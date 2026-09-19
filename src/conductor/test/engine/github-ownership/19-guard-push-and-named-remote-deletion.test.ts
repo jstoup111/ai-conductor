@@ -1,8 +1,51 @@
 // Covers: task:19
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { executeRemoteGit } from '../../../src/engine/remote-git-operations.js';
 import type { GithubMutationExecutionContext } from '../../../src/engine/tracker-client.js';
+import { initTestRepo } from '../../fixtures/git-repo.js';
+
+const execFile = promisify(execFileCb);
+const scratchDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(scratchDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+async function runGit(cwd: string, args: readonly string[]): Promise<{ readonly stdout: string }> {
+  const { stdout } = await execFile('git', [...args], { cwd });
+  return { stdout };
+}
+
+async function createLocalRemoteFixture(remoteRefs: readonly string[]) {
+  const root = await mkdtemp(join(tmpdir(), 'remote-git-ownership-'));
+  scratchDirs.push(root);
+  const repository = join(root, 'repository');
+  const remote = join(root, 'origin.git');
+  await mkdir(repository);
+  await initTestRepo(repository);
+  await writeFile(join(repository, 'fixture.txt'), 'initial fixture state\n');
+  await runGit(repository, ['add', '.']);
+  await runGit(repository, ['commit', '-m', 'test: seed local remote fixture']);
+  await runGit(root, ['init', '--bare', '--initial-branch=main', remote]);
+
+  // The resolver recognizes the GitHub URL while Git directs its write to this
+  // fixture-owned bare remote through pushurl; no third-party remote is used.
+  await runGit(repository, ['remote', 'add', 'origin', 'git@github.com:acme/rocket.git']);
+  await runGit(repository, ['config', 'remote.origin.pushurl', remote]);
+  await runGit(repository, ['push', 'origin', ...remoteRefs.map((ref) => `HEAD:${ref}`)]);
+
+  return { repository, remote };
+}
+
+async function bareRef(remote: string, ref: string): Promise<string> {
+  return (await runGit(remote, ['rev-parse', ref])).stdout.trim();
+}
 
 function configReader(url = 'git@github.com:acme/rocket.git') {
   return vi.fn().mockResolvedValue({ stdout: `${url}\n` });
@@ -48,6 +91,39 @@ describe('engine/remote-git-operations — guarded remote writes', () => {
     expect(runRemoteGit).toHaveBeenCalledWith(args, { cwd: '/fixture' });
   });
 
+  it('updates only the explicitly requested remote refs in a fixture-owned bare repository', async () => {
+    const { repository, remote } = await createLocalRemoteFixture([
+      'refs/heads/feature/one',
+      'refs/heads/feature/two',
+      'refs/heads/feature/untouched',
+    ]);
+    const untouchedBefore = await bareRef(remote, 'refs/heads/feature/untouched');
+    await writeFile(join(repository, 'fixture.txt'), 'updated fixture state\n');
+    await runGit(repository, ['add', '.']);
+    await runGit(repository, ['commit', '-m', 'test: advance owned source']);
+    const expectedCommit = (await runGit(repository, ['rev-parse', 'HEAD'])).stdout.trim();
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feature/one', 'HEAD:refs/heads/feature/two'],
+      {
+        cwd: repository,
+        config: (args) => runGit(repository, args),
+        runRemoteGit: (args, options) => runGit(options.cwd, args),
+        mutation: mutationContext(),
+      },
+    )).resolves.toEqual({
+      kind: 'executed',
+      targets: [
+        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/one' },
+        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/two' },
+      ],
+    });
+
+    await expect(bareRef(remote, 'refs/heads/feature/one')).resolves.toBe(expectedCommit);
+    await expect(bareRef(remote, 'refs/heads/feature/two')).resolves.toBe(expectedCommit);
+    await expect(bareRef(remote, 'refs/heads/feature/untouched')).resolves.toBe(untouchedBefore);
+  });
+
   it('refuses the whole push before the fake process boundary when one resolved ref loses authorization', async () => {
     const config = configReader();
     const runRemoteGit = vi.fn().mockResolvedValue({ stdout: '' });
@@ -80,6 +156,30 @@ describe('engine/remote-git-operations — guarded remote writes', () => {
       ['push', 'origin', '--delete', 'refs/heads/feature/obsolete'],
       { cwd: '/fixture' },
     );
+  });
+
+  it('removes only its named ref from a fixture-owned bare repository', async () => {
+    const { repository, remote } = await createLocalRemoteFixture([
+      'refs/heads/feature/obsolete',
+      'refs/heads/feature/retained',
+    ]);
+    const retainedBefore = await bareRef(remote, 'refs/heads/feature/retained');
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', '--delete', 'refs/heads/feature/obsolete'],
+      {
+        cwd: repository,
+        config: (args) => runGit(repository, args),
+        runRemoteGit: (args, options) => runGit(options.cwd, args),
+        mutation: mutationContext(),
+      },
+    )).resolves.toEqual({
+      kind: 'executed',
+      targets: [{ operation: 'remote-ref.delete', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/obsolete' }],
+    });
+
+    await expect(bareRef(remote, 'refs/heads/feature/obsolete')).rejects.toThrow();
+    await expect(bareRef(remote, 'refs/heads/feature/retained')).resolves.toBe(retainedBefore);
   });
 
   it('reports a force-with-lease failure without a plain-force fallback or retry', async () => {
