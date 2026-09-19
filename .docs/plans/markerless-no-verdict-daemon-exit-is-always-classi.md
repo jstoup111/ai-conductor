@@ -73,16 +73,16 @@ Task 2 is the cross-boundary integration owner: it proves the classification is 
 **Steps:**
 1. Following the existing gate-refusal test pattern in the clamp test file — mock the step registry to a small ordered list, seed `conduct-state.json`, run the real `Conductor` with `daemon: true`, and read the written marker files — add a failing test whose registry orders a prerequisite step before the blocked step, seeds that prerequisite `pending`, and asserts the class sidecar contains `mechanical`.
 2. Extend that test to assert the marker body contains the prerequisite name with its `pending` state, and that it does not contain the string `Operator action is required`.
-3. Add a second registry case whose blocked step has two unsatisfied prerequisites, one `pending` and resolvable earlier and one `failed`, asserting the class is still `mechanical` and the body names both with their states.
+3. Add a second registry case whose blocked step has two unsatisfied prerequisites, one `pending` and resolvable earlier and one `failed`, asserting the class is still `mechanical` and the body names both with their states; cover both orders, the `pending` prerequisite before the `failed` one and the `failed` prerequisite before the `pending` one.
 4. Subscribe to the loop-halt event in both cases and assert exactly one event whose reason equals the marker body's first line.
 5. Verify the tests fail (RED) because the branch currently returns without writing a marker and the catch-all classifies it `needs-human`.
-6. Implement: in the gate-refusal branch, when `noRunnablePrerequisite` is false, call the extracted helper for the blocked step at its own loop index; when it returns a non-negative index, build a reason naming every unsatisfied prerequisite with its state and stating the daemon will re-dispatch, then write the marker with class `mechanical` and emit the loop-halt event, mirroring the sibling branch's write-then-emit order.
+6. Implement: in the gate-refusal branch, when `noRunnablePrerequisite` is false, call the extracted helper for the blocked step at its own loop index, restricted through an optional inclusion predicate to prerequisites whose state is `pending` so a `failed` sibling at a smaller index cannot mask a reachable `pending` one (the clamp keeps calling the helper unrestricted); when it returns a non-negative index, build a reason naming every unsatisfied prerequisite with its state and stating the daemon will re-dispatch, then write the marker with class `mechanical` and emit the loop-halt event, mirroring the sibling branch's write-then-emit order.
 7. Run the narrowest test invocation for the clamp test file plus the repository typecheck target covering test files, then commit the focused change.
 
 **Done when:**
 - A daemon run whose blocked step has a `pending` prerequisite at an earlier registry index writes `.pipeline/HALT.class` containing exactly `mechanical`, asserted by the new gate-refusal case driving the real `Conductor`.
 - The written marker body contains the blocking prerequisite's name followed by its `pending` state and does not contain the string `Operator action is required`.
-- The mixed case whose unsatisfied set is one resolvable `pending` prerequisite and one `failed` prerequisite writes `mechanical` and names both prerequisites with their states in the body.
+- The mixed case whose unsatisfied set is one resolvable `pending` prerequisite and one `failed` prerequisite writes `mechanical` and names both prerequisites with their states in the body, asserted in both registry orders including the `failed` prerequisite at the smaller index.
 - Each new case emits exactly one loop-halt event whose reason equals the trimmed first line of the written marker body.
 - The reason text states that the daemon will re-dispatch the feature, asserted by a substring assertion rather than by absence of other text alone.
 

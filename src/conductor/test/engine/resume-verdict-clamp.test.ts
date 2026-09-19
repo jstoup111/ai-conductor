@@ -785,7 +785,37 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(haltReasons).toEqual([marker.trim()]);
     });
 
-    it('parks needs-human when the earliest reachable prerequisite is failed', async () => {
+    it('parks a mixed prerequisite set as mechanical when the failed prerequisite precedes the reachable pending one', async () => {
+      vi.mocked(buildStepRegistry).mockReturnValueOnce([
+        gateStep('build'),
+        gateStep('test_suite'),
+        gateStep('build_review', ['build', 'test_suite']),
+      ]);
+      await writeState(statePath, {
+        build: 'failed',
+        test_suite: 'pending',
+        build_review: 'in_progress',
+      } as ConductState);
+      const { runner } = trackingRunner(dir);
+      const haltReasons: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') haltReasons.push(event.reason);
+      });
+
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        daemon: true, fromStep: 'build_review',
+      }).run();
+
+      const marker = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('mechanical');
+      expect(marker).toContain('build (failed)');
+      expect(marker).toContain('test_suite (pending)');
+      expect(marker).toContain('daemon will re-dispatch');
+      expect(haltReasons).toEqual([marker.trim()]);
+    });
+
+    it('parks needs-human when the only pending prerequisite sits after the blocked step', async () => {
       vi.mocked(buildStepRegistry).mockReturnValueOnce([
         gateStep('build'),
         gateStep('build_review', ['build', 'test_suite']),
