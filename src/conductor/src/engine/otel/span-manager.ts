@@ -36,8 +36,6 @@ interface StepState {
   retryCount: number;
   startTimeMs: number;
   subjectLabel: string;
-  /** Explicit scopes have a shared event-time clock; legacy spans retain SDK timing. */
-  usesEventClock: boolean;
   settlementEndTimeMs?: number;
   dispatch?: DispatchMeteringObservation;
 }
@@ -108,15 +106,14 @@ export class SpanManager {
       this.openSteps.delete(identity.correlationKey);
     }
 
-    // Explicit executions can freeze at a later member-settlement event. Give
-    // those spans the same wall-clock origin as that frozen end; otherwise
-    // the SDK's monotonic start clock and the engine's wall-clock timestamp
-    // form an invalid duration pair. Legacy context-free spans retain the SDK
-    // clock because they have no separate settlement boundary.
+    // Every step span uses the injected event-time clock. Explicit executions
+    // can freeze at a later member-settlement event, and legacy events must
+    // remain on that same clock so an SDK wall-clock close cannot create an
+    // invalid mixed-clock duration.
     const startTimeMs = this.now();
     const span = this.tracer.startSpan(
       identity.subjectLabel,
-      event.executionContext === undefined ? {} : { startTime: startTimeMs },
+      { startTime: startTimeMs },
       this.runCtx,
     );
     // Set index and step name now; status + retryCount set at close.
@@ -133,7 +130,6 @@ export class SpanManager {
       retryCount: 0,
       startTimeMs,
       subjectLabel: identity.subjectLabel,
-      usesEventClock: event.executionContext !== undefined,
     });
   }
 
@@ -334,13 +330,7 @@ export class SpanManager {
   }
 
   private endSpan(state: StepState): void {
-    if (state.settlementEndTimeMs !== undefined) {
-      state.span.end(state.settlementEndTimeMs);
-    } else if (state.usesEventClock) {
-      state.span.end(this.now());
-    } else {
-      state.span.end();
-    }
+    state.span.end(state.settlementEndTimeMs ?? this.now());
   }
 
   // ── Span events ────────────────────────────────────────────────────────────
