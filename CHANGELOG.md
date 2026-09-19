@@ -34,6 +34,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - CI repair sessions retain failing-check context and report truthful repair outcomes. ([implementation PR #2534](https://github.com/jstoup111/ai-conductor/pull/2534)).
 - As-built remediation now accepts dotted subclauses that cite an approved ADR decision. ([implementation PR #2593](https://github.com/jstoup111/ai-conductor/pull/2593)).
 - `/remediate` now halts an environmental build stall immediately instead of spending a planner turn diagnosing a failure it cannot repair. ([implementation PR #2603](https://github.com/jstoup111/ai-conductor/pull/2603)).
+- Preserve OpenTelemetry span attribution for build-review and coverage-binding provider attempts. ([implementation PR #2611](https://github.com/jstoup111/ai-conductor/pull/2611)).
 
 ## Migration
 
