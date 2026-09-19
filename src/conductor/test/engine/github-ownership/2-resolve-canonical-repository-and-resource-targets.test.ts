@@ -5,6 +5,7 @@ import {
   githubTargetsMatch,
   resolveGithubTarget,
 } from '../../../src/engine/github-target.js';
+import { executeGithubOperation } from '../../../src/engine/github-operations.js';
 
 describe('engine/github-target — canonical repository and resource targets', () => {
   it('binds a GitHub issue-form URL to the pull-request identity returned by injected discovery', async () => {
@@ -96,5 +97,78 @@ describe('engine/github-target — canonical repository and resource targets', (
       kind: 'refused',
       reason: 'invalid-target',
     });
+  });
+
+  it.each([
+    [
+      'a malformed URL alias',
+      {
+        operation: 'issue.comment.create',
+        repository: 'acme/rocket',
+        url: 'https://example.test/acme/rocket/issues/17',
+        resource: { kind: 'issue', number: 17 },
+        context: { actor: 'operator-1' },
+        payload: { body: 'never write' },
+      },
+      { resolve: vi.fn() },
+    ],
+    [
+      'an ambiguous target discovery result',
+      {
+        operation: 'issue.comment.create',
+        repository: 'acme/rocket',
+        resource: { kind: 'issue', number: 17 },
+        context: { actor: 'operator-1' },
+        payload: { body: 'never write' },
+      },
+      { resolve: vi.fn().mockResolvedValue({ ambiguous: true }) },
+    ],
+    [
+      'a discovery result for another repository',
+      {
+        operation: 'issue.comment.create',
+        repository: 'acme/rocket',
+        resource: { kind: 'issue', number: 17 },
+        context: { actor: 'operator-1' },
+        payload: { body: 'never write' },
+      },
+      {
+        resolve: vi.fn().mockResolvedValue({
+          repository: 'acme/satellite',
+          resource: { kind: 'issue', number: 17 },
+        }),
+      },
+    ],
+  ])('refuses %s at the live operation boundary before the runner', async (_caseName, request, targetDiscovery) => {
+    const runner = { run: vi.fn().mockResolvedValue({}) };
+
+    await expect(executeGithubOperation(request, runner, { targetDiscovery })).resolves.toEqual({
+      kind: 'refused',
+      reason: 'invalid-target',
+    });
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it('runs the canonical resolved target rather than the caller-provided repository casing', async () => {
+    const targetDiscovery = {
+      resolve: vi.fn().mockResolvedValue({
+        repository: 'acme/rocket',
+        resource: { kind: 'issue', number: 17 },
+      }),
+    };
+    const runner = { run: vi.fn().mockResolvedValue({}) };
+
+    await expect(executeGithubOperation({
+      operation: 'issue.comment.create',
+      repository: 'Acme/Rocket',
+      resource: { kind: 'issue', number: 17 },
+      context: { actor: 'operator-1' },
+      payload: { body: 'owned write' },
+    }, runner, { targetDiscovery })).resolves.toMatchObject({ kind: 'executed' });
+
+    expect(targetDiscovery.resolve).toHaveBeenCalledOnce();
+    expect(runner.run).toHaveBeenCalledWith(expect.objectContaining({
+      target: { repository: 'acme/rocket', kind: 'issue', number: 17 },
+    }));
   });
 });

@@ -5,9 +5,15 @@ export interface GithubTargetInput {
   readonly repository?: string;
   readonly url?: string;
   readonly ref?: string;
+  /**
+   * A caller that already holds the resource-shaped handle still sends it
+   * through discovery.  This lets the boundary compare that handle with URL
+   * and ref aliases instead of trusting a separately constructed target.
+   */
+  readonly resource?: GithubTargetResource;
 }
 
-type GithubTargetResource = {
+export type GithubTargetResource = {
   readonly kind: GithubResourceKind;
   readonly number?: number;
   readonly name?: string;
@@ -120,7 +126,8 @@ function invalidTarget(): GithubTargetResolution {
 function inputIsValid(input: unknown): input is GithubTargetInput {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return false;
   const candidate = input as Record<string, unknown>;
-  return ['repository', 'url', 'ref'].every((key) => candidate[key] === undefined || typeof candidate[key] === 'string');
+  return ['repository', 'url', 'ref'].every((key) => candidate[key] === undefined || typeof candidate[key] === 'string')
+    && (candidate.resource === undefined || (typeof candidate.resource === 'object' && candidate.resource !== null));
 }
 
 /**
@@ -141,6 +148,11 @@ export async function resolveGithubTarget(
   const explicitRepository = input.repository === undefined ? undefined : canonicalRepository(input.repository);
   const url = input.url === undefined ? undefined : parseGithubUrl(input.url);
   if (explicitRepository && url && explicitRepository !== url.repository) return invalidTarget();
+  const identityRepository = explicitRepository ?? url?.repository;
+  const explicitResource = input.resource === undefined || identityRepository === undefined
+    ? undefined
+    : resourceTarget(input.resource, identityRepository);
+  if (input.resource !== undefined && !explicitResource) return invalidTarget();
 
   let discovered: GithubTargetDiscoveryResult;
   try {
@@ -159,9 +171,11 @@ export async function resolveGithubTarget(
   const target = resourceTarget(discovered.resource, repository);
   if (!target) return invalidTarget();
 
+  if (explicitResource && !githubTargetsMatch(target, explicitResource)) return invalidTarget();
+
   // A repository handle alone does not identify a PR, issue, label, or ref.
   // Discovery may only return the repository resource for that input shape.
-  if (input.ref === undefined && url?.number === undefined && target.kind !== 'repository') {
+  if (input.resource === undefined && input.ref === undefined && url?.number === undefined && target.kind !== 'repository') {
     return invalidTarget();
   }
 

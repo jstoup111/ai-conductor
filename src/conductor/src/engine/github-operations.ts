@@ -2,6 +2,11 @@ import type {
   ConductorEvent,
   GithubOperationRefusalRemedy,
 } from '../types/events.js';
+import {
+  resolveGithubTarget,
+  type GithubTargetDiscovery,
+  type GithubTargetInput,
+} from './github-target.js';
 
 /**
  * Closed request vocabulary for the GitHub and remote-Git guards.
@@ -221,6 +226,8 @@ export interface GithubOperationEventEmitter {
 
 export interface GithubOperationExecutionOptions {
   readonly events?: GithubOperationEventEmitter;
+  /** Read-only target resolution runs before any guarded operation reaches its runner. */
+  readonly targetDiscovery?: GithubTargetDiscovery;
 }
 
 function isRunnerRefusal(
@@ -319,6 +326,42 @@ function targetFrom(resource: unknown, repository: unknown): GithubOperationTarg
 
 function refused(reason: GithubOperationRefusalReason): GithubOperationDecodeResult {
   return { kind: 'refused', reason };
+}
+
+function targetInputFrom(
+  value: unknown,
+  target: GithubOperationTarget,
+): GithubTargetInput {
+  const raw = record(value) ? value : {};
+  const rawUrl = typeof raw.url === 'string' ? raw.url : undefined;
+  const rawRef = typeof raw.ref === 'string' ? raw.ref : undefined;
+  return {
+    repository: target.repository,
+    resource: target,
+    ...(rawUrl === undefined ? {} : { url: rawUrl }),
+    ...(rawRef === undefined
+      ? target.kind === 'remote-ref' ? { ref: target.ref } : {}
+      : { ref: rawRef }),
+  };
+}
+
+/**
+ * Typed callers can supply a resource handle directly, but it remains
+ * untrusted input to the canonical resolver.  Production compositions that
+ * have an authoritative remote lookup replace this read-only seam.
+ */
+const directTargetDiscovery: GithubTargetDiscovery = {
+  async resolve(input) {
+    if (input.repository === undefined || input.resource === undefined) return { ambiguous: true };
+    return { repository: input.repository, resource: input.resource };
+  },
+};
+
+function withResolvedTarget(
+  request: GithubOperationRequest,
+  target: GithubOperationTarget,
+): GithubOperationRequest {
+  return { ...request, target } as GithubOperationRequest;
 }
 
 function payloadFrom(value: unknown, required: GithubOperationDefinition['payload']): GithubOperationPayload | undefined {
@@ -437,23 +480,29 @@ export async function executeGithubOperation(
 ): Promise<GithubOperationResult | Extract<GithubOperationDecodeResult, { kind: 'refused' }>> {
   const decoded = decodeGithubOperationRequest(value);
   if (decoded.kind === 'refused') return decoded;
+  const resolution = await resolveGithubTarget(
+    targetInputFrom(value, decoded.request.target),
+    options.targetDiscovery ?? directTargetDiscovery,
+  );
+  if (resolution.kind === 'refused') return resolution;
+  const request = withResolvedTarget(decoded.request, resolution.target);
   try {
-    const response = await runner.run(decoded.request);
+    const response = await runner.run(request);
     if (isRunnerRefusal(response)) {
       const result = {
         kind: 'refused',
-        operation: decoded.request.operation,
+        operation: request.operation,
         reason: response.reason,
       } as const;
-      if (decoded.request.access !== 'read') {
-        await emitGithubOperationRefusal(decoded.request, response.reason, options.events);
+      if (request.access !== 'read') {
+        await emitGithubOperationRefusal(request, response.reason, options.events);
       }
       return result;
     }
     if (response.created && response.metadataFailures && response.metadataFailures.length > 0) {
       return {
         kind: 'partial',
-        operation: decoded.request.operation,
+        operation: request.operation,
         created: response.created,
         metadataFailures: response.metadataFailures,
       };
@@ -461,19 +510,19 @@ export async function executeGithubOperation(
     if (response.metadataFailures?.length) {
       return {
         kind: 'failed',
-        operation: decoded.request.operation,
+        operation: request.operation,
         error: 'GitHub metadata follow-up failed without a created resource.',
       };
     }
     return {
       kind: 'executed',
-      operation: decoded.request.operation,
-      target: response.created ?? decoded.request.target,
+      operation: request.operation,
+      target: response.created ?? request.target,
     };
   } catch (error) {
     return {
       kind: 'failed',
-      operation: decoded.request.operation,
+      operation: request.operation,
       error: error instanceof Error ? error.message : String(error),
     };
   }
