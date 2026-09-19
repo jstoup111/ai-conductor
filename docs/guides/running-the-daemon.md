@@ -540,9 +540,15 @@ A slug counts as `merged` on either of two signals:
 A missing branch, an unreadable `origin/main`, or a git failure yields `unclassified` and no action.
 It never reads as "not merged".
 
+The same sweep also considers every non-detached worktree registered directly under `.worktrees/`.
+It ignores nested worktrees and worktrees outside that directory. A registered candidate is retained
+without attempting removal when it is in flight, belongs to an `engineer-*` or `resolve-*` lifecycle,
+has an unreadable or present `.pipeline/HALT`, has an invalid slug, or the worktree listing cannot be
+read. This scan does not depend on the mergeable-watch registry.
+
 By default ([`reconcile_parked_auto_cleanup`](../reference/configuration.md#reconcile_parked_auto_cleanup)
-is unset or `true`), a `merged` slug with a `.docs/shipped/<slug>.md` record on `origin/main` is
-reconciled automatically: its worktree is removed, any branch for it is deleted, and it is unparked.
+is unset or `true`), a `merged` parked slug with a `.docs/shipped/<slug>.md` record on `origin/main`
+is reconciled automatically: its worktree is removed, any branch for it is deleted, and it is unparked.
 The record on `origin/main` is what settles completion here, so a worktree whose local
 `.pipeline/conduct-state.json` still reads mid-build — the normal state for anything built before
 `feature_status` existed, or for a `finish` that pushed and then died — does not block cleanup.
@@ -575,19 +581,25 @@ without ever having been registered as git worktrees, and `git worktree remove` 
 instead of refusing. A removal failure on a path git *does* own — locked, dirty, permissions — still
 refuses with `worktree-remove-failed`, and so does an unreadable worktree listing.
 
-A merged slug with no shipped
-record yet is left parked and,
-when a merged PR can be found, gets an ST-916 record-repair PR requested on its behalf; it
-reconciles on a later tick once the record lands. Set `reconcile_parked_auto_cleanup: false` to
-disable the automatic cleanup step and only classify/annotate, then reconcile explicitly per slug:
+A merged parked slug with no shipped record yet is left parked and, when a merged PR can be found,
+gets an ST-916 record-repair PR requested on its behalf; it reconciles on a later tick once the
+record lands. A registered worktree follows the same proof checks, but a shipped record is required
+only for a `feat/daemon-*` branch; another branch with merge proof can be reclaimed without one.
+
+Set `reconcile_parked_auto_cleanup: false` to disable automatic cleanup only for parked slugs and
+use `reclaim_merged_worktrees: false` to make registered-worktree reclamation report-only. The
+explicit command remains available for a parked slug:
 
 ```bash
 ai-conductor daemon reconcile-parked <slug>
 ```
 
 See [`daemon reconcile-parked`](../reference/cli.md#daemon-reconcile-parked) for its exact output
-and refusal reasons. An `orphan` classification is never auto-reconciled — it needs an operator to
-decide whether to park it, delete it, or resume it manually.
+and refusal reasons. Reclaimed, retained, and failed registered-worktree outcomes are persisted in
+the daemon event ledger as `worktree_reclaim_reclaimed`, `worktree_reclaim_retained`, and
+`worktree_reclaim_failed`; reclaimed and failed outcomes are also rendered in the daemon log. An
+`orphan` classification is never auto-reconciled — it needs an operator to decide whether to park it,
+delete it, or resume it manually.
 
 The cleanup sweep writes one aggregate line when its counts change instead of one line per parked
 slug. It includes `refused=N` and, when nonzero, a per-reason breakdown plus guidance for the
