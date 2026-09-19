@@ -5,15 +5,21 @@ import {
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 
 export type BuildReviewOutcome =
-  | { readonly kind: 'awaiting-settlement'; readonly lapId: string }
   | { readonly kind: 'repair'; readonly lapId: string; readonly caseIds: readonly string[]; readonly trace: string; readonly remainingInfrastructure: boolean }
   | { readonly kind: 'decision-stop'; readonly lapId: string; readonly stops: readonly { readonly caseId: string; readonly owner?: 'product' | 'plan' | 'architecture'; readonly sourceIds: readonly string[]; readonly rationale: string }[]; readonly detail: string; readonly trace: string; readonly remainingInfrastructure: boolean }
   | { readonly kind: 'infrastructure'; readonly lapId?: string; readonly status: 'retry' | 'halt'; readonly reason: string; readonly trace?: string }
   | { readonly kind: 'settled'; readonly lapId: string; readonly trace: string };
 
-/** The application boundary shared by attended and daemon review consumers. */
+/**
+ * The application boundary shared by attended and daemon review consumers.
+ *
+ * Settlement gate: the operation accepts only the recorded aggregate of a lap
+ * whose branches have all settled. The join writes that aggregate once, after
+ * every branch settles, so a partial or raw branch input fails the parse below
+ * and halts without a judge or a charge. There is no separate caller-asserted
+ * settlement flag: a caller cannot claim settlement the artifact does not prove.
+ */
 export async function applyBuildReviewOutcome(input: {
-  readonly settlement: 'pending' | 'settled';
   readonly recordedAggregate: unknown;
   readonly adjudication: Omit<BuildReviewAdjudicationCoordinatorInput, 'aggregate'>;
 }): Promise<BuildReviewOutcome> {
@@ -24,7 +30,6 @@ export async function applyBuildReviewOutcome(input: {
       reason: 'build-review aggregate is not a complete settled lap',
     };
   }
-  if (input.settlement !== 'settled') return { kind: 'awaiting-settlement', lapId: aggregate.lapId };
 
   const adjudication = await coordinateBuildReviewAdjudication({
     ...input.adjudication,
@@ -60,3 +65,15 @@ export async function applyBuildReviewOutcome(input: {
   }
   return { kind: 'settled', lapId: aggregate.lapId, trace: adjudication.trace };
 }
+
+/** Operator-facing lines for every structured stop, so none is reduced to the summary detail. */
+export function describeBuildReviewDecisionStops(
+  stops: Extract<BuildReviewOutcome, { kind: 'decision-stop' }>['stops'],
+): string {
+  return stops.map((stop) =>
+    `decision stop ${stop.caseId} (owner: ${stop.owner ?? 'unassigned'}; sources: ${stop.sourceIds.join(', ') || 'none'}): ${stop.rationale}`,
+  ).join('\n');
+}
+
+export const BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE =
+  'review infrastructure faults remain uncovered for this lap; they stay blocking in the mechanical lane after this route';

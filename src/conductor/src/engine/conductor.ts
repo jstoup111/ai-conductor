@@ -32,7 +32,11 @@ import {
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
-import { applyBuildReviewOutcome } from './build-review-outcome.js';
+import {
+  applyBuildReviewOutcome,
+  BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE,
+  describeBuildReviewDecisionStops,
+} from './build-review-outcome.js';
 import { isBuildEligibleActionCase, isBuildReviewSettlementObligationCase } from './remediation-case-effects.js';
 import {
   appendBuildReviewWorkOrderContext,
@@ -12045,8 +12049,10 @@ export class Conductor {
                     suppressedFindingIds,
                     floors,
                   });
+                  // Settlement gate: `verdictRaw` is the aggregate the join
+                  // recorded after every branch settled; the shared operation
+                  // refuses anything that does not parse as that complete lap.
                   const outcome = await applyBuildReviewOutcome({
-                    settlement: 'settled',
                     recordedAggregate: verdictRaw,
                     adjudication: {
                     projectRoot: this.projectRoot,
@@ -12095,7 +12101,13 @@ export class Conductor {
                     },
                   });
                   if (outcome.kind === 'decision-stop' || (outcome.kind === 'infrastructure' && outcome.status === 'halt')) {
-                    const detail = outcome.kind === 'decision-stop' ? outcome.detail : outcome.reason;
+                    const detail = outcome.kind === 'decision-stop'
+                      ? [
+                        outcome.detail,
+                        describeBuildReviewDecisionStops(outcome.stops),
+                        ...(outcome.remainingInfrastructure ? [BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE] : []),
+                      ].filter((line) => line !== '').join('\n')
+                      : outcome.reason;
                     const trace = outcome.trace;
                     const reason = `build_review adjudication halted: ${detail}` +
                       (trace ? `\n${trace}` : '');
@@ -12112,7 +12124,8 @@ export class Conductor {
                   if (outcome.kind === 'repair') {
                     const ledger = await readKickbackLedger(this.projectRoot);
                     const count = ledger.gates.build_review?.count ?? 1;
-                    const evidence = `build-review admitted repair ${outcome.caseIds.join(', ')}\n${outcome.trace}`;
+                    const evidence = `build-review admitted repair ${outcome.caseIds.join(', ')}\n${outcome.trace}` +
+                      (outcome.remainingInfrastructure ? `\n${BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE}` : '');
                     await emitTracked({ type: 'kickback', from: 'build_review', to: 'build', evidence, count });
                     pendingRetryHints.set('build', `build_review adjudication: ${evidence}`);
                     if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;

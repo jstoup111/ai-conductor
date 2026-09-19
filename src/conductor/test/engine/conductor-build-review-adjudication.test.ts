@@ -289,9 +289,10 @@ async function fixture(options: FixtureOptions = {}) {
 
   const events = new ConductorEventEmitter();
   const kickbacks: Array<{ from: string; to: string }> = [];
+  const kickbackEvidence: string[] = [];
   const lifecycle: ConductorEvent[] = [];
   const loopHalts: ConductorEvent[] = [];
-  events.on('kickback', (event) => { if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to }); });
+  events.on('kickback', (event) => { if (event.type === 'kickback') { kickbacks.push({ from: event.from, to: event.to }); kickbackEvidence.push(event.evidence ?? ''); } });
   events.on('loop_halt', (event) => { loopHalts.push(event); });
   for (const type of [
     'remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_adjudication_failed',
@@ -336,7 +337,7 @@ async function fixture(options: FixtureOptions = {}) {
   });
 
   return {
-    projectRoot, feature, dispatched, retryReasons, kickbacks, lifecycle, loopHalts, ghCalls, resolver,
+    projectRoot, feature, dispatched, retryReasons, kickbacks, kickbackEvidence, lifecycle, loopHalts, ghCalls, resolver,
     remediateDispatches: () => remediateDispatches, artifactMtimes,
     readJson: async (relative: string): Promise<unknown> =>
       JSON.parse(await readFile(join(projectRoot, relative), 'utf8')) as unknown,
@@ -396,6 +397,43 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     await expect(run.readJson('.pipeline/build-review-work-order.json')).resolves.toMatchObject({
       cases: [expect.objectContaining({ tasks: [expect.objectContaining({ admittedTaskIds: ['32'] })] })],
     });
+  });
+
+  it('names every structured decision stop — case, owner, sources, rationale — in the needs-human halt', async () => {
+    const customSource = projectBuildReviewAggregateSources(customAggregate())![0]!;
+    const sourceId = buildReviewAdjudicationSourceId(customSource);
+    const run = await fixture({
+      custom: true,
+      judgement: {
+        mode: 'case-v2', domain: 'build_review',
+        sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'plan-stop' }],
+        cases: [{
+          caseRef: 'plan-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+          rationale: 'The approved plan needs an owner decision before repair.',
+          effect: { kind: 'none' }, escalation: { owner: 'plan' },
+        }],
+        consistency: {
+          verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['plan-stop'],
+          rationale: 'The source cannot be repaired under the current approved plan.',
+        },
+      },
+    });
+
+    expect(run.dispatched).not.toContain('build');
+    const halt = await run.haltMarker();
+    expect(halt).toMatch(new RegExp(
+      `decision stop \\S+ \\(owner: plan; sources: ${sourceId}\\): The source cannot be repaired under the current approved plan\\.`,
+    ));
+    expect(run.loopHalts).toEqual([expect.objectContaining({ reason: expect.stringContaining('owner: plan') })]);
+  });
+
+  it('carries a remaining infrastructure fault into the admitted-repair kickback and BUILD hint', async () => {
+    const run = await fixture({ reportUncoveredInfrastructure: true });
+
+    expect(run.kickbacks).toEqual([{ from: 'build_review', to: 'build' }]);
+    expect(run.kickbackEvidence[0]).toContain('review infrastructure faults remain uncovered');
+    const clean = await fixture();
+    expect(clean.kickbackEvidence[0]).not.toContain('review infrastructure faults remain uncovered');
   });
 
   it.each([

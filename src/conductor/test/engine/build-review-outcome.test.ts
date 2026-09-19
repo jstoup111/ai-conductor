@@ -78,16 +78,12 @@ function coordinatorInput(projectRoot: string, judge: (context: unknown) => Prom
 }
 
 describe('applyBuildReviewOutcome', () => {
-  it('waits for branch settlement, then admits one validated repair through exactly one adjudicator', async () => {
+  it('admits one validated repair through exactly one adjudicator', async () => {
     const projectRoot = await root();
     const judge = vi.fn(async () => actionJudgement());
     const input = coordinatorInput(projectRoot, judge);
 
-    await expect(applyBuildReviewOutcome({ settlement: 'pending', recordedAggregate: aggregate, adjudication: input }))
-      .resolves.toEqual({ kind: 'awaiting-settlement', lapId: aggregate.lapId });
-    expect(judge).not.toHaveBeenCalled();
-
-    await expect(applyBuildReviewOutcome({ settlement: 'settled', recordedAggregate: aggregate, adjudication: input }))
+    await expect(applyBuildReviewOutcome({ recordedAggregate: aggregate, adjudication: input }))
       .resolves.toMatchObject({ kind: 'repair', lapId: aggregate.lapId, caseIds: ['case-outcome'], remainingInfrastructure: false });
     expect(judge).toHaveBeenCalledTimes(1);
   });
@@ -97,8 +93,7 @@ describe('applyBuildReviewOutcome', () => {
     const judge = vi.fn(async () => actionJudgement());
     const charge = vi.fn();
 
-    await expect(applyBuildReviewOutcome({
-      settlement: 'settled', recordedAggregate: { results: {} },
+    await expect(applyBuildReviewOutcome({ recordedAggregate: { results: {} },
       adjudication: { ...coordinatorInput(projectRoot, judge), chargeEffect: charge },
     })).resolves.toMatchObject({ kind: 'infrastructure', status: 'halt', reason: 'build-review aggregate is not a complete settled lap' });
     expect(judge).not.toHaveBeenCalled();
@@ -110,8 +105,7 @@ describe('applyBuildReviewOutcome', () => {
     const judge = vi.fn(async () => escalationJudgement());
     const charge = vi.fn();
 
-    const outcome = await applyBuildReviewOutcome({
-      settlement: 'settled', recordedAggregate: aggregate,
+    const outcome = await applyBuildReviewOutcome({ recordedAggregate: aggregate,
       adjudication: { ...coordinatorInput(projectRoot, judge), chargeEffect: charge },
     });
     expect(outcome).toMatchObject({
@@ -127,7 +121,6 @@ describe('applyBuildReviewOutcome', () => {
     const projectRoot = await root();
     const judge = vi.fn(async () => actionJudgement());
     const input = {
-      settlement: 'settled' as const,
       recordedAggregate: aggregate,
       adjudication: { ...coordinatorInput(projectRoot, judge), operatorResolvedFindingIds: new Set([source.findingId]) },
     };
@@ -151,13 +144,12 @@ describe('applyBuildReviewOutcome', () => {
       },
     });
 
-    await expect(applyBuildReviewOutcome({
-      settlement: 'settled', recordedAggregate: infrastructureOnly,
+    await expect(applyBuildReviewOutcome({ recordedAggregate: infrastructureOnly,
       adjudication: { ...coordinatorInput(projectRoot, judge), mechanical: 'retry', chargeEffect: charge },
     })).resolves.toMatchObject({ kind: 'infrastructure', lapId: infrastructureOnly.lapId, status: 'retry' });
 
     const settled = {
-      settlement: 'settled' as const, recordedAggregate: aggregate,
+      recordedAggregate: aggregate,
       adjudication: {
         ...coordinatorInput(projectRoot, judge), chargeEffect: charge,
         operatorResolvedFindingIds: new Set([source.findingId]),
