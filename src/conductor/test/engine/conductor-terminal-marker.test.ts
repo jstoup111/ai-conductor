@@ -4,8 +4,8 @@
  *
  * The daemon classifies a run solely by `.pipeline/DONE` vs `.pipeline/HALT`
  * (see daemon-deps.readWorktreeOutcome). A few early `return`s in the loop —
- * a blocked gate (prerequisites unsatisfied) and a parallel-group gating
- * failure — exited WITHOUT writing either marker, so the daemon reported a
+ * notably a parallel-group gating failure — can exit WITHOUT writing either
+ * marker, so the daemon reported a
  * bare `error` and stranded the worktree ("loop ended without DONE or HALT
  * marker"). The guarantee:
  *   - failure side: a daemon run that reaches `finally` with neither marker
@@ -204,11 +204,10 @@ describe('conductor/terminal-marker-guarantee', () => {
     expect(breadcrumb?.lastEventType).toBe('gate_blocked');
   });
 
-  it('daemon: the backstop HALT reason includes resolved last step, last event, and exit index — never "unknown"', async () => {
-    // Task 4: the finally backstop must wire resolveLastStep + the breadcrumb
-    // into the HALT reason so operators get an actionable message instead of
-    // the bare 'unknown' placeholder. The marker file and the emitted
-    // loop_halt event must carry the IDENTICAL string.
+  it('daemon: a resolvable pending gate block writes the mechanical reason and matching loop-halt event', async () => {
+    // A pending test_suite prerequisite occurs earlier in the registry, so the
+    // gate branch itself writes a mechanical HALT rather than falling through
+    // to the generic markerless-exit backstop.
     await writeState(statePath, {
       complexity_tier: 'M',
       build: 'pending',
@@ -234,20 +233,17 @@ describe('conductor/terminal-marker-guarantee', () => {
     await conductor.run();
 
     const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-    const breadcrumb = (conductor as unknown as {
-      _breadcrumb?: { lastAdvancedStep?: string; exitIndex?: number; lastEventType?: string };
-    })._breadcrumb;
-
     expect(halt).toContain('manual_test');
-    expect(halt).toContain(`last event: ${breadcrumb?.lastEventType ?? 'none'}`);
-    expect(halt).toContain(`exit index: ${breadcrumb?.exitIndex ?? 'n/a'}`);
-    expect(halt).not.toMatch(/unknown/);
+    expect(halt).toContain('test_suite (pending)');
+    expect(halt).toContain('daemon will re-dispatch');
+    expect(halt).not.toContain('Operator action is required');
+    expect(await readHaltClass(dir)).toBe('mechanical');
 
     expect(emittedReason).toBeDefined();
     expect(emittedReason).toBe(halt.replace(/\n$/, ''));
   });
 
-  it('daemon: a markerless blocked-gate exit without a park-boundary reader still HALTs needs-human with diagnostics', async () => {
+  it('daemon: a resolvable pending gate block without a park-boundary reader HALTs mechanical', async () => {
     await writeState(statePath, {
       complexity_tier: 'M',
       build: 'pending',
@@ -267,22 +263,18 @@ describe('conductor/terminal-marker-guarantee', () => {
 
     const termination = await conductor.run();
     const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-    const expectedExitIndex = ALL_STEPS.findIndex(({ name }) => name === 'manual_test');
-
     expect({
       termination,
       halt,
       haltClass: await readHaltClass(dir),
     }).toMatchObject({
       termination: undefined,
-      halt: expect.stringMatching(
-        new RegExp(`last step: manual_test[\\s\\S]*last event: gate_blocked, exit index: ${expectedExitIndex}`),
-      ),
-      haltClass: 'needs-human',
+      halt: expect.stringContaining('test_suite (pending)'),
+      haltClass: 'mechanical',
     });
   });
 
-  it('daemon: a markerless blocked-gate exit whose boundary reader reports no park still HALTs needs-human', async () => {
+  it('daemon: a resolvable pending gate block whose boundary reader reports no park HALTs mechanical', async () => {
     await writeState(statePath, {
       complexity_tier: 'M',
       build: 'pending',
@@ -305,27 +297,18 @@ describe('conductor/terminal-marker-guarantee', () => {
 
     const termination = await conductor.run();
     const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-    const expectedExitIndex = ALL_STEPS.findIndex(({ name }) => name === 'manual_test');
-
     expect({
       termination,
       halt,
       haltClass: await readHaltClass(dir),
     }).toMatchObject({
       termination: undefined,
-      halt: expect.stringMatching(
-        new RegExp(`last step: manual_test[\\s\\S]*last event: gate_blocked, exit index: ${expectedExitIndex}`),
-      ),
-      haltClass: 'needs-human',
+      halt: expect.stringContaining('test_suite (pending)'),
+      haltClass: 'mechanical',
     });
   });
 
-  it('daemon: with no breadcrumb and no last event, the backstop still HALTs and names the absence', async () => {
-    // Task 5: when the finally backstop's diagnostics-assembly seams have
-    // nothing recorded at all (fresh _breadcrumb, no event ever emitted), the
-    // reason string must still name the absence explicitly rather than
-    // producing a blank/garbled reason — and a marker + event must still be
-    // produced.
+  it('daemon: clearing the breadcrumb after a resolvable gate block does not change its mechanical classification', async () => {
     await writeState(statePath, {
       complexity_tier: 'M',
       build: 'pending',
@@ -359,9 +342,9 @@ describe('conductor/terminal-marker-guarantee', () => {
 
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(true);
     const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-    expect(halt).toContain('no step recorded');
-    expect(halt).toContain('last event: none');
-    expect(haltEvents.some((r) => r.includes('no step recorded'))).toBe(true);
+    expect(halt).toContain('test_suite (pending)');
+    expect(await readHaltClass(dir)).toBe('mechanical');
+    expect(haltEvents).toEqual([halt.trim()]);
   });
 
   it('daemon: the backstop never throws even when diagnostics assembly itself throws', async () => {
@@ -455,11 +438,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     expect(haltEvents.every((r) => !/unknown/.test(r))).toBe(true);
   });
 
-  it('daemon: a fully empty state (no step keys, no last_step) still HALTs naming the absence, never "unknown"', async () => {
-    // Task 6: empty-state coverage. No step keys at all, and the breadcrumb
-    // cleared before the finally backstop runs (same established pattern),
-    // means resolveLastStep has nothing to reconstruct from and must fall
-    // back to the explicit 'no step recorded' sentinel rather than 'unknown'.
+  it('daemon: an empty state with a resolvable gate block still writes mechanical', async () => {
     await writeState(statePath, {
       complexity_tier: 'M',
     } as ConductState);
@@ -489,10 +468,9 @@ describe('conductor/terminal-marker-guarantee', () => {
 
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(true);
     const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-    expect(halt).toContain('no step recorded');
-    expect(halt).not.toMatch(/unknown/);
-    expect(haltEvents.some((r) => r.includes('no step recorded'))).toBe(true);
-    expect(haltEvents.every((r) => !/unknown/.test(r))).toBe(true);
+    expect(halt).toContain('test_suite (pending)');
+    expect(await readHaltClass(dir)).toBe('mechanical');
+    expect(haltEvents).toEqual([halt.trim()]);
   });
 
   it('source: the finally backstop no longer falls back to the literal `?? \'unknown\'` for the last step', async () => {
