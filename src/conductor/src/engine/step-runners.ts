@@ -46,13 +46,14 @@ import {
   BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
 import {
-  claimDigest,
-  parseJudgePayload,
+  parseJudgeBatchPayload,
   readCoverageBindingEnvelope,
   writeCoverageBindingEnvelope,
   type CoverageBindingEnvelopeEntry,
+  type CoverageBindingEnvelopeFilesystem,
 } from './coverage-binding-envelope.js';
 import { assembleCoverageBindingClaims } from './coverage-binding-inputs.js';
+import { planCoverageBindingBatches } from './coverage-binding-batches.js';
 import { engineContentStamp } from './engine-version-id.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { BUILD_REVIEW_RUBRIC_IDS, getBuildReviewRubricDescriptor } from './build-review-registry.js';
@@ -532,6 +533,8 @@ export interface StepRunnerOptions {
   buildReviewArtifactReader?: typeof readBuildReviewBranchArtifact;
   /** Shared event spine for engine-owned build-review occurrences. */
   events?: ConductorEventEmitter;
+  /** Test-only envelope filesystem seam for coverage-binding checkpoints. */
+  coverageBindingFilesystem?: CoverageBindingEnvelopeFilesystem;
   /** Provider-aware session authority. Omitted by legacy scalar callers. */
   sessionStore?: ProviderSessionStore;
   /** Registry key for the captured provider when sessionStore is present. */
@@ -638,6 +641,7 @@ export class DefaultStepRunner implements StepRunner {
   private buildReviewEffectiveResolver: typeof resolveEffectiveBuildReviewVerdict;
   private buildReviewArtifactReader: typeof readBuildReviewBranchArtifact;
   private events?: ConductorEventEmitter;
+  private coverageBindingFilesystem?: CoverageBindingEnvelopeFilesystem;
   private sessionStore?: ProviderSessionStore;
   private readonly runId: string;
   private providerKey: string;
@@ -700,6 +704,7 @@ export class DefaultStepRunner implements StepRunner {
     this.buildReviewEffectiveResolver = options?.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict;
     this.buildReviewArtifactReader = options?.buildReviewArtifactReader ?? readBuildReviewBranchArtifact;
     this.events = options?.events;
+    this.coverageBindingFilesystem = options?.coverageBindingFilesystem;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
     this.providerKey = options?.providerKey ?? 'claude';
@@ -2651,15 +2656,15 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   private async runCoverageBinding(state: ConductState): Promise<StepRunResult> {
-    const { judgeEnabled } = resolveCoverageBindingConfig(this.config);
-    const filesystem = {
+    const { judgeEnabled, batchSize } = resolveCoverageBindingConfig(this.config);
+    const filesystem = this.coverageBindingFilesystem ?? {
       readFile: (path: string) => readFile(path, 'utf8'),
       mkdir: (path: string) => mkdir(path, { recursive: true }).then(() => undefined),
       writeFile,
       rename,
     };
     const writeEnvelope = async (
-      status: 'disabled' | 'done' | 'failed' | 'refused',
+      status: 'disabled' | 'done' | 'failed' | 'partial' | 'refused',
       entries: readonly CoverageBindingEnvelopeEntry[],
     ) => writeCoverageBindingEnvelope(this.projectDir, {
       version: 1,
@@ -2693,8 +2698,8 @@ export class DefaultStepRunner implements StepRunner {
       planText,
     });
     const previous = await readCoverageBindingEnvelope(this.projectDir, filesystem);
-    const cached = new Map(previous?.entries.map((entry) => [entry.digest, entry]) ?? []);
-    const entries: CoverageBindingEnvelopeEntry[] = [];
+    const planned = planCoverageBindingBatches({ claims, previous, batchSize });
+    const entries: CoverageBindingEnvelopeEntry[] = [...planned.entries];
     const refused: CoverageBindingEnvelopeEntry[] = [];
     const resolved = this.resolvedConfigFor('coverage_binding');
     const auxiliaryPolicy: ResolvedBuildReviewRubricPolicy = {
@@ -2708,40 +2713,23 @@ export class DefaultStepRunner implements StepRunner {
       escalate: resolved.escalate,
       min_confidence: 0,
     };
-    const entryFor = (
-      claim: ReturnType<typeof assembleCoverageBindingClaims>[number],
-      digest: string,
-      verdict: CoverageBindingEnvelopeEntry['verdict'],
-      missingAssertion?: string,
-    ): CoverageBindingEnvelopeEntry => ({
-      digest,
-      criterion: claim.criterion,
-      taskIds: claim.taskIds,
-      doneWhen: claim.doneWhen,
-      verdict,
-      ...(missingAssertion === undefined ? {} : { missingAssertion }),
-    });
-
-    for (const claim of claims) {
-      const digest = claimDigest(claim);
-      if (claim.applicability === 'not-applicable') {
-        const entry = entryFor(claim, digest, 'not-applicable');
-        entries.push(entry);
-        await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest, taskIds: [...entry.taskIds] });
-        continue;
-      }
-      const hit = cached.get(digest);
-      if (hit && hit.verdict !== 'not-applicable') {
-        const entry = entryFor(claim, digest, hit.verdict, hit.missingAssertion);
-        entries.push(entry);
-        await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest, taskIds: [...entry.taskIds] });
-        if (entry.verdict === 'does-not-assert') refused.push(entry);
-        continue;
-      }
+    for (const entry of entries) {
+      await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest: entry.digest, taskIds: [...entry.taskIds] });
+      if (entry.verdict === 'does-not-assert') refused.push(entry);
+    }
+    await writeEnvelope('partial', entries);
+    for (const [batchIndex, batch] of planned.batches.entries()) {
+      const batchDigests = batch.map(({ claimDigest: digest }) => digest);
+      const memberId = batchDigests[0]!;
       const prompt = [
-        'Judge only this criterion and these cited Done when checks. Do not read files, inspect a diff, or use any transcript.',
-        'Return exactly one JSON object: {"verdict":"asserts"} or {"verdict":"does-not-assert","missingAssertion":"..."}.',
-        JSON.stringify({ criterion: claim.criterion, taskIds: claim.taskIds, doneWhen: claim.doneWhen }),
+        'Judge each supplied claim independently against only its cited Done when checks. Do not read files, inspect a diff, or use any transcript.',
+        'Return exactly one JSON object with a verdicts array containing one verdict for every supplied digest.',
+        JSON.stringify({ claims: batch.map(({ claim, claimDigest: digest }) => ({
+          digest,
+          criterion: claim.criterion,
+          taskIds: claim.taskIds,
+          doneWhen: claim.doneWhen,
+        })) }),
       ].join('\n\n');
       let result: { success: boolean; output?: string; providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'] };
       if (this.providerRuntimes && this.sessionStore) {
@@ -2749,8 +2737,8 @@ export class DefaultStepRunner implements StepRunner {
           'coverage_binding',
           { prompt, cwd: this.projectDir, dangerouslySkipPermissions: true },
           (options) => executeAuxiliaryProviderCandidates({
-            step: 'coverage_binding', memberId: digest, policy: auxiliaryPolicy,
-            runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`coverage-binding:${digest}`),
+            step: 'coverage_binding', memberId, policy: auxiliaryPolicy,
+            runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`coverage-binding:${memberId}`),
             config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
             tier: state.complexity_tier,
             withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
@@ -2772,9 +2760,17 @@ export class DefaultStepRunner implements StepRunner {
       }
       if (!result.success || typeof result.output !== 'string') {
         await writeEnvelope('failed', entries);
-        return { success: false, output: result.output ?? `coverage_binding provider failed for ${digest}`, ...(result.providerSetupExhaustion ? { providerSetupExhaustion: result.providerSetupExhaustion } : {}) };
+        const infrastructureFailure = new CoverageBindingPayloadError(
+          `provider failed for batch ${batchIndex + 1} of ${planned.batches.length}: ${result.output ?? memberId}`,
+        );
+        return {
+          success: false,
+          output: infrastructureFailure.message,
+          infrastructureFailure,
+          ...(result.providerSetupExhaustion ? { providerSetupExhaustion: result.providerSetupExhaustion } : {}),
+        };
       }
-      const parsed = parseJudgePayload(result.output);
+      const parsed = parseJudgeBatchPayload(result.output, batchDigests);
       if (!parsed.ok) {
         await writeEnvelope('failed', entries);
         const infrastructureFailure = new CoverageBindingPayloadError(parsed.reason);
@@ -2784,10 +2780,21 @@ export class DefaultStepRunner implements StepRunner {
           infrastructureFailure,
         };
       }
-      const entry = entryFor(claim, digest, parsed.value.verdict, parsed.value.missingAssertion);
-      entries.push(entry);
-      await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest, taskIds: [...entry.taskIds] });
-      if (entry.verdict === 'does-not-assert') refused.push(entry);
+      for (const { claim, claimDigest: digest } of batch) {
+        const verdict = parsed.verdicts.get(digest)!;
+        const entry: CoverageBindingEnvelopeEntry = {
+          digest,
+          criterion: claim.criterion,
+          taskIds: claim.taskIds,
+          doneWhen: claim.doneWhen,
+          verdict: verdict.verdict,
+          ...(verdict.missingAssertion === undefined ? {} : { missingAssertion: verdict.missingAssertion }),
+        };
+        entries.push(entry);
+        await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest, taskIds: [...entry.taskIds] });
+        if (entry.verdict === 'does-not-assert') refused.push(entry);
+      }
+      await writeEnvelope('partial', entries);
     }
 
     if (refused.length > 0) {

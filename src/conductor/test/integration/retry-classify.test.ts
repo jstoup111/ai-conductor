@@ -83,6 +83,19 @@ async function seedTailAt(
   );
 }
 
+/** Return a contract-valid batched refusal for every digest issued to the judge. */
+function coverageBindingRefusalBatch(prompt: string): string {
+  const body = prompt.slice(prompt.lastIndexOf('\n\n{') + 2);
+  const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+  return JSON.stringify({
+    verdicts: claims.map(({ digest }) => ({
+      digest,
+      verdict: 'does-not-assert',
+      missingAssertion: 'No check requires the record.',
+    })),
+  });
+}
+
 /** A remediate runner that writes a routable (non-halt) plan targeting `build`. */
 function withRemediation(
   dir: string,
@@ -220,9 +233,9 @@ describe('integration/retry-classify (#646)', () => {
     const planPath = join(dir, 'plan.md');
     const refusalProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: async () => ({
+      invoke: async (options) => ({
         success: true,
-        output: '{"verdict":"does-not-assert","missingAssertion":"No check requires the record."}',
+        output: coverageBindingRefusalBatch(options.prompt),
         exitCode: 0,
       }),
     };
@@ -456,9 +469,9 @@ describe('integration/retry-classify (#646)', () => {
     const planPath = join(dir, 'plan.md');
     const refusalProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: async () => ({
+      invoke: async (options) => ({
         success: true,
-        output: '{"verdict":"does-not-assert","missingAssertion":"No check requires the record."}',
+        output: coverageBindingRefusalBatch(options.prompt),
         exitCode: 0,
       }),
     };
@@ -489,9 +502,9 @@ describe('integration/retry-classify (#646)', () => {
     const planPath = join(dir, 'plan.md');
     const refusalProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: async () => ({
+      invoke: async (options) => ({
         success: true,
-        output: '{"verdict":"does-not-assert","missingAssertion":"No check requires the record."}',
+        output: coverageBindingRefusalBatch(options.prompt),
         exitCode: 0,
       }),
     };

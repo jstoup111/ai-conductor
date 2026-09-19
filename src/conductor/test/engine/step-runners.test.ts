@@ -87,6 +87,16 @@ function expectUniqueFreshSessionIds(sessionIds: ReadonlyArray<string | undefine
   for (const id of sessionIds) expect(id).toMatch(FRESH_SESSION_ID_RE);
 }
 
+function coverageBindingBatchOutput(options: InvokeOptions, verdict: 'asserts' | 'does-not-assert' = 'asserts'): string {
+  const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+  const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+  return JSON.stringify({
+    verdicts: claims.map(({ digest }) => verdict === 'asserts'
+      ? { digest, verdict }
+      : { digest, verdict, missingAssertion: 'No check requires emission.' }),
+  });
+}
+
 describe('DefaultStepRunner', () => {
   it('writes disabled coverage-binding completion evidence without invoking a provider', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-disabled-'));
@@ -119,9 +129,9 @@ describe('DefaultStepRunner', () => {
     const coherenceDir = join(projectDir, '.docs', 'coherence');
     const featureDesc = 'coverage-binding-feature';
     const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
-      success: true, output: '{"verdict":"asserts"}', exitCode: 0,
-    });
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
+      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
+    }));
     await mkdir(coherenceDir, { recursive: true });
     await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n`);
     await writeFile(join(coherenceDir, `${featureDesc}.md`), `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n`);
@@ -154,9 +164,9 @@ describe('DefaultStepRunner', () => {
     const coherenceDir = join(projectDir, '.docs', 'coherence');
     const featureDesc = 'coverage-binding-rebound';
     const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
-      success: true, output: '{"verdict":"asserts"}', exitCode: 0,
-    });
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
+      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
+    }));
     const events = new ConductorEventEmitter();
     const judged: unknown[] = [];
     events.on('coverage_binding_judged', (event) => { judged.push(event); });
@@ -222,9 +232,9 @@ describe('DefaultStepRunner', () => {
     const planPath = join(projectDir, 'plan.md');
     const featureDesc = 'coverage-binding-refusal';
     const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
-      success: true, output: '{"verdict":"does-not-assert","missingAssertion":"No check requires emission."}', exitCode: 0,
-    });
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
+      success: true, output: coverageBindingBatchOutput(options, 'does-not-assert'), exitCode: 0,
+    }));
     await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
     await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service writes an audit record.\n`);
     await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits five records | task-1 | covered | "writes an audit record" | diff-local |\n`);
@@ -5200,7 +5210,7 @@ describe('auxiliary provider dispatch tier telemetry', () => {
     const featureDesc = 'coverage-binding-tier';
     const planPath = join(projectDir, 'plan.md');
     const attempts: ProviderAttemptEvent[] = [];
-    const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"asserts"}', exitCode: 0 });
+    const invoke = vi.fn(async (options: InvokeOptions) => ({ success: true, output: coverageBindingBatchOutput(options), exitCode: 0 }));
     await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
     await writeFile(planPath, '### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n');
     await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n');

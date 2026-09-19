@@ -350,6 +350,7 @@ export interface RetryRoutingConfig {
 export interface CoverageBindingConfig {
   judge?: {
     enabled?: boolean;
+    batch_size?: number;
   };
 }
 

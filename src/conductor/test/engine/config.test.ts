@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:2.1, task:3, task:4, task:5, task:9
+// Covers: task:1, task:2, task:2.1, task:4, task:5, task:9, task:3
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -18,6 +18,7 @@ import {
   loadConfig,
   loadMergedConfig,
   validateConfig,
+  CONFIG_CONSUMER_KEY_SETS,
   DEPRECATED_BUILD_REVIEW_RUBRIC_IDS,
   disabledStepNames,
   customStepEntries,
@@ -3393,6 +3394,57 @@ steps:
   });
 
   describe('coverage_binding config field (Task 8)', () => {
+    it('resolves an omitted judge batch size to 8', () => {
+      const result = validateConfig({ coverage_binding: { judge: {} } });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: { coverage_binding: { judge: { batch_size: 8 } } },
+      });
+    });
+
+    it('preserves a positive judge batch size', () => {
+      const result = validateConfig({ coverage_binding: { judge: { batch_size: 1 } } });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: { coverage_binding: { judge: { batch_size: 1 } } },
+      });
+    });
+
+    it.each([
+      ['zero', 0],
+      ['a negative number', -3],
+      ['a non-integer', 2.5],
+      ['a string', '8'],
+    ])('rejects batch size %s', (_name, batch_size) => {
+      const result = validateConfig({ coverage_binding: { judge: { batch_size } } });
+
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'coverage_binding.judge.batch_size must be a positive integer',
+        },
+      });
+    });
+
+    it('rejects an unknown plural batch-size key', () => {
+      const result = validateConfig({ coverage_binding: { judge: { batch_sizes: 8 } } });
+
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'Unknown key in coverage_binding.judge: "batch_sizes"',
+        },
+      });
+    });
+
+    it('registers the complete judge key set', () => {
+      expect(CONFIG_CONSUMER_KEY_SETS['coverage_binding.judge']).toEqual(['enabled', 'batch_size']);
+    });
+
     it('resolves the omitted judge to disabled', () => {
       const result = validateConfig({});
       expect(result.ok).toBe(true);

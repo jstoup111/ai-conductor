@@ -163,7 +163,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
-43 top-level keys are allow-listed (plus one retired, no-op key — `wiring`, see
+44 top-level keys are allow-listed (plus one retired, no-op key — `wiring`, see
 [build_review](#build_review)). Everything else fails the load.
 
 | Key | Type | Default | Section |
@@ -205,6 +205,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `ci_watch` | object | `{ enabled: true }` | [ci_watch](#ci_watch) |
 | `build_progress_halt` | object | see section | [build_progress_halt](#build_progress_halt) |
 | `retry_routing` | object | `{ enabled: true }` | [retry_routing](#retry_routing) |
+| `coverage_binding` | object | `{ judge: { enabled: false, batch_size: 8 } }` | [coverage_binding](#coverage_binding) |
 | `kickback_escalation` | object | `{ enabled: true }` | [kickback_escalation](#kickback_escalation) |
 | `cumulative_kickback_bound` | object | `{ enabled: true }` | [cumulative_kickback_bound](#cumulative_kickback_bound) |
 | `gate_code_validity` | object | `{ enabled: true }` | [gate_code_validity](#gate_code_validity) |
@@ -943,6 +944,20 @@ Kill-switch for classifying a retry as a rerun versus a route to another step. V
 `kickback_escalation`, which silently discards its block instead.
 
 Consumed at `src/conductor/src/engine/conductor.ts:4149`.
+
+## coverage_binding
+
+Opt-in pre-BUILD judge that confirms each criterion claim is asserted by the cited task's Done when checks.
+
+| Key | Type | Validation | Default |
+| --- | --- | --- | --- |
+| `coverage_binding.judge.enabled` | boolean | Boolean, else hard error | `false` |
+| `coverage_binding.judge.batch_size` | integer | Positive integer, else hard error | `8` |
+
+Only `enabled` and `batch_size` are accepted under `coverage_binding.judge`. Each fresh judge
+session evaluates an ordered batch of at most `batch_size` claims; a size of `1` uses one session
+per claim. The engine validates one verdict per claim and checkpoints accepted batches, so a later
+run reuses unchanged completed judgments and evaluates only pending claims.
 
 ## gate_code_validity
 

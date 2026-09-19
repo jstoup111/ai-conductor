@@ -1,0 +1,36 @@
+---
+slug: coverage-binding-serializes-judgments-and-loses-pa
+spec_hash: 6cc9363390982d17f55eb6b9ffb950d9cad584f6bd9ae0c1a2306a9a2f46a3b8
+pr: https://github.com/jstoup111/ai-conductor/pull/2594
+shipped: 2026-09-19
+engine_version: 20260918T164335Z-155ddb03a927
+---
+
+## Cost
+input: 1039642
+output: 166997
+cache_read: 25635575
+cache_creation: 1134736
+cost_usd: 29.636
+dispatches: 22
+retries: 0
+halts: 3
+unmetered: count: 0, duration_ms: 0
+cost_unmetered: count: 0
+providers:
+  codex: input: 1039478, output: 89476, cache_read: 18146944, cache_creation: 0, cost_usd: 8.4786, dispatches: 12, cost_unmetered: 0
+  claude: input: 164, output: 77521, cache_read: 7488631, cache_creation: 1134736, cost_usd: 21.1574, dispatches: 10, cost_unmetered: 0
+
+## Time
+state: partial
+reason: open-executions:step:build
+
+## Build Review
+laps_to_pass: 1
+skipped: 3
+cache_hits: 0
+infrastructure_failures: 0
+rubrics:
+  testQuality: failures: 1, judged: 3
+skip_reasons:
+  disabled: 3

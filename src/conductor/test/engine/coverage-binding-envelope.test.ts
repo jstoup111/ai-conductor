@@ -1,9 +1,13 @@
-// Covers: task:11
+// Covers: task:1, task:2, task:11
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   claimDigest,
+  COVERAGE_BINDING_COMPLETION_STATUSES,
+  COVERAGE_BINDING_ENVELOPE_STATUSES,
   coverageBindingEnvelopePath,
+  parseCoverageBindingEnvelope,
+  parseJudgeBatchPayload,
   parseJudgePayload,
   readCoverageBindingEnvelope,
   writeCoverageBindingEnvelope,
@@ -31,6 +35,26 @@ function memoryFilesystem(files: Record<string, string> = {}): CoverageBindingEn
 }
 
 describe('coverage binding envelope', () => {
+  it('round-trips every envelope status while keeping partial outside the completion set', () => {
+    const entries = [
+      { digest: 'sha256:one', criterion: 'Given one', taskIds: ['1'], doneWhen: [['One is asserted.']], verdict: 'asserts' as const },
+      { digest: 'sha256:two', criterion: 'Given two', taskIds: ['2'], doneWhen: [['Two is asserted.']], verdict: 'not-applicable' as const },
+    ];
+    const envelope = { version: 1, slug: 'feature', runId: 'run-1', entries } as const;
+
+    expect([
+      ['disabled', 'done', 'failed', 'partial', 'refused'].map((status) =>
+        parseCoverageBindingEnvelope({ ...envelope, status }),
+      ),
+      COVERAGE_BINDING_ENVELOPE_STATUSES,
+      COVERAGE_BINDING_COMPLETION_STATUSES,
+    ]).toEqual([
+      ['disabled', 'done', 'failed', 'partial', 'refused'].map((status) => ({ ...envelope, status })),
+      expect.arrayContaining(['partial']),
+      ['disabled', 'done'],
+    ]);
+  });
+
   it('accepts only the closed judge verdict payloads', () => {
     expect([
       parseJudgePayload('{"verdict":"asserts"}'),
@@ -45,6 +69,50 @@ describe('coverage binding envelope', () => {
       { ok: false, reason: expect.stringContaining('missingAssertion') },
       { ok: false, reason: expect.stringContaining('JSON') },
     ]);
+  });
+
+  it('accepts a batch only when it returns each issued digest once with engine-safe verdict data', () => {
+    const parsed = parseJudgeBatchPayload(JSON.stringify({
+      verdicts: [
+        { digest: 'sha256:first', verdict: 'asserts' },
+        { digest: 'sha256:second', verdict: 'does-not-assert', missingAssertion: 'The Done when checks omit the required emission.' },
+      ],
+    }), ['sha256:first', 'sha256:second']);
+
+    expect(parsed).toEqual({
+      ok: true,
+      verdicts: new Map([
+        ['sha256:first', { verdict: 'asserts' }],
+        ['sha256:second', { verdict: 'does-not-assert', missingAssertion: 'The Done when checks omit the required emission.' }],
+      ]),
+    });
+  });
+
+  it.each([
+    ['missing', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts' }] }, ['sha256:first', 'sha256:second'], 'sha256:second'],
+    ['foreign', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts' }, { digest: 'sha256:foreign', verdict: 'asserts' }] }, ['sha256:first', 'sha256:second'], 'sha256:foreign'],
+    ['duplicate', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts' }, { digest: 'sha256:first', verdict: 'asserts' }] }, ['sha256:first'], 'sha256:first'],
+  ])('rejects a %s digest-set mismatch', (_kind, payload, issuedDigests, reason) => {
+    expect(parseJudgeBatchPayload(JSON.stringify(payload), issuedDigests)).toEqual({
+      ok: false,
+      reason: expect.stringContaining(reason),
+    });
+  });
+
+  it.each([
+    ['unknown verdict', { verdicts: [{ digest: 'sha256:first', verdict: 'maybe' }] }, 'verdict'],
+    ['missingAssertion on asserts', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts', missingAssertion: 'not allowed' }] }, 'asserts'],
+    ['empty missingAssertion', { verdicts: [{ digest: 'sha256:first', verdict: 'does-not-assert', missingAssertion: '' }] }, 'missingAssertion'],
+    ['non-object payload', [], 'object'],
+    ['missing verdicts array', {}, 'verdicts'],
+    ['non-array verdicts', { verdicts: {} }, 'array'],
+    ['extra top-level key', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts' }], extra: true }, 'only verdicts'],
+    ['extra entry key', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts', extra: true }] }, 'asserts'],
+  ])('rejects a batch payload with %s', (_kind, payload, reason) => {
+    expect(parseJudgeBatchPayload(JSON.stringify(payload), ['sha256:first'])).toEqual({
+      ok: false,
+      reason: expect.stringContaining(reason),
+    });
   });
 
   it('hashes normalized criterion and Done when checks', () => {
@@ -85,6 +153,19 @@ describe('coverage binding envelope', () => {
       version: 1, slug: 'feature', runId: 'run-1', status: 'foreign', entries: [entry],
     });
     await expect(readCoverageBindingEnvelope(root, fs)).resolves.toBeNull();
+  });
+
+  it('keeps the previous envelope parseable when rename is interrupted', async () => {
+    const root = '/feature';
+    const path = coverageBindingEnvelopePath(root);
+    const previous = { version: 1, slug: 'feature', runId: 'run-1', status: 'partial', entries: [] } as const;
+    const fs = memoryFilesystem({ [path]: JSON.stringify(previous) });
+    fs.rename = vi.fn(async () => { throw new Error('interrupted rename'); });
+
+    await expect(writeCoverageBindingEnvelope(root, {
+      version: 1, slug: 'feature', runId: 'run-2', status: 'done', entries: [],
+    }, fs)).rejects.toThrow('interrupted rename');
+    await expect(readCoverageBindingEnvelope(root, fs)).resolves.toEqual(previous);
   });
 
   it('refuses to write a structurally invalid envelope', async () => {
