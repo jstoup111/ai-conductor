@@ -632,23 +632,27 @@ inline refusal and exits 1.
 
 ```bash
 ai-conductor config init
-ai-conductor config init [--test-suite-mode <aggregate|scoped>] [--test-suite-drift-budget <strict|tolerant>]
+ai-conductor config init [--test-suite-mode <aggregate|scoped>] [--test-suite-drift-budget <strict|tolerant>] [--test-suite-command <command>] [--test-suite-scoped-command <command>]
 ```
 
 Initializes the current Git repository's `.ai-conductor/config.yml` from
 `templates/project-config.yml.template`. A first run prints the created path and exits 0. If the
 file already exists, it reports that path, preserves the file byte-for-byte, and exits 0.
 
-When either verification option is present, the command records a `test_suite` block in the new
-config. `--test-suite-mode aggregate` is the default; `scoped` also writes a `scoped_command` with
-the required `{selectors}` placeholder. `--test-suite-drift-budget strict` is the default and
-tolerates no drift; `tolerant` permits unlimited `additional_inputs` drift and up to 20 changed
-`source` paths. Supplying one option uses the default for the other. See
+When any verification option is present, the command records a `test_suite` block in the new
+config. `--test-suite-command` records the project's aggregate command as a YAML scalar without
+running it; it must be non-empty and single-line. `--test-suite-mode aggregate` is the default;
+`scoped` also writes a `scoped_command` with the required `{selectors}` placeholder.
+`--test-suite-drift-budget strict` is the default and tolerates no drift; `tolerant` permits
+unlimited `additional_inputs` drift and up to 20 changed `source` paths. Supplying one option uses
+the default for the others. See
 [test_suite configuration](configuration.md#test_suite) for the resulting fields and constraints.
 
 The command exits 1 without writing when the current directory is not a Git repository or when the
 template cannot be resolved or written. Invalid option values exit 1 without creating a config:
-the modes are `aggregate` and `scoped`, and the drift-budget presets are `strict` and `tolerant`.
+the modes are `aggregate` and `scoped`, the drift-budget presets are `strict` and `tolerant`, and
+test commands must be non-empty single lines. An unrecognized `--` option also exits 1 before any
+file is created.
 
 ## `ai-conductor config read` / `ai-conductor config write` / `ai-conductor config set`
 
@@ -656,6 +660,7 @@ the modes are `aggregate` and `scoped`, and the drift-budget presets are `strict
 ai-conductor config read <dotted.path>
 ai-conductor config write <markdown_viewer|mermaid_renderer> <preset> <command> <args> <mode>
 ai-conductor config set conductor.<key> <scalar>
+ai-conductor config set spec_owner <identity>
 ```
 
 `read` resolves the effective configuration at `<dotted.path>`. From a directory with a project
@@ -673,12 +678,14 @@ is a single space-separated argument, split on whitespace — preserving every o
 already in the file. It exits 1 and prints the config path and error to stderr when the existing
 file fails to parse or the write fails (e.g. an unwritable directory).
 
-`set` updates exactly one `conductor` key without replacing other user configuration. Supported
-keys are `update_channel`, `auto_check`, `current_version`, and `last_checked_at`.
+`set` updates exactly one user-scoped setting without replacing other user configuration. Supported
+`conductor` keys are `update_channel`, `auto_check`, `current_version`, and `last_checked_at`.
 `conductor.auto_check` accepts only `true` or `false` and is stored as a YAML boolean; the other
-keys are stored as strings. The command validates both the existing and prospective `conductor:`
-block before writing, so invalid channels, unknown keys, malformed user YAML, and write failures
-exit 1 without changing the file. Use `config read conductor.<key>` to inspect the stored scalar.
+keys are stored as strings. `spec_owner` stores a non-empty operator identity only in
+`~/.ai-conductor/config.yml`; project configuration rejects that key to prevent identity leakage.
+The command validates both the existing and prospective value before writing, so invalid channels,
+empty identities, unknown keys, malformed user YAML, and write failures exit 1 without changing the
+file. Use `config read conductor.<key>` or `config read spec_owner` to inspect the stored scalar.
 
 ## `ai-conductor task`
 

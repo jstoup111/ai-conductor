@@ -35,8 +35,9 @@ already exists, and returns `false` silently on any failure without touching eit
 `templates/project-config.yml.template`. For an existing Git repository, run
 `ai-conductor config init`; it writes the same template when the file is absent, reports success
 without changing bytes when the file already exists, and refuses a non-Git directory. The missing-file
-error names this command as its remedy. `bin/install` and `bin/migrate` continue to write only the
-user file.
+error names this command as its remedy. Its `--test-suite-command <command>` option records a
+non-empty, single-line aggregate command in the generated `test_suite` block without executing it.
+`bin/install` and `bin/migrate` continue to write only the user file.
 
 ## Rate card (`.ai-conductor/rate-card.json`)
 
@@ -1436,6 +1437,10 @@ grants no termination or lifecycle authority.
 ## spec_owner
 
 The daemon operator identity used by the owner gate. Optional string.
+
+Set it only in user configuration with `ai-conductor config set spec_owner <identity>`. The command
+rejects an empty identity before writing; `ai-conductor config read spec_owner` shows the effective
+value.
 
 **This key may live only in `~/.ai-conductor/config.yml`.** On the `source: 'project'` path the key being
 merely present — blank or not — is a hard rejection naming the file and the fix
