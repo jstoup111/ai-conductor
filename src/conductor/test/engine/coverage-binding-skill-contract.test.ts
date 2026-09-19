@@ -21,9 +21,21 @@ async function publishedExample(): Promise<{ entries: ExampleEntry[]; digests: s
   return { entries, digests: entries.map((entry) => entry.digest) };
 }
 
+async function judgementPolicy(): Promise<string> {
+  const skill = await readFile(skillPath, 'utf8');
+  return skill.slice(0, skill.indexOf('## Result contract'));
+}
+
 const batch = (entries: readonly Record<string, unknown>[]) => JSON.stringify({ verdicts: entries });
 
 describe('coverage-binding skill contract', () => {
+  it('requires each claim to be judged independently on its own evidence', async () => {
+    const policy = await judgementPolicy();
+
+    expect(policy).toMatch(/Each claim is judged independently against its cited task's `Done when` checks\./);
+    expect(policy).toMatch(/No claim's\s+verdict may be inferred from another claim\./);
+  });
+
   it('publishes an example payload the engine batch parser accepts', async () => {
     const { entries, digests } = await publishedExample();
 
