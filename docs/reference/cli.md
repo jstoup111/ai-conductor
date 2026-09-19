@@ -171,8 +171,9 @@ disposition-store rejection — and records the same reason on the feature's
 terminal, resolved local operator identity, exact current lap, named rubric, and non-empty rationale.
 It derives the closed infrastructure cause from the current review state; callers cannot supply one.
 It records a decision only when that rubric currently has an exhausted mechanical infrastructure
-fault. Judged, skipped, duplicate, unknown-rubric, allowance-remaining, and stale-review requests
-are refused without changing the decision state.
+fault, or a current `projection-oversized` fault (which halts without consuming that allowance).
+Judged, skipped, duplicate, unknown-rubric, allowance-remaining for every other cause, and stale-review
+requests are refused without changing the decision state.
 
 ## `ai-conductor scope-check`
 
