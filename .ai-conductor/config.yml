@@ -75,7 +75,8 @@ build_review:
   # default remains false, so consumer repositories must opt in explicitly.
   scopeContainmentEnforced: true
   rubrics:
-    # test-quality is the only rubric this container dispatches. The rubrics it
+    # test-quality and security are the rubrics this container dispatches. The
+    # rubrics it
     # replaced — scope, completeness, rootCause, tautology — are retired and
     # unregistered: prd_audit now owns scope-as-intent grading with bounded
     # remediation, and the as-built architecture review owns design conformance,
@@ -84,6 +85,14 @@ build_review:
     # No retired key is declared here. A consumer config that still names one
     # loads as a no-op with a one-time notice (FR-20) rather than failing.
     testQuality:
+      enabled: true
+      llm_provider: claude
+      model: opus
+      effort: high
+    # Security judges the whole frozen feature diff for concrete, changed-hunk-
+    # anchored defects (#2568). Judgement-heavy like testQuality, so it takes the
+    # same Claude opus routing. Enabled 2026-09-18.
+    security:
       enabled: true
       llm_provider: claude
       model: opus
