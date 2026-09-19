@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
 
 import { checkStepCompletion, sweepStaleReviewArtifacts } from '../../src/engine/artifacts.js';
 import { Conductor } from '../../src/engine/conductor.js';
@@ -52,9 +53,14 @@ async function preservedReaderFixture(): Promise<{ dir: string; head: string }> 
     checkedAt: 1,
     preservation: {
       gate: 'prd_audit',
-      original: { artifactDigest: 'sha256:original', attemptId: 'attempt-1', runId: 'before-rebase', codeStamp: original },
+      original: {
+        artifactDigest: `sha256:${createHash('sha256').update(report).digest('hex')}`,
+        attemptId: 'before-rebase',
+        runId: 'before-rebase',
+        codeStamp: original,
+      },
       replay,
-      relevantInputIdentities: [],
+      relevantInputIdentities: ['.docs/specs/feature.md@replay-bound'],
       operationId: 'rebase-1',
     },
   });

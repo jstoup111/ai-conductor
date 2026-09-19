@@ -1501,7 +1501,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
    * without F, so the uncomputable-surface path stays the documented no-op —
    * the fix must not start inventing classification events.
    */
-  it('S7.5: stays a no-op on an uncomputable surface with no pre-verified preservation', async () => {
+  it('emits the applied conservative invalidations when feature surface is uncomputable', async () => {
     const outcome: RebaseOutcome = {
       kind: 'changed',
       changedCodePaths: ['src/feature.ts'],
@@ -1516,9 +1516,14 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
       if (event.type === 'rebase_gate_invalidated') seen.push(event.gate);
     });
 
-    await emitGateInvalidationEvents(events, outcome, false, []);
+    await emitGateInvalidationEvents(events, outcome, false, {
+      kickedBack: ['build', 'coverage_binding', 'build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built'],
+      reverified: [],
+    });
 
-    expect(seen).toEqual([]);
+    expect(seen.sort()).toEqual([
+      'architecture_review_as_built', 'build_review', 'coverage_binding', 'prd_audit', 'test_suite',
+    ]);
   });
 
   it('Task 6: delta-aware — feature runtime source changed → all judged gates invalidated including audits', async () => {

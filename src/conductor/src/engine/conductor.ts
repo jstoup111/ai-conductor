@@ -414,7 +414,6 @@ import {
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
 import { applyRebaseTransition } from './rebase-transition.js';
-import { classifyGateInvalidation } from './gate-invalidation.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
   escalateBuildFailure as defaultEscalateBuildFailure,
@@ -13698,89 +13697,9 @@ export class Conductor {
         await this.emitLoopHalt(reason);
         return 'halt';
       }
-      // FR-5: a file-changing rebase invalidated build (+test_suite,
-      // +build_review, +manual_test) via kickback-shaped verdicts. Those
-      // gates aren't `kickbackTarget` steps, so emit the kickback event(s)
-      // here; the selector below routes back to them. test_suite re-verifies
-      // before build_review judges the refreshed build.
-      // A completed replay uses applyRebaseTransition above. Its named batch
-      // is the sole state mutation: do not subsequently rewind by tail
-      // position, which would reopen completed authoring/BUILD work.
-      const appliedRebase = await readVerdict(this.projectRoot, 'rebase');
-      if (this.lastRebaseOutcome?.kind === 'changed' && appliedRebase?.rebaseOperation?.status !== 'applied') {
-        const verdicts = await readAllVerdicts(this.projectRoot);
-        // Task 7 (ADR-2026-07-20): a judged gate that classifyGateInvalidation
-        // decided to PRESERVE (delta misses its declared surface) must not be
-        // swept `stale` by markDownstreamStale's blanket cascade just because
-        // an upstream gate (e.g. manual_test) was re-opened. Recompute the
-        // same preserved set the verdict-writing side (applyRebaseVerdicts,
-        // Task 6) used, and exclude it from every navigateBack call in this
-        // rebase-origin loop. Strictly scoped to kind === 'changed' (this
-        // branch only runs there) — never affects non-rebase kickbacks.
-        const outcome = this.lastRebaseOutcome;
-        const ranManualTest = getStepStatus(state, 'manual_test') !== 'skipped';
-        const preserved: StepName[] =
-          outcome.featureSurface !== undefined
-            ? (classifyGateInvalidation(
-                outcome.changedCodePaths,
-                outcome.featureSurface,
-                ranManualTest,
-              ).preserved as StepName[])
-            : [];
-        // Task 14 (#655 amendment): the candidate target list must cover
-        // every gate classifyGateInvalidation can invalidate — not just the
-        // legacy fixed four. `applyRebaseVerdicts` already writes a
-        // kickback-shaped verdict to `prd_audit`/`architecture_review_as_built`
-        // when their feature-runtime surface is hit (classifyGateInvalidation's
-        // `invalidated` list), but without also driving `navigateBack` for
-        // them here, their step STATE never flips back to `pending` — the
-        // verdict alone re-opens the gate's own predicate, but the selector
-        // still sees `done` and never re-dispatches. Order matches the
-        // ALL_STEPS tail (test_suite → build_review →
-        // manual_test → prd_audit →
-        // architecture_review_as_built).
-        for (const target of [
-          'coverage_binding',
-          'build',
-          'test_suite',
-          'build_review',
-          'manual_test',
-          'prd_audit',
-          'architecture_review_as_built',
-        ] as StepName[]) {
-          const v = verdicts[target];
-          if (v && v.satisfied === false && v.kickback?.from === 'rebase') {
-            let convergenceCredit: { gate: 'build_review' } | undefined;
-            if (target === 'build_review') {
-              const credited = await updateKickbackLedger(this.projectRoot, (ledger) => {
-                const entry = ledger.gates.build_review;
-                if (!entry) return { result: false };
-                return {
-                  ledger: {
-                    ...ledger,
-                    gates: { ...ledger.gates, build_review: creditKickbackGateLaps(entry) },
-                  },
-                  result: true,
-                };
-              }, 'build_review');
-              if (credited) {
-                convergenceCredit = { gate: target };
-              }
-            }
-            await this.events.emit({
-              type: 'kickback',
-              from: 'rebase',
-              to: target,
-              evidence: v.kickback.evidence,
-              count: 1,
-              ...(convergenceCredit === undefined ? {} : { convergenceCredit }),
-            });
-            // Re-open the staled gate so the selector re-runs it, without
-            // sweeping any preserved judged gate stale in the process.
-            await this.navigateStateBack(state, target, steps, preserved);
-          }
-        }
-      }
+      // Completed rebases are applied solely through applyRebaseTransition.
+      // Its explicit invalidated set is already pending in state; never use a
+      // positional tail rewind, which can reopen acceptance authoring or BUILD.
     } else if (topo.verdictSteps.has(step.name)) {
       // Record the objective verdict for any gate we just ran — including in the
       // front half, so a re-run plan/stories refreshes its verdict on disk.

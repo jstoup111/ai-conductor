@@ -386,7 +386,7 @@ describe('integration/rebase-loop', () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline/build-review.json'),
-        JSON.stringify({ verdict: 'PASS', codeStamp, rubric: { testQuality: false } }),
+        JSON.stringify({ verdict: 'PASS', codeStamp, lapId: `lap-${codeStamp}`, rubric: { testQuality: false } }),
       );
     } else if (step === 'manual_test') {
       const codeStamp = await git('rev-parse', 'HEAD');
@@ -1387,6 +1387,11 @@ describe('integration/rebase-loop', () => {
         await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
+        expect(counts.acceptance_specs ?? 0).toBe(0);
+        expect(counts.build ?? 0).toBe(2);
+        expect(counts.build_review ?? 0).toBe(0);
+        expect(counts.test_suite ?? 0).toBe(0);
+        expect(counts.manual_test ?? 0).toBe(2);
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
       });

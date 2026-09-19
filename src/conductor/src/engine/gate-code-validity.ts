@@ -138,7 +138,10 @@ const PRESERVED_GATE_ARTIFACTS: Partial<Record<StepName, string>> = {
 
 /** Re-read the same artifact and engine-owned stamp that the rebase writer
  * bound into a preservation record. A record is not authority by itself. */
-async function currentPreservedJudgeIdentity(
+/** Read the immutable identity owned by a gate's durable artifact. Shared by
+ * the rebase writer and readers; conduct-session-id is intentionally not
+ * replay authority because every step replaces that compatibility scalar. */
+export async function currentPreservedJudgeIdentity(
   projectRoot: string,
   gate: StepName,
 ): Promise<{ artifactDigest: string; attemptId: string; runId: string; codeStamp: string } | null> {
@@ -163,9 +166,11 @@ async function currentPreservedJudgeIdentity(
       codeStamp = parsed.codeStamp;
       runId = parsed.runId;
     } else if (gate === 'build_review' || gate === 'test_suite') {
-      const parsed = JSON.parse(artifact) as { codeStamp?: unknown; provenanceHeadSha?: unknown };
+      const parsed = JSON.parse(artifact) as { codeStamp?: unknown; provenanceHeadSha?: unknown; lapId?: unknown };
       codeStamp = gate === 'build_review' ? parsed.codeStamp : parsed.provenanceHeadSha;
-      runId = await readFile(join(projectRoot, '.pipeline', 'conduct-session-id'), 'utf-8');
+      // Build-review's lap and the suite proof's provenance head are durable,
+      // source-bound judge identities. Do not substitute the mutable session.
+      runId = gate === 'build_review' ? parsed.lapId : parsed.provenanceHeadSha;
     }
     if (!nonEmptyString(codeStamp) || !nonEmptyString(runId)) return null;
     const normalizedRunId = runId.trim();

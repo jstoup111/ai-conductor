@@ -22,10 +22,6 @@ import {
   projectGateSurfaces,
 } from './gate-invalidation.js';
 import {
-  ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
-  MANUAL_TEST_CODE_STAMP,
-  MANUAL_TEST_FAIL_EVIDENCE,
-  PRD_AUDIT_CODE_STAMP,
   buildArtifactResolutionContext,
   resolveFeaturePlanPath,
   resolveFeaturePrdPaths,
@@ -44,7 +40,7 @@ import {
   type ReplayIdentitySeed,
 } from './rebase-replay.js';
 import type { ReplayEvidence } from './gate-verdicts.js';
-import { isApplicableOriginalPass } from './gate-code-validity.js';
+import { currentPreservedJudgeIdentity, isApplicableOriginalPass } from './gate-code-validity.js';
 import type { RebasePreservedCandidate } from './rebase-transition.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
@@ -1730,77 +1726,6 @@ async function applicableOriginalPass(
   return verdict!;
 }
 
-const PRESERVED_GATE_ARTIFACTS: Partial<Record<StepName, string>> = {
-  coverage_binding: '.pipeline/coverage-binding.json',
-  build_review: '.pipeline/build-review.json',
-  test_suite: '.pipeline/test-suite-evidence.json',
-  manual_test: '.pipeline/manual-test-results.md',
-  prd_audit: '.pipeline/prd-audit.md',
-  architecture_review_as_built: '.pipeline/architecture-review-as-built.md',
-};
-
-/**
- * Capture the durable identity of the original judge result.  A gate verdict
- * is only loop bookkeeping: its timestamp is neither an artifact digest nor
- * a provider attempt.  Replay authority therefore exists only when the
- * original artifact and its engine-owned sidecar can both prove the identity
- * we are retaining.
- */
-async function capturePreservedJudgeIdentity(
-  projectRoot: string,
-  gate: StepName,
-): Promise<RebasePreservedCandidate['original'] | undefined> {
-  const artifactPath = PRESERVED_GATE_ARTIFACTS[gate];
-  if (!artifactPath) return undefined;
-
-  try {
-    const artifact = await readFile(join(projectRoot, artifactPath), 'utf-8');
-    let codeStamp: unknown;
-    let runId: unknown;
-
-    if (gate === 'manual_test') {
-      const [stamp, identity] = await Promise.all([
-        readFile(join(projectRoot, MANUAL_TEST_FAIL_EVIDENCE), 'utf-8'),
-        readFile(join(projectRoot, MANUAL_TEST_CODE_STAMP), 'utf-8'),
-      ]);
-      codeStamp = (JSON.parse(stamp) as { codeStamp?: unknown }).codeStamp;
-      runId = (JSON.parse(identity) as { runId?: unknown }).runId;
-    } else if (gate === 'prd_audit' || gate === 'architecture_review_as_built') {
-      const sidecar = await readFile(join(
-        projectRoot,
-        gate === 'prd_audit' ? PRD_AUDIT_CODE_STAMP : ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
-      ), 'utf-8');
-      const parsed = JSON.parse(sidecar) as { codeStamp?: unknown; runId?: unknown };
-      codeStamp = parsed.codeStamp;
-      runId = parsed.runId;
-    } else if (gate === 'build_review' || gate === 'test_suite') {
-      // These are engine-native gates.  Their artifacts carry the engine's
-      // tree stamp and the session file is the engine-owned execution/run
-      // identity; unlike a generic verdict timestamp, neither is provider
-      // self-reporting.  coverage_binding has no tree stamp yet and remains
-      // deliberately unpreservable rather than being given a plausible one.
-      const parsed = JSON.parse(artifact) as { codeStamp?: unknown; provenanceHeadSha?: unknown };
-      codeStamp = gate === 'build_review' ? parsed.codeStamp : parsed.provenanceHeadSha;
-      runId = await readFile(join(projectRoot, '.pipeline', 'conduct-session-id'), 'utf-8');
-    }
-
-    // The SHIP-tail sidecar is the engine's source of truth: the same run id
-    // is deliberately handed to the provider as its attempt id. Other gates
-    // lack this authority and must be re-judged rather than assigned a
-    // plausible identity from the generic gate verdict.
-    if (typeof codeStamp !== 'string' || codeStamp.length === 0 ||
-        typeof runId !== 'string' || runId.trim().length === 0) return undefined;
-    return {
-      artifactDigest: `sha256:${createHash('sha256').update(artifact).digest('hex')}`,
-      attemptId: runId.trim(),
-      runId: runId.trim(),
-      codeStamp,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Write the gate verdicts implied by a rebase outcome and return whether the
  * rebase gate itself is satisfied (→ proceed to finish) or the loop must HALT.
@@ -1986,7 +1911,7 @@ export async function applyRebaseVerdicts(
         applicableOriginalPasses.add(gate);
       }
       if (original && classified) {
-        const identity = await capturePreservedJudgeIdentity(projectRoot, gate);
+        const identity = await currentPreservedJudgeIdentity(projectRoot, gate);
         if (identity) {
           preservedCandidates.push({
             gate,
@@ -2064,6 +1989,25 @@ export async function applyRebaseVerdicts(
     });
     kickedBack.push(target);
   }
+  // A completed changed rebase without P/B/O is still a first-class,
+  // conservative transition. The current HEAD supplies only an operation
+  // identity; `unproved` prohibits every preservation.
+  const missingReplayHead = !replayComparison && git
+    ? (await git(['rev-parse', 'HEAD'])).stdout.trim()
+    : '';
+  const transitionReplay = replayComparison
+    ? {
+        preRebaseHead: replayComparison.identity.preRebaseHead,
+        mergeBase: replayComparison.identity.mergeBase,
+        target: replayComparison.identity.target,
+        completedHead: replayComparison.identity.completedHead,
+        ...(replayComparison.kind === 'unproved'
+          ? { kind: 'unproved' as const }
+          : { kind: 'proved' as const, expectedTree: replayComparison.expectedTree }),
+      }
+    : missingReplayHead
+      ? { preRebaseHead: missingReplayHead, mergeBase: missingReplayHead, target: missingReplayHead, completedHead: missingReplayHead, kind: 'unproved' as const }
+      : undefined;
   return {
     satisfied: true,
     kickedBack,
@@ -2071,15 +2015,7 @@ export async function applyRebaseVerdicts(
     ...(preservedCandidates.length === 0 ? {} : { preservedGates: preservedCandidates.map(({ gate }) => gate) }),
     ...(preservedCandidates.length === 0 ? {} : { preservedCandidates }),
     ...(preserved.length === 0 ? {} : { preserved }),
-    ...(replayComparison ? { replay: {
-          preRebaseHead: replayComparison.identity.preRebaseHead,
-          mergeBase: replayComparison.identity.mergeBase,
-          target: replayComparison.identity.target,
-          completedHead: replayComparison.identity.completedHead,
-          ...(replayComparison.kind === 'unproved'
-            ? { kind: 'unproved' as const }
-            : { kind: 'proved' as const, expectedTree: replayComparison.expectedTree }),
-        } } : {}),
+    ...(transitionReplay ? { replay: transitionReplay } : {}),
   };
 }
 
@@ -2207,6 +2143,18 @@ export async function emitGateInvalidationEvents(
         deltaConsidered: [],
         basis,
       });
+    }
+    // The applied fail-closed invalidation is known even when its ordinary
+    // surface projection is not.  Reuse the preservation placeholder rather
+    // than creating a parallel observability channel.
+    for (const gate of (application?.kickedBack ?? []).filter((gate) => GATE_SURFACE[gate] !== undefined)) {
+      if (!preverifiedPreserved.some((preserved) => preserved.gate === gate)) {
+        await events.emit({
+          type: 'rebase_gate_invalidated',
+          gate,
+          matchedPaths: ['<feature surface uncomputable>'],
+        });
+      }
     }
     return;
   }

@@ -68,14 +68,15 @@ async function commit(
 }
 
 async function writeBuildReviewIdentity(s: Scratch, codeStamp: string, runId = 'run-1') {
-  const artifact = JSON.stringify({ codeStamp });
+  const lapId = `lap-${codeStamp}`;
+  const artifact = JSON.stringify({ codeStamp, lapId });
   await mkdir(join(s.repo, '.pipeline'), { recursive: true });
   await writeFile(join(s.repo, BUILD_REVIEW_VERDICT), artifact);
   await writeFile(join(s.repo, '.pipeline', 'conduct-session-id'), runId);
   return {
     artifactDigest: `sha256:${createHash('sha256').update(artifact).digest('hex')}`,
-    attemptId: runId,
-    runId,
+    attemptId: lapId,
+    runId: lapId,
     codeStamp,
   };
 }
