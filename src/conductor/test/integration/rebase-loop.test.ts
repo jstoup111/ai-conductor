@@ -1400,6 +1400,85 @@ describe('integration/rebase-loop', () => {
       });
     });
 
+    // ── Story: applied preservation survives a conductor restart through finish ──
+    describe('Story: a restarted conductor reaches finish on applied preservation without judge redispatch', () => {
+      it('keeps the original preserved identity and dispatches no judge after restart', async () => {
+        await initRepoOnFeatureBranchWithSharedRuntimeFile();
+        await addFeatureTestFile();
+        await advanceBaseWithDivergentEditToSharedFile([
+          { path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" },
+        ]);
+        forceIndeterminateProspectiveMerge();
+        await writeState(statePath, { ...FRONT_DONE_M });
+
+        // First process: dies at the finish boundary, after the rebase
+        // operation and its preservation records were durably applied.
+        const counts: Record<string, number> = {};
+        const crash = new Error('process died before finish');
+        const dyingRunner: StepRunner = {
+          run: async (step) => {
+            if (step === 'finish') throw crash;
+            counts[step] = (counts[step] ?? 0) + 1;
+            return satisfy(step);
+          },
+        };
+        await runThroughShip(dyingRunner);
+        // The conductor records the death as a halt with finish still open;
+        // recovery clears it before the next process starts.
+        await expect(readFile(join(dir, '.pipeline/HALT'), 'utf-8')).resolves.toContain(crash.message);
+        expect(JSON.parse(await readFile(statePath, 'utf-8')).finish).toBe('in_progress');
+        await rm(join(dir, '.pipeline/HALT'), { force: true });
+        await rm(join(dir, '.pipeline/HALT.class'), { force: true });
+
+        const rebaseBefore = await readGateVerdict('rebase');
+        expect(rebaseBefore?.rebaseOperation?.status).toBe('applied');
+        const judged = (rebaseBefore.rebaseOperation.transition.preserved as string[])
+          .filter((gate) => ['build_review', 'prd_audit', 'architecture_review_as_built'].includes(gate));
+        expect(judged.length).toBeGreaterThan(0);
+        const before = Object.fromEntries(
+          await Promise.all(judged.map(async (gate) => [gate, (await readGateVerdict(gate))?.preservation])),
+        );
+        for (const gate of judged) {
+          expect(before[gate]?.operationId).toBe(rebaseBefore.rebaseOperation.id);
+        }
+        const countsAtRestart = { ...counts };
+
+        // Second process: a fresh Conductor resumes and finishes.
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+        const fakeGit: GitRunner = async (args) =>
+          args.includes('--symbolic-full-name')
+            ? { stdout: 'refs/remotes/origin/feature/x\n' }
+            : { stdout: '' };
+        const restartedCounts: Record<string, number> = {};
+        await new Conductor({
+          stateFilePath: statePath,
+          stepRunner: runCountingRunner(restartedCounts),
+          events,
+          projectRoot: dir,
+          daemon: true,
+          verifyArtifacts: true,
+          mode: 'auto',
+          resume: true,
+          maxRetries: 1,
+          config: { rebase_resolution_attempts: 0 },
+          git: fakeGit,
+          shipmentEvidence: validShipmentEvidence,
+        }).run();
+
+        expect(completed).toBe(true);
+        expect(restartedCounts.finish).toBe(1);
+        for (const gate of judged) {
+          expect(restartedCounts[gate] ?? 0).toBe(0);
+          expect((await readGateVerdict(gate))?.preservation).toEqual(before[gate]);
+        }
+        expect(countsAtRestart.prd_audit).toBe(1);
+        expect(countsAtRestart.architecture_review_as_built).toBe(1);
+      });
+    });
+
     // ── Story: A change to the feature's own runtime source re-runs the
     // judged audit gates ──────────────────────────────────────────────────────
     describe("Story: feature-owned runtime source in the delta re-runs prd_audit and architecture_review_as_built", () => {

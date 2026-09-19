@@ -13700,21 +13700,14 @@ export class Conductor {
       }
       // A durable completed replay already applied its explicitly named state
       // mutation through applyRebaseTransition. Older/recovery rebase verdicts
-      // have no such operation, so consume their rebase-origin kickbacks here
-      // without a generic tail scan (which would stale preserved reviews).
+      // have no such operation, so consume the rebase-origin kickbacks
+      // runRebaseStep already persisted. Only the gates those verdicts name are
+      // reopened, by direct state mutation: no decision is recomputed here and
+      // no positional downstream sweep runs (which would stale preserved reviews).
       const appliedRebase = await readVerdict(this.projectRoot, 'rebase');
       if (this.lastRebaseOutcome?.kind === 'changed' && appliedRebase?.rebaseOperation?.status !== 'applied') {
         const verdicts = await readAllVerdicts(this.projectRoot);
-        const outcome = this.lastRebaseOutcome;
-        const ranManualTest = getStepStatus(state, 'manual_test') !== 'skipped';
-        const preserved: StepName[] =
-          outcome.featureSurface !== undefined
-            ? (classifyGateInvalidation(
-                outcome.changedCodePaths,
-                outcome.featureSurface,
-                ranManualTest,
-              ).preserved as StepName[])
-            : [];
+        const reopened: Record<string, StepStatus> = {};
         for (const target of [
           'coverage_binding',
           'build',
@@ -13750,8 +13743,9 @@ export class Conductor {
             count: 1,
             ...(convergenceCredit === undefined ? {} : { convergenceCredit }),
           });
-          await this.navigateStateBack(state, target, steps, preserved);
+          if (getStepStatus(state, target) !== 'skipped') reopened[target] = 'pending';
         }
+        await this.commitStateChanges(state, 'reopen persisted rebase kickbacks', reopened);
       }
     } else if (topo.verdictSteps.has(step.name)) {
       // Record the objective verdict for any gate we just ran — including in the
