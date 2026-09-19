@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-19T02:06:20.485Z
 Slug: reclaim-merged-feature-worktrees-without-depending
 Class: plan-gap
 Halting step: prd_audit
