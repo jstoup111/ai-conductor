@@ -2716,7 +2716,7 @@ export class DefaultStepRunner implements StepRunner {
       if (entry.verdict === 'does-not-assert') refused.push(entry);
     }
     await writeEnvelope('partial', entries);
-    for (const batch of planned.batches) {
+    for (const [batchIndex, batch] of planned.batches.entries()) {
       const batchDigests = batch.map(({ claimDigest: digest }) => digest);
       const memberId = batchDigests[0]!;
       const prompt = [
@@ -2759,7 +2759,7 @@ export class DefaultStepRunner implements StepRunner {
       if (!result.success || typeof result.output !== 'string') {
         await writeEnvelope('failed', entries);
         const infrastructureFailure = new CoverageBindingPayloadError(
-          result.output ?? `provider failed for ${memberId}`,
+          `provider failed for batch ${batchIndex + 1} of ${planned.batches.length}: ${result.output ?? memberId}`,
         );
         return {
           success: false,
