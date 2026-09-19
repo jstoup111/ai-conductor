@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-19T11:24:03.208Z
 Slug: enforce-ownership-across-all-harness-github-operat
 Class: needs-human
 Halting step: unknown
