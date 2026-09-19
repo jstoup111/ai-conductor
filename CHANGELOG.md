@@ -11,12 +11,13 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.3.1] - 2026-09-19
+## [1.4.0] - 2026-09-19
 
 ### Added
 
 - OpenTelemetry feature metrics now include the raw complexity-tier label when it is available. ([implementation PR #2567](https://github.com/jstoup111/ai-conductor/pull/2567)).
 - Adds an opt-in security rubric that grades build diffs for security defects before ship. ([implementation PR #2568](https://github.com/jstoup111/ai-conductor/pull/2568)).
+- Guided bootstrap now records project test commands and operator identity settings without hand-editing configuration. ([implementation PR #2575](https://github.com/jstoup111/ai-conductor/pull/2575)).
 
 ### Changed
 
@@ -33,6 +34,12 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - CI repair sessions retain failing-check context and report truthful repair outcomes. ([implementation PR #2534](https://github.com/jstoup111/ai-conductor/pull/2534)).
 - As-built remediation now accepts dotted subclauses that cite an approved ADR decision. ([implementation PR #2593](https://github.com/jstoup111/ai-conductor/pull/2593)).
 - `/remediate` now halts an environmental build stall immediately instead of spending a planner turn diagnosing a failure it cannot repair. ([implementation PR #2603](https://github.com/jstoup111/ai-conductor/pull/2603)).
+
+## Migration
+
+```bash migration
+true
+```
 
 ## [1.3.0] - 2026-09-15
 
