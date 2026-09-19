@@ -55,6 +55,7 @@ import * as gateVerdicts from '../../src/engine/gate-verdicts.js';
 import { readVerdict, writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { checkGate } from '../../src/engine/gates.js';
+import { readHaltClass } from '../../src/engine/halt-marker.js';
 import { gateSatisfied } from '../../src/engine/selector.js';
 import { writeFile, mkdir } from 'fs/promises';
 
@@ -778,6 +779,56 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(marker).toContain('test_suite (failed)');
       expect(marker).toContain('daemon will re-dispatch');
       expect(haltReasons).toEqual([marker.trim()]);
+    });
+
+    it('leaves no readable mechanical sidecar when the recoverable marker body write fails', async () => {
+      vi.mocked(buildStepRegistry).mockReturnValueOnce([
+        gateStep('build'),
+        gateStep('build_review', ['build']),
+      ]);
+      await mkdir(join(dir, '.pipeline', 'HALT'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'HALT.class'), 'mechanical', 'utf-8');
+      await writeState(statePath, {
+        build: 'pending',
+        build_review: 'in_progress',
+      } as ConductState);
+      const { runner } = trackingRunner(dir);
+
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        daemon: true, fromStep: 'build_review',
+      }).run();
+
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await expect(readHaltClass(dir)).resolves.toBe('unclassified');
+    });
+
+    it('leaves no readable mechanical sidecar when its write fails after the recoverable body', async () => {
+      vi.mocked(buildStepRegistry).mockReturnValueOnce([
+        gateStep('build'),
+        gateStep('build_review', ['build']),
+      ]);
+      await mkdir(join(dir, '.pipeline', 'HALT.class.tmp'), { recursive: true });
+      await writeState(statePath, {
+        build: 'pending',
+        build_review: 'in_progress',
+      } as ConductState);
+      const { runner } = trackingRunner(dir);
+
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        daemon: true, fromStep: 'build_review',
+      }).run();
+
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).resolves.toContain(
+        'daemon will re-dispatch',
+      );
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await expect(readHaltClass(dir)).resolves.toBe('unclassified');
     });
 
     it('parks an absent pending prerequisite as needs-human at the real daemon gate', async () => {
