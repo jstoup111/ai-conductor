@@ -18,6 +18,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - OpenTelemetry feature metrics now include the raw complexity-tier label when it is available. ([implementation PR #2567](https://github.com/jstoup111/ai-conductor/pull/2567)).
 - Adds an opt-in security rubric that grades build diffs for security defects before ship. ([implementation PR #2568](https://github.com/jstoup111/ai-conductor/pull/2568)).
 - Guided bootstrap now records project test commands and operator identity settings without hand-editing configuration. ([implementation PR #2575](https://github.com/jstoup111/ai-conductor/pull/2575)).
+- Adds an ai-conductor update command that runs the owning harness checkout's updater from any directory. ([implementation PR #2610](https://github.com/jstoup111/ai-conductor/pull/2610)).
 
 ### Changed
 
