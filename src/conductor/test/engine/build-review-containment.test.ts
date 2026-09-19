@@ -1,11 +1,58 @@
 // Covers: task:13
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { prepareBuildReviewContainment } from '../../src/engine/build-review-containment.js';
+import {
+  composeReviewLaunchMounts,
+  deriveExecutableRuntimeRoots,
+  prepareBuildReviewContainment,
+  type BuildReviewRuntimeHost,
+} from '../../src/engine/build-review-containment.js';
 import {
   resolveReviewScratchHome,
   resolveScratchHome,
 } from '../../src/engine/self-host/provider-scratch.js';
+
+const PATHS = {
+  frozenSource: '/review/frozen-source', policyMaterial: '/review/policy',
+  originalCheckout: '/review/original', originalInstallation: '/review/installed-policy',
+  engineEvidence: '/review/engine-evidence', siblingEvidence: '/review/sibling-evidence',
+  scratch: '/review/private-scratch', sourceWriteProbe: '/review/frozen-source/sentinel',
+  installationWriteProbe: '/review/installed-policy/sentinel',
+  engineStateWriteProbe: '/review/engine-evidence/sentinel',
+  scratchWriteProbe: '/review/private-scratch/sentinel',
+  siblingEvidenceProbe: '/review/sibling-evidence/result.json',
+  hostStateProbe: '/review/private-scratch.host-state-probe',
+};
+
+/** A fixed host: nvm-style node, a native claude symlink, an npm-installed codex. No real filesystem is read. */
+const HOST_LINKS: Record<string, string> = {
+  '/home/op/.nvm/versions/node/v22/bin/node': '/home/op/.nvm/versions/node/v22/bin/node',
+  '/home/op/.local/bin/claude': '/home/op/.local/share/claude/versions/2.1.0',
+  '/home/op/.nvm/versions/node/v22/bin/codex': '/home/op/.nvm/versions/node/v22/lib/node_modules/@openai/codex/bin/codex.js',
+  '/usr/bin/git': '/usr/bin/git',
+};
+const runtimeHost: BuildReviewRuntimeHost = {
+  execPath: '/home/op/.nvm/versions/node/v22/bin/node',
+  pathEnv: '/home/op/.local/bin:/home/op/.nvm/versions/node/v22/bin:/usr/bin',
+  home: '/home/op',
+  realpath: (path) => {
+    const real = HOST_LINKS[path];
+    if (real === undefined) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return real;
+  },
+};
+const HEALTHY_PROBE = [
+  'source-write-refused', 'installation-write-refused', 'engine-state-write-refused',
+  'scratch-write-succeeded', 'sibling-evidence-withheld', 'nested-sandbox-available', 'host-state-withheld',
+];
+
+function bindTriples(args: readonly string[]): Array<readonly [string, string, string]> {
+  const triples: Array<readonly [string, string, string]> = [];
+  args.forEach((flag, index) => {
+    if (/^--(ro-|dev-)?bind(-try)?$/.test(flag)) triples.push([flag, args[index + 1]!, args[index + 2]!]);
+  });
+  return triples;
+}
 
 describe('engine/build-review-containment', () => {
   it('derives review bookkeeping outside the protected candidate checkout', () => {
@@ -44,7 +91,9 @@ describe('engine/build-review-containment', () => {
         engineStateWriteProbe: '/review/engine-evidence/sentinel',
         scratchWriteProbe: '/review/private-scratch/sentinel',
         siblingEvidenceProbe: '/review/sibling-evidence/result.json',
+        hostStateProbe: '/review/private-scratch.host-state-probe',
       },
+      runtimeHost,
       runProcess: async (executable, args) => {
         processCalls.push({ executable, args });
         const engineEvidenceIsReadOnly = args.some((value, index) =>
@@ -55,7 +104,7 @@ describe('engine/build-review-containment', () => {
           stderr: '',
           stdout: [
             'source-write-refused', 'installation-write-refused', engineEvidenceIsReadOnly ? 'engine-state-write-refused' : 'engine-state-write-succeeded',
-            'scratch-write-succeeded', 'sibling-evidence-withheld', 'nested-sandbox-available',
+            'scratch-write-succeeded', 'sibling-evidence-withheld', 'nested-sandbox-available', 'host-state-withheld',
           ].join('\n'),
         };
       },
@@ -77,21 +126,109 @@ describe('engine/build-review-containment', () => {
         '--bind', '/review/private-scratch', '/review/private-scratch',
       ]),
     })]);
+    // The host sentinel is the probe's sixth operand, after the sibling probe.
+    expect(processCalls[0]!.args.slice(-2)).toEqual([
+      '/review/sibling-evidence/result.json', '/review/private-scratch.host-state-probe',
+    ]);
+  });
+
+  it('enumerates runtime roots instead of binding the host root, HOME, or a host config directory', async () => {
+    const result = await prepareBuildReviewContainment({
+      provider: 'claude', paths: PATHS, runtimeHost,
+      runProcess: async () => ({ exitCode: 0, stderr: '', stdout: HEALTHY_PROBE.join('\n') }),
+    });
+    if (result.kind !== 'ready') throw new Error(`expected ready containment: ${result.reason}`);
+    const binds = bindTriples(result.profile.mountArgs);
+    const sources = binds.map(([, source]) => source);
+
+    expect(sources).not.toContain('/');
+    expect(sources).not.toContain('/home/op');
+    expect(sources).not.toContain('/home');
+    expect(sources).not.toContain('/etc');
+    expect(sources).not.toContain('/home/op/.local');
+    expect(sources).not.toContain('/home/op/.local/bin');
+    expect(binds).toEqual(expect.arrayContaining([
+      ['--ro-bind-try', '/usr', '/usr'],
+      ['--ro-bind-try', '/etc/resolv.conf', '/etc/resolv.conf'],
+      ['--ro-bind-try', '/etc/ssl', '/etc/ssl'],
+      ['--ro-bind-try', '/etc/passwd', '/etc/passwd'],
+      // node under nvm: its install prefix, not HOME
+      ['--ro-bind-try', '/home/op/.nvm/versions/node/v22', '/home/op/.nvm/versions/node/v22'],
+      // native claude: the PATH symlink and the single resolved binary
+      ['--ro-bind-try', '/home/op/.local/bin/claude', '/home/op/.local/bin/claude'],
+      ['--ro-bind-try', '/home/op/.local/share/claude/versions/2.1.0', '/home/op/.local/share/claude/versions/2.1.0'],
+    ]));
+    // Every runtime root is read-only; scratch is the only writable bind.
+    expect(binds.filter(([flag]) => flag === '--bind' || flag.startsWith('--dev-bind'))).toEqual([
+      ['--bind', '/review/private-scratch', '/review/private-scratch'],
+    ]);
+    expect(result.profile.mountArgs).toEqual([...result.profile.runtimeMountArgs!, ...result.profile.reviewMountArgs!]);
+  });
+
+  it('binds an npm-installed provider by its package root and leaves system executables to /usr', () => {
+    expect(deriveExecutableRuntimeRoots('codex', runtimeHost)).toEqual([
+      '/home/op/.nvm/versions/node/v22/bin/codex',
+      '/home/op/.nvm/versions/node/v22/lib/node_modules/@openai/codex',
+    ]);
+    expect(deriveExecutableRuntimeRoots('git', runtimeHost)).toEqual([]);
+    expect(deriveExecutableRuntimeRoots('absent-provider', runtimeHost)).toEqual([]);
+  });
+
+  it('exposes a self-host prepared wrap read-only between the runtime roots and the review binds', async () => {
+    const result = await prepareBuildReviewContainment({
+      provider: 'codex', paths: PATHS, runtimeHost,
+      runProcess: async () => ({ exitCode: 0, stderr: '', stdout: HEALTHY_PROBE.join('\n') }),
+    });
+    if (result.kind !== 'ready') throw new Error(`expected ready containment: ${result.reason}`);
+
+    const composed = composeReviewLaunchMounts(result.profile, {
+      executable: 'bwrap',
+      args: ['--dev-bind', '/', '/', '--ro-bind', '/live', '/live', '--bind', '/live/.worktrees/f', '/live/.worktrees/f', '--', '/isolated/codex', 'exec'],
+    }, runtimeHost);
+
+    const runtimeLength = result.profile.runtimeMountArgs!.length;
+    expect(composed.slice(0, runtimeLength)).toEqual(result.profile.runtimeMountArgs);
+    expect(composed.slice(runtimeLength, composed.length - result.profile.reviewMountArgs!.length)).toEqual([
+      '--ro-bind-try', '/live', '/live',
+      '--ro-bind-try', '/live/.worktrees/f', '/live/.worktrees/f',
+      '--ro-bind-try', '/isolated/codex', '/isolated/codex',
+    ]);
+    expect(composed.slice(-result.profile.reviewMountArgs!.length)).toEqual(result.profile.reviewMountArgs);
+    expect(bindTriples(composed).map(([, source]) => source)).not.toContain('/');
+  });
+
+  it('refuses a host sentinel that an allowlisted root would expose', async () => {
+    const runProcess = vi.fn(async () => ({ exitCode: 0, stderr: '', stdout: HEALTHY_PROBE.join('\n') }));
+    const result = await prepareBuildReviewContainment({
+      provider: 'claude', runtimeHost, runProcess,
+      paths: { ...PATHS, hostStateProbe: '/review/original/host-sentinel' },
+    });
+
+    expect(result).toMatchObject({ kind: 'unsupported' });
+    expect(runProcess).not.toHaveBeenCalled();
   });
 
   it.each([
     ['missing bubblewrap', async () => { throw Object.assign(new Error('not found'), { code: 'ENOENT' }); }],
     ['a successful protected write', async () => ({
       exitCode: 0, stderr: '',
-      stdout: 'source-write-succeeded\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available',
+      stdout: 'source-write-succeeded\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available\nhost-state-withheld',
     })],
     ['a failed scratch write', async () => ({
       exitCode: 0, stderr: '',
-      stdout: 'source-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-refused\nsibling-evidence-withheld\nnested-sandbox-available',
+      stdout: 'source-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-refused\nsibling-evidence-withheld\nnested-sandbox-available\nhost-state-withheld',
+    })],
+    ['no proof that host state is withheld', async () => ({
+      exitCode: 0, stderr: '',
+      stdout: 'source-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available',
+    })],
+    ['readable host state', async () => ({
+      exitCode: 0, stderr: '',
+      stdout: 'source-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available\nhost-state-readable',
     })],
     ['an unsupported nested sandbox', async () => ({
       exitCode: 0, stderr: '',
-      stdout: 'source-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-denied',
+      stdout: 'source-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-denied\nhost-state-withheld',
     })],
   ])('refuses review preparation when containment has %s', async (_reason, runProcess) => {
     const result = await prepareBuildReviewContainment({
@@ -105,7 +242,9 @@ describe('engine/build-review-containment', () => {
         engineStateWriteProbe: '/review/engine-evidence/sentinel',
         scratchWriteProbe: '/review/private-scratch/sentinel',
         siblingEvidenceProbe: '/review/sibling-evidence/result.json',
+        hostStateProbe: '/review/private-scratch.host-state-probe',
       },
+      runtimeHost,
       runProcess,
     });
 

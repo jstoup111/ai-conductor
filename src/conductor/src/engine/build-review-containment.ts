@@ -1,4 +1,7 @@
-import { isAbsolute, relative } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { basename, delimiter, dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 /** Provider-neutral process boundary used to prove a Linux review sandbox. */
 export type BuildReviewContainmentProcess = (
@@ -23,17 +26,38 @@ export interface BuildReviewContainmentPaths {
   readonly engineStateWriteProbe: string;
   readonly scratchWriteProbe: string;
   readonly siblingEvidenceProbe: string;
+  /**
+   * A readable host file OUTSIDE every allowlisted root. The probe must find it
+   * unreadable inside the sandbox, proving unrelated host state is withheld.
+   */
+  readonly hostStateProbe: string;
+}
+
+/** Host lookups the runtime-root derivation needs; injectable so tests touch no real filesystem. */
+export interface BuildReviewRuntimeHost {
+  readonly execPath: string;
+  readonly pathEnv: string | undefined;
+  readonly home: string;
+  /** Resolve symlinks; throws when the path does not exist. */
+  readonly realpath: (path: string) => string;
 }
 
 export interface BuildReviewContainmentOptions {
   readonly provider: 'claude' | 'codex';
   readonly paths: BuildReviewContainmentPaths;
   readonly runProcess: BuildReviewContainmentProcess;
+  /** Defaults to the live process; tests inject a fixed host. */
+  readonly runtimeHost?: BuildReviewRuntimeHost;
 }
 
 /** A proved mount profile that an invoke adapter may wrap around a reviewer. */
 export interface BuildReviewContainmentProfile {
+  /** `runtimeMountArgs` followed by `reviewMountArgs`: the complete proved profile. */
   readonly mountArgs: readonly string[];
+  /** Allowlisted system/provider runtime roots. Optional only for hand-built fixtures. */
+  readonly runtimeMountArgs?: readonly string[];
+  /** The D5 review inputs, sibling-evidence mask and private scratch. */
+  readonly reviewMountArgs?: readonly string[];
   /** The candidate-private writable directory proved by the containment probe. */
   readonly scratch: string;
 }
@@ -55,6 +79,7 @@ const REQUIRED_OBSERVATIONS = [
   'scratch-write-succeeded',
   'sibling-evidence-withheld',
   'nested-sandbox-available',
+  'host-state-withheld',
 ] as const;
 
 const RECOGNIZED_OBSERVATIONS = new Set([
@@ -65,6 +90,7 @@ const RECOGNIZED_OBSERVATIONS = new Set([
   'scratch-write-refused',
   'sibling-evidence-readable',
   'nested-sandbox-denied',
+  'host-state-readable',
 ]);
 
 const REVIEW_CONTAINMENT_PROBE = [
@@ -75,6 +101,7 @@ const REVIEW_CONTAINMENT_PROBE = [
   'probe_write "$4" scratch',
   'if test -r "$5"; then printf "sibling-evidence-readable\\n"; else printf "sibling-evidence-withheld\\n"; fi',
   'if bwrap --ro-bind / / -- true >/dev/null 2>&1; then printf "nested-sandbox-available\\n"; else printf "nested-sandbox-denied\\n"; fi',
+  'if test -r "$6"; then printf "host-state-readable\\n"; else printf "host-state-withheld\\n"; fi',
 ].join('; ');
 
 function unsupported(
@@ -109,6 +136,8 @@ function hasSafePaths(paths: BuildReviewContainmentPaths): boolean {
   if (protectedPaths.some((protectedPath) => isWithin(protectedPath, paths.scratch) || isWithin(paths.scratch, protectedPath))) {
     return false;
   }
+  // A sentinel inside an allowlisted root could never be withheld.
+  if ([...protectedPaths, paths.scratch].some((bound) => isWithin(bound, paths.hostStateProbe))) return false;
   return isWithin(paths.frozenSource, paths.sourceWriteProbe)
     && isWithin(paths.originalInstallation, paths.installationWriteProbe)
     && isWithin(paths.engineEvidence, paths.engineStateWriteProbe)
@@ -116,12 +145,120 @@ function hasSafePaths(paths: BuildReviewContainmentPaths): boolean {
     && isWithin(paths.siblingEvidence, paths.siblingEvidenceProbe);
 }
 
-function deriveMountArgs(paths: BuildReviewContainmentPaths): readonly string[] {
+/**
+ * System runtime a provider process needs to execute at all. Everything is
+ * `--ro-bind-try` so a host lacking one entry (no /lib64, no /etc/pki) still
+ * prepares. `/etc` is enumerated, never bound whole: it holds host service
+ * configuration the reviewer has no business reading.
+ */
+const SYSTEM_RUNTIME_ROOTS = [
+  '/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64',
+  '/etc/ld.so.cache', '/etc/ld.so.conf', '/etc/ld.so.conf.d', '/etc/alternatives',
+  '/etc/resolv.conf', '/etc/hosts', '/etc/nsswitch.conf', '/etc/host.conf', '/etc/gai.conf',
+  '/etc/passwd', '/etc/group', '/etc/localtime',
+  '/etc/ssl', '/etc/ca-certificates', '/etc/ca-certificates.conf', '/etc/pki', '/etc/crypto-policies',
+  // /etc/resolv.conf is commonly a symlink into this systemd-resolved directory.
+  '/run/systemd/resolve',
+] as const;
+
+const liveRuntimeHost = (): BuildReviewRuntimeHost => ({
+  execPath: process.execPath,
+  pathEnv: process.env.PATH,
+  home: homedir(),
+  realpath: (path) => realpathSync(path),
+});
+
+function coveredBySystemRoot(path: string): boolean {
+  return SYSTEM_RUNTIME_ROOTS.some((root) => isWithin(root, path));
+}
+
+/** A root is too broad when it is the filesystem root, contains HOME, is HOME, or sits directly under HOME. */
+function isTooBroad(root: string, home: string): boolean {
+  if (root === sep || isWithin(root, home)) return true;
+  return isWithin(home, root) && dirname(root) === home;
+}
+
+/**
+ * The narrowest install root that still lets one resolved executable run:
+ * a package under `node_modules` binds its package root; an executable in a
+ * `bin/` directory binds that install prefix (node under nvm/asdf, a codex
+ * standalone release); anything else binds just the file.
+ */
+function installRootFor(real: string, home: string): string {
+  const parts = real.split(sep);
+  const modules = parts.lastIndexOf('node_modules');
+  if (modules !== -1 && modules + 1 < parts.length - 1) {
+    const scoped = parts[modules + 1]!.startsWith('@') && modules + 2 < parts.length - 1;
+    const root = parts.slice(0, modules + (scoped ? 3 : 2)).join(sep);
+    if (!isTooBroad(root, home)) return root;
+  }
+  if (basename(dirname(real)) === 'bin') {
+    const prefix = dirname(dirname(real));
+    if (!isTooBroad(prefix, home)) return prefix;
+  }
+  return real;
+}
+
+/**
+ * Read-only roots for one executable, given by name (resolved on PATH) or by
+ * absolute path. Returns the invoked path itself (so a PATH symlink still
+ * resolves inside the sandbox) plus the install root behind it. An
+ * unresolvable absolute path is returned as-is for `--ro-bind-try`.
+ */
+export function deriveExecutableRuntimeRoots(
+  executable: string,
+  host: BuildReviewRuntimeHost = liveRuntimeHost(),
+): readonly string[] {
+  const candidates = isAbsolute(executable)
+    ? [executable]
+    : executable.includes(sep)
+      ? []
+      : (host.pathEnv ?? '').split(delimiter).filter((entry) => isAbsolute(entry)).map((entry) => join(entry, executable));
+  for (const candidate of candidates) {
+    let real: string;
+    try { real = host.realpath(candidate); } catch { continue; }
+    return [...new Set([candidate, installRootFor(real, host.home)])].filter((root) => !coveredBySystemRoot(root));
+  }
+  return isAbsolute(executable) && !coveredBySystemRoot(executable) ? [executable] : [];
+}
+
+/**
+ * Write the readable host sentinel the probe must find withheld. It sits
+ * beside — never inside — the private scratch, so no allowlisted root covers
+ * it; the scratch lease's parent directory is removed with the run.
+ */
+export async function writeReviewHostStateSentinel(scratch: string): Promise<string> {
+  const sentinel = `${scratch.replace(/[\\/]+$/, '')}.host-state-probe`;
+  await writeFile(sentinel, 'host state that review containment must withhold\n', 'utf8');
+  return sentinel;
+}
+
+function roBindTry(paths: readonly string[]): string[] {
+  return [...new Set(paths)].flatMap((path) => ['--ro-bind-try', path, path]);
+}
+
+/**
+ * The allowlisted runtime half of the profile. There is deliberately NO
+ * whole-root bind: the sandbox root is an empty tmpfs, so the operator's HOME,
+ * other projects, host config directories, plugin/MCP state and credential
+ * files are absent unless a root below names them (adr-2026-09-10 D5).
+ */
+function deriveRuntimeMountArgs(provider: 'claude' | 'codex', host: BuildReviewRuntimeHost): readonly string[] {
   return [
-    '--ro-bind', '/', '/',
+    ...roBindTry([...SYSTEM_RUNTIME_ROOTS]),
     '--dev', '/dev',
     '--proc', '/proc',
+    '--tmpfs', '/tmp',
     '--unshare-pid',
+    ...roBindTry([
+      ...deriveExecutableRuntimeRoots(host.execPath, host),
+      ...deriveExecutableRuntimeRoots(provider, host),
+    ]),
+  ];
+}
+
+function deriveReviewMountArgs(paths: BuildReviewContainmentPaths): readonly string[] {
+  return [
     '--ro-bind', paths.frozenSource, paths.frozenSource,
     '--ro-bind', paths.policyMaterial, paths.policyMaterial,
     '--ro-bind', paths.originalCheckout, paths.originalCheckout,
@@ -134,6 +271,47 @@ function deriveMountArgs(paths: BuildReviewContainmentPaths): readonly string[] 
   ];
 }
 
+const BWRAP_BIND_FLAGS = new Set(['--bind', '--bind-try', '--ro-bind', '--ro-bind-try', '--dev-bind', '--dev-bind-try']);
+
+/**
+ * Mount args for one concrete launch under a proved profile. The launched
+ * command's own needs are added read-only BETWEEN the runtime roots and the
+ * review binds, so a later review bind (writable scratch, sibling mask) still
+ * wins over an enclosing root:
+ *  - an absolute provider executable (a self-host isolated binary) gets its
+ *    install root;
+ *  - a self-host prepared invocation that is itself a bubblewrap wrap needs
+ *    every path its inner bind set names to exist in this outer view, plus the
+ *    executable it finally runs. They are exposed read-only here; the inner
+ *    wrap keeps its own protections and cannot regain write access the outer
+ *    read-only mount withheld.
+ */
+export function composeReviewLaunchMounts(
+  profile: BuildReviewContainmentProfile,
+  command: { readonly executable: string; readonly args: readonly string[] },
+  host: BuildReviewRuntimeHost = liveRuntimeHost(),
+): readonly string[] {
+  const runtime = profile.runtimeMountArgs ?? [];
+  const review = profile.reviewMountArgs ?? profile.mountArgs;
+  const extra: string[] = [];
+  if (command.executable === 'bwrap' || basename(command.executable) === 'bwrap') {
+    const end = command.args.indexOf('--');
+    const inner = end === -1 ? command.args : command.args.slice(0, end);
+    for (let index = 0; index < inner.length; index += 1) {
+      if (!BWRAP_BIND_FLAGS.has(inner[index]!)) continue;
+      const source = inner[index + 1];
+      if (source !== undefined && isAbsolute(source) && source !== sep) extra.push(source);
+      index += 2;
+    }
+    const innerExecutable = end === -1 ? undefined : command.args[end + 1];
+    if (innerExecutable !== undefined) extra.push(...deriveExecutableRuntimeRoots(innerExecutable, host));
+  } else {
+    extra.push(...deriveExecutableRuntimeRoots(command.executable, host));
+  }
+  const known = new Set(runtime);
+  return [...runtime, ...roBindTry(extra.filter((path) => !known.has(path) && !coveredBySystemRoot(path))), ...review];
+}
+
 function deriveProbeArgs(paths: BuildReviewContainmentPaths, mountArgs: readonly string[]): readonly string[] {
   return [
     ...mountArgs,
@@ -143,6 +321,7 @@ function deriveProbeArgs(paths: BuildReviewContainmentPaths, mountArgs: readonly
     paths.engineStateWriteProbe,
     paths.scratchWriteProbe,
     paths.siblingEvidenceProbe,
+    paths.hostStateProbe,
   ];
 }
 
@@ -174,9 +353,11 @@ export async function prepareBuildReviewContainment(
   options: BuildReviewContainmentOptions,
 ): Promise<BuildReviewContainmentResult> {
   if (!hasSafePaths(options.paths)) {
-    return unsupported(options.provider, 'review containment paths must be absolute and candidate scratch must not be protected');
+    return unsupported(options.provider, 'review containment paths must be absolute, candidate scratch must not be protected, and the host-state sentinel must lie outside every bound root');
   }
-  const mountArgs = deriveMountArgs(options.paths);
+  const runtimeMountArgs = deriveRuntimeMountArgs(options.provider, options.runtimeHost ?? liveRuntimeHost());
+  const reviewMountArgs = deriveReviewMountArgs(options.paths);
+  const mountArgs = [...runtimeMountArgs, ...reviewMountArgs];
   let probe: Awaited<ReturnType<BuildReviewContainmentProcess>>;
   try {
     probe = await options.runProcess('bwrap', deriveProbeArgs(options.paths, mountArgs));
@@ -191,6 +372,6 @@ export async function prepareBuildReviewContainment(
   return {
     kind: 'ready',
     provider: options.provider,
-    profile: Object.freeze({ mountArgs, scratch: options.paths.scratch }),
+    profile: Object.freeze({ mountArgs, runtimeMountArgs, reviewMountArgs, scratch: options.paths.scratch }),
   };
 }

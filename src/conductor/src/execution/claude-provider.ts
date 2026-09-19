@@ -22,7 +22,8 @@ import {
   ProviderStreamAssembler,
 } from './provider-stream.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
-import { scrubTmuxEnvironment } from './child-environment.js';
+import { buildReviewChildEnvironment, scrubTmuxEnvironment } from './child-environment.js';
+import { composeReviewLaunchMounts } from '../engine/build-review-containment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import {
   inferRateLimitWaitSeconds,
@@ -568,11 +569,14 @@ export class ClaudeProvider implements LLMProvider {
     }
     const command = { executable: selfHost?.executable ?? 'claude', args, env: execaOptions.env };
     const launch = reviewAccess?.kind === 'ready'
-      ? wrapForContainment(command, reviewAccess.profile.mountArgs)
+      ? wrapForContainment(command, composeReviewLaunchMounts(reviewAccess.profile, command))
       : command;
     const subprocess = this.subprocessFactory(launch.executable, launch.args as string[], {
       ...execaOptions,
       env: launch.env,
+      // D5: the review env is a complete allowlist; execa must not re-merge
+      // the ambient process environment underneath it.
+      ...(reviewAccess?.kind === 'ready' ? { extendEnv: false } : {}),
       // A daemon feature must retain the diagnostic in its scoped/persisted
       // log. Other callers preserve the existing live inherited stdio path.
       stdout: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
@@ -899,19 +903,25 @@ export class ClaudeProvider implements LLMProvider {
     const scratch = options.reviewAccess?.kind === 'ready'
       ? options.reviewAccess.profile.scratch
       : undefined;
-    // tmux target variables are scrubbed last so neither the inherited env
-    // nor a self-host overlay can hand the child the daemon's own pane.
-    return scrubTmuxEnvironment(withDaemonSessionMarker({
-      ...process.env,
-      ...options.selfHost?.env,
-      ...(scratch === undefined ? {} : {
+    if (scratch !== undefined) {
+      // D5: a contained reviewer gets an allowlisted environment, never the
+      // ambient one — tracker/service credentials and host state are withheld.
+      return buildReviewChildEnvironment('claude', process.env, withDaemonSessionMarker({
+        ...options.selfHost?.env,
         HOME: join(scratch, 'home'),
         CLAUDE_CONFIG_DIR: join(scratch, 'claude-config'),
         TMPDIR: join(scratch, 'tmp'),
         XDG_CONFIG_HOME: join(scratch, 'xdg-config'),
         XDG_CACHE_HOME: join(scratch, 'xdg-cache'),
         XDG_DATA_HOME: join(scratch, 'xdg-data'),
-      }),
+        ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
+      }));
+    }
+    // tmux target variables are scrubbed last so neither the inherited env
+    // nor a self-host overlay can hand the child the daemon's own pane.
+    return scrubTmuxEnvironment(withDaemonSessionMarker({
+      ...process.env,
+      ...options.selfHost?.env,
       ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
     }));
   }

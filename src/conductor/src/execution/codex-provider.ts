@@ -22,7 +22,8 @@ import {
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
-import { scrubTmuxEnvironment } from './child-environment.js';
+import { buildReviewChildEnvironment, scrubTmuxEnvironment } from './child-environment.js';
+import { composeReviewLaunchMounts } from '../engine/build-review-containment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
@@ -331,7 +332,7 @@ export class CodexProvider implements LLMProvider {
       env: this.invocationEnv(options, authentication),
     };
     const launch = options.reviewAccess?.kind === 'ready'
-      ? wrapForContainment(command, options.reviewAccess.profile.mountArgs)
+      ? wrapForContainment(command, composeReviewLaunchMounts(options.reviewAccess.profile, command))
       : command;
     let streamedTokenUsage: TokenUsage | undefined;
 
@@ -344,6 +345,9 @@ export class CodexProvider implements LLMProvider {
         stderr: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
         cwd: options.cwd,
         env: launch.env,
+        // D5: the review env is a complete allowlist; execa must not re-merge
+        // the ambient process environment underneath it.
+        ...(options.reviewAccess?.kind === 'ready' ? { extendEnv: false } : {}),
       }, {
         ...options,
         onProviderStream: repl ? undefined : options.streamConsumer?.onProviderStream ?? options.onProviderStream,
@@ -1033,18 +1037,24 @@ export class CodexProvider implements LLMProvider {
     // can unset it.
     // tmux target variables are masked in the overlay (execa extends
     // process.env underneath it) so the child cannot resolve the daemon's pane.
+    if (scratch !== undefined) {
+      // D5: a contained reviewer gets an allowlisted environment, never the
+      // ambient one — tracker/service credentials and host state are withheld.
+      return buildReviewChildEnvironment('codex', process.env, withDaemonSessionMarker({
+        ...(options.selfHost?.env ?? {}),
+        ...auth,
+        HOME: join(scratch, 'home'),
+        CODEX_HOME: join(scratch, 'codex-home'),
+        TMPDIR: join(scratch, 'tmp'),
+        XDG_CONFIG_HOME: join(scratch, 'xdg-config'),
+        XDG_CACHE_HOME: join(scratch, 'xdg-cache'),
+        XDG_DATA_HOME: join(scratch, 'xdg-data'),
+      }));
+    }
     return scrubTmuxEnvironment(withDaemonSessionMarker(
       {
         ...(options.selfHost?.env ?? {}),
         ...auth,
-        ...(scratch === undefined ? {} : {
-          HOME: join(scratch, 'home'),
-          CODEX_HOME: join(scratch, 'codex-home'),
-          TMPDIR: join(scratch, 'tmp'),
-          XDG_CONFIG_HOME: join(scratch, 'xdg-config'),
-          XDG_CACHE_HOME: join(scratch, 'xdg-cache'),
-          XDG_DATA_HOME: join(scratch, 'xdg-data'),
-        }),
       },
     ));
   }

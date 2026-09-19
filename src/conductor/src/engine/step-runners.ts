@@ -96,7 +96,7 @@ import {
 } from './build-review-domain.js';
 import { discoverClaudeReviewPolicies } from './build-review-policy-claude.js';
 import { createCodexAppServerTransport, listCodexInstalledReviewSkills } from './build-review-policy-codex.js';
-import { prepareBuildReviewContainment } from './build-review-containment.js';
+import { prepareBuildReviewContainment, writeReviewHostStateSentinel } from './build-review-containment.js';
 import { acquireReviewScratchHome } from './self-host/provider-scratch.js';
 import { copySelectedCodexLogin } from '../execution/codex-self-host-auth.js';
 import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
@@ -2760,6 +2760,8 @@ export class DefaultStepRunner implements StepRunner {
           const engineEvidence = join(this.projectDir, '.pipeline', 'build-review', 'engine-evidence');
           const siblingEvidence = join(this.projectDir, '.pipeline', 'build-review', 'sibling-evidence');
           await Promise.all([mkdir(engineEvidence, { recursive: true }), mkdir(siblingEvidence, { recursive: true })]);
+          const hostStateProbe = await writeReviewHostStateSentinel(scratch);
+          context.onTeardown(() => rm(hostStateProbe, { force: true }));
           const containment = await prepareBuildReviewContainment({
             provider,
             paths: {
@@ -2771,6 +2773,7 @@ export class DefaultStepRunner implements StepRunner {
               engineStateWriteProbe: join(engineEvidence, '.build-review-write-probe'),
               scratchWriteProbe: join(scratch, '.build-review-write-probe'),
               siblingEvidenceProbe: join(siblingEvidence, '.build-review-read-probe'),
+              hostStateProbe,
             },
             runProcess: async (executable, args) => {
               const result = await execa(executable, args, { reject: false });
@@ -3258,7 +3261,10 @@ export class DefaultStepRunner implements StepRunner {
                 const engineEvidence = join(this.projectDir, '.pipeline', 'build-review', 'engine-evidence');
                 const siblingEvidence = join(this.projectDir, '.pipeline', 'build-review', 'sibling-evidence');
                 await Promise.all([mkdir(engineEvidence, { recursive: true }), mkdir(siblingEvidence, { recursive: true })]);
+                const hostStateProbe = await writeReviewHostStateSentinel(scratch);
+          context.onTeardown(() => rm(hostStateProbe, { force: true }));
                 const containment = await prepareBuildReviewContainment({ provider: containmentProvider, paths: {
+                  hostStateProbe,
                   frozenSource: materialized.headPath, policyMaterial: builtinBundle.materialPath, originalCheckout: this.projectDir, originalInstallation: builtinPolicy.packageRoot,
                   engineEvidence, siblingEvidence, scratch, sourceWriteProbe: join(materialized.headPath, '.build-review-write-probe'),
                   installationWriteProbe: join(builtinPolicy.packageRoot, '.build-review-write-probe'), engineStateWriteProbe: join(engineEvidence, '.build-review-write-probe'),

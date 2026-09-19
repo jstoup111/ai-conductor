@@ -1,5 +1,5 @@
 // Covers: task:14
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, ResultPromise } from 'execa';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
@@ -47,6 +47,85 @@ function codexCompletion() {
   ].join('\n');
 }
 
+const AMBIENT = {
+  PATH: '/fixture/bin', LANG: 'en_US.UTF-8', LC_ALL: 'C',
+  GH_TOKEN: 'tracker-secret', GITHUB_TOKEN: 'tracker-secret-2', JIRA_API_TOKEN: 'jira-secret', FOO_SECRET: 'ambient-secret',
+  ANTHROPIC_API_KEY: 'claude-auth', OPENAI_API_KEY: 'codex-auth',
+  TMUX: '/tmp/tmux-1000/default,1,0', TMUX_PANE: '%3',
+} as const;
+
+function providerWithSpy(providerName: 'codex' | 'claude') {
+  const subprocessFactory = vi.fn((_file: string, _args: readonly string[], _options: ExecaOptions) => Promise.resolve({
+    stdout: providerName === 'codex' ? codexCompletion() : JSON.stringify({ type: 'result', result: 'ok' }),
+    stderr: '', exitCode: 0, failed: false,
+  }) as any);
+  const runDoctor = vi.fn(async () => ({
+    stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }),
+    exitCode: 0,
+  }));
+  const provider = providerName === 'codex'
+    ? new CodexProvider(runDoctor, '/provider/codex', undefined, subprocessFactory as never)
+    : new ClaudeProvider(undefined, subprocessFactory as never);
+  return { provider, subprocessFactory };
+}
+
+describe('build-review review-profile child environment (adr-2026-09-10 D5)', () => {
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    for (const [key, value] of Object.entries(AMBIENT)) { saved[key] = process.env[key]; process.env[key] = value; }
+  });
+  afterEach(() => {
+    for (const key of Object.keys(AMBIENT)) {
+      if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
+    }
+  });
+
+  it.each([
+    ['codex', reviewProfile, 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'],
+    ['claude', claudeReviewProfile, 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'],
+  ] as const)('withholds ambient tracker and service credentials from a contained %s reviewer', async (providerName, profile, ownAuth, otherAuth) => {
+    const { provider, subprocessFactory } = providerWithSpy(providerName);
+
+    await provider.invoke({ ...baseOptions, reviewAccess: profile });
+
+    const options = subprocessFactory.mock.calls[0]![2];
+    const env = options.env as NodeJS.ProcessEnv;
+    // execa must not re-merge process.env underneath the allowlisted overlay.
+    expect(options.extendEnv).toBe(false);
+    for (const withheld of ['GH_TOKEN', 'GITHUB_TOKEN', 'JIRA_API_TOKEN', 'FOO_SECRET', otherAuth]) expect(env).not.toHaveProperty(withheld);
+    expect(env.TMUX).toBeUndefined();
+    expect(env.TMUX_PANE).toBeUndefined();
+    expect(env).toMatchObject({
+      PATH: '/fixture/bin', LANG: 'en_US.UTF-8', LC_ALL: 'C', [ownAuth]: AMBIENT[ownAuth],
+      HOME: `${profile.profile.scratch}/home`, CONDUCT_DAEMON_SESSION: '1',
+    });
+  });
+
+  it('leaves an ordinary Claude invocation on the inherited environment', async () => {
+    const { provider, subprocessFactory } = providerWithSpy('claude');
+
+    await provider.invoke(baseOptions);
+
+    const options = subprocessFactory.mock.calls[0]![2];
+    expect(options.extendEnv).toBeUndefined();
+    expect(options.env).toMatchObject({ GH_TOKEN: 'tracker-secret', FOO_SECRET: 'ambient-secret', PATH: '/fixture/bin' });
+    expect((options.env as NodeJS.ProcessEnv).HOME).toBe(process.env.HOME);
+  });
+
+  it('leaves an ordinary Codex invocation as an overlay execa extends over the inherited environment', async () => {
+    const { provider, subprocessFactory } = providerWithSpy('codex');
+
+    await provider.invoke(baseOptions);
+
+    const options = subprocessFactory.mock.calls[0]![2];
+    expect(options.extendEnv).toBeUndefined();
+    const env = options.env as NodeJS.ProcessEnv;
+    expect(env).not.toHaveProperty('HOME');
+    expect(env).not.toHaveProperty('PATH');
+    expect(env.CONDUCT_DAEMON_SESSION).toBe('1');
+  });
+});
+
 describe('build-review access profile', () => {
   it('wraps Codex review invocation around the proved profile while retaining its private bookkeeping', async () => {
     const subprocessFactory = vi.fn<
@@ -73,6 +152,8 @@ describe('build-review access profile', () => {
     expect(subprocessFactory).toHaveBeenCalledWith(
       'bwrap',
       [
+        // The self-host isolated executable is exposed read-only ahead of the review binds.
+        '--ro-bind-try', '/private/codex', '/private/codex',
         ...reviewProfile.profile.mountArgs,
         '--',
         '/private/codex',
@@ -119,6 +200,7 @@ describe('build-review access profile', () => {
     expect(subprocessFactory).toHaveBeenCalledWith(
       'bwrap',
       [
+        '--ro-bind-try', '/private/claude', '/private/claude',
         ...claudeReviewProfile.profile.mountArgs,
         '--',
         '/private/claude',
