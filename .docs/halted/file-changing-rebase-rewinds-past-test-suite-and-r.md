@@ -1,23 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: kickback-budget
-Resolved at: 2026-09-15T11:28:27.826Z
+Status: halted
 Slug: file-changing-rebase-rewinds-past-test-suite-and-r
 Class: needs-human
-Halting step: build
-Phase: BUILD
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-file-changing-rebase-rewinds-past-test-suite-and-r
-Head SHA: 882e9970de629d5470ac3d55a95790d660e74382
-Halted at: 2026-09-15T03:31:31.186Z
+Head SHA: cc2013f4cfa18bf43173f4748237191f85c6df59
+Halted at: 2026-09-19T16:16:06.699Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Operator credentials expired and refresh timed out after 60 minutes.
-Credentials file: /home/james-stoup/.claude/.credentials.json
-Expires at: 1789439400497
-Please refresh your OAuth token and re-queue this feature.
+Validation group "prd_audit" halted: branch "prd_audit" produced no-verdict after 3 attempts (You've hit your weekly limit · resets Sep 20, 9pm (America/New_York)).
 ```
