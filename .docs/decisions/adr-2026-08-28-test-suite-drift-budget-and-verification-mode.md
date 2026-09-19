@@ -242,6 +242,13 @@ byte copy, still deterministic and refuse-to-clobber.
 > invocation and the auto-mode invocation yield every key and value unchanged from the current
 > output. The template may gain explanatory comment lines, so the identity is over parsed
 > settings, not file bytes.
+>
+> **Consumer scope 2026-09-18 (operator decision, additive to D8 and D9):** the guided bootstrap
+> interview is an operator-invoked skill. Its `config read`, `config init` flag answers, and
+> `config set spec_owner` calls run from the operator's own shell session, which carries no
+> daemon-session marker. The engine-dispatched managed prelude is not a consumer of the config CLI
+> for this feature, and the daemon-session guard's allowlist stays closed to `config`. The managed
+> prelude's pre-existing auto-mode `config init` call predates this amendment and is out of its scope.
 
 ## Consequences
 
