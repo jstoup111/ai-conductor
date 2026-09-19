@@ -154,7 +154,7 @@ describe('executeProviderCandidates', () => {
     try {
       const result = await executeAuxiliaryProviderCandidates({
         step: 'build_review', memberId: 'scope',
-        policy: { enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0 },
+        policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0 },
         runtimes: new ProviderRuntimeSet([candidate]), sessions: new ProviderSessionScope(vi.fn()),
         options: { prompt: 'review', cwd: worktreeRoot, nativeSchema: { type: 'object' } },
         nativeSchemaScratch: { worktreeRoot, repository: 'acme/repo', featureSlug: 'feature' },
@@ -519,7 +519,7 @@ describe('executeProviderCandidates', () => {
       step: 'build_review',
       memberId: 'scope',
       policy: {
-        enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
+        enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
         model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0,
       },
       runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
@@ -556,7 +556,7 @@ describe('executeProviderCandidates', () => {
       step: 'build_review',
       memberId: 'scope',
       policy: {
-        enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
+        enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
         model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0,
       },
       runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
@@ -591,7 +591,7 @@ describe('executeProviderCandidates', () => {
       step: 'build_review',
       memberId: 'scope',
       policy: {
-        enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
+        enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
         model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0,
       },
       runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: vi.fn() })]),
@@ -630,7 +630,7 @@ describe('executeProviderCandidates', () => {
       step: 'build_review',
       memberId: 'scope',
       policy: {
-        enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
+        enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
         model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0,
       },
       runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
@@ -659,7 +659,7 @@ describe('executeProviderCandidates', () => {
       step: 'build_review',
       memberId: 'scope',
       policy: {
-        enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
+        enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
         model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0,
       },
       runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),

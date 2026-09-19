@@ -121,9 +121,13 @@ import {
   type BuildReviewBranchProvenance,
   type BuildReviewCustomArtifactMember,
 } from './build-review-artifacts.js';
-import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
+import { joinBuildReviewRubricOutcomes, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
-import { buildReviewConfidenceFloors, resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
+import {
+  buildReviewConfidenceFloors,
+  resolveEffectiveBuildReviewVerdict,
+  type BuildReviewEffectiveResolution,
+} from './build-review-effective.js';
 import { persistBuildReviewSuppressions, projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import {
   bumpMechanicalFaultsInLedger,
@@ -2284,6 +2288,7 @@ export class DefaultStepRunner implements StepRunner {
         return { success: false, output: 'build_review custom policy produced no durable result' };
       }
       customResults = Object.freeze(Object.fromEntries(members) as Record<string, BuildReviewCustomArtifactMember>);
+      await this.emitBuildReviewCustomMemberResults(lapId, customResults);
       // A custom-only lap still has a complete aggregate.  The fixed built-in
       // coordinator deliberately short-circuits disabled testQuality, so it
       // cannot be the owner of this aggregate publication.
@@ -2484,24 +2489,9 @@ export class DefaultStepRunner implements StepRunner {
     if (!publication.ok) {
       return { success: false, output: `build_review aggregate publication failed: ${publication.message}` };
     }
-    // adr-2026-08-29 D4.6: one projection of this lap's sub-floor findings,
-    // shared by the visibility event (D4.5) and the durable-history seam below.
-    const suppressionEntries = effective.ok
-      ? projectBuildReviewSuppressionEntries({
-          aggregate,
-          suppressedFindingIds: effective.effective.suppressedFindingIds ?? [],
-          floors: buildReviewConfidenceFloors(config),
-        })
-      : [];
-    await this.events?.emit({
-      type: 'build_review_outer_verdict',
-      lapId,
-      rawVerdict: aggregate.verdict,
-      effectiveVerdict: effective.ok ? effective.effective.verdict : 'FAIL',
-      ...(suppressionEntries.length > 0
-        ? { suppressedFindings: suppressionEntries.map(({ findingId, rubric, confidence, floor }) => ({ findingId, rubric, confidence, floor })) }
-        : {}),
-    });
+    // adr-2026-08-29 D4.6: the one projection of this lap's sub-floor findings
+    // is shared by the visibility event (D4.5) and the durable-history seam below.
+    const suppressionEntries = await this.emitBuildReviewOuterVerdict(lapId, aggregate, effective, config);
     if (!effective.ok) {
       return { success: false, output: `${JSON.stringify(aggregate)}\n\nbuild_review disposition resolution failed: ${effective.reason}` };
     }
@@ -3014,6 +3004,7 @@ export class DefaultStepRunner implements StepRunner {
       emit: (event) => this.events?.emit(event),
       minConfidence: buildReviewConfidenceFloors(input.config),
     });
+    await this.emitBuildReviewOuterVerdict(input.lapId, aggregate, effective, input.config);
     if (!effective.ok) {
       // A failed custom policy has already crossed its authoritative boundary:
       // preserve its typed, candidate-local diagnostic even when the later
@@ -3054,6 +3045,50 @@ export class DefaultStepRunner implements StepRunner {
       output: JSON.stringify(aggregate),
       ...(infrastructureFailure === undefined || hasFinding ? {} : { currentLapMechanicalFault: true }),
     };
+  }
+
+  /** Emits exactly one validated custom judgement per current-lap member. */
+  private async emitBuildReviewCustomMemberResults(
+    lapId: BuildReviewLapId,
+    customResults: Readonly<Record<string, BuildReviewCustomArtifactMember>>,
+  ): Promise<void> {
+    for (const member of Object.values(customResults)) {
+      if (member.result.kind !== 'judged') continue;
+      await this.events?.emit({
+        type: 'build_review_rubric_result',
+        rubric: member.result.declaration.rubricId,
+        lapId,
+        verdict: member.result.verdict,
+      });
+    }
+  }
+
+  /** Shares the verdict occurrence and suppression projection across lap shapes. */
+  private async emitBuildReviewOuterVerdict(
+    lapId: BuildReviewLapId,
+    aggregate: BuildReviewAggregate,
+    effective: BuildReviewEffectiveResolution,
+    config: ReturnType<typeof resolveBuildReviewConfig>,
+  ): Promise<ReturnType<typeof projectBuildReviewSuppressionEntries>> {
+    // adr-2026-08-29 D4.6: one projection of this lap's sub-floor findings,
+    // shared by the visibility event (D4.5) and the durable-history seam.
+    const suppressionEntries = effective.ok
+      ? projectBuildReviewSuppressionEntries({
+          aggregate,
+          suppressedFindingIds: effective.effective.suppressedFindingIds ?? [],
+          floors: buildReviewConfidenceFloors(config),
+        })
+      : [];
+    await this.events?.emit({
+      type: 'build_review_outer_verdict',
+      lapId,
+      rawVerdict: aggregate.verdict,
+      effectiveVerdict: effective.ok ? effective.effective.verdict : 'FAIL',
+      ...(suppressionEntries.length > 0
+        ? { suppressedFindings: suppressionEntries.map(({ findingId, rubric, confidence, floor }) => ({ findingId, rubric, confidence, floor })) }
+        : {}),
+    });
+    return suppressionEntries;
   }
 
   private async dispatchBuildReviewRubric(

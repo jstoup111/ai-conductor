@@ -27,7 +27,7 @@ describe('custom build-review policy event spine', () => {
     const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
     new AuditTrailWriter(root).subscribe(events);
     const lines: string[] = [];
-    for (const type of ['build_review_policy_resolved', 'build_review_policy_failed', 'build_review_cache_hit'] as const) {
+    for (const type of ['build_review_policy_resolved', 'build_review_policy_failed', 'build_review_cache_hit', 'build_review_rubric_result', 'build_review_outer_verdict'] as const) {
       events.on(type, (event) => renderDaemonEvent(event, (line) => lines.push(line)));
     }
     const candidate = { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' } as const;
@@ -49,11 +49,19 @@ describe('custom build-review policy event spine', () => {
         originalLapId: 'lap-original', originalSnapshotDigest: 'sha256:original-input',
       },
     } satisfies ConductorEvent;
+    const customResult = {
+      type: 'build_review_rubric_result', rubric: 'portablePolicy', lapId: 'lap-current', verdict: 'PASS',
+    } satisfies ConductorEvent;
+    const outerVerdict = {
+      type: 'build_review_outer_verdict', lapId: 'lap-current', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+    } satisfies ConductorEvent;
 
     persister.start();
     await events.emit(resolved);
     await events.emit(failed);
     await events.emit(reused);
+    await events.emit(customResult);
+    await events.emit(outerVerdict);
     persister.stop();
 
     const ledger = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
@@ -61,7 +69,7 @@ describe('custom build-review policy event spine', () => {
     const audit = (await readFile(join(root, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8'))
       .trim().split('\n').map((line) => JSON.parse(line));
 
-    expect(ledger).toEqual([resolved, failed, reused]);
+    expect(ledger).toEqual([resolved, failed, reused, customResult, outerVerdict]);
     expect(lines.join('\n')).toContain('codex/gpt-5.6-sol/medium plugin/acme:portable');
     expect(lines.join('\n')).toContain('custom reuse from lap-original');
     expect(audit).toEqual(expect.arrayContaining([

@@ -80,7 +80,11 @@ describe('custom build-review policy runner', () => {
     const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
     const events = new ConductorEventEmitter();
     const resolvedEvents: unknown[] = [];
+    const rubricResults: unknown[] = [];
+    const outerVerdicts: unknown[] = [];
     events.on('build_review_policy_resolved', (event) => { resolvedEvents.push(event); });
+    events.on('build_review_rubric_result', (event) => { rubricResults.push(event); });
+    events.on('build_review_outer_verdict', (event) => { outerVerdicts.push(event); });
     const policy = providerKey === 'claude' ? CLAUDE_MODEL_POLICY : CODEX_MODEL_POLICY;
     const runner = new DefaultStepRunner(provider, 'custom-policy', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
@@ -137,6 +141,75 @@ describe('custom build-review policy runner', () => {
         ...(source === 'plugin' ? { plugin: { id: 'policy-plugin', version: '1.0.0' } } : {}),
       }),
     })]);
+    const replay = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(replay.success, replay.output).toBe(true);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(rubricResults).toEqual([
+      { type: 'build_review_rubric_result', rubric: 'portable', lapId: 'lap-head', verdict: 'PASS' },
+      { type: 'build_review_rubric_result', rubric: 'portable', lapId: 'lap-head', verdict: 'PASS' },
+    ]);
+    expect(outerVerdicts).toEqual([
+      { type: 'build_review_outer_verdict', lapId: 'lap-head', rawVerdict: 'PASS', effectiveVerdict: 'PASS' },
+      { type: 'build_review_outer_verdict', lapId: 'lap-head', rawVerdict: 'PASS', effectiveVerdict: 'PASS' },
+    ]);
+  });
+
+  it('publishes a custom-only outer verdict when effective resolution fails', async () => {
+    const root = await fixture();
+    const provider: LLMProvider = {
+      invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) })),
+      supportsSessionResume: false,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+    };
+    const events = new ConductorEventEmitter();
+    const outerVerdicts: unknown[] = [];
+    events.on('build_review_outer_verdict', (event) => { outerVerdicts.push(event); });
+    const runner = new DefaultStepRunner(provider, 'custom-policy-resolution-failure', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
+      } } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(), events,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: async () => ({ ok: false, reason: 'disposition store unavailable' }) as never,
+      buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+
+    await expect(runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({ success: false });
+    expect(outerVerdicts).toEqual([{
+      type: 'build_review_outer_verdict', lapId: 'lap-head', rawVerdict: 'PASS', effectiveVerdict: 'FAIL',
+    }]);
+  });
+
+  it('emits validated custom member results in a mixed production lap', async () => {
+    const root = await fixture();
+    const provider: LLMProvider = {
+      invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) })),
+      supportsSessionResume: false,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+    };
+    const events = new ConductorEventEmitter();
+    const rubricResults: unknown[] = [];
+    events.on('build_review_rubric_result', (event) => { rubricResults.push(event); });
+    const runner = new DefaultStepRunner(provider, 'mixed-custom-policy', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: true } }, custom_rubrics: {
+        portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
+      } } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(), events,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
+      buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+
+    await runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(rubricResults).toEqual([{
+      type: 'build_review_rubric_result', rubric: 'portable', lapId: 'lap-head', verdict: 'PASS',
+    }]);
   });
 
   it('refuses an ambiguous installed selection without invoking a provider', async () => {

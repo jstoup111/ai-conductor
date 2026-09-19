@@ -50,7 +50,7 @@ const customCatalogEntry: ResolvedBuildReviewCatalogEntry = {
   id: 'portablePolicy', kind: 'custom', skill: 'portable-policy',
   question: 'Does this preserve the portable policy contract?', resources: [],
   policy: {
-    enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium',
+    enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium',
     model_fallback_ladder: [], max_retries: 1, escalate: false, min_confidence: 0,
   },
 };

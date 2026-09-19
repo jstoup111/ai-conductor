@@ -1,6 +1,7 @@
 import { relative } from 'node:path';
 
 import type { CapturedReviewPolicyBundle } from './build-review-policy-bundle.js';
+import { renderBuildReviewCustomReviewerPayloadShape } from './build-review-domain.js';
 
 /** The first engine-owned contract for an installed read-only review policy. */
 export const BUILD_REVIEW_POLICY_CONTRACT_VERSION = 'v1' as const;
@@ -80,8 +81,6 @@ export interface EvaluateBuildReviewPolicyPreflightOptions {
    */
   readonly activatePluginComponent?: () => void;
 }
-
-const SHARED_FINDINGS_PAYLOAD = '{ findings: [{ concernKind: string, summary: string, evidenceLocations: string[], sourceRegions: [{ path: string, startLine: integer, endLine: integer }], confidence?: integer (0..100) }] }';
 
 const RECOVERY_FOR_DECLARED_REQUIREMENT = Object.freeze({
   action: 'adapt-policy-to-read-only-review',
@@ -207,8 +206,8 @@ export function renderBuildReviewPolicyContract(
     'Captured support tree (all paths are available read-only beneath the material root):',
     materialEntries,
     '',
-    'Return only the engine-defined findings payload; do not use another output contract or a standalone presentation format.',
-    `Shared findings payload schema: ${SHARED_FINDINGS_PAYLOAD}`,
+    'Return only an engine-defined custom reviewer payload; do not use another output contract or a standalone presentation format.',
+    `Shared findings payload schema: ${renderBuildReviewCustomReviewerPayloadShape()}`,
     'The engine stamps policy, provider, lap, verdict, and all aggregate metadata after validating the payload.',
     '',
     'The complete selected SKILL.md follows unchanged. Apply its criteria only within the review role above:',

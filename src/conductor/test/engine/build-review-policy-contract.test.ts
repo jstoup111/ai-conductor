@@ -13,7 +13,9 @@ import type { CapturedReviewPolicyBundle } from '../../src/engine/build-review-p
 import {
   classifyBuildReviewPolicyIncompatibility,
   mapBuildReviewPolicyIncompatibilityToCoordinatorFailureReason,
+  renderBuildReviewCustomReviewerPayloadShape,
 } from '../../src/engine/build-review-domain.js';
+import { parseBuildReviewReviewerPayload } from '../../src/engine/build-review-projections.js';
 
 const ordinarySkillText = [
   '---',
@@ -83,7 +85,7 @@ describe('engine/build-review-policy-contract', () => {
     expect(rendered).toContain('/runtime/policies/policy-bundle-123');
     expect(rendered).toContain('plugin.json');
     expect(rendered).toContain('skills/boundary-review/criteria/public-api.md');
-    expect(rendered).toContain('Return only the engine-defined findings payload');
+    expect(rendered).toContain('Return only an engine-defined custom reviewer payload');
     expect(definition.bytes).toEqual(originalDefinitionBytes);
   });
 
@@ -103,7 +105,38 @@ describe('engine/build-review-policy-contract', () => {
     expect(rendered).toContain(standalonePresentation);
     expect(rendered).toContain('Do not choose an aggregate verdict, authorize repair work, edit code, install dependencies, or publish comments.');
     expect(rendered).toContain('The engine alone validates findings and owns aggregate verdicts and repair work orders.');
-    expect(rendered).toContain('{ findings: [{ concernKind: string, summary: string, evidenceLocations: string[]');
+    expect(rendered).toContain("{ kind: 'custom-findings', version: 'v1', findings: [...] }");
+  });
+
+  it('renders only custom-reviewer payloads accepted by the production parser', () => {
+    const rendered = renderBuildReviewPolicyContract({
+      bundle: bundle(),
+      question: 'Are boundary changes safe?',
+      scope: 'Review frozen sources.',
+    });
+    const empty = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const finding = {
+      concernId: 'public-boundary-gap',
+      summary: 'The changed public boundary lacks compatibility evidence.',
+      evidenceLocations: ['src/public-api.ts:8'],
+      sourceRegions: [{
+        path: 'src/public-api.ts', startLine: 8, endLine: 12,
+        contentHash: `sha256:${'a'.repeat(64)}`, display: 'public boundary',
+      }],
+    };
+    const withConfidence = { ...finding, confidence: 100 };
+    const unsupported = { kind: 'unsupported-policy', requirement: 'requires deployment credentials' };
+    const descriptor = { kind: 'custom', rubric: 'boundaryPolicy', parser: 'custom-findings-v1' } as const;
+
+    expect(rendered).toContain(renderBuildReviewCustomReviewerPayloadShape());
+    expect(rendered).toContain("kind: 'custom-findings'");
+    expect(rendered).toContain("kind: 'unsupported-policy'");
+    expect(parseBuildReviewReviewerPayload(empty, descriptor)).toEqual(empty);
+    expect(parseBuildReviewReviewerPayload({ ...empty, findings: [finding, withConfidence] }, descriptor)).toEqual({
+      ...empty,
+      findings: [finding, withConfidence],
+    });
+    expect(parseBuildReviewReviewerPayload(unsupported, descriptor)).toEqual(unsupported);
   });
 
   it.each([

@@ -164,13 +164,48 @@ function parseCounterfactualSensitivity(value: unknown): CounterfactualSensitivi
 }
 
 const LAP = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const CUSTOM_CONCERN_ID = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
-const MAX_CUSTOM_FINDINGS = 64;
-const MAX_CUSTOM_EVIDENCE_LOCATIONS = 64;
-const MAX_CUSTOM_SOURCE_REGIONS = 64;
-const MAX_CUSTOM_SUMMARY_LENGTH = 4_096;
-const MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH = 1_024;
-const MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH = 512;
+export const CUSTOM_CONCERN_ID = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
+export const MAX_CUSTOM_FINDINGS = 64;
+export const MAX_CUSTOM_EVIDENCE_LOCATIONS = 64;
+export const MAX_CUSTOM_SOURCE_REGIONS = 64;
+export const MAX_CUSTOM_SUMMARY_LENGTH = 4_096;
+export const MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH = 1_024;
+export const MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH = 512;
+export const CUSTOM_SOURCE_REGION_CONTENT_HASH = /^sha256:[a-f0-9]{64}$/;
+/**
+ * The reviewer-facing shape is rendered by the policy contract. Keep its
+ * structure and bounds beside the parser so the advertised and accepted
+ * contracts have one source of truth.
+ */
+export const BUILD_REVIEW_CUSTOM_REVIEWER_PAYLOAD_SCHEMA = Object.freeze({
+  customFindings: Object.freeze({
+    kind: 'custom-findings',
+    version: 'v1',
+    rootKeys: Object.freeze(['kind', 'version', 'findings']),
+    findingKeys: Object.freeze(['concernId', 'summary', 'evidenceLocations', 'sourceRegions']),
+    optionalFindingKeys: Object.freeze(['confidence']),
+    sourceRegionKeys: Object.freeze(['path', 'startLine', 'endLine', 'contentHash', 'display']),
+  }),
+  unsupportedPolicy: Object.freeze({
+    kind: 'unsupported-policy',
+    rootKeys: Object.freeze(['kind', 'requirement']),
+  }),
+});
+
+/** The exact accepted reviewer payload grammar for the provider contract. */
+export function renderBuildReviewCustomReviewerPayloadShape(): string {
+  const { customFindings, unsupportedPolicy } = BUILD_REVIEW_CUSTOM_REVIEWER_PAYLOAD_SCHEMA;
+  return [
+    `{ kind: '${customFindings.kind}', version: '${customFindings.version}', findings: [...] }`,
+    `where each finding has exactly ${customFindings.findingKeys.join(', ')} and may additionally include confidence`,
+    `(${customFindings.findingKeys[0]} matches /${CUSTOM_CONCERN_ID.source}/; summary is non-empty and at most ${MAX_CUSTOM_SUMMARY_LENGTH} characters; ` +
+      `evidenceLocations is a non-empty array of at most ${MAX_CUSTOM_EVIDENCE_LOCATIONS} non-empty strings, each at most ${MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH} characters; ` +
+      `sourceRegions is a non-empty array of at most ${MAX_CUSTOM_SOURCE_REGIONS} objects with exactly ${customFindings.sourceRegionKeys.join(', ')}, ` +
+      `path is repository-relative, startLine/endLine are positive integers with startLine <= endLine, contentHash matches /${CUSTOM_SOURCE_REGION_CONTENT_HASH.source}/, and display is non-empty; ` +
+      `confidence, when present, is an integer 0..100; findings has at most ${MAX_CUSTOM_FINDINGS} entries).`,
+    `Or { kind: '${unsupportedPolicy.kind}', requirement: string } with exactly ${unsupportedPolicy.rootKeys.join(', ')} and a non-empty requirement of at most ${MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH} characters.`,
+  ].join(' ');
+}
 function object(value: unknown): Record<string, unknown> | undefined { return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 function text(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0; }
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -190,7 +225,7 @@ function candidateScopeSourceRegion(value: unknown): BuildReviewCandidateScopeSo
   return source && parseBuildReviewCanonicalPathReference(source.path) &&
     Number.isInteger(source.startLine) && (source.startLine as number) > 0 &&
     Number.isInteger(source.endLine) && (source.endLine as number) >= (source.startLine as number) &&
-    typeof source.contentHash === 'string' && /^sha256:[a-f0-9]{64}$/.test(source.contentHash) && text(source.display)
+    typeof source.contentHash === 'string' && CUSTOM_SOURCE_REGION_CONTENT_HASH.test(source.contentHash) && text(source.display)
     ? { path: source.path as string, startLine: source.startLine as number, endLine: source.endLine as number, contentHash: source.contentHash, display: source.display as string }
     : undefined;
 }
