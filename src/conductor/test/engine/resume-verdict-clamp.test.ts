@@ -780,6 +780,86 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(haltReasons).toEqual([marker.trim()]);
     });
 
+    it('parks an absent pending prerequisite as needs-human at the real daemon gate', async () => {
+      vi.mocked(buildStepRegistry).mockReturnValueOnce([
+        gateStep('build_review', ['build']),
+      ]);
+      await writeState(statePath, {
+        build: 'pending',
+        build_review: 'in_progress',
+      } as ConductState);
+      const { runner } = trackingRunner(dir);
+      const haltReasons: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') haltReasons.push(event.reason);
+      });
+
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        daemon: true, fromStep: 'build_review',
+      }).run();
+
+      const marker = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human');
+      expect(marker).toContain('build (pending)');
+      expect(haltReasons).toEqual([marker.trim()]);
+    });
+
+    it('parks a pending prerequisite at or after the blocked step as needs-human', async () => {
+      vi.mocked(buildStepRegistry).mockReturnValueOnce([
+        gateStep('build_review', ['build']),
+        gateStep('build'),
+      ]);
+      await writeState(statePath, {
+        build: 'pending',
+        build_review: 'in_progress',
+      } as ConductState);
+      const { runner } = trackingRunner(dir);
+      const haltReasons: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') haltReasons.push(event.reason);
+      });
+
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        daemon: true, fromStep: 'build_review',
+      }).run();
+
+      const marker = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human');
+      expect(marker).toContain('build (pending)');
+      expect(haltReasons).toEqual([marker.trim()]);
+    });
+
+    it('parks only failed but earlier prerequisites as needs-human', async () => {
+      vi.mocked(buildStepRegistry).mockReturnValueOnce([
+        gateStep('build'),
+        gateStep('test_suite'),
+        gateStep('build_review', ['build', 'test_suite']),
+      ]);
+      await writeState(statePath, {
+        build: 'failed',
+        test_suite: 'failed',
+        build_review: 'in_progress',
+      } as ConductState);
+      const { runner } = trackingRunner(dir);
+      const haltReasons: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') haltReasons.push(event.reason);
+      });
+
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        daemon: true, fromStep: 'build_review',
+      }).run();
+
+      const marker = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human');
+      expect(marker).toContain('build (failed)');
+      expect(marker).toContain('test_suite (failed)');
+      expect(haltReasons).toEqual([marker.trim()]);
+    });
+
     it('writes and emits the existing needs-human halt from the real loop gate', async () => {
       vi.mocked(buildStepRegistry).mockReturnValueOnce([
         {

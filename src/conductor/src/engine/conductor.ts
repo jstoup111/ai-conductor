@@ -9227,6 +9227,16 @@ export class Conductor {
                 '. The daemon will re-dispatch the feature from an earlier reachable prerequisite.';
               await this.writeHaltMarker(haltReason + '\n', 'mechanical');
               await this.emitLoopHalt(haltReason);
+            } else {
+              const prerequisites = gate.unsatisfied.map(
+                (prerequisite) => `${prerequisite} (${getStepStatus(state, prerequisite)})`,
+              );
+              const haltReason =
+                `Step '${step.name}' is blocked by unreachable pending prerequisite${prerequisites.length === 1 ? '' : 's'}: ` +
+                prerequisites.join(', ') +
+                '. Operator action is required before this run can continue.';
+              await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+              await this.emitLoopHalt(haltReason);
             }
           }
           process.off('SIGINT', sigintHandler);
