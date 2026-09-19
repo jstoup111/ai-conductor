@@ -414,6 +414,7 @@ import {
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
 import { applyRebaseTransition } from './rebase-transition.js';
+import { classifyGateInvalidation } from './gate-invalidation.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
   escalateBuildFailure as defaultEscalateBuildFailure,
@@ -13697,9 +13698,61 @@ export class Conductor {
         await this.emitLoopHalt(reason);
         return 'halt';
       }
-      // Completed rebases are applied solely through applyRebaseTransition.
-      // Its explicit invalidated set is already pending in state; never use a
-      // positional tail rewind, which can reopen acceptance authoring or BUILD.
+      // A durable completed replay already applied its explicitly named state
+      // mutation through applyRebaseTransition. Older/recovery rebase verdicts
+      // have no such operation, so consume their rebase-origin kickbacks here
+      // without a generic tail scan (which would stale preserved reviews).
+      const appliedRebase = await readVerdict(this.projectRoot, 'rebase');
+      if (this.lastRebaseOutcome?.kind === 'changed' && appliedRebase?.rebaseOperation?.status !== 'applied') {
+        const verdicts = await readAllVerdicts(this.projectRoot);
+        const outcome = this.lastRebaseOutcome;
+        const ranManualTest = getStepStatus(state, 'manual_test') !== 'skipped';
+        const preserved: StepName[] =
+          outcome.featureSurface !== undefined
+            ? (classifyGateInvalidation(
+                outcome.changedCodePaths,
+                outcome.featureSurface,
+                ranManualTest,
+              ).preserved as StepName[])
+            : [];
+        for (const target of [
+          'coverage_binding',
+          'build',
+          'test_suite',
+          'build_review',
+          'manual_test',
+          'prd_audit',
+          'architecture_review_as_built',
+        ] as StepName[]) {
+          const verdict = verdicts[target];
+          if (!verdict || verdict.satisfied || verdict.kickback?.from !== 'rebase') continue;
+
+          let convergenceCredit: { gate: 'build_review' } | undefined;
+          if (target === 'build_review') {
+            const credited = await updateKickbackLedger(this.projectRoot, (ledger) => {
+              const entry = ledger.gates.build_review;
+              if (!entry) return { result: false };
+              return {
+                ledger: {
+                  ...ledger,
+                  gates: { ...ledger.gates, build_review: creditKickbackGateLaps(entry) },
+                },
+                result: true,
+              };
+            }, 'build_review');
+            if (credited) convergenceCredit = { gate: target };
+          }
+          await this.events.emit({
+            type: 'kickback',
+            from: 'rebase',
+            to: target,
+            evidence: verdict.kickback.evidence,
+            count: 1,
+            ...(convergenceCredit === undefined ? {} : { convergenceCredit }),
+          });
+          await this.navigateStateBack(state, target, steps, preserved);
+        }
+      }
     } else if (topo.verdictSteps.has(step.name)) {
       // Record the objective verdict for any gate we just ran — including in the
       // front half, so a re-run plan/stories refreshes its verdict on disk.
