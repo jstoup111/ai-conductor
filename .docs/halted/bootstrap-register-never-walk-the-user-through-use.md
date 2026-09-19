@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-19T02:11:45.446Z
 Slug: bootstrap-register-never-walk-the-user-through-use
 Class: needs-human
 Halting step: prd_audit
