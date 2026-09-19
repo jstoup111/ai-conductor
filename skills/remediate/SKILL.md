@@ -171,6 +171,16 @@ Consider **only the blocking gaps or the stall question**. Each gap already carr
 answered by reasoning over committed artifacts (plan, stories, ADRs, task-status) without
 re-reading source files unless essential.
 
+**Environmental stalls — check first, halt cheaply.** Before any other analysis of a stall
+question, decide whether its cause is the environment rather than the work: a service, container,
+database, network dependency, credential, or tool the build or test gate needs is down, crashing,
+or unreachable. No plan, story, ADR, or code change repairs the machine, so committed artifacts
+cannot answer the question. Route it `halt` with `category: unanswerable` immediately: preserve the
+question verbatim, state in `rationale` that the cause is environmental and name the failing
+dependency as the stall question reports it, and emit `tasks: []`. Do not dispatch
+`remediation-planner`, diagnose the failing dependency, read source, or propose configuration
+changes as a workaround — a turn spent investigating reaches the same halt at far greater cost.
+
 **Remediation context pointers:** When the dispatch context includes `plan contract:` or
 `prior attempts:` pointers, read every referenced file before planning repairs. Treat the
 referenced plan task's **Steps** as the governing contract for the repair; prior-attempt
@@ -384,6 +394,7 @@ Headers re-parse via the Task 18 grammar and must include:
 - [ ] Read the blocking gaps from `.pipeline/build-review.json`, `.pipeline/prd-audit.md` (and
       `.pipeline/architecture-review-as-built.md` if present), or the stall-question from
       `.pipeline/build-stall-question.md`
+- [ ] An environmental stall-question was halted `unanswerable` before any planner dispatch or diagnosis
 - [ ] One disposition per blocking gap or stall-question — nothing blocking omitted
 - [ ] HALT used ONLY for `architectural-clarity`, `product-scope`, or (stall-question) `unanswerable`; every other gap/question routed to a step
 - [ ] A gap whose ONLY defect is published PR prose (placeholder/wrong-template body, stale title,
