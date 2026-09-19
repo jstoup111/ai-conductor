@@ -3,14 +3,13 @@ import { readFile } from 'node:fs/promises';
 import {
   decodeGithubOperationRequest,
   executeGithubOperation,
+  type GithubOperationEventEmitter,
   type GithubOperationResult,
   type GithubOperationRunner,
   type GithubOperationTarget,
 } from './github-operations.js';
-import {
-  requestExplicitGithubOperationApproval,
-  type InteractiveGithubOperationConfirmation,
-} from './github-operation-approval.js';
+import type { InteractiveGithubOperationConfirmation } from './github-operation-approval.js';
+import { executeSharedGithubOperation } from './github-shared-operations.js';
 import { createGuardedGithubOperationRunner, makeProductionGh } from './tracker-client.js';
 
 export interface GithubOperationCliCommand {
@@ -43,6 +42,8 @@ export interface GithubOperationCliInput {
   readonly runner?: GithubOperationRunner;
   /** Only an interactive callback can mint approval for one exact shared request. */
   readonly confirmation?: InteractiveGithubOperationConfirmation;
+  /** Existing event spine when this command runs inside a conductor process. */
+  readonly events?: GithubOperationEventEmitter;
   readonly write?: (line: string) => void;
 }
 
@@ -75,14 +76,25 @@ export async function dispatchGithubOperationCommand(
     return 1;
   }
 
-  const approval = await requestExplicitGithubOperationApproval(decoded.request, input.confirmation);
+  if (decoded.request.access === 'shared-write') {
+    const result = await executeSharedGithubOperation(
+      request,
+      input.gh ?? makeProductionGh(),
+      { cwd: input.cwd, confirmation: input.confirmation, events: input.events },
+    );
+    const output = canonicalCliResult(result as GithubOperationResult, decoded.request.target);
+    write(`${JSON.stringify(output)}\n`);
+    return result.kind === 'executed' ? 0 : 1;
+  }
+
   const runner = input.runner ?? createGuardedGithubOperationRunner(input.gh ?? makeProductionGh(), {
     cwd: input.cwd,
-    ...(approval.kind === 'approved' ? { shared: { approval: approval.capability } } : {}),
+    events: input.events,
   });
   const result = await executeGithubOperation(
     request,
     runner,
+    { events: input.events },
   );
   const output = canonicalCliResult(result as GithubOperationResult, decoded.request.target);
   write(`${JSON.stringify(output)}\n`);

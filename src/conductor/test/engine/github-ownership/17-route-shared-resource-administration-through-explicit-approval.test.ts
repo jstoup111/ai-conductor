@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { decodeGithubOperationRequest, executeGithubOperation } from '../../../src/engine/github-operations.js';
 import { requestExplicitGithubOperationApproval } from '../../../src/engine/github-operation-approval.js';
 import { executeSharedGithubOperation } from '../../../src/engine/github-shared-operations.js';
+import { dispatchGithubOperationCommand } from '../../../src/engine/github-operations-cli.js';
 import {
   createGithubTrackerClient,
   createGuardedGithubOperationRunner,
@@ -169,5 +170,26 @@ describe('engine/github-shared-operations — exact approved shared administrati
     })).resolves.toEqual({ kind: 'refused', reason: 'unsupported-operation' });
     expect(confirm).not.toHaveBeenCalled();
     expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('routes the production request-file command through the shared entry point, not an injectable generic runner', async () => {
+    const transport = vi.fn<GhRunner>(async () => ({ stdout: '' }));
+    const genericRunner = { run: vi.fn(async () => ({})) };
+    const write = vi.fn();
+
+    await expect(dispatchGithubOperationCommand({ requestFile: '/request.json' }, {
+      cwd: '/fixture/worktree',
+      readRequest: async () => JSON.stringify(request),
+      gh: transport,
+      runner: genericRunner,
+      confirmation: { mode: 'interactive', confirm: vi.fn().mockResolvedValue(true) },
+      write,
+    })).resolves.toBe(0);
+
+    expect(genericRunner.run).not.toHaveBeenCalled();
+    expect(transport).toHaveBeenCalledWith([
+      'label', 'create', 'needs-triage', '-R', 'acme/widgets', '--color', '0e8a16',
+    ], { cwd: '/fixture/worktree' });
+    expect(write.mock.calls[0]?.[0]).toContain('"kind":"executed"');
   });
 });

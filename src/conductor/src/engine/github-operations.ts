@@ -217,6 +217,8 @@ export interface GithubOperationRunnerRefusal {
 /** Injectable guarded-operation seam. Task 6 adapts it to the canonical GhRunner. */
 export interface GithubOperationRunner {
   run(request: GithubOperationRequest): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal>;
+  /** Production guarded adapters carry the existing event-spine emitter. */
+  readonly events?: GithubOperationEventEmitter;
 }
 
 /** The existing event spine boundary needed to report a denied mutation. */
@@ -495,7 +497,7 @@ export async function executeGithubOperation(
         reason: response.reason,
       } as const;
       if (request.access !== 'read') {
-        await emitGithubOperationRefusal(request, response.reason, options.events);
+        await emitGithubOperationRefusal(request, response.reason, options.events ?? runner.events);
       }
       return result;
     }

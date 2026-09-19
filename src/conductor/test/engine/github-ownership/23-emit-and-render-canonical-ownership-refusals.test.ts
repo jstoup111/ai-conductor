@@ -143,4 +143,31 @@ describe('canonical GitHub ownership refusal event', () => {
       persister.stop();
     }
   });
+
+  it('uses the emitter carried by the guarded production adapter when the caller has no separate event option', async () => {
+    const events = new ConductorEventEmitter();
+    const terminal = vi.fn<GhRunner>(async () => ({ stdout: '' }));
+    const observed: ConductorEvent[] = [];
+    events.on('github_operation_refused', (event) => { observed.push(event); });
+
+    await expect(executeGithubOperation({
+      operation: 'issue.comment.create',
+      repository: 'acme/owned',
+      resource: { kind: 'issue', number: 17 },
+      context: { actor: 'alice' },
+      payload: { body: 'never-written' },
+    }, createGuardedGithubOperationRunner(terminal, {
+      cwd: '/fixture/worktree',
+      mutation: foreignOwnerContext(),
+      events,
+    }))).resolves.toMatchObject({ kind: 'refused', reason: 'other-owner' });
+
+    expect(terminal).not.toHaveBeenCalled();
+    expect(observed).toEqual([expect.objectContaining({
+      type: 'github_operation_refused',
+      operation: 'issue.comment.create',
+      reason: 'other-owner',
+      remedy: 'ask-resource-owner',
+    })]);
+  });
 });

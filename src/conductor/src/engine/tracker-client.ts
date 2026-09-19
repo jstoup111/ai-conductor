@@ -19,6 +19,7 @@ import type {
   GithubOperationRunner,
   GithubOperationRunnerRefusal,
   GithubOperationRunnerResponse,
+  GithubOperationEventEmitter,
   GithubIntakeWriteOperationRequest,
   GithubSharedWriteOperationRequest,
 } from './github-operations.js';
@@ -93,6 +94,8 @@ export interface GuardedGithubOperationRunnerOptions {
   readonly creation?: GithubCreationMutationExecutionContext;
   /** Absent or mismatched approval refuses every shared-resource mutation. */
   readonly shared?: GithubSharedMutationExecutionContext;
+  /** Existing event spine for best-effort refusal telemetry. */
+  readonly events?: GithubOperationEventEmitter;
 }
 
 /** Ownership context used by the GitHub TrackerClient's structured requests. */
@@ -105,6 +108,8 @@ export interface GithubTrackerClientOptions {
   readonly shared?: GithubSharedMutationExecutionContext;
   /** Canonical repository for operations whose legacy call shape omits one. */
   readonly repository?: string;
+  /** Existing event spine for best-effort ownership-refusal telemetry. */
+  readonly events?: GithubOperationEventEmitter;
 }
 
 function issueNumber(request: GithubOperationRequest): string {
@@ -255,6 +260,7 @@ export function createGuardedGithubOperationRunner(
   options: GuardedGithubOperationRunnerOptions,
 ): GithubOperationRunner {
   return {
+    ...(options.events === undefined ? {} : { events: options.events }),
     async run(request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> {
       if (request.access === 'read') {
         // Discovery reads need no ownership grant.
@@ -575,7 +581,8 @@ async function runTrackerIssueOperation(
     mutation: options.mutation,
     intake: options.intake,
     shared: options.shared,
-  }));
+    events: options.events,
+  }), { events: options.events });
 
   if (result.kind === 'refused') {
     throw new GithubTrackerOperationRefusalError(operation, result.reason);

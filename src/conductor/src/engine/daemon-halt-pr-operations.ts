@@ -7,6 +7,7 @@ import {
   type GhRunner,
 } from './tracker-client.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
+import type { GithubOperationEventEmitter } from './github-operations.js';
 
 const DAEMON_BRANCH_PREFIX = 'feat/daemon-';
 
@@ -18,6 +19,8 @@ export interface DaemonHaltPrOperationsOptions {
   readonly git: GitRunner;
   /** Resolves afresh for every guarded mutation. */
   readonly resolveMachineOwner: () => Promise<OwnerResolution>;
+  /** Feature or daemon event spine for best-effort ownership refusals. */
+  readonly events?: GithubOperationEventEmitter;
 }
 
 /**
@@ -63,6 +66,7 @@ export function createDaemonHaltPrOperations(
           },
         },
       },
+      events: options.events,
     });
   };
 }

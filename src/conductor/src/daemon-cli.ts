@@ -1464,7 +1464,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     await closeIssueOnImplementationMerge({
       gh: ghRunner,
       operations: closeIssueMutation
-        ? createGuardedGithubOperationRunner(ghRunner, { cwd: wt.path, mutation: closeIssueMutation })
+        ? createGuardedGithubOperationRunner(ghRunner, {
+          cwd: wt.path,
+          mutation: closeIssueMutation,
+          events: featureEvents,
+        })
         : undefined,
       sourceRef: item.sourceRef,
       prUrl: implementationPrUrl,
@@ -1682,7 +1686,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // the resolver returns `{ resolved: false }` and discovery builds NOTHING.
   // ADR-1 naming: `daemonOwner`, never a bare `owner`.
   const ownerGh: GhRunner = makeProductionGh();
-  const tracker = createGithubTrackerClient(ownerGh);
+  const tracker = createGithubTrackerClient(ownerGh, { events });
   const ownerGit = makeGitRunner(projectRoot);
   // Halt presentation is feature state, never daemon-global state.  Preserve
   // the read-only sweep transport while deriving a fresh guarded runner from
@@ -1693,6 +1697,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     gh: ownerGh,
     git: ownerGit,
     resolveMachineOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
+    events,
   });
   const haltPrGit = makeFinishPublicationGit();
 

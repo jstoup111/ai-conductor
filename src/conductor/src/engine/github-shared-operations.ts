@@ -8,6 +8,7 @@ import {
   decodeGithubOperationRequest,
   executeGithubOperation,
   type GithubOperationDecodeResult,
+  type GithubOperationEventEmitter,
   type GithubOperationResult,
 } from './github-operations.js';
 import { requestExplicitGithubOperationApproval } from './github-operation-approval.js';
@@ -17,6 +18,8 @@ export interface SharedGithubOperationExecutionOptions {
   readonly cwd: string;
   /** Only an interactive positive response can mint the exact approval. */
   readonly confirmation?: unknown;
+  /** Existing event spine for best-effort refusal telemetry. */
+  readonly events?: GithubOperationEventEmitter;
 }
 
 export type SharedGithubOperationResult = GithubOperationResult
@@ -47,5 +50,6 @@ export async function executeSharedGithubOperation(
   return executeGithubOperation(value, createGuardedGithubOperationRunner(transport, {
     cwd: options.cwd,
     shared: { approval: approval.capability },
+    events: options.events,
   }));
 }

@@ -12298,7 +12298,7 @@ export class Conductor {
                     // coordinator fixture kept passing.
                     ...(trackerRepo === undefined ? {} : {
                       repo: trackerRepo,
-                      tracker: createGithubTrackerClient(this.gh),
+                      tracker: createGithubTrackerClient(this.gh, { events: this.events }),
                       ...(featureCreationAuthority === undefined ? {} : { fileIssue: async (issue: { title: string; body: string; priority: 'critical' | 'high' | 'medium' | 'low' }) => {
                         const filed = await fileIntakeIssue(
                           { title: issue.title, body: issue.body, priority: issue.priority, repo: trackerRepo },
