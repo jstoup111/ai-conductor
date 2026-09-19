@@ -183,10 +183,16 @@ describe('custom build-review policy runner', () => {
     }]);
   });
 
-  it('emits validated custom member results in a mixed production lap', async () => {
+  it('dispatches an enabled security peer with a custom policy when testQuality is disabled', async () => {
     const root = await fixture();
     const provider: LLMProvider = {
-      invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) })),
+      invoke: vi.fn(async ({ prompt }) => ({
+        success: true,
+        exitCode: 0,
+        output: prompt.includes('Build Review Security rubric.')
+          ? JSON.stringify({ findings: [] })
+          : JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }),
+      })),
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
     };
@@ -195,21 +201,32 @@ describe('custom build-review policy runner', () => {
     events.on('build_review_rubric_result', (event) => { rubricResults.push(event); });
     const runner = new DefaultStepRunner(provider, 'mixed-custom-policy', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: true } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: {
+        testQuality: { enabled: false }, security: { enabled: true },
+      }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(), events,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: passingEffectiveResolver,
-      buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCatalog: async () => [
+        { semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const },
+        { semanticName: 'build-review-security', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/security/SKILL.md', packageRoot: '/fixture/project/security', declaredDependencies: [], availability: 'available' as const },
+      ],
       buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
     });
 
-    await runner.run('build_review', { complexity_tier: 'M' } as never);
-    expect(rubricResults).toEqual([{
-      type: 'build_review_rubric_result', rubric: 'portable', lapId: 'lap-head', verdict: 'PASS',
-    }]);
+    await expect(runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({ success: true });
+    expect(rubricResults).toEqual(expect.arrayContaining([
+      { type: 'build_review_rubric_result', rubric: 'portable', lapId: 'lap-head', verdict: 'PASS' },
+      { type: 'build_review_rubric_result', rubric: 'security', lapId: 'lap-head', verdict: 'PASS' },
+    ]));
+    const aggregate = JSON.parse(await readFile(join(root, '.pipeline', 'build-review.json'), 'utf8'));
+    expect(aggregate.results).toMatchObject({
+      security: { kind: 'judged', rubric: 'security', verdict: 'PASS' },
+      testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+    });
   });
 
   it('refuses an ambiguous installed selection without invoking a provider', async () => {

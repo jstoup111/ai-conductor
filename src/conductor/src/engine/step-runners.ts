@@ -2289,10 +2289,11 @@ export class DefaultStepRunner implements StepRunner {
       }
       customResults = Object.freeze(Object.fromEntries(members) as Record<string, BuildReviewCustomArtifactMember>);
       await this.emitBuildReviewCustomMemberResults(lapId, customResults);
-      // A custom-only lap still has a complete aggregate.  The fixed built-in
-      // coordinator deliberately short-circuits disabled testQuality, so it
-      // cannot be the owner of this aggregate publication.
-      if (!config.rubrics.testQuality.enabled) {
+      // A custom-only lap still has a complete aggregate.  Do not use one
+      // built-in's enabled flag as a proxy for the complete catalog: security
+      // (and every future built-in) must share this lap's frozen input and
+      // candidate path whenever it is enabled beside a custom policy.
+      if (!config.catalog.some((entry) => entry.kind === 'builtin')) {
         return this.publishCustomOnlyBuildReview({
           lapId,
           inputs,
