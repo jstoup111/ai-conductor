@@ -11,6 +11,38 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-19
+
+### Added
+
+- OpenTelemetry feature metrics now include the raw complexity-tier label when it is available. ([implementation PR #2567](https://github.com/jstoup111/ai-conductor/pull/2567)).
+- Adds an opt-in security rubric that grades build diffs for security defects before ship. ([implementation PR #2568](https://github.com/jstoup111/ai-conductor/pull/2568)).
+- Guided bootstrap now records project test commands and operator identity settings without hand-editing configuration. ([implementation PR #2575](https://github.com/jstoup111/ai-conductor/pull/2575)).
+- Adds an ai-conductor update command that runs the owning harness checkout's updater from any directory. ([implementation PR #2610](https://github.com/jstoup111/ai-conductor/pull/2610)).
+
+### Changed
+
+- Build review now bounds rubric projections and directs test-quality reviewers to verify pinned evidence regions. ([implementation PR #2596](https://github.com/jstoup111/ai-conductor/pull/2596)).
+
+### Fixed
+
+- Landing diagnostics now identify tracked and untracked worktree changes with the appropriate recovery guidance. ([implementation PR #2562](https://github.com/jstoup111/ai-conductor/pull/2562)).
+- Prevent FINISH from blocking when BUILD gates have already been satisfied. ([implementation PR #2573](https://github.com/jstoup111/ai-conductor/pull/2573)).
+- prd_audit no longer halts with a spurious "persistence-failed" widening recovery when the audit report exceeds 8 000 characters. ([implementation PR #2581](https://github.com/jstoup111/ai-conductor/pull/2581)).
+- prd_audit widening offers no longer halt as context-overflow when the clipped report snapshot contains multibyte characters. ([implementation PR #2583](https://github.com/jstoup111/ai-conductor/pull/2583)).
+- Validation-group members now retain independent lifecycle telemetry throughout shared execution. ([implementation PR #2514](https://github.com/jstoup111/ai-conductor/pull/2514)).
+- Skip registered projects with missing paths while polling other repositories. ([implementation PR #2566](https://github.com/jstoup111/ai-conductor/pull/2566)).
+- CI repair sessions retain failing-check context and report truthful repair outcomes. ([implementation PR #2534](https://github.com/jstoup111/ai-conductor/pull/2534)).
+- As-built remediation now accepts dotted subclauses that cite an approved ADR decision. ([implementation PR #2593](https://github.com/jstoup111/ai-conductor/pull/2593)).
+- `/remediate` now halts an environmental build stall immediately instead of spending a planner turn diagnosing a failure it cannot repair. ([implementation PR #2603](https://github.com/jstoup111/ai-conductor/pull/2603)).
+- Preserve OpenTelemetry span attribution for build-review and coverage-binding provider attempts. ([implementation PR #2611](https://github.com/jstoup111/ai-conductor/pull/2611)).
+
+## Migration
+
+```bash migration
+true
+```
+
 ## [1.3.0] - 2026-09-15
 
 ### Added
