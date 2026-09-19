@@ -75,6 +75,45 @@ HEAD-moved, per this ADR's own Context — the feature exists because SHAs are r
    pre-rebase, or forged) is returned unchanged and then fails the existing
    `merge-base --is-ancestor` check — refused, never repointed onto a live commit.
 
+> **Amended 2026-09-18 by #2462 (repair-obligation boundaries translate at rebase time):** Decision 2
+> lists `task-evidence.json` and `task-status.json` as the file-backed stores rewritten through the
+> map. The repair-obligation section of `engine-state.json` (adr-2026-09-06-reopened-task-resolution
+> D1) persists a `baseline.head` commit that the same rebase rewrites, and it was not on that list, so
+> a rebased feature refused every open obligation with `repair boundary <sha> is not an ancestor of
+> HEAD` and reopened completed repair tasks. PR #2544 added a read-time map lookup in `autoheal.ts`
+> for the direct-hit shape; the residue shape (boundary dropped or absorbed, Decision 4) still
+> refuses. Decisions 1, 3, 4 stand; Decisions 2 and 5 are extended as follows.
+>
+> D6. **Repair-obligation baselines are a translated store.** `translateAfterRebase` rewrites every
+> obligation's `baseline.head` through the same map, in the same pass as Decision 2, using the
+> engine-state store's atomic serialized read-modify-write seam (adr-2026-09-06 D3). No unrelated
+> field of the obligation or of `engine-state.json` changes. `baseline.tree` and
+> `resolvedTaskIds` are untouched.
+>
+> D7. **A residue boundary resolves to its nearest surviving successor, never a predecessor.** When
+> `baseline.head` is in `onto..origHead` but is residue (no patch-id match), walk the pre-image
+> commits strictly after it toward `origHead` in first-parent order and take the first one that is a
+> map key; its post-image becomes the new `baseline.head`. Because that commit is later than the
+> old boundary, the post-boundary evidence range can only shrink. A boundary with no surviving
+> successor is left unchanged and the read path refuses it as today. This bounded successor rule is
+> the only extension to Decision 5's no-laundering invariant: the substitute is always a genuine
+> map value reachable from `HEAD`, never a forged or unrelated sha, and a boundary outside
+> `onto..origHead` is never substituted.
+>
+> D8. **Translation is recorded on the event spine and nowhere else.** Each rewritten obligation
+> emits one `repair_boundary_translated` `ConductorEvent` carrying the obligation id, the old and new
+> boundary, and the rule applied (`direct` or `successor`), with an `EVENT_SINKS` row. Obligations
+> left unchanged under D7 are reported through the existing `rebase_citation_residue` event, whose
+> residue entries gain the citing obligation ids alongside the citing task ids. No sidecar, log line,
+> or marker file is added.
+>
+> D9. **The read-time lookup from #2544 remains as a fallback, not a second owner.** `autoheal.ts`
+> keeps following `.pipeline/rebase-rewrites.json` for a boundary the store was not rewritten for
+> (an obligation admitted before this change, or a store the translation pass could not parse). It
+> gains no successor logic; the residue shape is resolved only at rebase time under D7. A rebase
+> the engine did not perform writes no map, so both paths refuse and the existing recovery owners
+> (#1752, #2488) apply.
+
 All git calls go through the injected `GitRunner` (`makeGitRunner`, rebase.ts:22-59) so tests
 never touch a real rebase/remote. Absence of the capability (legacy callers, unit tests) is a
 no-op → today's behavior, fail-closed.
