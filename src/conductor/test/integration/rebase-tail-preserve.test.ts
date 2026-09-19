@@ -65,6 +65,23 @@ const FRONT_DONE_M: ConductState = {
   acceptance_specs: 'skipped',
 };
 
+function coverageBindingBatchOutput(
+  prompt: string,
+  verdict: 'asserts' | 'does-not-assert' = 'asserts',
+): string {
+  const body = prompt.slice(prompt.lastIndexOf('\n\n{') + 2);
+  const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+  return JSON.stringify({
+    verdicts: claims.map(({ digest }) => verdict === 'asserts'
+      ? { digest, verdict }
+      : {
+          digest,
+          verdict,
+          missingAssertion: 'The pair does not prove the criterion.',
+        }),
+  });
+}
+
 describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
   let dir: string;
   let statePath: string;
@@ -313,9 +330,9 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     let providerCalls = 0;
     const provider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: async () => {
+      invoke: async (options) => {
         providerCalls++;
-        return { success: true, output: '{"verdict":"asserts"}', exitCode: 0 };
+        return { success: true, output: coverageBindingBatchOutput(options.prompt), exitCode: 0 };
       },
     };
     const oldRunner = new DefaultStepRunner(provider, 'coverage-before-rebase', dir, {
@@ -340,9 +357,9 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     let providerCalls = 0;
     const provider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: async () => {
+      invoke: async (options) => {
         providerCalls++;
-        return { success: true, output: '{"verdict":"asserts"}', exitCode: 0 };
+        return { success: true, output: coverageBindingBatchOutput(options.prompt), exitCode: 0 };
       },
     };
     await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
@@ -371,9 +388,9 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     let providerCalls = 0;
     const provider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: async () => {
+      invoke: async (options) => {
         providerCalls++;
-        return { success: true, output: '{"verdict":"asserts"}', exitCode: 0 };
+        return { success: true, output: coverageBindingBatchOutput(options.prompt), exitCode: 0 };
       },
     };
     const counts: Record<string, number> = {};
@@ -389,9 +406,9 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     const config = { coverage_binding: { judge: { enabled: true } } };
     const provider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: async () => ({
+      invoke: async (options) => ({
         success: true,
-        output: '{"verdict":"does-not-assert","missingAssertion":"The pair does not prove the criterion."}',
+        output: coverageBindingBatchOutput(options.prompt, 'does-not-assert'),
         exitCode: 0,
       }),
     };
