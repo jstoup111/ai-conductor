@@ -32,6 +32,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Skip registered projects with missing paths while polling other repositories. ([implementation PR #2566](https://github.com/jstoup111/ai-conductor/pull/2566)).
 - CI repair sessions retain failing-check context and report truthful repair outcomes. ([implementation PR #2534](https://github.com/jstoup111/ai-conductor/pull/2534)).
 - As-built remediation now accepts dotted subclauses that cite an approved ADR decision. ([implementation PR #2593](https://github.com/jstoup111/ai-conductor/pull/2593)).
+- `/remediate` now halts an environmental build stall immediately instead of spending a planner turn diagnosing a failure it cannot repair. ([implementation PR #2603](https://github.com/jstoup111/ai-conductor/pull/2603)).
 
 ## [1.3.0] - 2026-09-15
 
