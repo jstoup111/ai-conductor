@@ -23,6 +23,12 @@ import { readRegistry, resolveRegistryPath } from './registry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+/** Candidate harness roots shared by resolution and callers' diagnostics. */
+export const harnessRootProbeCandidates = [
+  join(__dirname, '../../../'),
+  join(__dirname, '../../../../'),
+] as const;
+
 /**
  * Locate the harness root (the directory containing `bin/install`). Probes the
  * bundle depth (dist/ → ../../..) and the source-tree depth (src/engine/ →
@@ -31,8 +37,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * check rather than block.
  */
 export async function resolveHarnessRoot(): Promise<string | null> {
-  for (const rel of ['../../../', '../../../../']) {
-    const root = join(__dirname, rel);
+  for (const root of harnessRootProbeCandidates) {
     if (await access(join(root, 'bin', 'install')).then(() => true, () => false)) {
       return root;
     }

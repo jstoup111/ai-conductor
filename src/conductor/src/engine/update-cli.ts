@@ -1,6 +1,20 @@
 import { execa } from 'execa';
+import { access, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { resolveHarnessRoot } from './install-freshness.js';
+import { harnessRootProbeCandidates, resolveHarnessRoot } from './install-freshness.js';
+
+const pathExists = (path: string): Promise<boolean> =>
+  access(path).then(
+    () => true,
+    () => false,
+  );
+
+async function isDirectory(path: string): Promise<boolean> {
+  return stat(path).then(
+    (metadata) => metadata.isDirectory(),
+    () => false,
+  );
+}
 
 export interface UpdateCommand {
   args: string[];
@@ -26,6 +40,8 @@ export interface DispatchUpdateCommandOptions {
   harnessRoot?: string | null;
   /** Override the subprocess runner (tests). Defaults to a real `execa` spawn. */
   runner?: UpdateRunner;
+  /** Diagnostic sink (defaults to stderr). */
+  log?: (message: string) => void;
 }
 
 /** Dispatch an explicit update command to the harness checkout's updater. */
@@ -35,6 +51,26 @@ export async function dispatchUpdateCommand(
 ): Promise<number> {
   const harnessRoot =
     opts.harnessRoot !== undefined ? opts.harnessRoot : await resolveHarnessRoot();
+  const log = opts.log ?? ((message: string) => console.error(message));
+
+  if (!harnessRoot) {
+    log(
+      `update: could not locate the harness root; probed: ${harnessRootProbeCandidates.join(', ')}`,
+    );
+    return 1;
+  }
+
+  const updaterPath = join(harnessRoot, 'bin', 'update');
+  if (!(await pathExists(updaterPath))) {
+    log(`update: updater does not exist: ${updaterPath}`);
+    return 1;
+  }
+
+  if (!(await isDirectory(join(harnessRoot, '.git')))) {
+    log(`update: ${harnessRoot} is not a git checkout.`);
+    return 1;
+  }
+
   const runner = opts.runner ?? realUpdateRunner;
-  return runner(join(harnessRoot as string, 'bin', 'update'), command.args);
+  return runner(updaterPath, command.args);
 }

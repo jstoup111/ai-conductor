@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -14,6 +14,7 @@ import {
   realUpdateRunner,
   type UpdateRunner,
 } from '../../src/engine/update-cli.js';
+import { harnessRootProbeCandidates } from '../../src/engine/install-freshness.js';
 
 let harnessRoot: string;
 
@@ -79,4 +80,70 @@ describe('detectUpdateCommand', () => {
       reject: false,
     });
   });
+
+  it('propagates a non-zero updater exit without logging', async () => {
+    const runner = vi.fn<UpdateRunner>().mockResolvedValue(3);
+    const log = vi.fn();
+
+    await expect(dispatchUpdateCommand({ args: [] }, { harnessRoot, runner, log })).resolves.toBe(3);
+
+    expect(log).not.toHaveBeenCalled();
+    expect(runner).toHaveBeenCalledExactlyOnceWith(join(harnessRoot, 'bin', 'update'), []);
+  });
+
+  it('maps an updater terminated by a signal to exit code 1', async () => {
+    vi.mocked(execa).mockResolvedValue({ exitCode: undefined, signal: 'SIGINT' } as never);
+
+    await expect(realUpdateRunner('/fake/bin/update', [])).resolves.toBe(1);
+  });
+
+  it('refuses an unresolved harness root before spawning and names every probe candidate', async () => {
+    const runner = vi.fn<UpdateRunner>().mockResolvedValue(0);
+    const log = vi.fn();
+
+    await expect(dispatchUpdateCommand({ args: [] }, { harnessRoot: null, runner, log })).resolves.toBe(1);
+
+    const message = log.mock.calls.flat().join('\n');
+    for (const candidate of harnessRootProbeCandidates) expect(message).toContain(candidate);
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('refuses a root with no updater before spawning and names its absolute updater path', async () => {
+    const rootWithoutUpdater = await mkdtemp(join(tmpdir(), 'update-cli-no-updater-'));
+    const runner = vi.fn<UpdateRunner>().mockResolvedValue(0);
+    const log = vi.fn();
+    await mkdir(join(rootWithoutUpdater, '.git'));
+
+    try {
+      await expect(
+        dispatchUpdateCommand({ args: [] }, { harnessRoot: rootWithoutUpdater, runner, log }),
+      ).resolves.toBe(1);
+
+      expect(log.mock.calls.flat().join('\n')).toContain(join(rootWithoutUpdater, 'bin', 'update'));
+      expect(runner).not.toHaveBeenCalled();
+    } finally {
+      await rm(rootWithoutUpdater, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['a regular file', 'absent'])(
+    'refuses a root whose .git is %s before spawning',
+    async (gitShape) => {
+      const runner = vi.fn<UpdateRunner>().mockResolvedValue(0);
+      const log = vi.fn();
+
+      if (gitShape === 'a regular file') {
+        await rm(join(harnessRoot, '.git'), { recursive: true });
+        await writeFile(join(harnessRoot, '.git'), 'gitdir: /elsewhere');
+      } else {
+        await rm(join(harnessRoot, '.git'), { recursive: true });
+      }
+
+      await expect(dispatchUpdateCommand({ args: [] }, { harnessRoot, runner, log })).resolves.toBe(1);
+
+      expect(log.mock.calls.flat().join('\n')).toContain(harnessRoot);
+      expect(log.mock.calls.flat().join('\n')).toMatch(/not a git checkout/i);
+      expect(runner).not.toHaveBeenCalled();
+    },
+  );
 });
