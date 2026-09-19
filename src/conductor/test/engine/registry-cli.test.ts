@@ -332,6 +332,31 @@ describe('conduct-ts config init verification flags', () => {
     expect(nonCommentNonBlankLines(config)).toEqual(nonCommentNonBlankLines(preChangeRendering));
   });
 
+  it('keeps the interactive all-defaults path identical to auto mode except the inferred aggregate command', async () => {
+    // The guided interview with every default accepted records aggregate +
+    // strict plus the command it inferred from project tooling.
+    const inferredCommand = 'pytest';
+    const command = detectRegistryCommand([
+      'node', 'conduct-ts', 'config', 'init',
+      '--test-suite-mode', 'aggregate',
+      '--test-suite-drift-budget', 'strict',
+      '--test-suite-command', inferredCommand,
+    ]);
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(0);
+
+    const [config, fixture] = await Promise.all([
+      readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8'),
+      readFile(join(repositoryRoot, 'src', 'conductor', 'test', 'fixtures', 'config-init-defaults.yml'), 'utf8'),
+    ]);
+    const expected = loadYaml(preChangeAutoModeRendering(fixture)) as { test_suite: { command: string } };
+    const actual = loadYaml(config) as { test_suite: { command: string } };
+
+    expect(actual.test_suite.command).toBe(inferredCommand);
+    expect(expected.test_suite.command).not.toBe(inferredCommand);
+    expect({ ...actual, test_suite: { ...actual.test_suite, command: expected.test_suite.command } }).toEqual(expected);
+  });
+
   it.each([
     ['--test-suite-mode', 'selective', 'aggregate, scoped'],
     ['--test-suite-drift-budget', 'lenient', 'strict, tolerant'],
