@@ -401,6 +401,21 @@ describe('appendTimingSection', () => {
     )).toBe(true);
   });
 
+  it('escapes NUL delimiters in a partial reason before writing Markdown', () => {
+    const rendered = appendTimingSection(
+      renderShippedRecordWithCost(fields, rollup),
+      {
+        state: 'partial',
+        reason: 'open-executions:step:execution\0["timing-rollup"]',
+      },
+    );
+
+    expect(rendered).toContain(
+      'reason: open-executions:step:execution\\u0000["timing-rollup"]\n',
+    );
+    expect(rendered).not.toContain('\0');
+  });
+
   it('keeps every field recognized by earlier readers when adding a partial reason', () => {
     const before = renderShippedRecordWithCost(fields, rollup);
     const after = appendTimingSection(before, {
