@@ -310,21 +310,18 @@ describe('T10: run span lifecycle — one trace per run', () => {
 // ── T11: Step spans — duration & status ──────────────────────────────────────
 
 describe('T11: step spans — duration and status', () => {
-  it('uses the injected event clock for legacy step-span boundaries', async () => {
-    let now = 1_000;
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, undefined, () => now);
+  it('uses the SDK clock for legacy step-span boundaries', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
-    now = 1_025;
     await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
     const step = spanExporter.getFinishedSpans().find((span) => span.name === 'explore')!;
-    const durationMs = (step.endTime[0] - step.startTime[0]) * 1_000
-      + Math.floor((step.endTime[1] - step.startTime[1]) / 1_000_000);
-    expect(durationMs).toBe(25);
+    const durationNs = step.duration[0] * 1e9 + step.duration[1];
+    expect(durationNs).toBeGreaterThan(0);
   });
 
   it('step_started opens a span named for the step', async () => {

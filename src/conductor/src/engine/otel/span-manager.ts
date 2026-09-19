@@ -36,6 +36,8 @@ interface StepState {
   retryCount: number;
   startTimeMs: number;
   subjectLabel: string;
+  /** Explicit scopes have a shared event-time clock; legacy spans retain SDK timing. */
+  usesEventClock: boolean;
   settlementEndTimeMs?: number;
   dispatch?: DispatchMeteringObservation;
 }
@@ -106,14 +108,14 @@ export class SpanManager {
       this.openSteps.delete(identity.correlationKey);
     }
 
-    // Every step span uses the injected event-time clock. Explicit executions
-    // can freeze at a later member-settlement event, and legacy events must
-    // remain on that same clock so an SDK wall-clock close cannot create an
-    // invalid mixed-clock duration.
+    // Explicit executions can freeze at a later member-settlement event. Give
+    // those spans the same wall-clock origin as that frozen end; legacy spans
+    // retain the SDK's monotonic clock so synchronous event delivery cannot
+    // produce a zero-length span.
     const startTimeMs = this.now();
     const span = this.tracer.startSpan(
       identity.subjectLabel,
-      { startTime: startTimeMs },
+      event.executionContext === undefined ? {} : { startTime: startTimeMs },
       this.runCtx,
     );
     // Set index and step name now; status + retryCount set at close.
@@ -130,6 +132,7 @@ export class SpanManager {
       retryCount: 0,
       startTimeMs,
       subjectLabel: identity.subjectLabel,
+      usesEventClock: event.executionContext !== undefined,
     });
   }
 
@@ -330,7 +333,13 @@ export class SpanManager {
   }
 
   private endSpan(state: StepState): void {
-    state.span.end(state.settlementEndTimeMs ?? this.now());
+    if (state.settlementEndTimeMs !== undefined) {
+      state.span.end(state.settlementEndTimeMs);
+    } else if (state.usesEventClock) {
+      state.span.end(this.now());
+    } else {
+      state.span.end();
+    }
   }
 
   // ── Span events ────────────────────────────────────────────────────────────
