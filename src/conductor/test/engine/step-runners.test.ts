@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { execa } from 'execa';
 import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
-import type { ConductState, ProviderAttemptEvent, StepName } from '../../src/types/index.js';
+import type { ConductState, ExecutionContext, ProviderAttemptEvent, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
 import {
@@ -34,6 +34,9 @@ import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '..
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
+import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
+import { CapturingSpanExporter } from '../fixtures/capturing-span-exporter.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { scopedRunFailure } from '../../src/engine/build-review-test-quality-preflight.js';
@@ -3953,6 +3956,64 @@ TIER: M`,
       await writeFile(planPath, '# Plan\n\nDo the thing.\n', 'utf-8');
     });
 
+    it.each(['claude', 'codex'] as const)('correlates build-review provider attempts with the owning execution on %s', async (providerKey) => {
+      const executionContext: ExecutionContext = {
+        executionId: 'review-execution', subject: { kind: 'lifecycle-step', step: 'build_review' },
+      };
+      const attempts: ProviderAttemptEvent[] = [];
+      const events = new ConductorEventEmitter();
+      const spanExporter = new CapturingSpanExporter();
+      const warnings: string[] = [];
+      const visualizer = new OtelVisualizer(
+        resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, join(dir, '.pipeline')),
+        { spanExporter, onWarning: (warning) => warnings.push(warning) },
+      );
+      visualizer.start(events);
+      const invoke = vi.fn(async (options: InvokeOptions) => {
+        options.spawnPermit?.();
+        return { success: true, output: '{"findings":[]}', exitCode: 0 };
+      });
+      const runner = new DefaultStepRunner(createMockProvider(), 'correlation', dir, {
+        gitRunner: scriptedGit(), planPath,
+        buildReviewEffectiveResolver: async () => ({
+          ok: true, feature: { version: 'v1', repository: dir, feature: 'correlation' },
+          effective: {
+            rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [],
+            suppressedFindingIds: [], skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [],
+            uncoveredInfrastructureFailureRubrics: [],
+          },
+        }),
+        ...currentBuildReviewProof(),
+        config: { llm_provider: providerKey, build_review: {
+          enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: providerKey } },
+        } } as HarnessConfig,
+        providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(providerKey, invoke)]),
+        sessionStore: new ProviderSessionStore(), configuredProviders: [providerKey],
+        providerAttempt: async (step, attempt) => {
+          const event: ProviderAttemptEvent = { type: 'provider_attempt', step, ...attempt };
+          attempts.push(event);
+          await events.emit(event);
+        },
+      });
+
+      try {
+        await events.emit({ type: 'step_started', step: 'build_review', index: 0, executionContext });
+        const result = await runner.run('build_review', { complexity_tier: 'M' }, { executionContext });
+        expect(result.success, JSON.stringify(result)).toBe(true);
+        await events.emit({ type: 'step_completed', step: 'build_review', status: 'done', executionContext });
+      } finally {
+        await visualizer.stop();
+      }
+
+      expect(warnings).toEqual([]);
+      expect(spanExporter.getFinishedSpans().find((span) => span.name === 'build_review')?.attributes)
+        .toMatchObject({ 'conductor.provider': providerKey, 'conductor.complexity_tier': 'M' });
+      expect(attempts.some((attempt) => attempt.invoked)).toBe(true);
+      expect(attempts.filter((attempt) => attempt.lifecycle).map((attempt) => attempt.lifecycle!.phase))
+        .toEqual(['preparing', 'running', 'settled']);
+      for (const attempt of attempts) expect(attempt.executionContext).toEqual(executionContext);
+    });
+
     it('routes an expired counterfactual deadline to the guarded scoped-run timeout without launching', async () => {
       const launcher = vi.fn<BuildReviewScopedLauncher>(() => {
         throw new Error('the expired deadline must prevent launch');
@@ -5225,7 +5286,11 @@ describe('auxiliary provider dispatch tier telemetry', () => {
     });
 
     try {
-      await expect(runner.run('coverage_binding', tier === undefined ? {} : { complexity_tier: tier })).resolves.toMatchObject({ success: true });
+      const executionContext: ExecutionContext = {
+        executionId: 'coverage-execution', subject: { kind: 'lifecycle-step', step: 'coverage_binding' },
+      };
+      await expect(runner.run('coverage_binding', tier === undefined ? {} : { complexity_tier: tier }, { executionContext })).resolves.toMatchObject({ success: true });
+      for (const attempt of attempts) expect(attempt.executionContext).toEqual(executionContext);
       const invocation = attempts.find((attempt) => attempt.invoked);
       expect(invocation).toBeDefined();
       expect(invocation).toMatchObject(expected);
