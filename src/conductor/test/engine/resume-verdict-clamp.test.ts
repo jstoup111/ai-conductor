@@ -1,4 +1,4 @@
-// Covers: task:1, task:6
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { join } from 'path';
@@ -782,6 +782,37 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(marker).toContain('build (pending)');
       expect(marker).toContain('test_suite (failed)');
       expect(marker).toContain('daemon will re-dispatch');
+      expect(haltReasons).toEqual([marker.trim()]);
+    });
+
+    it('parks needs-human when the earliest reachable prerequisite is failed', async () => {
+      vi.mocked(buildStepRegistry).mockReturnValueOnce([
+        gateStep('build'),
+        gateStep('build_review', ['build', 'test_suite']),
+        gateStep('test_suite'),
+      ]);
+      await writeState(statePath, {
+        build: 'failed',
+        test_suite: 'pending',
+        build_review: 'in_progress',
+      } as ConductState);
+      const { runner } = trackingRunner(dir);
+      const haltReasons: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') haltReasons.push(event.reason);
+      });
+
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        daemon: true, fromStep: 'build_review',
+      }).run();
+
+      const marker = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human');
+      expect(marker).toContain('build (failed)');
+      expect(marker).toContain('test_suite (pending)');
+      expect(marker).toContain('Operator action is required');
+      expect(marker).not.toContain('daemon will re-dispatch');
       expect(haltReasons).toEqual([marker.trim()]);
     });
 
