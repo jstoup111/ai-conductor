@@ -954,8 +954,10 @@ Opt-in pre-BUILD judge that confirms each criterion claim is asserted by the cit
 | `coverage_binding.judge.enabled` | boolean | Boolean, else hard error | `false` |
 | `coverage_binding.judge.batch_size` | integer | Positive integer, else hard error | `8` |
 
-Only `enabled` and `batch_size` are accepted under `coverage_binding.judge`. A batch size of `1`
-uses one fresh judge session per claim.
+Only `enabled` and `batch_size` are accepted under `coverage_binding.judge`. Each fresh judge
+session evaluates an ordered batch of at most `batch_size` claims; a size of `1` uses one session
+per claim. The engine validates one verdict per claim and checkpoints accepted batches, so a later
+run reuses unchanged completed judgments and evaluates only pending claims.
 
 ## gate_code_validity
 

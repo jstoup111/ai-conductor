@@ -323,6 +323,7 @@ Every pattern declares one lifecycle scope:
 | `architecture_diagram` | `.docs/architecture/*.md` | repository |
 | `architecture_review` | `.docs/decisions/architecture-review-*.md` (feature), `.docs/decisions/adr-*.md` (repository) | mixed |
 | `worktree` | *(none)* | — |
+| `coverage_binding` | `.pipeline/coverage-binding.json` | run |
 | `acceptance_specs` | 15 stack-convention test globs — `spec/acceptance/**/*`, `spec/requests/**/*`, `spec/system/**/*`, `test/acceptance/**/*`, `test/**/*`, `tests/**/*`, `__tests__/**/*`, and `*.{test,spec}.{js,ts,jsx,tsx}` — plus any `acceptance_spec_globs` the project declares | repository |
 | `build` | `.pipeline/task-status.json` | run |
 | `build_review` | `.pipeline/build-review.json` | run |
@@ -335,7 +336,7 @@ Every pattern declares one lifecycle scope:
 | `remediate` | *(none — the engine reads `.pipeline/remediation.json` directly)* | — |
 | `attribution_verify` | *(none — computed, not a file)* | — |
 
-Totals: 8 steps write into `.docs/`, 6 write into `.pipeline/`, `acceptance_specs` matches project test
+Totals: 8 steps write into `.docs/`, 7 write into `.pipeline/`, `acceptance_specs` matches project test
 sources, and 10 produce no file artifact at all.
 
 ### Feature-scoped resolution
@@ -459,6 +460,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `build-review-regrade.json` | Per-feature-session regrade counter; bounds stale-mirage regrade to once per session | `build-review-disposition.ts` |
 | `build-review-work-order.json` | `{ version: 'v1', domain: 'build_review', feature, effectId, cases[], attemptedCaseIds? }`. The effect-bound, feature-local ordered BUILD work from a post-join adjudication; BUILD records `attemptedCaseIds` before dispatch so restart recovery and repeat detection remain durable. | build-review adjudication coordinator |
 | `build-stall-question.md` | Free-form stall question surfaced to the operator | `task-progress.ts` |
+| `coverage-binding.json` | `{ version: 1, slug, runId, status, entries[] }`, where `status` is `disabled`, `done`, `failed`, `partial`, or `refused`; every entry binds an engine-stamped claim digest to its verdict and cited task checks. `partial` checkpoints accepted batches but is not completion evidence. | `coverage_binding` step |
 | `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |
 | `fr-coverage.md` | Product-track FR-to-spec coverage table | `writing-system-tests` skill |
 | `intake-outcomes.md` | Staged intake outcomes | `engineer/outcome-staging.ts` |
