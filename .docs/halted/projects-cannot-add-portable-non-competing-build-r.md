@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-18T23:29:48.230Z
+Status: halted
 Slug: projects-cannot-add-portable-non-competing-build-r
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-projects-cannot-add-portable-non-competing-build-r
-Head SHA: 50e9e754bbae31aabfbfd024ad0008320d48087f
-Halted at: 2026-09-18T17:54:03.077Z
+Head SHA: 40e0c5b67c7df69c2187467321c472c8f1dfb119
+Halted at: 2026-09-19T16:28:57.986Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted in auto mode: step 'prd_audit' failed: post-dispatch verdict write handshake failed for prd_audit: .pipeline/prd-audit.md is stale (found mtime 2026-09-17T22:42:00.029Z); expected run id 82c26336-c37f-47f8-8dcd-a9ec6530416d; found run id 82c26336-c37f-47f8-8dcd-a9ec6530416d
+Validation group "prd_audit" halted: branch "prd_audit" produced no-verdict after 3 attempts (You've hit your weekly limit · resets Sep 20, 9pm (America/New_York)).
 ```
