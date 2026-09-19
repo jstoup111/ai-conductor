@@ -55,6 +55,23 @@ spellings must be the whole invocation; `ai-conductor daemon --version` is a dae
 version request. Like every other unsanctioned command it is refused inside a daemon-managed session
 (see [Daemon-session refusal](#daemon-session-refusal)).
 
+## `ai-conductor update`
+
+```bash
+ai-conductor update [args...]
+```
+
+Runs the owning harness checkout's `bin/update` from any working directory. It forwards every argument,
+inherits the terminal, and returns the updater's exit status. Use the same options as
+[`bin/update`](#binupdate), for example:
+
+```bash
+ai-conductor update --set-channel stable
+```
+
+The command exits 1 without starting an updater when it cannot find the harness checkout, its
+`bin/update`, or a checkout `.git` directory. Its diagnostic names the failed path or root.
+
 ## `bin/install`
 
 ```bash
