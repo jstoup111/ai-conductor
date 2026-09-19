@@ -14756,20 +14756,32 @@ export function clampToRunnablePrerequisite(
     const gate = checkGate(step, state);
     if (gate.passed) return idx;
 
-    // Earliest unsatisfied prerequisite that sits BEFORE the candidate. A
-    // prerequisite the registry cannot locate, or one at/after `idx`, is not
-    // something moving backward can fix — stop rather than spin.
-    let earliest = -1;
-    for (const prereq of step.prerequisites) {
-      if (stepSatisfied(state, prereq)) continue;
-      const prereqIdx = steps.findIndex((s) => s.name === prereq);
-      if (prereqIdx < 0 || prereqIdx >= idx) continue;
-      if (earliest === -1 || prereqIdx < earliest) earliest = prereqIdx;
-    }
+    const earliest = earliestResolvablePrerequisiteIndex(steps, state, step, idx);
     if (earliest === -1) return idx;
     idx = earliest;
   }
   return idx;
+}
+
+/**
+ * Find the earliest unsatisfied prerequisite that can be reached by moving
+ * backward from `beforeIndex`. Prerequisites absent from the resolved registry
+ * or at/after the bound cannot be resolved by that movement.
+ */
+export function earliestResolvablePrerequisiteIndex(
+  steps: StepDefinition[],
+  state: ConductState,
+  step: StepDefinition,
+  beforeIndex: number,
+): number {
+  let earliest = -1;
+  for (const prereq of step.prerequisites) {
+    if (stepSatisfied(state, prereq)) continue;
+    const prereqIdx = steps.findIndex((candidate) => candidate.name === prereq);
+    if (prereqIdx < 0 || prereqIdx >= beforeIndex) continue;
+    if (earliest === -1 || prereqIdx < earliest) earliest = prereqIdx;
+  }
+  return earliest;
 }
 
 /**

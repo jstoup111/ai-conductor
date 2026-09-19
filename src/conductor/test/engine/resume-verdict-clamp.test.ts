@@ -47,6 +47,7 @@ import { ALL_STEPS, buildStepRegistry } from '../../src/engine/steps.js';
 import {
   clampToRunnablePrerequisite,
   Conductor,
+  earliestResolvablePrerequisiteIndex,
   resolveRunnableResumeEntry,
 } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
@@ -133,6 +134,35 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
         isCheckpoint: false,
       };
     }
+
+    it('finds an unsatisfied prerequisite at an earlier index', () => {
+      const steps = [step('build'), step('build_review', ['build'])];
+      const state = { build: 'pending' } as ConductState;
+
+      expect(earliestResolvablePrerequisiteIndex(steps, state, steps[1], 1)).toBe(0);
+    });
+
+    it('returns -1 when an unsatisfied prerequisite is absent from the resolved steps', () => {
+      const blocked = step('build_review', ['build']);
+      const state = { build: 'pending' } as ConductState;
+
+      expect(earliestResolvablePrerequisiteIndex([blocked], state, blocked, 0)).toBe(-1);
+    });
+
+    it('returns -1 when an unsatisfied prerequisite sits at or after the bound', () => {
+      const blocked = step('build_review', ['build']);
+      const state = { build: 'pending' } as ConductState;
+
+      expect(earliestResolvablePrerequisiteIndex([blocked, step('build')], state, blocked, 0)).toBe(-1);
+    });
+
+    it('finds the smallest index among several unsatisfied resolvable prerequisites', () => {
+      const blocked = step('build_review', ['test_suite', 'build']);
+      const steps = [step('build'), step('test_suite'), blocked];
+      const state = { build: 'pending', test_suite: 'pending' } as ConductState;
+
+      expect(earliestResolvablePrerequisiteIndex(steps, state, blocked, 2)).toBe(0);
+    });
 
     it('returns a candidate whose gate passes unchanged', () => {
       const steps = [step('build'), step('build_review', ['build'])];
