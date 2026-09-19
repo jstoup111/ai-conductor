@@ -1,26 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-19T02:11:45.446Z
+Status: halted
 Slug: bootstrap-register-never-walk-the-user-through-use
 Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-bootstrap-register-never-walk-the-user-through-use
-Head SHA: 18bab848886b9537241f516014b1f60fc70c1be5
-Halted at: 2026-09-19T00:22:47.846Z
+Head SHA: 275191dea348c9caae7974e822a6266c5e95d435
+Halted at: 2026-09-19T03:01:23.778Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: needs human DECIDE — DECIDE entry refused — autonomous run may not enter DECIDE without operator direction.
+Pipeline blocked: architecture_review must repair the unresolved as-built remediation artifacts — D9 needs a numbered citable additive decision, and AB-2 through AB-4 need the required daemon-session guard ADR with explicit read/write and re-run rulings.
 
-Source gate:       remediate
-Requested target:  architecture_review
-Evidence:          FR-11→existing-task; AB-5→existing-task; AB-1→architecture_review; AB-2→architecture_review; AB-3→architecture_review; AB-4→architecture_review
-Why refused:       remediation requires a DECIDE revision of DECIDE step 'architecture_review' despite the current artifact — explicit operator grant required
-Operator choices:  direct a return to a named step | correct the routing target | reject the kickback
+
+build_stall remediation requested 2 plan tasks with no plan-growth allowance; only validated prd_audit FIXABLE or as-built REMEDIABLE findings may append remediation work.
 ```
