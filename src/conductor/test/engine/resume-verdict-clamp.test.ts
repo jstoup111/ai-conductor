@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:6
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { join } from 'path';
@@ -1037,6 +1037,108 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       await conductor.run();
 
       expect(log.filter((entry) => entry.startsWith('run:'))).toHaveLength(0);
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    });
+  });
+
+  // ── Task 6: preserve operator-required terminals outside the new park ──
+  describe('Task 6: non-recoverable exits retain needs-human classification', () => {
+    function gateStep(name: StepName, prerequisites: StepName[] = []): StepDefinition {
+      return {
+        name,
+        label: name,
+        phase: 'BUILD',
+        enforcement: 'gating',
+        prerequisites,
+        skippableForTiers: [],
+        isCheckpoint: false,
+      };
+    }
+
+    it('preserves the existing failed, unresolvable gate-refusal body byte-for-byte', async () => {
+      vi.mocked(buildStepRegistry).mockReturnValueOnce([
+        gateStep('build_review', ['build']),
+      ]);
+      await writeState(statePath, {
+        build: 'failed',
+        build_review: 'in_progress',
+      } as ConductState);
+      const { runner } = trackingRunner(dir);
+
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        daemon: true, fromStep: 'build_review',
+      }).run();
+
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).resolves.toBe(
+        "Step 'build_review' is blocked by unsatisfied prerequisite: build (failed). " +
+        'Operator action is required before this run can continue.\n',
+      );
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human');
+    });
+
+    // `done`, `skipped`, and `stale` satisfy a gate. These are every remaining
+    // non-pending StepStatus value that can actually leave a prerequisite
+    // unsatisfied and therefore exercise the operator-required branch.
+    it.each(['in_progress', 'failed', 'refused'] as const)(
+      'parks a resolvable %s prerequisite as needs-human with an operator action',
+      async (status) => {
+        vi.mocked(buildStepRegistry).mockReturnValueOnce([
+          gateStep('build'),
+          gateStep('build_review', ['build']),
+        ]);
+        await writeState(statePath, {
+          build: status,
+          build_review: 'in_progress',
+        } as ConductState);
+        const { runner } = trackingRunner(dir);
+
+        await new Conductor({
+          projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+          daemon: true, fromStep: 'build_review',
+        }).run();
+
+        const marker = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+        expect(marker).toContain(`build (${status})`);
+        expect(marker).toContain('Operator action is required before this run can continue.');
+        await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human');
+      },
+    );
+
+    it('keeps the daemon loop-tail catch-all needs-human for a non-gate markerless exit', async () => {
+      vi.mocked(buildStepRegistry).mockReturnValueOnce([
+        { ...gateStep('build'), isCheckpoint: true },
+      ]);
+      await writeState(statePath, { build: 'pending' } as ConductState);
+      const { runner, log } = trackingRunner(dir);
+
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        daemon: true, fromStep: 'build', onCheckpoint: async () => 'quit',
+      }).run();
+
+      expect(log).toContain('run:build');
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).resolves.toContain(
+        'loop exited without a terminal verdict',
+      );
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human');
+    });
+
+    it('does not let the loop-tail catch-all overwrite a terminal DONE marker', async () => {
+      vi.mocked(buildStepRegistry).mockReturnValueOnce([gateStep('build')]);
+      await writeState(statePath, { build: 'pending' } as ConductState);
+      const { runner } = trackingRunner(dir);
+
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        daemon: true, fromStep: 'build',
+      }).run();
+
+      await expect(readFile(join(dir, '.pipeline', 'DONE'), 'utf-8')).resolves.toBe(
+        'gate-driven loop converged\n',
+      );
       await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).rejects.toMatchObject({
         code: 'ENOENT',
       });
