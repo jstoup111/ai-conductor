@@ -42,7 +42,7 @@ import { promisify } from 'node:util';
 import { prepareWorktree as defaultPrepareWorktree } from './worktree-prepare.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from './tracker-client.js';
-import type { GithubOperationRunner } from './github-operations.js';
+import type { GithubOperationEventEmitter, GithubOperationRunner } from './github-operations.js';
 
 const execFile = promisify(execFileCb);
 
@@ -664,6 +664,7 @@ export type PushRefreshedResult =
 export interface PushRefreshedRemoteOptions {
   readonly remoteGit?: typeof executeRemoteGit;
   readonly mutation?: GithubMutationExecutionContext;
+  readonly events?: GithubOperationEventEmitter;
 }
 
 /**
@@ -711,6 +712,7 @@ export async function pushRefreshedBranch(
         return { stdout: result.stdout };
       },
       mutation: remote.mutation,
+      events: remote.events,
     },
   );
 
@@ -767,6 +769,7 @@ export interface PublishResolutionOptions {
   /** Guarded remote-write context for the lease publication. */
   remoteGit?: typeof executeRemoteGit;
   remoteMutation?: GithubMutationExecutionContext;
+  events?: GithubOperationEventEmitter;
 }
 
 /**
@@ -809,7 +812,7 @@ export async function publishResolution(
     opts.git,
     opts.branch,
     log,
-    { remoteGit: opts.remoteGit, mutation: opts.remoteMutation },
+    { remoteGit: opts.remoteGit, mutation: opts.remoteMutation, events: opts.events },
   );
 
   if (!pushResult.pushed) {
@@ -940,6 +943,8 @@ export async function resolveConflictingPr(
     operations?: GithubOperationRunner;
     /** Test seam for local-Git lease behavior; production uses the guarded adapter. */
     remoteGit?: typeof executeRemoteGit;
+    /** Existing event spine for remote-Git refusal telemetry. */
+    events?: GithubOperationEventEmitter;
   },
 ): Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' }> {
   const { prUrl, slug, repoCwd } = entry;
@@ -964,6 +969,7 @@ export async function resolveConflictingPr(
     const operations = deps.operations ?? createGuardedGithubOperationRunner(deps.runGh, {
       cwd: repoCwd,
       mutation: remoteMutation,
+      events: deps.events,
     });
 
     // Determine the base to rebase onto
@@ -1083,6 +1089,7 @@ export async function resolveConflictingPr(
       },
       remoteMutation,
       remoteGit: deps.remoteGit,
+      events: deps.events,
       // No earlierFailure → attempt the lease push
     });
 

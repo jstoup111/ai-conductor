@@ -2445,7 +2445,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
                     attemptCap,
                   },
-                  { runGh: ghRunner, runSuite, resolver, log, isFeatureInFlight: isWorkClaimActive, worktreeLifecycle },
+                  {
+                    runGh: ghRunner,
+                    runSuite,
+                    resolver,
+                    log,
+                    isFeatureInFlight: isWorkClaimActive,
+                    worktreeLifecycle,
+                    events,
+                  },
                 );
 
                 log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);

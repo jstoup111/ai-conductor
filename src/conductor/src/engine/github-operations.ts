@@ -272,8 +272,13 @@ export function formatGithubOperationRefusal(
   return `GitHub operation refused: ${event.operation} on ${formatGithubOperationTarget(event.target)} (${event.reason}); remedy: ${event.remedy}`;
 }
 
-async function emitGithubOperationRefusal(
-  request: GithubOperationRequest,
+/**
+ * Deliver refusal telemetry through the sole GitHub-operation event variant.
+ * Both GitHub and remote-Git guards call this so their reason/remedy vocabulary
+ * and rendered payload cannot drift.
+ */
+export async function emitGithubOperationRefusal(
+  refusal: Pick<Extract<ConductorEvent, { type: 'github_operation_refused' }>, 'operator' | 'target' | 'operation'>,
   reason: GithubOperationRefusalReason,
   events: GithubOperationEventEmitter | undefined,
 ): Promise<void> {
@@ -281,9 +286,9 @@ async function emitGithubOperationRefusal(
   try {
     await events.emit({
       type: 'github_operation_refused',
-      operator: request.context.actor,
-      target: request.target,
-      operation: request.operation,
+      operator: refusal.operator,
+      target: refusal.target,
+      operation: refusal.operation,
       reason,
       remedy: githubOperationRefusalRemedy(reason),
     });
@@ -497,7 +502,11 @@ export async function executeGithubOperation(
         reason: response.reason,
       } as const;
       if (request.access !== 'read') {
-        await emitGithubOperationRefusal(request, response.reason, options.events ?? runner.events);
+        await emitGithubOperationRefusal({
+          operator: request.context.actor,
+          target: request.target,
+          operation: request.operation,
+        }, response.reason, options.events ?? runner.events);
       }
       return result;
     }

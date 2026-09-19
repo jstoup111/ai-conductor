@@ -108,7 +108,10 @@ async function main(): Promise<void> {
   const actor = typeof event.sender?.login === 'string' && event.sender.login.trim() !== ''
     ? event.sender.login.trim().toLowerCase()
     : 'github-actions';
-  const dependencyOperations = createGuardedGithubOperationRunner(gh, {
+  // Association labels and dependency links share the same independently
+  // authorized intake runner. Label definitions still have no shared approval,
+  // so ensureLabel refuses create/update rather than widening this authority.
+  const guardedOperations = createGuardedGithubOperationRunner(gh, {
     cwd: process.cwd(),
     intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd() }),
   });
@@ -116,7 +119,14 @@ async function main(): Promise<void> {
   const result = await syncIssueLabels(
     { priority, size, dependsOn },
     issueRef,
-    { gh, dependencyOperations, actor, cwd: process.cwd(), log: (msg) => console.error(msg) },
+    {
+      gh,
+      dependencyOperations: guardedOperations,
+      labelOperations: guardedOperations,
+      actor,
+      cwd: process.cwd(),
+      log: (msg) => console.error(msg),
+    },
   );
 
   console.log(

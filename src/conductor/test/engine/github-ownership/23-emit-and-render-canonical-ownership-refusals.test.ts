@@ -7,6 +7,7 @@ import { Writable } from 'node:stream';
 
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { executeGithubOperation } from '../../../src/engine/github-operations.js';
+import { executeRemoteGit } from '../../../src/engine/remote-git-operations.js';
 import { createGuardedGithubOperationRunner, type GhRunner } from '../../../src/engine/tracker-client.js';
 import { createLiveRegion } from '../../../src/ui/live-region.js';
 import { TerminalRenderer } from '../../../src/ui/terminal-renderer.js';
@@ -166,6 +167,61 @@ describe('canonical GitHub ownership refusal event', () => {
     expect(observed).toEqual([expect.objectContaining({
       type: 'github_operation_refused',
       operation: 'issue.comment.create',
+      reason: 'other-owner',
+      remedy: 'ask-resource-owner',
+    })]);
+  });
+
+  it('emits the canonical refusal for a remote push with missing provenance after refusing it', async () => {
+    const events = new ConductorEventEmitter();
+    const remoteWrite = vi.fn();
+    const observed: ConductorEvent[] = [];
+    events.on('github_operation_refused', (event) => { observed.push(event); });
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feature/owned'],
+      {
+        cwd: '/fixture/worktree',
+        config: async () => ({ stdout: 'git@github.com:acme/owned.git\n' }),
+        runRemoteGit: remoteWrite,
+        events,
+      },
+    )).resolves.toMatchObject({ kind: 'refused', reason: 'missing-provenance' });
+
+    expect(remoteWrite).not.toHaveBeenCalled();
+    expect(observed).toEqual([expect.objectContaining({
+      type: 'github_operation_refused',
+      operator: 'unknown',
+      target: { repository: 'acme/owned', kind: 'remote-ref', ref: 'refs/heads/feature/owned' },
+      operation: 'remote-ref.push',
+      reason: 'missing-provenance',
+      remedy: 'record-feature-ownership',
+    })]);
+  });
+
+  it('emits the canonical refusal for a policy-denied remote push after authorization fails', async () => {
+    const events = new ConductorEventEmitter();
+    const remoteWrite = vi.fn();
+    const observed: ConductorEvent[] = [];
+    events.on('github_operation_refused', (event) => { observed.push(event); });
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feature/owned'],
+      {
+        cwd: '/fixture/worktree',
+        config: async () => ({ stdout: 'git@github.com:acme/owned.git\n' }),
+        runRemoteGit: remoteWrite,
+        events,
+        mutation: foreignOwnerContext(),
+      },
+    )).resolves.toMatchObject({ kind: 'refused', reason: 'other-owner' });
+
+    expect(remoteWrite).not.toHaveBeenCalled();
+    expect(observed).toEqual([expect.objectContaining({
+      type: 'github_operation_refused',
+      operator: 'alice',
+      target: { repository: 'acme/owned', kind: 'remote-ref', ref: 'refs/heads/feature/owned' },
+      operation: 'remote-ref.push',
       reason: 'other-owner',
       remedy: 'ask-resource-owner',
     })]);

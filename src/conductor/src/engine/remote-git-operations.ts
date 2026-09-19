@@ -1,4 +1,9 @@
-import type { GithubOperationRefusalReason } from './github-operations.js';
+import {
+  emitGithubOperationRefusal,
+  type GithubOperationEventEmitter,
+  type GithubOperationRefusalReason,
+  type GithubOperationTarget,
+} from './github-operations.js';
 import { authorizeGithubMutation } from './owner-gate/mutation-policy.js';
 import {
   resolveRemoteGitTargets,
@@ -22,6 +27,8 @@ export interface RemoteGitOperationDependencies {
   readonly runRemoteGit: RemoteGitCommandRunner;
   /** Missing provenance is a refusal, never permission to fall back to raw Git. */
   readonly mutation?: GithubMutationExecutionContext;
+  /** Existing event spine; delivery remains best-effort after a refusal. */
+  readonly events?: GithubOperationEventEmitter;
 }
 
 export type RemoteGitExecutionResult =
@@ -95,6 +102,33 @@ function messageFor(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+async function refusalOperator(dependencies: RemoteGitOperationDependencies): Promise<string> {
+  if (!dependencies.mutation) return 'unknown';
+  try {
+    const identity = await dependencies.mutation.dependencies.resolveMachineOwner();
+    return identity.resolved ? identity.id : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+async function emitRemoteGitRefusal(
+  destination: RemoteGitDestination,
+  reason: GithubOperationRefusalReason,
+  dependencies: RemoteGitOperationDependencies,
+): Promise<void> {
+  const target: GithubOperationTarget = {
+    repository: destination.repository,
+    kind: 'remote-ref',
+    ref: destination.ref,
+  };
+  await emitGithubOperationRefusal({
+    operator: await refusalOperator(dependencies),
+    target,
+    operation: destination.operation,
+  }, reason, dependencies.events);
+}
+
 /**
  * Resolve and authorize a complete remote destination set before invoking one
  * transport command. A denial or failure has no fallback transport path.
@@ -108,7 +142,9 @@ export async function executeRemoteGit(
   if (resolution.kind === 'refused') return resolution;
 
   if (!dependencies.mutation) {
-    return { kind: 'refused', reason: 'missing-provenance', target: resolution.targets[0] };
+    const target = resolution.targets[0];
+    await emitRemoteGitRefusal(target, 'missing-provenance', dependencies);
+    return { kind: 'refused', reason: 'missing-provenance', target };
   }
 
   // Deliberately authorize every exact ref before the single mutating command.
@@ -124,6 +160,7 @@ export async function executeRemoteGit(
       provenance: dependencies.mutation.provenance,
     }, dependencies.mutation.dependencies);
     if (decision.kind === 'refused') {
+      await emitRemoteGitRefusal(destination, decision.reason, dependencies);
       return { kind: 'refused', reason: decision.reason, target: destination };
     }
   }

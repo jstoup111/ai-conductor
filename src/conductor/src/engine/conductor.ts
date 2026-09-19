@@ -2092,6 +2092,7 @@ interface PostFinishShippedRecordRefreshOptions {
   gh: GhRunner;
   remoteGit?: typeof executeRemoteGit;
   remoteMutation?: GithubMutationExecutionContext;
+  events: ConductorEventEmitter;
 }
 
 /** Refresh the final Cost block and make its push best-effort and non-blocking. */
@@ -2104,6 +2105,7 @@ async function refreshPostFinishShippedRecord({
   gh,
   remoteGit,
   remoteMutation,
+  events,
 }: PostFinishShippedRecordRefreshOptions): Promise<void> {
   try {
     const planPaths = (await readdir(join(cwd, '.docs/plans')))
@@ -2167,6 +2169,7 @@ async function refreshPostFinishShippedRecord({
         branch: branchOut.trim(),
         remoteGit,
         remoteMutation: resolvedMutation,
+        events,
       });
     } catch (pushError) {
       let recoveryHead = preRefreshHead;
@@ -2224,6 +2227,7 @@ export async function pushPostFinishShippedRecord(input: {
   branch: string;
   remoteGit?: typeof executeRemoteGit;
   remoteMutation?: GithubMutationExecutionContext;
+  events?: ConductorEventEmitter;
 }): Promise<void> {
   const pushed = await (input.remoteGit ?? executeRemoteGit)(
     ['push', 'origin', `HEAD:refs/heads/${input.branch}`],
@@ -2232,6 +2236,7 @@ export async function pushPostFinishShippedRecord(input: {
       config: (args) => input.runGit(args, { cwd: input.cwd }),
       runRemoteGit: input.runGit,
       mutation: input.remoteMutation,
+      events: input.events,
     },
   );
   if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
@@ -7803,6 +7808,7 @@ export class Conductor {
             featureDesc: state.feature_desc,
             git: this.git,
             gh: this.gh,
+            events: this.events,
           });
           const draftPr = await openShipDraftPr({
             gh: this.gh,
@@ -7814,6 +7820,7 @@ export class Conductor {
             remoteMutation: publication?.remoteMutation,
             operations: publication?.operations,
             remoteGit: this.shipDraftRemoteGit,
+            events: this.events,
             log: this.log ?? console.warn,
           });
           if (draftPr.outcome === 'published') {
@@ -13680,6 +13687,7 @@ export class Conductor {
           log: this.log ?? console.warn,
           gh: this.gh,
           remoteMutation: this.postFinishRemoteMutation,
+          events: this.events,
         });
       }
     } catch (err) {

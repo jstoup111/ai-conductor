@@ -198,7 +198,10 @@ export async function openSpecPr(
 
   const push = await executeRemoteGit(
     ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`],
-    deps.publication.remote,
+    // Keep the event dependency explicit at this composition boundary. The
+    // remote guard owns refusal-first delivery; handoff only preserves the
+    // already-composed canonical emitter.
+    { ...deps.publication.remote, events: deps.publication.remote.events },
   );
   if (push.kind === 'refused') return { kind: 'pr-refused', reason: push.reason };
   if (push.kind === 'failed') throw new Error(`openSpecPr: guarded push failed: ${push.error}`);

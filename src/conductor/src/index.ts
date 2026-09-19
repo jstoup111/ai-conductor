@@ -30,6 +30,7 @@ import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdir, readFile } from 'node:fs/promises';
 import { realpathSync, writeSync } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
 import { execa } from 'execa';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -168,6 +169,11 @@ import {
 } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
 import { detectGithubOperationCommand, dispatchGithubOperationCommand } from './engine/github-operations-cli.js';
+import {
+  formatGithubOperationTarget,
+  type GithubOperationTarget,
+} from './engine/github-operations.js';
+import type { GithubOperationApprovalPrompt } from './engine/github-operation-approval.js';
 import {
   detectScopeCheckCommand,
   loadScopeCheckEnforcement,
@@ -888,7 +894,29 @@ async function main(): Promise<void> {
 
   const githubOperationCmd = detectGithubOperationCommand(process.argv);
   if (githubOperationCmd) {
-    process.exitCode = await dispatchGithubOperationCommand(githubOperationCmd, { cwd: process.cwd() });
+    // The CLI is the interactive authority boundary. It displays the exact
+    // decoded request and grants only this one confirmation; non-TTY callers
+    // get the normal explicit-authorization refusal.
+    const confirmation = {
+      mode: 'interactive' as const,
+      confirm: async (prompt: GithubOperationApprovalPrompt): Promise<boolean> => {
+        if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+        const target: GithubOperationTarget = prompt.target;
+        const readline = createInterface({ input: process.stdin, output: process.stdout });
+        try {
+          const answer = await readline.question(
+            `Authorize ${prompt.operation} on ${formatGithubOperationTarget(target)}? [y/N] `,
+          );
+          return answer.trim().toLowerCase() === 'y' || answer.trim().toLowerCase() === 'yes';
+        } finally {
+          readline.close();
+        }
+      },
+    };
+    process.exitCode = await dispatchGithubOperationCommand(githubOperationCmd, {
+      cwd: process.cwd(),
+      confirmation,
+    });
     return;
   }
 

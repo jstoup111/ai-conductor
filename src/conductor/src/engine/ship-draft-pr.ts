@@ -34,7 +34,11 @@ import {
   type GitRunner,
 } from './pr-labels.js';
 import { PR_BODY_FLOOR_MARKER, branchToFeatureDesc } from './halt-pr-rehabilitation.js';
-import { executeGithubOperation, type GithubOperationRunner } from './github-operations.js';
+import {
+  executeGithubOperation,
+  type GithubOperationEventEmitter,
+  type GithubOperationRunner,
+} from './github-operations.js';
 import { executeRemoteGit } from './remote-git-operations.js';
 import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from './tracker-client.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
@@ -140,6 +144,8 @@ export interface OpenShipDraftPrDeps {
    */
   remoteGit?: typeof executeRemoteGit;
   remoteMutation?: GithubMutationExecutionContext;
+  /** Existing event spine for refusal telemetry from the guarded push. */
+  events?: GithubOperationEventEmitter;
   /** Guarded PR creation; an absent runner is a refusal, never a raw gh fallback. */
   operations?: GithubOperationRunner;
   log?: (msg: string) => void;
@@ -171,6 +177,7 @@ export async function createShipDraftPublicationDependencies(input: {
   readonly featureDesc: string | undefined;
   readonly git: GitRunner;
   readonly gh: GhRunner;
+  readonly events?: GithubOperationEventEmitter;
 }): Promise<ShipDraftPublicationDependencies | undefined> {
   if (!input.branch || input.branch === 'HEAD' || !input.baseBranch || !input.featureDesc) return undefined;
   let repository: string | undefined;
@@ -206,6 +213,7 @@ export async function createShipDraftPublicationDependencies(input: {
     operations: createGuardedGithubOperationRunner(input.gh, {
       cwd: input.cwd,
       mutation: remoteMutation,
+      events: input.events,
     }),
   };
 }
@@ -338,6 +346,7 @@ export async function openShipDraftPr(
       config: (args) => git(args, { cwd }),
       runRemoteGit: git,
       mutation: deps.remoteMutation,
+      events: deps.events,
     });
     if (pushed.kind !== 'executed') {
       const reason = pushed.kind === 'failed'
