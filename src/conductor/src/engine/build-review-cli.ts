@@ -108,15 +108,16 @@ function reducedCoverageFault(result: NonNullable<ReturnType<typeof parseBuildRe
   return scopeFault && { rubric: scopeFault.rubric, cause: scopeFault.reason, diagnostic: scopeFault.detail };
 }
 
-/** Only a published mechanical fault after its allowance is exhausted is terminal. */
+/** Projection size is deterministic; other mechanical faults become terminal only after exhaustion. */
 function exhaustedMechanicalFaults(
   aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>,
   mechanicalFaults: number,
 ): readonly ExhaustedMechanicalFault[] {
-  if (mechanicalFaults < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) return [];
   return Object.values(aggregate.results).flatMap((result) => {
     const fault = reducedCoverageFault(result);
-    return fault ? [fault] : [];
+    return fault && (fault.cause === 'projection-oversized' || mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW)
+      ? [fault]
+      : [];
   });
 }
 
@@ -462,7 +463,7 @@ export async function dispatchBuildReviewRecordReducedCoverage(
         stateRefusal = `the current '${rubric}' reduced-coverage fault changed`;
         return false;
       }
-      if (((await readMechanicalFaults(worktree!)) ?? 0) < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
+      if (fault.cause !== 'projection-oversized' && ((await readMechanicalFaults(worktree!)) ?? 0) < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
         stateRefusal = 'the mechanical-fault allowance remains';
         return false;
       }

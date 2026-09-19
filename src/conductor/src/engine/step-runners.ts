@@ -2342,7 +2342,8 @@ export class DefaultStepRunner implements StepRunner {
     if (!persistedSuppressions.ok) {
       return { success: false, output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}` };
     }
-    if (infrastructureFailure?.reason === 'projection-oversized') {
+    if (infrastructureFailure?.reason === 'projection-oversized' &&
+      effective.effective.uncoveredInfrastructureFailureRubrics.includes(infrastructureFailure.rubric)) {
       const measurements = /measured=(\d+)\s+bytes\s+limit=(\d+)\s+bytes/.exec(infrastructureFailure.detail);
       const reason = measurements
         ? `build_review requires human action: ${infrastructureFailure.rubric} projection-oversized (measured ${measurements[1]} bytes; limit ${measurements[2]} bytes).`

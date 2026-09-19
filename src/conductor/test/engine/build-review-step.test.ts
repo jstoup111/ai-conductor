@@ -4,9 +4,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { DefaultStepRunner, type StepRunnerOptions } from '../../src/engine/step-runners.js';
 import { classifyRetryDecision } from '../../src/engine/artifacts.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
+import { resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
+import { BuildReviewDispositionStore, type BuildReviewReducedCoverageAppendResult } from '../../src/engine/build-review-dispositions.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
@@ -111,7 +114,7 @@ describe('build_review oversized projection step', () => {
   });
 
   it('preserves a sibling judged finding while an oversized projection halts for a human', async () => {
-    const runner = createRunner('projection-oversized: measured=1346093 bytes limit=1048576 bytes', 'projection-oversized', true);
+    const runner = createRunner('projection-oversized: measured=1346093 bytes limit=1048576 bytes', 'projection-oversized', 'finding');
 
     const result = await runner.run('build_review', state);
 
@@ -125,16 +128,67 @@ describe('build_review oversized projection step', () => {
     expect((await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults ?? 0).toBe(0);
   });
 
+  it('records an oversized projection through the real CLI and resolves the next lap through the real disposition store', async () => {
+    const detail = 'projection-oversized: measured=1346093 bytes limit=1048576 bytes';
+    const firstLap = await createRunner(detail).run('build_review', state);
+    const mechanicalFaultsBefore = (await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults ?? 0;
+    const cliIdentity = (path: string) => path === '/main'
+      ? '/main'
+      : path === '/main/.worktrees/feature' || path === projectRoot
+        ? '/main/.worktrees/feature'
+        : path;
+    const firstAggregate = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'build-review.json'), 'utf8'));
+
+    expect(firstLap).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+    const print = vi.fn();
+    const store = new BuildReviewDispositionStore(projectRoot);
+    let appendResult: BuildReviewReducedCoverageAppendResult | undefined;
+    const recorded = await dispatchBuildReviewRecordReducedCoverage({
+      kind: 'record-reduced-coverage', feature: 'feature', lapId: firstAggregate.lapId,
+      rubric: 'testQuality', rationale: 'The configured projection bound intentionally excludes this input.',
+    }, {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator',
+      resolveMainRoot: async () => '/main', realpath: async (path) => cliIdentity(path),
+      readFile: async (path) => readFile(path.replace('/main/.worktrees/feature', projectRoot), 'utf8'),
+      readMechanicalFaults: async () => mechanicalFaultsBefore, print, appendEvent: vi.fn(),
+      createStore: () => ({ appendReducedCoverageIfCurrent: async (input, validate) => {
+        appendResult = await store.appendReducedCoverageIfCurrent(input, validate);
+        return appendResult;
+      } }),
+    });
+    expect(recorded).toBe(0);
+    expect(appendResult).toMatchObject({
+      ok: true,
+      record: { identity: { rubric: 'testQuality', reason: 'projection-oversized' } },
+    });
+
+    const realEffectiveResolver: NonNullable<StepRunnerOptions['buildReviewEffectiveResolver']> = async (root, aggregate, deps) =>
+      resolveEffectiveBuildReviewVerdict(root, aggregate, {
+        ...deps,
+        resolveMainRoot: async () => '/main',
+        realpath: async (path) => cliIdentity(path),
+      });
+    const runner = createRunner(detail, 'projection-oversized', 'pass', realEffectiveResolver);
+    const secondLap = await runner.run('build_review', state);
+    const aggregate = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'build-review.json'), 'utf8'));
+
+    expect(secondLap).toMatchObject({ success: true });
+    expect(secondLap.refusal).toBeUndefined();
+    expect(aggregate.reducedCoverageEvidence).toContain('projection-oversized');
+    expect((await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults ?? 0).toBe(mechanicalFaultsBefore);
+  });
+
   function createRunner(
     detail: string,
     reason: 'projection-oversized' | 'provider-error' = 'projection-oversized',
-    withSecurityFinding = false,
+    securityResult: 'none' | 'finding' | 'pass' = 'none',
+    effectiveResolver?: StepRunnerOptions['buildReviewEffectiveResolver'],
   ): DefaultStepRunner {
     vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
       kind: 'ready',
       branches: [
         { kind: 'infrastructure-failure', rubric: 'testQuality', reason, detail },
-        ...(withSecurityFinding ? [{ kind: 'dispatched', rubric: 'security' }] : []),
+        ...(securityResult === 'none' ? [] : [{ kind: 'dispatched', rubric: 'security' }]),
       ],
     } as never);
     const provider: LLMProvider = { invoke: vi.fn() };
@@ -153,7 +207,7 @@ describe('build_review oversized projection step', () => {
           status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
         } as never),
       },
-      buildReviewEffectiveResolver: vi.fn(async () => ({
+      buildReviewEffectiveResolver: effectiveResolver ?? vi.fn(async () => ({
         ok: true as const,
         feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
         effective: {
@@ -163,8 +217,9 @@ describe('build_review oversized projection step', () => {
         },
         reducedCoverageEvidence: 'reduced coverage recorded',
       })),
-      buildReviewArtifactReader: withSecurityFinding
-        ? async (_root, rubric, lapId, snapshotDigest) => ({
+      buildReviewArtifactReader: securityResult === 'none'
+        ? undefined
+        : async (_root, rubric, lapId, snapshotDigest) => ({
             version: 1,
             rubric,
             lapId,
@@ -175,7 +230,7 @@ describe('build_review oversized projection step', () => {
               lapId,
               snapshotDigest,
               contractVersion: 'v3' as const,
-              findings: [{
+              findings: securityResult === 'finding' ? [{
                 concernKind: 'committed-secret' as const,
                 summary: 'Credential committed to source.',
                 evidenceLocations: ['src/covered.ts:1'],
@@ -187,12 +242,11 @@ describe('build_review oversized projection step', () => {
                     display: 'credential assignment',
                   },
                 },
-              }],
-              verdict: 'FAIL' as const,
+              }] : [],
+              verdict: securityResult === 'finding' ? 'FAIL' as const : 'PASS' as const,
             },
             provenance: { kind: 'fresh' as const },
-          })
-        : undefined,
+          }),
     });
     vi.spyOn(runner as any, 'runTautologyPreflight').mockResolvedValue({
       classification: 'approved-exception', exception: 'empty-test-set', cacheable: true, cacheProvenance: 'miss',
