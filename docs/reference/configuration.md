@@ -732,6 +732,11 @@ group policy step. Its duration ends when that member settles, so sibling and gr
 not inflate the member's duration. The same member label is used for its duration, retry, dispatch,
 and terminal-outcome metrics.
 
+Build-review rubric and coverage-binding provider attempts carry the execution identity of their
+owning lifecycle step, including provider preparation and settlement events. Their auxiliary member
+labels remain available for dispatch attribution; these calls update the owning step span rather
+than opening separate rubric spans. Context-free callers retain legacy name-based correlation.
+
 Daemon exports include backlog count and oldest state-residence age by `state`, busy and free slots,
 in-flight features, liveness, active dispatch blockers, discovery duration, and build stalls by
 `reason`. `conductor.daemon.inflight` is the only `conductor.daemon.*` instrument with a `feature`

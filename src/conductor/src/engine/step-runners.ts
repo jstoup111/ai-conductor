@@ -806,10 +806,10 @@ export class DefaultStepRunner implements StepRunner {
     // conductor session (see runBuildReview() for the resolveRebaseConflict
     // fresh-uuid/resume:false pattern).
     if (step === 'build_review') {
-      return this.runBuildReview(state.complexity_tier);
+      return this.runBuildReview(state.complexity_tier, opts?.executionContext);
     }
     if (step === 'coverage_binding') {
-      return this.runCoverageBinding(state);
+      return this.runCoverageBinding(state, opts?.executionContext);
     }
 
     // Lazy-init: check marker file on first run
@@ -2128,6 +2128,7 @@ export class DefaultStepRunner implements StepRunner {
     inputs: BuildReviewFrozenInputs,
     config: ReturnType<typeof resolveBuildReviewConfig>,
     tier: ConductState['complexity_tier'],
+    executionContext?: ExecutionContext,
   ): Promise<StepRunResult> {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
@@ -2152,7 +2153,7 @@ export class DefaultStepRunner implements StepRunner {
         writeFile,
         rename,
       }),
-      dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(branch, projection, tier),
+      dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(branch, projection, tier, executionContext),
       writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
         readFile: async (path) => readFile(path, 'utf-8'),
         mkdir: async (path) => { await mkdir(path, { recursive: true }); },
@@ -2375,6 +2376,7 @@ export class DefaultStepRunner implements StepRunner {
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
     tier?: ConductState['complexity_tier'],
+    executionContext?: ExecutionContext,
   ): Promise<unknown> {
     const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
       testQuality: 'Test Quality',
@@ -2441,6 +2443,7 @@ export class DefaultStepRunner implements StepRunner {
           }),
           (options) => executeAuxiliaryProviderCandidates({
             step: 'build_review',
+            executionContext,
             memberId: branch.rubric,
             policy: branch.policy,
             runtimes: this.providerRuntimes!,
@@ -2460,6 +2463,8 @@ export class DefaultStepRunner implements StepRunner {
               prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${prompt}`,
             }),
           }),
+          undefined,
+          executionContext,
         );
         const verified = safety?.verify(result) ?? result;
         this.callCount++;
@@ -2655,7 +2660,7 @@ export class DefaultStepRunner implements StepRunner {
     });
   }
 
-  private async runCoverageBinding(state: ConductState): Promise<StepRunResult> {
+  private async runCoverageBinding(state: ConductState, executionContext?: ExecutionContext): Promise<StepRunResult> {
     const { judgeEnabled, batchSize } = resolveCoverageBindingConfig(this.config);
     const filesystem = this.coverageBindingFilesystem ?? {
       readFile: (path: string) => readFile(path, 'utf8'),
@@ -2737,7 +2742,7 @@ export class DefaultStepRunner implements StepRunner {
           'coverage_binding',
           { prompt, cwd: this.projectDir, dangerouslySkipPermissions: true },
           (options) => executeAuxiliaryProviderCandidates({
-            step: 'coverage_binding', memberId, policy: auxiliaryPolicy,
+            step: 'coverage_binding', memberId, policy: auxiliaryPolicy, executionContext,
             runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`coverage-binding:${memberId}`),
             config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
             tier: state.complexity_tier,
@@ -2746,6 +2751,8 @@ export class DefaultStepRunner implements StepRunner {
             options,
             optionsForCandidate: (providerKey) => ({ ...options, prompt: `${renderAuxiliarySkillInvocation('coverage-binding', providerKey)}\n\n${prompt}` }),
           }),
+          undefined,
+          executionContext,
         );
         this.callCount++;
         result = { success: dispatched.success, output: dispatched.output, providerSetupExhaustion: dispatched.providerSetupExhaustion };
@@ -2812,7 +2819,7 @@ export class DefaultStepRunner implements StepRunner {
     return { success: true, output: `coverage_binding judged ${entries.length} claim(s)` };
   }
 
-  private async runBuildReview(tier?: ConductState['complexity_tier']): Promise<StepRunResult> {
+  private async runBuildReview(tier?: ConductState['complexity_tier'], executionContext?: ExecutionContext): Promise<StepRunResult> {
     // Resolve the plan for THIS feature — never the unscoped `.docs/plans/*.md`
     // sort()[last] guess (#407): with several features in flight the shared plans
     // directory holds many files, and picking the alphabetically-last one graded
@@ -2993,7 +3000,7 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     return withBaseFreshness(withContainmentAdvisory(
-      await this.runRubricBuildReview(inputs, buildReviewConfig, tier),
+      await this.runRubricBuildReview(inputs, buildReviewConfig, tier, executionContext),
     ));
   }
 
