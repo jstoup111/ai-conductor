@@ -9217,7 +9217,10 @@ export class Conductor {
               step,
               i,
             );
-            if (resolvablePrerequisiteIndex >= 0) {
+            if (
+              resolvablePrerequisiteIndex >= 0 &&
+              getStepStatus(state, steps[resolvablePrerequisiteIndex].name) === 'pending'
+            ) {
               const prerequisites = gate.unsatisfied.map(
                 (prerequisite) => `${prerequisite} (${getStepStatus(state, prerequisite)})`,
               );
