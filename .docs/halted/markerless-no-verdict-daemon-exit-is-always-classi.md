@@ -1,20 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-19T15:16:25.856Z
+Status: halted
 Slug: markerless-no-verdict-daemon-exit-is-always-classi
-Class: plan-gap
-Halting step: prd_audit
-Phase: SHIP
+Class: needs-human
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-markerless-no-verdict-daemon-exit-is-always-classi
-Head SHA: a68f50cdac09affc286b0aae0ced210263e4c4c8
-Halted at: 2026-09-19T13:51:03.088Z
+Head SHA: ebceea30b21344ca77e6f3bacd61fdd7efbe6a63
+Halted at: 2026-09-19T16:18:34.317Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome
+build_review mechanical fault allowance exhausted: 3 of 3 shared faults consumed.
+Current lap lap-ebceea30b21344ca77e6f3bacd61fdd7efbe6a63: testQuality closed cause malformed-artifact (invalid-provider-result).
+1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap lap-ebceea30b21344ca77e6f3bacd61fdd7efbe6a63 --rubric testQuality --rationale "<rationale>".
+2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.
 ```
