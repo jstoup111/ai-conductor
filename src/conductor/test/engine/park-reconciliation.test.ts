@@ -1844,6 +1844,45 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     }
   });
 
+  it('leaves an ordinary unmerged park with its own registered worktree out of the refusal tally', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'ordinary-registered-park';
+    const branch = `feat/daemon-${slug}`;
+    const { run, deleted } = makeGit({ branches: [branch] });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: '[]' });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      await writeOperatorPark(projectRoot, slug);
+      await mkdir(join(projectRoot, '.docs', 'intake'), { recursive: true });
+      await writeFile(join(projectRoot, '.docs', 'intake', `${slug}.md`), 'Source-Ref: acme/app#42\n');
+
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        runGh,
+        log,
+        getIssueState: async () => 'OPEN',
+        worktreeListing: async () => [{ slug, branch }],
+      });
+
+      expect({ counts: result.counts, refusedByReason: result.refusedByReason, deleted }).toEqual({
+        counts: {
+          reconciled: 0,
+          deferred: 0,
+          orphaned: 0,
+          parked: 1,
+          refused: 0,
+          skipped: 0,
+        },
+        refusedByReason: {},
+        deleted: [],
+      });
+      expect(log.mock.calls[0]?.[0]).toContain('refused=0');
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('keeps a record-missing outcome deferred rather than refused', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'sweep-record-missing';

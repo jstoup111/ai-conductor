@@ -644,12 +644,10 @@ export async function reconcileParkedFeatures(
     const reclamationDisabled = candidate.parked
       ? !autoCleanup
       : opts.reclaimMergedWorktrees === false;
-    // A registered operator-parked ref needs the helper's point-of-deletion
-    // proof even when no merge proof classified it as merged. Orphans remain
-    // report-only: issue state must never lead to a cleanup attempt or tally.
-    const shouldReconcile = candidate.parked
-      ? classification === 'merged' || (candidate.branch !== undefined && classification !== 'orphan')
-      : candidate.branch !== undefined;
+    // An operator-parked candidate keeps its pre-change path: only a park
+    // already classified merged reaches the helper, so an ordinary unmerged
+    // park never adds a refusal to the tally (Story 8).
+    const shouldReconcile = candidate.parked ? classification === 'merged' : candidate.branch !== undefined;
     if (!retainedReason && shouldReconcile && reclamationDisabled) {
       retainedReason = 'disabled';
       retainedByReason.disabled++;
