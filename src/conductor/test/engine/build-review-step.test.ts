@@ -11,6 +11,21 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
 
+const buildReviewPublication = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    rename: async (temporaryPath: string, destination: string): Promise<void> => {
+      if (/[/\\]\.pipeline[/\\]build-review\.json$/.test(destination)) {
+        buildReviewPublication.count += 1;
+      }
+      await actual.rename(temporaryPath, destination);
+    },
+  };
+});
+
 vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/build-review-coordinator.js')>(),
   coordinateBuildReviewRubrics: vi.fn(),
@@ -24,6 +39,7 @@ describe('build_review oversized projection step', () => {
   let planPath: string;
 
   beforeEach(async () => {
+    buildReviewPublication.count = 0;
     projectRoot = await mkdtemp(join(tmpdir(), 'build-review-oversize-'));
     planPath = join(projectRoot, 'plan.md');
     await writeFile(planPath, plan, 'utf8');
@@ -53,6 +69,7 @@ describe('build_review oversized projection step', () => {
     expect(aggregate.coverage.testQuality).toBe('infrastructure-failure');
     expect(aggregate.results.testQuality.reason).toBe('projection-oversized');
     expect(aggregate.reducedCoverageEvidence).toBe('reduced coverage recorded');
+    expect(buildReviewPublication.count).toBe(1);
     const ledger = await readKickbackLedger(projectRoot);
     expect(ledger.gates.build_review?.mechanicalFaults ?? 0).toBe(mechanicalFaultsBefore);
   });
@@ -64,6 +81,7 @@ describe('build_review oversized projection step', () => {
     expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
     expect(result.refusal?.reason).toContain('projection-oversized');
     expect(result.refusal?.reason).not.toMatch(/measured=|limit=/);
+    expect(buildReviewPublication.count).toBe(1);
   });
 
   it('keeps transient provider errors on the mechanical retry lane', async () => {
@@ -89,6 +107,7 @@ describe('build_review oversized projection step', () => {
       terminalRefusal: result.refusal?.kind,
     })).toEqual({ decision: 'route', signal: 'terminal-refusal' });
     expect(coordinateBuildReviewRubrics).toHaveBeenCalledTimes(dispatchesBefore + 1);
+    expect(buildReviewPublication.count).toBe(1);
   });
 
   it('preserves a sibling judged finding while an oversized projection halts for a human', async () => {
@@ -102,6 +121,7 @@ describe('build_review oversized projection step', () => {
     expect(aggregate.results.security.findings).toEqual([
       expect.objectContaining({ summary: 'Credential committed to source.' }),
     ]);
+    expect(buildReviewPublication.count).toBe(1);
     expect((await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults ?? 0).toBe(0);
   });
 
