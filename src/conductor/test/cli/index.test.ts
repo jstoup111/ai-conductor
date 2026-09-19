@@ -1,7 +1,8 @@
-// Covers: task:10, task:12
+// Covers: task:3, task:10, task:12
 
 import { describe, it, expect, vi } from 'vitest';
 import { execa } from 'execa';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   parseArgs,
@@ -348,6 +349,32 @@ describe('CLI', () => {
       expect(bareFeature.exitCode).toBe(1);
       expect(bareFeature.stderr).toContain('conduct: the inline SDLC pipeline now runs under the `inline` subcommand.');
       expect(bareFeature.stderr).not.toContain('error: unknown command');
+    });
+
+    it('dispatches update help without falling through to inline guidance', async () => {
+      const harnessRoot = join(process.cwd(), '..', '..');
+      const gitDirectory = await stat(join(harnessRoot, '.git')).then(
+        (metadata) => metadata.isDirectory(),
+        () => false,
+      );
+      const result = await execa(
+        process.execPath,
+        ['--import', 'tsx', join(process.cwd(), 'src', 'index.ts'), 'update', '--help'],
+        { reject: false },
+      );
+      const output = `${result.stdout}\n${result.stderr}`;
+
+      expect(output).not.toMatch(/unknown command/i);
+      expect(output).not.toContain('Run:        conduct inline');
+      if (!gitDirectory) {
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toMatch(/not a git checkout/i);
+        expect(result.stderr).toContain(harnessRoot);
+      } else {
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('Usage: update [OPTIONS]');
+        expect(result.stdout).toContain('--set-channel');
+      }
     });
 
     it('reports non-inline for a bare state flag', () => {

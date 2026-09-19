@@ -110,6 +110,7 @@ import {
   dispatchVersionCommand,
   resolveHarnessVersion,
 } from './engine/version-report.js';
+import { detectUpdateCommand, dispatchUpdateCommand } from './engine/update-cli.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
 import type { UIRenderer } from "./ui/types.js";
 import type {
@@ -630,6 +631,12 @@ async function main(): Promise<void> {
   // pipeline or daemon handler.
   if (detectVersionCommand(process.argv)) {
     process.exitCode = await dispatchVersionCommand({ moduleDir: __dirname });
+    return;
+  }
+
+  const updateCmd = detectUpdateCommand(process.argv);
+  if (updateCmd) {
+    process.exitCode = await dispatchUpdateCommand(updateCmd);
     return;
   }
 

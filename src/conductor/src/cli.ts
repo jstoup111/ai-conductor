@@ -582,6 +582,12 @@ export function createProgram(): Command {
     .command('version')
     .description('Print the harness version and the pinned engine build, then exit');
 
+  // Dispatched in index.ts before normal CLI bootstrapping.
+  program
+    .command('update [args...]')
+    .allowUnknownOption()
+    .description('Update the harness checkout');
+
   // Registry subcommands (Phase 9.2). These are NON-INTERACTIVE: they run to
   // completion and exit, rather than entering the interactive pipeline. The
   // actual dispatch happens in index.ts (detectRegistryCommand) before the
