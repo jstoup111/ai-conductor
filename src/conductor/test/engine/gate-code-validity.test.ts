@@ -662,6 +662,28 @@ describe('gateVerdictStillValid', () => {
     ).resolves.toBe('rerun');
   });
 
+  // Operator-accepted widening (prd_audit NC.1): outside any rebase, a
+  // `.docs/decisions/` edit stales the gates that consume governing ADRs, and
+  // nothing else.
+  it.each([
+    ['architecture_review_as_built', '.docs/decisions/adr-governing.md', 'rerun'],
+    ['coverage_binding', '.docs/decisions/adr-governing.md', 'rerun'],
+    ['architecture_review_as_built', '.docs/notes/unrelated.md', 'preserve'],
+    ['prd_audit', '.docs/decisions/adr-governing.md', 'preserve'],
+    ['build_review', '.docs/decisions/adr-governing.md', 'preserve'],
+  ])('%s with no rebase involved: a change at %s resolves %s', async (gate, path, expected) => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const baseline = await commit(s, {
+      '.docs/plans/active.md': '# plan\n',
+      '.pipeline/conduct-state.json': JSON.stringify({ feature_desc: 'active' }),
+      'src/feature.ts': 'f\n',
+    }, 'approved inputs');
+    await commit(s, { [path]: 'updated\n' }, 'document update');
+
+    await expect(gateVerdictStillValid({ projectRoot: s.repo, git: s.git }, gate, baseline)).resolves.toBe(expected);
+  });
+
   it('feature-codetest (build_review): returns preserve when the delta touches only a FOREIGN runtime path', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);
