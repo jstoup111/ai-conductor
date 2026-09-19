@@ -300,7 +300,7 @@ describe('integration/rebase-loop', () => {
 
   function conductorWith(
     runner: StepRunner,
-    fromStep: 'build' | 'rebase' | 'test_suite' = 'build',
+    fromStep: 'build' | 'build_review' | 'rebase' | 'test_suite' = 'build',
     rebaseResolutionAttempts = 0,
     fullSuiteVerifier?: ConstructorParameters<typeof Conductor>[0]['fullSuiteVerifier'],
   ): Conductor {
@@ -368,7 +368,7 @@ describe('integration/rebase-loop', () => {
     if (step === 'build') {
       await writeFile(
         join(dir, '.pipeline/task-status.json'),
-        JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+        JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
       );
     } else if (step === 'coverage_binding') {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -475,7 +475,11 @@ describe('integration/rebase-loop', () => {
           dispatched.push(step);
           if (step === 'build') {
             retryReasons.push(options?.retryReason ?? '');
-            return { success: false, output: 'stop after repair routing assertion' };
+            await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 2;\n');
+            return satisfy(step);
+          }
+          if (step === 'finish') {
+            return { success: false, output: 'stop after downstream validation assertion' };
           }
           return satisfy(step);
         },
@@ -484,21 +488,55 @@ describe('integration/rebase-loop', () => {
       events.on('kickback', (event) => {
         if (event.type === 'kickback' && event.from === 'test_suite') kickbacks.push(event.evidence ?? '');
       });
-      const ensure = vi.fn(async () => ({
-        status: 'FAILED' as const,
-        reason: 'nonzero_exit' as const,
-        message: 'fixture suite assertion failed',
-      }));
+      let suiteAttempts = 0;
+      const ensure = vi.fn(async () => {
+        suiteAttempts++;
+        if (suiteAttempts === 1) {
+          return {
+            status: 'FAILED' as const,
+            reason: 'nonzero_exit' as const,
+            message: 'fixture suite assertion failed',
+          };
+        }
+        return {
+          status: 'EXECUTED' as const,
+          freshness: { status: 'STALE' as const, reason: 'missing' as const },
+          evidence: {} as never,
+        };
+      });
 
       await conductorWith(runner, 'test_suite', 0, {
         inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
         ensure,
       }).run();
 
-      expect(ensure).toHaveBeenCalledTimes(1);
+      await conductorWith(runner, 'build_review', 0, {
+        inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
+        ensure,
+      }).run();
+
+      await conductorWith(runner, 'test_suite', 0, {
+        inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
+        ensure,
+      }).run();
+
+      await conductorWith(runner).run();
+
+      expect((await readState(statePath)).value).toMatchObject({ build: 'done' });
+      expect(ensure.mock.calls.length).toBeGreaterThanOrEqual(2);
       expect(dispatched).toContain('build');
       expect(retryReasons).toContainEqual(expect.stringContaining('fixture suite assertion failed'));
       expect(kickbacks).toEqual([expect.stringContaining('nonzero_exit')]);
+      expect(dispatched).toEqual(expect.arrayContaining([
+        'build',
+        'build_review',
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+        'finish',
+      ]));
+      expect(dispatched.indexOf('build_review')).toBeGreaterThan(dispatched.indexOf('build'));
+      expect(dispatched.indexOf('manual_test')).toBeGreaterThan(dispatched.indexOf('build_review'));
     });
 
     it.each([

@@ -32,6 +32,7 @@ import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-agg
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import {
   checkGateCompletion,
+  readVerdict,
   writeVerdict,
   type ReplayPreservationRecord,
 } from '../../src/engine/gate-verdicts.js';
@@ -255,6 +256,41 @@ describe('gateVerdictStillValid', () => {
     });
 
     await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBeNull();
+  });
+
+  it('keeps an interrupted rebase operation non-publishable when a later rebase verdict is rewritten', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const original = await commit(s, { 'src/shared.ts': 'original\n' }, 'original work');
+    const completed = await commit(s, { 'src/shared.ts': 'rebased\n' }, 'replayed work');
+    const applying = {
+      id: 'interrupted-rebase',
+      status: 'applying' as const,
+      transition: { preserved: [], invalidated: ['test_suite'] as const, reverified: [] },
+      replay: {
+        preRebaseHead: original,
+        mergeBase: original,
+        target: original,
+        completedHead: completed,
+        expectedTree: (await s.git(['rev-parse', `${completed}^{tree}`])).stdout.trim(),
+      },
+    };
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 1,
+      rebaseOperation: applying,
+    });
+
+    // This is the daemon re-kick's already-current/no-op rewrite. It must not
+    // discard the descriptor before the transition service can reconcile it.
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 2,
+      reason: 'branch already current with base',
+    });
+
+    expect((await readVerdict(s.repo, 'rebase'))?.rebaseOperation).toEqual(applying);
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toContain('still applying');
   });
 
   it('refuses malformed, unapplied, superseded, unavailable, and post-replay preservation authority', async () => {

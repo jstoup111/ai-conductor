@@ -161,13 +161,22 @@ export async function writeVerdict(
 ): Promise<void> {
   await mkdir(join(dir, GATES_DIR), { recursive: true });
   const path = verdictPath(dir, step);
+  // A normal rebase completion write (notably a no-op after a daemon restart)
+  // must not erase an in-flight cross-file transition.  The descriptor is the
+  // durable publication fence and restart authority until the transition
+  // owner explicitly replaces it with its applied result.
+  const prior = step === 'rebase' ? await readVerdict(dir, step) : undefined;
+  const persistedVerdict =
+    verdict.rebaseOperation === undefined && prior?.rebaseOperation !== undefined
+      ? { ...verdict, rebaseOperation: prior.rebaseOperation }
+      : verdict;
   // A transition spans gate records and state, so it cannot be one transaction.
   // Replacing each individual record atomically prevents a reader from seeing
   // truncated evidence and mistaking it for a legacy record.
   const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(
     temporaryPath,
-    JSON.stringify(verdict, null, 2) + '\n',
+    JSON.stringify(persistedVerdict, null, 2) + '\n',
     'utf-8',
   );
   await rename(temporaryPath, path);
