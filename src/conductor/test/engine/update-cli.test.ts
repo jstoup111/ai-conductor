@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -15,6 +15,8 @@ import {
   type UpdateRunner,
 } from '../../src/engine/update-cli.js';
 import { harnessRootProbeCandidates } from '../../src/engine/install-freshness.js';
+import { createProgram } from '../../src/cli.js';
+import { renderCanonicalFullHelp } from '../../src/index.js';
 
 let harnessRoot: string;
 
@@ -146,4 +148,14 @@ describe('detectUpdateCommand', () => {
       expect(runner).not.toHaveBeenCalled();
     },
   );
+});
+
+describe('update CLI surface', () => {
+  it('documents update in the command registry and canonical full help', () => {
+    const update = createProgram().commands.find((command) => command.name() === 'update');
+
+    expect(update).toBeDefined();
+    expect(update?.description()).not.toHaveLength(0);
+    expect(renderCanonicalFullHelp().split('\n').some((line) => line.trimStart().startsWith('update'))).toBe(true);
+  });
 });
