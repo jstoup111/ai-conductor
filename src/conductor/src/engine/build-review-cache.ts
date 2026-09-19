@@ -306,6 +306,7 @@ export async function readBuildReviewCacheEntry(
   fs: BuildReviewCacheFilesystem,
   semanticIdentity?: BuildReviewCacheSemanticIdentity,
 ): Promise<BuildReviewCacheEntryCandidate | undefined> {
+  if (isRetiredBuildReviewRubric(rubric)) return undefined;
   const exactPath = cacheEntryPath(projectRoot, rubric, semanticIdentity);
   try {
     const raw = await fs.readFile(exactPath);
@@ -313,7 +314,9 @@ export async function readBuildReviewCacheEntry(
       const entry = parseBuildReviewCacheEntryCandidate(JSON.parse(raw));
       // A malformed exact entry is an explicit invalid miss, not a silent
       // fallback to a legacy or sibling candidate entry.
-      return entry && !isRetiredBuildReviewRubric(entry.rubric) ? entry : {} as BuildReviewCacheEntryCandidate;
+      return entry === undefined
+        ? {} as BuildReviewCacheEntryCandidate
+        : isRetiredBuildReviewRubric(entry.rubric) ? undefined : entry;
     } catch {
       return {} as BuildReviewCacheEntryCandidate;
     }
@@ -329,7 +332,9 @@ export async function readBuildReviewCacheEntry(
           const raw = await fs.readFile(join(partition, name));
           try {
             const entry = parseBuildReviewCacheEntryCandidate(JSON.parse(raw));
-            return entry && !isRetiredBuildReviewRubric(entry.rubric) ? entry : {} as BuildReviewCacheEntryCandidate;
+            return entry === undefined
+              ? {} as BuildReviewCacheEntryCandidate
+              : isRetiredBuildReviewRubric(entry.rubric) ? undefined : entry;
           } catch {
             return {} as BuildReviewCacheEntryCandidate;
           }
@@ -346,7 +351,9 @@ export async function readBuildReviewCacheEntry(
       const raw = await fs.readFile(cacheEntryPath(projectRoot, rubric));
       try {
         const legacy = parseBuildReviewCacheEntryCandidate(JSON.parse(raw));
-        return legacy && !isRetiredBuildReviewRubric(legacy.rubric) ? legacy : {} as BuildReviewCacheEntryCandidate;
+        return legacy === undefined
+          ? {} as BuildReviewCacheEntryCandidate
+          : isRetiredBuildReviewRubric(legacy.rubric) ? undefined : legacy;
       } catch {
         return {} as BuildReviewCacheEntryCandidate;
       }
