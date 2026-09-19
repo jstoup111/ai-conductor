@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-19T15:16:25.856Z
 Slug: markerless-no-verdict-daemon-exit-is-always-classi
 Class: plan-gap
 Halting step: prd_audit
