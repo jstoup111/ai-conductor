@@ -13,6 +13,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -23,8 +24,10 @@ async function fixture(): Promise<string> {
   await mkdir(join(root, '.pipeline'), { recursive: true });
   await mkdir(join(root, '.docs', 'plans'), { recursive: true });
   await mkdir(join(root, 'src'), { recursive: true });
+  await mkdir(join(root, 'test'), { recursive: true });
   await writeFile(join(root, '.docs', 'plans', 'feature.md'), '# Plan\n\n### Task 1: review\n**Files:** src/a.ts\n');
   await writeFile(join(root, 'src', 'a.ts'), 'export const value = 1;\n');
+  await writeFile(join(root, 'test', 'a.test.ts'), 'export const value = 1;\n');
   return root;
 }
 
@@ -33,8 +36,8 @@ function git() {
     if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
     if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'head\n', stderr: '' };
     if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
-    if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: 'M\u0000src/a.ts\u0000', stderr: '' };
-    if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/src/a.ts b/src/a.ts\n', stderr: '' };
+    if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: 'M\u0000src/a.ts\u0000M\u0000test/a.test.ts\u0000', stderr: '' };
+    if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts\n', stderr: '' };
     if (args[0] === 'show') return { exitCode: 0, stdout: 'export const value = 0;\n', stderr: '' };
     return { exitCode: 1, stdout: '', stderr: '' };
   };
@@ -174,5 +177,86 @@ describe('build-review candidate cache runner ordering', () => {
     expect(invoke.mock.calls.map(([options]) => options.model)).toEqual([
       'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-sol',
     ]);
+  });
+
+  it('publishes one discard when an actual candidate reloads the policy under a new bundle digest', async () => {
+    const root = await fixture();
+    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) }));
+    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const runtimes = new ProviderRuntimeSet([{ key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) }]);
+    const events = new ConductorEventEmitter();
+    const discarded: unknown[] = [];
+    events.on('build_review_cache_discarded', (event) => { discarded.push(event); });
+    let digest = `sha256-v1:${'a'.repeat(64)}`;
+    const runner = new DefaultStepRunner(provider, 'candidate-cache-discard', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', source: 'project', llm_provider: 'codex' },
+      } } } as HarnessConfig,
+      providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(), events,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
+      buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest }),
+    });
+
+    await expect(runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({ success: true });
+    digest = `sha256-v1:${'b'.repeat(64)}`;
+    await expect(runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({ success: true });
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(discarded).toEqual([expect.objectContaining({ rubric: 'portable', reason: 'skill-digest-mismatch' })]);
+  });
+
+  it('bounds built-in installed-policy discovery at the production candidate deadline', async () => {
+    const root = await fixture();
+    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: '{}' }));
+    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const runtimes = new ProviderRuntimeSet([{ key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) }]);
+    const catalog = vi.fn(async ({ signal }: { signal?: AbortSignal }) => new Promise<never>((_resolve, reject) => {
+      if (signal === undefined) throw new Error('built-in discovery received no candidate signal');
+      signal.addEventListener('abort', () => reject(new Error('built-in discovery aborted')), { once: true });
+    }));
+    const runner = new DefaultStepRunner(provider, 'builtin-policy-deadline', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'codex', test_suite: { timeout_seconds: 0.05 }, build_review: { enabled: true, rubrics: { testQuality: { enabled: true, llm_provider: 'codex' } } } } as HarnessConfig,
+      providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(),
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver, buildReviewPolicyCatalog: catalog as never,
+    });
+
+    await (runner as never as { dispatchBuildReviewRubric: (...args: unknown[]) => Promise<unknown> }).dispatchBuildReviewRubric(
+      { rubric: 'testQuality', skillName: 'build-review-test-quality', policy: { enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0 } },
+      { rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v3', lapId: 'lap-deadline', snapshotDigest: 'sha256:snapshot', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [], repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflight: {} },
+      'M', {}, { engineStamp: 'stamp', skillDigests: { testQuality: { kind: 'unavailable', path: 'skills/build-review-test-quality/SKILL.md' } } },
+    );
+
+    expect(catalog).toHaveBeenCalledOnce();
+    expect(catalog.mock.calls[0]![0]).toMatchObject({ signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('loads, captures, judges, and caches the actual built-in candidate policy despite unavailable harness-root evidence', async () => {
+    const root = await fixture();
+    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ findings: [], scopeResolutions: [], counterfactualSensitivity: 'indeterminate' }) }));
+    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const runtimes = new ProviderRuntimeSet([{ key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) }]);
+    const catalog = vi.fn(async () => [{ semanticName: 'build-review-test-quality', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }]);
+    const capture = vi.fn(async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Built-in policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }));
+    const runner = new DefaultStepRunner(provider, 'builtin-policy-local', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(), config: { llm_provider: 'codex' } as HarnessConfig,
+      providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(), buildReviewPolicyCatalog: catalog as never, buildReviewPolicyCapture: capture as never,
+    });
+
+    const settled = await (runner as never as { dispatchBuildReviewRubric: (...args: unknown[]) => Promise<unknown> }).dispatchBuildReviewRubric(
+      { rubric: 'testQuality', skillName: 'build-review-test-quality', policy: { enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0 } },
+      { rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v3', lapId: 'lap-local-policy', snapshotDigest: 'sha256:snapshot', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [], repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflight: {} },
+      'M', {}, { engineStamp: 'stamp', skillDigests: { testQuality: { kind: 'unavailable', path: 'skills/build-review-test-quality/SKILL.md' } } },
+    );
+
+    expect(settled).toMatchObject({ kind: 'judged' });
+    expect(catalog).toHaveBeenCalledOnce();
+    expect(capture).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledOnce();
   });
 });

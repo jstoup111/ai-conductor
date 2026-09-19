@@ -1,4 +1,4 @@
-import { writeFile, access, readFile, mkdir, rename, rm, symlink } from 'node:fs/promises';
+import { writeFile, access, readFile, readdir, mkdir, rename, rm, symlink } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
 import { basename, dirname, join, relative } from 'node:path';
@@ -103,6 +103,7 @@ import { stampBuildReviewCustomJudgedResult } from './build-review-finding-ident
 import { buildReviewEffectiveResultDescriptor, parseBuildReviewReviewerPayload } from './build-review-projections.js';
 import {
   coordinateBuildReviewRubrics,
+  emitBuildReviewCacheDiscard,
   type BuildReviewCoordinationEngineIdentity,
   type BuildReviewRubricSkillDigest,
   describeBuildReviewDispatchedResultRejection,
@@ -2179,8 +2180,9 @@ export class DefaultStepRunner implements StepRunner {
    * once per build_review dispatch and injected into the coordinator: the
    * 12-hex engine content stamp (or the `dev` sentinel for an unpublished
    * run) plus a `sha256:` digest over the raw bytes of each registered
-   * rubric's installed SKILL.md under the harness root. An unreadable skill
-   * resolves as unavailable — the coordinator fails that rubric closed.
+   * rubric's installed SKILL.md under the harness root. This map is legacy
+   * coordinator-only evidence; candidate paths load the actual installed
+   * policy. engineStamp remains the per-run stamp on both paths.
    */
   private async resolveBuildReviewEngineIdentity(): Promise<BuildReviewCoordinationEngineIdentity> {
     const engineStamp = engineContentStamp(dirname(fileURLToPath(import.meta.url)));
@@ -2226,7 +2228,7 @@ export class DefaultStepRunner implements StepRunner {
     executionContext?: ExecutionContext,
   ): Promise<StepRunResult> {
     try {
-      return await this.runRubricBuildReviewInner(inputs, config, tier);
+      return await this.runRubricBuildReviewInner(inputs, config, tier, executionContext);
     } finally {
       // A custom lap owns one source view for every catalog member. Some
       // built-in paths settle before dispatch (for example a deterministic
@@ -2243,6 +2245,7 @@ export class DefaultStepRunner implements StepRunner {
     inputs: BuildReviewFrozenInputs,
     config: ReturnType<typeof resolveBuildReviewConfig>,
     tier: ConductState['complexity_tier'],
+    executionContext?: ExecutionContext,
   ): Promise<StepRunResult> {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
@@ -2303,7 +2306,7 @@ export class DefaultStepRunner implements StepRunner {
       useCandidateCache: true,
       preflight: async () => this.runTautologyPreflight(inputs),
       readCache: async (branch, _projection, _policyFingerprint, semanticIdentity) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
-        readFile: async (path) => readFile(path, 'utf-8'),
+        readFile: async (path) => readFile(path, 'utf-8'), readdir,
         mkdir: async (path) => { await mkdir(path, { recursive: true }); },
         writeFile,
         rename,
@@ -2579,7 +2582,12 @@ export class DefaultStepRunner implements StepRunner {
     };
     let cacheProvenance: Extract<BuildReviewBranchProvenance, { kind: 'cache-hit' }> | undefined;
     let coverageFailure = false;
-    const result = await executeAuxiliaryProviderCandidates({
+    const controller = new AbortController();
+    const deadlineAt = Date.now() + (this.config?.test_suite?.timeout_seconds ?? 300) * 1_000;
+    const timeout = setTimeout(() => controller.abort(), Math.max(0, deadlineAt - Date.now()));
+    let result: ProviderExecutionResult;
+    try {
+      result = await executeAuxiliaryProviderCandidates({
       step: 'build_review', memberId: entry.id, policy: entry.policy,
       runtimes: this.providerRuntimes, sessions: this.sessionStore.beginBranch(`build-review:${entry.id}`),
       config: this.config, runId: this.runId, tier,
@@ -2587,6 +2595,7 @@ export class DefaultStepRunner implements StepRunner {
       withCandidateSafety: this.candidateSafetyFor('build_review')?.wrapper ?? this.withCandidateSafety,
       prepareCandidateSelfHost: this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
       onAttempt: this.providerAttempt, warn: this.providerWarn, options,
+      abortSignal: controller.signal, deadlineAt,
       preparedCandidateOperation: async (context) => {
         const emitPolicyFailure = async (
           stage: 'catalog' | 'capture' | 'preflight' | 'containment' | 'runtime',
@@ -2648,7 +2657,7 @@ export class DefaultStepRunner implements StepRunner {
           } catch (error) {
             // Whatever the host threw on abort, the owning authority names the reason.
             if (!discovery.signal.aborted) throw error;
-            throw deadlineElapsed
+            throw deadlineElapsed || (context.deadlineAt !== undefined && Date.now() >= context.deadlineAt)
               ? new ReviewPolicyCatalogError(catalogProvider, 'timeout', 'candidate deadline elapsed during policy catalog discovery')
               : new ReviewPolicyCatalogError(catalogProvider, 'cancelled', 'candidate cancelled during policy catalog discovery');
           }
@@ -2795,11 +2804,12 @@ export class DefaultStepRunner implements StepRunner {
           ...(reviewAccess === undefined ? {} : { reviewAccess }),
         }, async (rung, invoke) => {
           const semanticIdentity = semanticIdentityFor(rung.model);
-          const cached = await readBuildReviewCacheEntry(this.projectDir, entry.id, { readFile: async (path) => readFile(path, 'utf-8'), mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename }, semanticIdentity);
+          const cached = await readBuildReviewCacheEntry(this.projectDir, entry.id, { readFile: async (path) => readFile(path, 'utf-8'), readdir, mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename }, semanticIdentity);
           const cache = classifyBuildReviewCacheLookup(cached, {
             rubric: entry.id, contractVersion: 'v3', projectionVersion: 'v3', projectionDigest: inputs.sourceSnapshot.contentDigest,
             policyFingerprint, engineIdentity: { engineStamp: candidateEngine.engineStamp, skillDigest: bundle.digest }, semanticIdentity, lapId, snapshotDigest: inputs.sourceSnapshot.digest,
           });
+          await emitBuildReviewCacheDiscard(async (event) => { await this.events?.emit(event); }, cache, entry.id, lapId, candidateEngine.engineStamp);
           if (cache.kind === 'hit' && 'result' in cache.hit.result && parseBuildReviewCustomArtifactMember(cache.hit.result)) {
             cacheHit = true;
             cacheProvenance = cache.hit.provenance;
@@ -2928,7 +2938,11 @@ export class DefaultStepRunner implements StepRunner {
           output: JSON.stringify(member),
         } };
       },
-    });
+      });
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+    }
     await inputs.sourceMaterialization?.settle(entry.id);
     this.callCount++;
     const member = result.success ? (() => {
@@ -3125,7 +3139,12 @@ export class DefaultStepRunner implements StepRunner {
       });
       if (this.providerRuntimes && this.sessionStore) {
         const safety = this.candidateSafetyFor('build_review');
-        const result = await this.dispatchProviderWithLifecycleSupervision(
+        const controller = new AbortController();
+        const deadlineAt = Date.now() + (this.config?.test_suite?.timeout_seconds ?? 300) * 1_000;
+        const timeout = setTimeout(() => controller.abort(), Math.max(0, deadlineAt - Date.now()));
+        let result: ProviderExecutionResult;
+        try {
+          result = await this.dispatchProviderWithLifecycleSupervision(
           'build_review',
           this.withFeatureDiagnosticLog({
             prompt,
@@ -3148,6 +3167,8 @@ export class DefaultStepRunner implements StepRunner {
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
             onAttempt: this.providerAttempt,
             warn: this.providerWarn,
+            abortSignal: controller.signal,
+            deadlineAt,
             options,
             optionsForCandidate: (providerKey) => ({
               ...options,
@@ -3171,6 +3192,8 @@ export class DefaultStepRunner implements StepRunner {
                   provider: context.candidate.providerKey,
                   entry: builtinEntry,
                   ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
+                  ...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
+                  ...(context.deadlineAt === undefined ? {} : { deadlineAt: context.deadlineAt }),
                 });
                 const resolved = resolveInstalledReviewPolicyCatalog({ skill: branch.skillName }, catalog);
                 if (resolved.kind === 'failure') throw new Error(`installed ${branch.skillName} policy is unavailable: ${resolved.failure.code}`);
@@ -3217,7 +3240,7 @@ export class DefaultStepRunner implements StepRunner {
                 const semanticIdentity = candidateIdentity(rung, builtinBundle.digest);
                 if (!semanticIdentity) return { success: false, exitCode: 1, output: 'build_review candidate cache identity is unavailable' };
                 const cached = await readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
-                  readFile: async (path) => readFile(path, 'utf-8'), mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename,
+                  readFile: async (path) => readFile(path, 'utf-8'), readdir, mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename,
                 }, semanticIdentity);
                 const cache = classifyBuildReviewCacheLookup(cached, {
                   rubric: branch.rubric, contractVersion: projection.contractVersion, projectionVersion: projection.projectionVersion,
@@ -3225,6 +3248,7 @@ export class DefaultStepRunner implements StepRunner {
                   engineIdentity: { engineStamp: engineIdentity.engineStamp, skillDigest: builtinBundle.digest }, semanticIdentity,
                   lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
                 });
+                await emitBuildReviewCacheDiscard(async (event) => { await this.events?.emit(event); }, cache, branch.rubric, projection.lapId, engineIdentity.engineStamp);
                 if (cache.kind === 'hit' && validateBuildReviewDispatchedResult(cache.hit.result, branch.rubric, projection)) {
                   cacheHit = true;
                   await this.events?.emit({ type: 'build_review_cache_hit', rubric: branch.rubric, lapId: projection.lapId });
@@ -3250,7 +3274,7 @@ export class DefaultStepRunner implements StepRunner {
                 version: 2, rubric: branch.rubric, contractVersion: projection.contractVersion, projectionVersion: projection.projectionVersion,
                 projectionDigest: projection.digest, policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
                 engineIdentity: { engineStamp: engineIdentity.engineStamp, skillDigest: builtinBundle.digest }, semanticIdentity, result: judged,
-                }, { readFile: async (path) => readFile(path, 'utf-8'), mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename });
+                }, { readFile: async (path) => readFile(path, 'utf-8'), readdir, mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename });
                 if (!cacheWrite.ok) {
                   cacheWriteFailureDetail = cacheWrite.error instanceof Error ? cacheWrite.error.message : String(cacheWrite.error);
                   await inputs?.sourceMaterialization?.settle(branch.rubric);
@@ -3268,9 +3292,13 @@ export class DefaultStepRunner implements StepRunner {
               return { kind: 'judged' as const, result: judged ? { ...invoked, output: JSON.stringify(judged) } : invoked };
             },
           }),
-          undefined,
-          executionContext,
-        );
+            undefined,
+            executionContext,
+          );
+        } finally {
+          clearTimeout(timeout);
+          controller.abort();
+        }
         const verified = safety?.verify(result) ?? result;
         this.callCount++;
         return preserveInvocationFailure(verified);

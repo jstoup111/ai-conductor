@@ -29,6 +29,7 @@ import {
   type BuildReviewCacheEntry,
   type BuildReviewCacheEntryCandidate,
   type BuildReviewEngineIdentity,
+  type BuildReviewCacheLookupResolution,
   type BuildReviewCacheSemanticIdentity,
 } from "./build-review-cache.js";
 import {
@@ -175,6 +176,22 @@ export interface BuildReviewCoordinationInput {
     | "build_review_scope_summary"
     | "build_review_scope_incomplete"
     | "build_review_outer_verdict" }>) => Promise<void>;
+}
+
+/** Publish only the identity mismatches governed by ADR D5, from every cache path. */
+export async function emitBuildReviewCacheDiscard(
+  emit: BuildReviewCoordinationInput['emit'] | undefined,
+  cache: BuildReviewCacheLookupResolution,
+  rubric: BuildReviewRubricId | string,
+  lapId: BuildReviewLapId,
+  currentEngineStamp: string,
+): Promise<void> {
+  if (cache.kind !== 'miss' || (cache.reason !== 'engine-version-mismatch' && cache.reason !== 'skill-digest-mismatch')) return;
+  await emit?.({
+    type: 'build_review_cache_discarded', rubric, lapId, reason: cache.reason,
+    ...(cache.cachedEngineStamp === undefined ? {} : { cachedEngineStamp: cache.cachedEngineStamp }),
+    currentEngineStamp,
+  });
 }
 
 async function emitScopeIncomplete(
@@ -639,6 +656,14 @@ export async function coordinateBuildReviewRubrics(
       });
       continue;
     }
+    // Candidate cache identity is loaded inside the actual prepared provider
+    // candidate. The harness-root digests below are legacy cache evidence;
+    // engineStamp is retained as the per-run stamp on both paths.
+    if (input.useCandidateCache) {
+      await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
+      misses.push(branch);
+      continue;
+    }
     const skillDigest = input.engineIdentity.skillDigests[branch.rubric];
     if (skillDigest === undefined || skillDigest.kind === "unavailable") {
       // adr-2026-08-21 D3 (amended): an unreadable rubric SKILL.md is an
@@ -648,15 +673,9 @@ export async function coordinateBuildReviewRubrics(
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "cache-read-failed", excerpt: detail });
       continue;
     }
-    // Cache identity includes the resolved provider/model. Production
-    // candidate preparation owns lookup and writes; the legacy coordinator
-    // seam remains a complete cache boundary for callers without that
-    // lifecycle context.
-    if (input.useCandidateCache) {
-      await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
-      misses.push(branch);
-      continue;
-    }
+    // Cache identity includes the resolved provider/model. The legacy
+    // coordinator seam remains a complete cache boundary for callers without
+    // candidate lifecycle context.
     const engineIdentity: BuildReviewEngineIdentity = {
       engineStamp: input.engineIdentity.engineStamp,
       skillDigest: skillDigest.digest,
@@ -682,16 +701,7 @@ export async function coordinateBuildReviewRubrics(
       lapId: input.lapId,
       snapshotDigest: projection.snapshotDigest,
     });
-    if (cache.kind === "miss" && (cache.reason === "engine-version-mismatch" || cache.reason === "skill-digest-mismatch")) {
-      await input.emit?.({
-        type: "build_review_cache_discarded",
-        rubric: branch.rubric,
-        lapId: input.lapId,
-        reason: cache.reason,
-        ...(cache.cachedEngineStamp === undefined ? {} : { cachedEngineStamp: cache.cachedEngineStamp }),
-        currentEngineStamp: input.engineIdentity.engineStamp,
-      });
-    }
+    await emitBuildReviewCacheDiscard(input.emit, cache, branch.rubric, input.lapId, input.engineIdentity.engineStamp);
     const cachedResult = cache.kind === "hit"
       ? validateBuildReviewDispatchedResult(cache.hit.result, branch.rubric, projection)
       : undefined;

@@ -66,6 +66,8 @@ export interface BuildReviewCacheEntry {
 /** Injected so cache tests never touch the host filesystem. */
 export interface BuildReviewCacheFilesystem {
   readFile(path: string): Promise<string>;
+  /** Lists one rubric's candidate-partitioned entries for stale-identity classification. */
+  readdir?(path: string): Promise<readonly string[]>;
   mkdir(path: string): Promise<void>;
   writeFile(path: string, contents: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
@@ -304,17 +306,50 @@ export async function readBuildReviewCacheEntry(
   fs: BuildReviewCacheFilesystem,
   semanticIdentity?: BuildReviewCacheSemanticIdentity,
 ): Promise<BuildReviewCacheEntryCandidate | undefined> {
+  const exactPath = cacheEntryPath(projectRoot, rubric, semanticIdentity);
   try {
-    const entry = parseBuildReviewCacheEntryCandidate(JSON.parse(await fs.readFile(cacheEntryPath(projectRoot, rubric, semanticIdentity))));
-    return entry && !isRetiredBuildReviewRubric(entry.rubric) ? entry : undefined;
+    const raw = await fs.readFile(exactPath);
+    try {
+      const entry = parseBuildReviewCacheEntryCandidate(JSON.parse(raw));
+      // A malformed exact entry is an explicit invalid miss, not a silent
+      // fallback to a legacy or sibling candidate entry.
+      return entry && !isRetiredBuildReviewRubric(entry.rubric) ? entry : {} as BuildReviewCacheEntryCandidate;
+    } catch {
+      return {} as BuildReviewCacheEntryCandidate;
+    }
   } catch {
+    // Candidate-partitioned writes include the effective bundle and engine
+    // content stamp in their filename. Scan the same rubric partition after
+    // an exact miss so a prior identity remains visible to the classifier.
+    if (semanticIdentity !== undefined && fs.readdir !== undefined) {
+      try {
+        const partition = dirname(exactPath);
+        for (const name of [...await fs.readdir(partition)].sort()) {
+          if (!name.endsWith('.json')) continue;
+          const raw = await fs.readFile(join(partition, name));
+          try {
+            const entry = parseBuildReviewCacheEntryCandidate(JSON.parse(raw));
+            return entry && !isRetiredBuildReviewRubric(entry.rubric) ? entry : {} as BuildReviewCacheEntryCandidate;
+          } catch {
+            return {} as BuildReviewCacheEntryCandidate;
+          }
+        }
+      } catch {
+        // A missing or unreadable partition retains the staged legacy lookup.
+      }
+    }
     // A candidate-keyed reader still observes the former flat location so a
     // valid legacy record reaches the classifier as an explicit
     // `semantic-identity-missing` miss rather than becoming invisible.
     if (semanticIdentity === undefined) return undefined;
     try {
-      const legacy = parseBuildReviewCacheEntryCandidate(JSON.parse(await fs.readFile(cacheEntryPath(projectRoot, rubric))));
-      return legacy && !isRetiredBuildReviewRubric(legacy.rubric) ? legacy : undefined;
+      const raw = await fs.readFile(cacheEntryPath(projectRoot, rubric));
+      try {
+        const legacy = parseBuildReviewCacheEntryCandidate(JSON.parse(raw));
+        return legacy && !isRetiredBuildReviewRubric(legacy.rubric) ? legacy : {} as BuildReviewCacheEntryCandidate;
+      } catch {
+        return {} as BuildReviewCacheEntryCandidate;
+      }
     } catch {
       return undefined;
     }

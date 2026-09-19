@@ -551,6 +551,21 @@ describe("build-review coordinator: security envelope", () => {
     expect(input.writeCache).not.toHaveBeenCalled();
   });
 
+  it("defers an unavailable harness-root digest to candidate-local production resolution", async () => {
+    const dispatchModel = vi.fn(async () => ({ kind: "judged", rubric: "security", lapId: "lap-current", snapshotDigest: "sha256:snapshot", contractVersion: "v3", findings: [], verdict: "PASS" }));
+    const input = coordinationInput(false, {
+      config: config(false, true), useCandidateCache: true,
+      engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "unavailable", path: "skills/build-review-security/SKILL.md" } } },
+      dispatchModel,
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(dispatchModel).toHaveBeenCalledOnce();
+    expect(securityBranch(result)).toMatchObject({ kind: "dispatched", rubric: "security" });
+    expect(input.readCache).not.toHaveBeenCalled();
+  });
+
   it("stamps a security finding with the projection-owned envelope and derived failure verdict", async () => {
     const securityHash = `sha256:${createHash("sha256").update("const command = request.input").digest("hex")}`;
     const result = await coordinateBuildReviewRubrics(coordinationInput(false, {

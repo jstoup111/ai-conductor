@@ -85,6 +85,10 @@ function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheF
       if (!(path in files)) throw Object.assign(new Error("missing"), { code: "ENOENT" });
       return files[path]!;
     }),
+    readdir: vi.fn(async (directory: string) => Object.keys(files)
+      .filter((path) => path.startsWith(`${directory}/`))
+      .map((path) => path.slice(directory.length + 1))
+      .filter((name) => !name.includes('/'))),
     mkdir: vi.fn(async () => undefined),
     writeFile: vi.fn(async (path: string, contents: string) => {
       writeCalls.push([path, contents]);
@@ -347,15 +351,43 @@ describe("build-review semantic cache", () => {
     });
   });
 
-  it("treats a missing, malformed, or unsupported entry as a non-mutating cache miss", async () => {
+  it("treats a missing entry as a non-mutating miss and preserves malformed evidence as invalid", async () => {
     const root = "/feature";
     const path = cacheEntryPath(root, "testQuality");
     const fs = memoryFilesystem({ [path]: JSON.stringify({ version: 2, result: entry().result }) });
 
-    await expect(readBuildReviewCacheEntry(root, "testQuality", fs)).resolves.toBeUndefined();
+    expect(classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "testQuality", fs), {
+      rubric: "testQuality", contractVersion: "v3", projectionVersion: "v3", projectionDigest: "sha256:projection-a",
+      policyFingerprint: "sha256:policy-a", engineIdentity: entry().engineIdentity, lapId: "lap-current" as never, snapshotDigest: "snapshot-current",
+    })).toEqual({ kind: "miss", reason: "invalid-entry" });
     expect(fs.writeCalls).toEqual([]);
     expect(fs.renameCalls).toEqual([]);
-    await expect(readBuildReviewCacheEntry(root, "testQuality", fs)).resolves.toBeUndefined();
+    await expect(readBuildReviewCacheEntry(root, "security", fs)).resolves.toBeUndefined();
+  });
+
+  it("reads a prior candidate partition so engine and bundle changes remain classifiable", async () => {
+    const root = "/feature";
+    const currentIdentity = candidateIdentity({ engineStamp: "bbbbbbbbbbbb", effectiveBundleDigest: "sha256:bundle-current" });
+    const priorIdentity = candidateIdentity({ engineStamp: "aaaaaaaaaaaa", effectiveBundleDigest: "sha256:bundle-prior" });
+    const prior = {
+      ...entry(),
+      engineIdentity: { engineStamp: "aaaaaaaaaaaa", skillDigest: "sha256:bundle-prior" },
+      semanticIdentity: priorIdentity,
+    };
+    const fs = memoryFilesystem({ [cacheEntryPath(root, "testQuality", priorIdentity)]: JSON.stringify(prior) });
+    const lookup = {
+      rubric: "testQuality" as const, contractVersion: "v3" as const, projectionVersion: "v3" as const,
+      projectionDigest: prior.projectionDigest, policyFingerprint: prior.policyFingerprint,
+      engineIdentity: { engineStamp: "bbbbbbbbbbbb", skillDigest: "sha256:bundle-current" },
+      semanticIdentity: currentIdentity, lapId: "lap-current" as never, snapshotDigest: "snapshot-current",
+    };
+
+    expect(classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "testQuality", fs, currentIdentity), lookup))
+      .toEqual({ kind: "miss", reason: "engine-version-mismatch", cachedEngineStamp: "aaaaaaaaaaaa" });
+
+    const sameEngine = { ...lookup, engineIdentity: { engineStamp: "aaaaaaaaaaaa", skillDigest: "sha256:bundle-current" }, semanticIdentity: { ...currentIdentity, engineStamp: "aaaaaaaaaaaa" } };
+    expect(classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "testQuality", fs, sameEngine.semanticIdentity), sameEngine))
+      .toEqual({ kind: "miss", reason: "skill-digest-mismatch", cachedEngineStamp: "aaaaaaaaaaaa" });
   });
 
   it("refuses to persist skips and infrastructure failures as reusable cache state", async () => {

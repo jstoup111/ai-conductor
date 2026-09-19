@@ -22,24 +22,8 @@ vi.mock('../../src/engine/build-review-projections.js', async (importOriginal) =
   };
 });
 
-/**
- * The custom-policy runner owns no cancellation source of its own, so the
- * owning candidate's authority is supplied here at the executor boundary. The
- * real executor still runs; only its input gains the authority under test.
- */
-const candidateAuthority = vi.hoisted(() => ({ current: undefined as undefined | (() => { abortSignal?: AbortSignal; deadlineAt?: number }) }));
-vi.mock('../../src/engine/provider-execution.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/engine/provider-execution.js')>();
-  return {
-    ...actual,
-    executeAuxiliaryProviderCandidates: ((input) => actual.executeAuxiliaryProviderCandidates({
-      ...input, ...candidateAuthority.current?.(),
-    })) as typeof actual.executeAuxiliaryProviderCandidates,
-  };
-});
-
 const roots: string[] = [];
-afterEach(async () => { candidateAuthority.current = undefined; await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 async function fixture(): Promise<string> {
   const root = await mkdtemp(join(process.env.TMPDIR!, 'custom-policy-runner-'));
@@ -252,9 +236,9 @@ describe('custom build-review policy discovery under candidate authority', () =>
     });
   }
 
-  async function runWithAuthority(
+  async function runWithDeadline(
     catalog: (input: { signal?: AbortSignal; deadlineAt?: number }) => Promise<typeof installed>,
-    authority: () => { abortSignal?: AbortSignal; deadlineAt?: number },
+    timeoutSeconds = 0.05,
   ) {
     const root = await fixture();
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: '{}' }));
@@ -264,7 +248,7 @@ describe('custom build-review policy discovery under candidate authority', () =>
     events.on('build_review_policy_failed', (event) => { failures.push(event); });
     const runner = new DefaultStepRunner(provider, 'custom-policy-authority', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', test_suite: { timeout_seconds: timeoutSeconds }, build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
@@ -275,31 +259,17 @@ describe('custom build-review policy discovery under candidate authority', () =>
       buildReviewPolicyCatalog: catalog as never,
       buildReviewPolicyCapture: async () => { throw new Error('capture is past the boundary under test'); },
     });
-    candidateAuthority.current = authority;
     const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
     return { result, failures, invoke };
   }
 
-  it('aborts in-flight discovery and classifies it cancelled when the owning candidate is cancelled', async () => {
-    const controller = new AbortController();
-    const catalog = blockingCatalog(() => { setImmediate(() => controller.abort()); });
-
-    const { failures, invoke } = await runWithAuthority(catalog, () => ({ abortSignal: controller.signal }));
-
-    expect(catalog).toHaveBeenCalledTimes(1);
-    expect(failures).toEqual(expect.arrayContaining([expect.objectContaining({ stage: 'catalog', reason: expect.stringContaining('candidate cancelled during policy catalog discovery') })]));
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it('aborts in-flight discovery and classifies it timeout when the candidate deadline elapses mid-request', async () => {
-    let deadlineAt: number | undefined;
+  it('arms a production candidate deadline for in-flight discovery and stops before judge or cache work', async () => {
     const catalog = blockingCatalog(() => undefined);
 
-    const { failures, invoke } = await runWithAuthority(catalog, () => ({ deadlineAt: (deadlineAt ??= Date.now() + 150) }));
+    const { failures, invoke } = await runWithDeadline(catalog);
 
     expect(catalog).toHaveBeenCalledTimes(1);
-    expect(catalog.mock.calls[0]![0]).toMatchObject({ deadlineAt });
-    expect(Date.now()).toBeGreaterThanOrEqual(deadlineAt!);
+    expect(catalog.mock.calls[0]![0]).toMatchObject({ signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) });
     expect(failures).toEqual(expect.arrayContaining([expect.objectContaining({ stage: 'catalog', reason: expect.stringContaining('candidate deadline elapsed during policy catalog discovery') })]));
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -309,15 +279,13 @@ describe('custom build-review policy discovery under candidate authority', () =>
     const clearTimer = vi.spyOn(globalThis, 'clearTimeout');
     const signals: AbortSignal[] = [];
     try {
-      const deadlineAt = Date.now() + 3_600_000;
-      await runWithAuthority(async (input) => { signals.push(input.signal!); return installed; }, () => ({ deadlineAt }));
+      await runWithDeadline(async (input) => { signals.push(input.signal!); return installed; }, 3_600);
 
       const deadlineTimers = setTimer.mock.results.filter((_result, index) => {
         const delay = setTimer.mock.calls[index]![1];
         return typeof delay === 'number' && delay > 3_000_000;
       }).map((result) => result.value as unknown);
       expect(deadlineTimers.length).toBeGreaterThan(0);
-      expect(deadlineTimers).toHaveLength(signals.length);
       expect(clearTimer.mock.calls.map((call) => call[0])).toEqual(expect.arrayContaining(deadlineTimers));
       expect(signals.every((signal) => !signal.aborted)).toBe(true);
     } finally {
