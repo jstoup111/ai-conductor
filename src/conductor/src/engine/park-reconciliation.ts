@@ -13,6 +13,7 @@ import { parseIntakeSourceRef } from './artifacts.js';
 import { runProjectTeardown } from './worktree-prepare.js';
 import { loadConfig } from './config.js';
 import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
+import { phaseMarkerPath } from './phase-marker.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
 import type { ConductorEvent, WorktreeReclaimRetainedReason } from '../types/events.js';
 
@@ -37,6 +38,8 @@ export interface ReconcileMergedParkOptions {
   /** Whether project teardown output should be logged. */
   verbose?: boolean;
   worktreeLifecycle?: WorktreeLifecycleQueue;
+  /** Daemon-pool liveness guard; destructive reconciliation always re-checks it. */
+  isFeatureInFlight?: (slug: string) => boolean;
 }
 
 type ReclaimProof = 'ancestry' | 'merged-pr-head';
@@ -67,6 +70,7 @@ export interface UnmergedCommitListing {
 
 export type RefusalReason =
   | 'invalid-slug'
+  | 'in-flight'
   | 'ancestry-check-failed'
   | 'branch-missing'
   | 'no-merge-proof'
@@ -266,7 +270,7 @@ async function listBranchesBySlug(
  */
 export interface RegisteredWorktree {
   slug: string;
-  branch: string;
+  branch?: string;
   /** Nested paths are reported for retention, but never passed to the helper. */
   reclaimable?: boolean;
 }
@@ -284,7 +288,7 @@ export async function listRegisteredWorktrees(
       const lines = record.split('\n');
       const worktreeLine = lines.find((line) => line.startsWith('worktree '));
       const branchLine = lines.find((line) => line.startsWith('branch refs/heads/'));
-      if (!worktreeLine || !branchLine) continue;
+      if (!worktreeLine) continue;
 
       const path = worktreeLine.slice('worktree '.length).trim();
       const parent = dirname(path);
@@ -295,8 +299,8 @@ export async function listRegisteredWorktrees(
 
       candidates.push({
         slug: parent === worktreesRoot ? basename(path) : path.slice(`${worktreesRoot}/`.length),
-        branch: branchLine.slice('branch refs/heads/'.length).trim(),
-        reclaimable: parent === worktreesRoot,
+        ...(branchLine === undefined ? {} : { branch: branchLine.slice('branch refs/heads/'.length).trim() }),
+        reclaimable: branchLine !== undefined && parent === worktreesRoot,
       });
     }
 
@@ -520,6 +524,7 @@ export async function reconcileParkedFeatures(
   };
   const refusedByReason: Partial<Record<RefusalReason, number>> = {};
   const retainedByReason: Record<WorktreeReclaimRetainedReason, number> = {
+    detached: 0,
     'in-flight': 0,
     'foreign-lifecycle': 0,
     'invalid-slug': 0,
@@ -553,12 +558,12 @@ export async function reconcileParkedFeatures(
     });
   }
   const enumeratedCandidates = [...candidates.values()]
-    .filter((candidate) => !candidate.parked && candidate.reclaimable).length;
+    .filter((candidate) => !candidate.parked).length;
 
   // Read pass-invariant evidence once. A record listing is unnecessary when
   // every candidate is a non-daemon listed branch, so do not consult it then.
   const hasRecordGatedCandidate = [...candidates.values()].some((candidate) =>
-    requiresShippedRecord(candidate.branch),
+    candidate.reclaimable && requiresShippedRecord(candidate.branch),
   );
   const prefetched = {
     shippedStems: hasRecordGatedCandidate
@@ -574,7 +579,9 @@ export async function reconcileParkedFeatures(
     // also operator-parked. A live dispatch or HALT always wins over cleanup.
     else if (opts.isFeatureInFlight?.(slug)) retainedReason = 'in-flight';
     else if (slug.startsWith('engineer-') || slug.startsWith('resolve-')) retainedReason = 'foreign-lifecycle';
-    else if (!candidate.reclaimable || !SINGLE_SLUG.test(slug)) retainedReason = 'invalid-slug';
+    else if (!candidate.reclaimable || !SINGLE_SLUG.test(slug)) {
+      retainedReason = !candidate.reclaimable && candidate.branch === undefined ? 'detached' : 'invalid-slug';
+    }
     else {
       try {
         await access(join(opts.projectRoot, '.worktrees', slug, '.pipeline', 'HALT'));
@@ -667,6 +674,7 @@ export async function reconcileParkedFeatures(
         teardownTimeoutSeconds: opts.teardownTimeoutSeconds,
         verbose: opts.verbose,
         worktreeLifecycle: opts.worktreeLifecycle,
+        isFeatureInFlight: opts.isFeatureInFlight,
         emitProof: true,
       });
       if (outcome.refusal === undefined) {
@@ -777,6 +785,23 @@ export async function reconcileMergedPark(
 ): Promise<ReconcileMergedParkOutcome> {
   if (!SINGLE_SLUG.test(opts.slug)) {
     return { slug: opts.slug, steps: [], refusal: 'invalid-slug' };
+  }
+
+  // This helper is also called directly by the operator verb, so it must
+  // re-derive liveness instead of relying on the sweep's earlier retention.
+  // A live phase marker is the durable fallback when no daemon predicate is
+  // available to that caller.
+  if (opts.isFeatureInFlight?.(opts.slug)) {
+    return { slug: opts.slug, steps: [], refusal: 'in-flight' };
+  }
+  try {
+    await access(phaseMarkerPath(join(opts.projectRoot, '.worktrees', opts.slug)));
+    return { slug: opts.slug, steps: [], refusal: 'in-flight' };
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+      return { slug: opts.slug, steps: [], refusal: 'in-flight' };
+    }
   }
 
   const runGit = opts.runGit ?? makeProductionGit();

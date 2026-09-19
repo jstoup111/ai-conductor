@@ -18,6 +18,7 @@ export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
 /** Closed reasons why the daemon retained a worktree during reclamation. */
 export type WorktreeReclaimRetainedReason =
+  | 'detached'
   | 'in-flight'
   | 'foreign-lifecycle'
   | 'invalid-slug'

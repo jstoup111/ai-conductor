@@ -16,6 +16,7 @@ describe('engine/park-reconciliation — registered worktree listing', () => {
       { slug: 'fix-b', branch: 'fix/b', reclaimable: true },
       { slug: 'chore-c', branch: 'chore/c', reclaimable: true },
       { slug: 'feat/daemon-x', branch: 'feat/daemon-x', reclaimable: false },
+      { slug: 'detached', reclaimable: false },
     ]);
     expect(runGit).toHaveBeenCalledWith(['worktree', 'list', '--porcelain'], { cwd: projectRoot });
   });

@@ -2129,6 +2129,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           // Rendering is observational. The daemon sweep below owns cleanup
           // and is the sole consumer of the startup-resolved toggle.
           autoCleanup: false,
+          reclaimMergedWorktrees: false,
           verbose: config?.daemon_verbose ?? false,
           worktreeLifecycle,
         });
@@ -2276,7 +2277,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           autoCleanup: reconcileParkedAutoCleanup,
           reclaimMergedWorktrees,
           isFeatureInFlight,
-          onEvent: (event) => events.emit(event),
+          onEvent: (event) => { void events.emit(event); },
           getIssueState: tracker.getIssueState.bind(tracker),
           requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log }),
           disposeHaltWatcher,

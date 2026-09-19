@@ -133,7 +133,11 @@ function makeGit(world: GitWorld = {}): {
         if (world.worktreeListUnavailable) throw gitFailure(128, 'fatal: not a git repository');
         return {
           stdout: (world.registeredWorktrees ?? [])
-            .map((path) => `worktree ${path}\nHEAD deadbeef\n`)
+            .map((path) => {
+              const slug = path.split('/').at(-1);
+              const branch = branches.find((ref) => ref.endsWith(`/${slug}`));
+              return `worktree ${path}\nHEAD deadbeef\n${branch ? `branch refs/heads/${branch}\n` : ''}`;
+            })
             .join('\n'),
         };
       }
@@ -259,6 +263,46 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       });
     },
   );
+
+  it('refuses an injected in-flight feature before any reconciliation action', async () => {
+    const slug = 'active-feature';
+    const { run, events } = makeGit();
+
+    const outcome = await reconcileMergedPark({
+      projectRoot: '/project',
+      slug,
+      runGit: run,
+      isFeatureInFlight: (candidate) => candidate === slug,
+    });
+
+    expect({ outcome, calls: run.mock.calls, events }).toEqual({
+      outcome: { slug, steps: [], refusal: 'in-flight' },
+      calls: [],
+      events: [],
+    });
+  });
+
+  it('refuses a live phase marker before teardown, removal, deletion, or unpark', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'marker-active';
+    const { run, events } = makeGit();
+    try {
+      await mkdir(join(projectRoot, '.worktrees', slug, '.pipeline'), { recursive: true });
+      await writeFile(join(projectRoot, '.worktrees', slug, '.pipeline', 'phase-active'), 'step: build\n');
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run });
+
+      expect({ outcome, calls: run.mock.calls, events, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
+        outcome: { slug, steps: [], refusal: 'in-flight' },
+        calls: [],
+        events: [],
+        parked: true,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
 
   it.each([
     {
@@ -1280,6 +1324,40 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
 });
 
 describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
+  it('retains one detached registered worktree without invoking destructive reconciliation', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'detached';
+    const { run, deleted } = makeGit();
+    const events: unknown[] = [];
+    const log = vi.fn<(message: string) => void>();
+    try {
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        log,
+        onEvent: (event) => events.push(event),
+        worktreeListing: async () => [{ slug, reclaimable: false }],
+      });
+
+      expect({
+        entries: result.entries,
+        events,
+        deleted,
+        destructive: run.mock.calls.filter(([args]) =>
+          args[0] === 'branch' || (args[0] === 'worktree' && args[1] === 'remove')),
+        summary: log.mock.calls[0]?.[0],
+      }).toEqual({
+        entries: [{ slug, classification: 'unclassified', annotation: undefined }],
+        events: [{ type: 'worktree_reclaim_retained', slug, branch: undefined, reason: 'detached' }],
+        deleted: [],
+        destructive: [],
+        summary: expect.stringContaining('candidates=1 retained=1'),
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('unions parked and registered candidates once, carries their listed branches, and reports enumeration without a watch registry', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const { run, deleted } = makeGit({
