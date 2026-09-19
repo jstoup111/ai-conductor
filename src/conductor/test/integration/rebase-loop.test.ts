@@ -1389,7 +1389,10 @@ describe('integration/rebase-loop', () => {
         expect(completed).toBe(true);
         expect(counts.acceptance_specs ?? 0).toBe(0);
         expect(counts.build ?? 0).toBe(2);
-        expect(counts.build_review ?? 0).toBe(0);
+        // The count includes the ordinary first-pass review before rebase.
+        // Clean replay preservation must prevent a second dispatch, not erase
+        // that already-completed review.
+        expect(counts.build_review ?? 0).toBe(1);
         expect(counts.test_suite ?? 0).toBe(0);
         expect(counts.manual_test ?? 0).toBe(2);
         expect(counts.prd_audit).toBe(1);
