@@ -4,47 +4,6 @@ spec_hash: eee871b982c47149da35d884ba7435f7daedd8fa596c827b7834bff26d14fd0f
 pr: https://github.com/jstoup111/ai-conductor/pull/2575
 shipped: 2026-09-19
 engine_version: 20260919T112422Z-8d60f5660031
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "test/test_lint_shell_enumeration.sh:111 — commit a4e7a44a8 captures the drift guard's stderr and adds two assertions that its rejection message names the \"syntax-check section\""
-    accepted: true
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.2
-    summary: "src/conductor/test/acceptance/non-daemon-projects-inherit-self-host-config-inste.acceptance.test.ts:101 — a foreign feature's forbidden-seed-key guard changed from substring matching to a non-comment top-level-key regex"
-    accepted: true
-  - gate: architecture_review_as_built
-    finding: AB-1
-    class: REMEDIABLE
-    governing_clause: "adr-2026-08-28-test-suite-drift-budget-and-verification-mode D9"
-    outcome: remediated
-    summary: "The operator-approved effective-settings qualification rewrote D9's prior approved text instead of preserving it in an additive amendment note."
-  - gate: architecture_review_as_built
-    finding: AB-2
-    class: REMEDIABLE
-    governing_clause: "adr-2026-08-28-test-suite-drift-budget-and-verification-mode D8"
-    outcome: remediated
-    summary: "The managed bootstrap runtime rejects the `config init` command through which D8 requires the skill to record project answers."
-  - gate: architecture_review_as_built
-    finding: AB-3
-    class: REMEDIABLE
-    governing_clause: "Task 13"
-    outcome: remediated
-    summary: "The managed bootstrap runtime rejects the `config read` and `config set spec_owner` commands required for operator identity."
-  - gate: architecture_review_as_built
-    finding: AB-4
-    class: REMEDIABLE
-    governing_clause: "Task 15"
-    outcome: remediated
-    summary: "The managed bootstrap runtime rejects the `config read` and `config init` commands required to report and preserve existing project settings on re-run."
-  - gate: architecture_review_as_built
-    finding: AB-5
-    class: REMEDIABLE
-    governing_clause: "Task 18"
-    outcome: remediated
-    summary: "The project template retains generic placeholder explanations and lacks the authored explanations and section references Task 18 requires."
 ---
 
 ## Cost
@@ -64,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","a6ef82d0-3153-42c9-b225-d008603acb08","lifecycle-step","finish"]
+reason: provider-outside-active-union
 
 ## Build Review
 laps_to_pass: 1
