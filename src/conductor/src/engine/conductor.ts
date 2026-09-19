@@ -9210,6 +9210,24 @@ export class Conductor {
               '. Operator action is required before this run can continue.';
             await this.writeHaltMarker(haltReason + '\n', 'needs-human');
             await this.emitLoopHalt(haltReason);
+          } else if (this.daemon) {
+            const resolvablePrerequisiteIndex = earliestResolvablePrerequisiteIndex(
+              steps,
+              state,
+              step,
+              i,
+            );
+            if (resolvablePrerequisiteIndex >= 0) {
+              const prerequisites = gate.unsatisfied.map(
+                (prerequisite) => `${prerequisite} (${getStepStatus(state, prerequisite)})`,
+              );
+              const haltReason =
+                `Step '${step.name}' is blocked by unsatisfied prerequisite${prerequisites.length === 1 ? '' : 's'}: ` +
+                prerequisites.join(', ') +
+                '. The daemon will re-dispatch the feature from an earlier reachable prerequisite.';
+              await this.writeHaltMarker(haltReason + '\n', 'mechanical');
+              await this.emitLoopHalt(haltReason);
+            }
           }
           process.off('SIGINT', sigintHandler);
           process.off('SIGTERM', sigterm);
