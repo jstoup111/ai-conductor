@@ -9211,16 +9211,16 @@ export class Conductor {
             await this.writeHaltMarker(haltReason + '\n', 'needs-human');
             await this.emitLoopHalt(haltReason);
           } else if (this.daemon) {
+            // Any reachable `pending` prerequisite makes the block recoverable,
+            // whatever its order relative to a `failed` sibling.
             const resolvablePrerequisiteIndex = earliestResolvablePrerequisiteIndex(
               steps,
               state,
               step,
               i,
+              (prerequisite) => getStepStatus(state, prerequisite) === 'pending',
             );
-            if (
-              resolvablePrerequisiteIndex >= 0 &&
-              getStepStatus(state, steps[resolvablePrerequisiteIndex].name) === 'pending'
-            ) {
+            if (resolvablePrerequisiteIndex >= 0) {
               const prerequisites = gate.unsatisfied.map(
                 (prerequisite) => `${prerequisite} (${getStepStatus(state, prerequisite)})`,
               );
@@ -14804,10 +14804,12 @@ export function earliestResolvablePrerequisiteIndex(
   state: ConductState,
   step: StepDefinition,
   beforeIndex: number,
+  include: (prerequisite: StepName) => boolean = () => true,
 ): number {
   let earliest = -1;
   for (const prereq of step.prerequisites) {
     if (stepSatisfied(state, prereq)) continue;
+    if (!include(prereq)) continue;
     const prereqIdx = steps.findIndex((candidate) => candidate.name === prereq);
     if (prereqIdx < 0 || prereqIdx >= beforeIndex) continue;
     if (earliest === -1 || prereqIdx < earliest) earliest = prereqIdx;
