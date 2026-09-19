@@ -234,6 +234,13 @@ async function replayBoundAuthorityStillValid(
 
     const inputs = authority.relevantInputIdentities.map(relevantInputPath);
     if (inputs.some((path) => path === null)) return false;
+    // Binding the capture-time list alone cannot notice a newly introduced
+    // governing decision. Re-resolve the declared authority before the
+    // replay fast-path, using the same resolver as the writer.
+    const declaredInputs = await resolveReviewInputs(ctx.projectRoot, [], true);
+    const storedDecisions = inputs.filter((path): path is string => path!.startsWith('.docs/decisions/'));
+    const currentDecisions = declaredInputs.filter((path) => path.startsWith('.docs/decisions/'));
+    if (storedDecisions.length !== currentDecisions.length || currentDecisions.some((path) => !storedDecisions.includes(path))) return false;
     const changed = await ctx.git(['diff', '--name-only', replay.completedHead, 'HEAD']);
     if (changed.exitCode !== 0) return false;
     const changedPaths = new Set(changed.stdout.split('\n').map((path) => path.trim()).filter(Boolean));
@@ -385,6 +392,7 @@ export async function gateVerdictStillValid(
   ctx: GateCodeValidityContext,
   gate: string,
   codeStamp: string | null | undefined,
+  head = 'HEAD',
 ): Promise<GateVerdictValidity> {
   if (!codeStamp) return 'rerun';
 
@@ -397,8 +405,8 @@ export async function gateVerdictStillValid(
   // from a changed replay contribution.
   if (await replayBoundAuthorityStillValid(ctx, gate, codeStamp)) return 'preserve';
 
-  const ancestry = await ctx.git(['merge-base', '--is-ancestor', codeStamp, 'HEAD']);
-  let diffRange = `${codeStamp}..HEAD`;
+  const ancestry = await ctx.git(['merge-base', '--is-ancestor', codeStamp, head]);
+  let diffRange = `${codeStamp}..${head}`;
   if (ancestry.exitCode !== 0) {
     // The stamped baseline is not in the current history. That is the #766
     // fail-closed case (an amend/reset orphaned it) UNLESS the engine's own
@@ -411,9 +419,9 @@ export async function gateVerdictStillValid(
     // fail-closed.
     const translated = await translateThroughRebaseRewrites(ctx.projectRoot, codeStamp);
     if (translated === null) return 'rerun';
-    const translatedAncestry = await ctx.git(['merge-base', '--is-ancestor', translated, 'HEAD']);
+    const translatedAncestry = await ctx.git(['merge-base', '--is-ancestor', translated, head]);
     if (translatedAncestry.exitCode !== 0) return 'rerun';
-    diffRange = `${codeStamp} HEAD`;
+    diffRange = `${codeStamp} ${head}`;
   }
 
   const diffResult = await ctx.git(['diff', '--name-only', ...diffRange.split(' ')]);

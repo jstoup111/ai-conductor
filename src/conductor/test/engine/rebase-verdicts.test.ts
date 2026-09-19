@@ -193,7 +193,11 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
       featureSurface: ['src/feature-change.ts'],
     }, false);
 
-    expect(result.kickedBack).toContain('build_review');
+    if (original.reason?.startsWith('skipped: ')) {
+      expect(result.kickedBack).not.toContain('build_review');
+    } else {
+      expect(result.kickedBack).toContain('build_review');
+    }
     expect(await readVerdict(projectRoot, 'build_review')).toEqual(original);
   });
 

@@ -41,7 +41,9 @@ describe('applyRebaseTransition', () => {
       stateStore: createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json')),
       operationId: 'operation-1',
       replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
-      invalidated: ['build_review', 'manual_test'],
+      // The rebase verdict writer removes skipped gates before the shared
+      // transition receives its durable operation set.
+      invalidated: ['build_review'],
       preserved: ['prd_audit'],
       preservedCandidates: [preservedCandidate('prd_audit')],
     });

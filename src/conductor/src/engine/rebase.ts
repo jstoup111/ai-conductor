@@ -40,7 +40,7 @@ import {
   type ReplayIdentitySeed,
 } from './rebase-replay.js';
 import type { ReplayEvidence } from './gate-verdicts.js';
-import { currentPreservedJudgeIdentity, isApplicableOriginalPass } from './gate-code-validity.js';
+import { currentPreservedJudgeIdentity, gateVerdictStillValid, isApplicableOriginalPass } from './gate-code-validity.js';
 import type { RebasePreservedCandidate } from './rebase-transition.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
@@ -1715,14 +1715,14 @@ export async function runGatedRebaseResolution(opts: {
 async function applicableOriginalPass(
   projectRoot: string,
   gate: StepName,
+  preRebaseHead: string,
+  git: GitRunner | undefined,
 ): Promise<GateVerdict | undefined> {
   const verdict = await readVerdict(projectRoot, gate);
   if (!isApplicableOriginalPass(verdict)) return undefined;
-
-  // The completion predicate compares the original code stamp with the new
-  // post-rebase HEAD, so it cannot judge this pre-rebase authority after any
-  // file delta. Exact replay proof and the bound preservation record own that
-  // later validity decision.
+  const identity = await currentPreservedJudgeIdentity(projectRoot, gate);
+  if (!git || !identity ||
+    await gateVerdictStillValid({ projectRoot, git }, gate, identity.codeStamp, preRebaseHead) !== 'preserve') return undefined;
   return verdict!;
 }
 
@@ -1905,7 +1905,7 @@ export async function applyRebaseVerdicts(
   const replayCandidates = replayPartition?.candidates ?? [];
   if (partition !== undefined) {
     for (const gate of partition.preserved as StepName[]) {
-      const original = await applicableOriginalPass(projectRoot, gate);
+      const original = await applicableOriginalPass(projectRoot, gate, outcome.replay?.preRebaseHead ?? '', git);
       const classified = replayCandidates.find((candidate) => candidate.gate === gate);
       if (original) {
         applicableOriginalPasses.add(gate);
@@ -1966,6 +1966,8 @@ export async function applyRebaseVerdicts(
     (left, right) => (gateOrder.get(left) ?? -1) - (gateOrder.get(right) ?? -1),
   );
   for (const target of orderedTargets) {
+    const before = await readVerdict(projectRoot, target);
+    if (isSkipVerdict(before)) continue;
     // A successful tree-attesting pre-verify has already written this gate's
     // fresh satisfied verdict, so it is not kicked back.
     if (reverifiedGates.has(target)) {
@@ -2178,6 +2180,17 @@ export async function emitGateInvalidationEvents(
   // an otherwise successful rebase into a HALT.
   for (const gate of invalidated.filter((gate) => GATE_SURFACE[gate] !== undefined)) {
     if (preservationBases.has(gate as StepName)) continue;
+    // The generic kickback is the lifecycle occurrence consumed by existing
+    // kickback observers; emit it from this shared applied-result path so
+    // foreground and daemon re-kick each see precisely the same decision.
+    if (application) {
+      await events.emit({
+        type: 'kickback',
+        from: 'rebase',
+        to: gate as StepName,
+        count: 1,
+      });
+    }
     await events.emit({
       type: 'rebase_gate_invalidated',
       gate: gate as StepName,

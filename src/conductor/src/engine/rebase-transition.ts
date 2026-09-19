@@ -128,7 +128,6 @@ export async function applyRebaseTransition(
   const snapshot = await readState(statePath);
   if (!snapshot.ok) return { operation, invalidated: options.invalidated, preserved: options.preserved, stateResult: 'refused' };
   const mutations = [...new Set(options.invalidated)]
-    .filter((gate) => snapshot.value[gate] !== 'skipped')
     .map((gate) => ({
       field: gate,
       expected: snapshot.value[gate],
@@ -145,7 +144,7 @@ export async function applyRebaseTransition(
   // enough: another writer could have changed a gate record while the batch
   // was applying.
   const settled = await readState(statePath);
-  const effectiveInvalidated = options.invalidated.filter((gate) => snapshot.value[gate] !== 'skipped');
+  const effectiveInvalidated = options.invalidated;
   const verdictsAgree = await Promise.all(effectiveInvalidated.map(async (gate) => {
     const verdict = await readVerdict(options.projectRoot, gate);
     return verdict?.satisfied === false && verdict.kickback?.from === 'rebase';
