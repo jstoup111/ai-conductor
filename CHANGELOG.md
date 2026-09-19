@@ -11,12 +11,16 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.3.1] - 2026-09-18
+## [1.3.1] - 2026-09-19
 
 ### Added
 
 - OpenTelemetry feature metrics now include the raw complexity-tier label when it is available. ([implementation PR #2567](https://github.com/jstoup111/ai-conductor/pull/2567)).
 - Adds an opt-in security rubric that grades build diffs for security defects before ship. ([implementation PR #2568](https://github.com/jstoup111/ai-conductor/pull/2568)).
+
+### Changed
+
+- Build review now bounds rubric projections and directs test-quality reviewers to verify pinned evidence regions. ([implementation PR #2596](https://github.com/jstoup111/ai-conductor/pull/2596)).
 
 ### Fixed
 
