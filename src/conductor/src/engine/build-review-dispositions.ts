@@ -130,6 +130,7 @@ interface BuildReviewDispositionState {
 const REDUCED_COVERAGE_REASONS = new Set<BuildReviewInfrastructureFailureReason>([
   'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact',
   'identity-mismatch', 'preflight-failed', 'artifact-read-failed', 'artifact-write-failed', 'scope-incomplete',
+  'projection-oversized',
 ]);
 
 /** Retired, shipped rubric ids are tolerated only for compatibility reads. */

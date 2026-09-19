@@ -1,0 +1,36 @@
+---
+slug: build-review-testquality-rubric-prompt-embeds-full
+spec_hash: 7045fb0bfe97a0e3fae05b7ac9b8d2c508b650e1537e6e9b23ca314d47795c82
+pr: https://github.com/jstoup111/ai-conductor/pull/2596
+shipped: 2026-09-19
+engine_version: 20260918T164335Z-155ddb03a927
+---
+
+## Cost
+input: 1737485
+output: 227271
+cache_read: 37112832
+cache_creation: 1664865
+cost_usd: 41.2877
+dispatches: 27
+retries: 7
+halts: 4
+unmetered: count: 0, duration_ms: 0
+cost_unmetered: count: 0
+providers:
+  codex: input: 1737341, output: 136564, cache_read: 28692224, cache_creation: 0, cost_usd: 13.9495, dispatches: 17, cost_unmetered: 0
+  claude: input: 144, output: 90707, cache_read: 8420608, cache_creation: 1664865, cost_usd: 27.3382, dispatches: 10, cost_unmetered: 0
+
+## Time
+state: partial
+reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","a51c7f05-5b4d-458f-9d34-0272e6f6f1dc","lifecycle-step","prd_audit"],step:execution\u0000["timing-rollup","persisted-ledger","ea301de3-83e6-4a4d-ae71-54b12b1d1231","lifecycle-step","architecture_review_as_built"]
+
+## Build Review
+laps_to_pass: 4
+skipped: 6
+cache_hits: 6
+infrastructure_failures: 0
+rubrics:
+  testQuality: failures: 1, judged: 11
+skip_reasons:
+  disabled: 6

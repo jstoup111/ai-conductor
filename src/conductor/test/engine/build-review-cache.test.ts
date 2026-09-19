@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   cacheEntryPath,
@@ -86,6 +87,7 @@ describe("build-review semantic cache", () => {
   });
 
   it("parses legacy projection candidates through the read seam, then misses against the current v3 identity", async () => {
+    const currentProjectionDigest = "sha256:digest-that-includes-evidence-content-hash";
     const currentLookup = {
       rubric: "testQuality",
       contractVersion: "v3",
@@ -111,6 +113,44 @@ describe("build-review semantic cache", () => {
     ]).toEqual([
       { kind: "miss", reason: "projection-version-mismatch" },
       { kind: "miss", reason: "projection-digest-mismatch" },
+    ]);
+  });
+
+  it("misses a pre-reference v3 entry closed without advancing the projection version", async () => {
+    const root = "/feature";
+    const path = cacheEntryPath(root, "testQuality");
+    const oldEngineEntry = {
+      ...entry(),
+      // The former projection embedded this region's bytes in its digest input.
+      projectionDigest: "sha256:digest-that-included-evidence-content",
+    };
+    const currentProjectionDigest = "sha256:digest-that-includes-evidence-content-hash";
+    const currentLookup = {
+      rubric: "testQuality",
+      contractVersion: "v3",
+      projectionVersion: "v3",
+      // The reference-only projection instead digests its pinned contentHash.
+      projectionDigest: currentProjectionDigest,
+      policyFingerprint: oldEngineEntry.policyFingerprint,
+      engineIdentity: oldEngineEntry.engineIdentity,
+      lapId: "lap-current",
+      snapshotDigest: "snapshot-current",
+    } as never;
+    const fs = memoryFilesystem({ [path]: JSON.stringify(oldEngineEntry) });
+
+    await writeBuildReviewCacheEntry(root, entry("snapshot-current"), fs);
+    const written = JSON.parse(fs.files[path]!);
+
+    expect([
+      classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "testQuality", memoryFilesystem({ [path]: JSON.stringify(oldEngineEntry) })), currentLookup),
+      classifyBuildReviewCacheLookup({ ...oldEngineEntry, projectionDigest: currentProjectionDigest, engineIdentity: { ...oldEngineEntry.engineIdentity, engineStamp: "aaaaaaaaaaaa" } }, currentLookup),
+      written.projectionVersion,
+      parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v4" }),
+    ]).toEqual([
+      { kind: "miss", reason: "projection-digest-mismatch" },
+      { kind: "miss", reason: "engine-version-mismatch", cachedEngineStamp: "aaaaaaaaaaaa" },
+      "v3",
+      undefined,
     ]);
   });
 
@@ -397,6 +437,25 @@ describe("engine identity in the cache key (adr-2026-08-21)", () => {
       { kind: "miss", reason: "policy-fingerprint-mismatch" },
       "hit",
     ]);
+  });
+
+  it("misses when one byte of the resolved skill text changes its digest", () => {
+    const skillText = "Judge changed tests.";
+    const changedSkillText = "Judge changed testS.";
+    const digest = (text: string) => `sha256:${createHash("sha256").update(text).digest("hex")}`;
+    const cached = {
+      ...identified(),
+      engineIdentity: { ...engineIdentity, skillDigest: digest(skillText) },
+    };
+    const changedRequest = {
+      ...request,
+      engineIdentity: { ...engineIdentity, skillDigest: digest(changedSkillText) },
+    };
+
+    expect(skillText.length).toBe(changedSkillText.length);
+    expect(classifyBuildReviewCacheLookup(cached, changedRequest)).toEqual({
+      kind: "miss", reason: "skill-digest-mismatch", cachedEngineStamp: engineIdentity.engineStamp,
+    });
   });
 
   it("classifies a legacy entry without engineIdentity as engine-version-mismatch, not invalid-entry (D4)", () => {

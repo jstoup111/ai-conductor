@@ -122,7 +122,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'steps.parallel': ['name', 'skill', 'model', 'effort', 'advisory'],
   'steps.by_tier': ['model', 'effort', 'max_retries'],
   'build_review.adjudication': ['enabled'],
-  'build_review.rubrics': ['enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence'],
+  'build_review.rubrics': ['enabled', 'max_projection_bytes', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence'],
   build_review: ['enabled', 'perTaskFloor', 'scopeContainmentEnforced', 'maxParallel', 'adjudication', 'rubrics'],
   ci_watch: ['enabled', 'cooldownMinutes'],
   kickback_escalation: ['enabled'],
@@ -236,6 +236,17 @@ function validateBuildReviewRubrics(
     }
     if (policy.enabled !== undefined && typeof policy.enabled !== 'boolean') {
       return { type: 'validation_error', message: `${path}.enabled must be a boolean` };
+    }
+    if (
+      policy.max_projection_bytes !== undefined &&
+      (typeof policy.max_projection_bytes !== 'number' ||
+        !Number.isInteger(policy.max_projection_bytes) ||
+        policy.max_projection_bytes <= 0)
+    ) {
+      return {
+        type: 'validation_error',
+        message: `${path}.max_projection_bytes must be a positive integer byte count`,
+      };
     }
     const providerError = validateProviderSelection(policy.llm_provider, `${path}.llm_provider`);
     if (providerError) return providerError;

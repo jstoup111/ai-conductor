@@ -154,8 +154,9 @@ lets you distinguish concurrent or retried review laps without reading `.pipelin
 
 `skipped` is not a judged failure. An infrastructure failure is also distinct from a judged `FAIL`;
 it means the rubric could not run. The `raw:` suffix appears only when a deterministic policy changed
-the effective verdict. The optional excerpt, deterministic reason, and unresolved-marker count are
-included only when the event supplies them.
+the effective verdict. A `projection-oversized` infrastructure failure includes measured and limit byte
+counts and halts for an operator without consuming the shared mechanical-fault allowance. The optional
+excerpt, deterministic reason, and unresolved-marker count are included only when the event supplies them.
 
 A rebase that changes the active feature’s stories or PRD reruns its PRD audit and coverage binding. Changes to its plan or coherence carrier rerun coverage binding. Document-only changes leave BUILD and aggregate test proof intact; unrelated features’ documents leave these reviews intact. Rebase events name the input paths responsible for each decision.
 

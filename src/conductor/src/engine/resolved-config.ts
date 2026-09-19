@@ -689,9 +689,16 @@ const DEFAULT_BUILD_REVIEW_ENABLED = true;
 const DEFAULT_BUILD_REVIEW_ADJUDICATION_ENABLED = true;
 const DEFAULT_SCOPE_CONTAINMENT_ENFORCED = false;
 const DEFAULT_BUILD_REVIEW_MAX_PARALLEL = 1;
+/**
+ * Measured after Task 2 against the testquality-admits-724 fixture projection:
+ * 3,496 UTF-8 bytes. One MiB leaves more than four times that measured size
+ * while retaining a provider-agnostic byte bound.
+ */
+export const DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES = 1_048_576;
 /** Concrete execution policy for one independently-dispatched review rubric. */
 export interface ResolvedBuildReviewRubricPolicy {
   enabled: boolean;
+  max_projection_bytes: number;
   llm_provider: ProviderSelection;
   model: string;
   effort: EffortLevel;
@@ -809,6 +816,7 @@ export function resolveBuildReviewConfig(
     );
     return [rubricId, {
       enabled: rubric?.enabled ?? DEFAULT_RUBRIC_ENABLED[rubricId],
+      max_projection_bytes: rubric?.max_projection_bytes ?? DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
       llm_provider: rubricProvider,
       model: resolvedNative.model,
       effort: resolvedNative.effort,

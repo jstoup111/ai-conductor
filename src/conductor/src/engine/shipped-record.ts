@@ -260,7 +260,7 @@ export function appendTimingSection(
       : '';
   const reasonLine =
     timing.state === 'partial' && timing.reason !== undefined
-      ? `reason: ${timing.reason}\n`
+      ? `reason: ${timing.reason.replaceAll('\0', '\\u0000')}\n`
       : '';
   const measuredLines =
     timing.state === 'measured'

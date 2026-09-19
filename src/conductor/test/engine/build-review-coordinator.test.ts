@@ -23,7 +23,7 @@ import {
   type BuildReviewInfrastructureFailureReason,
 } from "../../src/engine/build-review-domain.js";
 import { fingerprintBuildReviewRubricPolicy } from "../../src/engine/build-review-registry.js";
-import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
+import { canonicalJson, deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import type {
   ResolvedBuildReviewConfig,
@@ -34,6 +34,7 @@ import { ConductorEventEmitter } from "../../src/ui/events.js";
 
 const policy: ResolvedBuildReviewRubricPolicy = {
   enabled: true,
+  max_projection_bytes: 1_048_576,
   llm_provider: "claude",
   model: "sonnet",
   effort: "medium",
@@ -43,7 +44,7 @@ const policy: ResolvedBuildReviewRubricPolicy = {
   min_confidence: 0,
 };
 
-function config(testQualityEnabled: boolean, securityEnabled = false): ResolvedBuildReviewConfig {
+function config(testQualityEnabled: boolean, securityEnabled = false, maxProjectionBytes = policy.max_projection_bytes): ResolvedBuildReviewConfig {
   // The test-quality config key is introduced after the legacy resolved type.
   // The coordinator's registry, not that retired type, owns runnable membership.
   return {
@@ -52,7 +53,7 @@ function config(testQualityEnabled: boolean, securityEnabled = false): ResolvedB
     scopeContainmentEnforced: false,
     maxParallel: 1,
     rubrics: {
-      testQuality: { ...policy, enabled: testQualityEnabled },
+      testQuality: { ...policy, enabled: testQualityEnabled, max_projection_bytes: maxProjectionBytes },
       security: { ...policy, enabled: securityEnabled, effort: 'high' },
     },
   } as unknown as ResolvedBuildReviewConfig;
@@ -68,6 +69,21 @@ function configWithSecurityModel(model: string): ResolvedBuildReviewConfig {
 
 const disabledSecurityBranch = { kind: 'skipped', rubric: 'security', reason: 'disabled' } as const;
 
+function projectionWithCanonicalByteLength(byteLength: number): BuildReviewCoordinationInput["projections"] {
+  const lapId = parseBuildReviewLapId("lap-current")!;
+  const projection = {
+    rubric: "testQuality",
+    contractVersion: "v3",
+    projectionVersion: "v3",
+    lapId,
+    snapshotDigest: "sha256:snapshot",
+    digest: "sha256:test-quality",
+    padding: "",
+  };
+  const paddingLength = byteLength - Buffer.byteLength(canonicalJson(projection), "utf8");
+  if (paddingLength < 0) throw new Error("requested projection size is below its fixed envelope");
+  return { testQuality: { ...projection, padding: "x".repeat(paddingLength) } } as never;
+}
 function inputs(): BuildReviewFrozenInputs {
   const sourceContent = {
     diff: "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -0,0 +1 @@\n+const command = request.input\ndiff --git a/test/a.test.ts b/test/a.test.ts",
@@ -962,6 +978,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
       "artifact-read-failed": true,
       "artifact-write-failed": true,
       "scope-incomplete": true,
+      "projection-oversized": true,
     };
     // The parser admits exactly the reasons the coordinator mapping can produce;
     // the three union members outside that mapping are carried by other
@@ -1053,10 +1070,23 @@ describe("build-review coordinator: candidate scope resolutions", () => {
   it('stamps a uniquely resolved source reference into the existing declared-title identity', async () => {
     const projection = {
       ...candidateProjection,
-      testScope: { targets: [], candidates: [{
-        ...scopeCandidate,
-        declaration: { kind: 'test', titleChain: ['widget', 'persists state'], occurrence: 1 },
-      }] },
+      testScope: {
+        targets: [],
+        candidates: [{
+          candidateId: scopeCandidate.candidateId,
+          source: { side: 'head', fileName: scopeRegion.path },
+          declaration: { kind: 'test', span: { start: 9, end: 29 }, titleChain: ['widget', 'persists state'], occurrence: 1 },
+          markers: [{ reference: { kind: 'criterion', id: 'S5.1' } }],
+        }],
+        evidence: [{
+          id: scopeCandidate.candidateId,
+          source: { side: 'head', fileName: scopeRegion.path },
+          region: { start: 9, end: 29 },
+          startLine: scopeRegion.startLine,
+          endLine: scopeRegion.endLine,
+          contentHash: scopeRegion.contentHash,
+        }],
+      },
     };
     const resolution = { ...scopeCandidate, status: 'resolved', associationReason: 'The pinned assertion covers the obligation.' };
     const payload = {
@@ -1078,7 +1108,7 @@ describe("build-review coordinator: candidate scope resolutions", () => {
     expect(input.writeArtifact).toHaveBeenCalledWith(expect.objectContaining({ result }));
   });
 
-  it.each(['out-of-scope', 'indeterminate', 'foreign-hash', 'ambiguous', 'wrong-occurrence'])(
+  it.each(['out-of-scope', 'indeterminate', 'foreign-hash', 'unlisted-path', 'ambiguous', 'wrong-occurrence'])(
     'does not translate a %s source reference into finding authority', (failure) => {
       const declared = { ...scopeCandidate, declaration: { kind: 'test', titleChain: ['widget', 'persists state'], occurrence: 1 } };
       const candidates = failure === 'ambiguous' ? [declared, { ...declared, candidateId: 'sibling' }] : [declared];
@@ -1089,12 +1119,53 @@ describe("build-review coordinator: candidate scope resolutions", () => {
           ? { candidateId: candidate.candidateId, status: 'indeterminate', missingEvidenceReason: 'Binding uncertain.' }
           : { ...candidate, status: 'resolved', associationReason: 'Pinned assertion.' });
       const payload = { findings: [{ ...testQualityFinding('Concern'), anchor: { rubric: 'testQuality', locus: {
-        path: scopeRegion.path, contentHash: failure === 'foreign-hash' ? `sha256:${'b'.repeat(64)}` : scopeRegion.contentHash,
+        path: failure === 'unlisted-path' ? 'test/unlisted.test.ts' : scopeRegion.path,
+        contentHash: failure === 'foreign-hash' ? `sha256:${'b'.repeat(64)}` : scopeRegion.contentHash,
         display: scopeRegion.display, ...(failure === 'wrong-occurrence' ? { occurrence: 2 } : {}),
       } } }], scopeResolutions: resolutions };
       expect(validateBuildReviewDispatchedResult(stampBuildReviewDispatchedCandidate(payload, 'testQuality', projection), 'testQuality', projection)).toBeUndefined();
     },
   );
+
+  it('rejects a finding whose content hash is absent from projected evidence and candidates', () => {
+    const unreadableResolution = {
+      candidateId: scopeCandidate.candidateId,
+      status: 'indeterminate',
+      missingEvidenceReason: 'unreadable at pinned ref',
+    };
+    const payload = {
+      findings: [{ ...testQualityFinding('The unreadable region can pass.'), anchor: { rubric: 'testQuality', locus: {
+        path: scopeRegion.path, contentHash: `sha256:${'f'.repeat(64)}`, display: scopeRegion.display,
+      } } }],
+      scopeResolutions: [unreadableResolution],
+    };
+
+    expect(validateBuildReviewDispatchedResult(
+      stampBuildReviewDispatchedCandidate(payload, 'testQuality', candidateProjection), 'testQuality', candidateProjection,
+    )).toBeUndefined();
+  });
+
+  it('accepts an unreadable pinned region as indeterminate only with a non-empty reason', () => {
+    const acceptedPayload = {
+      findings: [],
+      scopeResolutions: [{
+        candidateId: scopeCandidate.candidateId,
+        status: 'indeterminate',
+        missingEvidenceReason: 'unreadable at pinned ref',
+      }],
+    };
+    const emptyReasonPayload = {
+      ...acceptedPayload,
+      scopeResolutions: [{ ...acceptedPayload.scopeResolutions[0], missingEvidenceReason: '' }],
+    };
+
+    expect(validateBuildReviewDispatchedResult(
+      stampBuildReviewDispatchedCandidate(acceptedPayload, 'testQuality', candidateProjection), 'testQuality', candidateProjection,
+    )).toMatchObject({ scopeResolutions: [{ ...acceptedPayload.scopeResolutions[0], sourceRegion: scopeRegion }] });
+    expect(validateBuildReviewDispatchedResult(
+      stampBuildReviewDispatchedCandidate(emptyReasonPayload, 'testQuality', candidateProjection), 'testQuality', candidateProjection,
+    )).toBeUndefined();
+  });
 
   it('diagnoses invalid candidate authority before blaming an otherwise scoped finding anchor', () => {
     const foreignResolution = {
@@ -1152,7 +1223,7 @@ describe("build-review coordinator: candidate scope resolutions", () => {
     });
   });
 
-  it("derives candidate authority only from the frozen v3 testScope candidate and pinned evidence", () => {
+  it("derives the pre-change candidate-context golden from identity-only pinned evidence", () => {
     const projection = {
       ...candidateProjection,
       testScope: {
@@ -1163,7 +1234,7 @@ describe("build-review coordinator: candidate scope resolutions", () => {
         }],
         evidence: [{
           id: "source:head:test/widget.test.ts:9:29", source: { side: "head", fileName: "test/widget.test.ts" },
-          region: { start: 9, end: 29 }, startLine: 12, endLine: 12, content: "expect(saved).toBe(1)", contentHash: scopeRegion.contentHash,
+          region: { start: 9, end: 29 }, startLine: 12, endLine: 12, contentHash: scopeRegion.contentHash,
         }],
       },
     } as never;
@@ -1172,6 +1243,33 @@ describe("build-review coordinator: candidate scope resolutions", () => {
       candidateId: "source:head:test/widget.test.ts:9:29", sourceRegion: { ...scopeRegion, startLine: 12, endLine: 12 },
       obligationReferences: ["criterion:S5.1"],
     }] });
+  });
+
+  it('does not create candidate authority from a hash-less evidence record, and rejects its anchor', () => {
+    const projection = {
+      ...candidateProjection,
+      testScope: {
+        targets: [],
+        candidates: [{
+          source: { side: 'head', fileName: scopeRegion.path },
+          declaration: { span: { start: 9, end: 29 }, titleChain: ['widget persists state'] },
+          markers: [{ reference: { kind: 'criterion', id: 'S5.1' } }],
+        }],
+        evidence: [{
+          id: 'source:head:test/widget.test.ts:9:29', source: { side: 'head', fileName: scopeRegion.path },
+          region: { start: 9, end: 29 }, startLine: 12, endLine: 12,
+        }],
+      },
+    } as never;
+    const candidate = {
+      findings: [{
+        ...testQualityFinding('The hash-less candidate can pass.'),
+        anchor: { rubric: 'testQuality', locus: scopeRegion },
+      }],
+    };
+
+    expect(buildReviewCandidateScopeResolutionContext(projection)).toEqual({ candidates: [] });
+    expect(validateBuildReviewDispatchedResult(candidate, 'testQuality', projection)).toBeUndefined();
   });
 
   it('keeps merged multi-reason candidates independently settleable by their pinned identities', () => {
@@ -1183,8 +1281,8 @@ describe("build-review coordinator: candidate scope resolutions", () => {
           { source: { side: 'head', fileName: 'test/widget.test.ts' }, declaration: { span: { start: 30, end: 50 }, titleChain: ['widget removes state'] }, markers: [{ reference: { kind: 'criterion', id: 'S5.2' } }], reasons: ['affected-dependency'] },
         ],
         evidence: [
-          { id: 'source:head:test/widget.test.ts:9:29', source: { side: 'head', fileName: 'test/widget.test.ts' }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, content: 'expect(saved).toBe(1)', contentHash: scopeRegion.contentHash },
-          { id: 'source:head:test/widget.test.ts:30:50', source: { side: 'head', fileName: 'test/widget.test.ts' }, region: { start: 30, end: 50 }, startLine: 13, endLine: 13, content: 'expect(removed).toBe(1)', contentHash: `sha256:${'b'.repeat(64)}` },
+          { id: 'source:head:test/widget.test.ts:9:29', source: { side: 'head', fileName: 'test/widget.test.ts' }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, contentHash: scopeRegion.contentHash },
+          { id: 'source:head:test/widget.test.ts:30:50', source: { side: 'head', fileName: 'test/widget.test.ts' }, region: { start: 30, end: 50 }, startLine: 13, endLine: 13, contentHash: `sha256:${'b'.repeat(64)}` },
         ],
       },
     } as never;
@@ -1213,8 +1311,8 @@ describe("build-review coordinator: candidate scope resolutions", () => {
           { source: { side: 'head', fileName: secondRegion.path }, declaration: { span: { start: 9, end: 29 }, titleChain: [secondRegion.display] }, markers: [{ reference: { kind: 'criterion', id: 'S5.2' } }] },
         ],
         evidence: [
-          { id: 'source:head:test/first.test.ts:9:29', source: { side: 'head', fileName: firstRegion.path }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, content: 'expect(first).toBe(1)', contentHash: firstRegion.contentHash },
-          { id: 'source:head:test/second.test.ts:9:29', source: { side: 'head', fileName: secondRegion.path }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, content: 'expect(second).toBe(1)', contentHash: secondRegion.contentHash },
+          { id: 'source:head:test/first.test.ts:9:29', source: { side: 'head', fileName: firstRegion.path }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, contentHash: firstRegion.contentHash },
+          { id: 'source:head:test/second.test.ts:9:29', source: { side: 'head', fileName: secondRegion.path }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, contentHash: secondRegion.contentHash },
         ],
       },
     } as never;
@@ -1398,6 +1496,85 @@ describe("build-review coordinator: counterfactual sensitivity is verdict-neutra
 });
 
 describe("build-review coordinator: engine-held rubric isolation", () => {
+  it("refuses an oversized canonical projection before cache or model dispatch", async () => {
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      config: config(true, false, 1_048_576),
+      projections: projectionWithCanonicalByteLength(1_346_093),
+      dispatchModel,
+      emit,
+    }));
+
+    expect(result).toEqual({
+      kind: "ready",
+      branches: [{
+        kind: "infrastructure-failure",
+        rubric: "testQuality",
+        reason: "projection-oversized",
+        detail: "measured=1346093 bytes limit=1048576 bytes",
+      }, disabledSecurityBranch],
+    });
+    expect(dispatchModel).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith({
+      type: "build_review_rubric_infrastructure_failure",
+      rubric: "testQuality",
+      lapId: "lap-current",
+      reason: "projection-oversized",
+      excerpt: "measured=1346093 bytes limit=1048576 bytes",
+      measuredBytes: 1_346_093,
+      limitBytes: 1_048_576,
+    });
+  });
+
+  it("admits an exactly bounded projection", async () => {
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+    const exactProjection = projectionWithCanonicalByteLength(1_024);
+
+    await coordinateBuildReviewRubrics(coordinationInput(true, {
+      config: config(true, false, 1_024),
+      projections: exactProjection,
+      dispatchModel,
+    }));
+
+    expect(dispatchModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("measures canonical projections in UTF-8 bytes rather than JavaScript characters", async () => {
+    const lapId = parseBuildReviewLapId("lap-current")!;
+    const projection = {
+      rubric: "testQuality",
+      contractVersion: "v3",
+      projectionVersion: "v3",
+      lapId,
+      snapshotDigest: "sha256:snapshot",
+      digest: "sha256:test-quality",
+      padding: "€".repeat(100),
+    };
+    const measured = Buffer.byteLength(canonicalJson(projection), "utf8");
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+
+    const refused = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      config: config(true, false, measured - 1),
+      projections: { testQuality: projection } as never,
+      dispatchModel,
+    }));
+    await coordinateBuildReviewRubrics(coordinationInput(true, {
+      config: config(true, false, measured),
+      projections: { testQuality: projection } as never,
+      dispatchModel,
+    }));
+
+    expect(measured).toBeGreaterThan([...canonicalJson(projection)].length);
+    expect(refused).toMatchObject({
+      branches: [
+        { kind: "infrastructure-failure", reason: "projection-oversized", detail: `measured=${measured} bytes limit=${measured - 1} bytes` },
+        disabledSecurityBranch,
+      ],
+    });
+    expect(dispatchModel).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a dispatch-time projection rubric mismatch without writing a branch artifact", async () => {
     const lapId = parseBuildReviewLapId("lap-current")!;
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);

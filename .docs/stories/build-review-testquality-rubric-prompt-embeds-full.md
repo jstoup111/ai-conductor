@@ -59,17 +59,18 @@ As the testQuality rubric session, I want the projection to tell me where each e
 
 #### Happy Path
 - Given an admitted projection, when the rubric prompt is rendered, then it states that `testScope.evidence` records are references to be read at the pinned refs with `git show «mergeBase»:«path»` for `side: base` and `git show «headSha»:«path»` for `side: head` using `startLine`/`endLine`, never from the mutable working tree, and that the read region must hash to the supplied `contentHash`.
-- Given `skills/build-review-test-quality/SKILL.md`, when it is loaded, then its input-projection section names evidence records as identity-only references and names the hash the session verifies against.
+- Given an admitted projection, when the rubric prompt is rendered, then it states that a region whose re-read bytes do not hash to the supplied `contentHash`, or that cannot be read at the pinned ref, must not be judged and that a fallback candidate for such a region is returned `indeterminate` with a `missingEvidenceReason`.
 - Given the skill text changes, when the next lap looks up the cache, then the `skillDigest` component of the engine identity differs and the lookup misses.
 
 #### Negative Paths
-- Given a region whose bytes at HEAD do not hash to the supplied `contentHash`, when the session prepares to judge it, then the skill instructs it to report the mismatch as an infrastructure-shaped concern and not to judge the region, never to substitute its own read as authoritative.
-- Given the session cannot read a cited path at the pinned ref, when it judges, then it records the region as unreadable evidence rather than inventing an assertion for it.
+- Given a judged result whose finding anchor cites a `contentHash` that no projected evidence record or candidate carries (the session's own re-read of a mismatched region), when the result is validated, then the result is rejected, so a session's substitute read is never authoritative.
+- Given a judged result that returns a fallback candidate as `indeterminate` with a `missingEvidenceReason` naming an unreadable pinned path and raises no finding for that region, when the result is validated, then it is accepted with the reason carried on the scope resolution, and the same entry with an empty reason is rejected.
 - Given the rubric prompt, when it is rendered for any provider, then it names `git` and the projection fields only and contains no provider-specific path, environment variable, or model name.
 
 ### Done When
-- [ ] `skills/build-review-test-quality/SKILL.md` input-projection section describes evidence records as identity-only references with the re-read seam and the hash check.
-- [ ] The rubric prompt in `dispatchBuildReviewRubric` names the evidence re-read seam alongside the existing diff re-read instruction.
+- [ ] `skills/build-review-test-quality/SKILL.md` input-projection section describes evidence records as identity-only references with the re-read seam and the hash check (a documentation deliverable, not a test-requiring criterion).
+- [ ] A validation test rejects a finding anchored to a `contentHash` absent from the projection, and accepts an `indeterminate` candidate with a non-empty `missingEvidenceReason`.
+- [ ] The rubric prompt in `dispatchBuildReviewRubric` names the evidence re-read seam and the not-judged/`indeterminate` disposition for unverifiable regions alongside the existing diff re-read instruction.
 - [ ] `test/test_provider_skill_contracts.sh` passes on the changed skill text.
 
 ## Story 4: An oversized projection is refused before dispatch with a named cause

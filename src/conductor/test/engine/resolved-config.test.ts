@@ -241,6 +241,7 @@ describe('engine/resolved-config', () => {
         maxParallel: number;
         rubrics: Record<string, {
           enabled: boolean;
+          max_projection_bytes: number;
           llm_provider: string[];
           model: string;
           effort: string;
@@ -259,6 +260,7 @@ describe('engine/resolved-config', () => {
         rubrics: {
           testQuality: {
             enabled: false,
+            max_projection_bytes: 1_048_576,
             llm_provider: ['codex', 'claude'],
             model: 'gpt-5.6-sol',
             effort: 'max',
@@ -269,6 +271,7 @@ describe('engine/resolved-config', () => {
           },
           security: {
             enabled: false,
+            max_projection_bytes: 1_048_576,
             llm_provider: ['claude', 'codex'],
             model: 'opus',
             effort: 'high',

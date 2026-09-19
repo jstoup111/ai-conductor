@@ -25,7 +25,11 @@ import {
   resolveMemoryProvider,
   resolveValidationConcurrency,
 } from '../../src/engine/config.js';
-import { resolveDaemonConcurrency } from '../../src/engine/resolved-config.js';
+import {
+  DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
+  resolveBuildReviewConfig,
+  resolveDaemonConcurrency,
+} from '../../src/engine/resolved-config.js';
 import * as resolvedConfig from '../../src/engine/resolved-config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 
@@ -2795,6 +2799,37 @@ steps:
         ok: false,
         error: { type: 'validation_error', message },
       });
+    });
+
+    it('resolves the shipped projection byte bound when test-quality leaves it unset', () => {
+      expect(resolveBuildReviewConfig({
+        build_review: { rubrics: { testQuality: { enabled: true } } },
+      }).rubrics.testQuality.max_projection_bytes).toBe(DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES);
+    });
+
+    it.each([0, -1, 1.5, '1MB'] as const)(
+      'rejects invalid test-quality max_projection_bytes %j',
+      (max_projection_bytes) => {
+        const result = validateConfig({
+          build_review: { rubrics: { testQuality: { max_projection_bytes } } },
+        });
+
+        expect(result).toEqual({
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: 'build_review.rubrics.testQuality.max_projection_bytes must be a positive integer byte count',
+          },
+        });
+      },
+    );
+
+    it('loads an explicit test-quality max_projection_bytes as a number', () => {
+      const result = validateConfig({
+        build_review: { rubrics: { testQuality: { max_projection_bytes: 1_048_576 } } },
+      });
+
+      expect(result.ok && result.config.build_review?.rubrics?.testQuality?.max_projection_bytes).toBe(1_048_576);
     });
 
     it('keeps retired keys tolerant and treats retired policy as a no-op', () => {

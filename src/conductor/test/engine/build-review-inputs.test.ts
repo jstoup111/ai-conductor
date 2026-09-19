@@ -13,7 +13,8 @@ import {
   MergeBaseError,
   TestSuiteProofError,
 } from '../../src/engine/build-review-inputs.js';
-import type { BuildReviewFrozenInputs, BuildReviewInputOptions } from '../../src/engine/build-review-inputs.js';
+import type { BuildReviewFrozenInputs, BuildReviewInputOptions, BuildReviewPinnedScopeEvidence } from '../../src/engine/build-review-inputs.js';
+import type { BuildReviewTestScope } from '../../src/engine/build-review-test-scope.js';
 import { buildReviewFindingReferenceContext, parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { deriveBuildReviewRubricProjections } from '../../src/engine/build-review-projections.js';
 import type { BuildReviewRubricProjection } from '../../src/engine/build-review-projections.js';
@@ -22,6 +23,9 @@ import { BuildReviewSourceReadError } from '../../src/engine/build-review-scope-
 import { recordTestSuiteRemediation } from '../../src/engine/test-suite-remediation.js';
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
+
+// Assembled so the text-only marker scan never reads a fixture string as this file's own marker (#2597).
+const FIXTURE_TASK_8_MARKER = ['// Covers', ' task:8'].join(':');
 
 const CURRENT_PROOF = {
   status: 'CURRENT',
@@ -287,8 +291,119 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         targets: [['changed assertion']],
         candidates: [],
       });
-      const evidence = inputs.sourceSnapshot.testScopeEvidence?.find((entry) => entry.source.fileName === 'test/widget.test.ts' && entry.source.side === 'head' && entry.content.includes('changed assertion'));
+      const evidence = inputs.sourceSnapshot.testScopeEvidence?.find((entry) => entry.source.fileName === 'test/widget.test.ts' && entry.source.side === 'head' && entry.contentHash.startsWith('sha256:'));
       expect(evidence).toMatchObject({ startLine: 2, endLine: 2 });
+    });
+
+    it('pins each source region by identity and hash, never its bytes', async () => {
+      const declaration = `it('${'x'.repeat(317)}', () => { expect(true).toBe(true); });`;
+      expect(declaration).toHaveLength(360);
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
+          'diff --git a/test/hash.test.ts b/test/hash.test.ts',
+          '--- a/test/hash.test.ts', '+++ b/test/hash.test.ts',
+          '@@ -1 +1,2 @@', `+${FIXTURE_TASK_8_MARKER}`, `+${declaration}`,
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: Typed frozen scope\n' } },
+        { match: ['show', 'base123:test/hash.test.ts'], result: { stdout: declaration } },
+        { match: ['show', 'head123:test/hash.test.ts'], result: { stdout: `${FIXTURE_TASK_8_MARKER}\n${declaration}` } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath, {
+        analyzeTestScope: () => ({
+          changedDeclarations: [],
+          targets: [],
+          candidates: [],
+          notes: [{
+            kind: 'declaration-uncertainty',
+            diagnostic: {
+              reason: 'syntax-diagnostic',
+              message: 'fixed fixture region',
+              span: { start: 18, end: 378 },
+            },
+          }],
+          affectedGroups: [],
+          sharedSources: [],
+        }),
+      });
+      const evidence = inputs.sourceSnapshot.testScopeEvidence?.find((entry) =>
+        entry.source.fileName === 'test/hash.test.ts' && entry.source.side === 'head' && entry.region.end - entry.region.start === 360,
+      );
+
+      expect(evidence).toBeDefined();
+      expect(Object.keys(evidence ?? {})).toEqual(['id', 'source', 'region', 'startLine', 'endLine', 'contentHash']);
+      expect(evidence?.contentHash).toBe('sha256:551d000b3463d87eba283a50b63a3cde45460465eda3c4c10f2f2d1f6ea0652f');
+
+      const invalidEvidence: BuildReviewPinnedScopeEvidence = {
+        id: 'source:head:test/hash.test.ts:0:360',
+        source: { fileName: 'test/hash.test.ts', side: 'head' },
+        region: { start: 0, end: 360 },
+        startLine: 1,
+        endLine: 1,
+        // @ts-expect-error Pinned evidence must not accept an inline source payload.
+        content: declaration,
+        contentHash: 'sha256:551d000b3463d87eba283a50b63a3cde45460465eda3c4c10f2f2d1f6ea0652f',
+      };
+      expect(invalidEvidence).toBeDefined();
+    });
+
+    // Covers: task:1
+    it('omits an added helper base region without weakening the pinned head identity', async () => {
+      const headSource = `${FIXTURE_TASK_8_MARKER}\nit('added helper', () => { expect(true).toBe(true); });`;
+      const declaration = {
+        kind: 'test' as const,
+        titleChain: ['added helper'],
+        modifierChain: [],
+        occurrence: 0,
+        span: { start: 18, end: headSource.length },
+        argumentsSpan: { start: 21, end: headSource.length - 1 },
+        bodySpan: { start: 43, end: headSource.length - 3 },
+        change: 'added' as const,
+      };
+      const scope: BuildReviewTestScope = {
+        changedDeclarations: [declaration],
+        targets: [{
+          source: { fileName: 'test/added-helper.test.ts', side: 'head' },
+          declaration,
+          bindings: [{
+            kind: 'bound',
+            target: declaration,
+            marker: { span: { start: 0, end: 17 }, reference: { kind: 'task', id: '8' } },
+            owner: { kind: 'test', association: 'leading-comment', declaration },
+          }],
+          associationChanges: [],
+        }],
+        candidates: [], notes: [], affectedGroups: [],
+        sharedSources: [{
+          source: { fileName: 'src/added-helper.ts', side: 'base' },
+          region: { start: 0, end: 20 },
+        }],
+      };
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
+          'diff --git a/test/added-helper.test.ts b/test/added-helper.test.ts',
+          '--- /dev/null', '+++ b/test/added-helper.test.ts', '+added helper',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: Typed frozen scope\n' } },
+        { match: ['show', 'base123:test/added-helper.test.ts'], result: { stdout: headSource } },
+        { match: ['show', 'head123:test/added-helper.test.ts'], result: { stdout: headSource } },
+        { match: ['show', 'base123:src/added-helper.ts'], result: { exitCode: 128, stderr: 'absent at merge base' } },
+        { match: ['ls-tree', '-z', 'base123', '--', 'src/added-helper.ts'], result: { stdout: '' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath, { analyzeTestScope: () => scope });
+      const evidence = inputs.sourceSnapshot.testScopeEvidence ?? [];
+      expect(evidence).not.toContainEqual(expect.objectContaining({ source: { fileName: 'src/added-helper.ts', side: 'base' } }));
+      expect(evidence).toContainEqual(expect.objectContaining({
+        id: `source:head:test/added-helper.test.ts:${declaration.span.start}:${declaration.span.end}`,
+        source: { fileName: 'test/added-helper.test.ts', side: 'head' },
+        region: declaration.span,
+        contentHash: `sha256:${createHash('sha256').update(headSource.slice(declaration.span.start)).digest('hex')}`,
+      }));
     });
 
     it('selects a changed hash-marked unsupported-language spec but not an unchanged one', async () => {
@@ -446,7 +561,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         readonly evidence: readonly {
           readonly source: { readonly fileName: string; readonly side: string };
           readonly region: { readonly start: number; readonly end: number };
-          readonly content: string;
+          readonly contentHash: string;
         }[];
       };
 
@@ -461,7 +576,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(scope.evidence).toContainEqual(expect.objectContaining({
         source: scope.targets[0]!.source,
         region: scope.targets[0]!.declaration.span,
-        content: expect.stringContaining("it('bound assertion'"),
+        contentHash: 'sha256:605b1226af5dd5cba817dd83d7f4589cef82426125ee37f1fca4a62050bdcdf8',
       }));
       expect(buildReviewFindingReferenceContext(projection).changedTestRegions).toEqual([
         expect.objectContaining({ path: 'test/widget.test.ts', display: 'bound assertion' }),

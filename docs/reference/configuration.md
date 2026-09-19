@@ -1137,8 +1137,12 @@ opting a project out of the replacement authority.
 config key is the only off switch. When disabled, the step is marked `skipped` and a `config_skip` event
 is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved once per pass.
 
-`testQuality` and `security` accept `enabled`, `llm_provider`, `model`, `effort`, `model_fallback_ladder`,
-`max_retries`, `escalate`, and `min_confidence`. `min_confidence` is an integer from 0 through 100 and
+`testQuality` and `security` accept `enabled`, `max_projection_bytes`, `llm_provider`, `model`, `effort`,
+`model_fallback_ladder`, `max_retries`, `escalate`, and `min_confidence`. `max_projection_bytes` is a
+positive integer UTF-8 byte limit for the rubric's canonical projection; it defaults to `1048576` and the
+limit itself is admitted. An oversized projection is not dispatched: the gate records
+`projection-oversized` with the measured and allowed byte counts, then halts for an operator without
+consuming the shared mechanical-fault allowance. `min_confidence` is an integer from 0 through 100 and
 defaults to `0`; scored findings below it are reported as suppressed rather than failing the gate or
 remaining actionable through `build-review findings` / `build-review accept`. Unscored findings are
 never suppressed. Both rubrics are off by default. When enabled, `testQuality` derives a frozen,

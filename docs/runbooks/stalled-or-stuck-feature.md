@@ -1319,6 +1319,31 @@ scope fault: address any retained test-quality finding through its normal dispos
 operator's reduced-coverage decision. A valid finding from the original result is still listed and still
 blocks unless independently repaired or accepted.
 
+### build_review halted on a projection-oversized rubric
+
+**Symptom:** `.pipeline/HALT` names `projection-oversized`, the rubric, and usually both the measured
+and configured byte limits. The matching `build_review_rubric_infrastructure_failure` event carries
+`measuredBytes` and `limitBytes` when both values were available.
+
+**Diagnosis:** the canonical UTF-8 projection exceeded that rubric's positive-integer
+`max_projection_bytes` limit. The engine does not dispatch the reviewer, does not retry the same
+snapshot, and does not consume the shared mechanical-fault allowance.
+
+**Recovery:** first decide whether a larger configured limit is appropriate for the feature's review
+corpus. If it is, change `build_review.rubrics.<rubric>.max_projection_bytes` through the approved
+configuration path and resume. Otherwise, after explicitly accepting reduced coverage, record it for
+the named current lap and rubric, then clear the halt:
+
+```bash
+ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> \
+  --rubric <rubric> --rationale "<why this rubric's coverage is being reduced>"
+```
+
+**Verification:** the command accepts the named current `projection-oversized` fault without requiring
+the mechanical-fault allowance to be exhausted. After the resume procedure, the next aggregate either
+uses the changed limit or records the reduced-coverage decision; any independent semantic finding still
+blocks normally.
+
 ### build_review halted on an exhausted mechanical fault allowance
 
 **Symptom:** `.pipeline/HALT` reads:
