@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
 import { execa } from 'execa';
+import { validateConfig } from '../src/engine/config.js';
 import {
   createProgram,
   userConfigReadCommand,
@@ -233,6 +234,16 @@ describe('conduct config write', () => {
 });
 
 describe('conduct config set', () => {
+  it('lists the config-init verification flags in help', () => {
+    const config = createProgram().commands.find((command) => command.name() === 'config');
+    const init = config?.commands.find((command) => command.name() === 'init');
+    const help = init?.helpInformation() ?? '';
+
+    expect(help).toContain('--test-suite-command <command>');
+    expect(help).toContain('--test-suite-mode <mode>');
+    expect(help).toContain('--test-suite-drift-budget <preset>');
+  });
+
   it('dispatches config set through the real argv entry point', async () => {
     home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
     const configDir = join(home, '.ai-conductor');
@@ -347,6 +358,56 @@ describe('conduct config set', () => {
       code: 0,
       config: { conductor: { auto_check: true } },
     });
+  });
+
+  it('writes and reads a machine-scoped spec owner without replacing other keys', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    const configDir = join(home, '.ai-conductor');
+    await mkdir(configDir);
+    await writeFile(join(configDir, 'config.yml'), 'conductor:\n  update_channel: main\n', 'utf8');
+    process.env.HOME = home;
+
+    expect(await userConfigSetCommand({ kind: 'user-config-set', path: 'spec_owner', value: 'jstoup111' })).toBe(0);
+    let stdout = '';
+    expect(await userConfigReadCommand({ kind: 'user-config-read', path: 'spec_owner' }, (output) => (stdout += output))).toBe(0);
+    expect({ config: loadYaml(await readFile(join(configDir, 'config.yml'), 'utf8')), stdout }).toEqual({
+      config: { conductor: { update_channel: 'main' }, spec_owner: 'jstoup111' },
+      stdout: 'jstoup111\n',
+    });
+  });
+
+  it('rejects empty spec owner and leaves both user and project config unchanged', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    projectRoot = await mkdtemp(join(tmpdir(), 'conduct-project-config-'));
+    const userPath = join(home, '.ai-conductor', 'config.yml');
+    const projectPath = join(projectRoot, '.ai-conductor', 'config.yml');
+    const userOriginal = 'conductor:\n  update_channel: main\n';
+    const projectOriginal = 'test_suite:\n  command: make check\n';
+    await mkdir(join(home, '.ai-conductor'));
+    await mkdir(join(projectRoot, '.ai-conductor'));
+    await writeFile(userPath, userOriginal, 'utf8');
+    await writeFile(projectPath, projectOriginal, 'utf8');
+    process.env.HOME = home;
+    let output = '';
+
+    expect(await userConfigSetCommand({ kind: 'user-config-set', path: 'spec_owner', value: '   ' }, (message) => (output += message))).toBe(1);
+    expect({ output, user: await readFile(userPath, 'utf8'), project: await readFile(projectPath, 'utf8') }).toEqual({
+      output: expect.stringContaining('spec_owner'), user: userOriginal, project: projectOriginal,
+    });
+  });
+
+  it('continues rejecting all paths other than spec_owner and conductor keys', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    process.env.HOME = home;
+    let output = '';
+    expect(await userConfigSetCommand({ kind: 'user-config-set', path: 'other.key', value: 'x' }, (message) => (output += message))).toBe(1);
+    expect(output).toContain('Unsupported user config path');
+  });
+
+  it('keeps the committed-project spec_owner guard unchanged', () => {
+    const result = validateConfig({ spec_owner: 'jstoup111' }, undefined, { source: 'project' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toContain('spec_owner must not be set in a project config');
   });
 
   it('rejects an invalid update channel without modifying user config', async () => {

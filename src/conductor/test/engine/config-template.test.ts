@@ -1,3 +1,4 @@
+// Covers: task:18
 /**
  * Regression coverage for issue #1010: copying
  * templates/ai-conductor-config.yml.template produced an invalid
@@ -22,13 +23,22 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { load as loadYaml } from 'js-yaml';
-import { loadConfig, satisfiesVersion, validateConfig } from '../../src/engine/config.js';
+import {
+  CONFIG_CONSUMER_KEY_SETS,
+  loadConfig,
+  satisfiesVersion,
+  validateConfig,
+} from '../../src/engine/config.js';
 
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
 const TEMPLATE_PATH = join(REPO_ROOT, 'templates', 'ai-conductor-config.yml.template');
 const PROJECT_TEMPLATE_PATH = join(REPO_ROOT, 'templates', 'project-config.yml.template');
 const VERSION_PATH = join(REPO_ROOT, 'VERSION');
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
  * Uncomment a line that is part of a commented-out YAML example block.
@@ -163,6 +173,167 @@ describe('templates/ai-conductor-config.yml.template (issue #1010)', () => {
 });
 
 describe('templates/project-config.yml.template', () => {
+  const walkthroughKeys = new Set([
+    'test_suite.verification.mode',
+    'test_suite.verification.drift_budget',
+    'test_suite.command',
+  ]);
+  const registryRoots: Record<string, string> = {
+    harness_self_host_build_auth: 'harness_self_host.build_auth',
+  };
+
+  function expectedDocumentedKeys(): Set<string> {
+    const keys = new Set<string>(
+      CONFIG_CONSUMER_KEY_SETS.top.filter((key) => key !== 'conductor' && key !== 'spec_owner'),
+    );
+    for (const [block, children] of Object.entries(CONFIG_CONSUMER_KEY_SETS)) {
+      if (block === 'top' || block === 'conductor') continue;
+      const root = registryRoots[block] ?? block;
+      for (const child of children as readonly string[]) {
+        const key = `${root}.${child}`;
+        if (!walkthroughKeys.has(key)) keys.add(key);
+      }
+    }
+    return keys;
+  }
+
+  function documentedKeys(raw: string): Set<string> {
+    return new Set(Array.from(raw.matchAll(/^# Controls: ([^,\s]+)/gm), ([, key]) => key));
+  }
+
+  const PLACEHOLDER_PHRASES = [
+    'a value accepted by the configuration validator',
+    'use the harness default',
+    'changes this setting for the project',
+  ];
+  const REFERENCE_URL = 'https://jstoup111.github.io/ai-conductor/reference/configuration';
+
+  function topLevelKeys(): string[] {
+    return Array.from(expectedDocumentedKeys()).filter((key) => !key.includes('.'));
+  }
+
+  function completeBlockPattern(key: string): RegExp {
+    return new RegExp(
+      `^# Controls: ${escapeRegex(key)}[ ,].*\\n# Allowed: \\S.*\\n# Default: \\S.*\\n# Changing it: \\S.*$`,
+      'm',
+    );
+  }
+
+  /** Keys whose `Controls:` line is not followed by the three guidance lines. */
+  function incompleteBlocks(raw: string): string[] {
+    return Array.from(documentedKeys(raw)).filter((key) => !completeBlockPattern(key).test(raw));
+  }
+
+  /** Top-level sections whose block carries the docs link and the agent offer. */
+  function referencedSections(raw: string): Set<string> {
+    const sections = new Set<string>();
+    const lines = raw.split('\n');
+    lines.forEach((line, index) => {
+      const key = /^# Controls: ([^,\s]+)/.exec(line)?.[1];
+      if (key === undefined || key.includes('.')) return;
+      const reference = lines[index + 4] ?? '';
+      if (
+        reference.startsWith('# Reference: ') &&
+        reference.includes(REFERENCE_URL) &&
+        /ai-conductor agent can set the value on request/.test(reference)
+      ) {
+        sections.add(key);
+      }
+    });
+    return sections;
+  }
+
+  /** Coverage violations: rejected keys with a block, accepted keys with no explanation path. */
+  function coverageViolations(raw: string): { rejected: string[]; uncovered: string[] } {
+    const expectedKeys = expectedDocumentedKeys();
+    const documented = documentedKeys(raw);
+    const referenced = referencedSections(raw);
+    return {
+      rejected: Array.from(documented).filter((key) => !expectedKeys.has(key)),
+      uncovered: Array.from(expectedKeys).filter(
+        (key) => !documented.has(key) && !(key.includes('.') && referenced.has(key.split('.')[0])),
+      ),
+    };
+  }
+
+  it('gives every top-level project-settable key an authored explanation with no placeholder text', async () => {
+    const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
+    for (const phrase of PLACEHOLDER_PHRASES) {
+      expect(raw).not.toContain(phrase);
+    }
+    const keys = topLevelKeys();
+    expect(keys).toContain('test_suite');
+    expect(keys).not.toContain('conductor');
+    expect(keys).not.toContain('spec_owner');
+    expect(keys.filter((key) => !completeBlockPattern(key).test(raw))).toEqual([]);
+  });
+
+  it('restores the key-specific blocks beside the values they explain', async () => {
+    const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
+    const restoredDefaults: Record<string, string> = {
+      harness_version: '">=0.99.0".',
+      'build_review.rubrics.enabled': 'false.',
+      'test_suite.working_directory': '`.` (the project root).',
+      'test_suite.timeout_seconds': '1800.',
+      'otel.worker_name': "this machine's hostname.",
+    };
+    for (const [key, value] of Object.entries(restoredDefaults)) {
+      expect(raw, key).toMatch(new RegExp(
+        `^# Controls: ${escapeRegex(key)} .*\\n# Allowed: .+\\n# Default: ${escapeRegex(value)}$`,
+        'm',
+      ));
+    }
+    expect(documentedKeys(raw)).toContain('steps.model');
+    expect(documentedKeys(raw)).toContain('steps.effort');
+  });
+
+  it('leaves no explanation block incomplete at any depth', async () => {
+    const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
+    expect(documentedKeys(raw).size).toBeGreaterThan(topLevelKeys().length);
+    expect(incompleteBlocks(raw)).toEqual([]);
+    expect(incompleteBlocks('# Controls: defaults — routing.\n# Allowed: an object.\n# Changing it: x.\n'))
+      .toEqual(['defaults']);
+  });
+
+  it('never explains the keys the bootstrap walkthrough asks about', async () => {
+    const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
+    const documented = documentedKeys(raw);
+    for (const key of walkthroughKeys) {
+      expect(documented, key).not.toContain(key);
+    }
+  });
+
+  it('covers every validator-accepted key with a block or its section reference, and no rejected key', async () => {
+    const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
+    expect(coverageViolations(raw)).toEqual({ rejected: [], uncovered: [] });
+    expect(raw).toContain('\n# CONFIG_INIT_TEST_SUITE_VERIFICATION\n');
+  });
+
+  it('fails coverage for a rejected key, and for an accepted key with neither a block nor a section reference', async () => {
+    const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
+
+    const withRejectedKey = `${raw}\n# Controls: not_a_real_setting — nothing.\n`;
+    expect(coverageViolations(withRejectedKey).rejected).toEqual(['not_a_real_setting']);
+
+    const withoutReferences = raw
+      .split('\n')
+      .filter((line) => !line.startsWith('# Reference: '))
+      .join('\n');
+    const { uncovered } = coverageViolations(withoutReferences);
+    expect(uncovered).toContain('test_suite.verification');
+    expect(uncovered).toContain('harness_self_host.build_auth.mode');
+    expect(uncovered).not.toContain('defaults.model');
+
+    const wrongOffer = raw.replaceAll('the ai-conductor agent can set the value on request', 'see the docs');
+    expect(coverageViolations(wrongOffer).uncovered).toContain('steps.by_tier.effort');
+  });
+
+  it('keeps the documented template config valid through the shared validator', async () => {
+    const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
+    const result = validateConfig(loadYaml(raw), undefined, { materializeDefaults: false });
+    expect(result.ok).toBe(true);
+  });
+
   it('is a valid project seed without user or self-host configuration', async () => {
     const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
     const authoredConfig = loadYaml(raw);

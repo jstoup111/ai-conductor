@@ -32,8 +32,8 @@ const forbiddenSeedKeys = [
   'owner_gate_cutover',
   'auto_restart_on_stale_engine',
   'attribution_audit_sample_pct',
-  'wiring:',
-  'manual_test:',
+  'wiring',
+  'manual_test',
 ];
 
 let sandbox: string | undefined;
@@ -98,7 +98,7 @@ describe('deterministic project-config scaffolding (#683)', () => {
     ]);
     expect(actual).toBe(expected);
     for (const key of forbiddenSeedKeys) {
-      expect(actual).not.toContain(key);
+      expect(actual).not.toMatch(new RegExp(`^(?!\\s*#)\\s*${key}:`, 'm'));
     }
     expect(await loadConfig(projectRoot)).toMatchObject({ ok: true });
   });
@@ -116,7 +116,7 @@ describe('deterministic project-config scaffolding (#683)', () => {
     expect(existsSync(join(target, '.ai-conductor'))).toBe(false);
   });
 
-  it('config init seeds an existing git repo once and is idempotent', async () => {
+  it('config init seeds an existing git repo with rendered defaults once and is idempotent', async () => {
     sandbox = await mkdtemp(join(tmpdir(), 'project-config-init-'));
     await initGitRepo(sandbox);
 

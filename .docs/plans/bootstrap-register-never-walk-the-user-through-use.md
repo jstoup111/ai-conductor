@@ -13,7 +13,7 @@ Extends the two existing deterministic config writers by one input each and grow
 ## Technical Approach
 
 - **Skill asks, engine writes (adr-2026-08-28 D8, new D9).** `skills/bootstrap/SKILL.md` Step 1b-i becomes a per-setting interview; every answer is recorded through one `ai-conductor config init` invocation carrying flags. The skill never edits `.ai-conductor/config.yml` (adr-2026-07-27 decision 3).
-- **One new `config init` flag: `--test-suite-command`.** Parsed in `detectRegistryCommand`, validated in `resolveVerificationSelection`, substituted by `renderVerificationBlock` at the existing single template anchor, replacing the hardcoded `npm test` literal. Flagless output stays byte-identical, pinned by a committed fixture. Local pattern to follow: the D8 flags in `src/conductor/src/engine/registry-cli.ts` — typed option carried into `runConfigInit`, closed-vocabulary validation before any write, single-anchor substitution, `already-exists` refusal untouched; allowed variation: the command is free text, so validation is shape-only (non-empty, single line). Rediscover via symbols `detectRegistryCommand`, `ConfigInitOptions`, `resolveVerificationSelection`, `renderVerificationBlock`, `TEST_SUITE_VERIFICATION_TEMPLATE_ANCHOR`.
+- **One new `config init` flag: `--test-suite-command`.** Parsed in `detectRegistryCommand`, validated in `resolveVerificationSelection`, substituted by `renderVerificationBlock` at the existing single template anchor, replacing the hardcoded `npm test` literal. Flagless output keeps its pre-change effective settings and non-comment lines, pinned by a committed pre-change fixture; only comment or blank lines are added. Local pattern to follow: the D8 flags in `src/conductor/src/engine/registry-cli.ts` — typed option carried into `runConfigInit`, closed-vocabulary validation before any write, single-anchor substitution, `already-exists` refusal untouched; allowed variation: the command is free text, so validation is shape-only (non-empty, single line). Rediscover via symbols `detectRegistryCommand`, `ConfigInitOptions`, `resolveVerificationSelection`, `renderVerificationBlock`, `TEST_SUITE_VERIFICATION_TEMPLATE_ANCHOR`.
 - **One new `config set` path: `spec_owner` (adr-2026-08-09 decision 6).** `userConfigSetCommand` in `src/conductor/src/cli.ts` accepts exactly this additional top-level path, validated through `validateConfig` on the user source, written by the existing atomic `writeUserConfig`. It never targets a project file, so adr-2026-07-01 D1/D2 hold by construction. Local pattern: the function's own `conductor` branch (validate prospective value, then write); allowed variation: one more accepted path.
 - **Identity step in the skill.** Step 1b-ii reads `config read spec_owner`; when empty it asks, defaulting to `gh api user -q .login`, and records via `config set spec_owner`. Unresolved identity is reported with the blocked actions named; auto mode skips the step.
 - **Template annotations.** `templates/project-config.yml.template` explains each unasked operator-settable key in place with `Controls:` / `Allowed:` / `Default:` / `Changing it:` comment lines; rendered keys and the anchor do not move.
@@ -88,19 +88,20 @@ Extends the two existing deterministic config writers by one input each and grow
 
 **Dependencies:** 1
 
-### Task 4: Prove flagless and auto-mode config-init output is byte-identical to the pre-change fixture
+### Task 4: Prove flagless and auto-mode config-init output is effectively identical to the pre-change fixture
 **Story:** 2
 **Story:** 8
 **Type:** negative-path
 
 **Steps:**
 1. Add a committed fixture `src/conductor/test/fixtures/config-init-defaults.yml` captured from the pre-change `config init --test-suite-mode aggregate --test-suite-drift-budget strict` output and from the flagless byte copy.
-2. Write tests asserting `runConfigInit` output equals the fixture byte-for-byte for (a) no flags and (b) the auto-mode invocation the bootstrap skill documents.
+2. Restore the fixture to its pre-change bytes (commit `f1130bd37` refreshed it with the annotated output; take the file from the merge base). Write tests asserting, for (a) no flags and (b) the auto-mode invocation the bootstrap skill documents, that `runConfigInit` output parses to settings deep-equal to the parsed fixture and that its non-comment, non-blank lines equal the fixture's non-comment, non-blank lines in order. Flagless `config init` stays a verbatim copy of the template (adr-2026-08-28 D9).
 3. Verify GREEN (behavior is preserved; this task proves it). Commit: "config init: pin flagless and auto-mode output to the pre-change fixture"
 
 **Done when:**
-- `runConfigInit` with no flags produces a file byte-equal to `config-init-defaults.yml`, as asserted by the flagless identity test.
-- `runConfigInit` with the auto-mode flags produces a file byte-equal to the fixture, as asserted by the auto-mode identity test.
+- `runConfigInit` with no flags produces a file whose parsed settings deep-equal the parsed pre-change `config-init-defaults.yml` and whose non-comment, non-blank lines equal the fixture's in order, as asserted by the flagless effective-identity test.
+- `runConfigInit` with the auto-mode flags produces a file whose parsed settings deep-equal the parsed pre-change fixture and whose non-comment, non-blank lines equal the fixture's in order, as asserted by the auto-mode effective-identity test.
+- `config-init-defaults.yml` holds the pre-change bytes captured at the merge base, as asserted by a test comparing it with the merge-base template rendering recorded in the test.
 
 **Files likely touched:**
 - `src/conductor/test/engine/registry-cli.test.ts`
@@ -197,11 +198,11 @@ Extends the two existing deterministic config writers by one input each and grow
 1. Write failing test in `config-template.test.ts`: for each key in a fixed list of unasked operator-settable keys (`test_suite.working_directory`, `test_suite.timeout_seconds`, `test_suite.inputs`, `test_suite.environment`, `test_suite.scoped_command`, `build_review.rubrics.testQuality.enabled`, `otel.worker_name`, `steps.<name>.model`, `steps.<name>.effort`, `harness_version`), the template contains a comment block naming the key and carrying the four markers `Controls:`, `Allowed:`, `Default:`, `Changing it:`.
 2. Verify RED.
 3. Implement: rewrite the template comments so each listed key has that four-line explanation, keeping every rendered (non-comment) key and the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor exactly as they are.
-4. Verify GREEN, and re-run Task 4's byte-identity tests (they must still pass, which pins that rendered keys did not move). Commit: "template: explain every unasked project config key in place"
+4. Verify GREEN, and re-run Task 4's effective-identity tests (they must still pass, which pins that rendered keys did not move). Commit: "template: explain every unasked project config key in place"
 
 **Done when:**
 - Every key in the test's unasked-key list has a template comment block with `Controls:`, `Allowed:`, `Default:`, and `Changing it:`, as asserted by the annotation-coverage test.
-- The template still contains the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor and Task 4's byte-identity tests still pass, as asserted by re-running them.
+- The template still contains the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor and Task 4's effective-identity tests still pass, as asserted by re-running them.
 
 **Files likely touched:**
 - `templates/project-config.yml.template`
@@ -221,7 +222,7 @@ Extends the two existing deterministic config writers by one input each and grow
 
 **Done when:**
 - A project config assembled from every key named in template comments passes `validateConfig` with no unknown-key error, as asserted by the explained-keys-are-known test.
-- The rendered (non-comment) keys of the template are unchanged by this task, as asserted by re-running Task 4's byte-identity tests.
+- The rendered (non-comment) keys of the template are unchanged by this task, as asserted by re-running Task 4's effective-identity tests.
 
 **Files likely touched:**
 - `templates/project-config.yml.template`
@@ -342,7 +343,7 @@ Extends the two existing deterministic config writers by one input each and grow
 4. Verify GREEN. Commit: "bootstrap: auto mode asks nothing and records no identity"
 
 **Done when:**
-- The auto-mode branch of Step 1b-i is the unchanged flagless-defaults invocation with no question text, as asserted by the auto-mode test, and Task 4 pins its output byte-identical.
+- The auto-mode branch of Step 1b-i is the unchanged flagless-defaults invocation with no question text, as asserted by the auto-mode test, and Task 4 pins its output effectively identical.
 - Step 1b-ii declares itself skipped in auto mode with no `config set` call, as asserted by the auto-mode identity test.
 
 **Files likely touched:**
@@ -395,12 +396,12 @@ Extends the two existing deterministic config writers by one input each and grow
 
 | Criterion | Task id(s) | Done when quote | Disposition |
 | --- | --- | --- | --- |
-| Story 1 happy: Given an operator is present and the project has no configuration yet, when onboarding reaches configuration, then every project-scoped setting the operator is expected to decide is asked, one question at a time, and no such setting is silently defaulted without being asked. | 11 | "a numbered question for each decidable key" | diff-local |
+| Story 1 happy: Given an operator is present and the project has no configuration yet, when onboarding reaches configuration, then every project-scoped setting the operator is expected to decide is asked, one question at a time, and no such setting is silently defaulted without being asked. | 17 | "asks for the scoped command only when the mode answer is `scoped`" | diff-local |
 | Story 1 happy: Given a question is asked, when it is presented, then it states what the setting controls, which values are permitted, which value applies if the operator answers nothing, and what a non-default value changes. | 11 | "carrying `Controls:`, `Allowed:`, `Default:`, and `Changing it:`" | diff-local |
 | Story 1 negative: Given a question with a closed set of permitted values, when the operator answers with a value outside that set, then the answer is rejected with the permitted values restated, the same question is asked again, and nothing is recorded for it. | 11, 2 | "states the closed-set and free-text re-ask rules" | diff-local |
 | Story 1 negative: Given a question whose answer is free text, when the operator answers with an empty or multi-line value, then the answer is rejected, the question is re-asked, and nothing is recorded for it. | 2, 11 | "exits 1 naming `--test-suite-command` and writes no config file for the empty and multi-line fixtures" | diff-local |
 | Story 2 happy: Given the operator answers a question with a permitted non-default value, when onboarding records configuration, then the project configuration carries that value and the harness reads it back as the effective value on its next run. | 3 | "`loadConfig` reads it back unchanged" | diff-local |
-| Story 2 happy: Given the operator accepts the offered value at every question, when onboarding records configuration, then the resulting project configuration is byte-identical to what onboarding produced before this change. | 4 | "byte-equal to `config-init-defaults.yml`" | diff-local |
+| Story 2 happy: Given the operator accepts the offered value at every question, when onboarding records configuration, then the resulting project configuration parses to the same effective settings onboarding produced before this change, except that the aggregate test command is the offered project-specific default Story 3 establishes rather than the former fixed literal, and every line it adds to the pre-change output is a comment or blank line. | 4 | "`runConfigInit` with no flags produces a file whose parsed settings deep-equal the parsed pre-change `config-init-defaults.yml` and whose non-comment, non-blank lines equal the fixture's in order, as asserted by the flagless effective-identity test." | diff-local |
 | Story 2 negative: Given a value that would fail configuration validation, when recording is attempted with it, then recording refuses before any file is written, names the rejected value, and the project has no partially written configuration. | 2 | "writes no config file for the empty and multi-line fixtures" | diff-local |
 | Story 2 negative: Given recording is invoked with a value for a setting it does not accept, when it runs, then it refuses with a message naming the unsupported setting and writes nothing. | 2 | "exits 1 with `unsupported flag --<name>` and writes no file" | diff-local |
 | Story 3 happy: Given an operator is present, when onboarding asks for the project's test command, then the operator's answer is recorded verbatim as the aggregate test command and is the value the pre-ship gate invokes. | 3, 1 | "The rendered `test_suite.command` equals the `--test-suite-command` value" | diff-local |
@@ -417,11 +418,11 @@ Extends the two existing deterministic config writers by one input each and grow
 | Story 6 happy: Given operator identity is already established, when onboarding runs again, then it is reported and preserved. | 13 | "reports an already-set identity without asking" | diff-local |
 | Story 6 negative: Given a project whose configuration already exists, when the recording step is invoked again with different answers, then it refuses to overwrite, reports that the configuration already exists, and the file is unchanged. | 5 | "the pre-existing file is byte-identical after a flagged re-run" | diff-local |
 | Story 6 negative: Given a project configuration that has been hand-edited since it was recorded, when onboarding runs again, then the hand-edited values are preserved and reported, not replaced with defaults. | 5 | "The hand-edited `command: make check` value survives the re-run unchanged" | diff-local |
-| Story 7 happy: Given onboarding has recorded a project configuration, when the operator opens it, then every setting the walkthrough did not ask about is accompanied by an explanation stating what it controls, its permitted values, its default, and the consequence of changing it. | 9 | "has a template comment block with `Controls:`, `Allowed:`, `Default:`, and `Changing it:`" | diff-local |
-| Story 7 negative: Given the recorded configuration, when its explanations are compared with the keys the harness accepts, then no explained key is unknown to the harness and no decidable-but-unasked key lacks an explanation. | 10 | "passes `validateConfig` with no unknown-key error" | diff-local |
+| Story 7 happy: Given onboarding has recorded a project configuration, when the operator opens it, then every top-level setting the walkthrough did not ask about is accompanied by an authored explanation stating what it controls, its permitted values, its default, and the consequence of changing it, and every nested setting either has its own such explanation or sits under a section explanation that links to the full configuration reference and says the ai-conductor agent can set the value on request. | 18 | "Every top-level project-settable key derived from `CONFIG_CONSUMER_KEY_SETS` (excluding the user-scoped `conductor` set, `spec_owner`, and the three asked keys) has an authored template comment block whose `Controls:`, `Allowed:`, `Default:`, and `Changing it:` lines name concrete permitted values, the concrete default, and a consequence, the seven key-specific blocks that commit `782b010cf` replaced are restored, and no block contains the placeholder phrases `a value accepted by the configuration validator`, `use the harness default`, or `changes this setting for the project`, as asserted by the authored-explanation test." | diff-local |
+| Story 7 negative: Given the recorded configuration, when its explanations are compared with the keys the harness accepts, then no explained key is unknown to the harness, no top-level decidable-but-unasked key lacks an authored explanation, no nested key lacks both its own explanation and a section reference line, and no explanation is generic placeholder text. | 18 | "Every `Controls:` token in the template names a key in the derived dotted-path set, and every derived nested key either has its own block or its top-level section block carries a `Reference:` line containing `https://jstoup111.github.io/ai-conductor/reference/configuration` and stating that the ai-conductor agent can set the value on request, as asserted by the coverage test, so a block naming a rejected key, or an accepted key with neither a block nor a section reference, fails." | diff-local |
 | Story 8 happy: Given onboarding runs with no operator present, when it reaches configuration, then it asks no question, records today's defaults, and completes. | 16 | "the unchanged flagless-defaults invocation with no question text" | diff-local |
 | Story 8 negative: Given onboarding runs with no operator present and no identity is established, when it reaches the identity step, then it neither asks nor records an identity, and the existing fail-closed behavior on later identity-dependent actions is unchanged. | 16 | "declares itself skipped in auto mode with no `config set` call" | diff-local |
-| Story 8 negative: Given onboarding runs with no operator present, when its output is compared with the pre-change unattended output, then the recorded project configuration is byte-identical. | 4 | "`runConfigInit` with the auto-mode flags produces a file byte-equal to the fixture" | diff-local |
+| Story 8 negative: Given onboarding runs with no operator present, when its output is compared with the pre-change unattended output, then the recorded project configuration parses to the same effective settings and differs only by added comment or blank lines. | 4 | "`runConfigInit` with the auto-mode flags produces a file whose parsed settings deep-equal the parsed pre-change fixture and whose non-comment, non-blank lines equal the fixture's in order, as asserted by the auto-mode effective-identity test." | diff-local |
 
 ## Verification
 
@@ -430,3 +431,85 @@ Extends the two existing deterministic config writers by one input each and grow
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
+
+> **Amended 2026-09-17 by operator (prd_audit PLAN_GAP resolution for S1.1, S7.1, S7.2):** The operator chose to ask for the scoped test command instead of dropping `scoped` from the walkthrough, and to explain every project-settable top-level key instead of narrowing Story 7 to a fixed list. Task 17 owns the S1.1 gap (answering `scoped` silently recorded a fixed `scoped_command` literal). Task 18 owns the S7.1/S7.2 gaps (nine explained keys against 46 accepted; the coverage test hardcoded the nine). Tasks 9, 10, and 11 keep their delivered scope; the Coverage Check rows for those criteria now cite Tasks 17 and 18.
+
+### Task 17: Ask for the scoped test command and record it through a config-init flag
+**Story:** 1
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests: in `src/conductor/test/engine/registry-cli.test.ts`, `config init --test-suite-mode scoped --test-suite-scoped-command "npm test -- {selectors}"` renders `scoped_command: npm test -- {selectors}` through `yamlScalar`; `--test-suite-mode scoped` without the scoped flag returns a naming message and writes no file; `--test-suite-scoped-command` with `--test-suite-mode aggregate` returns a naming message and writes no file; an empty or multi-line scoped command is refused before any write. In `src/conductor/test/bootstrap-skill-config-questions.test.ts`, extend the decidable-key list with `test_suite.scoped_command` as a conditional question that carries the four elements and names `--test-suite-scoped-command`.
+2. Verify RED.
+3. Implement in `src/conductor/src/engine/registry-cli.ts`: parse `--test-suite-scoped-command` (bare and `=` forms) into the config-init dispatch; validate it with the same non-empty single-line rule as `--test-suite-command`; make `renderVerificationBlock` substitute the operator's value instead of the fixed literal and never render a `scoped_command` line when the mode is `aggregate`. Declare the flag on the commander `config init` command next to `--test-suite-command`.
+4. Implement in `skills/bootstrap/SKILL.md` Step 1b-i: add a question for `test_suite.scoped_command` asked only when question 1 was answered `scoped` — Controls: the command the scoped verification mode runs for selected tests, with `{selectors}` substituted; Allowed: one non-empty single-line command containing `{selectors}`; Default: none, the answer is required once `scoped` is chosen; Changing it: records the project's selected-test runner. Record with `--test-suite-scoped-command <command>`. Auto mode never reaches this question because it records `aggregate`.
+5. Verify GREEN and re-run Task 4's effective-identity tests. Commit: "bootstrap: ask for the scoped test command instead of defaulting it"
+
+**Done when:**
+- `config init` renders `scoped_command` only from `--test-suite-scoped-command`, refuses the flag without `--test-suite-mode scoped`, refuses `scoped` mode without the flag, and refuses an empty or multi-line value before any write, as asserted by the registry-cli tests.
+- Step 1b-i of `skills/bootstrap/SKILL.md` asks for the scoped command only when the mode answer is `scoped`, with the four elements and the recording flag named, as asserted by the question-coverage test.
+- Task 4's flagless and auto-mode effective-identity tests still pass.
+
+**Files likely touched:**
+- `src/conductor/src/engine/registry-cli.ts`
+- `src/conductor/src/cli.ts`
+- `skills/bootstrap/SKILL.md`
+- `src/conductor/test/engine/registry-cli.test.ts`
+- `src/conductor/test/bootstrap-skill-config-questions.test.ts`
+
+**Dependencies:** 11, 12
+
+### Task 18: Explain every project-settable key at every depth and derive the coverage check from the validator
+**Story:** 7
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/config-template.test.ts`: derive the expected dotted-path key set from every entry of `CONFIG_CONSUMER_KEY_SETS` in `src/conductor/src/engine/config.ts` (top-level keys plus each nested set under its config path, e.g. `defaults.model`, `steps.by_tier.effort`, `harness_self_host.build_auth.mode`) minus the user-scoped `conductor` set, the user-scoped keys `conductor` and `spec_owner`, and minus the three keys the walkthrough asks (`test_suite.verification.mode`, `test_suite.verification.drift_budget`, `test_suite.command`; `test_suite` itself stays in the set because its unasked sub-keys need explanation); assert every derived key has a `Controls: <key>` comment block with `Allowed:`, `Default:`, and `Changing it:` in `templates/project-config.yml.template`; assert the set of `Controls: <key>` tokens in the template equals the derived dotted-path set exactly; keep a `validateConfig` check assembled from the top-level tokens and their stated defaults that passes with no unknown-key error.
+2. Verify RED (missing `test_suite.environment`, `defaults.model`, and the other unexplained keys).
+3. Implement (amended 2026-09-18 by operator, prd_audit S7.1 PLAN_GAP: narrow the explained set): hand-author a real four-line block for every top-level derived key and for the nested keys an operator commonly sets, restore the seven key-specific blocks commit `782b010cf` replaced, delete every generic placeholder block, and give each top-level section block a `Reference:` line linking `https://jstoup111.github.io/ai-conductor/reference/configuration` and saying the ai-conductor agent can set the value on request; superseding the original instruction to annotate every derived key in `templates/project-config.yml.template` with the four-line block, keeping every rendered (non-comment) key and the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor exactly as they are; a nested key without its own block is covered only by its section's `Reference:` line, never by placeholder text.
+4. Verify GREEN and re-run Task 4's effective-identity tests. Commit: "template: explain every project-settable key, derived from the validator"
+
+**Done when:**
+- Every top-level project-settable key derived from `CONFIG_CONSUMER_KEY_SETS` (excluding the user-scoped `conductor` set, `spec_owner`, and the three asked keys) has an authored template comment block whose `Controls:`, `Allowed:`, `Default:`, and `Changing it:` lines name concrete permitted values, the concrete default, and a consequence, the seven key-specific blocks that commit `782b010cf` replaced are restored, and no block contains the placeholder phrases `a value accepted by the configuration validator`, `use the harness default`, or `changes this setting for the project`, as asserted by the authored-explanation test.
+- Every `Controls:` token in the template names a key in the derived dotted-path set, and every derived nested key either has its own block or its top-level section block carries a `Reference:` line containing `https://jstoup111.github.io/ai-conductor/reference/configuration` and stating that the ai-conductor agent can set the value on request, as asserted by the coverage test, so a block naming a rejected key, or an accepted key with neither a block nor a section reference, fails.
+- The template still contains the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor and Task 4's effective-identity tests still pass.
+
+**Files likely touched:**
+- `templates/project-config.yml.template`
+- `src/conductor/test/engine/config-template.test.ts`
+
+**Dependencies:** 9, 10
+
+### Task rem-as-built-rem-ab1-1: Reshape the D9 amendment of adr-2026-08-28-test-suite-drift-budget-and-verification-mode into additive form: restore the merge-base sentence asserting flagless and auto-mode config-init output is byte-identical verbatim, add the operator's 2026-09-18 effective-settings qualification beside it as a dated amendment item numbered D<n> under the Decision heading so it is citable by the land gate, leave every other approved decision untouched, and obtain the operator reseal for that decisions path in the same change
+**Gate:** as-built
+**Rationale:** AB-1 is a defect in the form of an approved-ADR amendment, not implementation drift, and its repair edits a sealed artifact under the decisions directory, which this skill forbids routing to build or acceptance_specs (confidence 97%, verified from the seal record and the review). The seal's third rebaseline records the operator's 2026-09-18 approval to amend D9 of adr-2026-08-28-test-suite-drift-budget-and-verification-mode, so the substance is decided; what is wrong is that the merge-base sentence asserting byte-identical flagless and auto-mode output was deleted rather than preserved beside the new effective-settings qualification, which the governing architecture review at architecture-review-2026-09-14-bootstrap-register-never-walk-the-user-through-use lines 117-118 requires to be additive. architecture_review owns ADR authoring and the operator reseal gate for that path, so it is the only step that can both reshape the text into additive form and obtain the reseal; a build step editing that path would halt on protected-artifact self-amendment. No coverage or decision is removed: the task restores previously approved text and keeps the operator-approved qualification beside it, and memory of this repo's land gate requires the added note to carry a numbered D<n> so it stays citable. Found and deliberately excluded: no sibling ADR was amended by this feature — the seal shows exactly one decisions-directory rebaseline — so there is no second non-additive rewrite to sweep.
+**Governing clause:** adr-2026-08-28-test-suite-drift-budget-and-verification-mode D9
+**Done when:**
+- adr-2026-08-28-test-suite-drift-budget-and-verification-mode D9 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab1-1 is complete.
+
+### Task rem-as-built-rem-ab2-1: Decide and record, as a new ADR governing the daemon-session guard exemption boundary in src/conductor/src/execution/daemon-session.ts:45-77, whether the engine-managed bootstrap prelude may invoke the project-config writer at all — weighing D8's requirement that bootstrap record answers through config init against the allowlist contract that forbids state-mutating verbs, and naming which of a step-scoped exemption, an engine-performed write, or an explicit out-of-scope declaration governs; state the production root-to-command chain the decision makes reachable
+**Gate:** as-built
+**Rationale:** AB-2 cannot be closed without changing or clarifying an approved harness-wide boundary, which is what this disposition is for (confidence 96%, verified from current source). I confirmed the chain myself: the managed prelude dispatches bootstrap through src/conductor/src/engine/project-prelude.ts:122-128 and 171-189, the provider adapters stamp CONDUCT_DAEMON_SESSION=1, src/conductor/src/index.ts:615-625 runs guardDaemonSessionInvocation before any subcommand parsing, and the allowlist at src/conductor/src/execution/daemon-session.ts:54-77 omits config, so the skill's config init call is refused. The constraints conflict: D8 requires bootstrap to record answers through config init, while the allowlist's own documented contract at daemon-session.ts:45-53 states each entry is a deliberate exemption and explicitly forbids adding state-mutating verbs — and config init writes a project file. Load-bearing correction to the review's framing, verified at 99%: this unreachability is NOT introduced by this feature. The merge-base skill at e7e899d56:skills/bootstrap/SKILL.md:82,88 already invoked ai-conductor config init, so the managed-prelude path was equally unreachable before this branch; the feature added questions to a call site that was already blocked. No plan task, story, or ADR of this feature names daemon-session.ts, and no ADR governs the guard at all (no decisions-directory file mentions it), so choosing between a scoped per-step exemption, an engine-performed write, and declaring the managed-prelude path out of scope is an architecture decision this step must not make. This is not architectural-clarity halt material because architecture_review is the step that owns exactly this decision and can record it autonomously. No code, test, or assertion is removed by the emitted task — it authors a decision record only. Found and deliberately excluded: the guard also blocks every other non-allowlisted verb the skill might grow later, but sweeping the whole allowlist contract is the decision being routed, not a separate site.
+**Governing clause:** adr-2026-08-28-test-suite-drift-budget-and-verification-mode D8
+**Done when:**
+- adr-2026-08-28-test-suite-drift-budget-and-verification-mode D8 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-1 is complete.
+
+### Task rem-as-built-rem-ab3-1: In the same daemon-session guard decision, state explicitly whether a read-only config verb (config read spec_owner) is exempt on different grounds from a user-config writer (config set spec_owner), and record which of the two the bootstrap identity step may invoke from the engine-managed prelude, naming the guard call site src/conductor/src/execution/daemon-session.ts:54-77 and the identity writer src/conductor/src/cli.ts:326-343
+**Gate:** as-built
+**Rationale:** AB-3 is the operator-identity limb of the identical guard boundary and shares AB-2's root cause and evidence (confidence 96%, verified from current source): src/conductor/src/execution/daemon-session.ts:54-77 omits config, so both config read spec_owner and config set spec_owner required at skills/bootstrap/SKILL.md:115-119 are refused at daemon-session.ts:97-110 before dispatch. It is routed to the same step rather than to build because the remedy is the same unmade boundary decision, and because these two verbs differ in kind — config read mutates nothing while config set spec_owner writes machine-scoped user config — so whether a read-only config verb is exempt on different grounds than a writer is part of the decision and not derivable from the evidence. The task below is scoped to that distinction only and does not duplicate AB-2's task. No existing code, test, or assertion is relaxed by it. Found and deliberately excluded: the direct human shell path for these verbs is already reachable and correct per the review's Production Reachability section, so nothing in cli.ts:316-349 is touched.
+**Parent task:** 13
+**Governing clause:** Task 13
+**Done when:**
+- Task 13 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab3-1 is complete.
+
+### Task rem-as-built-rem-ab4-1: In the same daemon-session guard decision, rule on the re-run inspection path — the per-key config read calls and the refuse-to-clobber config init at skills/bootstrap/SKILL.md:69-72 — and record explicitly whether declaring the engine-managed bootstrap prelude an unsupported path is the chosen resolution, noting that the merge-base skill at e7e899d56 already invoked config init so the unreachability predates this feature and is not a regression introduced by it
+**Gate:** as-built
+**Rationale:** AB-4 is the re-run-inspection limb of the same guard boundary (confidence 96%, verified from current source): the per-key config read calls and the no-clobber config init invocation that skills/bootstrap/SKILL.md:69-72 mandates on re-run are refused by the same allowlist omission at src/conductor/src/execution/daemon-session.ts:54-77. Routed to architecture_review with AB-2 and AB-3 because one decision closes all three and splitting them across steps would produce three partial repairs of one boundary. The task below carries the scope question the other two do not: because the merge-base skill already invoked config init (e7e899d56:skills/bootstrap/SKILL.md:82,88), declaring the engine-managed prelude an unsupported bootstrap path is a legitimate resolution that closes AB-2 through AB-4 without widening a security guard, and the decision must say so or rule it out rather than leave it implicit. It removes no code, test, or assertion. Found and deliberately excluded: the two UNEXERCISED signatures the review lists (established-value reporting and unresolved-identity reporting) are consequences of this same unreachability, not independent findings, and are covered by whichever resolution this decision selects.
+**Parent task:** 15
+**Governing clause:** Task 15
+**Done when:**
+- Task 15 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab4-1 is complete.

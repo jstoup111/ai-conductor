@@ -323,6 +323,31 @@ export async function userConfigSetCommand(
     return 1;
   }
 
+  if (cmd.path === 'spec_owner') {
+    if (!cmd.value.trim()) {
+      write('spec_owner must be non-empty\n');
+      return 1;
+    }
+    const prospectiveValidation = validateConfig(
+      { spec_owner: cmd.value },
+      undefined,
+      { materializeDefaults: false },
+    );
+    if (!prospectiveValidation.ok) {
+      write(`${prospectiveValidation.error.message}\n`);
+      return 1;
+    }
+    config.spec_owner = cmd.value;
+    try {
+      await writeUserConfig(config);
+      return 0;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      write(`Unable to write user config at ${userConfigPath()}: ${reason}\n`);
+      return 1;
+    }
+  }
+
   const [section, key, ...rest] = cmd.path.split('.');
   if (section !== 'conductor' || !key || rest.length > 0) {
     write(`Unsupported user config path: ${cmd.path}\n`);
@@ -584,7 +609,11 @@ export function createProgram(): Command {
     .description('Manage project- and user-scoped harness configuration');
   config
     .command('init')
-    .description('Create project-scoped .ai-conductor/config.yml from the template if absent');
+    .description('Create project-scoped .ai-conductor/config.yml from the template if absent')
+    .option('--test-suite-mode <mode>', 'Test-suite verification mode: aggregate or scoped')
+    .option('--test-suite-drift-budget <preset>', 'Test-suite drift-budget preset: strict or tolerant')
+    .option('--test-suite-command <command>', 'Aggregate test command recorded in the project config')
+    .option('--test-suite-scoped-command <command>', 'Selected-test command recorded for scoped verification');
   config
     .command('read <path>')
     .description('Print a value from effective configuration: project-over-user when a project config exists, user configuration otherwise');

@@ -178,17 +178,36 @@ type TestSuiteDriftBudgetPreset = keyof typeof TEST_SUITE_DRIFT_BUDGET_PRESETS;
 interface ConfigInitOptions {
   testSuiteMode?: string;
   testSuiteDriftBudget?: string;
+  testSuiteCommand?: string;
+  testSuiteScopedCommand?: string;
+  unknownFlags?: string[];
   hasVerificationFlags?: boolean;
 }
 
 interface TestSuiteVerificationSelection {
+  command: string;
   mode: TestSuiteVerificationMode;
   preset: TestSuiteDriftBudgetPreset;
+  scopedCommand?: string;
 }
 
 function resolveVerificationSelection(
   options: ConfigInitOptions,
 ): TestSuiteVerificationSelection | string {
+  if (
+    options.testSuiteCommand !== undefined &&
+    (options.testSuiteCommand.trim().length === 0 ||
+      /[\r\n]/.test(options.testSuiteCommand))
+  ) {
+    return 'invalid --test-suite-command: must be non-empty and single line';
+  }
+  if (
+    options.testSuiteScopedCommand !== undefined &&
+    (options.testSuiteScopedCommand.trim().length === 0 ||
+      /[\r\n]/.test(options.testSuiteScopedCommand))
+  ) {
+    return 'invalid --test-suite-scoped-command: must be non-empty and single line';
+  }
   if (
     options.testSuiteMode !== undefined &&
     !TEST_SUITE_VERIFICATION_MODES.includes(
@@ -204,17 +223,40 @@ function resolveVerificationSelection(
     return `invalid --test-suite-drift-budget ${JSON.stringify(options.testSuiteDriftBudget)}; allowed values: ${Object.keys(TEST_SUITE_DRIFT_BUDGET_PRESETS).join(', ')}`;
   }
 
+  const mode = (options.testSuiteMode ?? 'aggregate') as TestSuiteVerificationMode;
+  if (mode !== 'scoped' && options.testSuiteScopedCommand !== undefined) {
+    return 'invalid --test-suite-scoped-command: only allowed when --test-suite-mode is scoped';
+  }
+  if (mode === 'scoped' && options.testSuiteScopedCommand === undefined) {
+    return 'invalid --test-suite-scoped-command: required when --test-suite-mode is scoped';
+  }
+  const scopedCommand = options.testSuiteScopedCommand;
+  if (mode === 'scoped' && !scopedCommand!.includes('{selectors}')) {
+    return 'invalid --test-suite-scoped-command: must contain the "{selectors}" placeholder';
+  }
+
   return {
-    mode: (options.testSuiteMode ?? 'aggregate') as TestSuiteVerificationMode,
+    command: options.testSuiteCommand ?? 'npm test',
+    mode,
     preset: (options.testSuiteDriftBudget ?? 'strict') as TestSuiteDriftBudgetPreset,
+    ...(mode === 'scoped' ? { scopedCommand } : {}),
   };
+}
+
+const YAML_IMPLICIT_SCALAR = /^(?:true|false|yes|no|on|off|null|~|[-+]?\d[\d_]*(?:\.\d[\d_]*)?(?:e[-+]?\d[\d_]*)?|[-+]?\.\d[\d_]*(?:e[-+]?\d[\d_]*)?|[-+]?\.(?:inf|nan)|\d{4}-\d{1,2}-\d{1,2}(?:[Tt ].*)?)$/i;
+
+function yamlScalar(value: string): string {
+  return /^[A-Za-z0-9][A-Za-z0-9 ._/-]*$/.test(value) &&
+    !YAML_IMPLICIT_SCALAR.test(value)
+    ? value
+    : JSON.stringify(value);
 }
 
 function renderVerificationBlock(selection: TestSuiteVerificationSelection): string {
   const driftBudget = TEST_SUITE_DRIFT_BUDGET_PRESETS[selection.preset];
   const scopedCommand =
     selection.mode === 'scoped'
-      ? '  scoped_command: npm test -- {selectors}\n'
+      ? `  scoped_command: ${yamlScalar(selection.scopedCommand!)}\n`
       : '';
   const budgetLines = Object.entries(driftBudget)
     .filter(
@@ -229,7 +271,7 @@ function renderVerificationBlock(selection: TestSuiteVerificationSelection): str
   return [
     '# Test-suite verification answer recorded by ai-conductor config init.',
     'test_suite:',
-    '  command: npm test',
+    `  command: ${yamlScalar(selection.command)}`,
     scopedCommand.trimEnd(),
     '  verification:',
     `    mode: ${selection.mode}`,
@@ -298,6 +340,11 @@ async function runConfigInit(
   options: ConfigInitOptions = {},
   projectRoot = process.cwd(),
 ): Promise<number> {
+  if ((options.unknownFlags?.length ?? 0) > 0) {
+    console.error(`conduct config init: unsupported flag ${options.unknownFlags![0]}`);
+    return 1;
+  }
+
   const verification = options.hasVerificationFlags
     ? resolveVerificationSelection(options)
     : undefined;
@@ -403,6 +450,9 @@ export type RegistryDispatch =
       kind: 'config-init';
       testSuiteMode?: string;
       testSuiteDriftBudget?: string;
+      testSuiteCommand?: string;
+      testSuiteScopedCommand?: string;
+      unknownFlags?: string[];
       hasVerificationFlags?: boolean;
     };
 
@@ -435,6 +485,9 @@ export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
   if (sub === 'config' && args[1] === 'init') {
     let testSuiteMode: string | undefined;
     let testSuiteDriftBudget: string | undefined;
+    let testSuiteCommand: string | undefined;
+    let testSuiteScopedCommand: string | undefined;
+    const unknownFlags: string[] = [];
     let hasVerificationFlags = false;
     for (let i = 2; i < args.length; i++) {
       const arg = args[i];
@@ -450,12 +503,29 @@ export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
       } else if (arg.startsWith('--test-suite-drift-budget=')) {
         hasVerificationFlags = true;
         testSuiteDriftBudget = arg.slice('--test-suite-drift-budget='.length);
+      } else if (arg === '--test-suite-command') {
+        hasVerificationFlags = true;
+        testSuiteCommand = args[++i] ?? '';
+      } else if (arg.startsWith('--test-suite-command=')) {
+        hasVerificationFlags = true;
+        testSuiteCommand = arg.slice('--test-suite-command='.length);
+      } else if (arg === '--test-suite-scoped-command') {
+        hasVerificationFlags = true;
+        testSuiteScopedCommand = args[++i] ?? '';
+      } else if (arg.startsWith('--test-suite-scoped-command=')) {
+        hasVerificationFlags = true;
+        testSuiteScopedCommand = arg.slice('--test-suite-scoped-command='.length);
+      } else if (arg.startsWith('--')) {
+        unknownFlags.push(arg);
       }
     }
     return {
       kind: 'config-init',
       testSuiteMode,
       testSuiteDriftBudget,
+      testSuiteCommand,
+      testSuiteScopedCommand,
+      ...(unknownFlags.length > 0 ? { unknownFlags } : {}),
       hasVerificationFlags,
     };
   }
@@ -469,6 +539,9 @@ export async function dispatchRegistry(d: RegistryDispatch): Promise<number> {
     return runConfigInit({
       testSuiteMode: d.testSuiteMode,
       testSuiteDriftBudget: d.testSuiteDriftBudget,
+      testSuiteCommand: d.testSuiteCommand,
+      testSuiteScopedCommand: d.testSuiteScopedCommand,
+      unknownFlags: d.unknownFlags,
       hasVerificationFlags: d.hasVerificationFlags,
     });
   }

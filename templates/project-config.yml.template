@@ -1,7 +1,318 @@
 # Project config — <repo>/.ai-conductor/config.yml
+#
+# Every top-level project setting, and the nested settings operators change most,
+# is explained below. A section's other nested settings are covered by its
+# Reference line. The settings bootstrap asks about are written by
+# `ai-conductor config init`. Settings with a live or example value further down
+# are explained next to that value.
+#
+# Controls: defaults — baseline model-routing and retry settings inherited by every step that does not override them.
+# Allowed: an object with only the keys model, effort, max_retries, and escalate; any other key (including by_tier) fails the load.
+# Default: unset; each step then uses its provider policy model and effort, its built-in retry budget, and escalate true.
+# Changing it: shifts every lifecycle step at once, so it is the broadest and most cost-sensitive override.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: defaults.model — the model every step uses unless a phase or step overrides it.
+# Allowed: any string the provider accepts (for Claude: fable, opus, sonnet, haiku); the value is not enum-checked at load.
+# Default: unset; each step uses the model its provider policy assigns.
+# Changing it: replaces the per-step policy model everywhere, so a cheap model here also weakens planning and review steps.
+# Controls: defaults.effort — the reasoning effort every step uses unless a phase or step overrides it.
+# Allowed: low, medium, high, xhigh, or max; anything else fails the load.
+# Default: unset; each step uses the effort its provider policy assigns.
+# Changing it: raises or lowers reasoning depth, latency, and token spend for every dispatch.
+# Controls: defaults.max_retries — the attempt budget a step gets before it fails.
+# Allowed: a number; no range check is applied.
+# Default: unset; each step uses its built-in budget, falling back to 3.
+# Changing it: a value above an explicitly set build_progress_halt.attempt_ceiling fails the load, so raise that ceiling with it.
+# Controls: phases — routing overrides applied to every step in one lifecycle phase.
+# Allowed: an object keyed by SETUP, UNDERSTAND, DECIDE, BUILD, or SHIP (uppercase); each phase takes model, effort, max_retries, escalate, and by_tier (tiers S, M, L).
+# Default: unset; phases add nothing on top of defaults.
+# Changing it: overrides defaults for that phase's steps, while a steps.<name> value still wins; an unknown phase name fails the load.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: steps — per-step overrides and custom step declarations, keyed by step name.
+# Allowed: an object whose keys are built-in step names (for example explore, plan, build) or custom steps that declare after: <existing-step>; each value is an object of per-step keys.
+# Default: unset; every built-in step runs with its built-in skill and routing.
+# Changing it: a key that is not a built-in step is treated as a custom step and fails the load without after; bootstrap, assess, remediate, and attribution_verify cannot be configured here.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: steps.llm_provider — the provider (or ordered fallback list) that runs this one step; written as steps.<name>.llm_provider.
+# Allowed: a non-empty string, or a non-empty array of unique non-empty strings, naming registered providers such as claude or codex.
+# Default: unset; the step inherits the first entry of the top-level llm_provider.
+# Changing it: routes only that step to another provider; an unregistered name stops the run at start.
+# Controls: steps.max_retries — the attempt budget for this one step; written as steps.<name>.max_retries.
+# Allowed: a number.
+# Default: unset; the step uses defaults.max_retries when set, otherwise its built-in budget (fallback 3).
+# Changing it: gives a flaky or expensive step more or fewer attempts without touching the others.
+# Controls: steps.disable — whether this one step is skipped; written as steps.<name>.disable.
+# Allowed: true or false.
+# Default: false.
+# Changing it: true skips the step, but only advisory steps and manual_test may be disabled; disabling any other gating or structural step fails the load.
+# Controls: complexity — a reserved block kept for compatibility.
+# Allowed: an empty object only; any key inside it fails the load.
+# Default: unset.
+# Changing it: has no effect today, so leave it out.
+# Controls: markdown_viewer — how markdown artifacts are shown during artifact review.
+# Allowed: an object with preset (glow, bat, mdcat, cat, code, typora, marktext, nvim, obsidian), or command plus args (a string array containing the literal {file}) and mode (inline, blocking, or external).
+# Default: unset; no viewer is launched. This is normally a per-user choice set in ~/.ai-conductor/config.yml.
+# Changing it: committing it here forces the same viewer program on every contributor's machine.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: mermaid_renderer — how Mermaid architecture diagrams are rendered for review.
+# Allowed: an object with preset (html, mmdc-png, mmdc-svg, none), or command plus args (a string array containing {file}; {out} is also substituted) and mode (inline, blocking, or external).
+# Default: unset; diagrams are not rendered. This is normally a per-user choice set in ~/.ai-conductor/config.yml.
+# Changing it: the mmdc presets need Chromium on every machine that reviews diagrams; html has no native dependencies.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: assess — when the stored codebase assessment counts as stale.
+# Allowed: an object with stale_after_days and stale_after_commits, each a finite number >= 0.
+# Default: unset; stale_after_days resolves to 90 and stale_after_commits to 500.
+# Changing it: lower thresholds prompt for a re-assessment more often; exceeding either one marks the assessment stale.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: acceptance_spec_globs — extra file globs the acceptance_specs step counts as completion evidence.
+# Allowed: an array of glob strings, for example "*/spec/**".
+# Default: [] (only the built-in acceptance-spec locations count).
+# Changing it: adds locations on top of the built-in ones and never replaces them; use "*/" prefixes for monorepo subprojects.
+# Controls: test_suite — the project-owned test configuration run by the pre-SHIP test_suite gate.
+# Allowed: an object configuring at least one of command, commands, or scoped_command, plus optional working_directory, timeout_seconds, inputs, environment, and verification.
+# Default: unset; bootstrap asks for the aggregate command and verification settings, and a project without this block halts at SHIP with missing_config.
+# Changing it: changes what the harness treats as authoritative proof that the project's tests pass.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: test_suite.commands — an ordered list of test commands run instead of one aggregate command.
+# Allowed: a non-empty list of entries, each with a required non-empty command and optional working_directory and timeout_seconds; it cannot be combined with the scalar command.
+# Default: unset.
+# Changing it: entries run serially in the declared order and stop at the first failure, which is recorded with the unexecuted remainder.
+# Controls: test_suite.scoped_command — the command used to run only selected tests.
+# Allowed: one project-owned command string containing the literal {selectors} placeholder.
+# Default: unset; scoped runs are unavailable.
+# Changing it: enables ai-conductor scoped-run and the scoped verification mode; it never falls back to the aggregate command.
+# Controls: test_suite.inputs — extra files included when fingerprinting the suite for cached verification.
+# Allowed: an array of project-relative path strings.
+# Default: unset (no extra inputs).
+# Changing it: a change to a listed file makes earlier passing evidence stale, so the suite re-runs.
+# Controls: test_suite.environment — environment variable NAMES (never values) the test suite depends on.
+# Allowed: an array of variable-name strings, for example [DATABASE_URL].
+# Default: unset (no variables tracked).
+# Changing it: each named variable's value is hashed into the suite fingerprint, so changing it re-runs the suite, and it is redacted from verifier output.
+# Controls: llm_provider — which provider host runs lifecycle steps.
+# Allowed: a non-empty string, or a non-empty array of unique strings used as a fallback ladder; built-in providers are claude and codex.
+# Default: [claude].
+# Changing it: the first entry becomes the provider for every step without its own steps.<name>.llm_provider; an unregistered name stops the run at start.
+# Controls: ui_renderer — the plugin that draws the run UI.
+# Allowed: the name of a registered renderer plugin; the built-in one is terminal.
+# Default: terminal.
+# Changing it: an unregistered name makes the run fail at start with a plugin-not-found error.
+# Controls: visualizers — extra visualizer plugins started for each run.
+# Allowed: an array of registered visualizer plugin names; do not list otel, which is configured through the otel block.
+# Default: unset (no extra visualizers).
+# Changing it: starts each named plugin; an unregistered name is skipped with one warning instead of failing.
+# Controls: memory_provider — the plugin that stores project memory.
+# Allowed: the name of an installed memory provider plugin; the built-in one is local.
+# Default: local.
+# Changing it: a name that is not installed falls back to local with one warning per run.
+# Controls: otel — OpenTelemetry export of traces and metrics for runs and daemon dispatches.
+# Allowed: an object with exporter (otlp or file), endpoint, file, protocol, headers, project_name, worker_name, and attributes.
+# Default: unset; telemetry export is disabled.
+# Changing it: an invalid block disables export and reports an error string instead of halting the run.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: otel.exporter — where telemetry is sent; required whenever the otel block exists.
+# Allowed: otlp or file.
+# Default: none; without an otel block export is disabled.
+# Changing it: otlp also requires otel.endpoint; file writes to otel.file (default <pipelineDir>/otel.jsonl); any other value disables export.
+# Controls: otel.endpoint — the collector URL used by the otlp exporter.
+# Allowed: a URL string, for example http://localhost:4318.
+# Default: none; it is required when exporter is otlp.
+# Changing it: points export at a different collector; omitting it with exporter otlp disables export.
+# Controls: build_progress — how often the build step's progress watcher polls and reports.
+# Allowed: an object with poll_seconds, quiet_minutes, and heartbeat_minutes (each a finite number > 0) and enabled (true or false); poll_seconds must not exceed quiet_minutes * 60.
+# Default: poll_seconds 30, quiet_minutes 15, heartbeat_minutes 5, enabled true.
+# Changing it: changes how quickly a quiet build is noticed and how chatty progress events are; enabled false turns the watcher off.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: provider_stream — the minimum spacing between live provider-stream progress events.
+# Allowed: an object with min_interval_ms, a finite number of milliseconds; zero or a negative value selects the default.
+# Default: min_interval_ms 5000.
+# Changing it: a lower value emits progress events more often and grows .pipeline/events.jsonl faster.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: owner_gate_cutover — the instant before which specs without an owner are labeled grandfathered by the owner gate.
+# Allowed: an ISO-8601 instant string such as "2026-01-01T00:00:00Z"; an unparseable date fails the load.
+# Default: unset (null); un-owned specs build by default.
+# Changing it: un-owned specs whose plan reached the default branch strictly before the instant are labeled grandfathered.
+# Controls: attribution_audit_sample_pct — the percentage of attribution telemetry audit events that are sampled.
+# Allowed: a number from 0 to 100; values outside that range are clamped with a warning.
+# Default: 10.
+# Changing it: higher values audit more events at more cost; 0 turns sampling off.
+# Controls: rebase_resolution_attempts — how many assisted conflict-resolution attempts the rebase step makes.
+# Allowed: a finite number >= 0; negative or non-numeric values silently resolve to the default.
+# Default: 3.
+# Changing it: 0 disables automatic resolution, so any rebase conflict halts immediately for a human.
+# Controls: validation_concurrency — how many SHIP-tail validation steps (manual_test, prd_audit, as-built review) run at once.
+# Allowed: a number; zero, negative, and NaN silently resolve to the default, and a non-number fails the load.
+# Default: 4.
+# Changing it: 1 serializes the validation group, which is slower but easier to follow and lighter on a constrained machine.
+# Controls: daemon_concurrency — how many features the daemon builds at the same time.
+# Allowed: an integer >= 1; zero, negative, fractional, or non-numeric values fail the load.
+# Default: 1 (serial).
+# Changing it: anything above 1 shares one repository between builds, so expect more rebase kickbacks and provider spend that scales with the width; a daemon --concurrency flag overrides it.
+# Controls: harness_self_host — guardrails used only when the project being built is the ai-conductor harness itself.
+# Allowed: an object with activation (auto, force_on, force_off), version_freeze, auth_park_timeout_minutes, build_auth (mode, token_path), sandbox_build_env, live_containment, version_approval_gate, and release_artifact_gate.
+# Default: unset; activation auto with every gate enabled, which leaves ordinary projects unaffected.
+# Changing it: leave it out of a normal project; force_on treats this repository as a harness self-build and turns on its release gates.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: model_fallback_ladder — the ordered models tried when a step's resolved model is unavailable.
+# Allowed: an array of non-empty model-name strings; an empty array is allowed.
+# Default: unset; the provider policy ladder is used ([fable, opus, sonnet] for Claude, [gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna] for Codex).
+# Changing it: replaces the provider's ladder for every step, so an empty array leaves no fallback model.
+# Controls: auto_restart_on_stale_engine — whether an idle daemon respawns itself when a newer engine build is installed.
+# Allowed: true or false; any other value resolves to false with a warning.
+# Default: false.
+# Changing it: only takes effect for harness self-host builds, and is read at daemon start, so a change needs a daemon restart.
+# Controls: engine_refresh_min_interval_seconds — the minimum seconds between the daemon's engine-refresh fetches from origin.
+# Allowed: a finite number > 0; zero, negative, or non-numeric values resolve to the default with a warning.
+# Default: 300.
+# Changing it: a lower value notices new engine releases sooner at the cost of more frequent git fetches.
+# Controls: codex_doctor_timeout_seconds — how long to wait for the Codex readiness check before giving up.
+# Allowed: a positive finite number of seconds; invalid values fail the load.
+# Default: 10.
+# Changing it: raise it on a slow machine where the Codex doctor command times out before it can report ready.
+# Controls: mergeable_autoresolve — automatic conflict resolution on the project's open pull requests.
+# Allowed: an object with enabled (true or false), cooldownMinutes (a finite number >= 0), and suiteCommand (a string).
+# Default: unset; enabled false, cooldownMinutes 60, suiteCommand unset.
+# Changing it: enabled true lets the daemon rebase and resolve CONFLICTING non-draft PRs on its own; draft PRs are always left alone.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: build_review — the judgement gate that reviews the build before the SHIP-tail steps.
+# Allowed: an object with enabled, scopeContainmentEnforced, maxParallel, adjudication, and rubrics; perTaskFloor is retired and ignored.
+# Default: enabled true, adjudication.enabled true, scopeContainmentEnforced false, maxParallel 4, and the testQuality rubric off.
+# Changing it: this block is the only off switch for the gate (steps.build_review.disable is rejected); malformed values fall back to enabled.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: build_review.enabled — whether the build_review gate runs at all.
+# Allowed: true or false.
+# Default: true.
+# Changing it: false marks the step skipped and emits a config_skip event, so builds ship without this review.
+# Controls: build_review.maxParallel — how many build_review rubric reviewers run at once.
+# Allowed: an integer from 1 through 4.
+# Default: 4.
+# Changing it: a lower value reduces concurrent provider dispatches during review at the cost of a slower gate.
+# Controls: build_review.rubrics — which opt-in review rubrics run, keyed by rubric id.
+# Allowed: an object whose only live id is testQuality; its value takes enabled, llm_provider, model, effort, model_fallback_ladder, max_retries, escalate, and min_confidence (an integer 0 through 100, default 0).
+# Default: testQuality off.
+# Changing it: every retired rubric id is ignored with a one-time notice rather than failing the load.
+# Controls: conflict_check — which approved ADRs the DECIDE conflict_check step compares stories against.
+# Allowed: an object with the single key adr_corpus.
+# Default: adr_corpus change_set.
+# Changing it: any other nested key fails the load.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: conflict_check.adr_corpus — how wide the ADR corpus for conflict_check is.
+# Allowed: change_set or repo_wide.
+# Default: change_set (only the ADRs in the current spec's change set).
+# Changing it: repo_wide considers every approved ADR, narrows to subjects overlapping the stories, and records both sets in the conflict report, which costs more but catches older decisions.
+# Controls: prd_audit — how far the SHIP-phase prd_audit gate may remediate its own findings before halting.
+# Allowed: an object with max_remediation_laps and max_appended_tasks (positive integers), max_appended_ratio (a number greater than 0 and at most 1), and halt_on_any_plan_gap (true or false).
+# Default: max_remediation_laps 1, max_appended_tasks 5, max_appended_ratio 0.25, halt_on_any_plan_gap false.
+# Changing it: findings beyond the caps halt for the operator instead of appending more tasks.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: prd_audit.max_remediation_laps — how many remediation laps a prd_audit FAIL can trigger for one feature.
+# Allowed: a positive integer.
+# Default: 1.
+# Changing it: a higher cap lets the harness retry fixes unattended for longer, spending more before it asks for a human.
+# Controls: architecture_review_as_built — policy for the as-built architecture review that runs on every feature.
+# Allowed: an object with checks (reachability, planGap, adrCompliance, diagramDrift, each with tiers: an array of S, M, L), remediation (enabled true or false), and max_remediation_laps (a positive integer).
+# Default: remediation.enabled true, max_remediation_laps 1; reachability and planGap run on every tier, adrCompliance and diagramDrift when approved ADRs or diagrams exist.
+# Changing it: an explicit tiers list restricts that check to those tiers; unknown keys and invalid values fail the load.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: architecture_review_as_built.max_remediation_laps — how many as-built remediation laps run before the feature halts.
+# Allowed: a positive integer.
+# Default: 1.
+# Changing it: a higher cap allows more unattended plan appends before a needs-human halt.
+# Controls: ci_watch — the post-merge loop that watches a PR's CI and dispatches fixes.
+# Allowed: an object with enabled (true or false) and cooldownMinutes (a finite number >= 0).
+# Default: enabled true, cooldownMinutes 60.
+# Changing it: enabled false stops automatic CI repair; cooldownMinutes 0 removes the delay between attempts. Draft PRs are never dispatched.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: build_progress_halt — whether a build that stops making progress halts, and after how many attempts.
+# Allowed: an object with enabled (true or false), attempt_ceiling (a positive integer not below the resolved max_retries), and dispatch_ceiling (a positive integer).
+# Default: enabled true, attempt_ceiling 30, dispatch_ceiling 20.
+# Changing it: lower ceilings stop a stuck build sooner and cheaper; higher ones tolerate long builds.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: build_progress_halt.attempt_ceiling — the most build attempts a feature may make without progress before it halts.
+# Allowed: a positive integer that is at least defaults.max_retries (or 3 when that is unset).
+# Default: 30.
+# Changing it: set it explicitly whenever you raise defaults.max_retries, because a ceiling below the retry budget fails the load only when the ceiling is written out.
+# Controls: build_progress_halt.dispatch_ceiling — the most dispatches a build may make without progress before it halts.
+# Allowed: a positive integer.
+# Default: 20.
+# Changing it: a lower value halts a looping build earlier and caps wasted provider spend.
+# Controls: retry_routing — the switch for classifying a retry as a rerun versus a route to another step.
+# Allowed: an object with the single key enabled (true or false); any other key fails the load.
+# Default: enabled true.
+# Changing it: false makes every retry a plain rerun of the same step.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: coverage_binding — the opt-in pre-BUILD judge that checks each acceptance criterion is asserted by its task's Done when checks.
+# Allowed: an object with judge, itself an object with the single key enabled (true or false).
+# Default: judge.enabled false.
+# Changing it: judge.enabled true adds a provider dispatch before BUILD and can stop a plan whose criteria are not bound to tasks.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: wiring — a retired key accepted only so older configs keep loading.
+# Allowed: any value; it is ignored.
+# Default: unset.
+# Changing it: has no effect; remove it from existing configs.
+# Controls: kickback_escalation — escalation when a kickback to build produces no change.
+# Allowed: an object with the single key enabled (true or false); a malformed block is silently replaced with enabled true.
+# Default: enabled true.
+# Changing it: see kickback_escalation.enabled below.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: kickback_escalation.enabled — whether a no-change kickback escalates instead of being re-kicked.
+# Allowed: true or false.
+# Default: true.
+# Changing it: false drops the tree-hash no-progress check and re-kicks until the per-gate cap, which still applies.
+# Controls: cumulative_kickback_bound — the lap cap that stops build_review from cycling forever.
+# Allowed: an object with the single key enabled (true or false); a block with any unknown key is replaced wholesale with enabled true.
+# Default: enabled true.
+# Changing it: see cumulative_kickback_bound.enabled below.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: cumulative_kickback_bound.enabled — whether build_review halts needs-human after 5 cumulative kickback laps.
+# Allowed: true or false.
+# Default: true.
+# Changing it: false removes only the terminal halt; the lap count is still kept and reported on kickback events.
+# Controls: gate_code_validity — reuse of a passing gate verdict while the code it judged is unchanged.
+# Allowed: an object with the single key enabled (true or false); any other key fails the load.
+# Default: enabled true.
+# Changing it: false returns to pure file-modification-time freshness, so gates re-run more often.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: daemon_verbose — whether the daemon log repeats skip notices for gated specs (no PR, terminal PR, no Source-Ref).
+# Allowed: true or false; any other value fails the load.
+# Default: false.
+# Changing it: true makes the daemon log noisier but shows why a spec is not being picked up.
+# Controls: reconcile_parked_auto_cleanup — whether the daemon automatically removes the worktree and branch of a parked feature once it is merged and recorded.
+# Allowed: true or false; any other value fails the load.
+# Default: true.
+# Changing it: false requires an explicit ai-conductor daemon reconcile-parked <slug> for every parked feature.
+# Controls: step_heartbeat_stall_minutes — a deprecated key that no longer does anything.
+# Allowed: a finite number; it loads with a deprecation warning.
+# Default: unset.
+# Changing it: has no effect; use provider_preparation_timeout_minutes for the pre-spawn deadline instead.
+# Controls: stale_claim_window_hours — how long a claimed engineer-intake entry may sit unfinished before it counts as stranded.
+# Allowed: a positive number of hours; non-positive or non-numeric values resolve to the default.
+# Default: 24.
+# Changing it: a shorter window re-queues abandoned claims sooner but can reclaim work someone is still doing.
+# Controls: provider_preparation_timeout_minutes — the deadline for provider selection, session setup, and self-host preparation before a provider is spawned.
+# Allowed: a finite number of minutes; 0 or a negative value disables the deadline.
+# Default: 5.
+# Changing it: on expiry the attempt is revoked and replaced once; a second timeout writes a needs-human HALT.
+# Controls: teardown_timeout_seconds — the time limit for the project's optional bin/teardown hook before a feature worktree is removed.
+# Allowed: a finite positive number of seconds (fractions allowed); 0, negative, or non-numeric values warn and resolve to the default.
+# Default: 120.
+# Changing it: cannot be disabled; a hook that exceeds it is logged and the worktree removal continues.
+# Controls: dispatch_start_timeout_seconds — the time limit for the project's optional bin/dispatch-start hook at the start of each daemon dispatch.
+# Allowed: a finite positive number of seconds (fractions allowed); 0, negative, or non-numeric values warn and resolve to the default.
+# Default: 120.
+# Changing it: cannot be disabled; a hook that exceeds it is logged and the dispatch continues.
 
+
+# Controls: harness_version — compatibility with the installed harness.
+# Allowed: a minimum-version range of the form ">=X.Y.Z" (three numeric parts); other range forms are not checked.
+# Default: ">=0.99.0".
+# Changing it: raises or narrows the required harness release; a harness older than the range refuses to load this config.
 harness_version: ">=0.99.0"
 
+# Controls: build_review.rubrics.enabled — whether build review evaluates changed tests; written as build_review.rubrics.testQuality.enabled.
+# Allowed: true or false.
+# Default: false.
+# Changing it: enable only after configuring a supported scoped test command below.
 # The test-quality reviewer is opt-in for scaffolded projects. Enable it only
 # after configuring a supported scoped test command below.
 build_review:
@@ -11,6 +322,14 @@ build_review:
     testQuality:
       enabled: false
 
+# Controls: test_suite.working_directory — the working directory used before test commands run.
+# Allowed: a project-relative directory inside the project root; absolute paths and .. escapes fail the load.
+# Default: `.` (the project root).
+# Changing it: point it at a subproject when the authoritative suite lives there.
+# Controls: test_suite.timeout_seconds — the maximum test-suite runtime in seconds.
+# Allowed: a finite number greater than 0.
+# Default: 1800.
+# Changing it: raise it only for a suite whose normal runtime needs more time.
 # Required for the native pre-SHIP aggregate gate. Name one project-owned
 # command that composes every authoritative test suite.
 # test_suite:
@@ -20,10 +339,22 @@ build_review:
 
 # CONFIG_INIT_TEST_SUITE_VERIFICATION
 
+# Controls: otel.worker_name — the OpenTelemetry worker identity.
+# Allowed: a non-blank worker name.
+# Default: this machine's hostname.
+# Changing it: gives CI or shared workers a stable trace identity.
 # OpenTelemetry identity override (optional; defaults to this machine's hostname).
 # otel:
 #   worker_name: ci-worker-1
 
+# Controls: steps.model — the model selected for an individual lifecycle step; written as steps.<name>.model.
+# Allowed: a model identifier string the step's provider accepts (for Claude: fable, opus, sonnet, haiku).
+# Default: unset; the step follows phases, then defaults.model, then the model its provider policy assigns.
+# Changing it: overrides model selection for that step.
+# Controls: steps.effort — the reasoning effort selected for an individual lifecycle step; written as steps.<name>.effort.
+# Allowed: low, medium, high, xhigh, or max.
+# Default: unset; the step follows phases, then defaults.effort, then the effort its provider policy assigns.
+# Changing it: overrides effort for that step.
 # --- Per-step overrides (optional) -------------------------------------------
 # steps:
 #   explore:

@@ -38,7 +38,7 @@ As an experienced operator, I want the value I chose during onboarding to be wha
 
 #### Happy Path
 - Given the operator answers a question with a permitted non-default value, when onboarding records configuration, then the project configuration carries that value and the harness reads it back as the effective value on its next run.
-- Given the operator accepts the offered value at every question, when onboarding records configuration, then the resulting project configuration is byte-identical to what onboarding produced before this change.
+- Given the operator accepts the offered value at every question, when onboarding records configuration, then the resulting project configuration parses to the same effective settings onboarding produced before this change, except that the aggregate test command is the offered project-specific default Story 3 establishes rather than the former fixed literal, and every line it adds to the pre-change output is a comment or blank line.
 
 #### Negative Paths
 - Given a value that would fail configuration validation, when recording is attempted with it, then recording refuses before any file is written, names the rejected value, and the project has no partially written configuration.
@@ -46,7 +46,7 @@ As an experienced operator, I want the value I chose during onboarding to be wha
 
 ### Done When
 - [ ] A round-trip test proves a non-default answer is written and read back as the effective value.
-- [ ] A byte-identity test proves the all-defaults path and the pre-change output are equal, and refusal cases leave no file behind.
+- [ ] An effective-identity test proves the all-defaults path parses equal to the pre-change output apart from the Story 3 project-specific aggregate test command and adds only comment or blank lines, and refusal cases leave no file behind.
 
 ## Story 3: Establish the real test command, never an ecosystem guess
 
@@ -134,13 +134,13 @@ As an operator changing a setting later, I want the recorded configuration itsel
 ### Acceptance Criteria
 
 #### Happy Path
-- Given onboarding has recorded a project configuration, when the operator opens it, then every setting the walkthrough did not ask about is accompanied by an explanation stating what it controls, its permitted values, its default, and the consequence of changing it.
+- Given onboarding has recorded a project configuration, when the operator opens it, then every top-level setting the walkthrough did not ask about is accompanied by an authored explanation stating what it controls, its permitted values, its default, and the consequence of changing it, and every nested setting either has its own such explanation or sits under a section explanation that links to the full configuration reference and says the ai-conductor agent can set the value on request.
 
 #### Negative Paths
-- Given the recorded configuration, when its explanations are compared with the keys the harness accepts, then no explained key is unknown to the harness and no decidable-but-unasked key lacks an explanation.
+- Given the recorded configuration, when its explanations are compared with the keys the harness accepts, then no explained key is unknown to the harness, no top-level decidable-but-unasked key lacks an authored explanation, no nested key lacks both its own explanation and a section reference line, and no explanation is generic placeholder text.
 
 ### Done When
-- [ ] A test proves the recorded configuration's explanatory text covers every unasked, operator-settable key and references no key the harness rejects.
+- [ ] A test proves every unasked top-level key has an authored, non-placeholder explanation, every nested key the harness accepts has its own explanation or a section reference line, and no explanation references a key the harness rejects.
 
 ## Story 8: Unattended onboarding asks nothing
 
@@ -155,7 +155,7 @@ As the daemon or a continuous-integration job, I want onboarding to complete wit
 
 #### Negative Paths
 - Given onboarding runs with no operator present and no identity is established, when it reaches the identity step, then it neither asks nor records an identity, and the existing fail-closed behavior on later identity-dependent actions is unchanged.
-- Given onboarding runs with no operator present, when its output is compared with the pre-change unattended output, then the recorded project configuration is byte-identical.
+- Given onboarding runs with no operator present, when its output is compared with the pre-change unattended output, then the recorded project configuration parses to the same effective settings and differs only by added comment or blank lines.
 
 ### Done When
-- [ ] A test proves the unattended path records configuration with zero questions and byte-identical output, and writes no identity.
+- [ ] A test proves the unattended path records configuration with zero questions and effective settings identical to the pre-change output with only comment or blank lines added, and writes no identity.
