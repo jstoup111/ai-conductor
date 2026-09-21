@@ -96,7 +96,10 @@ describe('applyRebaseTransition', () => {
       invalidated: ['build_review'] as const, preserved: [] as const, preservedCandidates: [] as const,
     };
     expect((await applyRebaseTransition(input)).convergenceCredit).toEqual({ gate: 'build_review' });
-    expect((await applyRebaseTransition(input)).convergenceCredit).toEqual({ gate: 'build_review' });
+    // A receipted operation performs no second refund, so it claims none.
+    const repeated = await applyRebaseTransition(input);
+    expect(repeated.stateResult).toBe('already-applied');
+    expect(repeated).not.toHaveProperty('convergenceCredit');
     const ledger = await readKickbackLedger(dir);
     expect(ledger.gates.build_review?.cumulative).toBe(0);
     expect(ledger.convergenceCreditReceipts).toEqual({ 'credited-operation': { gate: 'build_review' } });

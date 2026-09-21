@@ -16,11 +16,16 @@ export interface AppliedRebaseTransition {
   convergenceCredit?: { gate: 'build_review' };
 }
 
-/** Credit a rebase invalidation once, using the durable operation id as receipt. */
+/**
+ * Credit a rebase invalidation once, using the durable operation id as receipt.
+ * Returns the credit only for the call that actually mutated the ledger.
+ */
 async function creditBuildReviewConvergence(projectRoot: string, operationId: string, invalidated: readonly StepName[]): Promise<{ gate: 'build_review' } | undefined> {
   if (!invalidated.includes('build_review')) return undefined;
   return updateKickbackLedger(projectRoot, (ledger) => {
-    if (ledger.convergenceCreditReceipts?.[operationId]) return { result: { gate: 'build_review' } as const };
+    // A receipt means the refund already happened. Claiming it again would
+    // make the credit-bearing kickback event disagree with the ledger.
+    if (ledger.convergenceCreditReceipts?.[operationId]) return { result: undefined };
     const entry = ledger.gates.build_review;
     if (!entry) return { result: undefined };
     return {
