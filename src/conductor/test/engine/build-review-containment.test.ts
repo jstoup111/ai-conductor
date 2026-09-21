@@ -14,7 +14,6 @@ import {
 } from '../../src/engine/build-review-containment.js';
 import {
   acquireReviewScratchHome,
-  resolveReviewScratchHome,
   resolveScratchHome,
   type ReviewScratchFs,
 } from '../../src/engine/self-host/provider-scratch.js';
@@ -74,27 +73,31 @@ function secureReviewScratchFs(overrides: Partial<ReviewScratchFs> = {}): Review
 }
 
 describe('engine/build-review-containment', () => {
-  it('derives review bookkeeping outside the protected candidate checkout', () => {
-    const options: {
-      readonly worktreeRoot: string;
-      readonly runId: string;
-      readonly attempt: number;
-      readonly provider: 'codex';
-    } = {
+  it('acquires review bookkeeping outside the protected candidate checkout', async () => {
+    const mkdtemp = vi.fn(async (prefix: string) => `${prefix}leaf`);
+    const lease = await acquireReviewScratchHome({
       worktreeRoot: '/worktree', runId: 'run-7', attempt: 2, provider: 'codex',
-    };
+      fs: secureReviewScratchFs({ mkdtemp }),
+    });
 
-    expect(resolveReviewScratchHome(options)).toContain(`/ai-conductor-build-review-${process.getuid?.() ?? 'nouid'}/run-7/2-codex/review`);
-    expect(resolveReviewScratchHome(options)).not.toContain('/worktree/');
+    expect(lease.home).toBe(join(
+      tmpdir(), `ai-conductor-build-review-${process.getuid?.() ?? 'nouid'}`, 'run-7', '2-codex', 'review', 'review-leaf',
+    ));
+    expect(lease.home.startsWith('/worktree/')).toBe(false);
   });
 
-  it('keeps review members private without nesting in the provider lease', () => {
+  it('keeps review members private without nesting in the provider lease', async () => {
     const options = {
       worktreeRoot: '/review/candidate/../candidate/', runId: 'run-7', attempt: 2, provider: 'codex' as const,
     };
+    const fs = secureReviewScratchFs({ mkdtemp: async (prefix) => `${prefix}leaf` });
 
-    expect(resolveReviewScratchHome({ ...options, memberId: 'security' })).toContain('/review-security');
-    expect(resolveReviewScratchHome(options)).not.toEqual(resolveScratchHome(options));
+    const member = await acquireReviewScratchHome({ ...options, memberId: 'security', fs });
+    const plain = await acquireReviewScratchHome({ ...options, fs });
+
+    expect(member.home).toContain('/review-security/');
+    expect(member.home).not.toEqual(plain.home);
+    expect(plain.home.startsWith(resolveScratchHome(options))).toBe(false);
   });
 
   it('refuses a pre-created review scratch root that is group-accessible before creating a leaf', async () => {

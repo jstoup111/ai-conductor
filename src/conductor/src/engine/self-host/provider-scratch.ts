@@ -546,14 +546,10 @@ export function resolveScratchHome(options: ResolveScratchHomeOptions): string {
 }
 
 /**
- * Candidate-private bookkeeping for a read-only build review. The containing
- * provider lease remains the owner and cleanup boundary for this directory.
- */
-export function resolveReviewScratchHome(options: ResolveScratchHomeOptions): string {
-  return join(tmpdir(), ...reviewScratchComponents(options));
-}
-
-/**
+ * Candidate-private bookkeeping for a read-only build review lives under
+ * tmpdir(), never in the candidate checkout; the containing provider lease
+ * remains the owner and cleanup boundary.
+ *
  * Every path component below tmpdir(). The top level is per-user so another
  * local account cannot squat it; each level is verified top-down on acquire.
  */
