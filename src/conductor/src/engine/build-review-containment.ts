@@ -14,7 +14,10 @@ export type BuildReviewContainmentProcess = (
 }>;
 
 export interface BuildReviewContainmentPaths {
+  /** Materialized reviewed head tree. */
   readonly frozenSource: string;
+  /** Materialized reviewed baseline tree: deletions and pre-change content live only here. */
+  readonly frozenBaseline: string;
   readonly policyMaterial: string;
   readonly originalCheckout: string;
   readonly originalInstallation: string;
@@ -22,6 +25,7 @@ export interface BuildReviewContainmentPaths {
   readonly siblingEvidence: string;
   readonly scratch: string;
   readonly sourceWriteProbe: string;
+  readonly baselineWriteProbe: string;
   readonly installationWriteProbe: string;
   readonly engineStateWriteProbe: string;
   readonly scratchWriteProbe: string;
@@ -74,6 +78,7 @@ export type BuildReviewContainmentResult =
 
 const REQUIRED_OBSERVATIONS = [
   'source-write-refused',
+  'baseline-write-refused',
   'installation-write-refused',
   'engine-state-write-refused',
   'scratch-write-succeeded',
@@ -85,6 +90,7 @@ const REQUIRED_OBSERVATIONS = [
 const RECOGNIZED_OBSERVATIONS = new Set([
   ...REQUIRED_OBSERVATIONS,
   'source-write-succeeded',
+  'baseline-write-succeeded',
   'installation-write-succeeded',
   'engine-state-write-succeeded',
   'scratch-write-refused',
@@ -102,6 +108,7 @@ const REVIEW_CONTAINMENT_PROBE = [
   'if test -r "$5"; then printf "sibling-evidence-readable\\n"; else printf "sibling-evidence-withheld\\n"; fi',
   'if bwrap --ro-bind / / -- true >/dev/null 2>&1; then printf "nested-sandbox-available\\n"; else printf "nested-sandbox-denied\\n"; fi',
   'if test -r "$6"; then printf "host-state-readable\\n"; else printf "host-state-withheld\\n"; fi',
+  'probe_write "$7" baseline',
 ].join('; ');
 
 function unsupported(
@@ -127,6 +134,7 @@ function hasSafePaths(paths: BuildReviewContainmentPaths): boolean {
   if (values.some((path) => !isAbsolute(path))) return false;
   const protectedPaths = [
     paths.frozenSource,
+    paths.frozenBaseline,
     paths.policyMaterial,
     paths.originalCheckout,
     paths.originalInstallation,
@@ -138,7 +146,9 @@ function hasSafePaths(paths: BuildReviewContainmentPaths): boolean {
   }
   // A sentinel inside an allowlisted root could never be withheld.
   if ([...protectedPaths, paths.scratch].some((bound) => isWithin(bound, paths.hostStateProbe))) return false;
+  if (isWithin(paths.frozenSource, paths.frozenBaseline) || isWithin(paths.frozenBaseline, paths.frozenSource)) return false;
   return isWithin(paths.frozenSource, paths.sourceWriteProbe)
+    && isWithin(paths.frozenBaseline, paths.baselineWriteProbe)
     && isWithin(paths.originalInstallation, paths.installationWriteProbe)
     && isWithin(paths.engineEvidence, paths.engineStateWriteProbe)
     && isWithin(paths.scratch, paths.scratchWriteProbe)
@@ -233,6 +243,45 @@ export async function writeReviewHostStateSentinel(scratch: string): Promise<str
   return sentinel;
 }
 
+/**
+ * The complete frozen review input of one materialized lap: both commit views
+ * and a disposable write sentinel inside each.  Every production containment
+ * call derives its source paths here so no member sees a head-only boundary.
+ */
+export function buildReviewFrozenInputPaths(
+  view: { readonly baselinePath: string; readonly headPath: string },
+): Pick<BuildReviewContainmentPaths, 'frozenSource' | 'frozenBaseline' | 'sourceWriteProbe' | 'baselineWriteProbe'> {
+  return {
+    frozenSource: view.headPath,
+    frozenBaseline: view.baselinePath,
+    sourceWriteProbe: join(view.headPath, '.build-review-write-probe'),
+    baselineWriteProbe: join(view.baselinePath, '.build-review-write-probe'),
+  };
+}
+
+export interface BuildReviewFrozenInputScope {
+  readonly contentDigest: string;
+  readonly mergeBase: string;
+  readonly headSha: string;
+  readonly changes: readonly ({ readonly kind: string; readonly path: string; readonly oldPath?: string })[];
+  readonly view?: { readonly baselinePath: string; readonly headPath: string };
+}
+
+/** Engine-authored description of the same immutable change every lap member inspects. */
+export function renderBuildReviewFrozenInputScope(scope: BuildReviewFrozenInputScope): string {
+  return [
+    `Frozen build-review input ${scope.contentDigest}.`,
+    ...(scope.view === undefined ? [] : [
+      `Reviewed baseline ${scope.mergeBase} (read-only): ${scope.view.baselinePath}`,
+      `Reviewed head ${scope.headSha} (read-only): ${scope.view.headPath}`,
+      'Compare the two trees to inspect the change; a deleted path exists only under the baseline.',
+    ]),
+    'Changed path inventory (git name-status, baseline..head):',
+    ...(scope.changes.length === 0 ? ['(none)'] : scope.changes.map((change) =>
+      change.oldPath === undefined ? `${change.kind} ${change.path}` : `${change.kind} ${change.oldPath} -> ${change.path}`)),
+  ].join('\n');
+}
+
 function roBindTry(paths: readonly string[]): string[] {
   return [...new Set(paths)].flatMap((path) => ['--ro-bind-try', path, path]);
 }
@@ -260,6 +309,7 @@ function deriveRuntimeMountArgs(provider: 'claude' | 'codex', host: BuildReviewR
 function deriveReviewMountArgs(paths: BuildReviewContainmentPaths): readonly string[] {
   return [
     '--ro-bind', paths.frozenSource, paths.frozenSource,
+    '--ro-bind', paths.frozenBaseline, paths.frozenBaseline,
     '--ro-bind', paths.policyMaterial, paths.policyMaterial,
     '--ro-bind', paths.originalCheckout, paths.originalCheckout,
     '--ro-bind', paths.originalInstallation, paths.originalInstallation,
@@ -322,6 +372,7 @@ function deriveProbeArgs(paths: BuildReviewContainmentPaths, mountArgs: readonly
     paths.scratchWriteProbe,
     paths.siblingEvidenceProbe,
     paths.hostStateProbe,
+    paths.baselineWriteProbe,
   ];
 }
 

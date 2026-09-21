@@ -98,7 +98,7 @@ import {
 } from './build-review-domain.js';
 import { discoverClaudeReviewPolicies } from './build-review-policy-claude.js';
 import { createCodexAppServerTransport, listCodexInstalledReviewSkills } from './build-review-policy-codex.js';
-import { prepareBuildReviewContainment, writeReviewHostStateSentinel } from './build-review-containment.js';
+import { buildReviewFrozenInputPaths, prepareBuildReviewContainment, renderBuildReviewFrozenInputScope, writeReviewHostStateSentinel } from './build-review-containment.js';
 import { acquireReviewScratchHome } from './self-host/provider-scratch.js';
 import { copySelectedCodexLogin } from '../execution/codex-self-host-auth.js';
 import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
@@ -2771,10 +2771,9 @@ export class DefaultStepRunner implements StepRunner {
           const containment = await prepareBuildReviewContainment({
             provider,
             paths: {
-              frozenSource: source.headPath, policyMaterial: bundle.materialPath,
+              ...buildReviewFrozenInputPaths(source), policyMaterial: bundle.materialPath,
               originalCheckout: this.projectDir, originalInstallation: policy.packageRoot,
               engineEvidence, siblingEvidence, scratch,
-              sourceWriteProbe: join(source.headPath, '.build-review-write-probe'),
               installationWriteProbe: join(policy.packageRoot, '.build-review-write-probe'),
               engineStateWriteProbe: join(engineEvidence, '.build-review-write-probe'),
               scratchWriteProbe: join(scratch, '.build-review-write-probe'),
@@ -2798,7 +2797,10 @@ export class DefaultStepRunner implements StepRunner {
         const invoked = await context.invoke({
           prompt: renderBuildReviewPolicyContract({
             bundle, question: entry.question,
-            scope: `Frozen build-review input ${inputs.sourceSnapshot.contentDigest}.`,
+            scope: renderBuildReviewFrozenInputScope({
+              contentDigest: inputs.sourceSnapshot.contentDigest, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha,
+              changes: inputs.sourceSnapshot.sourceChanges ?? [], ...(source === undefined ? {} : { view: source }),
+            }),
           }),
           cwd: source?.headPath ?? this.projectDir,
           ...(reviewAccess === undefined ? {} : { reviewAccess }),
@@ -3280,8 +3282,8 @@ export class DefaultStepRunner implements StepRunner {
           context.onTeardown(() => rm(hostStateProbe, { force: true }));
                 const containment = await prepareBuildReviewContainment({ provider: containmentProvider, paths: {
                   hostStateProbe,
-                  frozenSource: materialized.headPath, policyMaterial: builtinBundle.materialPath, originalCheckout: this.projectDir, originalInstallation: builtinPolicy.packageRoot,
-                  engineEvidence, siblingEvidence, scratch, sourceWriteProbe: join(materialized.headPath, '.build-review-write-probe'),
+                  ...buildReviewFrozenInputPaths(materialized), policyMaterial: builtinBundle.materialPath, originalCheckout: this.projectDir, originalInstallation: builtinPolicy.packageRoot,
+                  engineEvidence, siblingEvidence, scratch,
                   installationWriteProbe: join(builtinPolicy.packageRoot, '.build-review-write-probe'), engineStateWriteProbe: join(engineEvidence, '.build-review-write-probe'),
                   scratchWriteProbe: join(scratch, '.build-review-write-probe'), siblingEvidenceProbe: join(siblingEvidence, '.build-review-read-probe'),
                 }, runProcess: async (executable, args) => { const result = await execa(executable, args, { reject: false }); return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr }; } });
@@ -3291,7 +3293,12 @@ export class DefaultStepRunner implements StepRunner {
               let cacheHit = false;
               const invoked = await context.invoke({
                 cwd: materialized?.headPath ?? this.projectDir,
-                prompt: `${builtinBundle.manifest.filter((file) => isUtf8(file.bytes)).map((file) => file.bytes.toString('utf8')).join('\n\n')}\n\n${rubricPrompt}`,
+                // Built-in peers of a custom-policy lap inspect the same frozen
+                // baseline/head input the custom reviewers are bound to.
+                prompt: `${builtinBundle.manifest.filter((file) => isUtf8(file.bytes)).map((file) => file.bytes.toString('utf8')).join('\n\n')}\n\n${rubricPrompt}${materialized === undefined ? '' : `\n\n${renderBuildReviewFrozenInputScope({
+                  contentDigest: inputs.sourceSnapshot.contentDigest, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha,
+                  changes: inputs.sourceSnapshot.sourceChanges ?? [], view: materialized,
+                })}`}`,
                 ...(reviewAccess === undefined ? {} : { reviewAccess }),
               }, async (rung, invoke) => {
                 const semanticIdentity = candidateIdentity(rung, builtinBundle.digest);

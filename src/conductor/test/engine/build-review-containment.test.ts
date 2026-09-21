@@ -17,7 +17,7 @@ import {
 import { copySelectedCodexLogin } from '../../src/execution/codex-self-host-auth.js';
 
 const PATHS = {
-  frozenSource: '/review/frozen-source', policyMaterial: '/review/policy',
+  frozenSource: '/review/frozen-source', frozenBaseline: '/review/frozen-baseline', baselineWriteProbe: '/review/frozen-baseline/sentinel', policyMaterial: '/review/policy',
   originalCheckout: '/review/original', originalInstallation: '/review/installed-policy',
   engineEvidence: '/review/engine-evidence', siblingEvidence: '/review/sibling-evidence',
   scratch: '/review/private-scratch', sourceWriteProbe: '/review/frozen-source/sentinel',
@@ -46,7 +46,7 @@ const runtimeHost: BuildReviewRuntimeHost = {
   },
 };
 const HEALTHY_PROBE = [
-  'source-write-refused', 'installation-write-refused', 'engine-state-write-refused',
+  'source-write-refused', 'baseline-write-refused', 'installation-write-refused', 'engine-state-write-refused',
   'scratch-write-succeeded', 'sibling-evidence-withheld', 'nested-sandbox-available', 'host-state-withheld',
 ];
 
@@ -159,7 +159,7 @@ describe('engine/build-review-containment', () => {
     const result = await prepareBuildReviewContainment({
       provider: 'codex',
       paths: {
-        frozenSource: '/review/frozen-source', policyMaterial: '/review/policy',
+        frozenSource: '/review/frozen-source', frozenBaseline: '/review/frozen-baseline', baselineWriteProbe: '/review/frozen-baseline/sentinel', policyMaterial: '/review/policy',
         originalCheckout: '/review/original', originalInstallation: '/review/installed-policy',
         engineEvidence: '/review/engine-evidence', siblingEvidence: '/review/sibling-evidence',
         scratch: '/review/private-scratch', sourceWriteProbe: '/review/frozen-source/sentinel',
@@ -179,7 +179,7 @@ describe('engine/build-review-containment', () => {
           exitCode: 0,
           stderr: '',
           stdout: [
-            'source-write-refused', 'installation-write-refused', engineEvidenceIsReadOnly ? 'engine-state-write-refused' : 'engine-state-write-succeeded',
+            'source-write-refused', 'baseline-write-refused', 'installation-write-refused', engineEvidenceIsReadOnly ? 'engine-state-write-refused' : 'engine-state-write-succeeded',
             'scratch-write-succeeded', 'sibling-evidence-withheld', 'nested-sandbox-available', 'host-state-withheld',
           ].join('\n'),
         };
@@ -194,6 +194,7 @@ describe('engine/build-review-containment', () => {
       executable: 'bwrap',
       args: expect.arrayContaining([
         '--ro-bind', '/review/frozen-source', '/review/frozen-source',
+        '--ro-bind', '/review/frozen-baseline', '/review/frozen-baseline',
         '--ro-bind', '/review/policy', '/review/policy',
         '--ro-bind', '/review/original', '/review/original',
         '--ro-bind', '/review/installed-policy', '/review/installed-policy',
@@ -202,9 +203,10 @@ describe('engine/build-review-containment', () => {
         '--bind', '/review/private-scratch', '/review/private-scratch',
       ]),
     })]);
-    // The host sentinel is the probe's sixth operand, after the sibling probe.
-    expect(processCalls[0]!.args.slice(-2)).toEqual([
-      '/review/sibling-evidence/result.json', '/review/private-scratch.host-state-probe',
+    // The host sentinel is the probe's sixth operand, after the sibling probe;
+    // the baseline write sentinel is the seventh.
+    expect(processCalls[0]!.args.slice(-3)).toEqual([
+      '/review/sibling-evidence/result.json', '/review/private-scratch.host-state-probe', '/review/frozen-baseline/sentinel',
     ]);
   });
 
@@ -292,25 +294,25 @@ describe('engine/build-review-containment', () => {
     })],
     ['a failed scratch write', async () => ({
       exitCode: 0, stderr: '',
-      stdout: 'source-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-refused\nsibling-evidence-withheld\nnested-sandbox-available\nhost-state-withheld',
+      stdout: 'source-write-refused\nbaseline-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-refused\nsibling-evidence-withheld\nnested-sandbox-available\nhost-state-withheld',
     })],
     ['no proof that host state is withheld', async () => ({
       exitCode: 0, stderr: '',
-      stdout: 'source-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available',
+      stdout: 'source-write-refused\nbaseline-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available',
     })],
     ['readable host state', async () => ({
       exitCode: 0, stderr: '',
-      stdout: 'source-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available\nhost-state-readable',
+      stdout: 'source-write-refused\nbaseline-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available\nhost-state-readable',
     })],
     ['an unsupported nested sandbox', async () => ({
       exitCode: 0, stderr: '',
-      stdout: 'source-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-denied\nhost-state-withheld',
+      stdout: 'source-write-refused\nbaseline-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-denied\nhost-state-withheld',
     })],
   ])('refuses review preparation when containment has %s', async (_reason, runProcess) => {
     const result = await prepareBuildReviewContainment({
       provider: 'claude',
       paths: {
-        frozenSource: '/review/frozen-source', policyMaterial: '/review/policy',
+        frozenSource: '/review/frozen-source', frozenBaseline: '/review/frozen-baseline', baselineWriteProbe: '/review/frozen-baseline/sentinel', policyMaterial: '/review/policy',
         originalCheckout: '/review/original', originalInstallation: '/review/installed-policy',
         engineEvidence: '/review/engine-evidence', siblingEvidence: '/review/sibling-evidence',
         scratch: '/review/private-scratch', sourceWriteProbe: '/review/frozen-source/sentinel',
