@@ -197,18 +197,20 @@ run_installer() {
   if [ -n "$PROVIDERS_OPTION" ]; then
     set -- "$@" --providers "$PROVIDERS_OPTION"
   fi
+  cd "$TARGET"
   if (: </dev/tty) 2>/dev/null; then
-    (cd "$TARGET" && ./bin/install "$@" </dev/tty)
+    ./bin/install "$@" </dev/tty
   else
-    (cd "$TARGET" && ./bin/install "$@")
+    ./bin/install "$@"
   fi
 }
 
 run_updater() {
+  cd "$TARGET"
   if (: </dev/tty) 2>/dev/null; then
-    (cd "$TARGET" && ./bin/update </dev/tty)
+    ./bin/update </dev/tty
   else
-    (cd "$TARGET" && ./bin/update)
+    ./bin/update
   fi
 }
 

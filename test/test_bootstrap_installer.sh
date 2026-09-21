@@ -553,14 +553,64 @@ fi
 CONCURRENT_HOME="$TMP_ROOT/home-concurrent"
 CONCURRENT_INSTALLER_RECORD="$TMP_ROOT/concurrent-installer-record"
 CONCURRENT_UPDATE_RECORD="$TMP_ROOT/concurrent-updater-record"
+CONCURRENT_PATH="$TMP_ROOT/prerequisites-concurrent"
+CONCURRENT_CLONE_READY="$TMP_ROOT/concurrent-clone-ready"
+CONCURRENT_CLONE_RELEASE="$TMP_ROOT/concurrent-clone-release"
+CONCURRENT_LOCK="$CONCURRENT_HOME/.ai-conductor/harness.lock"
+CONCURRENT_LOCK_ATTEMPTS="$TMP_ROOT/concurrent-lock-attempts"
 mkdir -p "$CONCURRENT_HOME"
+mkdir -p "$CONCURRENT_PATH"
+cat > "$CONCURRENT_PATH/git" <<'EOF'
+#!/bin/sh
+if [ "$1" = clone ]; then
+  : > "$CONCURRENT_CLONE_READY"
+  while [ ! -e "$CONCURRENT_CLONE_RELEASE" ]; do
+    /bin/sleep 0.01
+  done
+fi
+exec "$REAL_GIT" "$@"
+EOF
+chmod +x "$CONCURRENT_PATH/git"
+cat > "$CONCURRENT_PATH/mkdir" <<'EOF'
+#!/bin/sh
+if [ "$1" = "$CONCURRENT_LOCK" ]; then
+  printf '%s\n' "$1" >> "$CONCURRENT_LOCK_ATTEMPTS"
+fi
+exec "$REAL_MKDIR" "$@"
+EOF
+chmod +x "$CONCURRENT_PATH/mkdir"
+for tool in mv rm rmdir; do
+  ln -s "$(command -v "$tool")" "$CONCURRENT_PATH/$tool"
+done
+for tool in gh node npm tmux; do
+  ln -s "$PREREQUISITE_PATH/present" "$CONCURRENT_PATH/$tool"
+done
+ln -s "$PREREQUISITE_PATH/python3" "$CONCURRENT_PATH/python3"
 : > "$CONCURRENT_INSTALLER_RECORD"
 : > "$CONCURRENT_UPDATE_RECORD"
+: > "$CONCURRENT_LOCK_ATTEMPTS"
 set +e
-env HOME="$CONCURRENT_HOME" PATH="$FRESH_INSTALL_PATH" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$CONCURRENT_INSTALLER_RECORD" UPDATE_RECORD="$CONCURRENT_UPDATE_RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-one.stdout" 2> "$TMP_ROOT/concurrent-one.stderr" & concurrent_one=$!
-env HOME="$CONCURRENT_HOME" PATH="$FRESH_INSTALL_PATH" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$CONCURRENT_INSTALLER_RECORD" UPDATE_RECORD="$CONCURRENT_UPDATE_RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-two.stdout" 2> "$TMP_ROOT/concurrent-two.stderr" & concurrent_two=$!
+env HOME="$CONCURRENT_HOME" PATH="$CONCURRENT_PATH" REAL_GIT="$(command -v git)" REAL_MKDIR="$(command -v mkdir)" CONCURRENT_LOCK="$CONCURRENT_LOCK" CONCURRENT_LOCK_ATTEMPTS="$CONCURRENT_LOCK_ATTEMPTS" CONCURRENT_CLONE_READY="$CONCURRENT_CLONE_READY" CONCURRENT_CLONE_RELEASE="$CONCURRENT_CLONE_RELEASE" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$CONCURRENT_INSTALLER_RECORD" UPDATE_RECORD="$CONCURRENT_UPDATE_RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-one.stdout" 2> "$TMP_ROOT/concurrent-one.stderr" & concurrent_one=$!
+for _ in $(seq 1 100); do
+  [ -e "$CONCURRENT_CLONE_READY" ] && break
+  /bin/sleep 0.01
+done
+if [ -e "$CONCURRENT_CLONE_READY" ]; then
+  env HOME="$CONCURRENT_HOME" PATH="$CONCURRENT_PATH" REAL_GIT="$(command -v git)" REAL_MKDIR="$(command -v mkdir)" CONCURRENT_LOCK="$CONCURRENT_LOCK" CONCURRENT_LOCK_ATTEMPTS="$CONCURRENT_LOCK_ATTEMPTS" CONCURRENT_CLONE_READY="$CONCURRENT_CLONE_READY" CONCURRENT_CLONE_RELEASE="$CONCURRENT_CLONE_RELEASE" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$CONCURRENT_INSTALLER_RECORD" UPDATE_RECORD="$CONCURRENT_UPDATE_RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-two.stdout" 2> "$TMP_ROOT/concurrent-two.stderr" & concurrent_two=$!
+  for _ in $(seq 1 100); do
+    [ "$(wc -l < "$CONCURRENT_LOCK_ATTEMPTS")" -ge 2 ] && break
+    /bin/sleep 0.01
+  done
+  : > "$CONCURRENT_CLONE_RELEASE"
+else
+  concurrent_two=''
+fi
 wait "$concurrent_one"; concurrent_one_status=$?
-wait "$concurrent_two"; concurrent_two_status=$?
+if [ -n "$concurrent_two" ]; then
+  wait "$concurrent_two"; concurrent_two_status=$?
+else
+  concurrent_two_status=1
+fi
 set -e
 concurrent_successes=0
 [ "$concurrent_one_status" -ne 0 ] || concurrent_successes=$((concurrent_successes + 1))
