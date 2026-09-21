@@ -35,14 +35,14 @@ export const SHIPPED_GITHUB_INVOCATION_SITE_INVENTORY = {
  */
 const APPROVED_DIRECT_GITHUB_READ_SITES = new Set([
   'engine/backlog-priority.ts:323', 'engine/blocker-resolver.ts:162',
-  'engine/conductor.ts:5643', 'engine/conductor.ts:6568', 'engine/conductor.ts:6618',
-  'engine/conductor.ts:6649', 'engine/conductor.ts:6751', 'engine/conductor.ts:6783', 'engine/conductor.ts:6838',
+  'engine/conductor.ts:5633', 'engine/conductor.ts:6558', 'engine/conductor.ts:6608',
+  'engine/conductor.ts:6639', 'engine/conductor.ts:6742', 'engine/conductor.ts:6774', 'engine/conductor.ts:6830',
   'engine/documentation-delivery.ts:68', 'engine/engineer/intake/delivery-guard.ts:31',
   'engine/engineer/intake/delivery-guard.ts:79', 'engine/engineer/issue-dep-migration.ts:258',
   'engine/engineer/issue-dep-migration.ts:289', 'engine/engineer/issue-ref.ts:116',
   'engine/engineer/release-metadata-inject.ts:146', 'engine/finish-publication-production.ts:385',
   'engine/finish-publication-production.ts:416', 'engine/finish-publication-production.ts:455',
-  'engine/finish-publication-production.ts:524', 'engine/halt-pr-rehabilitation.ts:153',
+  'engine/finish-publication-production.ts:540', 'engine/halt-pr-rehabilitation.ts:153',
   'engine/halt-pr-rehabilitation.ts:206', 'engine/halt-pr-rehabilitation.ts:299',
   'engine/halt-pr-rehabilitation.ts:343', 'engine/halt-pr-rehabilitation.ts:441',
   'engine/halt-pr-rehabilitation.ts:570', 'engine/halt-pr-rehabilitation.ts:610',
@@ -51,7 +51,7 @@ const APPROVED_DIRECT_GITHUB_READ_SITES = new Set([
   'engine/owner-gate/identity.ts:70', 'engine/park-reconciliation.ts:290',
   'engine/pr-criticality-labels.ts:84', 'engine/pr-labels.ts:527', 'engine/pr-labels.ts:633',
   'engine/pr-labels.ts:665', 'engine/pr-labels.ts:697', 'engine/pr-labels.ts:822',
-  'engine/pr-labels.ts:907', 'engine/pr-labels.ts:1008', 'engine/ship-draft-pr.ts:277',
+  'engine/pr-labels.ts:907', 'engine/pr-labels.ts:1008', 'engine/ship-draft-pr.ts:298',
   'engine/shipment-audit.ts:744', 'engine/shipment-evidence.ts:92', 'engine/tracker-client.ts:723',
   'intake-backfill-cli.ts:40',
 ]);
