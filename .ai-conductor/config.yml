@@ -97,6 +97,10 @@ build_review:
       llm_provider: claude
       model: opus
       effort: high
+      # Findings the reviewer scores below 60 are suppressed, not kicked back:
+      # low-confidence security findings (35-55) cost a 30-minute lap and a
+      # kickback charge each while rarely surviving a second look.
+      min_confidence: 60
 
 # Native pre-SHIP aggregate verification. The ordered commands run the conductor
 # test suite and this repository's harness-integrity suite in one BUILD gate.
