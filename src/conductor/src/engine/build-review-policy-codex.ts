@@ -14,6 +14,8 @@ export interface CodexPreparedCatalogEnvironment {
   readonly env: NodeJS.ProcessEnv;
   /** Candidate-private executable when self-host preparation resolved one. */
   readonly executable?: string;
+  /** Leading arguments of the prepared invocation (a containment wrap) placed before `app-server`. */
+  readonly executableArgs?: readonly string[];
   /** The owning candidate cancels discovery and its app-server session. */
   readonly signal?: AbortSignal;
 }
@@ -69,7 +71,7 @@ export interface CodexAppServerTransport {
 export function createCodexAppServerTransport(executable = 'codex', launch: typeof spawn = spawn): CodexAppServerTransport {
   return {
     async open(environment) {
-      const child = launch(environment.executable ?? executable, ['app-server'], {
+      const child = launch(environment.executable ?? executable, [...(environment.executableArgs ?? []), 'app-server'], {
         cwd: environment.cwd,
         env: environment.env,
         stdio: ['pipe', 'pipe', 'pipe'],

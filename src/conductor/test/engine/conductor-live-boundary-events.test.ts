@@ -59,12 +59,14 @@ describe('self-host live-boundary events', () => {
     await Promise.all([projectRoot, liveCheckout, providerHome, fakeBin].map(root => rm(root, { recursive: true, force: true })));
   });
 
+  let lastPrepared: { originalCatalogHome?: string; env: NodeJS.ProcessEnv } | undefined;
   function harness(work: () => Promise<StepRunResult>) {
     const runtimes = new ProviderRuntimeSet([{ key: 'claude', provider: { invoke: vi.fn(), }, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }] as never);
     const providerExecution: ProviderExecutionContext = { runtimes, sessions: {} as never, configuredProviders: ['claude'] };
     const runner: StepRunner = { run: async (step: StepName) => {
       const prepared = await providerExecution.prepareCandidateSelfHost?.({ step, providerKey: 'claude', model: 'opus', effort: 'high' } as never, runtimes.get('claude') as never, { runId: 'live-boundary-events', attempt: 1 });
       if (!prepared) throw new Error('self-host candidate preparation was not installed');
+      lastPrepared = prepared;
       try { return await work(); } finally { await prepared.teardown(); }
     } };
     const events = new ConductorEventEmitter();
@@ -100,5 +102,14 @@ describe('self-host live-boundary events', () => {
     const recorded = await events();
     expect(recorded.filter(event => event.type === 'contained_live_checkout_drift')).toEqual([]);
     expect(recorded.filter(event => event.type === 'self_host_containment_verdict')).toEqual([expect.objectContaining({ contained: true, evidence: expect.any(String) })]);
+  });
+
+  it('maps the original provider catalog home onto the prepared candidate explicitly', async () => {
+    const { conductor, persister } = harness(async () => ({ success: true, output: 'done' }));
+    await conductor.run(); persister.stop();
+    // The prepared env replaces the home; installed global/plugin discovery
+    // needs the original root named by preparation, not guessed afterwards.
+    expect(lastPrepared?.originalCatalogHome).toBe(providerHome);
+    expect(lastPrepared?.env.CLAUDE_CONFIG_DIR).not.toBe(providerHome);
   });
 });

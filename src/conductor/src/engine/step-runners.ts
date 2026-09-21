@@ -96,8 +96,8 @@ import {
   classifyBuildReviewPolicyIncompatibility,
   type BuildReviewLapId,
 } from './build-review-domain.js';
-import { discoverClaudeReviewPolicies } from './build-review-policy-claude.js';
-import { createCodexAppServerTransport, listCodexInstalledReviewSkills } from './build-review-policy-codex.js';
+import { discoverClaudeReviewPolicies, type ClaudeMetadataCommand, type ClaudeReviewPolicyFilesystem } from './build-review-policy-claude.js';
+import { createCodexAppServerTransport, listCodexInstalledReviewSkills, type CodexAppServerTransport } from './build-review-policy-codex.js';
 import { buildReviewFrozenInputPaths, prepareBuildReviewContainment, renderBuildReviewFrozenInputScope, writeReviewHostStateSentinel } from './build-review-containment.js';
 import { acquireReviewScratchHome } from './self-host/provider-scratch.js';
 import { copySelectedCodexLogin } from '../execution/codex-self-host-auth.js';
@@ -581,6 +581,10 @@ export interface StepRunnerOptions {
     readonly entry: ResolvedBuildReviewCatalogEntry;
     readonly preparedEnv?: NodeJS.ProcessEnv;
     readonly preparedExecutable?: string;
+    /** Leading arguments of the prepared invocation (for example a containment wrap). */
+    readonly preparedArgs?: readonly string[];
+    /** The provider home preparation replaced, mapped explicitly for installed-catalog discovery. */
+    readonly originalCatalogHome?: string;
     /** Owning candidate's cancellation joined with its deadline; aborts in-flight discovery. */
     readonly signal?: AbortSignal;
     /** Owning candidate's absolute deadline, in epoch milliseconds. */
@@ -624,32 +628,53 @@ export interface StepRunnerOptions {
  * discovery occurs in the selected candidate's prepared environment, never in
  * the parent process that happens to start the conductor.
  */
-function productionBuildReviewPolicyCatalog(projectDir: string): NonNullable<StepRunnerOptions['buildReviewPolicyCatalog']> {
-  const codexTransport = createCodexAppServerTransport();
-  return async ({ provider, preparedEnv, preparedExecutable, signal }) => {
+export function productionBuildReviewPolicyCatalog(
+  projectDir: string,
+  deps: {
+    readonly codexTransport?: CodexAppServerTransport;
+    readonly claudeCommand?: ClaudeMetadataCommand;
+    readonly claudeFilesystem?: ClaudeReviewPolicyFilesystem;
+  } = {},
+): NonNullable<StepRunnerOptions['buildReviewPolicyCatalog']> {
+  const codexTransport = deps.codexTransport ?? createCodexAppServerTransport();
+  return async ({ provider, preparedEnv, preparedExecutable, preparedArgs, originalCatalogHome, signal }) => {
     const env = preparedEnv ?? process.env;
-    if (provider === 'claude') {
-      const claudeHome = env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
-      return discoverClaudeReviewPolicies({
-        candidate: {
+    if (provider !== 'claude' && provider !== 'codex') {
+      throw new Error(`Build-review custom policies are unsupported for provider ${provider}`);
+    }
+    const homeVariable = provider === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
+    const discover = (home: string, catalogEnv: NodeJS.ProcessEnv, includeProject: boolean): Promise<readonly InstalledReviewSkill[]> => provider === 'claude'
+      ? discoverClaudeReviewPolicies({
+          candidate: {
+            cwd: projectDir,
+            env: catalogEnv,
+            projectSkillRoots: includeProject ? [join(projectDir, '.claude', 'skills'), join(projectDir, '.agents', 'skills')] : [],
+            userSkillRoots: [join(home, 'skills')],
+            ...(signal === undefined ? {} : { signal }),
+          },
+          ...(deps.claudeCommand === undefined ? {} : { command: deps.claudeCommand }),
+          ...(deps.claudeFilesystem === undefined ? {} : { filesystem: deps.claudeFilesystem }),
+        })
+      : listCodexInstalledReviewSkills(codexTransport, {
           cwd: projectDir,
-          env,
-          projectSkillRoots: [join(projectDir, '.claude', 'skills'), join(projectDir, '.agents', 'skills')],
-          userSkillRoots: [join(claudeHome, 'skills')],
+          home,
+          env: catalogEnv,
+          ...(preparedExecutable === undefined ? {} : { executable: preparedExecutable }),
+          ...(preparedArgs === undefined ? {} : { executableArgs: preparedArgs }),
           ...(signal === undefined ? {} : { signal }),
-        },
-      });
-    }
-    if (provider === 'codex') {
-      return listCodexInstalledReviewSkills(codexTransport, {
-        cwd: projectDir,
-        home: env.CODEX_HOME ?? join(homedir(), '.codex'),
-        env,
-        ...(preparedExecutable === undefined ? {} : { executable: preparedExecutable }),
-        ...(signal === undefined ? {} : { signal }),
-      });
-    }
-    throw new Error(`Build-review custom policies are unsupported for provider ${provider}`);
+        });
+    const preparedHome = env[homeVariable] ?? join(homedir(), provider === 'claude' ? '.claude' : '.codex');
+    const prepared = await discover(preparedHome, env, true);
+    // Self-host preparation replaces the provider home. The operator's
+    // installed global and plugin catalogs are reachable only through the
+    // root preparation mapped explicitly; nothing here consults the engine's
+    // ambient home.  What preparation placed in the candidate home keeps
+    // precedence, because that is the definition the candidate would load.
+    if (originalCatalogHome === undefined || originalCatalogHome === preparedHome) return prepared;
+    const key = (skill: InstalledReviewSkill) => `${skill.source}\0${skill.plugin?.id ?? ''}\0${skill.semanticName}`;
+    const preparedKeys = new Set(prepared.map(key));
+    const original = await discover(originalCatalogHome, { ...env, [homeVariable]: originalCatalogHome }, false);
+    return [...prepared, ...original.filter((skill) => skill.source !== 'project' && !preparedKeys.has(key(skill)))];
   };
 }
 
@@ -2637,7 +2662,8 @@ export class DefaultStepRunner implements StepRunner {
             provider: context.candidate.providerKey,
             entry,
             ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
-            ...(context.prepared === undefined ? {} : { preparedExecutable: context.prepared.executable }),
+            ...(context.prepared === undefined ? {} : { preparedExecutable: context.prepared.executable, preparedArgs: context.prepared.args }),
+            ...(context.prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: context.prepared.originalCatalogHome }),
             signal: discovery.signal,
             ...(context.deadlineAt === undefined ? {} : { deadlineAt: context.deadlineAt }),
           });
@@ -3247,7 +3273,8 @@ export class DefaultStepRunner implements StepRunner {
                   provider: context.candidate.providerKey,
                   entry: builtinEntry,
                   ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
-                  ...(context.prepared === undefined ? {} : { preparedExecutable: context.prepared.executable }),
+                  ...(context.prepared === undefined ? {} : { preparedExecutable: context.prepared.executable, preparedArgs: context.prepared.args }),
+            ...(context.prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: context.prepared.originalCatalogHome }),
                   ...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
                   ...(context.deadlineAt === undefined ? {} : { deadlineAt: context.deadlineAt }),
                 });

@@ -6215,7 +6215,7 @@ export class Conductor {
               attempt: identity.attempt,
             });
             ownershipTransferred = true;
-            return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), teardown: async () => { try { await verify(); } finally { await home.teardown(); } } });
+            return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), originalCatalogHome: providerHome, teardown: async () => { try { await verify(); } finally { await home.teardown(); } } });
           }
           if (candidate.providerKey === 'claude') {
             const sandbox = await this.guardrails.provisionSandbox({
@@ -6231,6 +6231,7 @@ export class Conductor {
               executable: 'claude',
               env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
               args: [],
+              originalCatalogHome: providerHome,
               teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
             });
           }

@@ -151,6 +151,12 @@ export interface SelfHostInvocation {
   executable: string;
   env: NodeJS.ProcessEnv;
   args: readonly string[];
+  /**
+   * The provider home this preparation replaced in `env`. Installed-policy
+   * discovery reads the operator's global/plugin catalogs from this explicit
+   * mapping only; it is never written to and never inferred after preparation.
+   */
+  originalCatalogHome?: string;
   teardown(): Promise<void>;
 }
 
