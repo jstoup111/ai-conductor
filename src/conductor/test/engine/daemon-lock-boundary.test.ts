@@ -85,6 +85,11 @@ describe('daemon-lock boundary: confine lock primitive (FR-20, C3)', () => {
       // Engine repair state uses the same unique temporary-file publication
       // pattern; it does not participate in daemon process ownership.
       'engine/engine-state-store.ts',
+      // Review containment creates an owner-only, random-named host-state
+      // sentinel exactly once. Its O_EXCL write protects that sentinel from
+      // accidental replacement; it neither references `daemon.pid` nor
+      // coordinates daemon ownership.
+      'engine/build-review-containment.ts',
     ];
 
     for (const file of allTs) {
