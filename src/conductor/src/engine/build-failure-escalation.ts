@@ -178,7 +178,7 @@ export async function escalateBuildFailure(
   // pr-labels. Every create/presentation/comment mutation goes through this
   // fresh guarded operation adapter, which reauthorizes the provenance for
   // each individual write.
-  const operations = Object.assign(
+  let operations = Object.assign(
     (args: string[], options: { cwd: string }) => runGh(args, options),
     createGuardedGithubOperationRunner(runGh, { cwd, mutation }),
   );
@@ -207,6 +207,30 @@ export async function escalateBuildFailure(
     log?.('[escalate] could not find or create PR — skipping label and comment');
     return {};
   }
+
+  const pull = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
+  if (!pull || !mutation || pull[1].toLowerCase() !== mutation.provenance.repository.toLowerCase()) {
+    log?.('[escalate] could not bind guarded presentation to the created PR');
+    return {};
+  }
+  operations = Object.assign(
+    (args: string[], options: { cwd: string }) => runGh(args, options),
+    createGuardedGithubOperationRunner(runGh, {
+      cwd,
+      mutation: {
+        provenance: {
+          ...mutation.provenance,
+          target: {
+            repository: mutation.provenance.repository,
+            kind: 'pull-request',
+            number: Number(pull[2]),
+          },
+        },
+        dependencies: mutation.dependencies,
+      },
+      events: opts.events,
+    }),
+  );
 
   // ── Step 5: ensure halt presentation (draft + label + body marker) ────────
   const presentation = await ensureHaltPresentation(operations, cwd, prUrl, log);

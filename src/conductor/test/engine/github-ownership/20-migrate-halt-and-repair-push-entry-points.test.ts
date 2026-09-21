@@ -14,7 +14,7 @@ import type { GithubMutationExecutionContext } from '../../../src/engine/tracker
 const scratch: string[] = [];
 afterEach(async () => Promise.all(scratch.splice(0).map((path) => rm(path, { recursive: true, force: true }))));
 
-function mutationContext(target?: { repository: string; kind: 'remote-ref'; ref: string }) {
+function mutationContext(ref = 'refs/heads/feature/owned') {
   const resolveMachineOwner = vi.fn().mockResolvedValue({ resolved: true as const, id: 'alice' });
   const readCommittedRecords = vi.fn().mockResolvedValue([
     { path: '.docs/intake/feature.md', content: 'Owner: alice\n' },
@@ -26,7 +26,7 @@ function mutationContext(target?: { repository: string; kind: 'remote-ref'; ref:
       specBranch: 'feature/owned',
       featureMarker: '.docs/intake/feature.md',
       publication: 'merged' as const,
-      ...(target === undefined ? {} : { target }),
+      target: { repository: 'acme/rocket', kind: 'remote-ref', ref },
     },
     dependencies: { resolveMachineOwner, provenanceDiscovery: { readCommittedRecords } },
   } satisfies GithubMutationExecutionContext;
@@ -43,7 +43,7 @@ function guardedGit(pushes: string[][]) {
 describe('engine remote Git publication callers', () => {
   it('authorizes halt, lease repair, and conductor publications at the real guard before the fake process seam', async () => {
     const haltPushes: string[][] = [];
-    const haltMutation = mutationContext();
+    const haltMutation = mutationContext('refs/heads/feature/halted');
     await publishHaltRecord('/fixture', 'feature/halted', {
       git: guardedGit(haltPushes),
       gh: vi.fn(),
@@ -53,7 +53,7 @@ describe('engine remote Git publication callers', () => {
     expect(haltPushes).toEqual([['push', 'origin', 'HEAD:refs/heads/feature/halted']]);
 
     const repairPushes: string[][] = [];
-    const repairMutation = mutationContext();
+    const repairMutation = mutationContext('refs/heads/feature/repaired');
     const repairGit = vi.fn(async (args: string[]) => {
       if (args[0] === 'config') return { exitCode: 0, stdout: 'git@github.com:acme/rocket.git\n', stderr: '' };
       if (args[0] === 'push') repairPushes.push([...args]);
@@ -69,7 +69,7 @@ describe('engine remote Git publication callers', () => {
     expect(repairPushes).toEqual([['push', 'origin', 'HEAD:refs/heads/feature/repaired', '--force-with-lease']]);
 
     const conductorPushes: string[][] = [];
-    const conductorMutation = mutationContext();
+    const conductorMutation = mutationContext('refs/heads/feature/finished');
     await pushPostFinishShippedRecord({
       cwd: '/fixture',
       branch: 'feature/finished',
@@ -91,7 +91,7 @@ describe('engine remote Git publication callers', () => {
       if (args[0] === 'push') remoteWrites.push([...args]);
       return { stdout: '1\n' };
     });
-    const refused = mutationContext();
+    const refused = mutationContext('refs/heads/feature/escalation');
     refused.dependencies.resolveMachineOwner.mockResolvedValue({ resolved: true as const, id: 'bob' });
 
     await expect(escalateBuildFailure({
@@ -136,7 +136,7 @@ describe('engine remote Git publication callers', () => {
       if (args[0] === 'config') return { stdout: 'git@github.com:acme/rocket.git\n' };
       return { stdout: args[0] === 'rev-list' ? '1\n' : '' };
     });
-    const mutation = mutationContext();
+    const mutation = mutationContext('refs/heads/feature/escalation');
     mutation.dependencies.resolveMachineOwner
       .mockResolvedValueOnce({ resolved: true as const, id: 'alice' }) // remote push
       .mockResolvedValueOnce({ resolved: true as const, id: 'alice' }) // PR create
@@ -161,9 +161,7 @@ describe('engine remote Git publication callers', () => {
     const cwd = await mkdtemp(join(tmpdir(), 'remote-git-repair-'));
     scratch.push(cwd);
     const pushes: string[][] = [];
-    const mutation = mutationContext({
-      repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/repair/feature',
-    });
+    const mutation = mutationContext('refs/heads/repair/feature');
     const runGit = guardedGit(pushes);
     runGit.mockImplementation(async (args: string[]) => {
       if (args[0] === 'config') return { stdout: 'git@github.com:acme/rocket.git\n' };
@@ -195,9 +193,7 @@ describe('engine remote Git publication callers', () => {
   it('routes repair PR creation and commit status through fresh guarded GitHub operations', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'shipment-repair-operations-'));
     scratch.push(cwd);
-    const mutation = mutationContext({
-      repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/shipment-repair/42/feature',
-    });
+    const mutation = mutationContext('refs/heads/shipment-repair/42/feature');
     const calls: string[][] = [];
     let repairPrListed = false;
     const runGh = vi.fn(async (args: string[]) => {
