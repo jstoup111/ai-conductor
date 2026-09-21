@@ -678,6 +678,15 @@ export function productionBuildReviewPolicyCatalog(
   };
 }
 
+/** The command a review member launches, so containment proves the mounts that command gets. */
+function reviewLaunchCommand(
+  provider: 'claude' | 'codex',
+  prepared: { readonly executable: string; readonly args: readonly string[] } | undefined,
+): { readonly executable: string; readonly args: readonly string[] } {
+  if (prepared !== undefined) return { executable: prepared.executable, args: prepared.args };
+  return { executable: provider === 'codex' ? process.env.CODEX_EXECUTABLE ?? 'codex' : 'claude', args: [] };
+}
+
 /** Capabilities belong to the prepared provider role, never the policy declaration. */
 function establishedBuildReviewTools(provider: 'claude' | 'codex'): readonly string[] {
   // Both supported read-only profiles expose git for frozen-input inspection.
@@ -2794,6 +2803,7 @@ export class DefaultStepRunner implements StepRunner {
           context.onTeardown(() => rm(hostStateProbe, { force: true }));
           const containment = await prepareBuildReviewContainment({
             provider,
+            launch: reviewLaunchCommand(provider, context.prepared),
             paths: {
               ...buildReviewFrozenInputPaths(source), policyMaterial: bundle.materialPath,
               originalCheckout: this.projectDir, originalInstallation: policy.packageRoot,
@@ -3301,7 +3311,7 @@ export class DefaultStepRunner implements StepRunner {
                 const evidencePaths = await prepareBuildReviewEvidencePaths(this.projectDir);
                 const hostStateProbe = await writeReviewHostStateSentinel(scratch);
           context.onTeardown(() => rm(hostStateProbe, { force: true }));
-                const containment = await prepareBuildReviewContainment({ provider: containmentProvider, paths: {
+                const containment = await prepareBuildReviewContainment({ provider: containmentProvider, launch: reviewLaunchCommand(containmentProvider, context.prepared), paths: {
                   hostStateProbe,
                   ...buildReviewFrozenInputPaths(materialized), policyMaterial: builtinBundle.materialPath, originalCheckout: this.projectDir, originalInstallation: builtinPolicy.packageRoot,
                   ...evidencePaths, scratch,

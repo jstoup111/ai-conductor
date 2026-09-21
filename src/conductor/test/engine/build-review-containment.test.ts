@@ -333,27 +333,42 @@ describe('engine/build-review-containment', () => {
     expect(deriveExecutableRuntimeRoots('absent-provider', runtimeHost)).toEqual([]);
   });
 
-  it('exposes a self-host prepared wrap read-only between the runtime roots and the review binds', async () => {
+  const SELF_HOST_WRAP = {
+    executable: 'bwrap',
+    args: ['--dev-bind', '/', '/', '--ro-bind', '/live', '/live', '--bind', '/live/.worktrees/f', '/live/.worktrees/f', '--bind', '/live/.daemon', '/live/.daemon', '--bind', '/review/original', '/review/original', '--', '/isolated/codex', 'exec'],
+  };
+
+  it('gives a self-host wrap empty placeholders, never the live checkout, sibling worktrees or daemon state', async () => {
+    const runProcess = vi.fn(async () => ({ exitCode: 0, stderr: '', stdout: HEALTHY_PROBE.join('\n') }));
+    const result = await prepareBuildReviewContainment({ provider: 'codex', paths: PATHS, runtimeHost, runProcess, launch: SELF_HOST_WRAP });
+    if (result.kind !== 'ready') throw new Error(`expected ready containment: ${result.reason}`);
+
+    const composed = composeReviewLaunchMounts(result.profile, { ...SELF_HOST_WRAP, args: [...SELF_HOST_WRAP.args, '--json'] }, runtimeHost);
+
+    const runtimeLength = result.profile.runtimeMountArgs!.length;
+    expect(composed.slice(runtimeLength, composed.length - result.profile.reviewMountArgs!.length)).toEqual([
+      '--dir', '/live',
+      '--dir', '/live/.worktrees/f',
+      '--dir', '/live/.daemon',
+      '--ro-bind-try', '/isolated/codex', '/isolated/codex',
+    ]);
+    const sources = bindTriples(composed).map(([, source]) => source);
+    expect(sources.filter((source) => source === '/' || source.startsWith('/live'))).toEqual([]);
+    // The profile that was probed is exactly the profile that launches.
+    const probed = (runProcess.mock.calls[0] as unknown as [string, string[]])[1];
+    expect(probed.slice(0, probed.indexOf('--'))).toEqual([...composed]);
+    expect(result.profile.mountArgs).toEqual([...composed]);
+  });
+
+  it('refuses to launch a command whose mounts were not the ones proved', async () => {
     const result = await prepareBuildReviewContainment({
       provider: 'codex', paths: PATHS, runtimeHost,
       runProcess: async () => ({ exitCode: 0, stderr: '', stdout: HEALTHY_PROBE.join('\n') }),
     });
     if (result.kind !== 'ready') throw new Error(`expected ready containment: ${result.reason}`);
 
-    const composed = composeReviewLaunchMounts(result.profile, {
-      executable: 'bwrap',
-      args: ['--dev-bind', '/', '/', '--ro-bind', '/live', '/live', '--bind', '/live/.worktrees/f', '/live/.worktrees/f', '--', '/isolated/codex', 'exec'],
-    }, runtimeHost);
-
-    const runtimeLength = result.profile.runtimeMountArgs!.length;
-    expect(composed.slice(0, runtimeLength)).toEqual(result.profile.runtimeMountArgs);
-    expect(composed.slice(runtimeLength, composed.length - result.profile.reviewMountArgs!.length)).toEqual([
-      '--ro-bind-try', '/live', '/live',
-      '--ro-bind-try', '/live/.worktrees/f', '/live/.worktrees/f',
-      '--ro-bind-try', '/isolated/codex', '/isolated/codex',
-    ]);
-    expect(composed.slice(-result.profile.reviewMountArgs!.length)).toEqual(result.profile.reviewMountArgs);
-    expect(bindTriples(composed).map(([, source]) => source)).not.toContain('/');
+    expect(composeReviewLaunchMounts(result.profile, { executable: 'codex', args: ['exec'] }, runtimeHost)).toEqual(result.profile.mountArgs);
+    expect(() => composeReviewLaunchMounts(result.profile, SELF_HOST_WRAP, runtimeHost)).toThrow(/proved/);
   });
 
   it('refuses a host sentinel that an allowlisted root would expose', async () => {

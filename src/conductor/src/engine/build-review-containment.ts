@@ -58,11 +58,16 @@ export interface BuildReviewContainmentOptions {
   readonly runProcess: BuildReviewContainmentProcess;
   /** Defaults to the live process; tests inject a fixed host. */
   readonly runtimeHost?: BuildReviewRuntimeHost;
+  /**
+   * The command this profile will launch (a self-host prepared invocation).
+   * The probe runs over the mounts composed for it; defaults to the bare provider.
+   */
+  readonly launch?: { readonly executable: string; readonly args: readonly string[] };
 }
 
 /** A proved mount profile that an invoke adapter may wrap around a reviewer. */
 export interface BuildReviewContainmentProfile {
-  /** `runtimeMountArgs` followed by `reviewMountArgs`: the complete proved profile. */
+  /** The complete proved profile: exactly the mounts the probe ran under and the launch uses. */
   readonly mountArgs: readonly string[];
   /** Allowlisted system/provider runtime roots. Optional only for hand-built fixtures. */
   readonly runtimeMountArgs?: readonly string[];
@@ -358,43 +363,79 @@ export async function prepareBuildReviewEvidencePaths(projectDir: string): Promi
 
 const BWRAP_BIND_FLAGS = new Set(['--bind', '--bind-try', '--ro-bind', '--ro-bind-try', '--dev-bind', '--dev-bind-try']);
 
+export interface BuildReviewLaunchCommand {
+  readonly executable: string;
+  readonly args: readonly string[];
+}
+
+function bindSources(args: readonly string[]): string[] {
+  const sources: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (!BWRAP_BIND_FLAGS.has(args[index]!)) continue;
+    const source = args[index + 1];
+    if (source !== undefined) sources.push(source);
+    index += 2;
+  }
+  return sources;
+}
+
 /**
- * Mount args for one concrete launch under a proved profile. The launched
- * command's own needs are added read-only BETWEEN the runtime roots and the
- * review binds, so a later review bind (writable scratch, sibling mask) still
- * wins over an enclosing root:
- *  - an absolute provider executable (a self-host isolated binary) gets its
- *    install root;
+ * The launched command's own needs, placed BETWEEN the runtime roots and the
+ * review binds so a later review bind (writable scratch, evidence mask) wins:
+ *  - a provider executable gets its narrow install root, read-only;
  *  - a self-host prepared invocation that is itself a bubblewrap wrap needs
- *    every path its inner bind set names to exist in this outer view, plus the
- *    executable it finally runs. They are exposed read-only here; the inner
- *    wrap keeps its own protections and cannot regain write access the outer
- *    read-only mount withheld.
+ *    every path its inner bind set names to EXIST in this outer view. Its
+ *    sources are the live checkout, sibling worktrees and daemon state, so
+ *    they are never re-exposed: a source outside the proved roots becomes an
+ *    empty `--dir` placeholder the inner wrap can bind onto itself.
+ */
+function composeLaunchMounts(
+  runtime: readonly string[],
+  review: readonly string[],
+  command: BuildReviewLaunchCommand,
+  host: BuildReviewRuntimeHost,
+): readonly string[] {
+  const executables: string[] = [];
+  const placeholders: string[] = [];
+  if (basename(command.executable) === 'bwrap') {
+    const end = command.args.indexOf('--');
+    const inner = end === -1 ? command.args : command.args.slice(0, end);
+    const provedRoots = [...SYSTEM_RUNTIME_ROOTS, '/dev', '/proc', '/tmp', ...bindSources(runtime), ...bindSources(review)];
+    for (const source of bindSources(inner)) {
+      if (!isAbsolute(source) || source === sep) continue;
+      if (provedRoots.some((root) => isWithin(root, source))) continue;
+      placeholders.push(source);
+    }
+    const innerExecutable = end === -1 ? undefined : command.args[end + 1];
+    if (innerExecutable !== undefined) executables.push(...deriveExecutableRuntimeRoots(innerExecutable, host));
+  } else {
+    executables.push(...deriveExecutableRuntimeRoots(command.executable, host));
+  }
+  const known = new Set(runtime);
+  return [
+    ...runtime,
+    ...[...new Set(placeholders)].flatMap((path) => ['--dir', path]),
+    ...roBindTry(executables.filter((path) => !known.has(path) && !coveredBySystemRoot(path))),
+    ...review,
+  ];
+}
+
+/**
+ * Mount args for one concrete launch. A probed profile launches only the
+ * exact mounts its probe proved: a command that composes differently is
+ * refused rather than run under an unproved profile.
  */
 export function composeReviewLaunchMounts(
   profile: BuildReviewContainmentProfile,
-  command: { readonly executable: string; readonly args: readonly string[] },
+  command: BuildReviewLaunchCommand,
   host: BuildReviewRuntimeHost = liveRuntimeHost(),
 ): readonly string[] {
-  const runtime = profile.runtimeMountArgs ?? [];
-  const review = profile.reviewMountArgs ?? profile.mountArgs;
-  const extra: string[] = [];
-  if (command.executable === 'bwrap' || basename(command.executable) === 'bwrap') {
-    const end = command.args.indexOf('--');
-    const inner = end === -1 ? command.args : command.args.slice(0, end);
-    for (let index = 0; index < inner.length; index += 1) {
-      if (!BWRAP_BIND_FLAGS.has(inner[index]!)) continue;
-      const source = inner[index + 1];
-      if (source !== undefined && isAbsolute(source) && source !== sep) extra.push(source);
-      index += 2;
-    }
-    const innerExecutable = end === -1 ? undefined : command.args[end + 1];
-    if (innerExecutable !== undefined) extra.push(...deriveExecutableRuntimeRoots(innerExecutable, host));
-  } else {
-    extra.push(...deriveExecutableRuntimeRoots(command.executable, host));
+  const proved = profile.runtimeMountArgs !== undefined && profile.reviewMountArgs !== undefined;
+  const composed = composeLaunchMounts(profile.runtimeMountArgs ?? [], profile.reviewMountArgs ?? profile.mountArgs, command, host);
+  if (proved && (composed.length !== profile.mountArgs.length || composed.some((arg, index) => arg !== profile.mountArgs[index]))) {
+    throw new Error('review launch mounts differ from the proved containment profile; refusing to launch an unproved profile');
   }
-  const known = new Set(runtime);
-  return [...runtime, ...roBindTry(extra.filter((path) => !known.has(path) && !coveredBySystemRoot(path))), ...review];
+  return composed;
 }
 
 function deriveProbeArgs(paths: BuildReviewContainmentPaths, mountArgs: readonly string[]): readonly string[] {
@@ -441,9 +482,10 @@ export async function prepareBuildReviewContainment(
   if (!hasSafePaths(options.paths)) {
     return unsupported(options.provider, 'review containment paths must be absolute, candidate scratch must not be protected, and the host-state sentinel must lie outside every bound root');
   }
-  const runtimeMountArgs = deriveRuntimeMountArgs(options.provider, options.runtimeHost ?? liveRuntimeHost());
+  const host = options.runtimeHost ?? liveRuntimeHost();
+  const runtimeMountArgs = deriveRuntimeMountArgs(options.provider, host);
   const reviewMountArgs = deriveReviewMountArgs(options.paths);
-  const mountArgs = [...runtimeMountArgs, ...reviewMountArgs];
+  const mountArgs = composeLaunchMounts(runtimeMountArgs, reviewMountArgs, options.launch ?? { executable: options.provider, args: [] }, host);
   let probe: Awaited<ReturnType<BuildReviewContainmentProcess>>;
   try {
     probe = await options.runProcess('bwrap', deriveProbeArgs(options.paths, mountArgs));
