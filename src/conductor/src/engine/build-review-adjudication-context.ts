@@ -152,23 +152,6 @@ function boundedString(
   return actual > max ? { code: 'field-overflow', subject, field, limit: max, actual, ...(caseId === undefined ? {} : { caseId }) } : undefined;
 }
 
-const CRITERION_TRUNCATION_MARKER = '\n[truncated by the engine: the complete policy text is bound by the effective policy identity]';
-
-/**
- * A captured policy file is a text body, not a reference.  It is delivered
- * whole when it fits the text bound and otherwise as a marked leading excerpt
- * cut on a UTF-8 character boundary, so a real SKILL.md never stops the case.
- */
-function boundedPolicyCriterion(criterion: string): string {
-  if (Buffer.byteLength(criterion, 'utf8') <= LIMITS.maxTextBytes) return criterion;
-  const budget = LIMITS.maxTextBytes - Buffer.byteLength(CRITERION_TRUNCATION_MARKER, 'utf8');
-  const head = Buffer.from(criterion, 'utf8').subarray(0, budget);
-  let end = head.length;
-  while (end > 0 && (head[end - 1]! & 0xc0) === 0x80) end -= 1;
-  if (end > 0 && head[end - 1]! >= 0xc0) end -= 1;
-  return `${head.subarray(0, end).toString('utf8')}${CRITERION_TRUNCATION_MARKER}`;
-}
-
 function customPolicyContext(
   aggregate: BuildReviewAggregate,
   rubric: string,
@@ -179,7 +162,7 @@ function customPolicyContext(
     rubric,
     question: descriptor.declaration.question,
     effectivePolicyIdentity: descriptor.effectivePolicy.bundleDigest,
-    criteria: Object.freeze([...(descriptor.criteria ?? descriptor.declaration.resources)].map(boundedPolicyCriterion)),
+    criteria: Object.freeze([...(descriptor.criteria ?? descriptor.declaration.resources)]),
   });
 }
 
@@ -257,6 +240,8 @@ function validateCustomScope(
     if (policy.criteria.length > LIMITS.maxPolicyCriteria) {
       return { code: 'field-overflow', subject: 'policy-context', field: 'criteria', limit: LIMITS.maxPolicyCriteria, actual: policy.criteria.length };
     }
+    // A captured policy body is text, not a reference.  It is delivered whole
+    // or the lap stops before dispatch; the judge never sees an excerpt.
     for (const criterion of policy.criteria) {
       const criterionStop = boundedString(criterion, LIMITS.maxTextBytes, 'policy-context', 'criteria[]');
       if (criterionStop) return criterionStop;

@@ -64,7 +64,7 @@ const findingId = rawSource.findingId;
 const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
 const CUSTOM_DIGEST = `sha256:${'c'.repeat(64)}`;
 
-function customMixedAggregate() {
+function customMixedAggregate(criteria?: readonly string[]) {
   const declaration = {
     version: 'v1' as const, rubricId: 'security', semanticSkill: 'security-review',
     question: 'Does the changed code preserve the security boundary?',
@@ -74,6 +74,7 @@ function customMixedAggregate() {
     version: 'v1' as const, semanticSkill: 'security-review', declaration,
     installation: { source: 'project' as const },
     effectivePolicy: { version: 'v1' as const, bundleDigest: CUSTOM_DIGEST },
+    ...(criteria === undefined ? {} : { criteria }),
     reviewedInput: { version: 'v1' as const, contentDigest: CUSTOM_DIGEST },
     producer: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' },
   };
@@ -734,6 +735,39 @@ describe('coordinateBuildReviewAdjudication', () => {
     await expect(store.read()).resolves.toMatchObject({
       ok: true, state: { cases: [{ id: 'case-stranded', resolution: 'open' }] },
     });
+  });
+
+  it.each([
+    ['one byte over the text bound', 8_001, false],
+    ['exactly at the text bound', 8_000, true],
+  ])('dispatches captured custom policy criteria only when complete: %s', async (_label, bytes, dispatched) => {
+    const root = await projectRoot();
+    const criterion = 'c'.repeat(bytes);
+    const events: string[] = [];
+    const seen: unknown[] = [];
+    const judge = vi.fn(async (context: unknown): Promise<RemediationCaseJudgement> => {
+      seen.push(context);
+      throw new Error('sentinel: stop after the dispatch observation');
+    });
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: customMixedAggregate([criterion]), mechanical: 'retry',
+      emit: async (event) => { events.push(event.type); },
+      readPlanContract: async () => ({
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{ id: '34', contract: 'Mixed-lap coordinator integration.' }],
+      }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+    });
+
+    if (dispatched) {
+      expect(judge).toHaveBeenCalledTimes(1);
+      expect(seen[0]).toMatchObject({ policyContext: [{ rubric: 'security', criteria: [criterion] }] });
+      return;
+    }
+    expect(judge).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, detail: 'adjudication context field-overflow' });
+    expect(events).toEqual(['remediation_adjudication_failed']);
   });
 
   it('emits a typed failure and never returns a partial route when the one judgement throws', async () => {

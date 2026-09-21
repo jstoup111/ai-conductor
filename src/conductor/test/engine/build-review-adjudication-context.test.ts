@@ -406,27 +406,27 @@ describe('build-review adjudication context', () => {
     expect(result.context.policyContext[0]!.criteria).not.toContain('references/security-criteria.md');
   });
 
-  it('bounds a realistic captured policy body instead of stopping every custom adjudication', () => {
+  it('delivers a realistic captured policy body whole and stops on one that exceeds the text bound', () => {
     const skillBody = `# Authorization policy\n\n${'Every changed handler must enforce authorization. '.repeat(40)}`;
-    const oversized = `# Reference\n\n${'é'.repeat(9_000)}`;
-    const result = assembleBuildReviewAdjudicationContext({
-      aggregate: customAggregate([skillBody, oversized]),
+    const atBound = 'é'.repeat(4_000);
+    const evidence = {
       priorCases: [],
       planContract: {
         path: '.docs/plans/example.md', pointers: [],
         admittedTaskContracts: [{ id: '28', contract: 'Preserve the authorization boundary.' }],
       },
       taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '28', status: 'in_progress' }] },
-    });
+    };
 
-    expect(result.ok, JSON.stringify(result)).toBe(true);
-    if (!result.ok) return;
-    const [whole, excerpt] = result.context.policyContext[0]!.criteria;
-    expect(whole).toBe(skillBody);
-    expect(Buffer.byteLength(excerpt!, 'utf8')).toBeLessThanOrEqual(8_000);
-    expect(excerpt!.startsWith('# Reference')).toBe(true);
-    expect(excerpt!).toContain('[truncated by the engine');
-    expect(excerpt!).not.toContain('\uFFFD');
+    const complete = assembleBuildReviewAdjudicationContext({ aggregate: customAggregate([skillBody, atBound]), ...evidence });
+    expect(complete.ok, JSON.stringify(complete)).toBe(true);
+    if (!complete.ok) return;
+    expect(complete.context.policyContext[0]!.criteria).toEqual([skillBody, atBound]);
+
+    expect(assembleBuildReviewAdjudicationContext({ aggregate: customAggregate([skillBody, `${atBound}x`]), ...evidence })).toEqual({
+      ok: false,
+      stop: { code: 'field-overflow', subject: 'policy-context', field: 'criteria[]', limit: 8_000, actual: 8_001 },
+    });
   });
 
   it('stops rather than dispatching a custom policy without complete scope evidence', () => {
