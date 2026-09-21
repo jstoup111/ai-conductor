@@ -228,7 +228,7 @@ describe('build-review candidate cache runner ordering', () => {
     await (runner as never as { dispatchBuildReviewRubric: (...args: unknown[]) => Promise<unknown> }).dispatchBuildReviewRubric(
       { rubric: 'testQuality', skillName: 'build-review-test-quality', policy: { enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0 } },
       { rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v3', lapId: 'lap-deadline', snapshotDigest: 'sha256:snapshot', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [], repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflight: {} },
-      'M', {}, { engineStamp: 'stamp', skillDigests: { testQuality: { kind: 'unavailable', path: 'skills/build-review-test-quality/SKILL.md' } } },
+      'M', {}, builtInInputs(), { engineStamp: 'stamp', skillDigests: { testQuality: { kind: 'unavailable', path: 'skills/build-review-test-quality/SKILL.md' } } },
     );
 
     expect(catalog).toHaveBeenCalledOnce();
@@ -251,7 +251,7 @@ describe('build-review candidate cache runner ordering', () => {
     const settled = await (runner as never as { dispatchBuildReviewRubric: (...args: unknown[]) => Promise<unknown> }).dispatchBuildReviewRubric(
       { rubric: 'testQuality', skillName: 'build-review-test-quality', policy: { enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0 } },
       { rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v3', lapId: 'lap-local-policy', snapshotDigest: 'sha256:snapshot', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [], repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflight: {} },
-      'M', {}, { engineStamp: 'stamp', skillDigests: { testQuality: { kind: 'unavailable', path: 'skills/build-review-test-quality/SKILL.md' } } },
+      'M', {}, builtInInputs(), { engineStamp: 'stamp', skillDigests: { testQuality: { kind: 'unavailable', path: 'skills/build-review-test-quality/SKILL.md' } } },
     );
 
     expect(settled).toMatchObject({ kind: 'judged' });

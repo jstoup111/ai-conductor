@@ -1,7 +1,7 @@
 // Covers: task:13
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const execaMock = vi.hoisted(() => vi.fn());
@@ -44,7 +44,7 @@ describe('custom review containment exposes the complete frozen baseline/head in
     roots.push(root);
     const project = join(root, 'project');
     // Operator state lives outside the masked temp directory; keep the test's copy off the real home.
-    const stateHome = await mkdtemp('/var/tmp/frozen-input-containment-state-');
+    const stateHome = await mkdtemp(join(dirname(process.env.TMPDIR!), 'frozen-input-containment-state-'));
     roots.push(stateHome);
     vi.stubEnv('XDG_STATE_HOME', stateHome);
     await mkdir(join(project, '.pipeline'), { recursive: true });
