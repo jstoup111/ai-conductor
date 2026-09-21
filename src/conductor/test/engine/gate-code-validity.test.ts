@@ -689,9 +689,11 @@ describe('gateVerdictStillValid', () => {
     const s = await makeRepo();
     scratches.push(s.repo);
     await mkdir(join(s.repo, '.pipeline'), { recursive: true });
+    // The production pair: a closed five-key envelope plus the runner's stamp.
     await writeFile(join(s.repo, '.pipeline/coverage-binding.json'), JSON.stringify({
-      version: 1, runId: 'coverage-run', codeStamp: 'coverage-head', status: 'done', entries: [],
+      version: 1, slug: 'active', runId: 'coverage-run', status: 'done', entries: [],
     }));
+    await writeFile(join(s.repo, '.pipeline/coverage-binding-code-stamp.json'), JSON.stringify({ runId: 'coverage-run', codeStamp: 'coverage-head' }));
     await expect(currentPreservedJudgeIdentity(s.repo, 'coverage_binding')).resolves.toMatchObject({
       attemptId: 'coverage-run', runId: 'coverage-run', codeStamp: 'coverage-head',
     });
@@ -701,7 +703,10 @@ describe('gateVerdictStillValid', () => {
     const s = await makeRepo();
     scratches.push(s.repo);
     await mkdir(join(s.repo, '.pipeline'), { recursive: true });
-    await writeFile(join(s.repo, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, runId: 'coverage-run', entries: [] }));
+    await writeFile(join(s.repo, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'active', runId: 'coverage-run', status: 'done', entries: [] }));
+    await expect(currentPreservedJudgeIdentity(s.repo, 'coverage_binding')).resolves.toBeNull();
+    // A stamp left by an earlier run does not identify this envelope.
+    await writeFile(join(s.repo, '.pipeline/coverage-binding-code-stamp.json'), JSON.stringify({ runId: 'older-run', codeStamp: 'coverage-head' }));
     await expect(currentPreservedJudgeIdentity(s.repo, 'coverage_binding')).resolves.toBeNull();
   });
 

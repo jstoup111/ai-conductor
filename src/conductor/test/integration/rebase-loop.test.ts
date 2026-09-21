@@ -373,6 +373,8 @@ describe('integration/rebase-loop', () => {
     } else if (step === 'coverage_binding') {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'add-foo', runId: 'test-run', status: 'disabled', entries: [] }));
+      // The production runner stamps the HEAD it judged beside the envelope.
+      await writeFile(join(dir, '.pipeline/coverage-binding-code-stamp.json'), JSON.stringify({ runId: 'test-run', codeStamp: await git('rev-parse', 'HEAD') }));
     } else if (step === 'build_review') {
       // The build_review judgement gate's completion predicate requires a
       // fresh, valid PASS verdict at .pipeline/build-review.json (see
@@ -1527,6 +1529,35 @@ describe('integration/rebase-loop', () => {
         }
         expect(countsAtRestart.prd_audit).toBe(1);
         expect(countsAtRestart.architecture_review_as_built).toBe(1);
+      });
+    });
+
+    describe('Story: a stamped coverage judgement survives a clean replay', () => {
+      it('preserves coverage_binding and dispatches neither coverage nor BUILD again', async () => {
+        await initRepoOnFeatureBranchWithSharedRuntimeFile();
+        await addFeatureTestFile();
+        await advanceBaseWithDivergentEditToSharedFile([
+          { path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" },
+        ]);
+        forceIndeterminateProspectiveMerge();
+        await writeState(statePath, { ...FRONT_DONE_M });
+        // Coverage was judged on the pre-rebase HEAD by the ordinary lifecycle.
+        await satisfy('coverage_binding');
+        await writeVerdict(dir, 'coverage_binding', { satisfied: true, checkedAt: 1 });
+
+        const counts: Record<string, number> = {};
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+        await runThroughShip(runCountingRunner(counts));
+
+        expect(completed).toBe(true);
+        expect(counts.coverage_binding ?? 0).toBe(0);
+        expect(counts.build ?? 0).toBe(1);
+        const rebase = await readGateVerdict('rebase');
+        expect(rebase?.rebaseOperation?.transition.preserved).toContain('coverage_binding');
+        expect((await readGateVerdict('coverage_binding'))?.preservation?.operationId).toBe(rebase.rebaseOperation.id);
       });
     });
 
