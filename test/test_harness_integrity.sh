@@ -888,7 +888,7 @@ fi
 
 bootstrap_publish_dir=$(mktemp -d)
 if grep -q '^---$' "$bootstrap_doc_script" \
-  || find "$bootstrap_doc_script" -path '*/[_\.]*/install.sh' -print -quit | grep -q .; then
+  || (cd "${HARNESS_DIR}/docs" && find . -path './[_\.]*/install.sh' -print -quit | grep -q .); then
   assert "docs/install.sh is published verbatim" 1
 else
   cp "$bootstrap_doc_script" "$bootstrap_publish_dir/install.sh"
