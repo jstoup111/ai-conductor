@@ -119,4 +119,43 @@ describe('github-operation CLI', () => {
     expect(writes).toContainEqual(['pr', 'edit', '7', '-R', 'acme/widgets', '--body', 'owned change']);
     expect(remoteGit).toHaveBeenCalledOnce();
   });
+
+  it('refuses a request for another feature or default branch before the push boundary', async () => {
+    const git = vi.fn(async (args: string[]) => {
+      if (args.join(' ') === 'branch --show-current') return { stdout: 'feat/widget\n' };
+      if (args[0] === 'config') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
+      if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
+      if (args[0] === 'push') return { stdout: '' };
+      throw new Error(`unexpected git command: ${args.join(' ')}`);
+    });
+    const gh = vi.fn().mockResolvedValue({ stdout: 'alice\n' });
+    const owner = async () => ({ resolved: true as const, id: 'alice' });
+
+    for (const ref of ['refs/heads/feat/another-owner', 'refs/heads/main']) {
+      const write = vi.fn();
+      await expect(dispatchGithubOperationCommand({ requestFile: '/request.json' }, {
+        cwd: '/fixture',
+        readRequest: readRequest({
+          operation: 'remote-ref.push', repository: 'acme/widgets',
+          resource: { kind: 'remote-ref', ref },
+          context: { actor: 'alice', feature: 'widget' },
+        }),
+        gh, git, resolveMachineOwner: owner, write,
+      })).resolves.toBe(1);
+      expect(JSON.parse(write.mock.calls[0]?.[0] ?? '')).toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+    }
+    expect(git.mock.calls.filter(([args]) => args[0] === 'push')).toEqual([]);
+
+    await expect(dispatchGithubOperationCommand({ requestFile: '/request.json' }, {
+      cwd: '/fixture',
+      readRequest: readRequest({
+        operation: 'remote-ref.push', repository: 'acme/widgets',
+        resource: { kind: 'remote-ref', ref: 'refs/heads/feat/widget' },
+        context: { actor: 'alice', feature: 'widget' },
+      }),
+      gh, git, resolveMachineOwner: owner, write: vi.fn(),
+    })).resolves.toBe(0);
+    expect(git).toHaveBeenCalledWith(['push', 'origin', 'HEAD:refs/heads/feat/widget'], { cwd: '/fixture' });
+  });
 });

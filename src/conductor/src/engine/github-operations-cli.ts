@@ -94,11 +94,11 @@ async function featureMutationForRequest(
       return undefined;
     }
   }
-  // Bind a newly composed capability to this request's canonical target.  The
-  // runner is created per request so an earlier decision cannot be reused for
-  // a different PR, issue, or ref.
   return {
-    provenance: { ...resolved.provenance, target: request.target },
+    // The resolved feature branch is the only remote-ref capability this CLI
+    // composition can supply.  The mutation policy compares it to the
+    // requested destination before the remote transport is invoked.
+    provenance: resolved.provenance,
     dependencies: {
       ...resolved.dependencies,
       ...(input.resolveMachineOwner === undefined ? {} : { resolveMachineOwner: input.resolveMachineOwner }),

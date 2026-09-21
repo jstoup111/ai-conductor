@@ -18,6 +18,7 @@ afterEach(async () => { await Promise.all(directories.splice(0).map((directory) 
 describe('GitHub invocation audit', () => {
   it('uses TypeScript syntax rather than comments or documentation-like strings', () => {
     expect(auditGithubInvocationSource('example.ts', "// import { execFile } from 'node:child_process';\nconst guide = 'gh pr create';")).toEqual([]);
+    expect(auditGithubInvocationSource('example.ts', "import { execFile } from 'node:child_process';\nexecFile('gh', ['pr', 'create']);")).not.toEqual([]);
   });
 
   it('follows aliased process factories and reports a source location for bypasses', () => {
