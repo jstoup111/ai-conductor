@@ -169,6 +169,25 @@ describe('engine/daemon-park-cli', () => {
       expect(out.join('\n')).not.toMatch(/force/i);
     });
 
+    it('prints the helper-derived in-flight refusal', async () => {
+      const out: string[] = [];
+      const reconcileMergedPark = vi.fn().mockResolvedValue({
+        slug: 'active-feature',
+        steps: [],
+        refusal: 'in-flight',
+      });
+
+      const code = await dispatchDaemonPark(
+        { kind: 'reconcile-parked', slug: 'active-feature' },
+        { cwd: root, out: (line) => out.push(line), reconcileMergedPark },
+      );
+
+      expect({ code, out }).toEqual({
+        code: 1,
+        out: ["Could not reconcile 'active-feature': in-flight"],
+      });
+    });
+
     it('renders unmerged commits and an explicit overflow suffix without offering a force path', async () => {
       const out: string[] = [];
       const reconcileMergedPark = vi.fn().mockResolvedValue({

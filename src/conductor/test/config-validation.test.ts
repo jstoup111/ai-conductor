@@ -484,3 +484,22 @@ describe('reconcile_parked_auto_cleanup config field', () => {
     ]);
   });
 });
+
+describe('reclaim_merged_worktrees config field', () => {
+  it('hard-errors a non-boolean value with the field name', () => {
+    expect(validateConfig({ reclaim_merged_worktrees: 'yes' })).toMatchObject({
+      ok: false,
+      error: { message: expect.stringMatching(/reclaim_merged_worktrees.*boolean/i) },
+    });
+  });
+
+  it('accepts false and resolves an absent toggle to the enabled default', () => {
+    expect([
+      validateConfig({ reclaim_merged_worktrees: false }),
+      validateConfig({}),
+    ]).toMatchObject([
+      { ok: true, config: { reclaim_merged_worktrees: false }, warnings: [] },
+      { ok: true, config: { reclaim_merged_worktrees: true }, warnings: [] },
+    ]);
+  });
+});

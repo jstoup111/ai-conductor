@@ -168,6 +168,9 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'build_review_scope_summary',
   'build_review_scope_incomplete',
   'ci_repair_diagnostic',
+  'worktree_reclaim_reclaimed',
+  'worktree_reclaim_retained',
+  'worktree_reclaim_failed',
 ] satisfies Array<ConductorEvent['type']>;
 
 const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
@@ -266,6 +269,8 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'finish_publication_transition',
   'finish_publication_blocked',
   'finish_publication_disposition',
+  'worktree_reclaim_reclaimed',
+  'worktree_reclaim_failed',
   ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
 ] satisfies Array<ConductorEvent['type']>;
 
@@ -304,6 +309,10 @@ const infrastructureFailureWithoutProjectionBytes = {
   reason: 'provider-error',
 } satisfies ConductorEvent;
 void infrastructureFailureWithoutProjectionBytes;
+
+// @ts-expect-error -- retained reclamation reasons are a closed union.
+const reclaimRetentionWithUnlistedReason = { type: 'worktree_reclaim_retained', slug: 'feature', reason: 'operator-maybe' } satisfies ConductorEvent;
+void reclaimRetentionWithUnlistedReason;
 
 // @ts-expect-error -- probe-failure progress requires its closed kind and next disposition.
 const probeFailureMissingClosedMetadata = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure' } satisfies ConductorEvent;
@@ -908,6 +917,18 @@ describe('event sink subscriptions', () => {
       written: { render: true, persist: true, audit: true, otel: false },
       writeFailed: { render: true, persist: true, audit: true, otel: false },
       pushFailed: { render: true, persist: true, audit: true, otel: false },
+    });
+  });
+
+  it('persists reclaim outcomes while rendering only reclaimed and failed worktrees', () => {
+    expect({
+      reclaimed: EVENT_SINKS.worktree_reclaim_reclaimed,
+      retained: EVENT_SINKS.worktree_reclaim_retained,
+      failed: EVENT_SINKS.worktree_reclaim_failed,
+    }).toEqual({
+      reclaimed: { render: true, persist: true, audit: false, otel: false },
+      retained: { render: false, persist: true, audit: false, otel: false },
+      failed: { render: true, persist: true, audit: false, otel: false },
     });
   });
 

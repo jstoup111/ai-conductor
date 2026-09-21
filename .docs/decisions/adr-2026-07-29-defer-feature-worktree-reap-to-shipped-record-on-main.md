@@ -106,7 +106,10 @@ pass a gate."
 >    `resolve-*` prefixes, nested or otherwise invalid slugs, a live `.pipeline/HALT`, and every
 >    helper refusal retain the worktree; the reason is emitted as `worktree_reclaim_retained`, a
 >    reclaim as `worktree_reclaim_reclaimed`, and a removal error as `worktree_reclaim_failed`.
->    An unreadable worktree, record, or ref listing retains every candidate for that pass. The
+>    An unreadable worktree or ref listing retains every candidate for that pass. An unreadable
+>    shipped-record listing retains only the record-gated candidates (`feat/daemon-*` branches and
+>    branchless parked slugs); per adr-2026-08-01 D8 a non-daemon candidate never reads or depends
+>    on that listing (operator decision 2026-09-18: D8 takes precedence). The
 >    daemon log line is a rendering of the event, never a parallel write.
 
 ## Relationship to adjacent approved decisions

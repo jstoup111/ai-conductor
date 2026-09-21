@@ -483,6 +483,7 @@ export interface DaemonDeps {
    */
   reconcileParkedFeatures?: (deps: {
     disposeHaltWatcher: (slug: string) => void;
+    isFeatureInFlight: (slug: string) => boolean;
   }) => Promise<void>;
 
   /**
@@ -694,7 +695,10 @@ export async function runDaemon(
       log(`[daemon] reconcileHaltPrs error: ${err instanceof Error ? err.message : String(err)}`);
     }
     try {
-      await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher });
+      await deps.reconcileParkedFeatures?.({
+        disposeHaltWatcher: disposeWatcher,
+        isFeatureInFlight: (slug) => inFlight.has(slug),
+      });
     } catch (err) {
       log(`[daemon] reconcileParkedFeatures error: ${err instanceof Error ? err.message : String(err)}`);
     }

@@ -212,6 +212,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `gate_code_validity` | object | `{ enabled: true }` | [gate_code_validity](#gate_code_validity) |
 | `daemon_verbose` | boolean | `false` | [daemon_verbose](#daemon_verbose) |
 | `reconcile_parked_auto_cleanup` | boolean | `true` | [reconcile_parked_auto_cleanup](#reconcile_parked_auto_cleanup) |
+| `reclaim_merged_worktrees` | boolean | `true` | [reclaim_merged_worktrees](#reclaim_merged_worktrees) |
 | `provider_preparation_timeout_minutes` | number | `5` | [provider_preparation_timeout_minutes](#provider_preparation_timeout_minutes) |
 | `teardown_timeout_seconds` | number | `120` | [teardown_timeout_seconds](#teardown_timeout_seconds) |
 | `dispatch_start_timeout_seconds` | number | `120` | [dispatch_start_timeout_seconds](#dispatch_start_timeout_seconds) |
@@ -1379,6 +1380,17 @@ resolves to `true` at validation time (unlike `daemon_verbose`, the default is w
 Set to `false` to require an explicit `ai-conductor daemon reconcile-parked <slug>` (or manual
 cleanup) for every parked feature, even once it is merged and recorded — see
 [park a feature before you touch its git state](../guides/running-the-daemon.md#park-a-feature-before-you-touch-its-git-state).
+
+## reclaim_merged_worktrees
+
+Whether the daemon's startup and idle-tick sweep reclaims eligible, merged feature worktrees that
+are registered directly under `.worktrees/`. Optional boolean; a non-boolean is a hard error.
+Absent config resolves to `true` at validation time.
+
+Set to `false` for a report-only pass over registered worktrees. The daemon still evaluates those
+candidates and records them as retained with reason `disabled`, but does not remove their worktree
+or branch. This setting does not change `reconcile_parked_auto_cleanup`: parked features continue
+to follow that setting. See [parked-feature reconciliation](../guides/running-the-daemon.md#parked-feature-reconciliation).
 
 ## provider_preparation_timeout_minutes
 

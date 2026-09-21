@@ -110,6 +110,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   scratch_cleanup_reclaimed: 'not-audited-by-design',
   scratch_cleanup_retained: 'not-audited-by-design',
   scratch_cleanup_failed: 'not-audited-by-design',
+  worktree_reclaim_reclaimed: 'not-audited-by-design',
+  worktree_reclaim_retained: 'not-audited-by-design',
+  worktree_reclaim_failed: 'not-audited-by-design',
   // Whole-feature cost telemetry: durable in events.jsonl, but it describes no
   // friction — it is a summation of dispatches already mapped elsewhere.
   feature_usage_total: 'not-audited-by-design',
@@ -357,6 +360,24 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     attempt: 1,
     path: '/worktree/.daemon/scratch/R/1-codex',
     reason: 'removal blocked',
+  },
+  worktree_reclaim_reclaimed: {
+    type: 'worktree_reclaim_reclaimed',
+    slug: 'reclaimed-worktree',
+    branch: 'hotfix/reclaimed-worktree',
+    proof: 'ancestry',
+  },
+  worktree_reclaim_retained: {
+    type: 'worktree_reclaim_retained',
+    slug: 'retained-worktree',
+    branch: 'hotfix/retained-worktree',
+    reason: 'in-flight',
+  },
+  worktree_reclaim_failed: {
+    type: 'worktree_reclaim_failed',
+    slug: 'failed-worktree',
+    branch: 'hotfix/failed-worktree',
+    refusal: 'worktree-remove-failed',
   },
   feature_usage_total: {
     type: 'feature_usage_total',
