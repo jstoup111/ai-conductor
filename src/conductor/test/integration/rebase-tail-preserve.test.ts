@@ -162,7 +162,11 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     prospectiveMergeFixture.forceIndeterminate = true;
   }
 
-  function conductorWith(runner: StepRunner, config: Record<string, unknown> = {}): Conductor {
+  function conductorWith(
+    runner: StepRunner,
+    config: Record<string, unknown> = {},
+    suiteVerifier?: NonNullable<ConstructorParameters<typeof Conductor>[0]['fullSuiteVerifier']>,
+  ): Conductor {
     const fakeGit: GitRunner = async (args) =>
       args.includes('--symbolic-full-name')
         ? { stdout: 'refs/remotes/origin/feature/x\n' }
@@ -187,7 +191,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
         hash: 'fixture-hash',
         commit: input.candidateCommit,
       }),
-      fullSuiteVerifier: {
+      fullSuiteVerifier: suiteVerifier ?? {
         ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
         inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
       },
@@ -323,6 +327,68 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     const finalState = finalStateResult.ok ? finalStateResult.value : {};
     expect(finalState.prd_audit).toBe('done');
     expect(finalState.architecture_review_as_built).toBe('done');
+  });
+
+  it('establishes current suite proof before every downstream review, and still runs manual testing, after a runtime-changing replay', async () => {
+    await initRepoOnFeatureBranch({
+      path: 'src/feature.ts',
+      content: 'export const foo = 1;\n',
+    });
+    await advanceBaseForeignRuntimeOnly();
+    forceIndeterminateProspectiveMerge();
+    await writeState(statePath, { ...FRONT_DONE_M });
+
+    const order: string[] = [];
+    const runner: StepRunner = {
+      run: async (step) => {
+        order.push(step);
+        return satisfy(step);
+      },
+    };
+    // Suite proof is bound to the HEAD it was established on, so the replay
+    // (which moves HEAD onto the foreign runtime change) makes it stale.
+    let provedHead: string | undefined;
+    const headBeforeReplay = await git('rev-parse', 'HEAD');
+    await conductorWith(runner, {}, {
+      inspect: async () =>
+        provedHead === (await git('rev-parse', 'HEAD'))
+          ? { status: 'CURRENT', evidence: {} as never }
+          : { status: 'STALE', reason: 'fingerprint_mismatch' },
+      ensure: async () => {
+        provedHead = await git('rev-parse', 'HEAD');
+        order.push(`suite-proof@${provedHead}`);
+        return {
+          status: 'EXECUTED',
+          freshness: { status: 'STALE', reason: 'fingerprint_mismatch' },
+          evidence: {} as never,
+        };
+      },
+    }).run();
+
+    const replayedHead = await git('rev-parse', 'HEAD');
+    expect(replayedHead).not.toBe(headBeforeReplay);
+    await expect(git('cat-file', '-e', 'HEAD:src/foreign-only.ts')).resolves.toBe('');
+
+    // Everything from the first CURRENT (post-replay HEAD) proof onward.
+    const proofAtInOrder = order.indexOf(`suite-proof@${replayedHead}`);
+    expect(proofAtInOrder).toBeGreaterThanOrEqual(0);
+    // Reviews dispatched before the replay belong to the pre-replay pass;
+    // the replay boundary is the coverage refresh that follows the rebase.
+    const replayAt = order.indexOf('coverage_binding');
+    expect(replayAt).toBeGreaterThanOrEqual(0);
+    const afterReplay = order.slice(replayAt);
+    const proofAt = afterReplay.indexOf(`suite-proof@${replayedHead}`);
+    expect(proofAt).toBeGreaterThanOrEqual(0);
+
+    const reviews = ['build_review', 'prd_audit', 'architecture_review_as_built'];
+    const dispatchedReviews = reviews.filter((step) => afterReplay.includes(step));
+    expect(dispatchedReviews).toEqual(
+      expect.arrayContaining(['prd_audit', 'architecture_review_as_built']),
+    );
+    for (const review of dispatchedReviews) {
+      expect(afterReplay.indexOf(review)).toBeGreaterThan(proofAt);
+    }
+    expect(afterReplay.indexOf('manual_test')).toBeGreaterThan(proofAt);
   });
 
   it('refreshes changed coverage pairs with the existing runner before verification, without reopening authoring or BUILD', async () => {
