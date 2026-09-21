@@ -46,6 +46,10 @@ Config is read at daemon startup like the rest of `.ai-conductor/config.yml` (re
 apply). Escalation stickiness stays label-based (`needs-remediation`), not registry-based, so
 the operator's existing clear-the-label workflow is the single off/on switch.
 
+> **Amended 2026-09-20 by #2607 (operator decision):** The label stays the stickiness mechanism and the operator's switch. It has several writers (tier-2 escalation, ci-fix exhaustion, setup-stop, halted-build presentation), so the engine may lift it only where it can prove it owns it.
+>
+> **D1** Conflict-caused escalation clears itself. The watch entry gains an optional, zero-default escalation-cause field, written when autoresolve escalates a conflicting pull request. When a sweep tick finds `needs-remediation` on a pull request whose recorded cause is conflict resolution, whose merge state is no longer conflicting, and whose body carries no halt marker, it removes the label and clears the recorded cause, restoring eligibility. A label with any other or no recorded cause is never removed by the sweep. While the pull request is still conflicting the label remains sticky and the operator's clear-the-label workflow is unchanged.
+
 ## Consequences
 
 - No new files or pruning logic; restart-safe bounding for free.

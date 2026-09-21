@@ -81,6 +81,10 @@ staleness and *deciding* satisfaction remain deterministic, so ADR-001's critica
 property is preserved by construction, not by trusting a prompt. Reusing the
 `assessComplexity()` shape means no new dispatch pattern is introduced.
 
+> **Amended 2026-09-20 by #2607 (operator decision):** "Dropped commits" always firing `writeHalt` made a judged supersession impossible to accept: the FR-9 guard excuses a missing commit only when its added lines survive in HEAD, which is false whenever upstream rewrote the same lines. The satisfied predicate stays deterministic and engine-owned.
+>
+> **D1** Declared test-only drops satisfy FR-9. On the sweep path only, FR-9 additionally excuses a missing feature commit when the resolver's verdict declares it superseded, the engine confirms it is a commit this rebase replayed, and every path that commit touched is a test path. Any other missing commit, an undeclared one, a declared one touching a non-test path, or a declared one the rebase never replayed, fails FR-9 exactly as before. FR-8 and the finish-time predicate are unchanged.
+
 ## Consequences
 
 ### Positive

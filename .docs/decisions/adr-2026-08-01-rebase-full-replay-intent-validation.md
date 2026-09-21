@@ -36,6 +36,10 @@ Cross-file edits remain permitted when necessary. The resolver must explain and 
 
 The engine's existing deterministic branch-currency, active-rebase, and commit-preservation guards remain unchanged and complementary. This decision narrows the prior ADR's residual-risk acceptance: ambiguity is no longer accepted merely because downstream tests might pass.
 
+> **Amended 2026-09-20 by #2607 (operator decision):** Every tier-2 sweep resolution ended in escalation, including one-hunk conflicts confined to a test file where the resolver named both intents exactly. The mandatory stop on semantically conflicting intent gains one narrow exception. Full-replay inspection, staged-change attribution, the post-continue recheck, and the stop on unclear attribution or missing context are unchanged, so the #1152 failure class stays covered. The Positive consequence "the same skill contract governs finish-time, re-kick, watched-PR, and manual invocations" now holds for everything except this exception.
+>
+> **D1** Test-only supersession judgement. When the mergeable sweep dispatches the resolver and every conflicted path in the paused replay is a test path under the engine's existing test-path convention, the resolver may decide which side's intent survives, including declaring the replayed commit superseded by upstream, instead of returning `resolved: false` for that reason alone. It returns a schema-bound verdict naming the choice, the rationale, and each declared-superseded commit. The engine, not the skill, establishes that the conflict is test-only and tells the resolver the exception is in force. Any conflicted non-test path, and every finish-time, re-kick, or manual invocation, keeps the stop stated above.
+
 ## Consequences
 
 ### Positive
