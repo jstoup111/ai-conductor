@@ -602,6 +602,7 @@ async function runTrackerRead(
   repository: string,
   resource: Record<string, unknown>,
   args: string[],
+  runnerOpts: { timeout?: number; maxBuffer?: number } = {},
 ): Promise<string> {
   let stdout = '';
   let runnerError: GhRunnerError | undefined;
@@ -614,7 +615,7 @@ async function runTrackerRead(
     async run() {
       let response: { stdout: string };
       try {
-        response = await runner(args, { cwd });
+        response = await runner(args, { cwd, ...runnerOpts });
       } catch (err) {
         runnerError = new GhRunnerError(args, err);
         throw runnerError;
@@ -895,18 +896,30 @@ export function createGithubTrackerClient(
     },
 
     async getPullRequestHeadRef(prUrl, cwd) {
-      const { stdout } = await runOrThrow(runner, ['pr', 'view', prUrl, '--json', 'headRefName'], { cwd });
+      const target = pullRequestTargetFromUrl(prUrl);
+      if (!target) throw new GithubTrackerOperationRefusalError('pull-request.read', 'invalid-target');
+      const stdout = await runTrackerRead(
+        runner,
+        cwd,
+        'pull-request.read',
+        target.repository,
+        { kind: 'pull-request', number: target.number },
+        ['pr', 'view', prUrl, '--json', 'headRefName'],
+      );
       const data = parseJsonOrThrow<{ headRefName?: unknown }>('getPullRequestHeadRef', stdout || '{}');
       return typeof data.headRefName === 'string' ? data.headRefName.trim() : '';
     },
 
     async viewWorkflowRunFailedLog(repo, runId, cwd, opts) {
-      const { stdout } = await runOrThrow(
+      return runTrackerRead(
         runner,
+        cwd,
+        'repository.read',
+        repo,
+        { kind: 'repository' },
         ['run', 'view', runId, '--repo', repo, '--log-failed'],
-        { cwd, ...opts },
+        opts,
       );
-      return stdout;
     },
 
     async readPullRequestMergeState(prUrl, cwd, log) {

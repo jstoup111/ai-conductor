@@ -681,7 +681,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         },
       };
 
-      const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
+      const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0, remoteGit: permittedRemoteGit }, logger);
 
       // Verify the result
       expect(result.kind).toBe('published');
@@ -1131,7 +1131,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         },
       };
 
-      const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
+      const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0, remoteGit: permittedRemoteGit }, logger);
       expect(result.kind).toBe('published');
 
       // Primary checkout must be fully clean — no staged/unstaged/untracked pollution.
