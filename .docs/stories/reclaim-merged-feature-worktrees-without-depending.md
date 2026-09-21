@@ -133,7 +133,7 @@ was reclaimed or kept.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a candidate is reclaimed, when the sweep completes it, then a `worktree_reclaim_reclaimed` event carrying the slug, branch, and proof kind is emitted on the daemon's emitter
+- Given a candidate is reclaimed, when the sweep completes it, then a `worktree_reclaim_reclaimed` event carrying the slug, plus the branch and its proof kind when the candidate had a branch, is emitted on the daemon's emitter
 - Given a candidate is retained, when the sweep completes it, then a `worktree_reclaim_retained` event carrying the slug and a closed-union reason is emitted
 - Given a removal or branch deletion fails, when the sweep completes it, then a `worktree_reclaim_failed` event carrying the slug and the refusal is emitted
 - Given the three variants exist, when the sink registry is read, then each has a declaration with `persist: true`, `retained` has `render: false`, and `reclaimed` and `failed` have `render: true`
@@ -173,13 +173,15 @@ consumer can observe a report-only first pass before allowing removals.
 
 ## Story 8: Existing parked-feature reconciliation is preserved
 
+_Amended 2026-09-17: the preservation criterion carves out parked slugs retained by a Story 2 guard (operator decision resolving the Story 2 / Story 8 PLAN_GAP)._
+
 As an operator, I want the parked-only behavior of the sweep to be unchanged so that widening the
 candidate set adds reclamation without altering what already worked.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given only parked slugs on `feat/daemon-*` branches and no registered worktrees beyond them, when the sweep runs, then classifications, counts, refusal breakdown, and the de-duplicated summary line are identical to the pre-change behavior
+- Given only parked slugs on `feat/daemon-*` branches and no registered worktrees beyond them, when the sweep runs, then classifications, counts, refusal breakdown, and the de-duplicated summary line are identical to the pre-change behavior, except that a parked slug retained by a Story 2 guard (in-flight, or a live or unreadable `.pipeline/HALT`) keeps its named reason instead of being reclaimed
 - Given a parked slug that is orphaned (closed source issue, not merged), when the sweep runs, then it is annotated `orphan` and never deleted, as today
 
 #### Negative Paths

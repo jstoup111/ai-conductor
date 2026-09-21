@@ -109,10 +109,9 @@ export class SpanManager {
     }
 
     // Explicit executions can freeze at a later member-settlement event. Give
-    // those spans the same wall-clock origin as that frozen end; otherwise
-    // the SDK's monotonic start clock and the engine's wall-clock timestamp
-    // form an invalid duration pair. Legacy context-free spans retain the SDK
-    // clock because they have no separate settlement boundary.
+    // those spans the same wall-clock origin as that frozen end; legacy spans
+    // retain the SDK's monotonic clock so synchronous event delivery cannot
+    // produce a zero-length span.
     const startTimeMs = this.now();
     const span = this.tracer.startSpan(
       identity.subjectLabel,

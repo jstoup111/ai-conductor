@@ -9220,6 +9220,37 @@ export class Conductor {
               '. Operator action is required before this run can continue.';
             await this.writeHaltMarker(haltReason + '\n', 'needs-human');
             await this.emitLoopHalt(haltReason);
+          } else if (this.daemon) {
+            // Any reachable `pending` prerequisite makes the block recoverable,
+            // whatever its order relative to a `failed` sibling.
+            const resolvablePrerequisiteIndex = earliestResolvablePrerequisiteIndex(
+              steps,
+              state,
+              step,
+              i,
+              (prerequisite) => getStepStatus(state, prerequisite) === 'pending',
+            );
+            if (resolvablePrerequisiteIndex >= 0) {
+              const prerequisites = gate.unsatisfied.map(
+                (prerequisite) => `${prerequisite} (${getStepStatus(state, prerequisite)})`,
+              );
+              const haltReason =
+                `Step '${step.name}' is blocked by unsatisfied prerequisite${prerequisites.length === 1 ? '' : 's'}: ` +
+                prerequisites.join(', ') +
+                '. The daemon will re-dispatch the feature from an earlier reachable prerequisite.';
+              await this.writeHaltMarker(haltReason + '\n', 'mechanical');
+              await this.emitLoopHalt(haltReason);
+            } else {
+              const prerequisites = gate.unsatisfied.map(
+                (prerequisite) => `${prerequisite} (${getStepStatus(state, prerequisite)})`,
+              );
+              const haltReason =
+                `Step '${step.name}' is blocked by unreachable pending prerequisite${prerequisites.length === 1 ? '' : 's'}: ` +
+                prerequisites.join(', ') +
+                '. Operator action is required before this run can continue.';
+              await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+              await this.emitLoopHalt(haltReason);
+            }
           }
           process.off('SIGINT', sigintHandler);
           process.off('SIGTERM', sigterm);
@@ -14811,20 +14842,34 @@ export function clampToRunnablePrerequisite(
     const gate = checkGate(step, state);
     if (gate.passed) return idx;
 
-    // Earliest unsatisfied prerequisite that sits BEFORE the candidate. A
-    // prerequisite the registry cannot locate, or one at/after `idx`, is not
-    // something moving backward can fix — stop rather than spin.
-    let earliest = -1;
-    for (const prereq of step.prerequisites) {
-      if (stepSatisfied(state, prereq)) continue;
-      const prereqIdx = steps.findIndex((s) => s.name === prereq);
-      if (prereqIdx < 0 || prereqIdx >= idx) continue;
-      if (earliest === -1 || prereqIdx < earliest) earliest = prereqIdx;
-    }
+    const earliest = earliestResolvablePrerequisiteIndex(steps, state, step, idx);
     if (earliest === -1) return idx;
     idx = earliest;
   }
   return idx;
+}
+
+/**
+ * Find the earliest unsatisfied prerequisite that can be reached by moving
+ * backward from `beforeIndex`. Prerequisites absent from the resolved registry
+ * or at/after the bound cannot be resolved by that movement.
+ */
+export function earliestResolvablePrerequisiteIndex(
+  steps: StepDefinition[],
+  state: ConductState,
+  step: StepDefinition,
+  beforeIndex: number,
+  include: (prerequisite: StepName) => boolean = () => true,
+): number {
+  let earliest = -1;
+  for (const prereq of step.prerequisites) {
+    if (stepSatisfied(state, prereq)) continue;
+    if (!include(prereq)) continue;
+    const prereqIdx = steps.findIndex((candidate) => candidate.name === prereq);
+    if (prereqIdx < 0 || prereqIdx >= beforeIndex) continue;
+    if (earliest === -1 || prereqIdx < earliest) earliest = prereqIdx;
+  }
+  return earliest;
 }
 
 /**

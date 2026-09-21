@@ -205,7 +205,7 @@ it up automatically, and I want the limits of that guarantee written down rather
   fails identifying the hardcoded name — the registry must remain the enumeration source for
   registry-rendered commands.
 - Given a step declared only in project configuration — a custom step or a parallel-group
-  skill override, which dispatches as its raw state key rather than through the registry —
+  skill override, which is dispatched outside the registry —
   when the preflight's coverage is documented, then that surface is recorded as a **known
   non-covered case** rather than claimed as covered.
 - Given a step is removed from the registry, when the preflight runs, then it is no longer

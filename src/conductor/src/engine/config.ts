@@ -107,7 +107,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'build_review', 'conflict_check',
     'prd_audit', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
     'retry_routing', 'coverage_binding', 'wiring', 'kickback_escalation', 'cumulative_kickback_bound',
-    'gate_code_validity', 'daemon_verbose', 'reconcile_parked_auto_cleanup',
+    'gate_code_validity', 'daemon_verbose', 'reconcile_parked_auto_cleanup', 'reclaim_merged_worktrees',
     'step_heartbeat_stall_minutes', 'stale_claim_window_hours',
     'provider_preparation_timeout_minutes', 'teardown_timeout_seconds',
     'dispatch_start_timeout_seconds',
@@ -824,6 +824,16 @@ export function validateConfig(
     }
   } else if (materializeDefaults) {
     obj.reconcile_parked_auto_cleanup = true;
+  }
+
+  // reclaim_merged_worktrees — merged feature worktree reclamation policy.
+  // Absent → enabled by default; malformed values are hard configuration errors.
+  if (obj.reclaim_merged_worktrees !== undefined) {
+    if (typeof obj.reclaim_merged_worktrees !== 'boolean') {
+      return errVal('reclaim_merged_worktrees must be a boolean');
+    }
+  } else if (materializeDefaults) {
+    obj.reclaim_merged_worktrees = true;
   }
 
   // mergeable_autoresolve

@@ -849,6 +849,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const haltPrSweepCache = new Map<string, PrSweepOutcome>();
   const parkedSweepCache = new Map<string, ParkClassification>();
   const reconcileParkedAutoCleanup = config?.reconcile_parked_auto_cleanup ?? true;
+  const reclaimMergedWorktrees = config?.reclaim_merged_worktrees ?? true;
 
   const log = createDaemonModeLogger({
     formatActivityLine: formatDaemonActivityLine,
@@ -2128,6 +2129,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           // Rendering is observational. The daemon sweep below owns cleanup
           // and is the sole consumer of the startup-resolved toggle.
           autoCleanup: false,
+          reclaimMergedWorktrees: false,
           verbose: config?.daemon_verbose ?? false,
           worktreeLifecycle,
         });
@@ -2267,12 +2269,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // per-slug watcher disposer (cleanup otherwise leaves a watcher on a
       // deleted worktree). Removing either silently reverts this sweep to a
       // no-op fallback path — the same failure mode as the bindings above.
-      reconcileParkedFeatures: async ({ disposeHaltWatcher }) => {
+      reconcileParkedFeatures: async ({ disposeHaltWatcher, isFeatureInFlight }) => {
         await reconcileParkedFeatures({
           projectRoot,
           log: (message) => log(message, true),
           cache: parkedSweepCache,
           autoCleanup: reconcileParkedAutoCleanup,
+          reclaimMergedWorktrees,
+          isFeatureInFlight,
+          onEvent: (event) => { void events.emit(event); },
           getIssueState: tracker.getIssueState.bind(tracker),
           requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log }),
           disposeHaltWatcher,
@@ -2808,6 +2813,12 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'scratch_cleanup_failed':
       log(`${dot} ${chalk.red('✗')} scratch cleanup failed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
+      break;
+    case 'worktree_reclaim_reclaimed':
+      log(`${dot} ${chalk.green('✓')} worktree reclaimed ${event.slug}${event.branch === undefined ? '' : ` (${[event.branch, event.proof].filter(Boolean).join('; ')})`}`);
+      break;
+    case 'worktree_reclaim_failed':
+      log(`${dot} ${chalk.red('✗')} worktree reclaim failed ${event.slug} (${[event.branch, event.refusal].filter(Boolean).join('; ')})`);
       break;
     case 'provider_fallback':
       log(

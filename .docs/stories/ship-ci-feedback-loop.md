@@ -63,7 +63,8 @@ halt-monitor-visible event so that a broken ship is observable without reading C
   (never throws — FR-15 parity).
 - Given a PR already carrying `needs-remediation`, when its checks are failed, then NO fix
   dispatch occurs and the `ci-failed` label handling still applies (sticky escalation is
-  terminal until a human clears it).
+  terminal until the label is cleared: by a human, or by the sweep when the recorded
+  escalation cause is conflict resolution and the PR is no longer conflicting).
 - Given the same PR is failed on two consecutive sweeps with no state change, when the second
   sweep runs, then the ✋ event is not duplicated (emit on transition or dispatch, not every
   tick) — the halt-monitor is not spammed.
