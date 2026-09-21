@@ -862,6 +862,44 @@ else
   fi
 fi
 
+# 9f. The bootstrap script is a published plain file with one checkout path.
+bootstrap_doc_script="${HARNESS_DIR}/docs/install.sh"
+bootstrap_bin_link="${HARNESS_DIR}/bin/bootstrap"
+bootstrap_site_config="${HARNESS_DIR}/docs/_config.yml"
+if [ -f "$bootstrap_doc_script" ] && [ ! -L "$bootstrap_doc_script" ] \
+  && [ "$(head -n 1 "$bootstrap_doc_script")" = '#!/bin/sh' ]; then
+  assert "docs/install.sh is a plain published shell script" 0
+else
+  assert "docs/install.sh is a plain published shell script" 1
+fi
+
+if [ -L "$bootstrap_bin_link" ] && [ "$(readlink "$bootstrap_bin_link")" = '../docs/install.sh' ] \
+  && [ "$(readlink -f "$bootstrap_bin_link")" = "$(readlink -f "$bootstrap_doc_script")" ]; then
+  assert "bin/bootstrap links to docs/install.sh" 0
+else
+  assert "bin/bootstrap links to docs/install.sh" 1
+fi
+
+if ! grep -Eq '^[[:space:]]*-[[:space:]]*([^#]*install\.sh|[^#]*\*\.sh)' "$bootstrap_site_config"; then
+  assert "docs site does not exclude install.sh" 0
+else
+  assert "docs site does not exclude install.sh" 1
+fi
+
+bootstrap_publish_dir=$(mktemp -d)
+if grep -q '^---$' "$bootstrap_doc_script" \
+  || find "$bootstrap_doc_script" -path '*/[_\.]*/install.sh' -print -quit | grep -q .; then
+  assert "docs/install.sh is published verbatim" 1
+else
+  cp "$bootstrap_doc_script" "$bootstrap_publish_dir/install.sh"
+  if [ -f "$bootstrap_publish_dir/install.sh" ] && cmp -s "$bootstrap_doc_script" "$bootstrap_publish_dir/install.sh"; then
+    assert "docs/install.sh is published verbatim" 0
+  else
+    assert "docs/install.sh is published verbatim" 1
+  fi
+fi
+rm -rf "$bootstrap_publish_dir"
+
 # ── 10. Writer-audit for task-status.json single authority ──────────────────
 # Task #302 enforces that ONLY the engine (src/conductor/src/engine/) writes to
 # `.pipeline/task-status.json`. This is the single source of truth for task

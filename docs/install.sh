@@ -140,8 +140,44 @@ announce() {
 }
 
 acquire() {
-  mkdir -p "${TARGET%/harness}"
-  git clone --branch "$REF" "$REPO_URL" "$TARGET"
+  mkdir -p "$TARGET_PARENT"
+  if ! mkdir "$LOCK"; then
+    fail "another install is in progress at $LOCK"
+  fi
+  LOCK_HELD=1
+  if ! git clone --branch "$REF" "$REPO_URL" "$PARTIAL"; then
+    fail "could not acquire ai-conductor from $REPO_URL"
+  fi
+  mv "$PARTIAL" "$TARGET"
+}
+
+cleanup() {
+  [ -z "${PARTIAL-}" ] || rm -rf "$PARTIAL"
+  if [ "${LOCK_HELD-0}" -eq 1 ]; then
+    rmdir "$LOCK" 2>/dev/null || true
+  fi
+}
+
+is_our_origin() {
+  case "$1" in
+    "$REPO_URL"|https://github.com/jstoup111/ai-conductor|https://github.com/jstoup111/ai-conductor.git|git@github.com:jstoup111/ai-conductor|git@github.com:jstoup111/ai-conductor.git) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+classify_target() {
+  if [ ! -e "$TARGET" ]; then
+    TARGET_KIND=fresh
+    return
+  fi
+  if [ ! -d "$TARGET/.git" ]; then
+    fail "refusing to replace existing directory $TARGET"
+  fi
+  origin=$(git -C "$TARGET" remote get-url origin 2>/dev/null) || fail "refusing to use $TARGET without an origin"
+  if ! is_our_origin "$origin"; then
+    fail "refusing to use $TARGET with unexpected origin $origin"
+  fi
+  TARGET_KIND=ours
 }
 
 run_installer() {
@@ -159,18 +195,36 @@ run_installer() {
   fi
 }
 
+run_updater() {
+  if (: </dev/tty) 2>/dev/null; then
+    (cd "$TARGET" && ./bin/update </dev/tty)
+  else
+    (cd "$TARGET" && ./bin/update)
+  fi
+}
+
 main() {
   REPO_URL=${AI_CONDUCTOR_REPO_URL:-https://github.com/jstoup111/ai-conductor.git}
   TARGET="$HOME/.ai-conductor/harness"
+  TARGET_PARENT="$HOME/.ai-conductor"
+  PARTIAL="$TARGET_PARENT/harness.partial.$$"
+  LOCK="$TARGET_PARENT/harness.lock"
+  LOCK_HELD=0
+  trap cleanup 0 1 2 15
   parse_args "$@"
   if [ -n "${AI_CONDUCTOR_CHANNEL+x}" ]; then
     validate_channel "$AI_CONDUCTOR_CHANNEL"
   fi
   check_prerequisites
-  resolve_ref
-  announce
-  acquire
-  run_installer
+  classify_target
+  if [ "$TARGET_KIND" = ours ]; then
+    run_updater
+  else
+    resolve_ref
+    announce
+    acquire
+    run_installer
+  fi
 }
 
 main "$@"

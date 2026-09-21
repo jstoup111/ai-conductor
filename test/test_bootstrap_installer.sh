@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Covers: task:1, task:2, task:3, task:4, task:5, task:6
+# Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:8, task:9, task:10, task:11
 # Exercises the public bootstrap entry point with only a local stand-in source.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -24,7 +24,13 @@ exit "${INSTALLER_EXIT_CODE:-0}"
 EOF
 cat > "$SOURCE_REPO/bin/update" <<'EOF'
 #!/bin/sh
-printf '%s\n' "$PWD|$*|${AI_CONDUCTOR_CHANNEL-}" >> "$INSTALLER_RECORD"
+printf '%s\n' "$PWD|$*|${AI_CONDUCTOR_CHANNEL-}" >> "${UPDATE_RECORD:-$INSTALLER_RECORD}"
+printf '%s\n' 'installation is current'
+[ -z "${UPDATE_MARKER-}" ] || : > "$UPDATE_MARKER"
+if [ "${UPDATE_EXIT_CODE:-0}" -ne 0 ]; then
+  printf '%s\n' "updater failed with ${UPDATE_EXIT_CODE}" >&2
+fi
+exit "${UPDATE_EXIT_CODE:-0}"
 EOF
 chmod +x "$SOURCE_REPO/bin/install" "$SOURCE_REPO/bin/update"
 git -C "$SOURCE_REPO" add bin
@@ -67,11 +73,35 @@ done
 FRESH_INSTALL_PATH="$TMP_ROOT/prerequisites-fresh-install"
 mkdir -p "$FRESH_INSTALL_PATH"
 ln -s "$(command -v git)" "$FRESH_INSTALL_PATH/git"
-ln -s "$(command -v mkdir)" "$FRESH_INSTALL_PATH/mkdir"
+for tool in mkdir mv rm rmdir; do
+  ln -s "$(command -v "$tool")" "$FRESH_INSTALL_PATH/$tool"
+done
 for tool in gh node npm tmux; do
   ln -s "$PREREQUISITE_PATH/present" "$FRESH_INSTALL_PATH/$tool"
 done
 ln -s "$PREREQUISITE_PATH/python3" "$FRESH_INSTALL_PATH/python3"
+
+INTERRUPTED_CLONE_PATH="$TMP_ROOT/prerequisites-interrupted-clone"
+mkdir -p "$INTERRUPTED_CLONE_PATH"
+cat > "$INTERRUPTED_CLONE_PATH/git" <<'EOF'
+#!/bin/sh
+if [ "$1" = clone ]; then
+  for target; do :; done
+  /bin/mkdir -p "$target"
+  printf '%s\n' interrupted > "$target/interrupted"
+  printf '%s\n' "interrupted clone from $AI_CONDUCTOR_REPO_URL" >&2
+  exit 1
+fi
+exec "$REAL_GIT" "$@"
+EOF
+chmod +x "$INTERRUPTED_CLONE_PATH/git"
+for tool in mkdir mv rm rmdir; do
+  ln -s "$(command -v "$tool")" "$INTERRUPTED_CLONE_PATH/$tool"
+done
+for tool in gh node npm tmux; do
+  ln -s "$PREREQUISITE_PATH/present" "$INTERRUPTED_CLONE_PATH/$tool"
+done
+ln -s "$PREREQUISITE_PATH/python3" "$INTERRUPTED_CLONE_PATH/python3"
 
 MISSING_TOOLS_PATH="$TMP_ROOT/prerequisites-missing-tools"
 mkdir -p "$MISSING_TOOLS_PATH"
@@ -96,7 +126,7 @@ failures=''
 run_case() {
   local name=$1
   shift
-  local case_home="$TMP_ROOT/home-$name"
+  local case_home=${CASE_HOME_OVERRIDE:-"$TMP_ROOT/home-$name"}
   local case_stdout="$TMP_ROOT/$name.stdout"
   local case_stderr="$TMP_ROOT/$name.stderr"
   mkdir -p "$case_home"
@@ -108,7 +138,7 @@ run_case() {
     channel_env=("AI_CONDUCTOR_CHANNEL=$CASE_CHANNEL")
   fi
   env -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_CREDENTIAL_HELPER -u AI_CONDUCTOR_CHANNEL \
-    "${channel_env[@]}" HOME="$case_home" PATH="${CASE_PATH-$PATH}" AI_CONDUCTOR_REPO_URL="${CASE_REPO_URL-$SOURCE_REPO}" INSTALLER_RECORD="$RECORD" INSTALLER_EXIT_CODE="${INSTALLER_EXIT_CODE-0}" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
+    "${channel_env[@]}" HOME="$case_home" PATH="${CASE_PATH-$PATH}" REAL_GIT="$(command -v git)" AI_CONDUCTOR_REPO_URL="${CASE_REPO_URL-$SOURCE_REPO}" INSTALLER_RECORD="$RECORD" INSTALLER_EXIT_CODE="${INSTALLER_EXIT_CODE-0}" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
   CASE_STATUS=$?
   set -e
   CASE_STDOUT=$(< "$case_stdout")
@@ -121,6 +151,16 @@ assert_untouched() {
   local name=$1
   if [ -e "$CASE_HOME/.ai-conductor/harness" ] || [ -s "$RECORD" ]; then
     failures+="$name touched the target or reached the stand-in installer\n"
+  fi
+}
+
+assert_acquisition_clean() {
+  local name=$1
+  local parent="$CASE_HOME/.ai-conductor"
+  if [ -e "$parent/harness" ] \
+    || { [ -d "$parent" ] && find "$parent" -maxdepth 1 -name 'harness.partial.*' -print -quit | grep -q .; } \
+    || [ -s "$RECORD" ]; then
+    failures+="$name left an installation or partial acquisition behind\\n"
   fi
 }
 
@@ -235,6 +275,31 @@ else
   failures+="missing PyYAML was not reported: $CASE_OUTPUT\\n"
 fi
 assert_untouched missing-pyyaml
+
+MISSING_SOURCE="$TMP_ROOT/missing-source"
+CASE_REPO_URL="$MISSING_SOURCE" CASE_PATH="$FRESH_INSTALL_PATH" run_case missing-source
+if [ "$CASE_STATUS" -ne 0 ] && grep -Fq "$MISSING_SOURCE" <<< "$CASE_STDERR"; then
+  echo 'PASS unreachable source fails by name'
+else
+  failures+="unreachable source did not fail naming its URL: $CASE_OUTPUT\\n"
+fi
+assert_acquisition_clean missing-source
+
+CASE_PATH="$INTERRUPTED_CLONE_PATH" run_case interrupted-clone
+if [ "$CASE_STATUS" -ne 0 ] && grep -Fq "$SOURCE_REPO" <<< "$CASE_STDERR"; then
+  echo 'PASS interrupted clone exits non-zero naming its URL'
+else
+  failures+="interrupted clone did not fail naming its URL: $CASE_OUTPUT\\n"
+fi
+assert_acquisition_clean interrupted-clone
+
+FAILED_HOME=$CASE_HOME
+CASE_HOME_OVERRIDE="$FAILED_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case retry-after-acquisition-failure
+if [ "$CASE_STATUS" -eq 0 ] && [ -d "$FAILED_HOME/.ai-conductor/harness/.git" ]; then
+  echo 'PASS retry after acquisition failure installs afresh'
+else
+  failures+="retry after acquisition failure did not install cleanly: $CASE_OUTPUT\\n"
+fi
 
 CASE_PATH="$FRESH_INSTALL_PATH" run_case fresh-install
 FRESH_TARGET="$CASE_HOME/.ai-conductor/harness"
@@ -382,6 +447,121 @@ if [ "$BOOTSTRAP_STATUS" -eq 0 ] && [ "$MANUAL_CLONE_STATUS" -eq 0 ] && [ "$MANU
   echo 'PASS fresh bootstrap state matches a manual stable clone and install'
 else
   failures+="manual parity differed between bootstrap and manual install\\n"
+fi
+
+# Existing targets are classified before an acquisition can write anything.
+CONFIG_HOME="$TMP_ROOT/home-existing-config"
+CONFIG_FILE="$CONFIG_HOME/.ai-conductor/config.yml"
+mkdir -p "${CONFIG_FILE%/*}"
+printf 'preserve: true\n' > "$CONFIG_FILE"
+config_before=$(cksum "$CONFIG_FILE")
+CASE_HOME_OVERRIDE="$CONFIG_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case existing-config
+if [ "$CASE_STATUS" -eq 0 ] && [ "$(cksum "$CONFIG_FILE")" = "$config_before" ]; then
+  echo 'PASS existing ai-conductor configuration is preserved during fresh install'
+else
+  failures+="existing configuration was changed: $CASE_OUTPUT\\n"
+fi
+
+PLAIN_HOME="$TMP_ROOT/home-plain-target"
+PLAIN_TARGET="$PLAIN_HOME/.ai-conductor/harness"
+mkdir -p "$PLAIN_TARGET"
+printf 'keep one\n' > "$PLAIN_TARGET/one"
+printf 'keep two\n' > "$PLAIN_TARGET/two"
+plain_before=$(find "$PLAIN_TARGET" -type f -exec cksum {} + | sort)
+CASE_HOME_OVERRIDE="$PLAIN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case plain-target
+if [ "$CASE_STATUS" -ne 0 ] && grep -Fq "$PLAIN_TARGET" <<< "$CASE_STDERR" \
+  && [ "$(find "$PLAIN_TARGET" -type f -exec cksum {} + | sort)" = "$plain_before" ]; then
+  echo 'PASS plain target directory is refused untouched'
+else
+  failures+="plain target was not refused untouched: $CASE_OUTPUT\\n"
+fi
+
+FOREIGN_HOME="$TMP_ROOT/home-foreign-target"
+FOREIGN_TARGET="$FOREIGN_HOME/.ai-conductor/harness"
+mkdir -p "${FOREIGN_TARGET%/*}"
+git clone -q "$SOURCE_REPO" "$FOREIGN_TARGET"
+git -C "$FOREIGN_TARGET" remote set-url origin https://example.invalid/not-ai-conductor.git
+foreign_head=$(git -C "$FOREIGN_TARGET" rev-parse HEAD)
+foreign_before=$(find "$FOREIGN_TARGET" -type f -exec cksum {} + | sort)
+CASE_HOME_OVERRIDE="$FOREIGN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case foreign-target
+if [ "$CASE_STATUS" -ne 0 ] && grep -Fq "$FOREIGN_TARGET" <<< "$CASE_STDERR" \
+  && grep -Fq 'https://example.invalid/not-ai-conductor.git' <<< "$CASE_STDERR" \
+  && [ "$(git -C "$FOREIGN_TARGET" rev-parse HEAD)" = "$foreign_head" ] \
+  && [ "$(find "$FOREIGN_TARGET" -type f -exec cksum {} + | sort)" = "$foreign_before" ]; then
+  echo 'PASS foreign checkout is refused untouched'
+else
+  failures+="foreign checkout was not refused untouched: $CASE_OUTPUT\\n"
+fi
+
+RERUN_HOME="$TMP_ROOT/home-rerun"
+CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case rerun-first
+rerun_head=$(git -C "$RERUN_HOME/.ai-conductor/harness" rev-parse HEAD)
+: > "$RECORD"
+CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case rerun-second
+if [ "$CASE_STATUS" -eq 0 ] && grep -Fq 'installation is current' <<< "$CASE_STDOUT" \
+  && [ "$(< "$RECORD")" = "$RERUN_HOME/.ai-conductor/harness||" ] \
+  && [ "$(git -C "$RERUN_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$rerun_head" ]; then
+  echo 'PASS second run delegates to the current checkout updater'
+else
+  failures+="second run did not delegate to updater: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
+fi
+
+UPDATE_FAIL_HOME="$TMP_ROOT/home-updater-failure"
+git clone -q "$SOURCE_REPO" "$UPDATE_FAIL_HOME/.ai-conductor/harness"
+UPDATE_MARKER="$TMP_ROOT/updater-marker"
+set +e
+env HOME="$UPDATE_FAIL_HOME" PATH="$FRESH_INSTALL_PATH" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" UPDATE_EXIT_CODE=7 UPDATE_MARKER="$UPDATE_MARKER" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/updater-failure.stdout" 2> "$TMP_ROOT/updater-failure.stderr"
+update_failure_status=$?
+set -e
+if [ "$update_failure_status" -eq 7 ] && [ -f "$UPDATE_MARKER" ] && grep -Fq 'updater failed with 7' "$TMP_ROOT/updater-failure.stderr"; then
+  echo 'PASS updater failure and its state are propagated unchanged'
+else
+  failures+="updater failure was not propagated unchanged\\n"
+fi
+
+LOCK_HOME="$TMP_ROOT/home-held-lock"
+mkdir -p "$LOCK_HOME/.ai-conductor/harness.lock"
+CASE_HOME_OVERRIDE="$LOCK_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case held-lock
+if [ "$CASE_STATUS" -ne 0 ] && grep -Fq "$LOCK_HOME/.ai-conductor/harness.lock" <<< "$CASE_STDERR" \
+  && [ -d "$LOCK_HOME/.ai-conductor/harness.lock" ] && [ ! -e "$LOCK_HOME/.ai-conductor/harness" ]; then
+  echo 'PASS a foreign acquisition lock is never removed'
+else
+  failures+="held acquisition lock was not respected: $CASE_OUTPUT\\n"
+fi
+
+CONCURRENT_HOME="$TMP_ROOT/home-concurrent"
+mkdir -p "$CONCURRENT_HOME"
+set +e
+env HOME="$CONCURRENT_HOME" PATH="$FRESH_INSTALL_PATH" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-one.stdout" 2> "$TMP_ROOT/concurrent-one.stderr" & concurrent_one=$!
+env HOME="$CONCURRENT_HOME" PATH="$FRESH_INSTALL_PATH" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-two.stdout" 2> "$TMP_ROOT/concurrent-two.stderr" & concurrent_two=$!
+wait "$concurrent_one"; concurrent_one_status=$?
+wait "$concurrent_two"; concurrent_two_status=$?
+set -e
+if [ -d "$CONCURRENT_HOME/.ai-conductor/harness/.git" ] \
+  && git -C "$CONCURRENT_HOME/.ai-conductor/harness" fsck --no-dangling >/dev/null \
+  && [ ! -e "$CONCURRENT_HOME/.ai-conductor/harness.lock" ] \
+  && ! find "$CONCURRENT_HOME/.ai-conductor" -maxdepth 1 -name 'harness.partial.*' -print -quit | grep -q . \
+  && { [ "$concurrent_one_status" -eq 0 ] || [ "$concurrent_two_status" -eq 0 ]; }; then
+  echo 'PASS simultaneous first runs leave one healthy checkout'
+else
+  failures+="simultaneous first runs did not leave one healthy checkout\\n"
+fi
+
+HAND_HOME="$TMP_ROOT/home-hand-fetched"
+HAND_CHECKOUT="$HAND_HOME/code/ai-conductor"
+mkdir -p "${HAND_CHECKOUT%/*}"
+git clone -q "$SOURCE_REPO" "$HAND_CHECKOUT"
+hand_head=$(git -C "$HAND_CHECKOUT" rev-parse HEAD)
+hand_status=$(git -C "$HAND_CHECKOUT" status --porcelain)
+hand_files=$(find "$HAND_CHECKOUT" -type f -not -path '*/.git/*' -exec cksum {} + | sort)
+CASE_HOME_OVERRIDE="$HAND_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case hand-fetched
+if [ "$CASE_STATUS" -eq 0 ] && [ -d "$HAND_HOME/.ai-conductor/harness/.git" ] \
+  && [ "$(git -C "$HAND_CHECKOUT" rev-parse HEAD)" = "$hand_head" ] \
+  && [ "$(git -C "$HAND_CHECKOUT" status --porcelain)" = "$hand_status" ] \
+  && [ "$(find "$HAND_CHECKOUT" -type f -not -path '*/.git/*' -exec cksum {} + | sort)" = "$hand_files" ]; then
+  echo 'PASS hand-fetched checkout remains untouched'
+else
+  failures+="hand-fetched checkout was changed: $CASE_OUTPUT\\n"
 fi
 
 if [ -z "$failures" ]; then
