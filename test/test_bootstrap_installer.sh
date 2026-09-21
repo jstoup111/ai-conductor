@@ -299,7 +299,8 @@ assert_untouched missing-pyyaml
 
 MISSING_SOURCE="$TMP_ROOT/missing-source"
 CASE_REPO_URL="$MISSING_SOURCE" CASE_PATH="$FRESH_INSTALL_PATH" run_case missing-source
-if [ "$CASE_STATUS" -ne 0 ] && grep -Fq "$MISSING_SOURCE" <<< "$CASE_STDERR"; then
+if [ "$CASE_STATUS" -ne 0 ] \
+  && grep -Fq "could not acquire ai-conductor from $MISSING_SOURCE" <<< "$CASE_STDERR"; then
   echo 'PASS unreachable source fails by name'
 else
   failures+="unreachable source did not fail naming its URL: $CASE_OUTPUT\\n"
@@ -307,7 +308,8 @@ fi
 assert_acquisition_clean missing-source
 
 CASE_PATH="$INTERRUPTED_CLONE_PATH" run_case interrupted-clone
-if [ "$CASE_STATUS" -ne 0 ] && grep -Fq "$SOURCE_REPO" <<< "$CASE_STDERR"; then
+if [ "$CASE_STATUS" -ne 0 ] \
+  && grep -Fq "could not acquire ai-conductor from $SOURCE_REPO" <<< "$CASE_STDERR"; then
   echo 'PASS interrupted clone exits non-zero naming its URL'
 else
   failures+="interrupted clone did not fail naming its URL: $CASE_OUTPUT\\n"
