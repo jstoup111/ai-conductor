@@ -88,7 +88,7 @@ build_review:
       enabled: true
       llm_provider: claude
       model: opus
-      effort: high
+      effort: low
     # Security judges the whole frozen feature diff for concrete, changed-hunk-
     # anchored defects (#2568). Judgement-heavy like testQuality, so it takes the
     # same Claude opus routing. Enabled 2026-09-18.
@@ -96,7 +96,7 @@ build_review:
       enabled: true
       llm_provider: claude
       model: opus
-      effort: high
+      effort: low
       # Findings the reviewer scores below 60 are suppressed, not kicked back:
       # low-confidence security findings (35-55) cost a 30-minute lap and a
       # kickback charge each while rarely surviving a second look.
