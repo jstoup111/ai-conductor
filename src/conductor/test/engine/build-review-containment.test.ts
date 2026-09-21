@@ -48,7 +48,7 @@ const runtimeHost: BuildReviewRuntimeHost = {
 };
 const HEALTHY_PROBE = [
   'source-write-refused', 'baseline-write-refused', 'installation-write-refused', 'engine-state-write-refused',
-  'scratch-write-succeeded', 'sibling-evidence-withheld', 'nested-sandbox-available', 'host-state-withheld',
+  'scratch-write-succeeded', 'sibling-evidence-withheld', 'nested-sandbox-available', 'host-state-withheld', 'checkout-state-withheld',
 ];
 
 function bindTriples(args: readonly string[]): Array<readonly [string, string, string]> {
@@ -224,7 +224,7 @@ describe('engine/build-review-containment', () => {
           stderr: '',
           stdout: [
             'source-write-refused', 'baseline-write-refused', 'installation-write-refused', engineEvidenceIsReadOnly ? 'engine-state-write-refused' : 'engine-state-write-succeeded',
-            'scratch-write-succeeded', 'sibling-evidence-withheld', 'nested-sandbox-available', 'host-state-withheld',
+            'scratch-write-succeeded', 'sibling-evidence-withheld', 'nested-sandbox-available', 'host-state-withheld', 'checkout-state-withheld',
           ].join('\n'),
         };
       },
@@ -424,23 +424,23 @@ describe('engine/build-review-containment', () => {
     ['missing bubblewrap', async () => { throw Object.assign(new Error('not found'), { code: 'ENOENT' }); }],
     ['a successful protected write', async () => ({
       exitCode: 0, stderr: '',
-      stdout: 'source-write-succeeded\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available\nhost-state-withheld',
+      stdout: 'source-write-succeeded\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available\nhost-state-withheld\ncheckout-state-withheld',
     })],
     ['a failed scratch write', async () => ({
       exitCode: 0, stderr: '',
-      stdout: 'source-write-refused\nbaseline-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-refused\nsibling-evidence-withheld\nnested-sandbox-available\nhost-state-withheld',
+      stdout: 'source-write-refused\nbaseline-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-refused\nsibling-evidence-withheld\nnested-sandbox-available\nhost-state-withheld\ncheckout-state-withheld',
     })],
     ['no proof that host state is withheld', async () => ({
       exitCode: 0, stderr: '',
-      stdout: 'source-write-refused\nbaseline-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available',
+      stdout: 'source-write-refused\nbaseline-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available\ncheckout-state-withheld',
     })],
     ['readable host state', async () => ({
       exitCode: 0, stderr: '',
-      stdout: 'source-write-refused\nbaseline-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available\nhost-state-readable',
+      stdout: 'source-write-refused\nbaseline-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-available\nhost-state-readable\ncheckout-state-withheld',
     })],
     ['an unsupported nested sandbox', async () => ({
       exitCode: 0, stderr: '',
-      stdout: 'source-write-refused\nbaseline-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-denied\nhost-state-withheld',
+      stdout: 'source-write-refused\nbaseline-write-refused\ninstallation-write-refused\nengine-state-write-refused\nscratch-write-succeeded\nsibling-evidence-withheld\nnested-sandbox-denied\nhost-state-withheld\ncheckout-state-withheld',
     })],
   ])('refuses review preparation when containment has %s', async (_reason, runProcess) => {
     const result = await prepareBuildReviewContainment({
@@ -463,6 +463,55 @@ describe('engine/build-review-containment', () => {
     expect(result).toMatchObject({
       kind: 'unsupported', provider: 'claude', capability: 'linux-read-only-review-boundary',
       recovery: 'install-bubblewrap-and-enable-nested-sandboxing',
+    });
+  });
+  describe('checkout state that is not review input', () => {
+    const CHECKOUT_ENTRIES: Record<string, ReadonlyArray<{ readonly name: string; readonly kind: 'directory' | 'file' | 'other' }>> = {
+      '/review/original': [
+        { name: '.daemon', kind: 'directory' }, { name: '.worktrees', kind: 'directory' }, { name: '.pipeline', kind: 'directory' },
+        { name: '.git', kind: 'directory' }, { name: '.claude', kind: 'directory' },
+        { name: '.env', kind: 'file' }, { name: '.env.local', kind: 'file' }, { name: '.envrc-link', kind: 'other' },
+        { name: 'src', kind: 'directory' }, { name: '.github', kind: 'directory' },
+      ],
+      '/review/original/.git': [{ name: 'config', kind: 'file' }, { name: 'objects', kind: 'directory' }],
+      '/review/original/.claude': [{ name: 'settings.json', kind: 'file' }, { name: 'settings.local.json', kind: 'file' }, { name: 'worktrees', kind: 'directory' }],
+    };
+    const host: BuildReviewRuntimeHost = { ...runtimeHost, checkoutEntries: (directory) => CHECKOUT_ENTRIES[directory] ?? [] };
+    const MASKED = [
+      '/review/original/.daemon', '/review/original/.worktrees', '/review/original/.pipeline',
+      '/review/original/.claude/worktrees', '/review/original/.env', '/review/original/.env.local',
+      '/review/original/.claude/settings.local.json', '/review/original/.git/config',
+    ];
+
+    it('masks provider homes, sibling worktrees, pipeline state and operator credentials under the bound checkout', async () => {
+      const runProcess = vi.fn(async () => ({ exitCode: 0, stderr: '', stdout: HEALTHY_PROBE.join('\n') }));
+      const result = await prepareBuildReviewContainment({ provider: 'codex', paths: PATHS, runtimeHost: host, runProcess });
+      if (result.kind !== 'ready') throw new Error(`expected ready containment: ${result.reason}`);
+      const review = result.profile.reviewMountArgs!;
+      const at = (...needle: string[]) => review.findIndex((_, index) => needle.every((part, offset) => review[index + offset] === part));
+      const checkout = at('--ro-bind', '/review/original', '/review/original');
+      const evidenceMask = at('--tmpfs', PATHS.reviewEvidenceRoot);
+      for (const directory of MASKED.slice(0, 4)) {
+        expect(at('--tmpfs', directory), directory).toBeGreaterThan(checkout);
+        expect(at('--tmpfs', directory), directory).toBeLessThan(evidenceMask);
+      }
+      for (const file of MASKED.slice(4)) expect(at('--ro-bind', '/review/engine-evidence/.build-review-empty-mask', file), file).toBeGreaterThan(checkout);
+      // Reviewed source and tracked project configuration stay visible.
+      expect(review.join(' ')).not.toMatch(/original\/(src|\.github|\.envrc-link|\.claude\/settings\.json|\.git\/objects)/);
+      // The probe is handed every mask so the proved profile covers them.
+      const probed = (runProcess.mock.calls[0] as unknown as [string, string[]])[1];
+      expect(probed.slice(-MASKED.length).sort()).toEqual([...MASKED].sort());
+    });
+
+    it.each([
+      ['no proof that checkout state is withheld', HEALTHY_PROBE.filter((line) => line !== 'checkout-state-withheld')],
+      ['readable checkout state', HEALTHY_PROBE.map((line) => line === 'checkout-state-withheld' ? 'checkout-state-readable' : line)],
+    ])('refuses review preparation when containment has %s', async (_reason, lines) => {
+      const result = await prepareBuildReviewContainment({
+        provider: 'codex', paths: PATHS, runtimeHost: host,
+        runProcess: async () => ({ exitCode: 0, stderr: '', stdout: lines.join('\n') }),
+      });
+      expect(result).toMatchObject({ kind: 'unsupported', reason: expect.stringMatching(/checkout-state/) });
     });
   });
 });

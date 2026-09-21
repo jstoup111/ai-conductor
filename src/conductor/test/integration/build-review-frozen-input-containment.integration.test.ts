@@ -21,7 +21,7 @@ const HEAD = 'b'.repeat(40);
 const BASE = 'a'.repeat(40);
 const PROVED = [
   'source-write-refused', 'baseline-write-refused', 'installation-write-refused', 'engine-state-write-refused',
-  'scratch-write-succeeded', 'sibling-evidence-withheld', 'nested-sandbox-available', 'host-state-withheld',
+  'scratch-write-succeeded', 'sibling-evidence-withheld', 'nested-sandbox-available', 'host-state-withheld', 'checkout-state-withheld',
 ].join('\n');
 
 function git() {
@@ -99,6 +99,9 @@ describe('custom review containment exposes the complete frozen baseline/head in
     const evidenceRoot = join(project, '.pipeline', 'build-review');
     expect(bound('--tmpfs')).toContain(evidenceRoot);
     expect(probeArgs).toContain(join(evidenceRoot, '.sibling-evidence-probe'));
+    // Non-input checkout state is masked and handed to the probe.
+    expect(bound('--tmpfs')).toContain(join(project, '.pipeline'));
+    expect(probeArgs.at(-1)).toBe(join(project, '.pipeline'));
 
     const invocation = (invoke.mock.calls as unknown as Array<[{ prompt: string; cwd: string; reviewAccess?: { profile: { mountArgs: string[] } } }]>)[0]![0];
     expect(invocation.cwd).toBe(head);

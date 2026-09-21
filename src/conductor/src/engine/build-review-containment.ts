@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { readdirSync, realpathSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, relative, sep } from 'node:path';
@@ -50,6 +50,18 @@ export interface BuildReviewRuntimeHost {
   readonly home: string;
   /** Resolve symlinks; throws when the path does not exist. */
   readonly realpath: (path: string) => string;
+  /**
+   * Direct entries of one checkout directory (empty when it is absent). A mask
+   * can only land on a path that exists, and a directory and a file are masked
+   * differently. Optional only for fixed test hosts with no checkout state.
+   */
+  readonly checkoutEntries?: (directory: string) => readonly BuildReviewCheckoutEntry[];
+}
+
+export interface BuildReviewCheckoutEntry {
+  readonly name: string;
+  /** `other` (symlink, socket, device) is never masked: it cannot be mounted over. */
+  readonly kind: 'directory' | 'file' | 'other';
 }
 
 export interface BuildReviewContainmentOptions {
@@ -96,6 +108,7 @@ const REQUIRED_OBSERVATIONS = [
   'sibling-evidence-withheld',
   'nested-sandbox-available',
   'host-state-withheld',
+  'checkout-state-withheld',
 ] as const;
 
 const RECOGNIZED_OBSERVATIONS = new Set([
@@ -108,6 +121,7 @@ const RECOGNIZED_OBSERVATIONS = new Set([
   'sibling-evidence-readable',
   'nested-sandbox-denied',
   'host-state-readable',
+  'checkout-state-readable',
 ]);
 
 const REVIEW_CONTAINMENT_PROBE = [
@@ -120,6 +134,14 @@ const REVIEW_CONTAINMENT_PROBE = [
   'if bwrap --ro-bind / / -- true >/dev/null 2>&1; then printf "nested-sandbox-available\\n"; else printf "nested-sandbox-denied\\n"; fi',
   'if test -r "$6"; then printf "host-state-readable\\n"; else printf "host-state-withheld\\n"; fi',
   'probe_write "$7" baseline',
+  // Every remaining operand is a masked checkout path. A masked directory must
+  // itself be a tmpfs mount point (re-exposed evidence may sit beneath it, so
+  // emptiness is not the test) and a masked file must be an empty mount. A path
+  // the mount table cannot name verbatim counts as exposed: fail closed.
+  'shift 7; exposed=0',
+  'mounted_as() { awk -v path="$1" -v want="$2" \'$5 == path { for (i = 6; i <= NF; i++) if ($i == "-") { if (want == "" || $(i + 1) == want) found = 1 } } END { exit !found }\' /proc/self/mountinfo; }',
+  'for masked in "$@"; do if test -d "$masked"; then mounted_as "$masked" tmpfs || exposed=1; elif test -s "$masked" || ! mounted_as "$masked" ""; then exposed=1; fi; done',
+  'if test "$exposed" = 0; then printf "checkout-state-withheld\\n"; else printf "checkout-state-readable\\n"; fi',
 ].join('; ');
 
 function unsupported(
@@ -198,7 +220,19 @@ const liveRuntimeHost = (): BuildReviewRuntimeHost => ({
   pathEnv: process.env.PATH,
   home: homedir(),
   realpath: (path) => realpathSync(path),
+  checkoutEntries: liveCheckoutEntries,
 });
+
+const liveCheckoutEntries = (directory: string): readonly BuildReviewCheckoutEntry[] => {
+  try {
+    return readdirSync(directory, { withFileTypes: true }).map((entry) => ({
+      name: entry.name,
+      kind: entry.isDirectory() ? 'directory' as const : entry.isFile() ? 'file' as const : 'other' as const,
+    }));
+  } catch {
+    return [];
+  }
+};
 
 function coveredBySystemRoot(path: string): boolean {
   return SYSTEM_RUNTIME_ROOTS.some((root) => isWithin(root, path));
@@ -328,11 +362,51 @@ function deriveRuntimeMountArgs(provider: 'claude' | 'codex', host: BuildReviewR
   ];
 }
 
-function deriveReviewMountArgs(paths: BuildReviewContainmentPaths): readonly string[] {
+/**
+ * Checkout state that is not review input. The reviewer reads the frozen
+ * baseline/head trees; the checkout bind exists for tracked project files, so
+ * everything here is withheld:
+ *  - `.daemon`: self-host provider homes holding the operator's copied login;
+ *  - `.worktrees`, `.claude/worktrees`: other features' checkouts;
+ *  - `.pipeline`: engine state (policy material and engine evidence are
+ *    re-exposed beneath the evidence root by the binds that follow);
+ *  - `.env*`, `.claude/settings.local.json`, `.git/config`: operator secrets,
+ *    local permissions and credentialed remote URLs / helpers.
+ */
+const MASKED_CHECKOUT_DIRECTORIES = ['.daemon', '.worktrees', '.pipeline', join('.claude', 'worktrees')] as const;
+const MASKED_CHECKOUT_FILES = [join('.claude', 'settings.local.json'), join('.git', 'config')] as const;
+
+export interface BuildReviewCheckoutMasks {
+  readonly directories: readonly string[];
+  readonly files: readonly string[];
+}
+
+function deriveCheckoutMasks(checkout: string, host: BuildReviewRuntimeHost): BuildReviewCheckoutMasks {
+  const entries = host.checkoutEntries ?? (() => []);
+  const kindOf = (path: string) => entries(dirname(path)).find((entry) => entry.name === basename(path))?.kind;
+  const envFiles = entries(checkout).filter((entry) => entry.kind === 'file' && /^\.env(\..+)?$/.test(entry.name)).map((entry) => join(checkout, entry.name));
+  return {
+    directories: MASKED_CHECKOUT_DIRECTORIES.map((path) => join(checkout, path)).filter((path) => kindOf(path) === 'directory'),
+    files: [...envFiles, ...MASKED_CHECKOUT_FILES.map((path) => join(checkout, path)).filter((path) => kindOf(path) === 'file')],
+  };
+}
+
+/** Engine-owned empty file bound over each masked checkout file. */
+function emptyMaskFile(paths: Pick<BuildReviewContainmentPaths, 'engineEvidence'>): string {
+  return join(paths.engineEvidence, '.build-review-empty-mask');
+}
+
+function deriveReviewMountArgs(paths: BuildReviewContainmentPaths, masks: BuildReviewCheckoutMasks): readonly string[] {
   return [
     '--ro-bind', paths.frozenSource, paths.frozenSource,
     '--ro-bind', paths.frozenBaseline, paths.frozenBaseline,
     '--ro-bind', paths.originalCheckout, paths.originalCheckout,
+    // Masks follow the bind they hide and precede the evidence re-exposure, so
+    // policy material under `.pipeline` lands inside the empty mask.
+    ...masks.directories.flatMap((path) => ['--tmpfs', path]),
+    // An empty regular file, not /dev/null: a device node is unreadable on the
+    // sandbox's nodev root, and git aborts on an unreadable config.
+    ...masks.files.flatMap((path) => ['--ro-bind', emptyMaskFile(paths), path]),
     // The checkout bind above would expose every sibling branch artifact,
     // aggregate and cache entry under the evidence root.  Mask the root, then
     // re-expose only what this reviewer may read; bubblewrap applies these in
@@ -368,6 +442,7 @@ export function buildReviewEvidencePaths(projectDir: string): Pick<BuildReviewCo
 export async function prepareBuildReviewEvidencePaths(projectDir: string): Promise<ReturnType<typeof buildReviewEvidencePaths>> {
   const paths = buildReviewEvidencePaths(projectDir);
   await Promise.all([mkdir(paths.engineEvidence, { recursive: true }), mkdir(paths.siblingEvidence, { recursive: true })]);
+  await writeFile(emptyMaskFile(paths), '', 'utf8');
   await writeFile(paths.siblingEvidenceProbe, 'sibling review evidence that containment must withhold\n', 'utf8');
   return paths;
 }
@@ -449,7 +524,7 @@ export function composeReviewLaunchMounts(
   return composed;
 }
 
-function deriveProbeArgs(paths: BuildReviewContainmentPaths, mountArgs: readonly string[]): readonly string[] {
+function deriveProbeArgs(paths: BuildReviewContainmentPaths, mountArgs: readonly string[], masks: BuildReviewCheckoutMasks): readonly string[] {
   return [
     ...mountArgs,
     '--', '/bin/sh', '-c', REVIEW_CONTAINMENT_PROBE, 'build-review-containment-probe',
@@ -460,6 +535,8 @@ function deriveProbeArgs(paths: BuildReviewContainmentPaths, mountArgs: readonly
     paths.siblingEvidenceProbe,
     paths.hostStateProbe,
     paths.baselineWriteProbe,
+    ...masks.directories,
+    ...masks.files,
   ];
 }
 
@@ -499,11 +576,12 @@ export async function prepareBuildReviewContainment(
     return unsupported(options.provider, 'review containment paths must be absolute, candidate scratch must not be protected, and the host-state sentinel must lie outside every bound root');
   }
   const runtimeMountArgs = deriveRuntimeMountArgs(options.provider, host);
-  const reviewMountArgs = deriveReviewMountArgs(options.paths);
+  const masks = deriveCheckoutMasks(options.paths.originalCheckout, host);
+  const reviewMountArgs = deriveReviewMountArgs(options.paths, masks);
   const mountArgs = composeLaunchMounts(runtimeMountArgs, reviewMountArgs, options.launch ?? { executable: options.provider, args: [] }, host);
   let probe: Awaited<ReturnType<BuildReviewContainmentProcess>>;
   try {
-    probe = await options.runProcess('bwrap', deriveProbeArgs(options.paths, mountArgs));
+    probe = await options.runProcess('bwrap', deriveProbeArgs(options.paths, mountArgs, masks));
   } catch (error) {
     return unsupported(options.provider, probeFailureReason(error));
   }
