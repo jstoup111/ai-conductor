@@ -135,6 +135,27 @@ describe('engine/owner-gate/mutation-policy — machine identity and committed f
     expect(provenanceDiscovery.readCommittedRecords).not.toHaveBeenCalled();
   });
 
+  it('uses the canonical repository-and-resource matcher for provenance binding', async () => {
+    const canonicalized = request({
+      target: { repository: 'Acme/Rocket', kind: 'issue', number: 17 },
+    });
+    const provenanceDiscovery = { readCommittedRecords: vi.fn(async () => [ownedRecord('alice')]) };
+
+    await expect(authorizeGithubMutation(canonicalized, {
+      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
+      provenanceDiscovery,
+    })).resolves.toEqual({
+      kind: 'authorized',
+      actor: 'alice',
+      operation: 'issue.comment.create',
+      target: { repository: 'Acme/Rocket', kind: 'issue', number: 17 },
+    });
+    expect(provenanceDiscovery.readCommittedRecords).toHaveBeenCalledWith({
+      repository: 'acme/rocket',
+      ref: 'spec/owned',
+    });
+  });
+
   it('returns an authorized decision whose canonical target cannot be changed by later caller mutation', async () => {
     const attempted = request();
     const provenanceDiscovery = { readCommittedRecords: vi.fn(async () => [ownedRecord('alice')]) };

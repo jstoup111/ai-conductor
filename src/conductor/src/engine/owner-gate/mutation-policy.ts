@@ -6,6 +6,7 @@
 // fallback mutation.
 
 import type { GithubOperationName, GithubOperationTarget } from '../github-operations.js';
+import { githubTargetsMatch } from '../github-target.js';
 import { normalizeOwnerId, type OwnerResolution } from './identity.js';
 import {
   readMutationProvenance,
@@ -64,6 +65,24 @@ function boundTarget(target: GithubOperationTarget): GithubOperationTarget {
   }
 }
 
+/**
+ * Preserve the requested resource while substituting the provenance repository
+ * so the policy relies on the canonical target comparator for this boundary.
+ */
+function targetInRepository(target: GithubOperationTarget, repository: string): GithubOperationTarget {
+  switch (target.kind) {
+    case 'issue':
+    case 'pull-request':
+      return { repository, kind: target.kind, number: target.number };
+    case 'label-definition':
+      return { repository, kind: target.kind, name: target.name };
+    case 'remote-ref':
+      return { repository, kind: target.kind, ref: target.ref };
+    case 'repository':
+      return { repository, kind: target.kind };
+  }
+}
+
 function refused(
   request: GithubMutationAuthorizationRequest,
   reason: GithubMutationAuthorizationRefusalReason,
@@ -87,7 +106,7 @@ export async function authorizeGithubMutation(
   request: GithubMutationAuthorizationRequest,
   dependencies: GithubMutationAuthorizationDependencies,
 ): Promise<GithubMutationAuthorization> {
-  if (request.target.repository !== request.provenance.repository) {
+  if (!githubTargetsMatch(request.target, targetInRepository(request.target, request.provenance.repository))) {
     return refused(request, 'invalid-target');
   }
 
