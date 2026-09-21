@@ -32,7 +32,8 @@ import { Conductor } from '../test-conductor.js';
 const SLUG = 'projects-cannot-add-portable-non-competing-build-r';
 const PLAN_PATH = `.docs/plans/${SLUG}.md`;
 const STORY_PATH = `.docs/stories/${SLUG}.md`;
-const HASH = `sha256:${'a'.repeat(64)}`;
+// The engine recomputes a cited region from the frozen head blob: line 1 of the pre-repair src/feature.ts.
+const HASH = 'sha256:4effb9f76498b4adc1f86d868994f02e761151e4749676fe1d9312b54751e350';
 const roots: string[] = [];
 
 const PASS_EVIDENCE = {
