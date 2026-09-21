@@ -5,6 +5,7 @@ import type { ConductStateStore } from './conduct-state-store.js';
 import type { PreservedJudgeIdentity, ReplayEvidence, RebaseOperationRecord } from './gate-verdicts.js';
 import { readVerdict, writeVerdict } from './gate-verdicts.js';
 import { readState } from './state.js';
+import { creditKickbackGateLaps, updateKickbackLedger } from './kickback-ledger.js';
 
 /** The durable result consumed by the conductor and the re-kick path. */
 export interface AppliedRebaseTransition {
@@ -12,6 +13,28 @@ export interface AppliedRebaseTransition {
   invalidated: readonly StepName[];
   preserved: readonly StepName[];
   stateResult: 'applied' | 'already-applied' | 'refused';
+  convergenceCredit?: { gate: 'build_review' };
+}
+
+/** Credit a rebase invalidation once, using the durable operation id as receipt. */
+async function creditBuildReviewConvergence(projectRoot: string, operationId: string, invalidated: readonly StepName[]): Promise<{ gate: 'build_review' } | undefined> {
+  if (!invalidated.includes('build_review')) return undefined;
+  return updateKickbackLedger(projectRoot, (ledger) => {
+    if (ledger.convergenceCreditReceipts?.[operationId]) return { result: { gate: 'build_review' } as const };
+    const entry = ledger.gates.build_review;
+    if (!entry) return { result: undefined };
+    return {
+      ledger: {
+        ...ledger,
+        gates: { ...ledger.gates, build_review: creditKickbackGateLaps(entry) },
+        convergenceCreditReceipts: {
+          ...ledger.convergenceCreditReceipts,
+          [operationId]: { gate: 'build_review' },
+        },
+      },
+      result: { gate: 'build_review' } as const,
+    };
+  }, 'build_review');
 }
 
 /**
@@ -77,7 +100,8 @@ export async function applyRebaseTransition(
     const complete = await Promise.all(options.preserved.map(async (gate) =>
       (await readVerdict(options.projectRoot, gate))?.preservation?.operationId === operation.id));
     if (complete.every(Boolean)) {
-      return { operation: priorRebase.rebaseOperation, invalidated: options.invalidated, preserved: options.preserved, stateResult: 'already-applied' };
+      const convergenceCredit = await creditBuildReviewConvergence(options.projectRoot, operation.id, options.invalidated);
+      return { operation: priorRebase.rebaseOperation, invalidated: options.invalidated, preserved: options.preserved, stateResult: 'already-applied', ...(convergenceCredit ? { convergenceCredit } : {}) };
     }
     // A prior process exposed an applied descriptor before writing every
     // preservation effect. Re-open its fence and reconcile below; publication
@@ -187,6 +211,7 @@ export async function applyRebaseTransition(
   // restart can safely distinguish a completed operation from an interrupted
   // one without publishing a half-written pair.
   const applied: RebaseOperationRecord = { ...operation, status: 'applied' };
+  const convergenceCredit = await creditBuildReviewConvergence(options.projectRoot, operation.id, options.invalidated);
   await writeVerdict(options.projectRoot, 'rebase', {
     satisfied: true,
     checkedAt: Date.now(),
@@ -198,5 +223,6 @@ export async function applyRebaseTransition(
     invalidated: options.invalidated,
     preserved: options.preserved,
     stateResult: result.kind === 'idempotent' ? 'already-applied' : 'applied',
+    ...(convergenceCredit ? { convergenceCredit } : {}),
   };
 }

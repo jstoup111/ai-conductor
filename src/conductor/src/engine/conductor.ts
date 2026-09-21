@@ -14496,6 +14496,7 @@ export class Conductor {
         kickedBack: [...transition.operation.transition.invalidated],
         reverified: [...transition.operation.transition.reverified],
         preservedGates: [...transition.operation.transition.preserved],
+        ...(transition.convergenceCredit ? { convergenceCredit: transition.convergenceCredit } : {}),
       };
     }
 

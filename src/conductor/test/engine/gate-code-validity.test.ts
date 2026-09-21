@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import {
   gateVerdictStillValid,
+  currentPreservedJudgeIdentity,
   rebaseOperationPublicationBlocker,
   verdictProducedByRun,
 } from '../../src/engine/gate-code-validity.js';
@@ -682,6 +683,26 @@ describe('gateVerdictStillValid', () => {
     await commit(s, { [path]: 'updated\n' }, 'document update');
 
     await expect(gateVerdictStillValid({ projectRoot: s.repo, git: s.git }, gate, baseline)).resolves.toBe(expected);
+  });
+
+  it('reads the preserved coverage identity from its declared artifact', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await mkdir(join(s.repo, '.pipeline'), { recursive: true });
+    await writeFile(join(s.repo, '.pipeline/coverage-binding.json'), JSON.stringify({
+      version: 1, runId: 'coverage-run', codeStamp: 'coverage-head', status: 'done', entries: [],
+    }));
+    await expect(currentPreservedJudgeIdentity(s.repo, 'coverage_binding')).resolves.toMatchObject({
+      attemptId: 'coverage-run', runId: 'coverage-run', codeStamp: 'coverage-head',
+    });
+  });
+
+  it('rejects coverage preservation when its declared artifact lacks a code stamp', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await mkdir(join(s.repo, '.pipeline'), { recursive: true });
+    await writeFile(join(s.repo, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, runId: 'coverage-run', entries: [] }));
+    await expect(currentPreservedJudgeIdentity(s.repo, 'coverage_binding')).resolves.toBeNull();
   });
 
   it('feature-codetest (build_review): returns preserve when the delta touches only a FOREIGN runtime path', async () => {

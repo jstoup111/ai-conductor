@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { applyRebaseTransition } from '../../src/engine/rebase-transition.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
 function preservedCandidate(gate: 'prd_audit', checkedAt = 2) {
   const original = { satisfied: true, checkedAt, reason: 'approved' };
@@ -78,6 +79,27 @@ describe('applyRebaseTransition', () => {
     };
     expect((await applyRebaseTransition(input)).stateResult).toBe('applied');
     expect((await applyRebaseTransition(input)).stateResult).toBe('already-applied');
+  });
+
+  it('credits an applied build-review invalidation once per operation', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ build_review: 'done' }));
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
+      version: 1, gates: { build_review: { count: 1, cumulative: 2, laps: 3, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 } },
+    }));
+    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    const input = {
+      projectRoot: dir, stateStore: createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json')),
+      operationId: 'credited-operation', replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      invalidated: ['build_review'] as const, preserved: [] as const, preservedCandidates: [] as const,
+    };
+    expect((await applyRebaseTransition(input)).convergenceCredit).toEqual({ gate: 'build_review' });
+    expect((await applyRebaseTransition(input)).convergenceCredit).toEqual({ gate: 'build_review' });
+    const ledger = await readKickbackLedger(dir);
+    expect(ledger.gates.build_review?.cumulative).toBe(0);
+    expect(ledger.convergenceCreditReceipts).toEqual({ 'credited-operation': { gate: 'build_review' } });
   });
 
   it('refuses to apply an operation that names a preserved gate without its bound candidate', async () => {

@@ -2098,6 +2098,7 @@ type AppliedRebaseGateDecision = {
   /** Replay-aware candidate gates that survived original-PASS validation. */
   preservedGates?: readonly StepName[];
   preserved?: readonly RebaseGatePreservation[];
+  convergenceCredit?: { gate: 'build_review' };
 };
 
 function isAppliedRebaseGateDecision(
@@ -2152,6 +2153,13 @@ export async function emitGateInvalidationEvents(
     for (const gate of (application?.kickedBack ?? []).filter((gate) => GATE_SURFACE[gate] !== undefined)) {
       if (!preverifiedPreserved.some((preserved) => preserved.gate === gate)) {
         await events.emit({
+          type: 'kickback',
+          from: 'rebase',
+          to: gate as StepName,
+          count: 1,
+          ...(application?.convergenceCredit?.gate === gate ? { convergenceCredit: application.convergenceCredit } : {}),
+        });
+        await events.emit({
           type: 'rebase_gate_invalidated',
           gate,
           matchedPaths: ['<feature surface uncomputable>'],
@@ -2189,6 +2197,7 @@ export async function emitGateInvalidationEvents(
         from: 'rebase',
         to: gate as StepName,
         count: 1,
+        ...(application.convergenceCredit?.gate === gate ? { convergenceCredit: application.convergenceCredit } : {}),
       });
     }
     await events.emit({

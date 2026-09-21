@@ -171,6 +171,10 @@ export async function currentPreservedJudgeIdentity(
       // Build-review's lap and the suite proof's provenance head are durable,
       // source-bound judge identities. Do not substitute the mutable session.
       runId = gate === 'build_review' ? parsed.lapId : parsed.provenanceHeadSha;
+    } else if (gate === 'coverage_binding') {
+      const parsed = JSON.parse(artifact) as { codeStamp?: unknown; runId?: unknown };
+      codeStamp = parsed.codeStamp;
+      runId = parsed.runId;
     }
     if (!nonEmptyString(codeStamp) || !nonEmptyString(runId)) return null;
     const normalizedRunId = runId.trim();

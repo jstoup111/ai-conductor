@@ -934,6 +934,7 @@ export async function resumeRebaseFirst(opts: {
       kickedBack: [...transition.operation.transition.invalidated],
       reverified: [...transition.operation.transition.reverified],
       preservedGates: [...transition.operation.transition.preserved],
+      ...(transition.convergenceCredit ? { convergenceCredit: transition.convergenceCredit } : {}),
     };
   }
   for (const step of rebaseVerdict.reverified) {
