@@ -2,6 +2,7 @@ import { relative } from 'node:path';
 
 import type { CapturedReviewPolicyBundle } from './build-review-policy-bundle.js';
 import { renderBuildReviewCustomReviewerPayloadShape } from './build-review-domain.js';
+import { BUILD_REVIEW_CUSTOM_SOURCE_REGION_HASH_RULE } from './build-review-source-region-admission.js';
 
 /** The first engine-owned contract for an installed read-only review policy. */
 export const BUILD_REVIEW_POLICY_CONTRACT_VERSION = 'v1' as const;
@@ -208,6 +209,7 @@ export function renderBuildReviewPolicyContract(
     '',
     'Return only an engine-defined custom reviewer payload; do not use another output contract or a standalone presentation format.',
     `Shared findings payload schema: ${renderBuildReviewCustomReviewerPayloadShape()}`,
+    `Source region rule: ${BUILD_REVIEW_CUSTOM_SOURCE_REGION_HASH_RULE}`,
     'The engine stamps policy, provider, lap, verdict, and all aggregate metadata after validating the payload.',
     '',
     'The complete selected SKILL.md follows unchanged. Apply its criteria only within the review role above:',

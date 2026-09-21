@@ -16,6 +16,8 @@ import { ModelAvailability } from './model-availability.js';
 import { redactSafetyText } from './safety-diagnostics.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
 import type { StepName, ConductState, ComplexityTier, ExecutionContext, RunMode } from '../types/index.js';
+import { admitBuildReviewCustomSourceRegions } from './build-review-source-region-admission.js';
+import { BuildReviewScopeSource } from './build-review-scope-source.js';
 import type { HarnessConfig, EffortLevel, BuildReviewRubricId } from '../types/config.js';
 import { prdAuditScopeProjection } from './conductor.js';
 import type {
@@ -2863,20 +2865,25 @@ export class DefaultStepRunner implements StepRunner {
             output: failure.detail,
           } };
         }
-        // Provider locations may only refer to a path in the frozen changed
-        // inventory.  The identity stamper then binds every region and
-        // location to this candidate-owned result before it becomes durable.
-        const changedPaths = new Set((inputs.sourceSnapshot.sourceChanges ?? []).map((change) => change.path));
-        if (parsed.findings.some((finding) => finding.sourceRegions.some((region) => !changedPaths.has(region.path)))) {
+        // The admitted reference set is derived by the engine from the frozen
+        // baseline/head commits: each claimed region is re-read and re-hashed
+        // from pinned blobs before the identity stamper may bind it.
+        const frozenBlobs = new BuildReviewScopeSource(this.gitRunner, inputs.sourceSnapshot.headSha);
+        const admission = await admitBuildReviewCustomSourceRegions(
+          parsed.findings.flatMap((finding) => finding.sourceRegions),
+          inputs.sourceSnapshot.sourceChanges ?? [],
+          { read: (side, path) => frozenBlobs.readAtOptional(side === 'head' ? inputs.sourceSnapshot.headSha : inputs.sourceSnapshot.mergeBase, path) },
+        );
+        if (admission.kind === 'rejected') {
           coverageFailure = true;
-          failure = { reason: 'malformed-artifact', detail: 'Installed build-review policy cited a source region outside the frozen input' };
+          failure = { reason: 'malformed-artifact', detail: `Installed build-review policy cited unverifiable source evidence (${admission.reason}): ${admission.detail}` };
           await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
           return { kind: 'failure' as const, result: {
             success: false, exitCode: 1,
             output: failure.detail,
           } };
         }
-        const sourceRegions = parsed.findings.flatMap((finding) => finding.sourceRegions);
+        const sourceRegions = admission.sourceRegions;
         const stamped = stampBuildReviewCustomJudgedResult(raw, {
           rubric: entry.id,
           lapId,
