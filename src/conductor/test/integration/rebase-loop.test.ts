@@ -524,7 +524,10 @@ describe('integration/rebase-loop', () => {
 
       await conductorWith(runner).run();
 
-      expect((await readState(statePath)).value).toMatchObject({ build: 'done' });
+      const state = await readState(statePath);
+      expect(state.ok).toBe(true);
+      if (!state.ok) throw new Error(`expected readable state: ${state.error.message}`);
+      expect(state.value).toMatchObject({ build: 'done' });
       expect(ensure.mock.calls.length).toBeGreaterThanOrEqual(2);
       expect(dispatched).toContain('build');
       expect(retryReasons).toContainEqual(expect.stringContaining('fixture suite assertion failed'));

@@ -109,7 +109,7 @@ describe('coverage-binding runner batches', () => {
     const { projectDir, runner } = await runBatches(2, 8);
     try {
       const git = (...args: string[]) => promisify(execFile)('git', ['-C', projectDir, ...args]);
-      await git('init', '-q');
+      await git('init', '-q', '-b', 'main');
       await git('-c', 'user.email=t@example.com', '-c', 'user.name=T', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'judged');
       const head = (await git('rev-parse', 'HEAD')).stdout.trim();
 
