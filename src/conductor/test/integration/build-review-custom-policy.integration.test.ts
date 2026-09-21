@@ -264,10 +264,10 @@ describe('custom build-review policy runner', () => {
     expect(result.output).toContain('ambiguous');
     expect(result.output).toContain('conflicting installed sources: /fixture/global, /fixture/project');
     expect(result.output).not.toContain('disposition resolution failed');
-    const aggregate = JSON.parse(await readFile(join(root, '.pipeline', 'build-review.json'), 'utf8'));
-    expect(aggregate.customResults.portable.result).toMatchObject({
-      kind: 'infrastructure-failure', reason: 'policy-load-failed',
-    });
+    // Below the mechanical allowance the lap stays in the retry lane: the
+    // typed diagnostic is returned, but no aggregate may be published.
+    expect(result.currentLapMechanicalFault).toBe(true);
+    await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
     expect(invoke).not.toHaveBeenCalled();
     await expect(readFile(join(root, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.toContain('"mechanicalFaults": 1');
     expect(failures).toHaveLength(3);
@@ -295,6 +295,11 @@ describe('custom build-review policy runner', () => {
       buildReviewPolicyCapture: async () => { throw new Error('missing criteria.md'); },
     });
 
+    // The aggregate is published only once the mechanical allowance is
+    // exhausted, so drive the loading failure through every allowed lap.
+    await runner.run('build_review', { complexity_tier: 'M' } as never);
+    await runner.run('build_review', { complexity_tier: 'M' } as never);
+    await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
     const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
     const aggregate = JSON.parse(await readFile(join(root, '.pipeline', 'build-review.json'), 'utf8'));
 

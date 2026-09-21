@@ -2998,6 +2998,29 @@ export class DefaultStepRunner implements StepRunner {
       customResults: input.customResults,
       currentCustomRubrics: input.currentCustomRubrics,
     });
+    // An infrastructure-only lap belongs to the mechanical retry lane: below
+    // the allowance no aggregate, effective resolution, or verdict may exist,
+    // so completion stays absent and no semantic route can observe the lap.
+    const lapResults = Object.values(input.customResults).map((member) => member.result);
+    const infrastructureFailure = lapResults.find((result): result is Extract<BuildReviewRubricResult, { kind: 'infrastructure-failure' }> =>
+      result.kind === 'infrastructure-failure',
+    );
+    const hasFinding = lapResults.some((result) => result.kind === 'judged' && result.findings.length > 0);
+    if (infrastructureFailure && !hasFinding) {
+      const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review', {
+        rubric: infrastructureFailure.rubric,
+        reason: infrastructureFailure.reason,
+        detail: infrastructureFailure.detail,
+        lapId: input.lapId,
+      });
+      if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
+        return {
+          success: false,
+          output: `build_review mechanical fault in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
+          currentLapMechanicalFault: true,
+        };
+      }
+    }
     const pipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
     const aggregatePath = join(pipelineDir, 'build-review.json');
     try {
@@ -3028,26 +3051,6 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: `build_review disposition resolution failed: ${effective.reason}` };
     }
     if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
-    const lapResults = Object.values(input.customResults).map((member) => member.result);
-    const infrastructureFailure = lapResults.find((result): result is Extract<BuildReviewRubricResult, { kind: 'infrastructure-failure' }> =>
-      result.kind === 'infrastructure-failure',
-    );
-    const hasFinding = lapResults.some((result) => result.kind === 'judged' && result.findings.length > 0);
-    if (infrastructureFailure && !hasFinding) {
-      const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review', {
-        rubric: infrastructureFailure.rubric,
-        reason: infrastructureFailure.reason,
-        detail: infrastructureFailure.detail,
-        lapId: input.lapId,
-      });
-      if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
-        return {
-          success: false,
-          output: `build_review mechanical fault in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
-          currentLapMechanicalFault: true,
-        };
-      }
-    }
     return {
       success: effective.effective.verdict === 'PASS' || hasFinding,
       output: JSON.stringify(aggregate),

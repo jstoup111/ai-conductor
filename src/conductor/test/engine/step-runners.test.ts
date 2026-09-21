@@ -160,6 +160,58 @@ describe('DefaultStepRunner', () => {
     }
   });
 
+  it('withholds the custom-only aggregate, resolution, and verdict until the mechanical allowance is exhausted', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-only-allowance-'));
+    const resolver = vi.fn(async () => ({
+      ok: true,
+      feature: { version: 'v1', repository: projectDir, feature: 'custom-only-allowance' },
+      effective: {
+        rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+        skippedRubrics: ['testQuality'], infrastructureFailureRubrics: ['portable'],
+        uncoveredInfrastructureFailureRubrics: ['portable'], uncoveredScopeIncompleteRubrics: [],
+      },
+    }));
+    const runner = new DefaultStepRunner(createMockProvider(), 'custom-only-allowance', projectDir, {
+      buildReviewEffectiveResolver: resolver as never,
+    });
+    const declaration = {
+      version: 'v1' as const, rubricId: 'portable', semanticSkill: 'portable-policy',
+      question: 'Check the frozen input.', resources: [],
+    };
+    const publish = (lap: number) => (runner as unknown as {
+      publishCustomOnlyBuildReview(input: unknown): Promise<{ success: boolean; output: string; currentLapMechanicalFault?: boolean }>;
+    }).publishCustomOnlyBuildReview({
+      lapId: `lap-${lap}`,
+      inputs: { sourceSnapshot: { digest: 'sha256:snapshot' } },
+      customResults: {
+        portable: {
+          declaration,
+          result: { kind: 'infrastructure-failure', rubric: 'portable', reason: 'policy-load-failed', detail: 'catalog unavailable' },
+        },
+      },
+      currentCustomRubrics: ['portable'],
+      config: resolveBuildReviewConfig({ llm_provider: 'claude', build_review: { enabled: true } } as HarnessConfig, CLAUDE_POLICY),
+    });
+    const aggregatePath = join(projectDir, '.pipeline', 'build-review.json');
+
+    try {
+      for (const lap of [1, 2]) {
+        const belowCap = await publish(lap);
+        expect(belowCap).toMatchObject({ success: false, currentLapMechanicalFault: true });
+        expect(belowCap.output).toContain('catalog unavailable');
+        await expect(access(aggregatePath)).rejects.toThrow();
+        expect(resolver).not.toHaveBeenCalled();
+      }
+
+      const exhausted = await publish(3);
+      expect(exhausted.currentLapMechanicalFault).toBe(true);
+      expect(JSON.parse(await readFile(aggregatePath, 'utf-8'))).toMatchObject({ lapId: 'lap-3' });
+      expect(resolver).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('writes disabled coverage-binding completion evidence without invoking a provider', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-disabled-'));
     const provider = createMockProvider();
