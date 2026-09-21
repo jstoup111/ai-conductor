@@ -411,7 +411,7 @@ function composeLaunchMounts(
   if (basename(command.executable) === 'bwrap') {
     const end = command.args.indexOf('--');
     const inner = end === -1 ? command.args : command.args.slice(0, end);
-    const provedRoots = [...SYSTEM_RUNTIME_ROOTS, '/dev', '/proc', '/tmp', ...bindSources(runtime), ...bindSources(review)];
+    const provedRoots = [...SYSTEM_RUNTIME_ROOTS, '/dev', '/proc', ...bindSources(runtime), ...bindSources(review)];
     for (const source of bindSources(inner)) {
       if (!isAbsolute(source) || source === sep) continue;
       if (provedRoots.some((root) => isWithin(root, source))) continue;
