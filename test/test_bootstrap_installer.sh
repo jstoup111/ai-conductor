@@ -29,19 +29,60 @@ chmod +x "$SOURCE_REPO/bin/install" "$SOURCE_REPO/bin/update"
 git -C "$SOURCE_REPO" add bin
 git -C "$SOURCE_REPO" commit -qm fixture
 
+PREREQUISITE_PATH="$TMP_ROOT/prerequisites"
+mkdir -p "$PREREQUISITE_PATH"
+cat > "$PREREQUISITE_PATH/present" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+cat > "$PREREQUISITE_PATH/python3" <<'EOF'
+#!/bin/sh
+if [ "${1-}" = '-c' ] && [ "${2-}" = 'import yaml' ]; then
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$PREREQUISITE_PATH/present" "$PREREQUISITE_PATH/python3"
+for tool in git gh node npm tmux; do
+  ln -s present "$PREREQUISITE_PATH/$tool"
+done
+
+MISSING_TOOLS_PATH="$TMP_ROOT/prerequisites-missing-tools"
+mkdir -p "$MISSING_TOOLS_PATH"
+for tool in git node npm; do
+  ln -s "$PREREQUISITE_PATH/present" "$MISSING_TOOLS_PATH/$tool"
+done
+ln -s "$PREREQUISITE_PATH/python3" "$MISSING_TOOLS_PATH/python3"
+
+PYTHON_FAILURE_PATH="$TMP_ROOT/prerequisites-no-yaml"
+mkdir -p "$PYTHON_FAILURE_PATH"
+for tool in git gh node npm tmux; do
+  ln -s "$PREREQUISITE_PATH/present" "$PYTHON_FAILURE_PATH/$tool"
+done
+cat > "$PYTHON_FAILURE_PATH/python3" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$PYTHON_FAILURE_PATH/python3"
+
 failures=''
 
 run_case() {
   local name=$1
   shift
   local case_home="$TMP_ROOT/home-$name"
+  local case_stdout="$TMP_ROOT/$name.stdout"
+  local case_stderr="$TMP_ROOT/$name.stderr"
   mkdir -p "$case_home"
   : > "$RECORD"
 
   set +e
-  CASE_OUTPUT=$(HOME="$case_home" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" sh -s -- "$@" < "$INSTALL_SCRIPT" 2>&1)
+  HOME="$case_home" PATH="${CASE_PATH-$PATH}" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
   CASE_STATUS=$?
   set -e
+  CASE_STDOUT=$(< "$case_stdout")
+  CASE_STDERR=$(< "$case_stderr")
+  CASE_OUTPUT="$CASE_STDOUT$CASE_STDERR"
   CASE_HOME=$case_home
 }
 
@@ -106,10 +147,35 @@ else
 fi
 assert_untouched invalid-providers
 
+CASE_PATH="$PREREQUISITE_PATH" run_case prerequisites-present
+if [ "$CASE_STATUS" -eq 0 ] && [ -z "$CASE_STDOUT" ] && [ -z "$CASE_STDERR" ]; then
+  echo 'PASS present prerequisites allow the bootstrap to continue quietly'
+else
+  failures+="present prerequisites did not continue quietly: $CASE_OUTPUT\\n"
+fi
+
+CASE_PATH="$MISSING_TOOLS_PATH" run_case missing-tools
+if [ "$CASE_STATUS" -ne 0 ] \
+  && [ "$(grep -c '^error:' <<< "$CASE_STDERR" || true)" -eq 1 ] \
+  && grep -Eq '^error:.*tmux.*gh|^error:.*gh.*tmux' <<< "$CASE_STDERR"; then
+  echo 'PASS all missing prerequisites are named in one message'
+else
+  failures+="missing tools were not named in one error message: $CASE_STDERR\\n"
+fi
+assert_untouched missing-tools
+
+CASE_PATH="$PYTHON_FAILURE_PATH" run_case missing-pyyaml
+if [ "$CASE_STATUS" -ne 0 ] && grep -Fq 'PyYAML' <<< "$CASE_OUTPUT"; then
+  echo 'PASS missing PyYAML is reported'
+else
+  failures+="missing PyYAML was not reported: $CASE_OUTPUT\\n"
+fi
+assert_untouched missing-pyyaml
+
 if [ -z "$failures" ]; then
-  echo 'PASS bootstrap option parsing behavior is covered'
+  echo 'PASS bootstrap option parsing and prerequisites are covered'
   exit 0
 fi
 
-printf 'FAIL bootstrap option parsing behavior is covered\n%b' "$failures"
+printf 'FAIL bootstrap option parsing and prerequisites are covered\n%b' "$failures"
 exit 1

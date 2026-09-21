@@ -77,8 +77,22 @@ parse_args() {
   done
 }
 
+check_prerequisites() {
+  missing=''
+  for tool in git gh node npm tmux python3; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      missing="${missing}${missing:+ }${tool}"
+    fi
+  done
+  if command -v python3 >/dev/null 2>&1 && ! python3 -c 'import yaml' >/dev/null 2>&1; then
+    missing="${missing}${missing:+ }PyYAML"
+  fi
+  [ -z "$missing" ] || fail "missing prerequisites: $missing"
+}
+
 main() {
   parse_args "$@"
+  check_prerequisites
 }
 
 main "$@"
