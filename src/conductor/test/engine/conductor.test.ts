@@ -5149,7 +5149,7 @@ describe('engine/conductor', () => {
     expect(result.ok && result.value.feature_status).toBeUndefined();
   });
 
-  it('daemon terminal-marker guarantee classifies an unmarked gate exit as needs-human', async () => {
+  it('daemon classifies a gate exit with a reachable pending prerequisite as mechanical', async () => {
     const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
     const conductor = new Conductor({
       stateFilePath: statePath,
@@ -5162,7 +5162,7 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+    expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('mechanical');
   });
 
   describe('daemon prd-audit gap-aware halting', () => {
