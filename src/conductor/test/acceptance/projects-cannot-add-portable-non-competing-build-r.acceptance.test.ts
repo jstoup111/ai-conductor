@@ -295,7 +295,8 @@ async function runFlow(input: {
         const stampedFinding = aggregate.customResults?.portablePolicy?.result?.findings?.[0];
         const sourceId = `portablePolicy:${stampedFinding?.identity?.id ?? stampedFinding?.findingId ?? stampedFinding?.id ?? 'stale-policy-cache'}`;
         await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
-          mode: 'case-v1',
+          // A custom lap is adjudicated under the case-v2 contract it was handed.
+          mode: 'case-v2',
           domain: 'build_review',
           sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'case-portable-policy' }],
           cases: [{
@@ -304,8 +305,15 @@ async function runFlow(input: {
             priority: 'high',
             confidence: 'high',
             rationale: 'Task 36 admits repair of the effective-policy cache binding.',
-            effect: { kind: 'action', route: 'build', tasks: [{ title: 'Task 36: bind cache identity to the effective policy' }] },
+            effect: { kind: 'action', route: 'build', tasks: [{
+              title: 'Task 36: bind cache identity to the effective policy', admittedTaskIds: ['36'],
+              admissionRationale: 'Task 36 owns the post-repair effective-policy binding.',
+            }] },
           }],
+          consistency: {
+            verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['case-portable-policy'],
+            rationale: 'One admitted repair covers the sole custom source.',
+          },
         }));
         return { success: true };
       }
