@@ -1,5 +1,6 @@
 // Covers: task:13
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,6 +8,8 @@ import {
   composeReviewLaunchMounts,
   deriveExecutableRuntimeRoots,
   prepareBuildReviewContainment,
+  resolveReviewHostStateRoot,
+  writeReviewHostStateSentinel,
   type BuildReviewRuntimeHost,
 } from '../../src/engine/build-review-containment.js';
 import {
@@ -512,6 +515,39 @@ describe('engine/build-review-containment', () => {
         runProcess: async () => ({ exitCode: 0, stderr: '', stdout: lines.join('\n') }),
       });
       expect(result).toMatchObject({ kind: 'unsupported', reason: expect.stringMatching(/checkout-state/) });
+    });
+  });
+
+  describe('host-state sentinel', () => {
+    it('refuses a sentinel under the masked /tmp, where the probe could never find it readable', async () => {
+      const runProcess = vi.fn(async () => ({ exitCode: 0, stderr: '', stdout: HEALTHY_PROBE.join('\n') }));
+      const result = await prepareBuildReviewContainment({
+        provider: 'claude', runtimeHost, runProcess,
+        paths: { ...PATHS, hostStateProbe: '/tmp/ai-conductor-1000/review/run.host-state-probe' },
+      });
+      expect(result).toMatchObject({ kind: 'unsupported' });
+      expect(runProcess).not.toHaveBeenCalled();
+    });
+
+    it('resolves the operator state directory, never the temp directory', () => {
+      expect(resolveReviewHostStateRoot({ XDG_STATE_HOME: '/state' }, '/home/op')).toBe('/state/ai-conductor/review-host-state');
+      expect(resolveReviewHostStateRoot({ XDG_STATE_HOME: 'relative' }, '/home/op')).toBe('/home/op/.local/state/ai-conductor/review-host-state');
+      expect(resolveReviewHostStateRoot({}, '/home/op')).toBe('/home/op/.local/state/ai-conductor/review-host-state');
+    });
+
+    it('writes a unique 0600 sentinel under the given state root', async () => {
+      const stateRoot = await mkdtemp(join(tmpdir(), 'review-host-state-'));
+      try {
+        const first = await writeReviewHostStateSentinel({ stateRoot });
+        const second = await writeReviewHostStateSentinel({ stateRoot });
+        expect(first).not.toBe(second);
+        expect(first.startsWith(`${stateRoot}/`)).toBe(true);
+        expect((await stat(first)).mode & 0o777).toBe(0o600);
+        expect((await stat(stateRoot)).mode & 0o077).toBe(0);
+        expect(await readFile(first, 'utf8')).toMatch(/withhold/);
+      } finally {
+        await rm(stateRoot, { recursive: true, force: true });
+      }
     });
   });
 });

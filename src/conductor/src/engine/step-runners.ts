@@ -2799,7 +2799,7 @@ export class DefaultStepRunner implements StepRunner {
           context.onTeardown(() => scratchLease.release());
           const scratch = scratchLease.home;
           const evidencePaths = await prepareBuildReviewEvidencePaths(this.projectDir);
-          const hostStateProbe = await writeReviewHostStateSentinel(scratch);
+          const hostStateProbe = await writeReviewHostStateSentinel();
           context.onTeardown(() => rm(hostStateProbe, { force: true }));
           const containment = await prepareBuildReviewContainment({
             provider,
@@ -3309,7 +3309,7 @@ export class DefaultStepRunner implements StepRunner {
                 context.onTeardown(() => scratchLease.release());
                 const scratch = scratchLease.home;
                 const evidencePaths = await prepareBuildReviewEvidencePaths(this.projectDir);
-                const hostStateProbe = await writeReviewHostStateSentinel(scratch);
+                const hostStateProbe = await writeReviewHostStateSentinel();
           context.onTeardown(() => rm(hostStateProbe, { force: true }));
                 const containment = await prepareBuildReviewContainment({ provider: containmentProvider, launch: reviewLaunchCommand(containmentProvider, context.prepared), paths: {
                   hostStateProbe,

@@ -1,4 +1,5 @@
 // Covers: task:13
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -15,7 +16,7 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 const HEAD = 'b'.repeat(40);
 const BASE = 'a'.repeat(40);
@@ -42,6 +43,10 @@ describe('custom review containment exposes the complete frozen baseline/head in
     const root = await mkdtemp(join(process.env.TMPDIR!, 'frozen-input-containment-'));
     roots.push(root);
     const project = join(root, 'project');
+    // Operator state lives outside the masked temp directory; keep the test's copy off the real home.
+    const stateHome = await mkdtemp('/var/tmp/frozen-input-containment-state-');
+    roots.push(stateHome);
+    vi.stubEnv('XDG_STATE_HOME', stateHome);
     await mkdir(join(project, '.pipeline'), { recursive: true });
     await mkdir(join(project, '.docs', 'plans'), { recursive: true });
     await writeFile(join(project, '.docs', 'plans', 'feature.md'), '# Plan\n\n### Task 1: review\n**Files:** src/a.ts\n');
@@ -102,6 +107,10 @@ describe('custom review containment exposes the complete frozen baseline/head in
     // Non-input checkout state is masked and handed to the probe.
     expect(bound('--tmpfs')).toContain(join(project, '.pipeline'));
     expect(probeArgs.at(-1)).toBe(join(project, '.pipeline'));
+    // The host sentinel is operator state outside the masked temp directory, removed with the run.
+    const sentinel = probeArgs.find((arg) => arg.endsWith('.host-state-probe'))!;
+    expect(sentinel.startsWith(join(stateHome, 'ai-conductor', 'review-host-state') + '/')).toBe(true);
+    expect(existsSync(sentinel)).toBe(false);
 
     const invocation = (invoke.mock.calls as unknown as Array<[{ prompt: string; cwd: string; reviewAccess?: { profile: { mountArgs: string[] } } }]>)[0]![0];
     expect(invocation.cwd).toBe(head);

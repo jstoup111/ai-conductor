@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { readdirSync, realpathSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, relative, sep } from 'node:path';
 
@@ -179,6 +180,9 @@ function hasSafePaths(paths: BuildReviewContainmentPaths): boolean {
   }
   // A sentinel inside an allowlisted root could never be withheld.
   if ([...protectedPaths, paths.scratch].some((bound) => isWithin(bound, paths.hostStateProbe))) return false;
+  // A sentinel under a blanket mask is unreadable whether or not host state is
+  // exposed, so the observation it feeds could never fail.
+  if (isWithin(MASKED_TEMP_ROOT, paths.hostStateProbe)) return false;
   if (isWithin(paths.frozenSource, paths.frozenBaseline) || isWithin(paths.frozenBaseline, paths.frozenSource)) return false;
   return isWithin(paths.frozenSource, paths.sourceWriteProbe)
     && isWithin(paths.frozenBaseline, paths.baselineWriteProbe)
@@ -222,6 +226,9 @@ const liveRuntimeHost = (): BuildReviewRuntimeHost => ({
   realpath: (path) => realpathSync(path),
   checkoutEntries: liveCheckoutEntries,
 });
+
+/** Replaced wholesale by an empty tmpfs inside the sandbox. */
+const MASKED_TEMP_ROOT = '/tmp';
 
 const liveCheckoutEntries = (directory: string): readonly BuildReviewCheckoutEntry[] => {
   try {
@@ -289,13 +296,27 @@ export function deriveExecutableRuntimeRoots(
 }
 
 /**
- * Write the readable host sentinel the probe must find withheld. It sits
- * beside — never inside — the private scratch, so no allowlisted root covers
- * it; the scratch lease's parent directory is removed with the run.
+ * Operator state directory that holds host-state sentinels. It is deliberately
+ * NOT under the temp directory: the profile replaces /tmp with an empty tmpfs,
+ * so a sentinel there is withheld by that mask alone and proves nothing.
  */
-export async function writeReviewHostStateSentinel(scratch: string): Promise<string> {
-  const sentinel = `${scratch.replace(/[\\/]+$/, '')}.host-state-probe`;
-  await writeFile(sentinel, 'host state that review containment must withhold\n', 'utf8');
+export function resolveReviewHostStateRoot(env: { readonly XDG_STATE_HOME?: string }, home: string): string {
+  const stateHome = env.XDG_STATE_HOME !== undefined && isAbsolute(env.XDG_STATE_HOME) ? env.XDG_STATE_HOME : join(home, '.local', 'state');
+  return join(stateHome, 'ai-conductor', 'review-host-state');
+}
+
+/**
+ * Write the readable host sentinel the probe must find withheld. It is genuine
+ * operator state outside every bound root and every mask, so the observation
+ * fails the moment a profile exposes the operator's home. Owner-only; the
+ * caller removes it on teardown.
+ */
+export async function writeReviewHostStateSentinel(options: { readonly stateRoot?: string } = {}): Promise<string> {
+  const stateRoot = options.stateRoot ?? resolveReviewHostStateRoot(process.env, homedir());
+  await mkdir(stateRoot, { recursive: true, mode: 0o700 });
+  await chmod(stateRoot, 0o700);
+  const sentinel = join(stateRoot, `${randomUUID()}.host-state-probe`);
+  await writeFile(sentinel, 'host state that review containment must withhold\n', { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   return sentinel;
 }
 
