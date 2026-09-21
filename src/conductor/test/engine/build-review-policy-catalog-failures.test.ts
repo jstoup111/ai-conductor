@@ -46,6 +46,7 @@ describe('engine/build-review-policy catalog failures', () => {
     await expect(listCodexInstalledReviewSkills(transport, {
       cwd: '/prepared/project',
       home: '/prepared/home',
+      env: {},
     })).rejects.toMatchObject({
       name: 'ReviewPolicyCatalogError',
       code: 'error',
@@ -111,6 +112,7 @@ describe('engine/build-review-policy catalog failures', () => {
     await expect(listCodexInstalledReviewSkills(transport, {
       cwd: '/prepared/project',
       home: '/prepared/home',
+      env: {},
       signal: controller.signal,
     })).rejects.toMatchObject({ name: 'ReviewPolicyCatalogError', provider: 'codex', code });
 

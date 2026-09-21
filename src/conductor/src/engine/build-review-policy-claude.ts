@@ -267,6 +267,23 @@ function pluginSkillDirectories(manifestText: string, manifestPath: string): rea
   return directories;
 }
 
+function unavailablePlugin(
+  plugin: ClaudePluginInventoryEntry,
+  availability: 'disabled' | 'marketplace-only',
+): InstalledReviewSkill {
+  const packageRoot = `marketplace:${plugin.id}`;
+  return {
+    semanticName: plugin.id,
+    source: 'plugin',
+    plugin: { id: plugin.id, ...(plugin.version === undefined ? {} : { version: plugin.version }) },
+    installationOrigin: packageRoot,
+    canonicalSkillPath: `${packageRoot}/SKILL.md`,
+    packageRoot,
+    declaredDependencies: [],
+    availability,
+  };
+}
+
 /**
  * Lists only locally installed policies in the prepared candidate's Claude
  * environment. Marketplace records and non-skill plugin components are never
@@ -306,9 +323,13 @@ export async function discoverClaudeReviewPolicies(
     const policies = standalone.flat();
 
     for (const plugin of pluginInventory) {
-      // An inventory item without an installed root is merely a marketplace
-      // listing. It has no local material the review boundary may read.
-      if (!plugin.enabled || !plugin.installPath) continue;
+      // Marketplace inventory has no local package to inspect, but its named
+      // selection must still reach the resolver as ineligible rather than
+      // collapsing into generic absence.
+      if (!plugin.installPath) {
+        policies.push(unavailablePlugin(plugin, plugin.enabled ? 'marketplace-only' : 'disabled'));
+        continue;
+      }
       const packageRoot = await filesystem.realpath(plugin.installPath);
       const manifestPath = join(plugin.installPath, '.claude-plugin', 'plugin.json');
       let manifestText: string;
@@ -319,12 +340,16 @@ export async function discoverClaudeReviewPolicies(
       }
       const directories = pluginSkillDirectories(manifestText, manifestPath);
       for (const directory of directories) {
-        policies.push(...await installedSkillsInDirectory(
+        const skills = await installedSkillsInDirectory(
           filesystem,
           join(plugin.installPath, directory),
           'plugin',
           { id: plugin.id, ...(plugin.version === undefined ? {} : { version: plugin.version }), packageRoot },
-        ));
+        );
+        policies.push(...skills.map((skill) => ({
+          ...skill,
+          availability: plugin.enabled ? 'available' as const : 'disabled' as const,
+        })));
         abortIfNeeded(candidate.signal);
       }
     }

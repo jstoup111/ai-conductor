@@ -77,6 +77,10 @@ describe('custom build-review policy runner', () => {
     vi.mocked(buildReviewProjections.parseBuildReviewReviewerPayload).mockClear();
     const root = await fixture();
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) }));
+    const preparedEnv = { CODEX_HOME: '/prepared/candidate-home', CANDIDATE_ONLY: providerKey };
+    const policyCatalog = vi.fn(async () => [{
+      semanticName: 'portable-policy', source, ...(source === 'plugin' ? { plugin: { id: 'policy-plugin', version: '1.0.0' } } : {}), installationOrigin: `/fixture/${source}`, canonicalSkillPath: `/fixture/${source}/SKILL.md`, packageRoot: `/fixture/${source}`, declaredDependencies: [], availability: 'available' as const,
+    }]);
     const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
     const events = new ConductorEventEmitter();
     const resolvedEvents: unknown[] = [];
@@ -96,12 +100,13 @@ describe('custom build-review policy runner', () => {
       } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: providerKey, provider, policy, builtIn: true, availability: new ModelAvailability(policy.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(),
+      providerExecution: {
+        prepareCandidateSelfHost: async () => ({ executable: `/prepared/${providerKey}`, env: preparedEnv, args: [], teardown: async () => {} }),
+      } as never,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       events,
       buildReviewEffectiveResolver: passingEffectiveResolver,
-      buildReviewPolicyCatalog: async () => [{
-        semanticName: 'portable-policy', source, ...(source === 'plugin' ? { plugin: { id: 'policy-plugin', version: '1.0.0' } } : {}), installationOrigin: `/fixture/${source}`, canonicalSkillPath: `/fixture/${source}/SKILL.md`, packageRoot: `/fixture/${source}`, declaredDependencies: [], availability: 'available',
-      }],
+      buildReviewPolicyCatalog: policyCatalog,
       buildReviewPolicyCapture: async (policy) => ({
         policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
         manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }],
@@ -120,6 +125,10 @@ describe('custom build-review policy runner', () => {
       result: { kind: 'judged', rubric: 'portable' },
     });
     expect(invoke).toHaveBeenCalledTimes(1);
+    expect(policyCatalog).toHaveBeenCalledWith(expect.objectContaining({
+      preparedEnv,
+      preparedExecutable: `/prepared/${providerKey}`,
+    }));
     const firstInvocation = (invoke.mock.calls as unknown as Array<[Parameters<LLMProvider['invoke']>[0]]>)[0]?.[0];
     if (!firstInvocation?.model || !firstInvocation.effort) throw new Error('expected a prepared provider candidate');
     const preparedCandidate = { provider: providerKey, model: firstInvocation.model, effort: firstInvocation.effort };

@@ -578,6 +578,7 @@ export interface StepRunnerOptions {
     readonly provider: string;
     readonly entry: ResolvedBuildReviewCatalogEntry;
     readonly preparedEnv?: NodeJS.ProcessEnv;
+    readonly preparedExecutable?: string;
     /** Owning candidate's cancellation joined with its deadline; aborts in-flight discovery. */
     readonly signal?: AbortSignal;
     /** Owning candidate's absolute deadline, in epoch milliseconds. */
@@ -623,7 +624,7 @@ export interface StepRunnerOptions {
  */
 function productionBuildReviewPolicyCatalog(projectDir: string): NonNullable<StepRunnerOptions['buildReviewPolicyCatalog']> {
   const codexTransport = createCodexAppServerTransport();
-  return async ({ provider, preparedEnv, signal }) => {
+  return async ({ provider, preparedEnv, preparedExecutable, signal }) => {
     const env = preparedEnv ?? process.env;
     if (provider === 'claude') {
       const claudeHome = env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
@@ -641,6 +642,8 @@ function productionBuildReviewPolicyCatalog(projectDir: string): NonNullable<Ste
       return listCodexInstalledReviewSkills(codexTransport, {
         cwd: projectDir,
         home: env.CODEX_HOME ?? join(homedir(), '.codex'),
+        env,
+        ...(preparedExecutable === undefined ? {} : { executable: preparedExecutable }),
         ...(signal === undefined ? {} : { signal }),
       });
     }
@@ -2632,6 +2635,7 @@ export class DefaultStepRunner implements StepRunner {
             provider: context.candidate.providerKey,
             entry,
             ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
+            ...(context.prepared === undefined ? {} : { preparedExecutable: context.prepared.executable }),
             signal: discovery.signal,
             ...(context.deadlineAt === undefined ? {} : { deadlineAt: context.deadlineAt }),
           });
@@ -3231,6 +3235,7 @@ export class DefaultStepRunner implements StepRunner {
                   provider: context.candidate.providerKey,
                   entry: builtinEntry,
                   ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
+                  ...(context.prepared === undefined ? {} : { preparedExecutable: context.prepared.executable }),
                   ...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
                   ...(context.deadlineAt === undefined ? {} : { deadlineAt: context.deadlineAt }),
                 });

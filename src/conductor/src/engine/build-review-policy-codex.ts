@@ -10,6 +10,10 @@ import {
 export interface CodexPreparedCatalogEnvironment {
   readonly cwd: string;
   readonly home: string;
+  /** Exact environment prepared for this candidate; never merge the parent. */
+  readonly env: NodeJS.ProcessEnv;
+  /** Candidate-private executable when self-host preparation resolved one. */
+  readonly executable?: string;
   /** The owning candidate cancels discovery and its app-server session. */
   readonly signal?: AbortSignal;
 }
@@ -62,12 +66,12 @@ export interface CodexAppServerTransport {
  * The catalog adapter remains the owner of validation; this transport only
  * provides request/response framing and closes the child with its candidate.
  */
-export function createCodexAppServerTransport(executable = 'codex'): CodexAppServerTransport {
+export function createCodexAppServerTransport(executable = 'codex', launch: typeof spawn = spawn): CodexAppServerTransport {
   return {
     async open(environment) {
-      const child = spawn(executable, ['app-server'], {
+      const child = launch(environment.executable ?? executable, ['app-server'], {
         cwd: environment.cwd,
-        env: { ...process.env, CODEX_HOME: environment.home },
+        env: environment.env,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       if (!child.stdin || !child.stdout) throw new Error('Codex app server did not provide stdio');
@@ -233,12 +237,10 @@ export async function listCodexInstalledReviewSkills(
     }
 
     return entry.skills.flatMap((skill): InstalledReviewSkill[] => {
-      if (!skill.enabled) return [];
       const plugin = skill.pluginId === null ? undefined : plugins.get(skill.pluginId);
-      if (skill.pluginId !== null && !isEnabledLocalPlugin(plugin)) return [];
-
       const source = plugin === undefined ? sourceForScope(skill.scope) : 'plugin';
       if (source === undefined) return [];
+      const availability = availabilityFor(skill, plugin);
       return [{
         semanticName: skill.name,
         source,
@@ -250,7 +252,7 @@ export async function listCodexInstalledReviewSkills(
         packageRoot: plugin?.source.type === 'local' ? plugin.source.path : dirname(skill.path),
         ...(skill.dependencies?.tools === undefined ? {} : { requiredTools: skill.dependencies.tools.map((dependency) => dependency.value) }),
         declaredDependencies: [],
-        availability: 'available',
+        availability,
       }];
     });
   } catch (error) {
@@ -273,11 +275,14 @@ function sourceForScope(scope: CodexSkillMetadata['scope']): InstalledReviewSkil
   return undefined;
 }
 
-function isEnabledLocalPlugin(
+function availabilityFor(
+  skill: CodexSkillMetadata,
   plugin: CodexPluginDescriptor | undefined,
-): plugin is CodexPluginDescriptor & { readonly source: { readonly type: 'local'; readonly path: string } } {
-  return plugin?.installed === true
-    && plugin.enabled === true
-    && plugin.availability === 'AVAILABLE'
-    && plugin.source.type === 'local';
+): InstalledReviewSkill['availability'] {
+  if (!skill.enabled) return 'disabled';
+  if (skill.pluginId === null) return 'available';
+  if (plugin === undefined) return 'incomplete';
+  if (!plugin.installed || plugin.source.type !== 'local') return 'marketplace-only';
+  if (!plugin.enabled || plugin.availability !== 'AVAILABLE') return 'disabled';
+  return 'available';
 }

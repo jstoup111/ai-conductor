@@ -22,7 +22,7 @@ import {
   ProviderStreamAssembler,
 } from './provider-stream.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
-import { buildReviewChildEnvironment, scrubTmuxEnvironment } from './child-environment.js';
+import { buildReviewChildEnvironment, filterReviewChildEnvironment, scrubTmuxEnvironment } from './child-environment.js';
 import { composeReviewLaunchMounts } from '../engine/build-review-containment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import {
@@ -906,8 +906,10 @@ export class ClaudeProvider implements LLMProvider {
     if (scratch !== undefined) {
       // D5: a contained reviewer gets an allowlisted environment, never the
       // ambient one — tracker/service credentials and host state are withheld.
-      return buildReviewChildEnvironment('claude', process.env, withDaemonSessionMarker({
-        ...options.selfHost?.env,
+      return buildReviewChildEnvironment('claude', {
+        ...process.env,
+        ...filterReviewChildEnvironment('claude', options.selfHost?.env ?? {}),
+      }, withDaemonSessionMarker({
         HOME: join(scratch, 'home'),
         CLAUDE_CONFIG_DIR: join(scratch, 'claude-config'),
         TMPDIR: join(scratch, 'tmp'),

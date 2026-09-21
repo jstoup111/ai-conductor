@@ -11,6 +11,7 @@ function fakeFilesystem(): ClaudeReviewPolicyFilesystem {
     '/prepared/project/.claude/skills': ['project-review'],
     '/prepared/user/skills': ['global-review'],
     '/prepared/plugins/quality/review-skills': ['quality-review'],
+    '/prepared/plugins/disabled/review-skills': ['disabled-review'],
   };
   const files: Record<string, string> = {
     '/prepared/project/.claude/skills/project-review/SKILL.md': '---\nrequires: [project-context]\n---\n',
@@ -22,12 +23,16 @@ function fakeFilesystem(): ClaudeReviewPolicyFilesystem {
       commands: ['./commands'],
     }),
     '/prepared/plugins/quality/review-skills/quality-review/SKILL.md': '---\nrequires: [diff-context]\n---\n',
+    '/prepared/plugins/disabled/.claude-plugin/plugin.json': JSON.stringify({ skills: ['./review-skills'] }),
+    '/prepared/plugins/disabled/review-skills/disabled-review/SKILL.md': '---\n---\n',
   };
   const canonical: Record<string, string> = {
     '/prepared/project/.claude/skills/project-review': '/canonical/project-review',
     '/prepared/user/skills/global-review': '/canonical/global-review',
     '/prepared/plugins/quality': '/canonical/plugin-quality',
     '/prepared/plugins/quality/review-skills/quality-review': '/canonical/plugin-quality/review-skills/quality-review',
+    '/prepared/plugins/disabled': '/canonical/plugin-disabled',
+    '/prepared/plugins/disabled/review-skills/disabled-review': '/canonical/plugin-disabled/review-skills/disabled-review',
   };
 
   return {
@@ -106,6 +111,26 @@ describe('engine/build-review-policy-claude', () => {
         declaredDependencies: ['diff-context'],
         availability: 'available',
       },
+      {
+        semanticName: 'disabled-review',
+        source: 'plugin',
+        plugin: { id: 'disabled-plugin', version: '1.0.0' },
+        installationOrigin: '/canonical/plugin-disabled',
+        canonicalSkillPath: '/canonical/plugin-disabled/review-skills/disabled-review/SKILL.md',
+        packageRoot: '/canonical/plugin-disabled',
+        declaredDependencies: [],
+        availability: 'disabled',
+      },
+      {
+        semanticName: 'marketplace-only',
+        source: 'plugin',
+        plugin: { id: 'marketplace-only', version: '1.0.0' },
+        installationOrigin: 'marketplace:marketplace-only',
+        canonicalSkillPath: 'marketplace:marketplace-only/SKILL.md',
+        packageRoot: 'marketplace:marketplace-only',
+        declaredDependencies: [],
+        availability: 'marketplace-only',
+      },
     ]);
   });
 
@@ -152,5 +177,25 @@ describe('engine/build-review-policy-claude', () => {
       declaredDependencies: [],
       availability: 'available',
     }]);
+  });
+
+  it('retains disabled and marketplace-only plugin selections as unavailable and never activates unrelated components', async () => {
+    const filesystem = fakeFilesystem();
+    const policies = await discoverClaudeReviewPolicies({
+      candidate: {
+        cwd: '/prepared/project', env: {}, projectSkillRoots: ['/prepared/project/.claude/skills'], userSkillRoots: ['/prepared/user/skills'],
+      },
+      command: async () => ({ stdout: JSON.stringify([
+        { id: 'quality-plugin', enabled: false, installPath: '/prepared/plugins/quality', scope: 'user', version: '1.2.3' },
+        { id: 'marketplace-only', enabled: true, scope: 'user', version: '1.0.0' },
+      ]) }),
+      filesystem,
+    });
+
+    expect(policies).toEqual(expect.arrayContaining([
+      expect.objectContaining({ semanticName: 'quality-review', plugin: { id: 'quality-plugin', version: '1.2.3' }, availability: 'disabled' }),
+      expect.objectContaining({ semanticName: 'marketplace-only', plugin: { id: 'marketplace-only', version: '1.0.0' }, availability: 'marketplace-only' }),
+    ]));
+    expect(policies.filter((policy) => policy.source === 'plugin' && policy.availability === 'available')).toEqual([]);
   });
 });

@@ -22,7 +22,7 @@ import {
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
-import { buildReviewChildEnvironment, scrubTmuxEnvironment } from './child-environment.js';
+import { buildReviewChildEnvironment, filterReviewChildEnvironment, scrubTmuxEnvironment } from './child-environment.js';
 import { composeReviewLaunchMounts } from '../engine/build-review-containment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
@@ -1040,8 +1040,10 @@ export class CodexProvider implements LLMProvider {
     if (scratch !== undefined) {
       // D5: a contained reviewer gets an allowlisted environment, never the
       // ambient one — tracker/service credentials and host state are withheld.
-      return buildReviewChildEnvironment('codex', process.env, withDaemonSessionMarker({
-        ...(options.selfHost?.env ?? {}),
+      return buildReviewChildEnvironment('codex', {
+        ...process.env,
+        ...filterReviewChildEnvironment('codex', options.selfHost?.env ?? {}),
+      }, withDaemonSessionMarker({
         ...auth,
         HOME: join(scratch, 'home'),
         CODEX_HOME: join(scratch, 'codex-home'),

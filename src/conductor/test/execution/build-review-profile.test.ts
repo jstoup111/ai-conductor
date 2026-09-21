@@ -101,6 +101,42 @@ describe('build-review review-profile child environment (adr-2026-09-10 D5)', ()
     });
   });
 
+  it.each([
+    ['codex', reviewProfile, 'CODEX_API_KEY', 'OPENAI_API_KEY', 'CODEX_HOME'],
+    ['claude', claudeReviewProfile, 'CLAUDE_CONFIG_DIR', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR'],
+  ] as const)('filters self-host tracker state for a contained %s reviewer while retaining provider identity and engine redirections', async (
+    providerName,
+    profile,
+    runtimeKey,
+    authKey,
+    redirectedKey,
+  ) => {
+    const { provider, subprocessFactory } = providerWithSpy(providerName);
+    const selfHostEnv = {
+      GH_TOKEN: 'self-host-tracker-secret',
+      MCP_TRACKER_TOKEN: 'self-host-mcp-secret',
+      [runtimeKey]: 'provider-runtime',
+      [authKey]: 'provider-auth',
+      [redirectedKey]: '/unsafe/self-host-state',
+    };
+
+    await provider.invoke({
+      ...baseOptions,
+      reviewAccess: profile,
+      selfHost: { executable: `/private/${providerName}`, args: [], env: selfHostEnv, teardown: async () => {} },
+    });
+
+    const env = subprocessFactory.mock.calls[0]![2].env as NodeJS.ProcessEnv;
+    expect(env).not.toHaveProperty('GH_TOKEN');
+    expect(env).not.toHaveProperty('MCP_TRACKER_TOKEN');
+    expect(env).toMatchObject({
+      [runtimeKey]: 'provider-runtime', [authKey]: 'provider-auth',
+      [redirectedKey]: providerName === 'codex'
+        ? `${profile.profile.scratch}/codex-home`
+        : `${profile.profile.scratch}/claude-config`,
+    });
+  });
+
   it('leaves an ordinary Claude invocation on the inherited environment', async () => {
     const { provider, subprocessFactory } = providerWithSpy('claude');
 
