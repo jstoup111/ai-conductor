@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-21T01:49:00.895Z
 Slug: file-changing-rebase-rewinds-past-test-suite-and-r
 Class: needs-human
 Halting step: prd_audit
