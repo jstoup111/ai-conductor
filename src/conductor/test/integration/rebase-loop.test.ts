@@ -545,6 +545,78 @@ describe('integration/rebase-loop', () => {
     });
 
     it.each([
+      [
+        'an executed passing suite',
+        { status: 'STALE' as const, reason: 'missing' as const },
+        {
+          status: 'EXECUTED' as const,
+          freshness: { status: 'STALE' as const, reason: 'missing' as const },
+          evidence: {} as never,
+        },
+      ],
+      [
+        'a permitted reuse of current suite proof',
+        { status: 'CURRENT' as const, evidence: {} as never },
+        { status: 'REUSED' as const, evidence: {} as never },
+      ],
+    ])(
+      'dispatches no rebase-only BUILD repair after %s and proceeds to downstream validation',
+      async (_label, inspection, verification) => {
+        await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+        await writeAppliedRebaseOperation();
+        await writeState(statePath, { ...FRONT_DONE_M, build: 'done', build_review: 'done', test_suite: 'pending' });
+
+        const dispatched: string[] = [];
+        const runner: StepRunner = {
+          run: async (step) => {
+            dispatched.push(step);
+            if (step === 'finish') {
+              return { success: false, output: 'stop after downstream validation assertion' };
+            }
+            return satisfy(step);
+          },
+        };
+        const suiteKickbacks: string[] = [];
+        events.on('kickback', (event) => {
+          if (event.type === 'kickback' && event.from === 'test_suite') {
+            suiteKickbacks.push(event.evidence ?? '');
+          }
+        });
+        // The production verifier persists passing evidence, so every
+        // inspection after a verdict reads that proof as current.
+        let proofEstablished = false;
+        const ensure = vi.fn(async () => {
+          proofEstablished = true;
+          return verification;
+        });
+
+        await conductorWith(runner, 'test_suite', 0, {
+          inspect: async () =>
+            proofEstablished ? { status: 'CURRENT' as const, evidence: {} as never } : inspection,
+          ensure,
+        }).run();
+
+        // The native suite gate was consulted and its proof accepted...
+        expect(ensure).toHaveBeenCalled();
+        const state = await readState(statePath);
+        expect(state.ok).toBe(true);
+        if (!state.ok) throw new Error(`expected readable state: ${state.error.message}`);
+        expect(state.value).toMatchObject({ build: 'done', test_suite: 'done' });
+        // ...so the rebase alone charged no BUILD repair: the pre-rebase
+        // baseline of zero build dispatches is unchanged...
+        expect(dispatched.filter((step) => step === 'build')).toEqual([]);
+        expect(suiteKickbacks).toEqual([]);
+        // ...and the flow carried on into downstream validation.
+        expect(dispatched).toEqual(expect.arrayContaining([
+          'manual_test',
+          'prd_audit',
+          'architecture_review_as_built',
+          'finish',
+        ]));
+      },
+    );
+
+    it.each([
       ['launch failure', 'unlaunchable'],
       ['timeout', 'timeout'],
       ['unavailable result', 'preflight_failed'],
