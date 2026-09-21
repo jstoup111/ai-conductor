@@ -61,7 +61,7 @@ import {
 import { classifyPrdWidening, classifyPrdWideningProjection } from './prd-widening-classification.js';
 import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
-import { createGithubTrackerClient } from './tracker-client.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner } from './tracker-client.js';
 import { executeGithubOperation, type GithubOperationRunner } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
@@ -563,10 +563,29 @@ export function createProvenanceGuardedFinishPresentationRepair(input: {
     if (!publication) {
       throw new Error('guarded finish presentation repair unavailable: committed feature provenance could not be resolved');
     }
+    const pull = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
+    if (!pull || pull[1].toLowerCase() !== publication.remoteMutation.provenance.repository.toLowerCase()) {
+      throw new Error('guarded finish presentation repair unavailable: pull request target could not be resolved');
+    }
+    const operations = createGuardedGithubOperationRunner(input.gh, {
+      cwd: input.projectRoot,
+      mutation: {
+        provenance: {
+          ...publication.remoteMutation.provenance,
+          target: {
+            repository: publication.remoteMutation.provenance.repository,
+            kind: 'pull-request',
+            number: Number(pull[2]),
+          },
+        },
+        dependencies: publication.remoteMutation.dependencies,
+      },
+      events: publication.operations.events,
+    });
     await createFinishPresentationRepair({
       projectRoot: input.projectRoot,
       gh: input.gh,
-      operations: publication.operations,
+      operations,
       log: input.log,
     })({ prUrl, state });
   };
