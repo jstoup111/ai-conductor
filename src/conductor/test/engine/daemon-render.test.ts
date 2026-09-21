@@ -569,6 +569,18 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
     })[0]).toContain('security policy containment failed: bubblewrap unavailable');
   });
 
+  it('renders each durable decision stop of a settled adjudication with its owner and case', () => {
+    const rendered = lines({
+      type: 'remediation_adjudication_completed', domain: 'build_review', lapId: 'lap-12345678',
+      caseIds: ['case-1'], effectIds: [],
+      decisionStops: [{ caseId: 'case-1', owner: 'architecture', sourceIds: ['security:f1'], rationale: 'The repairs contradict the approved boundary.' }],
+    }).join('\n');
+    expect(rendered).toContain('decision stop');
+    expect(rendered).toContain('case-1');
+    expect(rendered).toContain('architecture');
+    expect(rendered).toContain('The repairs contradict the approved boundary.');
+  });
+
   it('renders the patch-equivalent filtered-commit count alongside the base freshness summary', () => {
     expect(lines({
       type: 'build_review_base',

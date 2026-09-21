@@ -2652,6 +2652,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'remediation_adjudication_completed':
       log(`${dot} build_review adjudication completed (${event.caseIds.length} settled case${event.caseIds.length === 1 ? '' : 's'})`);
+      for (const stop of event.decisionStops ?? []) {
+        log(`${dot} ${chalk.yellow(`build_review decision stop: case ${stop.caseId} needs a ${stop.owner ?? 'consistency'} decision (${stop.sourceIds.length} source${stop.sourceIds.length === 1 ? '' : 's'}) — ${stop.rationale}`)}`);
+      }
       break;
     case 'remediation_case_refuted':
       log(`${dot} build_review refuted remediation case ${event.caseId}`);
