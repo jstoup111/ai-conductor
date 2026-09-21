@@ -11,6 +11,16 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-21
+
+### Added
+
+- Daemons now reclaim merged feature worktrees even when they are absent from the mergeable watch registry. ([implementation PR #2574](https://github.com/jstoup111/ai-conductor/pull/2574)).
+
+### Fixed
+
+- Daemon runs now classify reachable pending gate blocks as recoverable so they re-dispatch automatically. ([implementation PR #2609](https://github.com/jstoup111/ai-conductor/pull/2609)).
+
 ## [1.4.0] - 2026-09-19
 
 ### Added
