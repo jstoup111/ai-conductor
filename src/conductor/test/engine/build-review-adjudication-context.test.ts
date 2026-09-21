@@ -453,13 +453,10 @@ describe('build-review adjudication context', () => {
     } });
   });
 
-  it('delivers captured policy bytes to the case dispatcher instead of their resource paths', () => {
-    const capturedCriteria = [
-      '# Authorization policy\n\nEvery changed handler must enforce authorization.',
-      '## Evidence\n\nA focused regression must cover the authorized route.',
-    ];
+  it('prefers explicit short criteria over the declared resource references', () => {
+    const explicit = ['authorization-boundary', 'authorized-route-regression'];
     const result = assembleBuildReviewAdjudicationContext({
-      aggregate: customAggregate(capturedCriteria),
+      aggregate: customAggregate(explicit),
       priorCases: [],
       planContract: {
         path: '.docs/plans/example.md', pointers: [],
@@ -469,19 +466,12 @@ describe('build-review adjudication context', () => {
     });
 
     expect(result).toMatchObject({ ok: true, context: {
-      policyContext: [{
-        rubric: 'security',
-        effectivePolicyIdentity: POLICY_DIGEST,
-        criteria: capturedCriteria,
-      }],
+      policyContext: [{ rubric: 'security', effectivePolicyIdentity: POLICY_DIGEST, criteria: explicit }],
     } });
-    if (!result.ok) return;
-    expect(result.context.policyContext[0]!.criteria).not.toContain('references/security-criteria.md');
   });
 
-  it('delivers a realistic captured policy body whole and stops on one that exceeds the text bound', () => {
-    const skillBody = `# Authorization policy\n\n${'Every changed handler must enforce authorization. '.repeat(40)}`;
-    const atBound = 'é'.repeat(4_000);
+  it('delivers a criterion at the reference bound whole and stops, untruncated, on one byte more', () => {
+    const atBound = 'é'.repeat(128);
     const evidence = {
       priorCases: [],
       planContract: {
@@ -491,14 +481,14 @@ describe('build-review adjudication context', () => {
       taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '28', status: 'in_progress' }] },
     };
 
-    const complete = assembleBuildReviewAdjudicationContext({ aggregate: customAggregate([skillBody, atBound]), ...evidence });
+    const complete = assembleBuildReviewAdjudicationContext({ aggregate: customAggregate([atBound]), ...evidence });
     expect(complete.ok, JSON.stringify(complete)).toBe(true);
     if (!complete.ok) return;
-    expect(complete.context.policyContext[0]!.criteria).toEqual([skillBody, atBound]);
+    expect(complete.context.policyContext[0]!.criteria).toEqual([atBound]);
 
-    expect(assembleBuildReviewAdjudicationContext({ aggregate: customAggregate([skillBody, `${atBound}x`]), ...evidence })).toEqual({
+    expect(assembleBuildReviewAdjudicationContext({ aggregate: customAggregate([`${atBound}x`]), ...evidence })).toEqual({
       ok: false,
-      stop: { code: 'field-overflow', subject: 'policy-context', field: 'criteria[]', limit: 8_000, actual: 8_001 },
+      stop: { code: 'field-overflow', subject: 'policy-context', field: 'criteria[]', limit: 256, actual: 257 },
     });
   });
 

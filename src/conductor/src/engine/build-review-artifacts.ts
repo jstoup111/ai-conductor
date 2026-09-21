@@ -37,7 +37,11 @@ export interface BuildReviewCustomEvidenceDescriptor {
   readonly declaration: BuildReviewCustomDeclaration;
   readonly installation: { readonly source: 'project' | 'global' | 'plugin'; readonly plugin?: { readonly id: string; readonly version?: string } };
   readonly effectivePolicy: { readonly version: 'v1'; readonly bundleDigest: string };
-  /** Captured SKILL.md/resources, never a mutable installation path. */
+  /**
+   * Optional short adjudication criteria; absent means `declaration.resources`.
+   * Never package file bodies. Evidence persisted before this rule may carry
+   * bodies here, so the reader still accepts the field at the bundle bound.
+   */
   readonly criteria?: readonly string[];
   readonly reviewedInput: { readonly version: 'v1'; readonly contentDigest: string };
   readonly producer: { readonly provider: string; readonly model: string; readonly effort: string };

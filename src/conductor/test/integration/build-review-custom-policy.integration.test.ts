@@ -15,6 +15,10 @@ import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import * as buildReviewProjections from '../../src/engine/build-review-projections.js';
 import * as buildReviewCache from '../../src/engine/build-review-cache.js';
+import { assembleBuildReviewAdjudicationContext } from '../../src/engine/build-review-adjudication-context.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 
 vi.mock('../../src/engine/build-review-projections.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/build-review-projections.js')>();
@@ -169,6 +173,78 @@ describe('custom build-review policy runner', () => {
       { type: 'build_review_outer_verdict', lapId: 'lap-head', rawVerdict: 'PASS', effectiveVerdict: 'PASS' },
       { type: 'build_review_outer_verdict', lapId: 'lap-head', rawVerdict: 'PASS', effectiveVerdict: 'PASS' },
     ]);
+  });
+
+  it('records declared references, never captured package file bodies, as plugin policy criteria', async () => {
+    const root = await fixture();
+    const skillBody = `# Portable policy\n\n${'Review every changed handler for the portable policy. '.repeat(400)}`;
+    const siblingBody = `# Sibling skill\n\n${'Unrelated sibling reviewer instructions. '.repeat(400)}`;
+    const provider: LLMProvider = {
+      invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) })),
+      supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+    };
+    const runner = new DefaultStepRunner(provider, 'custom-policy-criteria', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: {
+        llm_provider: 'claude',
+        build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+          portable: { enabled: true, skill: 'policy-plugin:portable-policy', question: 'Check the selected policy.', source: 'plugin', resources: ['references/criteria.md'], llm_provider: 'claude' },
+        } },
+      } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(),
+      providerExecution: { prepareCandidateSelfHost: async () => ({ executable: '/prepared/claude', env: {}, args: [], teardown: async () => {} }) } as never,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'portable-policy', source: 'plugin' as const, plugin: { id: 'policy-plugin', version: '1.0.0' }, installationOrigin: '/fixture/plugin', canonicalSkillPath: '/fixture/plugin/skills/portable-policy/SKILL.md', packageRoot: '/fixture/plugin', declaredDependencies: [], availability: 'available' as const,
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/skills/portable-policy/SKILL.md',
+        manifest: [
+          { relativePath: 'skills/portable-policy/SKILL.md', bytes: Buffer.from(skillBody) },
+          { relativePath: 'skills/sibling/SKILL.md', bytes: Buffer.from(siblingBody) },
+          { relativePath: 'references/criteria.md', bytes: Buffer.from('# Criteria body\n') },
+        ],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+    });
+
+    const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(result.success, result.output).toBe(true);
+    // The reviewer still receives the selected policy text; only the evidence descriptor changes.
+    expect(vi.mocked(provider.invoke).mock.calls[0]?.[0].prompt).toContain('Review every changed handler');
+    const { descriptor } = JSON.parse(await readFile(join(root, '.pipeline', 'build-review', 'lap-head', 'portable.json'), 'utf8'));
+    expect(descriptor.effectivePolicy).toEqual({ version: 'v1', bundleDigest: `sha256-v1:${'a'.repeat(64)}` });
+    expect(descriptor.declaration.resources).toEqual(['references/criteria.md']);
+    expect(JSON.stringify(descriptor)).not.toContain('Review every changed handler');
+    expect(JSON.stringify(descriptor)).not.toContain('Sibling skill');
+    expect(JSON.stringify(descriptor)).not.toContain('Criteria body');
+
+    const lapId = parseBuildReviewLapId('lap-head')!;
+    const sourceRegion = { path: 'src/a.ts', startLine: 1, endLine: 1, contentHash: `sha256:${'b'.repeat(64)}`, display: 'changed value' };
+    const stamped = stampBuildReviewCustomJudgedResult({
+      kind: 'custom-findings', version: 'v1',
+      findings: [{ concernId: 'policy-gap', summary: 'The change misses the policy.', evidenceLocations: ['src/a.ts:1'], confidence: 90, sourceRegions: [sourceRegion] }],
+    }, {
+      rubric: 'portable', lapId, declaration: descriptor.declaration, policy: descriptor.effectivePolicy,
+      candidate: descriptor.producer, reviewedInput: descriptor.reviewedInput,
+    }, { sourceRegions: [sourceRegion] })!;
+    const context = assembleBuildReviewAdjudicationContext({
+      aggregate: joinBuildReviewRubricOutcomes({
+        lapId, snapshotDigest: 'sha256:snapshot',
+        results: { testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS' } },
+        customResults: { portable: { descriptor, result: stamped } },
+        currentCustomRubrics: ['portable'],
+      } as never),
+      priorCases: [],
+      planContract: { path: '.docs/plans/feature.md', pointers: [], admittedTaskContracts: [{ id: '1', contract: 'review' }] },
+      taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '1', status: 'in_progress' }] },
+    });
+    expect(context.ok, JSON.stringify(context)).toBe(true);
+    if (!context.ok) return;
+    expect(context.context.policyContext).toEqual([expect.objectContaining({ rubric: 'portable', criteria: ['references/criteria.md'] })]);
   });
 
   it('publishes a custom-only outer verdict when effective resolution fails', async () => {
