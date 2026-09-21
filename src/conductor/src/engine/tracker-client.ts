@@ -23,7 +23,8 @@ import type {
   GithubIntakeWriteOperationRequest,
   GithubSharedWriteOperationRequest,
 } from './github-operations.js';
-import { executeGithubOperation } from './github-operations.js';
+import { decodeGithubAmbientRead, executeGithubOperation, type GithubAmbientReadOperation } from './github-operations.js';
+import { parseGithubUrl } from './github-target.js';
 import { hasExplicitGithubOperationApproval } from './github-operation-approval.js';
 import { authorizeGithubMutation } from './owner-gate/mutation-policy.js';
 import type {
@@ -491,10 +492,10 @@ export class GhRunnerError extends Error {
 
 /** A guarded TrackerClient mutation was denied before the terminal transport. */
 export class GithubTrackerOperationRefusalError extends Error {
-  readonly operation: GithubOperationName;
+  readonly operation: GithubOperationName | GithubAmbientReadOperation;
   readonly reason: GithubOperationRefusalReason;
 
-  constructor(operation: GithubOperationName, reason: GithubOperationRefusalReason) {
+  constructor(operation: GithubOperationName | GithubAmbientReadOperation, reason: GithubOperationRefusalReason) {
     super(`GitHub tracker operation '${operation}' was refused: ${reason}`);
     this.name = 'GithubTrackerOperationRefusalError';
     this.operation = operation;
@@ -718,6 +719,59 @@ export async function runTrackerRead(
   return stdout;
 }
 
+/**
+ * Run a registered checkout-scoped read (identity, repository discovery, or a
+ * PR/issue addressed by a branch or number that `gh` resolves from `cwd`).
+ * The argv is decoded against the closed ambient registry first. A transport
+ * failure is rethrown as-is so a migrated caller keeps its error handling.
+ */
+export async function runTrackerAmbientRead(
+  runner: GhRunner,
+  cwd: string,
+  operation: GithubAmbientReadOperation,
+  args: string[],
+  runnerOpts: { timeout?: number; maxBuffer?: number } = {},
+): Promise<string> {
+  const decoded = decodeGithubAmbientRead({ operation, args });
+  if (decoded.kind === 'refused') throw new GithubTrackerOperationRefusalError(operation, decoded.reason);
+  const { stdout } = await runner([...decoded.request.args], { cwd, ...runnerOpts });
+  return stdout;
+}
+
+/** `runTrackerRead` for a migrated caller: a transport failure is rethrown as-is. */
+export async function runTrackerRepositoryRead(
+  ...parameters: Parameters<typeof runTrackerRead>
+): Promise<string> {
+  try {
+    return await runTrackerRead(...parameters);
+  } catch (error) {
+    throw error instanceof GhRunnerError ? error.cause : error;
+  }
+}
+
+/**
+ * Read one PR or issue by handle. A GitHub URL binds the read to its exact
+ * repository and number through `runTrackerRead`; a branch or bare number has
+ * no repository of its own and is a checkout-scoped ambient read.
+ */
+export async function runTrackerUrlRead(
+  runner: GhRunner,
+  cwd: string,
+  kind: 'pull-request' | 'issue',
+  handle: string,
+  args: string[],
+  runnerOpts: { timeout?: number; maxBuffer?: number } = {},
+): Promise<string> {
+  const url = parseGithubUrl(handle);
+  if (!url || url.number === undefined) {
+    return runTrackerAmbientRead(runner, cwd, kind === 'issue' ? 'ambient.issue.read' : 'ambient.pull-request.read', args, runnerOpts);
+  }
+  return runTrackerRepositoryRead(
+    runner, cwd, kind === 'issue' ? 'issue.read' : 'pull-request.read',
+    url.repository, { kind, number: url.number }, args, runnerOpts,
+  );
+}
+
 /** Construct a `TrackerClient` backed by the GitHub `gh` CLI via the given runner. */
 export function createGithubTrackerClient(
   runner: GhRunner,
@@ -788,13 +842,12 @@ export function createGithubTrackerClient(
     },
 
     async viewerIdentity(cwd) {
-      // This account-identity lookup has no repository resource to bind. It
-      // remains a read-only machine-identity seam until the operation registry
-      // admits an account target; it never carries mutation authority.
+      // This account-identity lookup has no repository resource to bind, so it
+      // is a registered ambient identity read; it never carries mutation authority.
       if (!options.repository) {
         let stdout: string;
         try {
-          ({ stdout } = await runner(['api', 'user', '--jq', '.login'], { cwd }));
+          stdout = await runTrackerAmbientRead(runner, cwd, 'ambient.identity.read', ['api', 'user', '--jq', '.login']);
         } catch (err) {
           throw new GhRunnerError(['api', 'user', '--jq', '.login'], err);
         }

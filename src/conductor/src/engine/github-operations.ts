@@ -110,6 +110,51 @@ export type GithubOperationPayload =
   | GithubDependencyPayload
   | GithubCommitStatusPayload;
 
+/**
+ * Checkout-scoped ("ambient") reads: `gh` resolves the repository or account
+ * from the working directory, so no repository-bound target exists yet. These
+ * are the discovery reads D1 admits without target ownership. The registry is
+ * closed: an argv outside the named command shapes is refused, never treated
+ * as read-only by default, and a repository-bound read must use a targeted
+ * read operation instead.
+ */
+export const GITHUB_AMBIENT_READ_REGISTRY = {
+  'ambient.identity.read': [['api', 'user'], ['auth', 'status']],
+  'ambient.repository.read': [['repo', 'view']],
+  'ambient.pull-request.read': [['pr', 'view'], ['pr', 'list']],
+  'ambient.issue.read': [['issue', 'view']],
+} as const satisfies Record<string, readonly (readonly [string, string])[]>;
+
+export type GithubAmbientReadOperation = keyof typeof GITHUB_AMBIENT_READ_REGISTRY;
+
+export interface GithubAmbientReadRequest {
+  readonly operation: GithubAmbientReadOperation;
+  readonly args: readonly string[];
+}
+
+const AMBIENT_WRITE_FLAG = /^(?:-X|--method|-f|-F|--field|--raw-field|--input)/;
+const AMBIENT_REPOSITORY_FLAG = /^(?:-R|--repo)(?:=|$|.)/;
+
+/** Decode an ambient read; every refusal happens before a transport is reached. */
+export function decodeGithubAmbientRead(
+  value: unknown,
+): { readonly kind: 'accepted'; readonly request: GithubAmbientReadRequest } | { readonly kind: 'refused'; readonly reason: GithubOperationRefusalReason } {
+  if (typeof value !== 'object' || value === null) return { kind: 'refused', reason: 'invalid-target' };
+  const { operation, args } = value as { operation?: unknown; args?: unknown };
+  if (typeof operation !== 'string' || !Object.hasOwn(GITHUB_AMBIENT_READ_REGISTRY, operation)) {
+    return { kind: 'refused', reason: 'unsupported-operation' };
+  }
+  if (!Array.isArray(args) || !args.every((arg): arg is string => typeof arg === 'string')) {
+    return { kind: 'refused', reason: 'invalid-target' };
+  }
+  const shapes = GITHUB_AMBIENT_READ_REGISTRY[operation as GithubAmbientReadOperation];
+  const registered = shapes.some(([command, subcommand]) => args[0] === command && args[1] === subcommand);
+  const bound = args.some((arg) => AMBIENT_REPOSITORY_FLAG.test(arg) || /(?:^|\/)repos\//.test(arg));
+  const writes = args[0] === 'api' && args.slice(2).some((arg) => AMBIENT_WRITE_FLAG.test(arg));
+  if (!registered || bound || writes) return { kind: 'refused', reason: 'invalid-target' };
+  return { kind: 'accepted', request: { operation: operation as GithubAmbientReadOperation, args } };
+}
+
 interface GithubOperationDefinition {
   readonly access: GithubOperationAccess;
   readonly targetKinds: readonly GithubResourceKind[];

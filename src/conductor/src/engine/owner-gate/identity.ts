@@ -20,6 +20,7 @@
  * canonical definition in tracker-client.ts.
  */
 import type { GhRunner } from '../tracker-client.js';
+import { runTrackerAmbientRead } from '../tracker-client.js';
 export type { GhRunner };
 
 /** Minimal config surface this module reads. Full type lives in types/config.ts. */
@@ -67,7 +68,7 @@ export function configuredOwner(config: OwnerConfig): OwnerResolution {
 export async function ghLoginOwner(gh: GhRunner, cwd: string): Promise<OwnerResolution> {
   let login: string | null;
   try {
-    const { stdout } = await gh(['api', 'user', '--jq', '.login'], { cwd });
+    const stdout = await runTrackerAmbientRead(gh, cwd, 'ambient.identity.read', ['api', 'user', '--jq', '.login']);
     login = normalizeOwnerId(stdout);
   } catch {
     return { resolved: false };

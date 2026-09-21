@@ -16,6 +16,7 @@
 import { parseWorkRef } from './source-ref.js';
 import { parseIssueRef } from '../pr-labels.js';
 import { executeGithubOperation, type GithubOperationRunner } from '../github-operations.js';
+import { runTrackerUrlRead } from '../tracker-client.js';
 
 /** Shell runner for the `gh` CLI. Mirrors the intake adapter's GhRunner shape. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
@@ -113,7 +114,7 @@ export async function injectIssueRef(opts: InjectIssueRefOpts): Promise<boolean>
   const line = `${keyword} ${parsed.repo}#${parsed.number}`;
 
   try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     let body = '';
     try {
       body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');

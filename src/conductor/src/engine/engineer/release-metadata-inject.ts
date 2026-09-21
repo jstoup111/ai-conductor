@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { parseReleaseDisposition } from '../release-metadata.js';
 import { parseIssueRef, type GitRunner } from '../pr-labels.js';
 import { executeGithubOperation, type GithubOperationRunner } from '../github-operations.js';
+import { runTrackerUrlRead } from '../tracker-client.js';
 
 /** Shell runner for the `gh` CLI. Same shape as issue-ref.ts's GhRunner. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
@@ -143,7 +144,7 @@ export async function ensureReleaseMetadata(opts: EnsureReleaseMetadataOpts): Pr
   }
 
   try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     let body = '';
     try {
       body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');

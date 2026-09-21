@@ -11,6 +11,7 @@ import {
 } from './shipment-evidence.js';
 import type { GhRunner, GitRunner } from './pr-labels.js';
 import { renderShippedRecord, specHash } from './shipped-record.js';
+import { runTrackerAmbientRead } from './tracker-client.js';
 
 export const DEFAULT_SHIPMENT_AUDIT_REPORT =
   '.docs/audits/2026-07-25-durable-shipped-record-backfill.json';
@@ -741,7 +742,7 @@ function countRows(rows: ShipmentAuditRow[]): Record<ShipmentAuditClassification
 }
 
 async function repositoryName(options: ShipmentAuditOptions): Promise<string> {
-  const { stdout } = await options.runGh(['repo', 'view', '--json', 'nameWithOwner'], { cwd: options.cwd });
+  const stdout = await runTrackerAmbientRead(options.runGh, options.cwd, 'ambient.repository.read', ['repo', 'view', '--json', 'nameWithOwner']);
   const value = JSON.parse(stdout) as { nameWithOwner?: unknown };
   if (typeof value.nameWithOwner !== 'string' || !value.nameWithOwner) {
     throw new Error('repository name is unavailable for merged PR enumeration');

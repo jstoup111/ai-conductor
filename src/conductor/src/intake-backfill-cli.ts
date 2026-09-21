@@ -14,6 +14,7 @@ import {
   renderBackfillReport,
   type BacklogIssue,
 } from './engine/engineer/intake/backfill.js';
+import { runTrackerRepositoryRead } from './engine/tracker-client.js';
 
 function parseRepoArg(argv: string[]): string | null {
   const i = argv.indexOf('--repo');
@@ -37,10 +38,7 @@ function labelNames(issue: RawIssue): string[] {
  * --state open --json ... -R <repo>`).
  */
 async function listAssignedOpenIssues(gh: GhRunner, repo: string, cwd: string): Promise<BacklogIssue[]> {
-  const { stdout } = await gh(
-    ['issue', 'list', '--assignee', '@me', '--state', 'open', '--json', 'number,body,labels', '-R', repo],
-    { cwd },
-  );
+  const stdout = await runTrackerRepositoryRead(gh, cwd, 'repository.read', repo, { kind: 'repository' }, ['issue', 'list', '--assignee', '@me', '--state', 'open', '--json', 'number,body,labels', '-R', repo]);
   const parsed: unknown = JSON.parse(stdout || '[]');
   const raw = Array.isArray(parsed) ? (parsed as RawIssue[]) : [];
   return raw.map((issue) => ({

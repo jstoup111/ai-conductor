@@ -206,6 +206,7 @@ export function parseDependencyProse(input: DependencyProseInput): DependencyPro
 
 /** Canonical `gh` CLI runner shape — re-exported from tracker-client.ts. */
 import type { GhRunner } from '../tracker-client.js';
+import { runTrackerRepositoryRead } from '../tracker-client.js';
 export type { GhRunner };
 
 /** Parse a GitHub API `repository_url` (e.g. `https://api.github.com/repos/acme/app`) into `owner/repo`. */
@@ -255,9 +256,7 @@ async function fetchExistingBlockedBy(
   gh: GhRunner,
   cwd: string,
 ): Promise<Set<string>> {
-  const { stdout } = await gh(['api', `repos/${sourceRepo}/issues/${sourceNumber}/dependencies/blocked_by`], {
-    cwd,
-  });
+  const stdout = await runTrackerRepositoryRead(gh, cwd, 'issue.read', `${sourceRepo}`, { kind: 'issue', number: Number(sourceNumber) }, ['api', `repos/${sourceRepo}/issues/${sourceNumber}/dependencies/blocked_by`]);
   let raw: RawBlockedByEntry[] = [];
   try {
     raw = JSON.parse(stdout || '[]') as RawBlockedByEntry[];
@@ -286,7 +285,7 @@ async function resolveIssueDatabaseId(
   gh: GhRunner,
   cwd: string,
 ): Promise<number | null> {
-  const { stdout } = await gh(['api', `repos/${repo}/issues/${number}`], { cwd });
+  const stdout = await runTrackerRepositoryRead(gh, cwd, 'issue.read', `${repo}`, { kind: 'issue', number: Number(number) }, ['api', `repos/${repo}/issues/${number}`]);
   try {
     const parsed = JSON.parse(stdout || '{}') as { id?: unknown };
     return typeof parsed.id === 'number' && Number.isFinite(parsed.id) ? parsed.id : null;

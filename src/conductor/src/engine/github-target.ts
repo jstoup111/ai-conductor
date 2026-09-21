@@ -68,7 +68,7 @@ function positiveNumber(value: string): number | undefined {
 }
 
 /** Parse only browser GitHub URLs that identify one supported GitHub resource route. */
-function parseGithubUrl(value: unknown): ParsedGithubUrl | undefined {
+export function parseGithubUrl(value: unknown): ParsedGithubUrl | undefined {
   if (typeof value !== 'string' || value.trim() !== value || value === '') return undefined;
 
   let parsed: URL;

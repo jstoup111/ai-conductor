@@ -31,6 +31,7 @@ import {
   assertRealExecAllowed,
   type GhRunner,
 } from './tracker-client.js';
+import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
 export { makeProductionGh, assertRealExecAllowed, type GhRunner };
 
 /**
@@ -524,10 +525,7 @@ export async function prMergeState(
   log?: (msg: string) => void,
 ): Promise<PrMergeState> {
   try {
-    const { stdout } = await runGh(
-      ['pr', 'view', prUrl, '--json', 'state,mergeable,statusCheckRollup,labels,isDraft'],
-      { cwd },
-    );
+    const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'state,mergeable,statusCheckRollup,labels,isDraft']);
     let parsed: unknown;
     try {
       parsed = JSON.parse(stdout);
@@ -630,10 +628,7 @@ export async function findOrCreatePr(
         // attempted once, never retried as a duplicate fallback.
         throw new Error('guarded PR lookup has no raw response adapter');
       }
-      const { stdout } = await runGh(
-        ['pr', 'view', opts.branch, '--json', 'url,state'],
-        { cwd },
-      );
+      const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', opts.branch, ['pr', 'view', opts.branch, '--json', 'url,state']);
       const data: { url?: string; state?: string } = JSON.parse(stdout);
       if (data.state === 'OPEN' && data.url) {
         return { prUrl: data.url };
@@ -662,10 +657,7 @@ export async function findOrCreatePr(
     // duplicate the PR.
     if (typeof runGh !== 'function') return { outcome: result };
     try {
-      const { stdout } = await runGh(
-        ['pr', 'view', opts.branch, '--json', 'url,state'],
-        { cwd },
-      );
+      const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', opts.branch, ['pr', 'view', opts.branch, '--json', 'url,state']);
       const data: { url?: string; state?: string } = JSON.parse(stdout);
       return data.state === 'OPEN' && data.url
         ? { prUrl: data.url, outcome: result }
@@ -694,10 +686,7 @@ export async function resolveSpecPrUrl(
   log?: (msg: string) => void,
 ): Promise<string | undefined> {
   try {
-    const { stdout } = await runGh(
-      ['pr', 'list', '--state', 'all', '--head', branch, '--json', 'url,state', '--limit', '1'],
-      { cwd },
-    );
+    const stdout = await runTrackerAmbientRead(runGh, cwd, 'ambient.pull-request.read', ['pr', 'list', '--state', 'all', '--head', branch, '--json', 'url,state', '--limit', '1']);
     const data: Array<{ url?: string; state?: string }> = JSON.parse(stdout);
     const url = data[0]?.url;
     return url || undefined;
@@ -819,7 +808,7 @@ export async function upsertComment(
 
   let matchedUrl: string | undefined;
   try {
-    const { stdout } = await runGh(['pr', 'view', prUrl, '--json', 'comments'], { cwd });
+    const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'comments']);
     const data: GhCommentJson = JSON.parse(stdout);
     const matched = (data.comments ?? []).find(
       (c) => typeof c?.body === 'string' && c.body.includes(marker),
@@ -904,7 +893,7 @@ export async function upsertIssueComment(
 
   let matchedUrl: string | undefined;
   try {
-    const { stdout } = await runGh(['issue', 'view', issueUrl, '--json', 'comments'], { cwd });
+    const stdout = await runTrackerUrlRead(runGh, cwd, 'issue', issueUrl, ['issue', 'view', issueUrl, '--json', 'comments']);
     const data: GhCommentJson = JSON.parse(stdout);
     const matched = (data.comments ?? []).find(
       (c) => typeof c?.body === 'string' && c.body.includes(marker),
@@ -1005,10 +994,7 @@ export async function readHaltPresentation(
   log?: (msg: string) => void,
 ): Promise<HaltPresentation | null> {
   try {
-    const { stdout } = await runGh(
-      ['pr', 'view', prUrl, '--json', 'isDraft,labels,body'],
-      { cwd },
-    );
+    const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'isDraft,labels,body']);
     const data: GhHaltPresentationJson = JSON.parse(stdout);
     const isDraft = data.isDraft ?? false;
     const labels = (data.labels ?? []).map((l) => l.name ?? '').filter(Boolean);

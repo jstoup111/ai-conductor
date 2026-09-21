@@ -463,6 +463,7 @@ import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
+import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -5638,7 +5639,7 @@ export class Conductor {
   private async resolveTrackerRepoSlug(): Promise<string | undefined> {
     if (this.trackerRepoSlug !== undefined) return this.trackerRepoSlug ?? undefined;
     try {
-      const { stdout } = await this.gh(['repo', 'view', '--json', 'nameWithOwner'], { cwd: this.projectRoot });
+      const stdout = await runTrackerAmbientRead(this.gh, this.projectRoot, 'ambient.repository.read', ['repo', 'view', '--json', 'nameWithOwner']);
       const parsed = JSON.parse(stdout || '{}') as { nameWithOwner?: unknown };
       this.trackerRepoSlug = typeof parsed.nameWithOwner === 'string' && parsed.nameWithOwner ? parsed.nameWithOwner : null;
     } catch {
@@ -6575,17 +6576,14 @@ export class Conductor {
     if (!head || head === 'HEAD' || !this.baseBranch) return undefined;
 
     try {
-      const { stdout } = await this.runGh(
-        [
+      const stdout = await runTrackerAmbientRead(this.runGh, this.projectRoot, 'ambient.pull-request.read', [
           'pr', 'list',
           '--head', head,
           '--base', this.baseBranch,
           '--state', 'open',
           '--json', 'url,state',
           '--limit', '10',
-        ],
-        { cwd: this.projectRoot },
-      );
+        ]);
       const rows: unknown = JSON.parse(stdout);
       if (!Array.isArray(rows)) return undefined;
       const match = rows.find(
@@ -6625,17 +6623,14 @@ export class Conductor {
     let prUrl = state.pr_url;
     if (!prUrl && state.worktree_branch && this.baseBranch) {
       try {
-        const { stdout } = await this.runGh(
-          [
+        const stdout = await runTrackerAmbientRead(this.runGh, this.projectRoot, 'ambient.pull-request.read', [
             'pr', 'list',
             '--head', state.worktree_branch,
             '--base', this.baseBranch,
             '--state', 'open',
             '--json', 'url,state',
             '--limit', '10',
-          ],
-          { cwd: this.projectRoot },
-        );
+          ]);
         const rows: unknown = JSON.parse(stdout);
         if (Array.isArray(rows)) {
           prUrl = rows.find(
@@ -6656,10 +6651,7 @@ export class Conductor {
     // lifecycle. Re-check immediately before a resume clear so a PR closed or
     // merged by a human can never receive a label/body mutation.
     try {
-      const { stdout } = await this.gh(
-        ['pr', 'view', prUrl, '--json', 'state'],
-        { cwd: this.projectRoot },
-      );
+      const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'state']);
       const prState = (JSON.parse(stdout) as { state?: unknown }).state;
       if (prState !== 'OPEN') {
         this.resumeHaltStateClearAttempted = true;
@@ -6759,10 +6751,7 @@ export class Conductor {
     this.releaseMetadataSnapshot = undefined;
 
     try {
-      const { stdout } = await this.gh(
-        ['pr', 'view', prUrl, '--json', 'body'],
-        { cwd: this.projectRoot },
-      );
+      const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
       const body = (JSON.parse(stdout) as { body?: unknown }).body;
       if (typeof body !== 'string') throw new Error('PR body is absent');
       const block = snapshotReleaseMetadataBlock(body);
@@ -6791,7 +6780,7 @@ export class Conductor {
 
     try {
       const readBody = async (): Promise<string> => {
-        const { stdout } = await this.gh(['pr', 'view', prUrl, '--json', 'body'], { cwd: this.projectRoot });
+        const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
         const body = (JSON.parse(stdout) as { body?: unknown }).body;
         if (typeof body !== 'string') throw new Error('PR body is absent');
         return body;
@@ -6847,10 +6836,7 @@ export class Conductor {
 
     let body: string;
     try {
-      const { stdout } = await this.runGh(
-        ['pr', 'view', prUrl, '--json', 'body'],
-        { cwd: this.projectRoot },
-      );
+      const stdout = await runTrackerUrlRead(this.runGh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
       const value = JSON.parse(stdout) as { body?: unknown };
       if (typeof value.body !== 'string') throw new Error('PR body is absent');
       body = value.body;

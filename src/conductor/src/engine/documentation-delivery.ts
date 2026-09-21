@@ -1,6 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { GhRunner } from './tracker-client.js';
+import { runTrackerUrlRead } from './tracker-client.js';
 
 const DELIVERY_FILE = '.pipeline/documentation-delivery.json';
 const SOURCE_REF = /^[^/\s]+\/[^/#\s]+#[1-9]\d*$/;
@@ -65,10 +66,7 @@ export async function readDocumentationDelivery(
     throw new Error(`Documentation delivery result is invalid: ${DELIVERY_FILE}`);
   }
 
-  const { stdout } = await options.gh(
-    ['pr', 'view', value.prUrl, '--json', 'headRefName,body'],
-    { cwd: options.projectRoot },
-  );
+  const stdout = await runTrackerUrlRead(options.gh, options.projectRoot, 'pull-request', value.prUrl, ['pr', 'view', value.prUrl, '--json', 'headRefName,body']);
   let pr: unknown;
   try {
     pr = JSON.parse(stdout);

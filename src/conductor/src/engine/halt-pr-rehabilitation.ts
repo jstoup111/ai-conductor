@@ -40,6 +40,7 @@ import {
   NEEDS_REMEDIATION_BODY_MARKER,
 } from './pr-labels.js';
 import { injectIssueRef } from './engineer/issue-ref.js';
+import { runTrackerUrlRead } from './tracker-client.js';
 
 export const NEEDS_REMEDIATION_TITLE_PREFIX = 'needs-remediation:';
 export const NEEDS_REMEDIATION_LABEL = 'needs-remediation';
@@ -150,7 +151,7 @@ export async function rehabilitateHaltPr(
 
   let view: PrViewState;
   try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body'], { cwd });
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body']);
     view = parsePrView(stdout);
   } catch (err) {
     log(`[halt-pr-rehab] gh pr view failed for ${prUrl} — skipping rehabilitation: ${err}`);
@@ -203,7 +204,7 @@ export async function clearHaltStateForResume(
 ): Promise<ClearHaltStateForResumeOutcome> {
   let view: PrViewState;
   try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'isDraft,labels,body'], { cwd });
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'isDraft,labels,body']);
     view = parsePrView(stdout);
   } catch (err) {
     log(`[halt-pr-rehab] resume clear state read failed for ${prUrl}: ${err}`);
@@ -296,7 +297,7 @@ export async function retitleFloor(
 ): Promise<RetitleFloorResult> {
   let currentTitle = '';
   try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title'], { cwd });
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'title']);
     currentTitle = String((JSON.parse(stdout || '{}') as { title?: unknown }).title ?? '');
   } catch (err) {
     log(`[halt-pr-rehab] retitle-floor gh pr view failed for ${prUrl} — skipping: ${err}`);
@@ -340,7 +341,7 @@ export async function readStaleHaltTitle(
   log?: (msg: string) => void,
 ): Promise<string | null> {
   try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title'], { cwd });
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'title']);
     const title = String((JSON.parse(stdout || '{}') as { title?: unknown }).title ?? '');
     return title.startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ? title : null;
   } catch (err) {
@@ -438,7 +439,7 @@ export async function readStaleHaltBanner(
   log?: (msg: string) => void,
 ): Promise<string | null> {
   try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
     return body.includes(HALT_PR_BANNER_SENTINEL) ? HALT_PR_BANNER_SENTINEL : null;
   } catch (err) {
@@ -567,7 +568,7 @@ export async function readFlooredBody(
   log?: (msg: string) => void,
 ): Promise<string | null> {
   try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
     return isEngineFlooredBody(body) ? PR_BODY_FLOOR_MARKER : null;
   } catch (err) {
@@ -607,10 +608,7 @@ export async function postHaltHistoryComment(
   let view: PrViewState;
   let existingComments: string[] = [];
   try {
-    const { stdout } = await gh(
-      ['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body,comments'],
-      { cwd },
-    );
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body,comments']);
     view = parsePrView(stdout);
     try {
       const raw = JSON.parse(stdout || '{}') as { comments?: unknown };
@@ -757,9 +755,7 @@ export async function makeRetainedPrPresentable(
   // repair on the SHIP-adoption path does not tax every ordinary run.
   let view: PrViewState;
   try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body'], {
-      cwd,
-    });
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body']);
     view = parsePrView(stdout);
   } catch (err) {
     log(`[halt-pr-rehab] retained-PR state read failed for ${prUrl} — skipping repair: ${err}`);
@@ -865,7 +861,7 @@ export async function bodyFloor(
 
   let body = '';
   try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
   } catch (err) {
     logFn(`[halt-pr-rehab] bodyFloor gh pr view failed for ${prUrl} — skipping: ${err}`);
@@ -936,7 +932,7 @@ export async function bodyFloor(
         return 'refused';
       }
 
-      const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
+      const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
       const verifyBody = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
       if (!verifyBody.includes(HALT_PR_BANNER_SENTINEL)) {
         return 'floored';

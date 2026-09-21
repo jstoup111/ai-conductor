@@ -18,35 +18,6 @@ export interface GithubInvocationAuditSite {
   readonly classification: 'approved-adapter' | 'local-git' | 'remote-write';
 }
 
-/**
- * Pre-boundary read sites are explicit, line-addressed compatibility entries.
- * They are not a file-level escape hatch: a new literal invocation, including
- * one in these files, has no entry and fails the audit. New code must use
- * `runTrackerRead` instead of extending this historical inventory.
- */
-const APPROVED_DIRECT_GITHUB_READ_SITES = new Set([
-  'engine/backlog-priority.ts:323', 'engine/blocker-resolver.ts:162',
-  'engine/conductor.ts:5633', 'engine/conductor.ts:6558', 'engine/conductor.ts:6608',
-  'engine/conductor.ts:6639', 'engine/conductor.ts:6742', 'engine/conductor.ts:6774', 'engine/conductor.ts:6830',
-  'engine/documentation-delivery.ts:68', 'engine/engineer/intake/delivery-guard.ts:31',
-  'engine/engineer/intake/delivery-guard.ts:79', 'engine/engineer/issue-dep-migration.ts:258',
-  'engine/engineer/issue-dep-migration.ts:289', 'engine/engineer/issue-ref.ts:116',
-  'engine/engineer/release-metadata-inject.ts:146', 'engine/finish-publication-production.ts:385',
-  'engine/finish-publication-production.ts:416', 'engine/finish-publication-production.ts:455',
-  'engine/finish-publication-production.ts:540', 'engine/halt-pr-rehabilitation.ts:153',
-  'engine/halt-pr-rehabilitation.ts:206', 'engine/halt-pr-rehabilitation.ts:299',
-  'engine/halt-pr-rehabilitation.ts:343', 'engine/halt-pr-rehabilitation.ts:441',
-  'engine/halt-pr-rehabilitation.ts:570', 'engine/halt-pr-rehabilitation.ts:610',
-  'engine/halt-pr-rehabilitation.ts:760', 'engine/halt-pr-rehabilitation.ts:868',
-  'engine/halt-pr-rehabilitation.ts:939', 'engine/merged-pr-guard.ts:43',
-  'engine/owner-gate/identity.ts:70', 'engine/park-reconciliation.ts:290',
-  'engine/pr-criticality-labels.ts:84', 'engine/pr-labels.ts:527', 'engine/pr-labels.ts:633',
-  'engine/pr-labels.ts:665', 'engine/pr-labels.ts:697', 'engine/pr-labels.ts:822',
-  'engine/pr-labels.ts:907', 'engine/pr-labels.ts:1008', 'engine/ship-draft-pr.ts:298',
-  'engine/shipment-audit.ts:744', 'engine/shipment-evidence.ts:92', 'engine/tracker-client.ts:797',
-  'intake-backfill-cli.ts:40',
-]);
-
 const PROCESS_MODULE = /^(?:node:)?child_process$/;
 const EXECA_MODULE = /^execa(?:\/|$)/;
 const GITHUB_HTTP_MODULE = /^(?:@octokit\/|octokit(?:$|\/)|github(?:$|\/)|node-fetch$|undici$)/;
@@ -312,16 +283,13 @@ function guardedMutationRunnerCall(file: string, node: ts.CallExpression): boole
   return isCanonicalGuardedAdapterTransportCall(file, node);
 }
 
-function approvedDirectGithubReadCall(file: string, parsed: ts.SourceFile, node: ts.CallExpression): boolean {
-  return APPROVED_DIRECT_GITHUB_READ_SITES.has(`${normalizedFile(file)}:${location(parsed, node).line}`);
-}
-
 /** Every dynamic GhRunner forwarding exemption is bound to its real owner. */
 const GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS: Readonly<Record<
-  'runTrackerRead' | 'runTrackerIssueOperation' | 'graphqlPage' | 'guardedPrRunner',
+  'runTrackerRead' | 'runTrackerAmbientRead' | 'runTrackerIssueOperation' | 'graphqlPage' | 'guardedPrRunner',
   readonly string[]
 >> = {
   runTrackerRead: ['engine/tracker-client.ts'],
+  runTrackerAmbientRead: ['engine/tracker-client.ts'],
   runTrackerIssueOperation: ['engine/tracker-client.ts'],
   graphqlPage: ['engine/shipment-audit.ts'],
   guardedPrRunner: ['engine/gate-writeback.ts', 'engine/pr-labels.ts'],
@@ -331,7 +299,7 @@ const GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS: Readonly<Record<
 function guardedDynamicRunnerForwarding(file: string, node: ts.CallExpression): boolean {
   const owner = enclosingFunctionName(node);
   if (isCanonicalGuardedAdapterTransportCall(file, node)) return true;
-  if (owner === 'runTrackerRead' || owner === 'graphqlPage' || owner === 'runTrackerIssueOperation') {
+  if (owner === 'runTrackerRead' || owner === 'runTrackerAmbientRead' || owner === 'graphqlPage' || owner === 'runTrackerIssueOperation') {
     return GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS[owner].includes(normalizedFile(file));
   }
   if (owner !== 'guardedPrRunner') return false;
@@ -484,7 +452,7 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
         const directHead = argvHead(node.arguments[0]);
         if (directHead && ghMutation(directHead) && !guardedMutationRunnerCall(file, node)) {
           findings.push(report(parsed, file, node, 'direct injected GitHub mutation outside guarded adapter'));
-        } else if (directHead && !guardedMutationRunnerCall(file, node) && !approvedDirectGithubReadCall(file, parsed, node)) {
+        } else if (directHead && !guardedMutationRunnerCall(file, node)) {
           findings.push(report(parsed, file, node, 'direct injected GitHub read outside guarded adapter'));
         } else if (!directArgs && !directHead
           && !readOnlyRunnerForwarding(node, readOnlyFactories)

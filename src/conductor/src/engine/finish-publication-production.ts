@@ -54,6 +54,7 @@ import {
   upsertShipmentPlanDeclaration,
   withoutShipmentPlanDeclarations,
 } from './shipment-plan-declaration.js';
+import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
 
 export interface ProductionFinishPublicationCoordinator {
   advance(input: {
@@ -390,7 +391,7 @@ export function createProductionFinishPublicationCoordinator(
           ],
     });
     if (!renderedReducedCoverage.ok) throw new Error(`accepted-risk projection: ${renderedReducedCoverage.message}`);
-    const { stdout } = await deps.gh(['pr', 'view', prUrl, '--json', 'body'], { cwd: deps.projectRoot });
+    const stdout = await runTrackerUrlRead(deps.gh, deps.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     const body = (JSON.parse(stdout) as { body?: unknown }).body;
     const reducedCoverageBody = upsertReducedCoverageEvidence(
       typeof body === 'string' ? body : '',
@@ -421,7 +422,7 @@ export function createProductionFinishPublicationCoordinator(
         : `plan not found: ${resolution.expected}`;
       throw new Error(`shipment plan declaration: ${detail}`);
     }
-    const { stdout } = await deps.gh(['pr', 'view', prUrl, '--json', 'body'], { cwd: deps.projectRoot });
+    const stdout = await runTrackerUrlRead(deps.gh, deps.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     const body = (JSON.parse(stdout) as { body?: unknown }).body;
     if (typeof body !== 'string') throw new Error('shipment plan declaration: PR body is malformed');
     const next = upsertShipmentPlanDeclaration(body, resolution.identity.slug);
@@ -460,7 +461,7 @@ export function createProductionFinishPublicationCoordinator(
                 // Missing/indeterminate remote is safe only for foreground keep.
               }
               try {
-                await deps.gh(['auth', 'status'], { cwd: deps.projectRoot });
+                await runTrackerAmbientRead(deps.gh, deps.projectRoot, 'ambient.identity.read', ['auth', 'status']);
                 authentication = 'authenticated';
               } catch {
                 // The policy maps unavailable auth to the safe foreground outcome.
@@ -545,10 +546,7 @@ export function createProductionFinishPublicationCoordinator(
             observePullRequest: async () => {
               if (!state.pr_url) return { state: 'missing' };
               try {
-                const { stdout } = await deps.gh(
-                  ['pr', 'view', state.pr_url, '--json', 'url,title,body,isDraft,labels'],
-                  { cwd: deps.projectRoot },
-                );
+                const stdout = await runTrackerUrlRead(deps.gh, deps.projectRoot, 'pull-request', state.pr_url, ['pr', 'view', state.pr_url, '--json', 'url,title,body,isDraft,labels']);
                 const pr = JSON.parse(stdout) as {
                   url?: unknown;
                   title?: unknown;

@@ -23,6 +23,7 @@ import {
 } from './pr-labels.js';
 import { parseSourceRef } from './engineer/issue-ref.js';
 import { executeGithubOperation, type GithubOperationRunner } from './github-operations.js';
+import { runTrackerRepositoryRead } from './tracker-client.js';
 
 /**
  * The criticality label family. Matches `backlog-priority.ts`'s parser exactly
@@ -81,7 +82,7 @@ async function readIssueLabels(
   repo: string,
   number: string,
 ): Promise<string[]> {
-  const { stdout } = await gh(['api', `repos/${repo}/issues/${number}/labels`], { cwd });
+  const stdout = await runTrackerRepositoryRead(gh, cwd, 'issue.read', `${repo}`, { kind: 'issue', number: Number(number) }, ['api', `repos/${repo}/issues/${number}/labels`]);
   const parsed: unknown = JSON.parse(stdout);
   if (!Array.isArray(parsed)) return [];
   return parsed

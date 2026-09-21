@@ -43,6 +43,7 @@ import { executeRemoteGit } from './remote-git-operations.js';
 import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from './tracker-client.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
+import { runTrackerUrlRead } from './tracker-client.js';
 
 /**
  * Human-readable note stamped into the placeholder body so a reader who lands
@@ -295,7 +296,7 @@ async function reobserveOpenPr(
   log: (msg: string) => void,
 ): Promise<string | undefined> {
   try {
-    const { stdout } = await gh(['pr', 'view', branch, '--json', 'url,state'], { cwd });
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', branch, ['pr', 'view', branch, '--json', 'url,state']);
     const data: { url?: unknown; state?: unknown } = JSON.parse(stdout);
     return data.state === 'OPEN' && typeof data.url === 'string' && data.url.length > 0
       ? data.url
