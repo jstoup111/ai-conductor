@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Covers: task:1
+# Covers: task:1, task:2, task:3
 # Exercises the public bootstrap entry point with only a local stand-in source.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -19,7 +19,8 @@ git -C "$SOURCE_REPO" config user.name test
 mkdir -p "$SOURCE_REPO/bin"
 cat > "$SOURCE_REPO/bin/install" <<'EOF'
 #!/bin/sh
-printf '%s\n' "$PWD|$*|${AI_CONDUCTOR_CHANNEL-}" >> "$INSTALLER_RECORD"
+printf '%s|%s|%s|%s\n' "$PWD" "$0" "$*" "${AI_CONDUCTOR_CHANNEL-}" >> "$INSTALLER_RECORD"
+exit "${INSTALLER_EXIT_CODE:-0}"
 EOF
 cat > "$SOURCE_REPO/bin/update" <<'EOF'
 #!/bin/sh
@@ -28,6 +29,7 @@ EOF
 chmod +x "$SOURCE_REPO/bin/install" "$SOURCE_REPO/bin/update"
 git -C "$SOURCE_REPO" add bin
 git -C "$SOURCE_REPO" commit -qm fixture
+git -C "$SOURCE_REPO" branch -M stable
 
 PREREQUISITE_PATH="$TMP_ROOT/prerequisites"
 mkdir -p "$PREREQUISITE_PATH"
@@ -46,6 +48,15 @@ chmod +x "$PREREQUISITE_PATH/present" "$PREREQUISITE_PATH/python3"
 for tool in git gh node npm tmux; do
   ln -s present "$PREREQUISITE_PATH/$tool"
 done
+
+FRESH_INSTALL_PATH="$TMP_ROOT/prerequisites-fresh-install"
+mkdir -p "$FRESH_INSTALL_PATH"
+ln -s "$(command -v git)" "$FRESH_INSTALL_PATH/git"
+ln -s "$(command -v mkdir)" "$FRESH_INSTALL_PATH/mkdir"
+for tool in gh node npm tmux; do
+  ln -s "$PREREQUISITE_PATH/present" "$FRESH_INSTALL_PATH/$tool"
+done
+ln -s "$PREREQUISITE_PATH/python3" "$FRESH_INSTALL_PATH/python3"
 
 MISSING_TOOLS_PATH="$TMP_ROOT/prerequisites-missing-tools"
 mkdir -p "$MISSING_TOOLS_PATH"
@@ -77,7 +88,8 @@ run_case() {
   : > "$RECORD"
 
   set +e
-  HOME="$case_home" PATH="${CASE_PATH-$PATH}" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
+  env -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_CREDENTIAL_HELPER \
+    HOME="$case_home" PATH="${CASE_PATH-$PATH}" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" INSTALLER_EXIT_CODE="${INSTALLER_EXIT_CODE-0}" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
   CASE_STATUS=$?
   set -e
   CASE_STDOUT=$(< "$case_stdout")
@@ -111,13 +123,12 @@ else
 fi
 assert_untouched short-help
 
-run_case accepted-equals --channel=stable --providers=claude,codex
-if [ "$CASE_STATUS" -eq 0 ]; then
-  echo 'PASS equals-form options accept supported values without acquiring'
+CASE_PATH="$FRESH_INSTALL_PATH" run_case accepted-equals --channel=stable --providers=claude,codex
+if [ "$CASE_STATUS" -eq 0 ] && [ -d "$CASE_HOME/.ai-conductor/harness/.git" ]; then
+  echo 'PASS equals-form options accept supported values and continue to acquisition'
 else
   failures+="supported equals-form options were rejected: $CASE_OUTPUT\n"
 fi
-assert_untouched accepted-equals
 
 run_case unknown --not-an-option
 if [ "$CASE_STATUS" -ne 0 ] && grep -Fq -- '--not-an-option' <<< "$CASE_OUTPUT"; then
@@ -148,10 +159,10 @@ fi
 assert_untouched invalid-providers
 
 CASE_PATH="$PREREQUISITE_PATH" run_case prerequisites-present
-if [ "$CASE_STATUS" -eq 0 ] && [ -z "$CASE_STDOUT" ] && [ -z "$CASE_STDERR" ]; then
-  echo 'PASS present prerequisites allow the bootstrap to continue quietly'
+if [ "$CASE_STATUS" -ne 0 ] && ! grep -Fq 'missing prerequisites' <<< "$CASE_OUTPUT"; then
+  echo 'PASS present prerequisites pass before the fake git hand-off failure'
 else
-  failures+="present prerequisites did not continue quietly: $CASE_OUTPUT\\n"
+  failures+="present prerequisites did not continue past the prerequisite check: $CASE_OUTPUT\\n"
 fi
 
 CASE_PATH="$MISSING_TOOLS_PATH" run_case missing-tools
@@ -171,6 +182,65 @@ else
   failures+="missing PyYAML was not reported: $CASE_OUTPUT\\n"
 fi
 assert_untouched missing-pyyaml
+
+CASE_PATH="$FRESH_INSTALL_PATH" run_case fresh-install
+FRESH_TARGET="$CASE_HOME/.ai-conductor/harness"
+if [ "$CASE_STATUS" -eq 0 ] \
+  && [ -d "$FRESH_TARGET/.git" ] \
+  && grep -Fq "Installing ai-conductor in $FRESH_TARGET" <<< "$CASE_STDOUT" \
+  && grep -Fq 'channel stable' <<< "$CASE_STDOUT" \
+  && grep -Fq "$FRESH_TARGET|./bin/install||" "$RECORD"; then
+  echo 'PASS fresh bootstrap clones locally and runs the installer from the harness'
+else
+  failures+="fresh install did not clone, announce, and hand off: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
+fi
+
+INSTALLER_EXIT_CODE=23 CASE_PATH="$FRESH_INSTALL_PATH" run_case installer-status
+if [ "$CASE_STATUS" -eq 23 ] && [ -d "$CASE_HOME/.ai-conductor/harness/.git" ]; then
+  echo 'PASS bootstrap mirrors the installer exit status'
+else
+  failures+="installer status was not mirrored: exit $CASE_STATUS; $CASE_OUTPUT\\n"
+fi
+
+BOOTSTRAP_HOME="$TMP_ROOT/home-bootstrap-parity"
+MANUAL_HOME="$TMP_ROOT/home-manual-parity"
+BOOTSTRAP_RECORD="$TMP_ROOT/bootstrap-parity-record"
+MANUAL_RECORD="$TMP_ROOT/manual-parity-record"
+mkdir -p "$BOOTSTRAP_HOME" "$MANUAL_HOME"
+: > "$BOOTSTRAP_RECORD"
+: > "$MANUAL_RECORD"
+set +e
+env -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_CREDENTIAL_HELPER \
+  HOME="$BOOTSTRAP_HOME" PATH="$FRESH_INSTALL_PATH" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$BOOTSTRAP_RECORD" \
+  /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/bootstrap-parity.stdout" 2> "$TMP_ROOT/bootstrap-parity.stderr"
+BOOTSTRAP_STATUS=$?
+env -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_CREDENTIAL_HELPER \
+  HOME="$MANUAL_HOME" PATH="$FRESH_INSTALL_PATH" INSTALLER_RECORD="$MANUAL_RECORD" \
+  git clone --branch stable "$SOURCE_REPO" "$MANUAL_HOME/.ai-conductor/harness" > "$TMP_ROOT/manual-parity.stdout" 2> "$TMP_ROOT/manual-parity.stderr"
+MANUAL_CLONE_STATUS=$?
+if [ "$MANUAL_CLONE_STATUS" -eq 0 ]; then
+  (
+    cd "$MANUAL_HOME/.ai-conductor/harness"
+    INSTALLER_RECORD="$MANUAL_RECORD" ./bin/install
+  )
+  MANUAL_INSTALL_STATUS=$?
+else
+  MANUAL_INSTALL_STATUS=1
+fi
+set -e
+BOOTSTRAP_TARGET="$BOOTSTRAP_HOME/.ai-conductor/harness"
+MANUAL_TARGET="$MANUAL_HOME/.ai-conductor/harness"
+bootstrap_record=$(sed "s|$BOOTSTRAP_HOME|HOME|g" "$BOOTSTRAP_RECORD")
+manual_record=$(sed "s|$MANUAL_HOME|HOME|g" "$MANUAL_RECORD")
+if [ "$BOOTSTRAP_STATUS" -eq 0 ] && [ "$MANUAL_CLONE_STATUS" -eq 0 ] && [ "$MANUAL_INSTALL_STATUS" -eq 0 ] \
+  && [ "$bootstrap_record" = "$manual_record" ] \
+  && [ "$(git -C "$BOOTSTRAP_TARGET" rev-parse HEAD)" = "$(git -C "$MANUAL_TARGET" rev-parse HEAD)" ] \
+  && [ "$(git -C "$BOOTSTRAP_TARGET" branch --show-current)" = "$(git -C "$MANUAL_TARGET" branch --show-current)" ] \
+  && [ "$(git -C "$BOOTSTRAP_TARGET" status --porcelain)" = "$(git -C "$MANUAL_TARGET" status --porcelain)" ]; then
+  echo 'PASS fresh bootstrap state matches a manual stable clone and install'
+else
+  failures+="manual parity differed between bootstrap and manual install\\n"
+fi
 
 if [ -z "$failures" ]; then
   echo 'PASS bootstrap option parsing and prerequisites are covered'

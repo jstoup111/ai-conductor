@@ -90,9 +90,39 @@ check_prerequisites() {
   [ -z "$missing" ] || fail "missing prerequisites: $missing"
 }
 
+announce() {
+  printf '%s\n' "Installing ai-conductor in $TARGET (channel $REF) from $REPO_URL"
+}
+
+acquire() {
+  mkdir -p "${TARGET%/harness}"
+  git clone --branch "$REF" "$REPO_URL" "$TARGET"
+}
+
+run_installer() {
+  set --
+  if [ -n "$CHANNEL_OPTION" ]; then
+    set -- "$@" --channel "$CHANNEL_OPTION"
+  fi
+  if [ -n "$PROVIDERS_OPTION" ]; then
+    set -- "$@" --providers "$PROVIDERS_OPTION"
+  fi
+  if (: </dev/tty) 2>/dev/null; then
+    (cd "$TARGET" && ./bin/install "$@" </dev/tty)
+  else
+    (cd "$TARGET" && ./bin/install "$@")
+  fi
+}
+
 main() {
+  REPO_URL=${AI_CONDUCTOR_REPO_URL:-https://github.com/jstoup111/ai-conductor.git}
+  TARGET="$HOME/.ai-conductor/harness"
+  REF=stable
   parse_args "$@"
   check_prerequisites
+  announce
+  acquire
+  run_installer
 }
 
 main "$@"
