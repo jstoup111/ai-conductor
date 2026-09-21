@@ -72,6 +72,24 @@ function mutationContext(resolveMachineOwner = vi.fn().mockResolvedValue({ resol
 }
 
 describe('engine/remote-git-operations — guarded remote writes', () => {
+  it('refuses a foreign ref from an otherwise owned worktree before any remote write', async () => {
+    const runRemoteGit = vi.fn().mockResolvedValue({ stdout: '' });
+    const baseMutation = mutationContext();
+    const mutation = {
+      ...baseMutation,
+      provenance: {
+        ...baseMutation.provenance,
+        target: { repository: 'acme/rocket', kind: 'remote-ref' as const, ref: 'refs/heads/spec/owned' },
+      },
+    } satisfies GithubMutationExecutionContext;
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feature/foreign'],
+      { cwd: '/owned-worktree', config: configReader(), runRemoteGit, mutation },
+    )).resolves.toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+    expect(runRemoteGit).not.toHaveBeenCalled();
+  });
+
   it('authorizes the complete explicit push set before exactly one injected remote write', async () => {
     const config = configReader();
     const runRemoteGit = vi.fn().mockResolvedValue({ stdout: '' });

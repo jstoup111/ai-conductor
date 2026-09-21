@@ -52,6 +52,7 @@ export function createDaemonHaltPrOperations(
           specBranch: branch,
           featureMarker,
           publication: 'merged',
+          target: { repository: target.repo, kind: 'pull-request', number: Number(target.number) },
         },
         dependencies: {
           resolveMachineOwner: options.resolveMachineOwner,

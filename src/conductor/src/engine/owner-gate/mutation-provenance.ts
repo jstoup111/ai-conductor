@@ -7,6 +7,7 @@
 // git authors, or caller-provided hints.
 
 import { normalizeOwnerId } from './identity.js';
+import type { GithubOperationTarget } from '../github-operations.js';
 
 export interface MutationProvenanceRequest {
   readonly repository: string;
@@ -16,6 +17,12 @@ export interface MutationProvenanceRequest {
   readonly featureMarker: string;
   /** Default-branch evidence after merge; spec-branch evidence before publish. */
   readonly publication: 'merged' | 'initial';
+  /**
+   * When a composition has already resolved the feature resource, retain that
+   * exact identity here.  The policy compares it with every requested target;
+   * a provenance record is never a reusable repository-wide capability.
+   */
+  readonly target?: GithubOperationTarget;
   /** Deliberately ignored: hints are never ownership evidence. */
   readonly hints?: unknown;
 }

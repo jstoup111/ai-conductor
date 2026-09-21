@@ -71,6 +71,22 @@ function ownedRecord(owner: string, path = '.docs/specs/owned.md'): { path: stri
 }
 
 describe('engine/owner-gate/mutation-policy — machine identity and committed feature authorization', () => {
+  it('binds a provenance decision to its exact target rather than the repository alone', async () => {
+    const provenance = {
+      ...request().provenance,
+      target: { repository: 'acme/rocket', kind: 'remote-ref' as const, ref: 'refs/heads/spec/owned' },
+    };
+    await expect(authorizeGithubMutation({
+      ...request(),
+      operation: 'remote-ref.push',
+      target: { repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/foreign' },
+      provenance,
+    }, {
+      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
+      provenanceDiscovery: { readCommittedRecords: async () => [ownedRecord('alice')] },
+    })).resolves.toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+  });
+
   it('uses the machine-configured identity before the authenticated gh fallback and permits its matching committed owner', async () => {
     const ghFallback = vi.fn(async () => ({ stdout: 'other-login\n' }));
     const resolveMachineOwner = makeMachineOwnerResolver(

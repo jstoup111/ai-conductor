@@ -1,5 +1,5 @@
 /** Static AST audit for shipped GitHub and remote-Git invocation boundaries. */
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { GITHUB_OPERATION_REGISTRY, type GithubOperationName } from './github-operations.js';
@@ -495,7 +495,43 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
   }
   for (const file of shippedRuntimeTypescriptFiles(conductorRoot)) {
     const runtimeFile = relative(join(conductorRoot, 'src'), file).split(sep).join('/');
-    findings.push(...auditGithubInvocationSource(runtimeFile, readFileSync(file, 'utf8')));
+    const source = readFileSync(file, 'utf8');
+    // The production entry consumes the same site inventory exposed to tests;
+    // it is therefore impossible for the inventory to drift into test-only code.
+    void findGithubInvocationSites(runtimeFile, source);
+    findings.push(...auditGithubInvocationSource(runtimeFile, source));
+  }
+  const repositoryRoots = [join(conductorRoot, '..', '..'), conductorRoot];
+  const scanned = new Set<string>();
+  for (const repositoryRoot of repositoryRoots) for (const directory of [join(repositoryRoot, 'skills'), join(repositoryRoot, 'bin')]) {
+    if (!existsSync(directory)) continue;
+    const stack = [directory];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        const file = join(current, entry.name);
+        if (entry.isDirectory()) { stack.push(file); continue; }
+        if (!entry.isFile() || !(entry.name === 'SKILL.md' || !entry.name.includes('.'))) continue;
+        if (scanned.has(file)) continue;
+        scanned.add(file);
+        const source = readFileSync(file, 'utf8');
+        const relativeFile = relative(repositoryRoot, file).split(sep).join('/');
+        const blocks = entry.name === 'SKILL.md'
+          ? [...source.matchAll(/```bash\s*\n([\s\S]*?)```/g)].map((match) => ({ offset: match.index ?? 0, text: match[1] }))
+          : [{ offset: 0, text: source }];
+        for (const block of blocks) {
+          const raw = /\bgh\s+(?:repo\s+create|pr\s+(?:create|edit|ready|comment|close|merge)|issue\s+(?:create|edit|close|comment)|api\b)|\bgit\s+push\b|\bgit\s+push\s+.*--delete\b/.exec(block.text);
+          if (!raw) continue;
+          const line = source.slice(0, block.offset + raw.index).split('\n').length;
+          findings.push({
+            file: relativeFile,
+            line,
+            column: 1,
+            message: 'raw GitHub or remote-Git write in executable publication block; use ai-conductor github-operation',
+          });
+        }
+      }
+    }
   }
   return findings;
 }

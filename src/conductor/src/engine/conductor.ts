@@ -2841,8 +2841,18 @@ export class Conductor {
         planPath = undefined;
       }
       const sourceRef = await this.resolveIntakeSourceRef(state.feature_desc, planPath);
+      const publication = await this.resolveShipDraftPublicationDependencies({
+        cwd: this.projectRoot,
+        branch: state.worktree_branch,
+        baseBranch: this.baseBranch,
+        featureDesc: state.feature_desc,
+        git: this.git,
+        gh: this.gh,
+        events: this.events,
+      });
       await mirrorIssueCriticalityLabels({
         gh: this.gh,
+        operations: publication?.operations,
         cwd: this.projectRoot,
         prUrl,
         sourceRef,
@@ -15433,8 +15443,8 @@ export function buildRemediationHint(
       `Remediating blocking ${source} gaps (see .pipeline/remediation.json and ` +
       `${evidenceFile}). These are PUBLICATION gaps: the implementation is complete and ` +
       'must not change. Fix only the pull request\'s published prose — rewrite the PR body ' +
-      '(`## Why` / `## What Changed` / `## Testing`, plus the `Closes` reference) with ' +
-      '`gh pr edit`, and correct the title or issue linkage if named below. Do not change ' +
+      '(`## Why` / `## What Changed` / `## Testing`, plus the `Closes` reference) with a ' +
+      '`pull-request.edit` request passed to `ai-conductor github-operation --request-file`, and correct the title or issue linkage if named below. Do not change ' +
       'code, do not amend the plan, and do not re-run the build:\n' +
       lines.join('\n')
     );
@@ -15487,11 +15497,11 @@ export function buildRetryHint(
       'do not change code, do not touch the plan, and do not re-run the build. Fix the ' +
       'PR in place:\n' +
       '  1. Author a real body from the branch diff — `## Why`, `## What Changed`, ' +
-      '`## Testing`, plus the `Closes` reference — and write it with `gh pr edit ' +
-      '<pr-url> --body <body>`. It must read like a clean first-pass finish: no halt ' +
-      'boilerplate, no remediation narrative (those belong in a `gh pr comment`), and ' +
+      '`## Testing`, plus the `Closes` reference — and submit it as a `pull-request.edit` ' +
+      'request through `ai-conductor github-operation --request-file <request.json>`. It must read like a clean first-pass finish: no halt ' +
+      'boilerplate, no remediation narrative (those belong in a guarded `pull-request.comment.create` request), and ' +
       'no engine placeholder text.\n' +
-      '  2. If the PR is still a draft, mark it ready with `gh pr ready <pr-url>`.\n' +
+      '  2. If the PR is still a draft, submit a guarded `pull-request.ready` request through the same CLI.\n' +
       'Then re-record the finish outcome. The step is NOT complete until the recorded ' +
       'PR carries an authored body.'
     );

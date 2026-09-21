@@ -1726,6 +1726,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // network calls to GitHub.
   const gatedWritebackDeps = {
     cwd: projectRoot,
+    operations: createGuardedGithubOperationRunner(ownerGh, { cwd: projectRoot, events }),
     log,
     warnedSkips: new Set<string>(),
     verbose: config?.daemon_verbose ?? false,

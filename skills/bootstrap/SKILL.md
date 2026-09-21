@@ -463,7 +463,8 @@ seed commit captures a scaffold that actually boots.
      create a GitHub repo and wire `origin` in one step. Confirm the repo name
      (default: the project directory name) and visibility (**private** by default):
      ```bash
-     gh repo create <name> --private --source=. --remote=origin
+     # Create a guarded shared-operation request for the private repository,
+     # then run: ai-conductor github-operation --request-file <request.json>
      ```
      `--source=.` attaches `origin` to this repo without pushing yet.
    - **Missing, no `gh`** (or the user declines GitHub) — ask for a remote URL. If
@@ -475,7 +476,8 @@ seed commit captures a scaffold that actually boots.
 
 4. **Push & set upstream** — only when an `origin` remote exists:
    ```bash
-   git push -u origin main
+   # Submit the initial remote-ref push through ai-conductor github-operation
+   # using its guarded request file; do not invoke a raw remote write directly.
    ```
    `-u` records the upstream so later `git push`/`git pull` and `gh pr create` work
    without extra flags. If the push is **rejected** because the remote already has

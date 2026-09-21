@@ -84,6 +84,11 @@ export async function resolveFeatureRemoteMutation(input: {
       specBranch: input.branch,
       featureMarker,
       publication: 'merged',
+      target: {
+        repository: targets.targets[0].repository,
+        kind: 'remote-ref',
+        ref: targets.targets[0].ref,
+      },
     },
     dependencies: {
       resolveMachineOwner: async () =>

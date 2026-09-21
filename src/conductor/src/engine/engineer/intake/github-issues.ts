@@ -19,6 +19,7 @@ import { parseSourceRef } from '../issue-ref.js';
 import {
   createGithubTrackerClient,
   DEFAULT_ASSIGNED_ISSUES_LIMIT,
+  runTrackerRead,
   type GhRunner,
   type GithubIntakeMutationExecutionContext,
   type IntakeTrackerClient,
@@ -101,10 +102,14 @@ export function createGithubIntakeAuthorization(deps: {
   ): Promise<Set<string> | null> {
     if (request.target.kind !== 'issue') return null;
     try {
-      const { stdout } = await deps.gh([
-        'issue', 'view', String(request.target.number), '-R', request.target.repository,
-        '--json', 'assignees',
-      ], { cwd });
+      const stdout = await runTrackerRead(
+        deps.gh,
+        cwd,
+        'issue.read',
+        request.target.repository,
+        { kind: 'issue', number: request.target.number },
+        ['issue', 'view', String(request.target.number), '-R', request.target.repository, '--json', 'assignees'],
+      );
       const parsed = JSON.parse(stdout) as { assignees?: unknown };
       if (!Array.isArray(parsed.assignees)) return null;
       const normalized = parsed.assignees.map((value) => {

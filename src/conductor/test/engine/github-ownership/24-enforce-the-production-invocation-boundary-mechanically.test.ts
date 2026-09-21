@@ -254,9 +254,12 @@ describe('GitHub invocation audit', () => {
     directories.push(root);
     await mkdir(join(root, 'src', 'engine'), { recursive: true });
     await mkdir(join(root, 'test'), { recursive: true });
+    await mkdir(join(root, 'skills', 'bootstrap'), { recursive: true });
     await writeFile(join(root, 'src', 'engine', 'bypass.ts'), "import { execFile } from 'node:child_process'; await execFile('git', ['push', 'origin', 'main']);");
     await writeFile(join(root, 'test', 'historical.ts'), "import { execFile } from 'node:child_process'; await execFile('git', ['push', 'origin', 'main']);");
+    await writeFile(join(root, 'skills', 'bootstrap', 'SKILL.md'), '```bash\ngh pr edit 1 --body repaired\n```\n');
     expect(auditShippedGithubInvocationBoundary(root)).toContainEqual(expect.objectContaining({ file: 'engine/bypass.ts', message: 'direct remote Git mutation outside executeRemoteGit' }));
+    expect(auditShippedGithubInvocationBoundary(root)).toContainEqual(expect.objectContaining({ file: 'skills/bootstrap/SKILL.md', message: expect.stringContaining('raw GitHub') }));
     expect(findGithubInvocationSites('engine/bypass.ts', await readFile(join(root, 'src', 'engine', 'bypass.ts'), 'utf8'))).toEqual([
       expect.objectContaining({ command: 'git', classification: 'remote-write' }),
     ]);

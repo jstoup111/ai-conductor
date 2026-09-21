@@ -29,6 +29,7 @@ import {
   type GithubOperationRunner,
   type GithubOperationResult,
 } from './github-operations.js';
+import { runTrackerRead } from './tracker-client.js';
 
 export { OWNER_GATED_MARKER };
 
@@ -128,7 +129,14 @@ async function upsertGatedIssueMarkerComment(
   const body = `${OWNER_GATED_MARKER}\n${renderCommentBody(spec)}`;
   let existing: IssueComment | undefined;
   try {
-    const { stdout } = await runGh(['issue', 'view', `${repository}#${number}`, '--json', 'comments'], { cwd });
+    const stdout = await runTrackerRead(
+      runGh,
+      cwd,
+      'issue.read',
+      repository,
+      { kind: 'issue', number },
+      ['issue', 'view', `${repository}#${number}`, '--json', 'comments'],
+    );
     const parsed = JSON.parse(stdout || '{}') as { comments?: IssueComment[] };
     existing = parsed.comments?.find((comment) => comment.body?.includes(OWNER_GATED_MARKER));
   } catch (error) {

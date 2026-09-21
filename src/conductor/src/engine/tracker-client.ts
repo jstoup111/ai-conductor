@@ -595,7 +595,7 @@ async function runTrackerIssueOperation(
 }
 
 /** Run a registered read through the same closed request decoder without authority. */
-async function runTrackerRead(
+export async function runTrackerRead(
   runner: GhRunner,
   cwd: string,
   operation: Extract<GithubOperationName, 'issue.read' | 'pull-request.read' | 'repository.read'>,
