@@ -5,13 +5,13 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 // Acceptance specs for #532 ("Rekick resume runs finish while the build gate
-// verdict is unsatisfied") — see .docs/stories/rekick-resume-runs-finish-while-
+// verdict is unsatisfied") -- see .docs/stories/rekick-resume-runs-finish-while-
 // the-build-gate-ver.md and the approved
 // adr-2026-07-11-verdict-aware-resume-entry. These drive the REAL production
 // entry point (`Conductor.run({ resume: true })`), not the new selector helper
-// directly — the bug lives in the wiring between resume's start-index
+// directly -- the bug lives in the wiring between resume's start-index
 // derivation and the on-disk gate verdicts, which a unit test of the helper in
-// isolation cannot reach (per /writing-system-tests §3b).
+// isolation cannot reach (per /writing-system-tests section 3b).
 
 vi.mock('execa', () => ({
   execa: vi.fn(() => Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })),
@@ -199,7 +199,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
   });
 
-  // ── Story 1: resume never dispatches past an unsatisfied gate verdict ─────
+  // -- Story 1: resume never dispatches past an unsatisfied gate verdict -----
   describe('Story 1: resume clamps to the earliest unsatisfied gate', () => {
     async function seed532Fixture(): Promise<void> {
       const seed = seedDoneThrough('build');
@@ -218,8 +218,8 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       const { runner, log } = trackingRunner(dir);
       // Daemon parity (daemon-cli.ts passes verifyArtifacts: true): the clamp
       // enters at build, and the artifact gate keeps finish unreachable while
-      // the build gate is unsatisfied — the tail selector is the only
-      // satisfaction authority (adr-2026-07-11-verdict-aware-resume-entry §5).
+      // the build gate is unsatisfied -- the tail selector is the only
+      // satisfaction authority (adr-2026-07-11-verdict-aware-resume-entry section 5).
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
         verifyArtifacts: true,
@@ -251,7 +251,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
     it('a corrupt build.json verdict does not throw and still starts at build', async () => {
       await seed532Fixture();
-      // Overwrite with unparseable bytes — readVerdict must treat this as absent.
+      // Overwrite with unparseable bytes -- readVerdict must treat this as absent.
       await writeFile(join(dir, '.pipeline', 'gates', 'build.json'), '{oops', 'utf-8');
 
       const { runner, log } = trackingRunner(dir);
@@ -302,7 +302,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
   });
 
-  // ── Story 2: the in_progress resume branch is clamped too ─────────────────
+  // -- Story 2: the in_progress resume branch is clamped too -----------------
   describe('Story 2: the in_progress branch honors the clamp', () => {
     it('finish marked in_progress still resumes at build under an unsatisfied build verdict', async () => {
       const seed = seedDoneThrough('build');
@@ -328,7 +328,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       const seed = seedDoneThrough('build');
       seed.build = 'in_progress';
       await writeState(statePath, seed as ConductState);
-      // A later gate happens to be unsatisfied too — must not pull entry forward.
+      // A later gate happens to be unsatisfied too -- must not pull entry forward.
       await writeVerdict(dir, 'manual_test', { satisfied: false, checkedAt: 1, kickback });
 
       const { runner, log } = trackingRunner(dir);
@@ -360,7 +360,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
   });
 
-  // ── Story 3: post-rebase kickback verdicts are honored on resume ──────────
+  // -- Story 3: post-rebase kickback verdicts are honored on resume ----------
   describe('Story 3: post-rebase kickback verdicts steer the resume entry', () => {
     it.each([
       {
@@ -431,7 +431,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       const seed = seedDoneThrough('finish');
       // Post-kickback disk state exactly as navigateBack (the in-loop
       // demotion authority) left it: the kicked-back target is 'pending',
-      // its downstream 'stale'. Resume never rewrites statuses itself —
+      // its downstream 'stale'. Resume never rewrites statuses itself --
       // adr-2026-07-11-verdict-aware-resume-entry rejected Option C.
       seed.build = 'pending';
       seed.build_review = 'stale';
@@ -477,7 +477,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       await writeState(statePath, seed as ConductState);
       await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
       await writeVerdict(dir, 'test_suite', { satisfied: true, checkedAt: 1 });
-      // Stale but the on-disk verdict lies and says satisfied — state must win.
+      // Stale but the on-disk verdict lies and says satisfied -- state must win.
       await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 1 });
       await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
 
@@ -493,7 +493,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     it('an unsatisfied verdict before regionStart is ignored by the clamp while current validation still fences finish', async () => {
       const seed = seedDoneThrough('finish');
       await writeState(statePath, seed as ConductState);
-      // 'explore' precedes regionStart (the first kickback target, 'prd') —
+      // 'explore' precedes regionStart (the first kickback target, 'prd') --
       // a stray unsatisfied verdict there must not affect the resume entry.
       await writeVerdict(dir, 'explore', { satisfied: false, checkedAt: 1 });
 
@@ -508,7 +508,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
   });
 
-  // ── Story 4: all-satisfied resumes fast-forward unchanged (regression) ────
+  // -- Story 4: all-satisfied resumes fast-forward unchanged (regression) ----
   describe('Story 4: parity with pre-fix state-only derivation', () => {
     it('fully satisfied persisted verdicts still require current validation evidence before finish', async () => {
       const seed = seedDoneThrough('finish');
@@ -544,7 +544,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     it('a pending front-half step is not dragged forward by pending loop gates', async () => {
       const seed = seedDoneThrough('architecture_review'); // architecture_review pending
       await writeState(statePath, seed as ConductState);
-      // No verdict files at all — loop-region gates are pending, not unsatisfied
+      // No verdict files at all -- loop-region gates are pending, not unsatisfied
       // by verdict; the clamp must not pull the entry into the loop region.
 
       const { runner, log } = trackingRunner(dir);
@@ -574,13 +574,13 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
   });
 
-  // ── Story 4 (#1052): a stale verdict must not clamp PAST a failed step ────
+  // -- Story 4 (#1052): a stale verdict must not clamp PAST a failed step ----
   // Live-daemon fixture: `.pipeline/gates/build.json` said satisfied:true while
   // conduct-state.json said build:"failed" (a build attempt failed after an
   // earlier passing review, and nothing rewrote the verdict). The clamp's
   // verdict-authoritative predicate skipped `build` and landed on
   // `build_review`, whose STATE-only `checkGate` can never pass while its
-  // `build` prerequisite is failed — so the loop took the markerless
+  // `build` prerequisite is failed -- so the loop took the markerless
   // `gate_blocked` return and the finally-backstop parked the run with
   // "loop exited without a terminal verdict", identically on every resume,
   // without ever dispatching a session.
@@ -640,7 +640,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
   });
 
-  // ── Task 2: every resume candidate is reconciled with checkGate ─────────
+  // -- Task 2: every resume candidate is reconciled with checkGate ---------
   describe('Task 2: resume reconciles state-derived entries without a verdict clamp', () => {
     async function seedReopenedBuildFixture(): Promise<void> {
       const seed = seedDoneThrough('test_suite');
@@ -713,7 +713,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
   });
 
-  // ── Task 3: the existing loop owns malformed-entry refusal ────────────
+  // -- Task 3: the existing loop owns malformed-entry refusal ------------
   describe('Task 3: malformed resume entries reach the loop refusal', () => {
     function gateStep(name: StepName, prerequisites: StepName[] = []): StepDefinition {
       return {
@@ -1104,7 +1104,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
   });
 
-  // ── Task 6: preserve operator-required terminals outside the new park ──
+  // -- Task 6: preserve operator-required terminals outside the new park --
   describe('Task 6: non-recoverable exits retain needs-human classification', () => {
     function gateStep(name: StepName, prerequisites: StepName[] = []): StepDefinition {
       return {
@@ -1206,7 +1206,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
   });
 
-  // ── Story 5: tail selection is clamped by the entry-gate predicate ──────
+  // -- Story 5: tail selection is clamped by the entry-gate predicate ------
   describe('Story 5: tail selection cannot enter a gate its prerequisite rejects', () => {
     async function selectTailWithTestSuiteStatus(
       testSuiteStatus: 'done' | 'failed',
