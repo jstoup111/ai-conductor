@@ -62,6 +62,12 @@ surface, rather than claiming a coverage it does not have. Closing that gap belo
 `custom-step-skill-identity-dispatch`, whose story artifact is still in draft state and is
 therefore not accepted work.
 
+> **Amended 2026-09-21 by #1344:** that draft story was never planned and has been removed. Its
+> behavior — a custom step runs the skill its configuration names, not its step key — is now
+> accepted work as Story 4 of `custom-steps-work-only-in-this-repo-engine-hardcod`. The preflight's
+> coverage statement above is unchanged: config-declared steps remain outside the registry it
+> enumerates.
+
 **2. A provider-boundary classification, so the result is never a false success.** An
 unresolved step command becomes a named, unsuccessful `InvokeResult` — one reason
 field, alongside the existing `authFailure` / `modelUnavailable` / `providerUnavailable`
