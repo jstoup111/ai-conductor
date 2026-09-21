@@ -1052,7 +1052,7 @@ describe('parked-feature reconciliation acceptance (rem-adr-006): the production
     const { detect, dispatch } = await loadReconcileVerb();
     const out: string[] = [];
     const guardedGit: GitRunner = async (args, opts) => {
-      if (args.join(' ') === 'config --get remote.origin.url') {
+      if (args.join(' ') === 'config --get remote.origin.url' || args.join(' ') === 'remote get-url --push origin') {
         return { stdout: 'https://github.com/acme/repo.git\n' };
       }
       if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') {

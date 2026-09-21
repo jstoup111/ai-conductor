@@ -78,7 +78,7 @@ describe('github-operation CLI', () => {
     const writes: string[][] = [];
     const git = vi.fn(async (args: string[]) => {
       if (args.join(' ') === 'branch --show-current') return { stdout: 'spec/widget\n' };
-      if (args[0] === 'config') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/widgets.git\n' };
       if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
       if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
       throw new Error(`unexpected git read: ${args.join(' ')}`);
@@ -123,7 +123,7 @@ describe('github-operation CLI', () => {
   it('refuses a request-file feature that differs from the resolved spec branch before any mutation boundary', async () => {
     const git = vi.fn(async (args: string[]) => {
       if (args.join(' ') === 'branch --show-current') return { stdout: 'spec/foreign\n' };
-      if (args[0] === 'config') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/widgets.git\n' };
       if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
       if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
       if (args[0] === 'push') return { stdout: '' };
@@ -167,7 +167,7 @@ describe('github-operation CLI', () => {
   it('refuses a request for another feature or default branch before the push boundary', async () => {
     const git = vi.fn(async (args: string[]) => {
       if (args.join(' ') === 'branch --show-current') return { stdout: 'spec/widget\n' };
-      if (args[0] === 'config') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/widgets.git\n' };
       if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
       if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
       if (args[0] === 'push') return { stdout: '' };
@@ -210,7 +210,7 @@ describe('github-operation CLI', () => {
     };
     const git = vi.fn(async (args: string[]) => {
       if (args.join(' ') === 'branch --show-current') return { stdout: 'main\n' };
-      if (args[0] === 'config') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/widgets.git\n' };
       if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') throw new Error('empty remote');
       throw new Error(`unexpected git command: ${args.join(' ')}`);
     });

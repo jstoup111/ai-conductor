@@ -499,7 +499,7 @@ describe('dispatchEngineer({kind:"handoff"})', () => {
     // owner marker before its fake transport can publish. Keep those read-only
     // answers faithful while retaining the injected write boundary below.
     const fakeGit = async (args: string[]) => {
-      if (args.join(' ') === 'config --get remote.origin.url') {
+      if (args.join(' ') === 'config --get remote.origin.url' || args.join(' ') === 'remote get-url --push origin') {
         return { stdout: 'https://github.com/test-owner/target-repo.git\n' };
       }
       if (args[0] === 'show') return { stdout: 'Owner: test-owner\n' };

@@ -34,7 +34,7 @@ function mutationContext(ref = 'refs/heads/feature/owned') {
 
 function guardedGit(pushes: string[][]) {
   return vi.fn(async (args: string[]) => {
-    if (args[0] === 'config') return { stdout: 'git@github.com:acme/rocket.git\n' };
+    if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/rocket.git\n' };
     if (args[0] === 'push') pushes.push([...args]);
     return { stdout: '' };
   });
@@ -55,7 +55,7 @@ describe('engine remote Git publication callers', () => {
     const repairPushes: string[][] = [];
     const repairMutation = mutationContext('refs/heads/feature/repaired');
     const repairGit = vi.fn(async (args: string[]) => {
-      if (args[0] === 'config') return { exitCode: 0, stdout: 'git@github.com:acme/rocket.git\n', stderr: '' };
+      if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { exitCode: 0, stdout: 'git@github.com:acme/rocket.git\n', stderr: '' };
       if (args[0] === 'push') repairPushes.push([...args]);
       return { exitCode: 0, stdout: '', stderr: '' };
     });
@@ -87,7 +87,7 @@ describe('engine remote Git publication callers', () => {
       if (args[0] === 'rev-parse') return { stdout: 'feature/escalation\n' };
       if (args[0] === 'symbolic-ref') return { stdout: 'refs/remotes/origin/main\n' };
       if (args[0] === 'merge-base') return { stdout: 'base\n' };
-      if (args[0] === 'config') return { stdout: 'git@github.com:acme/rocket.git\n' };
+      if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/rocket.git\n' };
       if (args[0] === 'push') remoteWrites.push([...args]);
       return { stdout: '1\n' };
     });
@@ -133,7 +133,7 @@ describe('engine remote Git publication callers', () => {
       if (args[0] === 'rev-parse') return { stdout: 'feature/escalation\n' };
       if (args[0] === 'symbolic-ref') return { stdout: 'refs/remotes/origin/main\n' };
       if (args[0] === 'merge-base') return { stdout: 'base\n' };
-      if (args[0] === 'config') return { stdout: 'git@github.com:acme/rocket.git\n' };
+      if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/rocket.git\n' };
       return { stdout: args[0] === 'rev-list' ? '1\n' : '' };
     });
     const mutation = mutationContext('refs/heads/feature/escalation');
@@ -164,7 +164,7 @@ describe('engine remote Git publication callers', () => {
     const mutation = mutationContext('refs/heads/repair/feature');
     const runGit = guardedGit(pushes);
     runGit.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'config') return { stdout: 'git@github.com:acme/rocket.git\n' };
+      if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/rocket.git\n' };
       if (args[0] === 'diff') return { stdout: '.docs/shipped/feature.md\n' };
       if (args[0] === 'rev-parse') return { stdout: 'repair-head\n' };
       if (args[0] === 'push') pushes.push([...args]);

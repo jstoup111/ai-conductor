@@ -62,7 +62,7 @@ function fakeGit(
   const calls: string[][] = [];
   const git: GitRunner = async (args) => {
     calls.push([...args]);
-    if (args[0] === 'config') return { stdout: 'https://github.com/acme/repo.git\n' };
+    if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'https://github.com/acme/repo.git\n' };
     const result = handler(args);
     if (result instanceof Error) throw result;
     return result;

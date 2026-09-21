@@ -210,7 +210,7 @@ describe('acceptance: halt-PR presentation reliability (ai-conductor#274)', () =
         if (args[0] === 'symbolic-ref') return { stdout: 'refs/remotes/origin/main\n' };
         if (args[0] === 'merge-base') return { stdout: 'deadbeef\n' };
         if (args[0] === 'rev-list') return { stdout: '3\n' };
-        if (args[0] === 'config') return { stdout: 'git@github.com:owner/repo.git\n' };
+        if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:owner/repo.git\n' };
         return { stdout: '' };
       }) as never;
 

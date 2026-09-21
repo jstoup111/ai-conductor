@@ -43,7 +43,7 @@ function fakes() {
   const git: GitRunner = async (args) => {
     gitCalls.push([...args]);
     if (args[0] === 'rev-list') return { stdout: '3\n' };
-    if (args.join(' ') === 'config --get remote.origin.url') return { stdout: 'https://github.com/acme/repo.git\n' };
+    if (args.join(' ') === 'config --get remote.origin.url' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'https://github.com/acme/repo.git\n' };
     if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
     return { stdout: '' };
   };
@@ -407,7 +407,7 @@ describe('the retained SHIP PR is presentable before the first SHIP consumer', (
     };
     const git: GitRunner = async (args) =>
       args[0] === 'rev-list' ? { stdout: '3\n' }
-        : args.join(' ') === 'config --get remote.origin.url' ? { stdout: 'https://github.com/acme/repo.git\n' }
+        : args.join(' ') === 'config --get remote.origin.url' || args.join(' ') === 'remote get-url --push origin' ? { stdout: 'https://github.com/acme/repo.git\n' }
           : args[0] === 'show' ? { stdout: 'Owner: alice\n' }
             : { stdout: '' };
     return { gh, git, ghCalls };
@@ -625,7 +625,7 @@ describe('conductor clears a resumed halt PR at the dispatch boundary', () => {
       gh,
       baseBranch: 'main',
       git: async (args) =>
-        args.join(' ') === 'config --get remote.origin.url' ? { stdout: 'https://github.com/acme/repo.git\n' }
+        args.join(' ') === 'config --get remote.origin.url' || args.join(' ') === 'remote get-url --push origin' ? { stdout: 'https://github.com/acme/repo.git\n' }
           : args[0] === 'show' ? { stdout: 'Owner: alice\n' }
             : { stdout: '' },
       maxRetries: 1,
@@ -686,7 +686,7 @@ describe('conductor clears a resumed halt PR at the dispatch boundary', () => {
         gh,
         baseBranch: 'main',
         git: async (args) =>
-          args.join(' ') === 'config --get remote.origin.url' ? { stdout: 'https://github.com/acme/repo.git\n' }
+          args.join(' ') === 'config --get remote.origin.url' || args.join(' ') === 'remote get-url --push origin' ? { stdout: 'https://github.com/acme/repo.git\n' }
             : args[0] === 'show' ? { stdout: 'Owner: alice\n' }
               : { stdout: '' },
         maxRetries: 1,
@@ -749,7 +749,7 @@ describe('conductor clears a resumed halt PR at the dispatch boundary', () => {
         gh,
         baseBranch: 'main',
         git: async (args) =>
-          args.join(' ') === 'config --get remote.origin.url' ? { stdout: 'https://github.com/acme/repo.git\n' }
+          args.join(' ') === 'config --get remote.origin.url' || args.join(' ') === 'remote get-url --push origin' ? { stdout: 'https://github.com/acme/repo.git\n' }
             : args[0] === 'show' ? { stdout: 'Owner: alice\n' }
               : { stdout: '' },
         maxRetries: 1,

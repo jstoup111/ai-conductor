@@ -31,7 +31,7 @@ function fakeGit(responses: Array<string | Error>): {
     // Task 20's production path resolves the remote destination and reads the
     // committed owner before a guarded mutation. These fixture-owned reads are
     // not part of a scenario's scripted Git behavior.
-    if (args[0] === 'config') return { stdout: 'git@github.com:foo/bar.git\n' };
+    if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:foo/bar.git\n' };
     if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
     const response = responses[idx++];
     if (response === undefined) return { stdout: '' };

@@ -214,7 +214,7 @@ describe('composer handoff — initial spec publication ownership', () => {
       const ghCalls: string[][] = [];
       const git = async (args: string[]) => {
         gitCalls.push(args);
-        if (args[0] === 'config') return { stdout: `https://github.com/${REPOSITORY}.git\n` };
+        if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: `https://github.com/${REPOSITORY}.git\n` };
         if (args[0] === 'show') return { stdout: 'Owner: bob\n' };
         return { stdout: '' };
       };

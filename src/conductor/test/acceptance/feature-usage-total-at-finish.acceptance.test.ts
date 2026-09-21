@@ -154,7 +154,7 @@ const realGit: GitRunner = async (args, options) => {
 /** The controlled local remote models Git transport; ownership resolution sees its GitHub identity. */
 function ownershipAwareGit(runner: GitRunner): GitRunner {
   return async (args, options) => {
-    if (args[0] === 'config' && args[1] === '--get' && args[2] === 'remote.origin.url') {
+    if ((args[0] === 'config' && args[1] === '--get' && args[2] === 'remote.origin.url') || args.join(' ') === 'remote get-url --push origin') {
       return { stdout: 'git@github.com:owner/repo.git\n' };
     }
     return runner(args, options);

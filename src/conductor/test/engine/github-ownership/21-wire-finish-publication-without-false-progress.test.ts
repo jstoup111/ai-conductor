@@ -156,7 +156,7 @@ describe('finish publication guarded draft boundary', () => {
     const gh = vi.fn();
     const git = vi.fn(async (args: string[]) => {
       if (args[0] === 'rev-list') return { stdout: '1\n' };
-      if (args[0] === 'config') return { stdout: `https://github.com/${REPOSITORY}.git\n` };
+      if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: `https://github.com/${REPOSITORY}.git\n` };
       throw new Error(`unexpected command: ${args.join(' ')}`);
     });
 
