@@ -4102,6 +4102,17 @@ TIER: M`,
         } } as HarnessConfig,
         providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(providerKey, invoke)]),
         sessionStore: new ProviderSessionStore(), configuredProviders: [providerKey],
+        buildReviewPolicyCatalog: async () => [{
+          semanticName: 'build-review-security', source: 'project', installationOrigin: '/fixture/project',
+          canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
+          declaredDependencies: [], availability: 'available',
+        }],
+        buildReviewPolicyCapture: async (policy) => ({
+          policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+          manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Build review security\n') }],
+          metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+          digest: `sha256-v1:${'a'.repeat(64)}`,
+        }),
         providerAttempt: async (step, attempt) => {
           const event: ProviderAttemptEvent = { type: 'provider_attempt', step, ...attempt };
           attempts.push(event);
