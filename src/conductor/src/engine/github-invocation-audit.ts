@@ -19,15 +19,6 @@ export interface GithubInvocationAuditSite {
 }
 
 /**
- * Non-operator executable surfaces retain only named site classifications.
- * Empty inventories are intentional: the file is still fully audited, so a
- * later direct invocation cannot inherit a whole-file exception.
- */
-export const SHIPPED_GITHUB_INVOCATION_SITE_INVENTORY = {
-  'scripts/intake-label-sync-apply.mts': [] as const,
-} as const;
-
-/**
  * Pre-boundary read sites are explicit, line-addressed compatibility entries.
  * They are not a file-level escape hatch: a new literal invocation, including
  * one in these files, has no entry and fails the audit. New code must use
@@ -555,9 +546,8 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
   for (const file of shippedRuntimeTypescriptFiles(conductorRoot)) {
     const runtimeFile = relative(join(conductorRoot, 'src'), file).split(sep).join('/');
     const source = readFileSync(file, 'utf8');
-    // The production entry consumes the same site inventory exposed to tests.
-    // CI workflow scripts are classified explicitly; every other executable
-    // site is audited as an operator-harness invocation.
+    // Every runtime file is audited in full: there is no file-level inventory
+    // or exemption, so a new executable site is classified where it appears.
     const sites = findGithubInvocationSites(runtimeFile, source);
     findings.push(...auditGithubInvocationSource(runtimeFile, source));
     for (const site of sites) {

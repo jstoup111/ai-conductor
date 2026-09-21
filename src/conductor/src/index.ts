@@ -169,6 +169,7 @@ import {
 } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
 import { detectGithubOperationCommand, dispatchGithubOperationCommand } from './engine/github-operations-cli.js';
+import { detectGithubBoundaryAuditCommand, dispatchGithubBoundaryAudit } from './engine/github-invocation-audit-cli.js';
 import {
   formatGithubOperationTarget,
   type GithubOperationTarget,
@@ -890,6 +891,13 @@ async function main(): Promise<void> {
   if (taskCmd) {
     const code = await dispatchTaskCommand(taskCmd, process.cwd());
     process.exit(code);
+  }
+
+  // `github-boundary-audit` is the production entry of the shipped invocation
+  // audit: read-only, non-interactive, exit 1 on any unguarded site.
+  const githubBoundaryAuditCmd = detectGithubBoundaryAuditCommand(process.argv);
+  if (githubBoundaryAuditCmd) {
+    process.exit(dispatchGithubBoundaryAudit(githubBoundaryAuditCmd));
   }
 
   const githubOperationCmd = detectGithubOperationCommand(process.argv);
