@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Covers: task:1, task:2, task:3
+# Covers: task:1, task:2, task:3, task:4
 # Exercises the public bootstrap entry point with only a local stand-in source.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -104,6 +104,40 @@ assert_untouched() {
     failures+="$name touched the target or reached the stand-in installer\n"
   fi
 }
+
+run_truncated_case() {
+  local name=$1
+  local byte_count=$2
+  local case_home="$TMP_ROOT/home-truncated-$name"
+  local case_stdout="$TMP_ROOT/truncated-$name.stdout"
+  local case_stderr="$TMP_ROOT/truncated-$name.stderr"
+  mkdir -p "$case_home"
+  : > "$RECORD"
+
+  set +e
+  head -c "$byte_count" "$INSTALL_SCRIPT" | env -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_CREDENTIAL_HELPER \
+    HOME="$case_home" PATH="$FRESH_INSTALL_PATH" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" /bin/sh -s \
+    > "$case_stdout" 2> "$case_stderr"
+  CASE_STATUS=$?
+  set -e
+  CASE_HOME=$case_home
+}
+
+script_length=$(wc -c < "$INSTALL_SCRIPT" | tr -d ' ')
+for truncation in \
+  "quarter:$((script_length / 4))" \
+  "half:$((script_length / 2))" \
+  "three-quarters:$((script_length * 3 / 4))" \
+  "two-bytes-short:$((script_length - 2))"; do
+  truncation_name=${truncation%%:*}
+  truncation_bytes=${truncation#*:}
+  run_truncated_case "$truncation_name" "$truncation_bytes"
+  if [ ! -e "$CASE_HOME/.ai-conductor/harness" ] && [ ! -s "$RECORD" ]; then
+    echo "PASS truncated $truncation_name bootstrap does not acquire or install"
+  else
+    failures+="truncated $truncation_name bootstrap touched the target or reached the stand-in installer\\n"
+  fi
+done
 
 run_case help --help
 if [ "$CASE_STATUS" -eq 0 ] \
