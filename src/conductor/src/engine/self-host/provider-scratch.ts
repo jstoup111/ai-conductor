@@ -550,10 +550,22 @@ export function resolveScratchHome(options: ResolveScratchHomeOptions): string {
  * provider lease remains the owner and cleanup boundary for this directory.
  */
 export function resolveReviewScratchHome(options: ResolveScratchHomeOptions): string {
+  return join(tmpdir(), ...reviewScratchComponents(options));
+}
+
+/**
+ * Every path component below tmpdir(). The top level is per-user so another
+ * local account cannot squat it; each level is verified top-down on acquire.
+ */
+function reviewScratchComponents(options: ResolveScratchHomeOptions): string[] {
   // Review containment protects the worktree, including its normal provider
   // lease. Keep mutable reviewer state outside every protected root.
   const member = options.memberId === undefined ? 'review' : `review-${options.memberId}`;
-  return join(tmpdir(), 'ai-conductor-build-review', options.runId, `${options.attempt}-${options.provider}`, member);
+  const uid = process.getuid?.();
+  return [
+    `ai-conductor-build-review-${uid === undefined ? 'nouid' : uid}`,
+    String(options.runId), `${options.attempt}-${options.provider}`, member,
+  ];
 }
 
 /** A candidate-owned review scratch lease; unlike provider homes it is external to the worktree. */
@@ -564,7 +576,7 @@ export interface ReviewScratchLease {
 
 /** Filesystem boundary for externally located review scratch credentials. */
 export interface ReviewScratchFs {
-  mkdir(path: string, options: { recursive: true; mode?: number }): Promise<void>;
+  mkdir(path: string, options: { recursive: false; mode: number }): Promise<void>;
   lstat(path: string): Promise<{
     readonly uid: number;
     readonly mode: number;
@@ -595,27 +607,39 @@ function verifyReviewScratchRoot(root: string, entry: ReviewScratchEntry): void 
   if ((entry.mode & 0o077) !== 0) throw new Error(`review scratch root is group/world-accessible: ${root}`);
 }
 
-function isMissingPath(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT';
+function isExistingPath(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'EEXIST';
 }
 
-async function ensureVerifiedReviewScratchRoot(root: string, fs: ReviewScratchFs): Promise<void> {
-  try {
-    verifyReviewScratchRoot(root, await fs.lstat(root));
-    return;
-  } catch (error) {
-    if (!isMissingPath(error)) {
-      if (error instanceof Error && error.message.startsWith('review scratch root')) throw error;
-      throw new Error(`cannot verify review scratch root ${root}: ${error instanceof Error ? error.message : String(error)}`);
+/**
+ * Create-or-verify every component below tmpdir(), top-down and never
+ * recursively. Once a level is proven ours with mode 0700 no other account can
+ * traverse, rename, or replace anything beneath it, so verifying parents before
+ * children leaves no window for an ancestor swap.
+ */
+async function ensureVerifiedReviewScratchRoot(components: readonly string[], fs: ReviewScratchFs): Promise<string> {
+  let current = tmpdir();
+  for (const component of components) {
+    if (component === '' || component === '.' || component === '..' || /[\\/\0]/.test(component)) {
+      throw new Error(`unsafe review scratch path component: ${JSON.stringify(component)}`);
     }
+    current = join(current, component);
+    try {
+      await fs.mkdir(current, { recursive: false, mode: 0o700 });
+    } catch (error) {
+      if (!isExistingPath(error)) {
+        throw new Error(`cannot create review scratch root ${current}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    let entry: ReviewScratchEntry;
+    try {
+      entry = await fs.lstat(current);
+    } catch (error) {
+      throw new Error(`cannot verify review scratch root ${current}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    verifyReviewScratchRoot(current, entry);
   }
-  await fs.mkdir(root, { recursive: true, mode: 0o700 });
-  try {
-    verifyReviewScratchRoot(root, await fs.lstat(root));
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('review scratch root')) throw error;
-    throw new Error(`cannot verify review scratch root ${root}: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  return current;
 }
 
 export async function acquireReviewScratchHome(
@@ -626,8 +650,7 @@ export async function acquireReviewScratchHome(
   },
 ): Promise<ReviewScratchLease> {
   const fs = options.fs ?? realReviewScratchFs;
-  const root = resolveReviewScratchHome(options);
-  await ensureVerifiedReviewScratchRoot(root, fs);
+  const root = await ensureVerifiedReviewScratchRoot(reviewScratchComponents(options), fs);
   const home = await fs.mkdtemp(join(root, 'review-'));
   await fs.chmod(home, 0o700);
   try {

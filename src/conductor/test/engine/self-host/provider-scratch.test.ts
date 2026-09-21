@@ -25,26 +25,22 @@ describe('provider scratch homes', () => {
     const created: string[] = [];
     const removed: string[] = [];
     let leaf = 0;
-    let lstatCalls = 0;
     const lease = await acquireReviewScratchHome({
       worktreeRoot: '/worktree', runId: 'review-run', attempt: 2, provider: 'codex', memberId: 'quality',
       fs: {
         mkdir: async (path) => { created.push(path); },
-        lstat: async () => {
-          if (++lstatCalls === 1) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
-          return { uid: process.getuid?.() ?? 0, mode: 0o700, isSymbolicLink: () => false, isDirectory: () => true };
-        },
+        lstat: async () => ({ uid: process.getuid?.() ?? 0, mode: 0o700, isSymbolicLink: () => false, isDirectory: () => true }),
         mkdtemp: async (prefix) => `${prefix}${++leaf}`,
         chmod: async () => {},
         rm: async (path) => { removed.push(path); },
       },
     });
 
-    expect(lease.home).toContain('/ai-conductor-build-review/review-run/2-codex/review-quality/review-');
+    expect(lease.home).toContain(`/ai-conductor-build-review-${process.getuid?.() ?? 'nouid'}/review-run/2-codex/review-quality/review-`);
     await lease.release();
     await lease.release();
-    expect(created).toHaveLength(1);
-    expect(lease.home).toContain(created[0]!);
+    expect(created).toHaveLength(4);
+    expect(lease.home).toContain(created[3]!);
     expect(removed).toEqual([lease.home]);
   });
 

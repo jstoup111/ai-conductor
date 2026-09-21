@@ -1,5 +1,6 @@
 // Covers: task:13
 import { describe, expect, it, vi } from 'vitest';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -80,7 +81,7 @@ describe('engine/build-review-containment', () => {
       worktreeRoot: '/worktree', runId: 'run-7', attempt: 2, provider: 'codex',
     };
 
-    expect(resolveReviewScratchHome(options)).toContain('/ai-conductor-build-review/run-7/2-codex/review');
+    expect(resolveReviewScratchHome(options)).toContain(`/ai-conductor-build-review-${process.getuid?.() ?? 'nouid'}/run-7/2-codex/review`);
     expect(resolveReviewScratchHome(options)).not.toContain('/worktree/');
   });
 
@@ -119,17 +120,12 @@ describe('engine/build-review-containment', () => {
 
   it('creates unique 0700 review leaves and seeds auth.json with mode 0600', async () => {
     let sequence = 0;
-    let lstatCalls = 0;
     const rootModes: number[] = [];
     const leafModes: Array<readonly [string, number]> = [];
     const authModes: Array<readonly [string, number]> = [];
     const removed: string[] = [];
     const fs = secureReviewScratchFs({
       mkdir: async (_path, options) => { rootModes.push(options.mode!); },
-      lstat: async () => {
-        if (++lstatCalls === 1) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
-        return { uid: process.getuid?.() ?? 0, mode: 0o700, isSymbolicLink: () => false, isDirectory: () => true };
-      },
       mkdtemp: async (prefix) => `${prefix}${++sequence}`,
       chmod: async (path, mode) => { leafModes.push([path, mode]); },
       rm: async (path) => { removed.push(path); },
@@ -146,12 +142,60 @@ describe('engine/build-review-containment', () => {
     const second = await acquireReviewScratchHome(options);
 
     expect(first.home).not.toBe(second.home);
-    expect(rootModes).toEqual([0o700]);
+    expect(rootModes).toEqual(Array(8).fill(0o700));
     expect(leafModes).toEqual([[first.home, 0o700], [second.home, 0o700]]);
     expect(authModes).toEqual([[join(first.home, 'codex-home', 'auth.json'), 0o600], [join(second.home, 'codex-home', 'auth.json'), 0o600]]);
     await first.release();
     await second.release();
     expect(removed).toEqual([first.home, second.home]);
+  });
+
+  describe('review scratch ancestor chain', () => {
+    const uid = process.getuid?.() ?? 0;
+    const top = join(tmpdir(), `ai-conductor-build-review-${uid}`);
+    const chain = [top, join(top, 'run-7'), join(top, 'run-7', '2-codex'), join(top, 'run-7', '2-codex', 'review')];
+    const good = { uid, mode: 0o700, isSymbolicLink: () => false, isDirectory: () => true };
+    const acquireWith = async (bad: Record<string, typeof good>) => {
+      const mkdtemp = vi.fn(async (prefix: string) => `${prefix}unexpected`);
+      const seed = vi.fn(async () => {});
+      const promise = acquireReviewScratchHome({
+        worktreeRoot: '/worktree', runId: 'run-7', attempt: 2, provider: 'codex', seed,
+        fs: secureReviewScratchFs({
+          mkdir: async (path) => { if (path in bad) throw Object.assign(new Error('exists'), { code: 'EEXIST' }); },
+          lstat: async (path) => bad[path] ?? good,
+          mkdtemp,
+        }),
+      });
+      return { promise, mkdtemp, seed };
+    };
+
+    it.each([
+      ['a foreign-owned top-level ancestor', 0, { ...good, uid: uid + 1 }, 'not owned by the current uid'],
+      ['a symlinked intermediate ancestor', 1, { ...good, isSymbolicLink: () => true, isDirectory: () => false }, 'is a symlink'],
+      ['a group-writable intermediate ancestor', 2, { ...good, mode: 0o770 }, 'group/world-accessible'],
+    ])('refuses %s before creating or seeding a leaf', async (_label, index, entry, message) => {
+      const { promise, mkdtemp, seed } = await acquireWith({ [chain[index]!]: entry });
+      await expect(promise).rejects.toThrow(message);
+      await expect(promise).rejects.toThrow(chain[index]!);
+      expect(mkdtemp).not.toHaveBeenCalled();
+      expect(seed).not.toHaveBeenCalled();
+    });
+
+    it('creates every level below tmpdir non-recursively with mode 0700, top-down', async () => {
+      const made: Array<readonly [string, boolean, number | undefined]> = [];
+      const lease = await acquireReviewScratchHome({
+        worktreeRoot: '/worktree', runId: 'run-7', attempt: 2, provider: 'codex',
+        fs: secureReviewScratchFs({ mkdir: async (path, options) => { made.push([path, options.recursive, options.mode]); } }),
+      });
+      expect(made).toEqual(chain.map((path) => [path, false, 0o700]));
+      await lease.release();
+    });
+
+    it('refuses a run id that would add path components', async () => {
+      await expect(acquireReviewScratchHome({
+        worktreeRoot: '/worktree', runId: '../escape', attempt: 2, provider: 'codex', fs: secureReviewScratchFs(),
+      })).rejects.toThrow('unsafe review scratch path component');
+    });
   });
 
   it('proves read-only review access through the production process boundary', async () => {
