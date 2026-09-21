@@ -15,7 +15,7 @@ TASK_CLI_FILE="${HARNESS_DIR}/src/conductor/src/engine/task-cli.ts"
 CODE_REVIEW_SKILL="${HARNESS_DIR}/skills/code-review/SKILL.md"
 FINISH_SKILL_FILE="${HARNESS_DIR}/skills/finish/SKILL.md"
 PR_SKILL_FILE="${HARNESS_DIR}/skills/pr/SKILL.md"
-ENGINEER_SKILL_FILE="${HARNESS_DIR}/skills/engineer/SKILL.md"
+COMPOSER_SKILL_FILE="${HARNESS_DIR}/skills/composer/SKILL.md"
 CONDUCT_SKILL_FILE="${HARNESS_DIR}/skills/conduct/SKILL.md"
 BOOTSTRAP_SKILL_FILE="${HARNESS_DIR}/skills/bootstrap/SKILL.md"
 EXPLORE_SKILL_FILE="${HARNESS_DIR}/skills/explore/SKILL.md"
@@ -56,7 +56,7 @@ pass() {
 conduct_suite_guidance_contract_holds() {
   local skill_file="$1"
 
-  grep -qF 'conduct-ts test-suite' "$skill_file" \
+  grep -qF 'ai-conductor test-suite' "$skill_file" \
     && grep -qF 'EXECUTED PASS' "$skill_file" \
     && grep -qF 'REUSED PASS' "$skill_file" \
     && grep -qiE 'non-zero exit.*BLOCKS' "$skill_file" \
@@ -161,10 +161,10 @@ if [ ! -f "$FINISH_SKILL_FILE" ]; then
 fi
 pass "skills/finish/SKILL.md exists"
 
-if grep -qF "The originating GitHub issue's assignees MUST remain unchanged throughout claim, land, handoff, verification, and cleanup; the engineer loop MUST NOT add, remove, or change assignees." "$ENGINEER_SKILL_FILE"; then
-  pass "engineer preserves originating GitHub issue assignees throughout its lifecycle"
+if tr '\n' ' ' < "$COMPOSER_SKILL_FILE" | tr -s ' ' | grep -qF "Never change the originating GitHub issue's assignees during claim, land, handoff, verification, or cleanup."; then
+  pass "composer preserves originating GitHub issue assignees throughout its lifecycle"
 else
-  fail "engineer must preserve originating GitHub issue assignees throughout claim, land, handoff, verification, and cleanup without adding, removing, or changing them"
+  fail "composer must preserve originating GitHub issue assignees throughout claim, land, handoff, verification, and cleanup without adding, removing, or changing them"
 fi
 
 if [ -e "$LEGACY_TEST_SUITE_SKILL" ]; then
@@ -244,7 +244,7 @@ else
   rm -f "$adr_policy_mutation"
 fi
 
-if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|conduct-ts[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' 2>/dev/null \
+if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|(conduct-ts|ai-conductor)[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' 2>/dev/null \
   | grep -vF "${CONDUCT_SKILL_FILE}:" \
   | grep -vF "${BOOTSTRAP_SKILL_FILE}:" >/tmp/pipeline_contract_genericity_hits.$$; then
   cat /tmp/pipeline_contract_genericity_hits.$$ >&2
@@ -264,7 +264,7 @@ else
   # Negative control: remove every required guidance statement from an isolated
   # copy. The semantic predicate must reject that copy before it accepts the
   # production skill.
-  sed -E '/conduct-ts test-suite|EXECUTED PASS|REUSED PASS|non-zero exit BLOCKS|BUILD remediation|`\/tdd` or `\/pipeline`/d' \
+  sed -E '/ai-conductor test-suite|EXECUTED PASS|REUSED PASS|non-zero exit BLOCKS|BUILD remediation|`\/tdd` or `\/pipeline`/d' \
     "$CONDUCT_SKILL_FILE" >"$mutated_conduct_skill"
 
   if conduct_suite_guidance_contract_holds "$mutated_conduct_skill"; then
@@ -337,21 +337,21 @@ else
   fail "missing reference to session-hook machinery"
 fi
 
-# Batch verification and its evaluator must share one named affected-test union, retaining a full-suite fallback.
+# Batch verification and its evaluator must share one named affected-test union. Indeterminate
+# scope defers aggregate proof to the engine's test_suite gate; build sessions never run the
+# full suite (#2232).
+pipeline_text="$(tr '\n' ' ' < "$SKILL_FILE" | tr -s ' ')"
+code_review_text="$(tr '\n' ' ' < "$CODE_REVIEW_SKILL" 2>/dev/null | tr -s ' ')"
 if [ -f "$CODE_REVIEW_SKILL" ] \
-  && grep -qF 'Batch verification MUST run only the named `BATCH_AFFECTED_TESTS` union.' "$SKILL_FILE" \
-  && grep -qF 'The evaluator MUST receive that same `BATCH_AFFECTED_TESTS` union and its result set.' "$SKILL_FILE" \
-  && grep -qF 'Only when `BATCH_AFFECTED_TESTS` cannot be determined with confidence MUST the full test suite run instead.' "$SKILL_FILE" \
-  && grep -qF 'For batch reviews, use the provided `BATCH_AFFECTED_TESTS` result set; require a full-suite result only when the batch scope was indeterminate.' "$CODE_REVIEW_SKILL" \
-  && ! tr '\n' ' ' < "$SKILL_FILE" \
-    | grep -oiE 'batch boundar(y|ies).{0,200}full (test )?suite|full (test )?suite.{0,200}batch boundar(y|ies)' \
-    | grep -viE 'uncertain|cannot be determined|fallback|only when' >/dev/null \
-  && ! tr '\n' ' ' < "$CODE_REVIEW_SKILL" \
-    | grep -oiE '.{0,160}(batch.{0,200}full[- ](test )?suite|full[- ](test )?suite.{0,200}batch|test results \(full suite output\)).{0,160}' \
-    | grep -viE 'indeterminate|uncertain|cannot be determined|fallback|only when' >/dev/null; then
-  pass "batch verification and evaluator use affected-test union with uncertainty fallback"
+  && grep -qF 'compute one named `BATCH_AFFECTED_TESTS` union' <<<"$pipeline_text" \
+  && grep -qF 'The evaluator MUST receive that same `BATCH_AFFECTED_TESTS` union and its result set.' <<<"$pipeline_text" \
+  && grep -qF 'When `BATCH_AFFECTED_TESTS` cannot be determined with confidence, record that in the REPORT and defer aggregate proof' <<<"$pipeline_text" \
+  && grep -qF 'the build session never runs the full test suite.' <<<"$pipeline_text" \
+  && grep -qF 'For batch reviews, inspect the provided `BATCH_AFFECTED_TESTS` result set' <<<"$code_review_text" \
+  && grep -qF 'Never require or launch an intermediate full-suite run.' <<<"$code_review_text"; then
+  pass "batch verification and evaluator use affected-test union and defer aggregate proof to test_suite"
 else
-  fail "batch verification and evaluator must use affected-test union, with full suite only when scope is uncertain"
+  fail "batch verification and evaluator must use affected-test union and defer aggregate proof to test_suite"
 fi
 
 # Code review keeps routing batches touching security boundaries to the higher
