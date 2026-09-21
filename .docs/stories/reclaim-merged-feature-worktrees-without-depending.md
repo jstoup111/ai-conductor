@@ -64,7 +64,7 @@ backs the worktree so that hand-named and daemon-named worktrees are both evalua
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a candidate at `.worktrees/hotfix-x` on branch `hotfix/x` that is an ancestor of `origin/main`, when the helper runs with that branch, then ancestry proves it merged without consulting `gh`
+- Given a candidate at `.worktrees/hotfix-x` on branch `hotfix/x` that is an ancestor of `origin/main` and whose MERGED PR `headRefOid` equals the branch tip, when the helper runs with that branch, then the listed branch is proven merged
 - Given a candidate at `.worktrees/<slug>` on branch `feat/daemon-<slug>` that is not an ancestor but whose MERGED PR `headRefOid` equals the branch tip, when the helper runs with that branch, then head identity proves it merged
 - Given a candidate whose listed branch is proven merged, when the helper completes, then the proven branch is the one deleted, not a branch that merely shares the slug's final path segment
 
