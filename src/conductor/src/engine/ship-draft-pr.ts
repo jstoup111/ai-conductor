@@ -165,6 +165,21 @@ function repositoryFromOrigin(value: string): string | undefined {
 }
 
 /**
+ * A branch publication and a retained PR are different mutation targets. Keep
+ * the ref binding for `git push`, but bind PR presentation writes to the exact
+ * PR URL the caller has just resolved. A feature's provenance is never a
+ * repository-wide capability.
+ */
+function pullRequestTargetFromUrl(
+  prUrl: string,
+  repository: string,
+): { repository: string; kind: 'pull-request'; number: number } | undefined {
+  const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
+  if (!match || match[1].toLowerCase() !== repository.toLowerCase()) return undefined;
+  return { repository, kind: 'pull-request', number: Number(match[2]) };
+}
+
+/**
  * Construct production-only authorization context from committed feature
  * evidence. The caller retains a typed absence when either remote identity or
  * feature provenance cannot be resolved; `openShipDraftPr` then refuses before
@@ -175,6 +190,8 @@ export async function createShipDraftPublicationDependencies(input: {
   readonly branch: string | undefined;
   readonly baseBranch: string | undefined;
   readonly featureDesc: string | undefined;
+  /** When present, bind GitHub mutations to this retained PR rather than the branch ref. */
+  readonly prUrl?: string;
   readonly git: GitRunner;
   readonly gh: GhRunner;
   readonly events?: GithubOperationEventEmitter;
@@ -187,6 +204,10 @@ export async function createShipDraftPublicationDependencies(input: {
     return undefined;
   }
   if (!repository) return undefined;
+  const target = input.prUrl === undefined
+    ? { repository, kind: 'remote-ref' as const, ref: `refs/heads/${input.branch}` }
+    : pullRequestTargetFromUrl(input.prUrl, repository);
+  if (!target) return undefined;
   const featureMarker = `.docs/intake/${input.featureDesc}.md`;
   const remoteMutation: GithubMutationExecutionContext = {
     provenance: {
@@ -195,7 +216,7 @@ export async function createShipDraftPublicationDependencies(input: {
       specBranch: input.branch,
       featureMarker,
       publication: 'initial',
-      target: { repository, kind: 'remote-ref', ref: `refs/heads/${input.branch}` },
+      target,
     },
     dependencies: {
       resolveMachineOwner: async () => resolveDaemonOwner(

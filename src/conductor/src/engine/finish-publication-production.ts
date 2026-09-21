@@ -486,6 +486,22 @@ export function createProductionFinishPublicationCoordinator(
         gh: deps.gh,
       });
       const operations = deps.operations ?? publication?.operations;
+      // Publication starts with authority for the branch ref. Every later
+      // retained-PR write needs a new, exact PR binding instead; a branch
+      // target must never become repository-wide PR authority.
+      const retainedOperations = async (prUrl: string): Promise<GithubOperationRunner | undefined> => {
+        if (deps.operations) return deps.operations;
+        const retained = await createShipDraftPublicationDependencies({
+          cwd: deps.projectRoot,
+          branch: state.worktree_branch,
+          baseBranch: deps.baseBranch,
+          featureDesc: state.feature_desc,
+          prUrl,
+          git: deps.git,
+          gh: deps.gh,
+        });
+        return retained?.operations;
+      };
 
       const observationInput = {
         mode: intent.authority.kind === 'operator_confirmed' ? 'interactive' : intent.authority.mode,
@@ -715,23 +731,25 @@ export function createProductionFinishPublicationCoordinator(
           },
           repairPresentation: async () => {
             if (!state.pr_url) throw new Error('missing PR identity');
-            await projectAcceptedRiskToRetainedPr(state.pr_url, operations);
+            const prOperations = await retainedOperations(state.pr_url);
+            await projectAcceptedRiskToRetainedPr(state.pr_url, prOperations);
             if (deps.repairPresentation) {
               await deps.repairPresentation({ prUrl: state.pr_url, state });
             } else {
               const mutation = await mutateRetainedPullRequest({
-                operations,
+                operations: prOperations,
                 prUrl: state.pr_url,
                 operation: 'pull-request.ready',
               });
               if (!mutation.ok) throw new Error(mutation.message);
             }
             if (!state.feature_desc) throw new Error('missing shipment identity');
-            await projectShipmentPlanDeclarationToRetainedPr(state.pr_url, state.feature_desc, operations);
+            await projectShipmentPlanDeclarationToRetainedPr(state.pr_url, state.feature_desc, prOperations);
           },
           recordOutcome: async (request) => {
             if (request.choice === 'pr') {
-              await projectAcceptedRiskToRetainedPr(request.prUrl, operations);
+              const prOperations = await retainedOperations(request.prUrl);
+              await projectAcceptedRiskToRetainedPr(request.prUrl, prOperations);
               // AB-1: repairPresentation is NOT the only route to a completed PR
               // outcome. The selector returns record_outcome directly whenever the
               // retained PR is already non-draft (finish-publication.ts, `if
@@ -746,7 +764,7 @@ export function createProductionFinishPublicationCoordinator(
               // path re-reads here and issues no second edit. The keep rung
               // deliberately projects nothing.
               if (!state.feature_desc) throw new Error('missing shipment identity');
-              await projectShipmentPlanDeclarationToRetainedPr(request.prUrl, state.feature_desc, operations);
+              await projectShipmentPlanDeclarationToRetainedPr(request.prUrl, state.feature_desc, prOperations);
             }
             // finish-record signals every fail-closed refusal as a non-zero exit
             // code, never a throw. Discarding it turned a refusal into a silent

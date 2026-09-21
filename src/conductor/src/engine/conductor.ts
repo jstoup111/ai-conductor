@@ -61,7 +61,7 @@ import {
 import { classifyPrdWidening, classifyPrdWideningProjection } from './prd-widening-classification.js';
 import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
-import { createGithubTrackerClient, createGuardedGithubOperationRunner } from './tracker-client.js';
+import { createGithubTrackerClient } from './tracker-client.js';
 import { executeGithubOperation, type GithubOperationRunner } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
@@ -557,6 +557,7 @@ export function createProvenanceGuardedFinishPresentationRepair(input: {
       branch: state.worktree_branch,
       baseBranch: input.baseBranch,
       featureDesc: state.feature_desc,
+      prUrl,
       git: input.git,
       gh: input.gh,
     });
@@ -567,25 +568,10 @@ export function createProvenanceGuardedFinishPresentationRepair(input: {
     if (!pull || pull[1].toLowerCase() !== publication.remoteMutation.provenance.repository.toLowerCase()) {
       throw new Error('guarded finish presentation repair unavailable: pull request target could not be resolved');
     }
-    const operations = createGuardedGithubOperationRunner(input.gh, {
-      cwd: input.projectRoot,
-      mutation: {
-        provenance: {
-          ...publication.remoteMutation.provenance,
-          target: {
-            repository: publication.remoteMutation.provenance.repository,
-            kind: 'pull-request',
-            number: Number(pull[2]),
-          },
-        },
-        dependencies: publication.remoteMutation.dependencies,
-      },
-      events: publication.operations.events,
-    });
     await createFinishPresentationRepair({
       projectRoot: input.projectRoot,
       gh: input.gh,
-      operations,
+      operations: publication.operations,
       log: input.log,
     })({ prUrl, state });
   };
@@ -2806,6 +2792,7 @@ export class Conductor {
         branch: state.worktree_branch,
         baseBranch: this.baseBranch,
         featureDesc: state.feature_desc,
+        prUrl,
         git: this.git,
         gh: this.gh,
       });
@@ -2905,27 +2892,30 @@ export class Conductor {
       planPath = undefined;
     }
 
-    // Every production path uses this one sequence. The conductor alone adds
-    // its retained release-metadata restore between the body floor and ready.
-    const publication = await this.resolveShipDraftPublicationDependencies({
-      cwd: this.projectRoot,
-      branch: state.worktree_branch ?? this.worktreeBranch,
-      baseBranch: this.baseBranch,
-      featureDesc: state.feature_desc ?? this.featureDesc,
-      git: this.git,
-      gh: this.gh,
-    });
-    const presentationRepair = createFinishPresentationRepair({
-      projectRoot: this.projectRoot,
-      gh: this.gh,
-      operations: publication?.operations,
-      log: this.log,
-      restoreReleaseMetadata: (prUrl) => this.restoreFinishReleaseMetadata(prUrl),
-    });
-    const repairFinishPr = (
+    // Presentation writes are scoped to the retained PR, not the branch ref
+    // used for publication. Resolve the guard at repair time because the PR
+    // identity is the authorization target and may change across a re-entry.
+    const repairFinishPr = async (
       prUrl: string,
       opts: { mode?: 'capture-only' | 'full' } = {},
-    ): Promise<void> => presentationRepair({ prUrl, state, mode: opts.mode });
+    ): Promise<void> => {
+      const publication = await this.resolveShipDraftPublicationDependencies({
+        cwd: this.projectRoot,
+        branch: state.worktree_branch ?? this.worktreeBranch,
+        baseBranch: this.baseBranch,
+        featureDesc: state.feature_desc ?? this.featureDesc,
+        prUrl,
+        git: this.git,
+        gh: this.gh,
+      });
+      await createFinishPresentationRepair({
+        projectRoot: this.projectRoot,
+        gh: this.gh,
+        operations: publication?.operations,
+        log: this.log,
+        restoreReleaseMetadata: (url) => this.restoreFinishReleaseMetadata(url),
+      })({ prUrl, state, mode: opts.mode });
+    };
 
     return {
       sessionStartedAt: state.session_started_at,
@@ -6688,6 +6678,7 @@ export class Conductor {
       branch: state.worktree_branch,
       baseBranch: this.baseBranch,
       featureDesc: state.feature_desc,
+      prUrl,
       git: this.git,
       gh: this.gh,
     });
@@ -6814,6 +6805,7 @@ export class Conductor {
         branch: this.worktreeBranch,
         baseBranch: this.baseBranch,
         featureDesc: this.featureDesc,
+        prUrl,
         git: this.git,
         gh: this.gh,
       });
