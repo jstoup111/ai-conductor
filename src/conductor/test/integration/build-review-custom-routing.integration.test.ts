@@ -15,7 +15,7 @@ import { Conductor } from '../test-conductor.js';
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
-async function runCompatibilityLap(custom: boolean) {
+async function runCompatibilityLap(custom: boolean, verdictShape: 'aggregate' | 'scalar' = 'aggregate') {
   const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-custom-routing-'));
   roots.push(root);
   await mkdir(join(root, '.pipeline'), { recursive: true });
@@ -46,7 +46,9 @@ async function runCompatibilityLap(custom: boolean) {
   const runner: StepRunner = { run: async (step) => {
     dispatched.push(step);
     if (step === 'build_review') {
-      await writeFile(join(root, '.pipeline', 'build-review.json'), JSON.stringify(aggregate));
+      await writeFile(join(root, '.pipeline', 'build-review.json'), JSON.stringify(verdictShape === 'aggregate' ? aggregate : {
+        verdict: 'FAIL', rubric: { testQuality: true }, reasons: ['legacy scalar failure'],
+      }));
       return { success: false, output: 'build review found a failure' };
     }
     return { success: true };
@@ -75,6 +77,18 @@ describe('custom build-review compatibility routing', () => {
 
   it('preserves the legacy no-custom compatibility route', async () => {
     const result = await runCompatibilityLap(false);
+    expect(result.halt).not.toContain('custom-capability error');
+  });
+
+  it('refuses a custom-enabled lap whose verdict has no settled aggregate instead of raw-FAIL routing', async () => {
+    const result = await runCompatibilityLap(true, 'scalar');
+    expect(result.halt).toContain('custom-capability error');
+    expect(result.dispatched).not.toContain('remediate');
+    expect(result.dispatched).not.toContain('build');
+  });
+
+  it('keeps the historical raw route for a scalar verdict without custom policies', async () => {
+    const result = await runCompatibilityLap(false, 'scalar');
     expect(result.halt).not.toContain('custom-capability error');
   });
 });

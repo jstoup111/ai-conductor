@@ -12181,6 +12181,15 @@ export class Conductor {
                   continue;
                   }
                 }
+                // A scalar/legacy verdict never entered the shared authority above.
+                // With an enabled custom member it is refused, never raw-routed (D10).
+                if (!aggregate && this.hasEnabledCustomBuildReviewPolicy()) {
+                  const reason = 'build_review custom-capability error: the FAIL verdict carries no settled aggregate for the shared adjudication authority';
+                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  await this.emitLoopHalt(reason);
+                  return;
+                }
                 const failureDetails = buildReviewFailureDetails(parsed);
                 let buildReviewBeforeConsumption: KickbackGateEntry | undefined;
                 let buildReviewKickbackCharged = false;
