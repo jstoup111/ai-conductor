@@ -224,6 +224,7 @@ Every mapped criterion is diff-local: it states behavior of this implementation 
 - A real conductor rebase flow records zero additional acceptance_specs, BUILD, build_review, prd_audit, and as-built dispatches for valid same-file disjoint replay while establishing current suite proof and running applicable manual testing.
 - Changed-resolution and unproved-comparison conductor flows dispatch the explicit affected review set, never acceptance_specs or established BUILD by position, and never report unproved replay as unchanged.
 - After a completed code-changing rebase, the next selected lifecycle step is test_suite or later; required coverage refresh runs in place and cannot select an intervening authoring or BUILD step.
+- When replay changes aggregate-verification or runtime inputs, a real conductor rebase flow establishes current test_suite proof before any required downstream review dispatches, and manual_test still runs for the changed runtime behavior.
 
 **Files:** `src/conductor/src/engine/conductor.ts`, `src/conductor/src/engine/rebase.ts`, `src/conductor/test/integration/rebase-tail-preserve.test.ts`
 
