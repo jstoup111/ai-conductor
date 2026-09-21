@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Covers: task:1, task:2, task:3, task:4, task:5
+# Covers: task:1, task:2, task:3, task:4, task:5, task:6
 # Exercises the public bootstrap entry point with only a local stand-in source.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -36,6 +36,15 @@ git -C "$SOURCE_REPO" update-ref refs/heads/main "$MAIN_HEAD"
 git -C "$SOURCE_REPO" tag v0.1.0 "$STABLE_HEAD"
 git -C "$SOURCE_REPO" tag v0.2.0 "$MAIN_HEAD"
 git -C "$SOURCE_REPO" tag nightly "$MAIN_HEAD"
+
+NO_SEMVER_REPO="$TMP_ROOT/no-semver-source"
+git init -q "$NO_SEMVER_REPO"
+git -C "$NO_SEMVER_REPO" config user.email test@example.invalid
+git -C "$NO_SEMVER_REPO" config user.name test
+printf 'nightly fixture\n' > "$NO_SEMVER_REPO/README"
+git -C "$NO_SEMVER_REPO" add README
+git -C "$NO_SEMVER_REPO" commit -qm nightly
+git -C "$NO_SEMVER_REPO" tag nightly
 
 PREREQUISITE_PATH="$TMP_ROOT/prerequisites"
 mkdir -p "$PREREQUISITE_PATH"
@@ -99,7 +108,7 @@ run_case() {
     channel_env=("AI_CONDUCTOR_CHANNEL=$CASE_CHANNEL")
   fi
   env -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_CREDENTIAL_HELPER -u AI_CONDUCTOR_CHANNEL \
-    "${channel_env[@]}" HOME="$case_home" PATH="${CASE_PATH-$PATH}" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" INSTALLER_EXIT_CODE="${INSTALLER_EXIT_CODE-0}" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
+    "${channel_env[@]}" HOME="$case_home" PATH="${CASE_PATH-$PATH}" AI_CONDUCTOR_REPO_URL="${CASE_REPO_URL-$SOURCE_REPO}" INSTALLER_RECORD="$RECORD" INSTALLER_EXIT_CODE="${INSTALLER_EXIT_CODE-0}" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
   CASE_STATUS=$?
   set -e
   CASE_STDOUT=$(< "$case_stdout")
@@ -308,6 +317,15 @@ if [ "$CASE_STATUS" -eq 0 ] \
 else
   failures+="tagged environment did not select the latest release tag: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
 fi
+
+CASE_REPO_URL="$NO_SEMVER_REPO" CASE_PATH="$FRESH_INSTALL_PATH" run_case tagged-without-semver --channel tagged
+if [ "$CASE_STATUS" -ne 0 ] \
+  && grep -Fq "no vX.Y.Z release tag found at $NO_SEMVER_REPO" <<< "$CASE_STDERR"; then
+  echo 'PASS tagged channel without a semver release tag refuses before acquisition'
+else
+  failures+="tagged channel without a semver release tag did not fail cleanly: $CASE_OUTPUT\\n"
+fi
+assert_untouched tagged-without-semver
 
 CASE_CHANNEL_SET=true CASE_CHANNEL=main CASE_PATH="$FRESH_INSTALL_PATH" run_case option-precedence --channel stable
 if [ "$CASE_STATUS" -eq 0 ] \
