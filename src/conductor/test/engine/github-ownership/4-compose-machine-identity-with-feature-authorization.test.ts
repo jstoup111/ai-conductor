@@ -88,13 +88,13 @@ describe('engine/owner-gate/mutation-policy — machine identity and committed f
     })).resolves.toMatchObject({ kind: 'refused', reason: 'invalid-target' });
   });
 
-  it('refuses an unbound provenance context for an existing resource', async () => {
+  it('permits an unbound provenance context when the canonical target is in the owned repository', async () => {
     await expect(authorizeGithubMutation(request({
       provenance: { ...request().provenance, target: undefined },
     }), {
       resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
       provenanceDiscovery: { readCommittedRecords: async () => [ownedRecord('alice')] },
-    })).resolves.toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+    })).resolves.toMatchObject({ kind: 'authorized', target: request().target });
   });
 
   it('uses the machine-configured identity before the authenticated gh fallback and permits its matching committed owner', async () => {

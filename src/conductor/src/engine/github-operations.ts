@@ -113,7 +113,7 @@ export type GithubOperationPayload =
 interface GithubOperationDefinition {
   readonly access: GithubOperationAccess;
   readonly targetKinds: readonly GithubResourceKind[];
-  readonly payload?: 'body' | 'label' | 'issue-create' | 'pull-request-create' | 'label-definition' | 'pull-request-edit' | 'comment-update' | 'dependency' | 'commit-status';
+  readonly payload?: 'body' | 'label' | 'issue-create' | 'pull-request-create' | 'repository-create' | 'label-definition' | 'pull-request-edit' | 'comment-update' | 'dependency' | 'commit-status';
 }
 
 /** Every operation admitted by this boundary is named here. */
@@ -147,7 +147,7 @@ export const GITHUB_OPERATION_REGISTRY = {
   'commit.status.create': { access: 'feature-write', targetKinds: ['repository'], payload: 'commit-status' },
   'label-definition.create': { access: 'shared-write', targetKinds: ['label-definition'], payload: 'label-definition' },
   'label-definition.update': { access: 'shared-write', targetKinds: ['label-definition'], payload: 'label-definition' },
-  'repository.create': { access: 'shared-write', targetKinds: ['repository'], payload: 'issue-create' },
+  'repository.create': { access: 'shared-write', targetKinds: ['repository'], payload: 'repository-create' },
   'remote-ref.push': { access: 'remote-ref-write', targetKinds: ['remote-ref'] },
   'remote-ref.delete': { access: 'remote-ref-write', targetKinds: ['remote-ref'] },
 } as const satisfies Readonly<Record<string, GithubOperationDefinition>>;
@@ -379,6 +379,9 @@ function payloadFrom(value: unknown, required: GithubOperationDefinition['payloa
   if (required === 'label' && typeof value.label === 'string' && value.label !== '') return { label: value.label };
   if (required === 'issue-create' && typeof value.title === 'string' && typeof value.body === 'string') {
     return { title: value.title, body: value.body };
+  }
+  if (required === 'repository-create' && (value.body === 'private' || value.body === 'public')) {
+    return { body: value.body };
   }
   if (required === 'pull-request-create'
     && typeof value.title === 'string'

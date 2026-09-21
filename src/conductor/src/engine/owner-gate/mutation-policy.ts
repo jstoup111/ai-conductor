@@ -107,12 +107,12 @@ export async function authorizeGithubMutation(
   dependencies: GithubMutationAuthorizationDependencies,
 ): Promise<GithubMutationAuthorization> {
   const provenanceTarget = request.provenance.target;
-  const requiresExactTarget = request.target.kind === 'issue'
-    || request.target.kind === 'pull-request'
-    || request.target.kind === 'remote-ref';
+  // A provenance target can bind a single known resource, but feature
+  // ownership also authorizes independently resolved resources in that same
+  // repository (including multi-ref publication). The request target remains
+  // operation-bound in the returned decision either way.
   if (!githubTargetsMatch(request.target, targetInRepository(request.target, request.provenance.repository))
-    || (requiresExactTarget && (provenanceTarget === undefined
-      || !githubTargetsMatch(request.target, provenanceTarget)))) {
+    || (provenanceTarget !== undefined && !githubTargetsMatch(request.target, provenanceTarget))) {
     return refused(request, 'invalid-target');
   }
 

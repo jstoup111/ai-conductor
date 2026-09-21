@@ -55,7 +55,10 @@ function registeredMutation(operation: GithubOperationName): Record<string, unkn
   const pullRequest = operation.startsWith('pull-request.');
   const sharedLabel = operation.startsWith('label-definition.');
   const remoteRef = operation.startsWith('remote-ref.');
-  const repositoryResource = operation === 'issue.create' || operation === 'pull-request.create' || operation === 'commit.status.create';
+  const repositoryResource = operation === 'issue.create'
+    || operation === 'pull-request.create'
+    || operation === 'commit.status.create'
+    || operation === 'repository.create';
   const resource = sharedLabel
     ? { kind: 'label-definition', name: 'owned-label' }
     : remoteRef
@@ -71,7 +74,9 @@ function registeredMutation(operation: GithubOperationName): Record<string, unkn
       ? { label: 'owned-label' }
       : operation.includes('.dependency.')
         ? { dependency: { repository: 'acme/owned', resource: { kind: 'issue', number: 18 } } }
-        : operation === 'issue.create'
+        : operation === 'repository.create'
+          ? { body: 'private' }
+          : operation === 'issue.create'
           ? { title: 'Owned issue', body: 'created in scope' }
         : operation === 'pull-request.create'
           ? { title: 'Owned PR', body: 'created in scope', head: 'feature/owned', base: 'main' }
