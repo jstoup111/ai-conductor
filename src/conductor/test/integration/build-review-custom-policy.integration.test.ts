@@ -1,4 +1,5 @@
 // Covers: task:16, task:21, task:26
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +9,7 @@ import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -219,6 +221,50 @@ describe('custom build-review policy runner', () => {
       buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
     });
   }
+
+  // adr-2026-08-29 D4.6: a fully suppressed custom-only lap is an effective
+  // PASS that never reaches adjudication, so the step itself must write the
+  // durable suppression history.
+  it('persists durable suppression history for a fully suppressed custom-only lap', async () => {
+    const root = await fixture();
+    const feature = { version: 'v1' as const, repository: root, feature: 'feature' };
+    const frozenLine = 'export const value = 0;\n';
+    const summary = 'The changed boundary lacks compatibility evidence.';
+    let suppressedFindingId: string | undefined;
+    const runner = customOnlyRunner(root, {
+      minConfidence: 70,
+      findings: [{
+        concernId: 'portable-policy-gap', summary, confidence: 40,
+        evidenceLocations: ['src/a.ts:1'],
+        sourceRegions: [{
+          path: 'src/a.ts', startLine: 1, endLine: 1, display: 'value',
+          contentHash: `sha256:${createHash('sha256').update(frozenLine).digest('hex')}`,
+        }],
+      }],
+      resolver: async (_projectRoot, aggregate) => {
+        const member = (aggregate as { customResults: Record<string, { result: { findings: Array<{ identity: { id: string } }> } }> }).customResults.portable!;
+        suppressedFindingId = member.result.findings[0]!.identity.id;
+        return {
+          ok: true, feature,
+          effective: {
+            rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [],
+            suppressedFindingIds: [suppressedFindingId],
+            skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+          },
+        };
+      },
+    });
+
+    const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(result.success, result.output).toBe(true);
+
+    const persisted = await new RemediationCaseStore(root, feature).read();
+    if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
+    expect(suppressedFindingId).toEqual(expect.any(String));
+    expect(persisted.state.suppressions).toEqual([{
+      findingId: suppressedFindingId, rubric: 'portable', summary, confidence: 40, floor: 70, lastSeenLap: 'lap-head',
+    }]);
+  });
 
   // adr-2026-08-18 D9: the lap evidence of a reduced-coverage PASS carries the
   // rendered decision, on the custom-only route as on the mixed one.

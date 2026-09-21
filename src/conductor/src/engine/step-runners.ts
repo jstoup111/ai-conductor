@@ -3083,7 +3083,9 @@ export class DefaultStepRunner implements StepRunner {
     } catch (error) {
       return { success: false, output: `build_review aggregate publication failed: ${error instanceof Error ? error.message : String(error)}` };
     }
-    await this.emitBuildReviewOuterVerdict(input.lapId, aggregate, effective, input.config);
+    // adr-2026-08-29 D4.6: one projection feeds both the visibility event and
+    // the durable-history seam below.
+    const suppressionEntries = await this.emitBuildReviewOuterVerdict(input.lapId, aggregate, effective, input.config);
     if (!effective.ok) {
       // A failed custom policy has already crossed its authoritative boundary:
       // preserve its typed, candidate-local diagnostic even when the later
@@ -3097,6 +3099,17 @@ export class DefaultStepRunner implements StepRunner {
         return { success: false, output: `${JSON.stringify(aggregate)}\n\n${policyFailure.result.detail}` };
       }
       return { success: false, output: `build_review disposition resolution failed: ${effective.reason}` };
+    }
+    // Written before the pass/fail fork: a fully suppressed lap is an effective
+    // PASS that never reaches the adjudication coordinator (D4.4), and the
+    // seam is the same idempotent single writer the mixed path uses.
+    const persistedSuppressions = await persistBuildReviewSuppressions({
+      projectRoot: this.projectDir,
+      feature: effective.feature,
+      suppressions: suppressionEntries,
+    });
+    if (!persistedSuppressions.ok) {
+      return { success: false, output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}` };
     }
     if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
     return {
