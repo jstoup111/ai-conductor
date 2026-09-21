@@ -691,7 +691,7 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
 const DEFAULT_BUILD_REVIEW_ENABLED = true;
 const DEFAULT_BUILD_REVIEW_ADJUDICATION_ENABLED = true;
 const DEFAULT_SCOPE_CONTAINMENT_ENFORCED = false;
-const DEFAULT_BUILD_REVIEW_MAX_PARALLEL = 1;
+const DEFAULT_BUILD_REVIEW_MAX_PARALLEL = 4;
 /**
  * Measured after Task 2 against the testquality-admits-724 fixture projection:
  * 3,496 UTF-8 bytes. One MiB leaves more than four times that measured size

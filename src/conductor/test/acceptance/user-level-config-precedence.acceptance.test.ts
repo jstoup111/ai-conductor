@@ -90,7 +90,7 @@ const AFFECTED_CASES: AffectedCase[] = [
     select: (config) => config.build_review,
     userValue: {
       enabled: true,
-      maxParallel: 1,
+      maxParallel: 4,
       adjudication: { enabled: true },
       rubrics: {
         security: { enabled: false },
@@ -99,7 +99,7 @@ const AFFECTED_CASES: AffectedCase[] = [
     },
     projectValue: {
       enabled: true,
-      maxParallel: 1,
+      maxParallel: 4,
       adjudication: { enabled: true },
       rubrics: {
         security: { enabled: false },
@@ -108,7 +108,7 @@ const AFFECTED_CASES: AffectedCase[] = [
     },
     defaultValue: {
       enabled: true,
-      maxParallel: 1,
+      maxParallel: 4,
       adjudication: { enabled: true },
       rubrics: {
         security: { enabled: false },
