@@ -22,6 +22,7 @@ function mutation(identity = 'alice'): GithubMutationExecutionContext {
       specBranch: BRANCH,
       featureMarker: MARKER,
       publication: 'initial',
+      target: { repository: REPOSITORY, kind: 'remote-ref', ref: `refs/heads/${BRANCH}` },
     },
     dependencies: {
       resolveMachineOwner: vi.fn().mockResolvedValue({ resolved: true, id: identity }),
