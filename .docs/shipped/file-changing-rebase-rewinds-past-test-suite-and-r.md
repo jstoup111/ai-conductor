@@ -4,6 +4,68 @@ spec_hash: f1120e1d3f67ec3c8b09ec1d24c9091b3f4bec3b175eb05e5401dbbc4401a129
 pr: https://github.com/jstoup111/ai-conductor/pull/2555
 shipped: 2026-09-21
 engine_version: 20260921T014919Z-f9a937e4d19d
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "`src/conductor/src/engine/gate-invalidation.ts:59,89` — `.docs/decisions/` is now a coverage document input and the as-built review uses the `feature-runtime-or-coverage-inputs` surface; `src/conductor/src/engine/artifacts.ts:1009,3440` apply it on ordinary completion and the stale-artifact sweep, with no rebase needed"
+    accepted: true
+    decision: accept
+    rationale: "Operator (James) accepts 2026-09-19: an as-built or coverage verdict should go stale when a governing ADR changes, rebase or not. Non-rebase coverage added in gate-code-validity.test.ts ('with no rebase involved' cases)."
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "Task rem-as-built-rem-ab3-1"
+    outcome: remediated
+    summary: "Applied build_review invalidation bypasses the required operation-scoped, exactly-once convergence refund."
+  - gate: architecture_review_as_built
+    finding: AB-2
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-18-rebase-invalidation-refunds-build-review-convergence D3"
+    outcome: remediated
+    summary: "Applied generic kickback telemetry carries no convergence credit."
+  - gate: architecture_review_as_built
+    finding: AB-3
+    class: REMEDIABLE
+    governing_clause: "Task rem-as-built-rem-ab4-1"
+    outcome: remediated
+    summary: "Applied fail-closed invalidations emit no generic rebase kickback."
+  - gate: architecture_review_as_built
+    finding: AB-4
+    class: REMEDIABLE
+    governing_clause: "Task rem-as-built-rem-ab5-1"
+    outcome: remediated
+    summary: "Coverage has no preserved-identity parser and cannot bind replay authority."
+  - gate: architecture_review_as_built
+    finding: AB-5
+    class: REMEDIABLE
+    governing_clause: "Task rem-as-built-rem-ab5-2"
+    outcome: remediated
+    summary: "Neither production tail refreshes coverage in place or clamps continuation to test_suite or later."
+  - gate: architecture_review_as_built
+    finding: AB-6
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-11-selective-post-rebase-verification D5"
+    outcome: remediated
+    summary: "Preservation does not detect a governing ADR added after the bound input set was captured."
+  - gate: architecture_review_as_built
+    finding: AB-7
+    class: REMEDIABLE
+    governing_clause: "Task 10"
+    outcome: remediated
+    summary: "The applied-transition path never records the required operation-scoped build_review convergence credit."
+  - gate: architecture_review_as_built
+    finding: AB-8
+    class: REMEDIABLE
+    governing_clause: "Task 19"
+    outcome: remediated
+    summary: "The applied-transition path emits rebase-specific events but never emits the required generic kickback events for its applied invalidations."
+  - gate: architecture_review_as_built
+    finding: AB-9
+    class: REMEDIABLE
+    governing_clause: "Task 9"
+    outcome: remediated
+    summary: "A skipped gate can remain skipped in state/verdict while the durable operation and event report it invalidated."
 ---
 
 ## Cost
