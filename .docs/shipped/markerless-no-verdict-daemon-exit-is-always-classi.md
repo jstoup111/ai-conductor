@@ -4,6 +4,12 @@ spec_hash: 7904484be896fd6a7e3bafddd75108c10d162775b0a5af61569800e1a6bc4138
 pr: https://github.com/jstoup111/ai-conductor/pull/2609
 shipped: 2026-09-21
 engine_version: 20260921T014919Z-f9a937e4d19d
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/engine/otel/span-manager.ts:111-114 and test/engine/otel/span-manager.test.ts:313-325,354-359 — unplanned OTel span-clock work; net production change is comment-only"
+    accepted: true
 ---
 
 ## Cost
