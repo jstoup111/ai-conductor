@@ -544,6 +544,12 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });
   let judgement: RemediationCaseJudgement;
   try { judgement = await input.judge(freshContext.context); } catch { return failUnlessAccepted('remediate judgement failed', { settleAbsentAttempted: true }); }
+  // The context, not the judge, selects the case contract.  A custom lap's
+  // case-v2 consistency decision and admission evidence cannot be shed by
+  // answering in the older mode, whose acts would all be authorized.
+  if (judgement.mode !== freshContext.context.mode) {
+    return failUnlessAccepted(`remediation judgement mode mismatch: requested ${freshContext.context.mode}, received ${String(judgement.mode)}`, { settleAbsentAttempted: true });
+  }
   // Do not reconcile or effect a provider result after a late exact operator
   // acceptance made every source non-autonomous.
   try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }

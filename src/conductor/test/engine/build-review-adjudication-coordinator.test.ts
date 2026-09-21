@@ -445,6 +445,38 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
   });
 
+  it('refuses a case-v1 answer to a custom lap that required the case-v2 consistency and admission evidence', async () => {
+    const root = await projectRoot();
+    const mixed = customMixedAggregate();
+    const customSource = projectBuildReviewAggregateSources(mixed)!.find((source) => source.rubric === 'security')!;
+    const sourceId = buildReviewAdjudicationSourceId(customSource);
+    const judge = vi.fn(async (): Promise<RemediationCaseJudgement> => ({
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'case-security' }],
+      cases: [{
+        caseRef: 'case-security', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'A downgraded answer carries no admission evidence.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the authorization boundary.' }] },
+      }],
+    } as never));
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: mixed, mechanical: 'retry', chargeEffect: charge,
+      generateId: sequentialIds('custom-downgrade'),
+      readPlanContract: async () => ({
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{ id: '34', contract: 'Mixed-lap coordinator integration.' }],
+      }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+    });
+
+    expect(judge).toHaveBeenCalledTimes(1);
+    expect(charge).not.toHaveBeenCalled();
+    expect(result).not.toMatchObject({ route: 'build' });
+    expect(JSON.stringify(result)).toContain('mode mismatch');
+  });
+
   it('does not judge or charge infrastructure-only, exact-settled, or confidence-suppressed custom laps', async () => {
     const root = await projectRoot();
     const mixed = customMixedAggregate();
