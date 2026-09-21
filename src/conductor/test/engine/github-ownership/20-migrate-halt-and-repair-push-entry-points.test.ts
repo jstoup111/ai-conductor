@@ -14,7 +14,7 @@ import type { GithubMutationExecutionContext } from '../../../src/engine/tracker
 const scratch: string[] = [];
 afterEach(async () => Promise.all(scratch.splice(0).map((path) => rm(path, { recursive: true, force: true }))));
 
-function mutationContext() {
+function mutationContext(target?: { repository: string; kind: 'remote-ref'; ref: string }) {
   const resolveMachineOwner = vi.fn().mockResolvedValue({ resolved: true as const, id: 'alice' });
   const readCommittedRecords = vi.fn().mockResolvedValue([
     { path: '.docs/intake/feature.md', content: 'Owner: alice\n' },
@@ -26,6 +26,7 @@ function mutationContext() {
       specBranch: 'feature/owned',
       featureMarker: '.docs/intake/feature.md',
       publication: 'merged' as const,
+      ...(target === undefined ? {} : { target }),
     },
     dependencies: { resolveMachineOwner, provenanceDiscovery: { readCommittedRecords } },
   } satisfies GithubMutationExecutionContext;
@@ -160,7 +161,9 @@ describe('engine remote Git publication callers', () => {
     const cwd = await mkdtemp(join(tmpdir(), 'remote-git-repair-'));
     scratch.push(cwd);
     const pushes: string[][] = [];
-    const mutation = mutationContext();
+    const mutation = mutationContext({
+      repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/repair/feature',
+    });
     const runGit = guardedGit(pushes);
     runGit.mockImplementation(async (args: string[]) => {
       if (args[0] === 'config') return { stdout: 'git@github.com:acme/rocket.git\n' };
@@ -192,7 +195,9 @@ describe('engine remote Git publication callers', () => {
   it('routes repair PR creation and commit status through fresh guarded GitHub operations', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'shipment-repair-operations-'));
     scratch.push(cwd);
-    const mutation = mutationContext();
+    const mutation = mutationContext({
+      repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/shipment-repair/42/feature',
+    });
     const calls: string[][] = [];
     let repairPrListed = false;
     const runGh = vi.fn(async (args: string[]) => {

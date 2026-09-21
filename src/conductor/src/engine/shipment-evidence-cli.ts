@@ -429,7 +429,11 @@ export function makeProductionRepairPublisher(input: {
   if (!repo) throw new Error('GITHUB_REPOSITORY is required for repair publication');
   const operations = input.operations ?? createGuardedGithubOperationRunner(input.runGh, {
     cwd: input.cwd,
-    mutation: input.remoteMutation,
+    // The remote-ref binding authorizes only the repair branch push. GitHub
+    // operations below are repository resources, so preserve the same fresh
+    // owner/provenance readers but let their canonical repository targets bind
+    // through the normal policy instead of mismatching that ref.
+    mutation: mutationForRepositoryOperations(input.remoteMutation),
   });
 
   return {
@@ -518,6 +522,14 @@ export function makeProductionRepairPublisher(input: {
       });
     },
   };
+}
+
+function mutationForRepositoryOperations(
+  mutation: GithubMutationExecutionContext | undefined,
+): GithubMutationExecutionContext | undefined {
+  if (mutation?.provenance.target?.kind !== 'remote-ref') return mutation;
+  const { target: _remoteTarget, ...provenance } = mutation.provenance;
+  return { provenance, dependencies: mutation.dependencies };
 }
 
 async function requireRepairPublicationOperation(
