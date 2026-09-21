@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-21T14:35:10.198Z
 Slug: file-changing-rebase-rewinds-past-test-suite-and-r
 Class: needs-human
 Halting step: unknown
