@@ -398,6 +398,17 @@ describe('engine/build-review-containment', () => {
     expect(runProcess).not.toHaveBeenCalled();
   });
 
+  it('treats a dot-dot-prefixed child name as inside its root', async () => {
+    const runProcess = vi.fn(async () => ({ exitCode: 0, stderr: '', stdout: HEALTHY_PROBE.join('\n') }));
+    const result = await prepareBuildReviewContainment({
+      provider: 'claude', runtimeHost, runProcess,
+      paths: { ...PATHS, hostStateProbe: '/review/original/..sentinel' },
+    });
+
+    expect(result).toMatchObject({ kind: 'unsupported' });
+    expect(runProcess).not.toHaveBeenCalled();
+  });
+
   it('refuses a host sentinel that an allowlisted root would expose', async () => {
     const runProcess = vi.fn(async () => ({ exitCode: 0, stderr: '', stdout: HEALTHY_PROBE.join('\n') }));
     const result = await prepareBuildReviewContainment({

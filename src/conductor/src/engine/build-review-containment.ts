@@ -137,7 +137,7 @@ function unsupported(
 
 function isWithin(parent: string, child: string): boolean {
   const childPath = relative(parent, child);
-  return childPath === '' || (!childPath.startsWith('..') && childPath !== '..');
+  return childPath === '' || (childPath !== '..' && !childPath.startsWith(`..${sep}`) && !isAbsolute(childPath));
 }
 
 function hasSafePaths(paths: BuildReviewContainmentPaths): boolean {
