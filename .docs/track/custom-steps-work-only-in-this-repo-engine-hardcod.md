@@ -1,0 +1,7 @@
+# Track: Custom steps work only in this repo — engine hardcodes their path/name
+
+Track: technical
+
+Scope boundary: Operator-confirmed (2026-09-20). In scope: the FINISH freshness prerequisite applies to every gating custom step that declares a `completion_artifact`, replacing the reserved `release-disposition` step-name lookup; this repository's release-only behavior (PR-body release-metadata snapshot/restore, release-gate metadata input) is confined to the self-host area and activated by self-host configuration rather than a skill-path literal, with an unsatisfiable declared gate halting by step name; the six `release-*.ts` modules leave the conductor package's public exports; a custom step is dispatched by the skill its `skill` path names, with the provider-correct invocation prefix, rather than by its step key, and an unresolvable skill fails closed naming the step and the skill (added 2026-09-20 during architecture review, operator-approved); custom steps are documented end-to-end, including `hooks`. Out of scope, filed as separate intake: step packages that ship code together with installed/semantic step identity (blocked by #1986), and PR-template / PR-body customization for custom steps. Aligns with, but does not depend on, #1986 / PR #2523.
+
+Removes engine special cases and documents existing behavior; introduces no new consumer workflow, so acceptance criteria live in stories and no PRD is authored.
