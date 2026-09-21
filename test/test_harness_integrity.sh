@@ -844,6 +844,24 @@ else
   fi
 fi
 
+# 9e. The bootstrap installer option-parsing contract.
+bootstrap_installer_test="${HARNESS_DIR}/test/test_bootstrap_installer.sh"
+if [ ! -f "$bootstrap_installer_test" ]; then
+  assert "test/test_bootstrap_installer.sh exists" 1
+else
+  set +e
+  bootstrap_installer_output=$(bash "$bootstrap_installer_test" 2>&1)
+  bootstrap_installer_exit=$?
+  set -e
+
+  if [ "$bootstrap_installer_exit" -eq 0 ]; then
+    assert "test/test_bootstrap_installer.sh — bootstrap installer contracts pass" 0
+  else
+    echo "$bootstrap_installer_output" | sed 's/^/    /'
+    assert "test/test_bootstrap_installer.sh — bootstrap installer contracts pass" 1
+  fi
+fi
+
 # ── 10. Writer-audit for task-status.json single authority ──────────────────
 # Task #302 enforces that ONLY the engine (src/conductor/src/engine/) writes to
 # `.pipeline/task-status.json`. This is the single source of truth for task
