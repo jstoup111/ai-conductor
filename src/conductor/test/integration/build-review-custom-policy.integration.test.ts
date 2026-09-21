@@ -192,6 +192,58 @@ describe('custom build-review policy runner', () => {
     }]);
   });
 
+  /** A custom-only runner over the shared fixture, driven through the step entry. */
+  function customOnlyRunner(root: string, options: {
+    readonly findings: readonly unknown[];
+    readonly minConfidence?: number;
+    readonly resolver: (projectRoot: string, aggregate: unknown) => Promise<unknown>;
+  }): DefaultStepRunner {
+    const provider: LLMProvider = {
+      invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: options.findings }) })),
+      supportsSessionResume: false,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+    };
+    return new DefaultStepRunner(provider, 'custom-only-durable-evidence', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        portable: {
+          enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude',
+          ...(options.minConfidence === undefined ? {} : { min_confidence: options.minConfidence }),
+        },
+      } } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(), events: new ConductorEventEmitter(),
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: options.resolver as never,
+      buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+  }
+
+  // adr-2026-08-18 D9: the lap evidence of a reduced-coverage PASS carries the
+  // rendered decision, on the custom-only route as on the mixed one.
+  it('stamps reduced-coverage evidence into the persisted custom-only aggregate', async () => {
+    const root = await fixture();
+    const evidence = '## Reduced coverage\n\n- portable: policy-load-failed (operator decision)';
+    const runner = customOnlyRunner(root, {
+      findings: [],
+      resolver: async () => ({
+        ok: true,
+        feature: { version: 'v1', repository: root, feature: 'feature' },
+        reducedCoverageEvidence: evidence,
+        effective: {
+          rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+          skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+        },
+      }),
+    });
+
+    const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(result.success, result.output).toBe(true);
+    const aggregate = JSON.parse(await readFile(join(root, '.pipeline', 'build-review.json'), 'utf8'));
+    expect(aggregate).toMatchObject({ lapId: 'lap-head', verdict: 'PASS', reducedCoverageEvidence: evidence });
+  });
+
   it('dispatches an enabled security peer with a custom policy when testQuality is disabled', async () => {
     const root = await fixture();
     const provider: LLMProvider = {

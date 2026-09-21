@@ -3064,18 +3064,25 @@ export class DefaultStepRunner implements StepRunner {
     }
     const pipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
     const aggregatePath = join(pipelineDir, 'build-review.json');
-    try {
-      await mkdir(pipelineDir, { recursive: true });
-      const temporaryPath = `${aggregatePath}.${randomUUID()}.tmp`;
-      await writeFile(temporaryPath, `${JSON.stringify(aggregate, null, 2)}\n`, 'utf-8');
-      await rename(temporaryPath, aggregatePath);
-    } catch (error) {
-      return { success: false, output: `build_review aggregate publication failed: ${error instanceof Error ? error.message : String(error)}` };
-    }
+    // adr-2026-08-18 D9: effective state resolves BEFORE publication so a
+    // reduced-coverage lap's evidence is stamped into the one aggregate that
+    // is persisted; an unrenderable record fails resolution, so no PASS can
+    // be published without it.
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
       minConfidence: buildReviewConfidenceFloors(input.config),
     });
+    const stampedAggregate = effective.ok && effective.reducedCoverageEvidence !== undefined
+      ? { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence }
+      : aggregate;
+    try {
+      await mkdir(pipelineDir, { recursive: true });
+      const temporaryPath = `${aggregatePath}.${randomUUID()}.tmp`;
+      await writeFile(temporaryPath, `${JSON.stringify(stampedAggregate, null, 2)}\n`, 'utf-8');
+      await rename(temporaryPath, aggregatePath);
+    } catch (error) {
+      return { success: false, output: `build_review aggregate publication failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
     await this.emitBuildReviewOuterVerdict(input.lapId, aggregate, effective, input.config);
     if (!effective.ok) {
       // A failed custom policy has already crossed its authoritative boundary:
