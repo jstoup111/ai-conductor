@@ -281,6 +281,10 @@
 # Allowed: true or false; any other value fails the load.
 # Default: true.
 # Changing it: false requires an explicit ai-conductor daemon reconcile-parked <slug> for every parked feature.
+# Controls: reclaim_merged_worktrees — whether the daemon's startup and idle sweep removes merged feature worktrees registered under .worktrees/.
+# Allowed: true or false; any other value fails the load.
+# Default: true.
+# Changing it: false makes the sweep report-only; it records eligible worktrees as retained and removes nothing.
 # Controls: step_heartbeat_stall_minutes — a deprecated key that no longer does anything.
 # Allowed: a finite number; it loads with a deprecation warning.
 # Default: unset.
