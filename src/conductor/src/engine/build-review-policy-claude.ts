@@ -1,5 +1,5 @@
 import { readdir, readFile, realpath } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
 import { execa } from 'execa';
 
@@ -163,6 +163,35 @@ function parseSkillMetadata(skillText: string, skillPath: string): {
   };
 }
 
+/** True when `path` is `root` or lies beneath it; a component test, never a string prefix. */
+function isInside(root: string, path: string): boolean {
+  const offset = relative(root, path);
+  return offset === '' || (offset !== '..' && !offset.startsWith(`..${sep}`) && !isAbsolute(offset));
+}
+
+/**
+ * A plugin may only contribute skills from its own installed package. Resolve
+ * links before anything is read so a symlink cannot redirect the read outside.
+ * Returns undefined when the directory does not exist.
+ */
+async function containedPluginDirectory(
+  filesystem: ClaudeReviewPolicyFilesystem,
+  directory: string,
+  plugin: { readonly id: string; readonly packageRoot: string },
+): Promise<string | undefined> {
+  let canonical: string;
+  try {
+    canonical = await filesystem.realpath(directory);
+  } catch (error) {
+    if (isMissing(error)) return undefined;
+    throw new ClaudeReviewPolicyCatalogError(`Unable to resolve Claude plugin skill directory ${directory}: ${String(error)}`, 'unreadable');
+  }
+  if (!isInside(plugin.packageRoot, canonical)) {
+    throw new ClaudeReviewPolicyCatalogError(`Claude plugin ${plugin.id} skill directory ${directory} resolves outside its installed package`);
+  }
+  return canonical;
+}
+
 async function installedSkillsInDirectory(
   filesystem: ClaudeReviewPolicyFilesystem,
   directory: string,
@@ -170,6 +199,7 @@ async function installedSkillsInDirectory(
   plugin?: { readonly id: string; readonly version?: string; readonly packageRoot: string },
 ): Promise<readonly InstalledReviewSkill[]> {
   const policies: InstalledReviewSkill[] = [];
+  if (plugin && await containedPluginDirectory(filesystem, directory, plugin) === undefined) return policies;
   const direct = await installedSkillAtDirectory(filesystem, directory, source, plugin);
   if (direct) policies.push(direct);
   const entries = await optionalDirectoryEntries(filesystem, directory);
@@ -187,6 +217,7 @@ async function installedSkillAtDirectory(
   plugin?: { readonly id: string; readonly version?: string; readonly packageRoot: string },
 ): Promise<InstalledReviewSkill | undefined> {
   const skillPath = join(skillDirectory, 'SKILL.md');
+  if (plugin && await containedPluginDirectory(filesystem, skillDirectory, plugin) === undefined) return undefined;
   let skillText: string;
   try {
     skillText = await filesystem.readFile(skillPath);
@@ -261,7 +292,12 @@ function pluginSkillDirectories(manifestText: string, manifestPath: string): rea
   if (!manifest) throw new ClaudeReviewPolicyCatalogError(`Invalid Claude plugin manifest ${manifestPath}`);
   const skills = manifest.skills;
   const directories = skills === undefined ? ['./skills'] : typeof skills === 'string' ? [skills] : strings(skills);
-  if (!directories || directories.some((path) => !path.startsWith('./'))) {
+  // Entries are joined onto the package root, so a './' prefix alone proves
+  // nothing: './../..' still climbs out. Require the resolved path to stay inside.
+  const root = resolve(sep, 'plugin-package');
+  if (!directories || directories.some((path) => (
+    !path.startsWith('./') || isAbsolute(path) || path.includes('\0') || !isInside(root, resolve(root, path))
+  ))) {
     throw new ClaudeReviewPolicyCatalogError(`Unsupported Claude plugin skill components in ${manifestPath}`);
   }
   return directories;

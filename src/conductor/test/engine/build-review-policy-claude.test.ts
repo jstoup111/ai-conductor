@@ -31,8 +31,10 @@ function fakeFilesystem(): ClaudeReviewPolicyFilesystem {
     '/prepared/project/.claude/skills/project-review': '/canonical/project-review',
     '/prepared/user/skills/global-review': '/canonical/global-review',
     '/prepared/plugins/quality': '/canonical/plugin-quality',
+    '/prepared/plugins/quality/review-skills': '/canonical/plugin-quality/review-skills',
     '/prepared/plugins/quality/review-skills/quality-review': '/canonical/plugin-quality/review-skills/quality-review',
     '/prepared/plugins/disabled': '/canonical/plugin-disabled',
+    '/prepared/plugins/disabled/review-skills': '/canonical/plugin-disabled/review-skills',
     '/prepared/plugins/disabled/review-skills/disabled-review': '/canonical/plugin-disabled/review-skills/disabled-review',
   };
 
@@ -179,6 +181,75 @@ describe('engine/build-review-policy-claude', () => {
       declaredDependencies: [],
       availability: 'available',
     }]);
+  });
+
+  describe('plugin manifest skill entries that leave the installed package', () => {
+    const discoverWith = async (skills: unknown, realpaths: Record<string, string> = {}) => {
+      const touched: string[] = [];
+      const filesystem: ClaudeReviewPolicyFilesystem = {
+        async readdir(path) {
+          touched.push(path);
+          if (path === '/prepared/project/.claude/skills' || path === '/prepared/user/skills') return [];
+          if (path === '/prepared/plugins/direct/linked') return ['inner'];
+          throw new Error(`ENOENT: ${path}`);
+        },
+        async readFile(path) {
+          touched.push(path);
+          if (path === '/prepared/plugins/direct/.claude-plugin/plugin.json') return JSON.stringify({ skills });
+          if (path.endsWith('/SKILL.md') && !path.startsWith('/prepared/project') && !path.startsWith('/prepared/user')) return '---\nname: leaked\n---\n';
+          throw new Error(`ENOENT: ${path}`);
+        },
+        async realpath(path) {
+          if (path === '/prepared/plugins/direct') return '/canonical/direct-plugin';
+          if (path in realpaths) return realpaths[path]!;
+          if (path.startsWith('/prepared/plugins/direct/')) return path.replace('/prepared/plugins/direct', '/canonical/direct-plugin');
+          return path;
+        },
+      };
+      const promise = discoverClaudeReviewPolicies({
+        candidate: { cwd: '/prepared/project', env: {}, projectSkillRoots: ['/prepared/project/.claude/skills'], userSkillRoots: ['/prepared/user/skills'] },
+        command: async () => ({ stdout: JSON.stringify([{ id: 'direct-plugin', enabled: true, installPath: '/prepared/plugins/direct', scope: 'project' }]) }),
+        filesystem,
+      });
+      return { promise, touched };
+    };
+    const outside = (touched: readonly string[]) => touched.filter((path) => (
+      !path.startsWith('/prepared/plugins/direct/') && !path.startsWith('/prepared/project/') && !path.startsWith('/prepared/user/')
+    ));
+
+    it.each([
+      ['a parent traversal', ['./../../..']],
+      ['a traversal hidden mid-path', ['./skills/../../other-plugin']],
+      ['a traversal given as a bare string', './..'],
+      ['an absolute entry', ['/etc']],
+    ])('rejects %s as a malformed manifest without reading outside the package', async (_label, skills) => {
+      const { promise, touched } = await discoverWith(skills);
+      await expect(promise).rejects.toMatchObject({
+        provider: 'claude', code: 'malformed',
+        message: expect.stringContaining('/prepared/plugins/direct/.claude-plugin/plugin.json'),
+      });
+      expect(outside(touched)).toEqual([]);
+    });
+
+    it('rejects a skill directory that is a symlink out of the package', async () => {
+      const { promise, touched } = await discoverWith(['./linked'], { '/prepared/plugins/direct/linked': '/home/operator/.ssh' });
+      await expect(promise).rejects.toMatchObject({ provider: 'claude', code: 'malformed' });
+      expect(touched).not.toContain('/prepared/plugins/direct/linked/SKILL.md');
+      expect(touched).not.toContain('/prepared/plugins/direct/linked');
+    });
+
+    it('rejects a nested skill that is a symlink out of the package', async () => {
+      const { promise, touched } = await discoverWith(['./linked'], { '/prepared/plugins/direct/linked/inner': '/home/operator/secret' });
+      await expect(promise).rejects.toMatchObject({ provider: 'claude', code: 'malformed' });
+      expect(touched).not.toContain('/prepared/plugins/direct/linked/inner/SKILL.md');
+    });
+
+    it('still discovers a normal ./skills style entry', async () => {
+      const { promise } = await discoverWith(['./linked']);
+      expect((await promise).map((policy) => policy.canonicalSkillPath)).toEqual([
+        '/canonical/direct-plugin/linked/SKILL.md', '/canonical/direct-plugin/linked/inner/SKILL.md',
+      ]);
+    });
   });
 
   it('retains disabled and marketplace-only plugin selections as unavailable and never activates unrelated components', async () => {
