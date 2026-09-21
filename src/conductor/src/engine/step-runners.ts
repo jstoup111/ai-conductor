@@ -85,7 +85,7 @@ import {
 import type { ResolvedBuildReviewCatalogEntry, ResolvedBuildReviewCustomCatalogEntry } from './resolved-config.js';
 import { fingerprintBuildReviewPolicyDeclaration, type InstalledReviewSkill } from './build-review-policy.js';
 import { resolveInstalledReviewPolicyCatalog, ReviewPolicyCatalogError } from './build-review-policy-resolver.js';
-import { captureInstalledReviewPolicyBundle, type CapturedReviewPolicyBundle } from './build-review-policy-bundle.js';
+import { captureInstalledReviewPolicyBundle, resolveReviewPolicyPackageReference, type CapturedReviewPolicyBundle } from './build-review-policy-bundle.js';
 import {
   evaluateBuildReviewPolicyPreflight,
   parseBuildReviewPolicyRuntimeUnsupportedResponse,
@@ -2764,7 +2764,7 @@ export class DefaultStepRunner implements StepRunner {
             { kind: 'action', action: 'read-frozen-input' },
             { kind: 'action', action: 'read-policy-material' },
             ...(policy.requiredTools ?? []).map((tool) => ({ kind: 'tool' as const, tool })),
-            ...policy.declaredDependencies.map((dependency) => ({ kind: 'dependency' as const, dependency, source: 'host' as const })),
+            ...policy.declaredDependencies.map((dependency) => ({ kind: 'dependency' as const, dependency: resolveReviewPolicyPackageReference(dependency), source: 'host' as const })),
           ],
         });
         if (preflight.kind !== 'admitted') {

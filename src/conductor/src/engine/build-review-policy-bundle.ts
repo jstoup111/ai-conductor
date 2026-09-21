@@ -126,13 +126,22 @@ function referencedPackagePath(sourceRelativePath: string, reference: string): s
   return normalized;
 }
 
+/**
+ * The package-relative path a skill-level reference resolves to.  Capture and
+ * preflight share this one rule so a resource capture admitted is never
+ * refused afterwards for its spelling.
+ */
+export function resolveReviewPolicyPackageReference(reference: string): string {
+  return referencedPackagePath('SKILL.md', reference);
+}
+
 function validateRequiredResources(
   policy: InstalledReviewSkill,
   manifest: readonly CapturedReviewPolicyBundleEntry[],
 ): void {
   const availablePaths = new Set(manifest.map((entry) => entry.relativePath));
   const requireResource = (reference: string, sourceRelativePath = 'SKILL.md') => {
-    const resourcePath = referencedPackagePath(sourceRelativePath, reference);
+    const resourcePath = sourceRelativePath === 'SKILL.md' ? resolveReviewPolicyPackageReference(reference) : referencedPackagePath(sourceRelativePath, reference);
     if (!availablePaths.has(resourcePath)) {
       throw policyResourceError('is missing or unreadable', reference);
     }

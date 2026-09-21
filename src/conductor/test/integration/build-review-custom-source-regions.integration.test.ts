@@ -46,7 +46,7 @@ function git() {
   };
 }
 
-async function review(region: { path: string; startLine: number; endLine: number; contentHash: string }) {
+async function review(region: { path: string; startLine: number; endLine: number; contentHash: string }, declaredDependencies: string[] = []) {
   const root = await fixture();
   const payload = { kind: 'custom-findings', version: 'v1', findings: [{
     concernId: 'concern.one', summary: 'A concern.', evidenceLocations: [`${region.path}:${region.startLine}`],
@@ -70,11 +70,11 @@ async function review(region: { path: string; startLine: number; endLine: number
       skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
     } }) as never,
     buildReviewPolicyCatalog: async () => [{
-      semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available',
+      semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies, availability: 'available',
     }],
     buildReviewPolicyCapture: async (policy) => ({
       policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
-      manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }],
+      manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }, { relativePath: 'refs/criteria.md', bytes: Buffer.from('criteria\n') }],
       metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
       digest: `sha256-v1:${'a'.repeat(64)}`,
     }),
@@ -106,5 +106,10 @@ describe('custom source regions are validated against frozen source bytes', () =
   it('refuses a line range beyond the frozen blob', async () => {
     const { artifact } = await review({ path: 'src/a.ts', startLine: 2, endLine: 9, contentHash: sha('export const other = 2;\n') });
     expect(artifact.result).toMatchObject({ kind: 'infrastructure-failure', reason: 'malformed-artifact' });
+  });
+
+  it('admits a declared dependency written in a non-normalized form that capture already resolved', async () => {
+    const { artifact } = await review({ path: 'src/a.ts', startLine: 1, endLine: 1, contentHash: sha('export const value = 1;\n') }, ['./refs/criteria.md']);
+    expect(artifact.result).toMatchObject({ kind: 'judged' });
   });
 });
