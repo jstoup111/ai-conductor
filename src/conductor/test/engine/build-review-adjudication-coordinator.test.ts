@@ -64,7 +64,7 @@ const findingId = rawSource.findingId;
 const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
 const CUSTOM_DIGEST = `sha256:${'c'.repeat(64)}`;
 
-function customMixedAggregate(criteria?: readonly string[]) {
+function customMixedAggregate(criteria?: readonly string[], regionHash = `sha256:${'a'.repeat(64)}`) {
   const declaration = {
     version: 'v1' as const, rubricId: 'security', semanticSkill: 'security-review',
     question: 'Does the changed code preserve the security boundary?',
@@ -80,7 +80,7 @@ function customMixedAggregate(criteria?: readonly string[]) {
   };
   const sourceRegion = {
     path: 'src/handler.ts', startLine: 12, endLine: 16,
-    contentHash: `sha256:${'a'.repeat(64)}`, display: 'authorization handler',
+    contentHash: regionHash, display: 'authorization handler',
   };
   const judged = stampBuildReviewCustomJudgedResult({
     kind: 'custom-findings', version: 'v1', findings: [{
@@ -444,6 +444,74 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(mixed.customResults?.availability).toMatchObject({
       result: { kind: 'infrastructure-failure', reason: 'policy-load-failed' },
     });
+  });
+
+  it('hands a decision stop persisted before a restart to the judge once the approved baseline changes', async () => {
+    const root = await projectRoot();
+    const customSourceId = (mixed: ReturnType<typeof customMixedAggregate>) =>
+      buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(mixed)!.find((source) => source.rubric === 'security')!);
+    const scope = {
+      mechanical: 'retry' as const,
+      readPlanContract: async () => ({
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{ id: '34', contract: 'Mixed-lap coordinator integration.' }],
+      }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+    };
+    const escalate = (sourceId: string, existingCaseId?: string): RemediationCaseJudgement => ({
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'architecture-stop' }],
+      cases: [{
+        caseRef: 'architecture-stop', ...(existingCaseId === undefined ? {} : { existingCaseId }),
+        disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'No admitted task owns this boundary; architecture must decide.',
+        effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: {
+        verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['architecture-stop'],
+        rationale: 'The repair contradicts the approved baseline.',
+      },
+    });
+
+    const lapOne = customMixedAggregate();
+    const lapOneSourceId = customSourceId(lapOne);
+    const stopped = await coordinateBuildReviewAdjudication({
+      ...input(root, vi.fn(async () => escalate(lapOneSourceId))), ...scope, aggregate: lapOne,
+      generateId: sequentialIds('stop'),
+    });
+    expect(stopped).toMatchObject({ route: 'halt' });
+    const persisted = await new RemediationCaseStore(root, feature).read();
+    if (!persisted.ok) throw new Error(persisted.reason);
+    const stop = persisted.state.cases[0]!;
+    expect(stop).toMatchObject({
+      disposition: 'escalate', resolution: 'open', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      consistencyStop: { sourceIds: [lapOneSourceId], rationale: 'The repair contradicts the approved baseline.' },
+    });
+
+    // Restart: nothing survives but the store file. The approved-baseline
+    // change re-anchors the finding, so the lap raises a new exact source.
+    const lapTwo = customMixedAggregate(undefined, `sha256:${'b'.repeat(64)}`);
+    const lapTwoSourceId = customSourceId(lapTwo);
+    expect(lapTwoSourceId).not.toBe(lapOneSourceId);
+    const seen: unknown[] = [];
+    const rejudge = vi.fn(async (context: unknown) => {
+      seen.push(context);
+      return escalate(lapTwoSourceId, stop.id);
+    });
+    const reevaluated = await coordinateBuildReviewAdjudication({
+      ...input(root, rejudge), ...scope, aggregate: lapTwo, generateId: sequentialIds('restart'),
+    });
+
+    expect(rejudge).toHaveBeenCalledTimes(1);
+    expect(seen[0]).toMatchObject({
+      currentFindings: [expect.objectContaining({ sourceId: lapTwoSourceId })],
+      priorCases: [{
+        id: stop.id, disposition: 'escalate', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+        sources: [{ sourceId: lapOneSourceId, outcome: 'escalate' }],
+        consistencyStop: { sourceIds: [lapOneSourceId], rationale: 'The repair contradicts the approved baseline.' },
+      }],
+    });
+    expect(JSON.stringify(reevaluated)).not.toContain('unrepresentable-prior-case');
   });
 
   it('refuses a case-v1 answer to a custom lap that required the case-v2 consistency and admission evidence', async () => {

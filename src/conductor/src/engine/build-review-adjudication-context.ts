@@ -3,7 +3,12 @@ import type { BuildReviewRubricId } from '../types/config.js';
 import type { BuildReviewAggregate, BuildReviewRawSourceProjection } from './build-review-aggregate.js';
 import { projectBuildReviewAggregateSources } from './build-review-aggregate.js';
 import type { RemediationCaseEffect, RemediationCaseRecord, RemediationCaseSourceLink, RemediationCaseSuppressionEntry } from './remediation-case-store.js';
-import type { RemediationCaseRefutation } from './remediation-case-artifact.js';
+import type {
+  RemediationCaseDisposition,
+  RemediationCaseEscalationOwner,
+  RemediationCaseRefutation,
+  RemediationCaseSourceOutcome,
+} from './remediation-case-artifact.js';
 
 export const BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS = Object.freeze({
   maxCurrentSources: 512,
@@ -31,6 +36,10 @@ export interface BuildReviewAdjudicationPriorCase {
   readonly sources: readonly RemediationCaseSourceLink[];
   readonly effect: RemediationCaseEffect;
   readonly refutation?: RemediationCaseRefutation;
+  /** The decision owner of a persisted `escalate` stop, exactly as stored. */
+  readonly escalation?: RemediationCaseRecord['escalation'];
+  /** The blocked consistency verdict a persisted `escalate` stop retains. */
+  readonly consistencyStop?: RemediationCaseRecord['consistencyStop'];
 }
 
 /** The active approved-plan contract that decides whether work is admitted. */
@@ -130,7 +139,17 @@ export type AssembleBuildReviewAdjudicationContextResult =
   | { readonly ok: false; readonly stop: BuildReviewAdjudicationContextStop };
 
 const LIMITS = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS;
-const OUTCOMES = new Set(['acted', 'deferred', 'rejected', 'refuted', 'merged']);
+// Keyed by the store's own vocabularies: a value the store learns to persist
+// fails to compile here until this boundary represents it too.
+const OUTCOMES: Readonly<Record<RemediationCaseSourceOutcome, true>> = Object.freeze({
+  acted: true, deferred: true, rejected: true, refuted: true, merged: true, escalate: true,
+});
+const DISPOSITIONS: Readonly<Record<RemediationCaseDisposition, true>> = Object.freeze({
+  act: true, defer: true, reject: true, refute: true, escalate: true,
+});
+const ESCALATION_OWNERS: Readonly<Record<RemediationCaseEscalationOwner, true>> = Object.freeze({
+  product: true, plan: true, architecture: true,
+});
 
 function bytes(value: string): number {
   return Buffer.byteLength(value, 'utf8');
@@ -274,7 +293,7 @@ function validateCurrent(source: BuildReviewRawSourceProjection): BuildReviewAdj
 
 function validateEffect(caseRecord: RemediationCaseRecord): BuildReviewAdjudicationContextStop | undefined {
   const effect = caseRecord.effect;
-  if (caseRecord.disposition === 'reject' || caseRecord.disposition === 'refute' && effect.kind === 'none') {
+  if (caseRecord.disposition === 'reject' || caseRecord.disposition === 'escalate' || caseRecord.disposition === 'refute' && effect.kind === 'none') {
     return effect.kind === 'none' ? undefined : { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'effect' };
   }
   const expectedKind = caseRecord.disposition === 'act' ? 'action' : 'deferral';
@@ -290,6 +309,27 @@ function validateEffect(caseRecord: RemediationCaseRecord): BuildReviewAdjudicat
   return undefined;
 }
 
+/** Mirrors the store's pairing: stop evidence exists only on, and always on, an `escalate` case. */
+function validateDecisionStop(caseRecord: RemediationCaseRecord): BuildReviewAdjudicationContextStop | undefined {
+  const { escalation, consistencyStop } = caseRecord;
+  const unrepresentable = (field: string): BuildReviewAdjudicationContextStop => ({ code: 'unrepresentable-prior-case', caseId: caseRecord.id, field });
+  if (caseRecord.disposition !== 'escalate') {
+    return escalation === undefined && consistencyStop === undefined ? undefined : unrepresentable('decision-stop');
+  }
+  if (escalation === undefined && consistencyStop === undefined) return unrepresentable('decision-stop');
+  if (escalation !== undefined && !Object.hasOwn(ESCALATION_OWNERS, escalation.owner)) return unrepresentable('escalation.owner');
+  if (consistencyStop === undefined) return undefined;
+  if (!Array.isArray(consistencyStop.sourceIds) || consistencyStop.sourceIds.length === 0) return unrepresentable('consistencyStop.sourceIds');
+  if (consistencyStop.sourceIds.length > LIMITS.maxSourcesPerCase) {
+    return { code: 'field-overflow', subject: 'prior-case', field: 'consistencyStop.sourceIds', limit: LIMITS.maxSourcesPerCase, actual: consistencyStop.sourceIds.length, caseId: caseRecord.id };
+  }
+  for (const sourceId of consistencyStop.sourceIds) {
+    const stop = boundedString(sourceId, LIMITS.maxReferenceBytes, 'prior-case', 'consistencyStop.sourceIds[]', caseRecord.id);
+    if (stop) return stop;
+  }
+  return boundedString(consistencyStop.rationale, LIMITS.maxTextBytes, 'prior-case', 'consistencyStop.rationale', caseRecord.id);
+}
+
 function validatePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudicationContextStop | undefined {
   for (const [field, value, limit] of [
     ['id', caseRecord.id, LIMITS.maxReferenceBytes],
@@ -298,7 +338,7 @@ function validatePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudi
     const stop = boundedString(value, limit, 'prior-case', field, caseRecord.id);
     if (stop) return stop;
   }
-  if (caseRecord.domain !== 'build_review' || !['act', 'defer', 'reject', 'refute'].includes(caseRecord.disposition) ||
+  if (caseRecord.domain !== 'build_review' || !Object.hasOwn(DISPOSITIONS, caseRecord.disposition) ||
     !['critical', 'high', 'medium', 'low'].includes(caseRecord.priority) ||
     !['high', 'medium', 'low'].includes(caseRecord.confidence) || !['open', 'resolved'].includes(caseRecord.resolution)) {
     return { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'case' };
@@ -310,12 +350,12 @@ function validatePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudi
   for (const source of caseRecord.sources) {
     const sourceId = boundedString(source.sourceId, LIMITS.maxReferenceBytes, 'prior-case', 'sources[].sourceId', caseRecord.id);
     if (sourceId) return sourceId;
-    if (!OUTCOMES.has(source.outcome) || Number.isNaN(Date.parse(source.recordedAt)) || sourceIds.has(source.sourceId)) {
+    if (!Object.hasOwn(OUTCOMES, source.outcome) || Number.isNaN(Date.parse(source.recordedAt)) || sourceIds.has(source.sourceId)) {
       return { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'sources' };
     }
     sourceIds.add(source.sourceId);
   }
-  return validateEffect(caseRecord);
+  return validateEffect(caseRecord) ?? validateDecisionStop(caseRecord);
 }
 
 function freezeRefutation(refutation: RemediationCaseRefutation): RemediationCaseRefutation {
@@ -354,6 +394,13 @@ function freezePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudica
     sources: Object.freeze(sources),
     effect: Object.freeze({ ...caseRecord.effect }) as RemediationCaseEffect,
     ...(caseRecord.disposition === 'refute' ? { refutation: freezeRefutation(caseRecord.refutation!) } : {}),
+    ...(caseRecord.escalation === undefined ? {} : { escalation: Object.freeze({ owner: caseRecord.escalation.owner }) }),
+    ...(caseRecord.consistencyStop === undefined ? {} : {
+      consistencyStop: Object.freeze({
+        sourceIds: Object.freeze([...caseRecord.consistencyStop.sourceIds]),
+        rationale: caseRecord.consistencyStop.rationale,
+      }),
+    }),
   });
 }
 

@@ -136,7 +136,80 @@ function priorRefutedCase(id: string): RemediationCaseRecord {
   };
 }
 
+function priorDecisionStop(id: string): RemediationCaseRecord {
+  return {
+    ...priorCase(id),
+    disposition: 'escalate',
+    rationale: `Case ${id} needs an architecture decision before any repair.`,
+    sources: [{ sourceId: `security:${id}`, outcome: 'escalate', recordedAt: '2026-08-30T12:00:00.000Z' }],
+    effect: { kind: 'none' },
+    escalation: { owner: 'architecture' },
+    consistencyStop: { sourceIds: [`security:${id}`], rationale: 'The proposed cases contradict the approved baseline.' },
+  };
+}
+
 describe('build-review adjudication context', () => {
+  it('projects a persisted decision stop with its owner and consistency evidence intact', () => {
+    const stop = priorDecisionStop('stop-a');
+    const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [stop] });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.context.priorCases).toEqual([{
+      id: 'stop-a', disposition: 'escalate', priority: 'high', rationale: stop.rationale, confidence: 'high',
+      resolution: 'open', sources: stop.sources, effect: { kind: 'none' },
+      escalation: { owner: 'architecture' }, consistencyStop: stop.consistencyStop,
+    }]);
+    expect(result.context.effectPointers).toEqual([]);
+    expect(Object.isFrozen(result.context.priorCases[0]!.consistencyStop!.sourceIds)).toBe(true);
+    expect(JSON.parse(JSON.stringify(result.context)).priorCases[0]).toMatchObject({
+      escalation: { owner: 'architecture' }, consistencyStop: stop.consistencyStop,
+    });
+  });
+
+  it('projects an owner-only and a consistency-only decision stop without inventing the absent evidence', () => {
+    const { consistencyStop: _c, ...ownerOnly } = priorDecisionStop('stop-owner');
+    const { escalation: _e, ...consistencyOnly } = priorDecisionStop('stop-consistency');
+    const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [ownerOnly, consistencyOnly] });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.context.priorCases.map((record) => Object.keys(record).filter((key) => key === 'escalation' || key === 'consistencyStop')))
+      .toEqual([['consistencyStop'], ['escalation']]);
+  });
+
+  it.each([
+    ['an escalate case with no stop evidence', (stop: RemediationCaseRecord) => { const { escalation: _e, consistencyStop: _c, ...bare } = stop; return bare; }, 'decision-stop'],
+    ['an owner outside the store vocabulary', (stop: RemediationCaseRecord) => ({ ...stop, escalation: { owner: 'operator' as never } }), 'escalation.owner'],
+    ['an escalate case carrying an effect', (stop: RemediationCaseRecord) => ({ ...stop, effect: { id: 'effect-x', kind: 'deferral' as const, status: 'reserved' as const } }), 'effect'],
+    ['an empty consistency source set', (stop: RemediationCaseRecord) => ({ ...stop, consistencyStop: { ...stop.consistencyStop!, sourceIds: [] } }), 'consistencyStop.sourceIds'],
+    ['an empty consistency rationale', (stop: RemediationCaseRecord) => ({ ...stop, consistencyStop: { ...stop.consistencyStop!, rationale: '' } }), 'consistencyStop.rationale'],
+    ['stop evidence on an ordinary case', () => ({ ...priorCase('stop-a'), escalation: { owner: 'plan' as const } }), 'decision-stop'],
+  ])('stops as unrepresentable on %s', (_name, malform, field) => {
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('alpha')), priorCases: [malform(priorDecisionStop('stop-a'))],
+    });
+
+    expect(result).toEqual({ ok: false, stop: { code: 'unrepresentable-prior-case', caseId: 'stop-a', field } });
+  });
+
+  it('stops on oversized decision-stop evidence rather than truncating it', () => {
+    const limits = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS;
+    const stop = priorDecisionStop('stop-a');
+    const assemble = (consistencyStop: NonNullable<RemediationCaseRecord['consistencyStop']>) =>
+      assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [{ ...stop, consistencyStop }] });
+
+    expect(assemble({ ...stop.consistencyStop!, rationale: 'r'.repeat(limits.maxTextBytes + 1) })).toEqual({
+      ok: false, stop: { code: 'field-overflow', subject: 'prior-case', field: 'consistencyStop.rationale', limit: limits.maxTextBytes, actual: limits.maxTextBytes + 1, caseId: 'stop-a' },
+    });
+    expect(assemble({ ...stop.consistencyStop!, sourceIds: ['s'.repeat(limits.maxReferenceBytes + 1)] })).toEqual({
+      ok: false, stop: { code: 'field-overflow', subject: 'prior-case', field: 'consistencyStop.sourceIds[]', limit: limits.maxReferenceBytes, actual: limits.maxReferenceBytes + 1, caseId: 'stop-a' },
+    });
+    expect(assemble({ ...stop.consistencyStop!, sourceIds: Array.from({ length: limits.maxSourcesPerCase + 1 }, (_, index) => `s-${index}`) })).toEqual({
+      ok: false, stop: { code: 'field-overflow', subject: 'prior-case', field: 'consistencyStop.sourceIds', limit: limits.maxSourcesPerCase, actual: limits.maxSourcesPerCase + 1, caseId: 'stop-a' },
+    });
+  });
+
   it('projects every current unresolved source and every prior case deterministically', () => {
     const current = aggregate(finding('alpha'), finding('beta'));
     const result = assembleBuildReviewAdjudicationContext({
