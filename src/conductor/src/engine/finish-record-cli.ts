@@ -192,7 +192,7 @@ export async function dispatchFinishRecord(
         'finish-record: refusing to record choice "keep" — a git remote is configured and this run is in ' +
           'unattended (auto/daemon) mode. Per Daemon Operations Safety rule 4 ("a manual PR is NOT a harness ' +
           'finish"), an unattended finish with a remote configured MUST resolve to an opened PR. Push the ' +
-          'branch, open the PR with `gh pr create` (or reuse an existing one), and re-run with ' +
+          'branch, submit a guarded `pull-request.create` request with `ai-conductor github-operation --request-file <request.json>` (or reuse an existing PR), and re-run with ' +
           '`--choice pr --pr-url <url>`. If PR creation itself fails, HALT for human review — do not fall ' +
           'back to keep.',
       );

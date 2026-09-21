@@ -18,6 +18,11 @@ export interface GithubInvocationAuditSite {
   readonly classification: 'approved-adapter' | 'local-git' | 'remote-write';
 }
 
+/** Non-operator executable surfaces retained by an explicit inventory entry. */
+export const SHIPPED_GITHUB_INVOCATION_SITE_INVENTORY = {
+  'scripts/intake-label-sync-apply.mts': 'ci-workflow-actions-token',
+} as const;
+
 const PROCESS_MODULE = /^(?:node:)?child_process$/;
 const EXECA_MODULE = /^execa(?:\/|$)/;
 const GITHUB_HTTP_MODULE = /^(?:@octokit\/|octokit(?:$|\/)|github(?:$|\/)|node-fetch$|undici$)/;
@@ -59,6 +64,7 @@ export const SHIPPED_MUTATION_OPERATION_CALLER_PROOFS = {
   'commit.status.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'label-definition.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'label-definition.update': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
+  'repository.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'remote-ref.push': { adapter: 'executeRemoteGit', owner: 'remote-git-operations.ts' },
   'remote-ref.delete': { adapter: 'executeRemoteGit', owner: 'remote-git-operations.ts' },
 } as const satisfies Record<MutationOperation, OperationCallerProof>;
@@ -478,7 +484,7 @@ export function shippedRuntimeTypescriptFiles(conductorRoot: string): string[] {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) walk(path);
-      else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.d.ts')) files.push(path);
+      else if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.mts')) && !entry.name.endsWith('.d.ts')) files.push(path);
     }
   };
   walk(join(conductorRoot, 'src'));
@@ -496,10 +502,19 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
   for (const file of shippedRuntimeTypescriptFiles(conductorRoot)) {
     const runtimeFile = relative(join(conductorRoot, 'src'), file).split(sep).join('/');
     const source = readFileSync(file, 'utf8');
-    // The production entry consumes the same site inventory exposed to tests;
-    // it is therefore impossible for the inventory to drift into test-only code.
-    void findGithubInvocationSites(runtimeFile, source);
+    // The production entry consumes the same site inventory exposed to tests.
+    // CI workflow scripts are classified explicitly; every other executable
+    // site is audited as an operator-harness invocation.
+    const sites = findGithubInvocationSites(runtimeFile, source);
+    if (runtimeFile in SHIPPED_GITHUB_INVOCATION_SITE_INVENTORY) {
+      continue;
+    }
     findings.push(...auditGithubInvocationSource(runtimeFile, source));
+    for (const site of sites) {
+      if (site.classification === 'remote-write') {
+        findings.push({ file: site.file, line: site.line, column: 1, message: 'unclassified executable GitHub invocation site' });
+      }
+    }
   }
   const repositoryRoots = [join(conductorRoot, '..', '..'), conductorRoot];
   const scanned = new Set<string>();

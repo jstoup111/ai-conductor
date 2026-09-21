@@ -73,4 +73,50 @@ describe('github-operation CLI', () => {
     expect(gh).toHaveBeenCalledTimes(1);
     expect(noConfirmationWrite.mock.calls[0]?.[0]).toContain('explicit-authorization-required');
   });
+
+  it('composes owned-worktree PR authority per request, refuses a foreign PR, and routes refs to guarded remote Git', async () => {
+    const writes: string[][] = [];
+    const git = vi.fn(async (args: string[]) => {
+      if (args.join(' ') === 'branch --show-current') return { stdout: 'feat/widget\n' };
+      if (args[0] === 'config') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
+      if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
+      throw new Error(`unexpected git read: ${args.join(' ')}`);
+    });
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
+      if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ number: 7 }) };
+      writes.push(args);
+      return { stdout: '' };
+    });
+    const pr = {
+      operation: 'pull-request.edit', repository: 'acme/widgets',
+      resource: { kind: 'pull-request', number: 7 }, context: { actor: 'alice', feature: 'widget' },
+      payload: { body: 'owned change' },
+    };
+    const foreign = { ...pr, resource: { kind: 'pull-request', number: 8 } };
+    const output = vi.fn();
+
+    const ownedExit = await dispatchGithubOperationCommand({ requestFile: '/owned.json' }, {
+      cwd: '/fixture', readRequest: readRequest(pr), gh, git, resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }), write: output,
+    });
+    expect(ownedExit, JSON.stringify(output.mock.calls)).toBe(0);
+    await expect(dispatchGithubOperationCommand({ requestFile: '/foreign.json' }, {
+      cwd: '/fixture', readRequest: readRequest(foreign), gh, git, resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }), write: output,
+    })).resolves.toBe(1);
+
+    const remoteGit = vi.fn(async () => ({ kind: 'executed' as const, targets: [] }));
+    await expect(dispatchGithubOperationCommand({ requestFile: '/push.json' }, {
+      cwd: '/fixture',
+      readRequest: readRequest({
+        operation: 'remote-ref.push', repository: 'acme/widgets',
+        resource: { kind: 'remote-ref', ref: 'refs/heads/feat/widget' },
+        context: { actor: 'alice', feature: 'widget' },
+      }),
+      gh, git, remoteGit, resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }), write: output,
+    })).resolves.toBe(0);
+
+    expect(writes).toContainEqual(['pr', 'edit', '7', '-R', 'acme/widgets', '--body', 'owned change']);
+    expect(remoteGit).toHaveBeenCalledOnce();
+  });
 });

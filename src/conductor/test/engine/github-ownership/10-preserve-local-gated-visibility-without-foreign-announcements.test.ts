@@ -13,6 +13,9 @@ import type {
   GithubOperationRunner,
 } from '../../../src/engine/github-operations.js';
 import type { GhRunner } from '../../../src/engine/tracker-client.js';
+import { createGuardedGithubOperationRunner } from '../../../src/engine/tracker-client.js';
+import { createGithubIntakeAuthorization } from '../../../src/engine/engineer/intake/github-issues.js';
+import { executeGithubOperation } from '../../../src/engine/github-operations.js';
 
 const CWD = '/fake/worktree';
 const PR_URL = 'https://github.com/acme/widgets/pull/47';
@@ -151,5 +154,39 @@ describe('gate write-back ownership', () => {
       ],
       rawMutationCalls: [],
     });
+  });
+
+  it('uses the daemon gate-writeback composition to authorize only an exclusively assigned source issue', async () => {
+    const writes: string[][] = [];
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
+      if (args[0] === 'issue' && args[1] === 'view') {
+        const number = args[2];
+        return { stdout: JSON.stringify({ assignees: [{ login: number === '18' ? 'alice' : 'bob' }] }) };
+      }
+      writes.push(args);
+      return { stdout: '' };
+    };
+    const operations = createGuardedGithubOperationRunner(gh, {
+      cwd: CWD,
+      intake: createGithubIntakeAuthorization({
+        gh,
+        cwd: CWD,
+        resolveActor: async () => ({ resolved: true, id: 'alice' }),
+      }),
+    });
+    const request = (number: number) => ({
+      operation: 'intake.issue.label.add', repository: 'acme/widgets',
+      resource: { kind: 'issue', number }, context: { actor: 'daemon-gate-writeback' },
+      payload: { label: 'owner-gated' },
+    });
+
+    await expect(executeGithubOperation(request(18), operations)).resolves.toMatchObject({ kind: 'executed' });
+    await expect(executeGithubOperation(request(19), operations)).resolves.toMatchObject({
+      kind: 'refused', reason: 'explicit-authorization-required',
+    });
+    expect(writes).toEqual([[
+      'api', '--method', 'POST', 'repos/acme/widgets/issues/18/labels', '-f', 'labels[]=owner-gated',
+    ]]);
   });
 });

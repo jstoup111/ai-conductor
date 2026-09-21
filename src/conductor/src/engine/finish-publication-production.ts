@@ -120,12 +120,14 @@ export interface ProductionReleaseReadinessObserverInput {
 export async function publishAcceptedBuildReviewRiskToRetainedPr(input: {
   prUrl: string;
   body: string;
+  /** A prior retained-PR projection may have changed the body before risk upsert. */
+  originalBody?: string;
   records: readonly BuildReviewDispositionRecord[];
   operations?: GithubOperationRunner;
 }): Promise<{ readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly message: string }> {
   const upserted = upsertBuildReviewAcceptedRisk(input.body, input.records);
   if (!upserted.ok) return upserted;
-  if (upserted.changed) {
+  if (upserted.changed || (input.originalBody !== undefined && upserted.body !== input.originalBody)) {
     const mutation = await mutateRetainedPullRequest({
       operations: input.operations,
       prUrl: input.prUrl,
@@ -395,17 +397,14 @@ export function createProductionFinishPublicationCoordinator(
       renderedReducedCoverage.section,
     );
     if (!reducedCoverageBody.ok) throw new Error(`accepted-risk projection: ${reducedCoverageBody.message}`);
-    const acceptedRiskBody = upsertBuildReviewAcceptedRisk(reducedCoverageBody.body, listed.records);
-    if (!acceptedRiskBody.ok) throw new Error(`accepted-risk projection: ${acceptedRiskBody.message}`);
-    if (acceptedRiskBody.body !== (typeof body === 'string' ? body : '')) {
-      const mutation = await mutateRetainedPullRequest({
-        operations,
-        prUrl,
-        operation: 'pull-request.edit',
-        payload: { body: acceptedRiskBody.body },
-      });
-      if (!mutation.ok) throw new Error(`accepted-risk projection: ${mutation.message}`);
-    }
+    const published = await publishAcceptedBuildReviewRiskToRetainedPr({
+      prUrl,
+      body: reducedCoverageBody.body,
+      originalBody: typeof body === 'string' ? body : '',
+      records: listed.records,
+      operations,
+    });
+    if (!published.ok) throw new Error(`accepted-risk projection: ${published.message}`);
   };
   const projectShipmentPlanDeclarationToRetainedPr = async (
     prUrl: string,

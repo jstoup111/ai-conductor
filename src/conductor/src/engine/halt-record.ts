@@ -7,6 +7,7 @@ import { resolveMainRepoRoot } from './park-marker.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import { makeProductionGh, makeProductionGit, type GhRunner, type GitRunner } from './pr-labels.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
+import type { GithubOperationEventEmitter } from './github-operations.js';
 
 /** Git-tracked records that let an operator inspect a feature halt from its branch. */
 export const HALT_RECORD_DIR = '.docs/halted';
@@ -41,6 +42,7 @@ export interface HaltRecordRemoteOptions {
   readonly mutation?: GithubMutationExecutionContext;
   readonly git?: GitRunner;
   readonly gh?: GhRunner;
+  readonly events?: GithubOperationEventEmitter;
 }
 
 /** Resolve a halt record's repository-relative path. */
@@ -193,6 +195,7 @@ export async function publishHaltRecord(
       config: (args) => git(args, { cwd: root }),
       runRemoteGit: git,
       mutation,
+      events: remote.events,
     },
   );
 }

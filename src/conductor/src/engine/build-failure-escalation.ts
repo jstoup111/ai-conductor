@@ -33,6 +33,7 @@ import {
   createGuardedGithubOperationRunner,
   type GithubMutationExecutionContext,
 } from './tracker-client.js';
+import type { GithubOperationEventEmitter } from './github-operations.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,7 @@ export interface EscalateBuildFailureOpts {
   /** Guarded remote-write seam; absent context refuses publication. */
   remoteGit?: typeof executeRemoteGit;
   remoteMutation?: GithubMutationExecutionContext;
+  events?: GithubOperationEventEmitter;
 }
 
 export interface EscalateBuildFailureResult {
@@ -163,6 +165,7 @@ export async function escalateBuildFailure(
         config: (args) => runGit(args, { cwd }),
         runRemoteGit: runGit,
         mutation,
+        events: opts.events,
       },
     );
     if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));

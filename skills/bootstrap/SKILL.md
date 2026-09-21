@@ -462,10 +462,11 @@ seed commit captures a scaffold that actually boots.
    - **Missing, and `gh` is authenticated** (`gh auth status` exits 0) — offer to
      create a GitHub repo and wire `origin` in one step. Confirm the repo name
      (default: the project directory name) and visibility (**private** by default):
-     ```bash
-     # Create a guarded shared-operation request for the private repository,
-     # then run: ai-conductor github-operation --request-file <request.json>
-     ```
+    ```json
+    {"operation":"repository.create","repository":"OWNER/REPOSITORY","resource":{"kind":"repository"},"context":{"actor":"OPERATOR"},"payload":{"title":"bootstrap","body":"private"}}
+    ```
+    Save that exact request as `request.json`, confirm the one-time prompt, then run
+    `ai-conductor github-operation --request-file request.json`.
      `--source=.` attaches `origin` to this repo without pushing yet.
    - **Missing, no `gh`** (or the user declines GitHub) — ask for a remote URL. If
      given: `git remote add origin <url>`. If the user has no remote yet, skip the
@@ -475,10 +476,10 @@ seed commit captures a scaffold that actually boots.
      the directory without prompting; otherwise skip remote + push (never block).
 
 4. **Push & set upstream** — only when an `origin` remote exists:
-   ```bash
-   # Submit the initial remote-ref push through ai-conductor github-operation
-   # using its guarded request file; do not invoke a raw remote write directly.
-   ```
+    ```json
+    {"operation":"remote-ref.push","repository":"OWNER/REPOSITORY","resource":{"kind":"remote-ref","ref":"refs/heads/main"},"context":{"actor":"OPERATOR","feature":"bootstrap"}}
+    ```
+    Save it as `push-request.json` and run `ai-conductor github-operation --request-file push-request.json`.
    `-u` records the upstream so later `git push`/`git pull` and `gh pr create` work
    without extra flags. If the push is **rejected** because the remote already has
    commits (the user pointed `origin` at a non-empty repo), do NOT force — stop and

@@ -195,6 +195,7 @@ export async function createShipDraftPublicationDependencies(input: {
       specBranch: input.branch,
       featureMarker,
       publication: 'initial',
+      target: { repository, kind: 'remote-ref', ref: `refs/heads/${input.branch}` },
     },
     dependencies: {
       resolveMachineOwner: async () => resolveDaemonOwner(

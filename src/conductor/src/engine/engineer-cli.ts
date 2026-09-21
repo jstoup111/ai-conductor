@@ -611,6 +611,7 @@ function initialSpecPublication(
       specBranch: branch,
       featureMarker,
       publication: 'initial' as const,
+      target: { repository, kind: 'remote-ref' as const, ref: `refs/heads/${branch}` },
     },
     dependencies: {
       resolveMachineOwner: async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, cwd),

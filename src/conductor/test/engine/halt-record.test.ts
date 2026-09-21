@@ -122,6 +122,7 @@ describe('halt record supersession', () => {
 
     await expect(supersedeHaltRecord(root, input.slug, 'operator resume')).resolves.toMatchObject({ kind: 'failed' });
   });
+
 });
 
 const scratchRoots: string[] = [];

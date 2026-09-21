@@ -90,6 +90,8 @@ export interface RealDepsConfig {
    */
   memoryProvider?: unknown;
   log?: (msg: string) => void;
+  /** Daemon-wide event spine for guarded maintenance refusals. */
+  events?: ConductorEventEmitter;
   /**
    * Echo `bin/setup`'s full output into the log on success (`daemon_verbose`).
    * Default false: a one-line summary instead. Failure output is unaffected.
@@ -260,6 +262,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
         projectRoot: opts.projectRoot,
         failureReason: opts.failureReason,
         log: opts.log ?? cfg.log,
+        events: cfg.events,
       });
     },
 

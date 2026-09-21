@@ -108,6 +108,7 @@ import { resolveHarnessVersion } from './engine/version-report.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
 import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh } from './engine/tracker-client.js';
+import { createGithubIntakeAuthorization } from './engine/engineer/intake/github-issues.js';
 import { resolveFeatureRemoteMutation } from './engine/remote-git-operations.js';
 import { createDaemonHaltPrOperations } from './engine/daemon-halt-pr-operations.js';
 import { GH_VERSION_FLOOR, probeGhVersion } from './engine/gh-version-floor.js';
@@ -1582,6 +1583,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     providerExecution: createProviderExecution,
     beginFeatureRun,
     memoryProvider,
+    events,
     log,
     verbose: config?.daemon_verbose ?? false,
     dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(config),
@@ -1726,7 +1728,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // network calls to GitHub.
   const gatedWritebackDeps = {
     cwd: projectRoot,
-    operations: createGuardedGithubOperationRunner(ownerGh, { cwd: projectRoot, events }),
+    operations: createGuardedGithubOperationRunner(ownerGh, {
+      cwd: projectRoot,
+      intake: createGithubIntakeAuthorization({ gh: ownerGh, cwd: projectRoot }),
+      events,
+    }),
     log,
     warnedSkips: new Set<string>(),
     verbose: config?.daemon_verbose ?? false,

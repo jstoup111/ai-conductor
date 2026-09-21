@@ -27,7 +27,7 @@ class CaptureStream extends Writable {
   }
 }
 
-function foreignOwnerContext() {
+function foreignOwnerContext(target = { repository: 'acme/owned', kind: 'issue' as const, number: 17 }) {
   return {
     provenance: {
       repository: 'acme/owned',
@@ -35,6 +35,7 @@ function foreignOwnerContext() {
       specBranch: 'spec/owned',
       featureMarker: '.docs/specs/owned.md',
       publication: 'initial' as const,
+      target,
     },
     dependencies: {
       resolveMachineOwner: async () => ({ resolved: true as const, id: 'alice' }),
@@ -212,7 +213,7 @@ describe('canonical GitHub ownership refusal event', () => {
         config: async () => ({ stdout: 'git@github.com:acme/owned.git\n' }),
         runRemoteGit: remoteWrite,
         events,
-        mutation: foreignOwnerContext(),
+        mutation: foreignOwnerContext({ repository: 'acme/owned', kind: 'remote-ref', ref: 'refs/heads/feature/owned' }),
       },
     )).resolves.toMatchObject({ kind: 'refused', reason: 'other-owner' });
 

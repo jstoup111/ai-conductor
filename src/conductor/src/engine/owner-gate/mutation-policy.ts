@@ -107,8 +107,12 @@ export async function authorizeGithubMutation(
   dependencies: GithubMutationAuthorizationDependencies,
 ): Promise<GithubMutationAuthorization> {
   const provenanceTarget = request.provenance.target;
+  const requiresExactTarget = request.target.kind === 'issue'
+    || request.target.kind === 'pull-request'
+    || request.target.kind === 'remote-ref';
   if (!githubTargetsMatch(request.target, targetInRepository(request.target, request.provenance.repository))
-    || (provenanceTarget !== undefined && !githubTargetsMatch(request.target, provenanceTarget))) {
+    || (requiresExactTarget && (provenanceTarget === undefined
+      || !githubTargetsMatch(request.target, provenanceTarget)))) {
     return refused(request, 'invalid-target');
   }
 

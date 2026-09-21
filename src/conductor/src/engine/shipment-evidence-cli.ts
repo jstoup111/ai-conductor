@@ -527,9 +527,14 @@ export function makeProductionRepairPublisher(input: {
 function mutationForRepositoryOperations(
   mutation: GithubMutationExecutionContext | undefined,
 ): GithubMutationExecutionContext | undefined {
-  if (mutation?.provenance.target?.kind !== 'remote-ref') return mutation;
-  const { target: _remoteTarget, ...provenance } = mutation.provenance;
-  return { provenance, dependencies: mutation.dependencies };
+  if (!mutation) return mutation;
+  return {
+    provenance: {
+      ...mutation.provenance,
+      target: { repository: mutation.provenance.repository, kind: 'repository' },
+    },
+    dependencies: mutation.dependencies,
+  };
 }
 
 async function requireRepairPublicationOperation(

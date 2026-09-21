@@ -147,6 +147,7 @@ export const GITHUB_OPERATION_REGISTRY = {
   'commit.status.create': { access: 'feature-write', targetKinds: ['repository'], payload: 'commit-status' },
   'label-definition.create': { access: 'shared-write', targetKinds: ['label-definition'], payload: 'label-definition' },
   'label-definition.update': { access: 'shared-write', targetKinds: ['label-definition'], payload: 'label-definition' },
+  'repository.create': { access: 'shared-write', targetKinds: ['repository'], payload: 'issue-create' },
   'remote-ref.push': { access: 'remote-ref-write', targetKinds: ['remote-ref'] },
   'remote-ref.delete': { access: 'remote-ref-write', targetKinds: ['remote-ref'] },
 } as const satisfies Readonly<Record<string, GithubOperationDefinition>>;

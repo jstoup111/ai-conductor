@@ -61,6 +61,7 @@ function request(overrides: Partial<GithubMutationAuthorizationRequest> = {}): G
       specBranch: 'spec/owned',
       featureMarker: '.docs/specs/owned.md',
       publication: 'initial',
+      target: { repository: 'acme/rocket', kind: 'issue', number: 17 },
     },
     ...overrides,
   };
@@ -82,6 +83,15 @@ describe('engine/owner-gate/mutation-policy — machine identity and committed f
       target: { repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/foreign' },
       provenance,
     }, {
+      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
+      provenanceDiscovery: { readCommittedRecords: async () => [ownedRecord('alice')] },
+    })).resolves.toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+  });
+
+  it('refuses an unbound provenance context for an existing resource', async () => {
+    await expect(authorizeGithubMutation(request({
+      provenance: { ...request().provenance, target: undefined },
+    }), {
       resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
       provenanceDiscovery: { readCommittedRecords: async () => [ownedRecord('alice')] },
     })).resolves.toMatchObject({ kind: 'refused', reason: 'invalid-target' });
@@ -224,7 +234,10 @@ describe('engine/owner-gate/mutation-policy — machine identity and committed f
         target: { repository: 'acme/satellite', kind: 'issue', number: 18 },
         provenance: { ...request().provenance, repository: 'acme/satellite', featureMarker: '.docs/specs/bob.md' },
       }),
-    ];
+    ].map((attempt) => ({
+      ...attempt,
+      provenance: { ...attempt.provenance, target: attempt.target },
+    }));
     const resolveMachineOwner = vi.fn()
       .mockResolvedValueOnce({ resolved: true as const, id: 'alice' })
       .mockResolvedValue({ resolved: true as const, id: 'bob' });

@@ -244,6 +244,14 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
       if (request.payload && 'description' in request.payload && typeof request.payload.description === 'string') args.push('--description', request.payload.description);
       return args;
     }
+    case 'repository.create': {
+      const payload = request.payload;
+      const visibility = payload && 'body' in payload && (payload.body === 'private' || payload.body === 'public')
+        ? payload.body
+        : undefined;
+      if (!visibility) throw new Error("Registered repository creation requires payload.body to be 'private' or 'public'.");
+      return ['repo', 'create', repository, `--${visibility}`, '--source', '.', '--remote', 'origin'];
+    }
     case 'remote-ref.push':
     case 'remote-ref.delete':
       throw new Error(`GitHub operation '${request.operation}' requires the remote-Git adapter, not gh.`);

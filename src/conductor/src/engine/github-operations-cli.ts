@@ -10,7 +10,16 @@ import {
 } from './github-operations.js';
 import type { InteractiveGithubOperationConfirmation } from './github-operation-approval.js';
 import { executeSharedGithubOperation } from './github-shared-operations.js';
-import { createGuardedGithubOperationRunner, makeProductionGh } from './tracker-client.js';
+import { createGithubIntakeAuthorization } from './engineer/intake/github-issues.js';
+import { executeRemoteGit, resolveFeatureRemoteMutation, type RemoteGitCommandRunner } from './remote-git-operations.js';
+import { makeProductionGit, type GitRunner } from './pr-labels.js';
+import type { OwnerResolution } from './owner-gate/identity.js';
+import {
+  createGuardedGithubOperationRunner,
+  makeProductionGh,
+  runTrackerRead,
+  type GithubMutationExecutionContext,
+} from './tracker-client.js';
 
 export interface GithubOperationCliCommand {
   readonly requestFile: string;
@@ -38,6 +47,11 @@ export interface GithubOperationCliInput {
   readonly cwd: string;
   readonly readRequest?: (path: string) => Promise<string>;
   readonly gh?: ReturnType<typeof makeProductionGh>;
+  /** Guarded remote transport and Git discovery are injectable for CLI composition tests. */
+  readonly git?: GitRunner;
+  readonly remoteGit?: typeof executeRemoteGit;
+  /** Test seam for the same fresh owner lookup used by production provenance. */
+  readonly resolveMachineOwner?: () => Promise<OwnerResolution>;
   /** Test seam; production always builds the canonical guarded runner below. */
   readonly runner?: GithubOperationRunner;
   /** Only an interactive callback can mint approval for one exact shared request. */
@@ -45,6 +59,51 @@ export interface GithubOperationCliInput {
   /** Existing event spine when this command runs inside a conductor process. */
   readonly events?: GithubOperationEventEmitter;
   readonly write?: (line: string) => void;
+}
+
+async function featureMutationForRequest(
+  request: import('./github-operations.js').GithubOperationRequest,
+  input: GithubOperationCliInput,
+  gh: ReturnType<typeof makeProductionGh>,
+  git: GitRunner,
+): Promise<GithubMutationExecutionContext | undefined> {
+  if (request.access === 'read' || request.access === 'intake-write' || request.access === 'shared-write') return undefined;
+  const { stdout } = await git(['branch', '--show-current'], { cwd: input.cwd });
+  const branch = stdout.trim();
+  if (!branch) return undefined;
+  const resolved = await resolveFeatureRemoteMutation({
+    cwd: input.cwd,
+    slug: request.context.feature ?? branch.replace(/^spec\//, ''),
+    branch,
+    git: async (args) => git(args, { cwd: input.cwd }),
+    gh,
+  });
+  if (!resolved) return undefined;
+  if (request.target.kind === 'pull-request') {
+    try {
+      const stdout = await runTrackerRead(
+        gh,
+        input.cwd,
+        'pull-request.read',
+        resolved.provenance.repository,
+        { kind: 'pull-request', number: request.target.number },
+        ['pr', 'view', branch, '-R', resolved.provenance.repository, '--json', 'number'],
+      );
+      if ((JSON.parse(stdout) as { number?: unknown }).number !== request.target.number) return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  // Bind a newly composed capability to this request's canonical target.  The
+  // runner is created per request so an earlier decision cannot be reused for
+  // a different PR, issue, or ref.
+  return {
+    provenance: { ...resolved.provenance, target: request.target },
+    dependencies: {
+      ...resolved.dependencies,
+      ...(input.resolveMachineOwner === undefined ? {} : { resolveMachineOwner: input.resolveMachineOwner }),
+    },
+  };
 }
 
 function canonicalCliResult(result: GithubOperationResult, target: GithubOperationTarget): GithubOperationCliResult {
@@ -87,8 +146,34 @@ export async function dispatchGithubOperationCommand(
     return result.kind === 'executed' ? 0 : 1;
   }
 
-  const runner = input.runner ?? createGuardedGithubOperationRunner(input.gh ?? makeProductionGh(), {
+  const gh = input.gh ?? makeProductionGh();
+  const git = input.git ?? makeProductionGit();
+  if (decoded.request.access === 'remote-ref-write') {
+    const result = await (input.remoteGit ?? executeRemoteGit)(
+      decoded.request.operation === 'remote-ref.push'
+        ? ['push', 'origin', `HEAD:${decoded.request.target.kind === 'remote-ref' ? decoded.request.target.ref : ''}`]
+        : ['push', 'origin', '--delete', decoded.request.target.kind === 'remote-ref' ? decoded.request.target.ref.replace(/^refs\/heads\//, '') : ''],
+      {
+        cwd: input.cwd,
+        config: (args) => git(args, { cwd: input.cwd }),
+        runRemoteGit: git as RemoteGitCommandRunner,
+        mutation: await featureMutationForRequest(decoded.request, input, gh, git),
+        events: input.events,
+      },
+    );
+    const output: GithubOperationCliResult = result.kind === 'executed'
+      ? { kind: 'executed', operation: decoded.request.operation, target: decoded.request.target }
+      : result.kind === 'refused'
+        ? { kind: 'refused', operation: decoded.request.operation, target: decoded.request.target, reason: result.reason }
+        : { kind: 'failed', operation: decoded.request.operation, target: decoded.request.target, error: result.kind === 'failed' ? result.error : 'not a remote write' };
+    write(`${JSON.stringify(output)}\n`);
+    return result.kind === 'executed' ? 0 : 1;
+  }
+
+  const runner = input.runner ?? createGuardedGithubOperationRunner(gh, {
     cwd: input.cwd,
+    mutation: await featureMutationForRequest(decoded.request, input, gh, git),
+    intake: createGithubIntakeAuthorization({ gh, cwd: input.cwd }),
     events: input.events,
   });
   const result = await executeGithubOperation(
