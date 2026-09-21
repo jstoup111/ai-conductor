@@ -5,12 +5,15 @@ import {
   type GithubOperationTarget,
 } from './github-operations.js';
 import { authorizeGithubMutation } from './owner-gate/mutation-policy.js';
+import { hasExplicitGithubOperationApproval, type GithubExplicitOperationApproval } from './github-operation-approval.js';
+import { githubTargetsMatch } from './github-target.js';
 import {
   resolveRemoteGitTargets,
   type RemoteGitConfigReader,
   type RemoteGitDestination,
 } from './remote-git-targets.js';
 import type { GhRunner, GithubMutationExecutionContext } from './tracker-client.js';
+import type { GithubOperationRequest } from './github-operations.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 
@@ -27,6 +30,15 @@ export interface RemoteGitOperationDependencies {
   readonly runRemoteGit: RemoteGitCommandRunner;
   /** Missing provenance is a refusal, never permission to fall back to raw Git. */
   readonly mutation?: GithubMutationExecutionContext;
+  /**
+   * Exact interactive approval for a first publication with no feature record.
+   * This is intentionally an alternative to feature provenance, never a
+   * repository-wide capability.
+   */
+  readonly explicitApproval?: {
+    readonly capability: GithubExplicitOperationApproval;
+    readonly request: GithubOperationRequest;
+  };
   /** Existing event spine; delivery remains best-effort after a refusal. */
   readonly events?: GithubOperationEventEmitter;
 }
@@ -146,7 +158,19 @@ export async function executeRemoteGit(
   if (resolution.kind === 'not-remote-write') return resolution;
   if (resolution.kind === 'refused') return resolution;
 
-  if (!dependencies.mutation) {
+  const explicitlyApproved = (destination: RemoteGitDestination): boolean => {
+    const approval = dependencies.explicitApproval;
+    if (!approval || approval.request.operation !== destination.operation) return false;
+    const target: GithubOperationTarget = {
+      repository: destination.repository,
+      kind: 'remote-ref',
+      ref: destination.ref,
+    };
+    return githubTargetsMatch(approval.request.target, target)
+      && hasExplicitGithubOperationApproval(approval.capability, approval.request);
+  };
+
+  if (!dependencies.mutation && !resolution.targets.every(explicitlyApproved)) {
     const target = resolution.targets[0];
     await emitRemoteGitRefusal(target, 'missing-provenance', dependencies);
     return { kind: 'refused', reason: 'missing-provenance', target };
@@ -155,6 +179,15 @@ export async function executeRemoteGit(
   // Deliberately authorize every exact ref before the single mutating command.
   // The policy resolves current identity and provenance afresh per target.
   for (const destination of resolution.targets) {
+    if (explicitlyApproved(destination)) continue;
+    const mutation = dependencies.mutation;
+    // The earlier missing-provenance check proves this only for the
+    // non-explicit path; keep the guard local so TypeScript and future edits
+    // cannot accidentally dereference absent feature context.
+    if (!mutation) {
+      await emitRemoteGitRefusal(destination, 'missing-provenance', dependencies);
+      return { kind: 'refused', reason: 'missing-provenance', target: destination };
+    }
     const decision = await authorizeGithubMutation({
       operation: destination.operation,
       target: {
@@ -162,8 +195,8 @@ export async function executeRemoteGit(
         kind: 'remote-ref',
         ref: destination.ref,
       },
-      provenance: dependencies.mutation.provenance,
-    }, dependencies.mutation.dependencies);
+      provenance: mutation.provenance,
+    }, mutation.dependencies);
     if (decision.kind === 'refused') {
       await emitRemoteGitRefusal(destination, decision.reason, dependencies);
       return { kind: 'refused', reason: decision.reason, target: destination };

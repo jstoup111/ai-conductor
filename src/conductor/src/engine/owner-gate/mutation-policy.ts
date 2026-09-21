@@ -95,6 +95,11 @@ function refused(
   });
 }
 
+/** A new PR has no PR identity yet; its repository target is the exact create target. */
+function isInitialPullRequestCreation(request: GithubMutationAuthorizationRequest): boolean {
+  return request.operation === 'pull-request.create' && request.target.kind === 'repository';
+}
+
 /**
  * Authorize one exact feature mutation from the operator's current machine
  * identity and its current, authoritative committed ownership record.
@@ -106,17 +111,16 @@ export async function authorizeGithubMutation(
   request: GithubMutationAuthorizationRequest,
   dependencies: GithubMutationAuthorizationDependencies,
 ): Promise<GithubMutationAuthorization> {
-  // A provenance target binds an exact resource only when it identifies the
-  // same resource kind. A feature branch therefore cannot publish a different
-  // branch, while its independently resolved PR and repository-level creation
-  // operations remain authorized in the owned repository.
+  // Provenance is an exact resource binding, not repository-wide authority.
+  // Cross-kind work must supply an independently resolved exact target (for
+  // example the CLI's branch-to-PR lookup); issue intake has its own D3 path.
   const provenanceTarget = request.provenance.target;
   if (!githubTargetsMatch(request.target, targetInRepository(request.target, request.provenance.repository))) {
     return refused(request, 'invalid-target');
   }
   if (provenanceTarget !== undefined
-    && provenanceTarget.kind === request.target.kind
-    && !githubTargetsMatch(request.target, provenanceTarget)) {
+    && !githubTargetsMatch(request.target, provenanceTarget)
+    && !isInitialPullRequestCreation(request)) {
     return refused(request, 'invalid-target');
   }
 

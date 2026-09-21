@@ -119,7 +119,10 @@ interface GithubOperationDefinition {
 /** Every operation admitted by this boundary is named here. */
 export const GITHUB_OPERATION_REGISTRY = {
   'issue.read': { access: 'read', targetKinds: ['issue'] },
-  'pull-request.read': { access: 'read', targetKinds: ['pull-request'] },
+  // Listing or observing a PR by branch starts with a repository-scoped
+  // discovery query; once a number is known, callers retain the exact PR
+  // target. Both forms remain within the same typed read operation.
+  'pull-request.read': { access: 'read', targetKinds: ['pull-request', 'repository'] },
   'repository.read': { access: 'read', targetKinds: ['repository'] },
   'issue.comment.create': { access: 'feature-write', targetKinds: ['issue'], payload: 'body' },
   'issue.comment.update': { access: 'feature-write', targetKinds: ['issue'], payload: 'comment-update' },

@@ -138,16 +138,24 @@ function interactiveConfirmation(value: unknown): value is InteractiveGithubOper
     && typeof (value as { confirm?: unknown }).confirm === 'function';
 }
 
-/** Only pre-spec intake and shared-resource writes may obtain this authority. */
+/**
+ * Only pre-spec intake, shared-resource, and initial-publication writes may
+ * obtain this authority. A remote-ref push reaches this path only when the
+ * CLI could not resolve owned feature provenance; the remote adapter checks
+ * the same opaque, exact-request capability again before transport.
+ */
 function requiresExplicitApproval(request: GithubOperationRequest): boolean {
-  return request.access === 'intake-write' || request.access === 'shared-write';
+  return request.access === 'intake-write'
+    || request.access === 'shared-write'
+    || (request.access === 'remote-ref-write' && request.operation === 'remote-ref.push');
 }
 
 /**
  * Present one canonical request to an interactive operator. A positive answer
  * mints one opaque capability; missing, declined, failed, or noninteractive
- * confirmation remains a typed refusal. Publication intent is intentionally
- * not an input and cannot become shared-resource authority.
+ * confirmation remains a typed refusal. Initial publication remains bound to
+ * the same actor, repository, ref, operation, and payload as every other
+ * approved request; it cannot become repository-wide authority.
  */
 export async function requestExplicitGithubOperationApproval(
   request: GithubOperationRequest,

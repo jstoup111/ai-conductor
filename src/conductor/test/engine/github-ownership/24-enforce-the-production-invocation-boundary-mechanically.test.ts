@@ -146,7 +146,7 @@ describe('GitHub invocation audit', () => {
     ]);
   });
 
-  it('does not exempt pr-labels: mutable aliases fail while literal reads remain admissible', () => {
+  it('does not exempt pr-labels: mutable aliases and unclassified literal reads fail', () => {
     const mutableAlias = [
       "import type { GhRunner } from './tracker-client.js';",
       'async function write(runGh: GhRunner) {',
@@ -167,7 +167,21 @@ describe('GitHub invocation audit', () => {
         message: 'direct injected GitHub mutation outside guarded adapter',
       }),
     ]);
-    expect(auditGithubInvocationSource('engine/pr-labels.ts', literalRead)).toEqual([]);
+    expect(auditGithubInvocationSource('engine/pr-labels.ts', literalRead)).toEqual([
+      expect.objectContaining({ line: 3, message: 'direct injected GitHub read outside guarded adapter' }),
+    ]);
+  });
+
+  it('does not let the intake-label workflow script inherit a whole-file read exception', () => {
+    const source = [
+      "import type { GhRunner } from '../src/engine/tracker-client.js';",
+      'async function bypass(gh: GhRunner) {',
+      "  await gh(['issue', 'view', '7', '-R', 'acme/app'], { cwd: '/tmp' });",
+      '}',
+    ].join('\n');
+    expect(auditGithubInvocationSource('scripts/intake-label-sync-apply.mts', source)).toEqual([
+      expect.objectContaining({ line: 3, message: 'direct injected GitHub read outside guarded adapter' }),
+    ]);
   });
 
   it('does not let migration or repair-publisher function names suppress raw writes', () => {

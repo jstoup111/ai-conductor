@@ -14,7 +14,7 @@
 import { parseSizeLabel, parsePriorityLabels } from '../../backlog-priority.js';
 import { parseSourceRef } from '../issue-ref.js';
 import { sanitizeIntakeText, type Redaction } from './sanitize.js';
-import { createGuardedGithubOperationRunner, type GhRunner } from '../../tracker-client.js';
+import { createGuardedGithubOperationRunner, runTrackerRead, type GhRunner } from '../../tracker-client.js';
 import {
   executeGithubIssueCreationTransaction,
   resolveGithubIssueCreationAuthority,
@@ -194,7 +194,14 @@ export function createIntakeFilingOperations(
 
       // This is discovery only. It identifies the foreign issue's database id
       // for GitHub's dependency API; it never grants a write to that issue.
-      const { stdout } = await gh(['api', `repos/${dependency.repository}/issues/${dependency.number}`], { cwd });
+      const stdout = await runTrackerRead(
+        gh,
+        cwd,
+        'issue.read',
+        dependency.repository,
+        { kind: 'issue', number: dependency.number },
+        ['api', `repos/${dependency.repository}/issues/${dependency.number}`],
+      );
       const id = (JSON.parse(stdout) as { id?: unknown }).id;
       if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1) {
         return { kind: 'refused', reason: 'invalid-target' };

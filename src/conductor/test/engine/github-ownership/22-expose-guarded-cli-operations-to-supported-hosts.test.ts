@@ -158,4 +158,73 @@ describe('github-operation CLI', () => {
     })).resolves.toBe(0);
     expect(git).toHaveBeenCalledWith(['push', 'origin', 'HEAD:refs/heads/feat/widget'], { cwd: '/fixture' });
   });
+
+  it('permits only an exact interactive initial-publication approval when no feature provenance exists', async () => {
+    const request = {
+      operation: 'remote-ref.push', repository: 'acme/widgets',
+      resource: { kind: 'remote-ref', ref: 'refs/heads/main' }, context: { actor: 'alice' },
+    };
+    const git = vi.fn(async (args: string[]) => {
+      if (args.join(' ') === 'branch --show-current') return { stdout: 'main\n' };
+      if (args[0] === 'config') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') throw new Error('empty remote');
+      throw new Error(`unexpected git command: ${args.join(' ')}`);
+    });
+    const remoteGit = vi.fn(async () => ({ kind: 'executed' as const, targets: [] }));
+    const confirmation = { mode: 'interactive' as const, confirm: vi.fn().mockResolvedValue(true) };
+
+    await expect(dispatchGithubOperationCommand({ requestFile: '/push.json' }, {
+      cwd: '/fixture', readRequest: readRequest(request), git, remoteGit, confirmation, write: vi.fn(),
+    })).resolves.toBe(0);
+    expect(remoteGit).toHaveBeenCalledOnce();
+    const remoteInvocation = remoteGit.mock.calls[0] as unknown as [string[], Record<string, unknown>];
+    expect(remoteInvocation[0]).toEqual(['push', 'origin', 'HEAD:refs/heads/main']);
+    expect(remoteInvocation[1]).toMatchObject({
+      explicitApproval: { request: expect.objectContaining({ operation: 'remote-ref.push', target: { repository: 'acme/widgets', kind: 'remote-ref', ref: 'refs/heads/main' } }) },
+    });
+
+    for (const denied of [undefined, { mode: 'interactive' as const, confirm: vi.fn().mockResolvedValue(false) }]) {
+      const rejectedRemote = vi.fn(async () => ({ kind: 'executed' as const, targets: [] }));
+      await expect(dispatchGithubOperationCommand({ requestFile: '/push.json' }, {
+        cwd: '/fixture', readRequest: readRequest(request), git, remoteGit: rejectedRemote, confirmation: denied, write: vi.fn(),
+      })).resolves.toBe(1);
+      expect(rejectedRemote).not.toHaveBeenCalled();
+    }
+
+    await expect(dispatchGithubOperationCommand({ requestFile: '/push.json' }, {
+      cwd: '/fixture',
+      readRequest: readRequest({ ...request, repository: 'acme/other' }),
+      git, confirmation, write: vi.fn(),
+    })).resolves.toBe(1);
+    expect(git.mock.calls.filter(([args]) => args[0] === 'push')).toEqual([]);
+  });
+
+  it('forwards exact interactive approval to intake authorization and refuses a declined request before mutation', async () => {
+    const request = {
+      operation: 'intake.issue.close', repository: 'acme/widgets',
+      resource: { kind: 'issue', number: 7 }, context: { actor: 'alice' },
+    };
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'issue' && args[1] === 'view') return { stdout: JSON.stringify({ assignees: [] }) };
+      return { stdout: '' };
+    });
+    const confirmation = { mode: 'interactive' as const, confirm: vi.fn().mockResolvedValue(true) };
+    await expect(dispatchGithubOperationCommand({ requestFile: '/issue.json' }, {
+      cwd: '/fixture', readRequest: readRequest(request), gh, confirmation,
+      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }), write: vi.fn(),
+    })).resolves.toBe(0);
+    expect(confirmation.confirm).toHaveBeenCalledOnce();
+    expect(gh).toHaveBeenLastCalledWith(['issue', 'close', '7', '-R', 'acme/widgets'], { cwd: '/fixture' });
+
+    const refusedGh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'issue' && args[1] === 'view') return { stdout: JSON.stringify({ assignees: [] }) };
+      return { stdout: '' };
+    });
+    await expect(dispatchGithubOperationCommand({ requestFile: '/issue.json' }, {
+      cwd: '/fixture', readRequest: readRequest(request), gh: refusedGh,
+      confirmation: { mode: 'interactive', confirm: vi.fn().mockResolvedValue(false) },
+      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }), write: vi.fn(),
+    })).resolves.toBe(1);
+    expect(refusedGh.mock.calls.filter(([args]) => args[0] === 'issue' && args[1] === 'close')).toEqual([]);
+  });
 });

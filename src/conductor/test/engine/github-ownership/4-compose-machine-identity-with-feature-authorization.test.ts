@@ -88,6 +88,32 @@ describe('engine/owner-gate/mutation-policy — machine identity and committed f
     })).resolves.toMatchObject({ kind: 'refused', reason: 'invalid-target' });
   });
 
+  it('refuses cross-kind issue and PR mutations from a feature ref before provenance can become repository authority', async () => {
+    const provenance = {
+      ...request().provenance,
+      target: { repository: 'acme/rocket', kind: 'remote-ref' as const, ref: 'refs/heads/spec/owned' },
+    };
+    const provenanceDiscovery = { readCommittedRecords: vi.fn(async () => [ownedRecord('alice')]) };
+    const dependencies = {
+      resolveMachineOwner: async () => ({ resolved: true as const, id: 'alice' }),
+      provenanceDiscovery,
+    };
+
+    for (const denied of [
+      request({ provenance }),
+      request({
+        operation: 'pull-request.edit',
+        target: { repository: 'acme/rocket', kind: 'pull-request', number: 17 },
+        provenance,
+      }),
+    ]) {
+      await expect(authorizeGithubMutation(denied, dependencies)).resolves.toMatchObject({
+        kind: 'refused', reason: 'invalid-target', target: denied.target,
+      });
+    }
+    expect(provenanceDiscovery.readCommittedRecords).not.toHaveBeenCalled();
+  });
+
   it('permits an unbound provenance context when the canonical target is in the owned repository', async () => {
     await expect(authorizeGithubMutation(request({
       provenance: { ...request().provenance, target: undefined },

@@ -477,10 +477,12 @@ seed commit captures a scaffold that actually boots.
 
 4. **Push & set upstream** — only when an `origin` remote exists:
     ```json
-    {"operation":"remote-ref.push","repository":"OWNER/REPOSITORY","resource":{"kind":"remote-ref","ref":"refs/heads/main"},"context":{"actor":"OPERATOR","feature":"bootstrap"}}
+    {"operation":"remote-ref.push","repository":"OWNER/REPOSITORY","resource":{"kind":"remote-ref","ref":"refs/heads/main"},"context":{"actor":"OPERATOR"}}
     ```
-    Save it as `push-request.json` and run `ai-conductor github-operation --request-file push-request.json`.
-   `-u` records the upstream so later `git push`/`git pull` and `gh pr create` work
+    Save it as `push-request.json`, confirm the one-time initial-publication prompt,
+    and run `ai-conductor github-operation --request-file push-request.json`. After it
+    succeeds, run `git branch --set-upstream-to=origin/main`.
+   This records the upstream so later `git push`/`git pull` and `gh pr create` work
    without extra flags. If the push is **rejected** because the remote already has
    commits (the user pointed `origin` at a non-empty repo), do NOT force — stop and
    surface it for the user to reconcile.

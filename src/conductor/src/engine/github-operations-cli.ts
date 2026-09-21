@@ -8,7 +8,10 @@ import {
   type GithubOperationRunner,
   type GithubOperationTarget,
 } from './github-operations.js';
-import type { InteractiveGithubOperationConfirmation } from './github-operation-approval.js';
+import {
+  requestExplicitGithubOperationApproval,
+  type InteractiveGithubOperationConfirmation,
+} from './github-operation-approval.js';
 import { executeSharedGithubOperation } from './github-shared-operations.js';
 import { createGithubIntakeAuthorization } from './engineer/intake/github-issues.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation, type RemoteGitCommandRunner } from './remote-git-operations.js';
@@ -98,7 +101,12 @@ async function featureMutationForRequest(
     // The resolved feature branch is the only remote-ref capability this CLI
     // composition can supply.  The mutation policy compares it to the
     // requested destination before the remote transport is invoked.
-    provenance: resolved.provenance,
+    provenance: request.target.kind === 'pull-request'
+      // The branch-to-PR lookup above independently resolved this exact PR.
+      // Preserve that binding for the policy instead of letting a ref grant
+      // repository-wide PR authority.
+      ? { ...resolved.provenance, target: request.target }
+      : resolved.provenance,
     dependencies: {
       ...resolved.dependencies,
       ...(input.resolveMachineOwner === undefined ? {} : { resolveMachineOwner: input.resolveMachineOwner }),
@@ -149,6 +157,20 @@ export async function dispatchGithubOperationCommand(
   const gh = input.gh ?? makeProductionGh();
   const git = input.git ?? makeProductionGit();
   if (decoded.request.access === 'remote-ref-write') {
+    const mutation = await featureMutationForRequest(decoded.request, input, gh, git);
+    const approval = mutation === undefined && decoded.request.operation === 'remote-ref.push'
+      ? await requestExplicitGithubOperationApproval(decoded.request, input.confirmation)
+      : undefined;
+    if (approval?.kind === 'refused') {
+      const output: GithubOperationCliResult = {
+        kind: 'refused',
+        operation: decoded.request.operation,
+        target: decoded.request.target,
+        reason: approval.reason,
+      };
+      write(`${JSON.stringify(output)}\n`);
+      return 1;
+    }
     const result = await (input.remoteGit ?? executeRemoteGit)(
       decoded.request.operation === 'remote-ref.push'
         ? ['push', 'origin', `HEAD:${decoded.request.target.kind === 'remote-ref' ? decoded.request.target.ref : ''}`]
@@ -157,7 +179,10 @@ export async function dispatchGithubOperationCommand(
         cwd: input.cwd,
         config: (args) => git(args, { cwd: input.cwd }),
         runRemoteGit: git as RemoteGitCommandRunner,
-        mutation: await featureMutationForRequest(decoded.request, input, gh, git),
+        mutation,
+        ...(approval?.kind === 'approved'
+          ? { explicitApproval: { capability: approval.capability, request: decoded.request } }
+          : {}),
         events: input.events,
       },
     );
@@ -173,7 +198,7 @@ export async function dispatchGithubOperationCommand(
   const runner = input.runner ?? createGuardedGithubOperationRunner(gh, {
     cwd: input.cwd,
     mutation: await featureMutationForRequest(decoded.request, input, gh, git),
-    intake: createGithubIntakeAuthorization({ gh, cwd: input.cwd }),
+    intake: createGithubIntakeAuthorization({ gh, cwd: input.cwd, confirmation: input.confirmation }),
     events: input.events,
   });
   const result = await executeGithubOperation(

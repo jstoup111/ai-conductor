@@ -33,6 +33,7 @@ import {
   type GithubOperationRefusalReason,
 } from '../github-operations.js';
 import { executeRemoteGit, type RemoteGitOperationDependencies } from '../remote-git-operations.js';
+import { runTrackerRead } from '../tracker-client.js';
 
 // ─── Public types ──────────────────────────────────────────────────────────────
 
@@ -143,12 +144,23 @@ function createPayload(branch: string, args: readonly string[]): { title: string
 
 async function readCreatedPrUrl(
   runner: CommandRunner,
+  repository: string,
   branch: string,
   cwd: string,
 ): Promise<string | undefined> {
-  const response = await runner(['pr', 'view', branch, '--json', 'url'], { cwd });
+  const stdout = await runTrackerRead(
+    async (args, opts) => {
+      const response = await runner(args, opts);
+      return { stdout: response.stdout };
+    },
+    cwd,
+    'pull-request.read',
+    repository,
+    { kind: 'repository' },
+    ['pr', 'view', branch, '--json', 'url'],
+  );
   try {
-    const url = (JSON.parse(response.stdout || '{}') as { url?: unknown }).url;
+    const url = (JSON.parse(stdout || '{}') as { url?: unknown }).url;
     return typeof url === 'string' && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(url) ? url : undefined;
   } catch {
     return undefined;
@@ -220,7 +232,7 @@ export async function openSpecPr(
   if (created.kind === 'partial') throw new Error('openSpecPr: PR creation returned an invalid partial result');
   const url = created.target.kind === 'pull-request'
     ? `https://github.com/${created.target.repository}/pull/${created.target.number}`
-    : await readCreatedPrUrl(runner, branch, cwd);
+    : await readCreatedPrUrl(runner, deps.publication.repository, branch, cwd);
   if (!url) throw new Error(`openSpecPr: guarded PR creation did not identify a URL for branch "${branch}".`);
 
   // 3. Record the (project, feature) authored key durably.

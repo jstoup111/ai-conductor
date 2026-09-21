@@ -464,6 +464,7 @@ export interface IntakeTrackerClient extends TrackerClient {
  * advisory-label-strip flow) can detect "issue not found" specifically. */
 export class GhRunnerError extends Error {
   readonly argv: string[];
+  readonly cause: unknown;
   readonly stderr?: string;
   readonly exitCode?: number;
   readonly status?: number;
@@ -479,6 +480,7 @@ export class GhRunnerError extends Error {
     );
     this.name = 'GhRunnerError';
     this.argv = argv;
+    this.cause = cause;
     this.stderr = stderr;
     this.exitCode = typeof causeErr?.code === 'number' ? causeErr.code : undefined;
     if (is404) {

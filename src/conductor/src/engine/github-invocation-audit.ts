@@ -18,10 +18,43 @@ export interface GithubInvocationAuditSite {
   readonly classification: 'approved-adapter' | 'local-git' | 'remote-write';
 }
 
-/** Non-operator executable surfaces retained by an explicit inventory entry. */
+/**
+ * Non-operator executable surfaces retain only named site classifications.
+ * Empty inventories are intentional: the file is still fully audited, so a
+ * later direct invocation cannot inherit a whole-file exception.
+ */
 export const SHIPPED_GITHUB_INVOCATION_SITE_INVENTORY = {
-  'scripts/intake-label-sync-apply.mts': 'ci-workflow-actions-token',
+  'scripts/intake-label-sync-apply.mts': [] as const,
 } as const;
+
+/**
+ * Pre-boundary read sites are explicit, line-addressed compatibility entries.
+ * They are not a file-level escape hatch: a new literal invocation, including
+ * one in these files, has no entry and fails the audit. New code must use
+ * `runTrackerRead` instead of extending this historical inventory.
+ */
+const APPROVED_DIRECT_GITHUB_READ_SITES = new Set([
+  'engine/backlog-priority.ts:323', 'engine/blocker-resolver.ts:162',
+  'engine/conductor.ts:5643', 'engine/conductor.ts:6568', 'engine/conductor.ts:6618',
+  'engine/conductor.ts:6649', 'engine/conductor.ts:6751', 'engine/conductor.ts:6783', 'engine/conductor.ts:6838',
+  'engine/documentation-delivery.ts:68', 'engine/engineer/intake/delivery-guard.ts:31',
+  'engine/engineer/intake/delivery-guard.ts:79', 'engine/engineer/issue-dep-migration.ts:258',
+  'engine/engineer/issue-dep-migration.ts:289', 'engine/engineer/issue-ref.ts:116',
+  'engine/engineer/release-metadata-inject.ts:146', 'engine/finish-publication-production.ts:385',
+  'engine/finish-publication-production.ts:416', 'engine/finish-publication-production.ts:455',
+  'engine/finish-publication-production.ts:524', 'engine/halt-pr-rehabilitation.ts:153',
+  'engine/halt-pr-rehabilitation.ts:206', 'engine/halt-pr-rehabilitation.ts:299',
+  'engine/halt-pr-rehabilitation.ts:343', 'engine/halt-pr-rehabilitation.ts:441',
+  'engine/halt-pr-rehabilitation.ts:570', 'engine/halt-pr-rehabilitation.ts:610',
+  'engine/halt-pr-rehabilitation.ts:760', 'engine/halt-pr-rehabilitation.ts:868',
+  'engine/halt-pr-rehabilitation.ts:939', 'engine/merged-pr-guard.ts:43',
+  'engine/owner-gate/identity.ts:70', 'engine/park-reconciliation.ts:290',
+  'engine/pr-criticality-labels.ts:84', 'engine/pr-labels.ts:527', 'engine/pr-labels.ts:633',
+  'engine/pr-labels.ts:665', 'engine/pr-labels.ts:697', 'engine/pr-labels.ts:822',
+  'engine/pr-labels.ts:907', 'engine/pr-labels.ts:1008', 'engine/ship-draft-pr.ts:277',
+  'engine/shipment-audit.ts:744', 'engine/shipment-evidence.ts:92', 'engine/tracker-client.ts:723',
+  'intake-backfill-cli.ts:40',
+]);
 
 const PROCESS_MODULE = /^(?:node:)?child_process$/;
 const EXECA_MODULE = /^execa(?:\/|$)/;
@@ -288,6 +321,10 @@ function guardedMutationRunnerCall(file: string, node: ts.CallExpression): boole
   return isCanonicalGuardedAdapterTransportCall(file, node);
 }
 
+function approvedDirectGithubReadCall(file: string, parsed: ts.SourceFile, node: ts.CallExpression): boolean {
+  return APPROVED_DIRECT_GITHUB_READ_SITES.has(`${normalizedFile(file)}:${location(parsed, node).line}`);
+}
+
 /** Dynamic runner forwarding is safe only inside an explicitly typed read or adapter seam. */
 function guardedDynamicRunnerForwarding(file: string, node: ts.CallExpression): boolean {
   const owner = enclosingFunctionName(node);
@@ -442,6 +479,8 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
         const directHead = argvHead(node.arguments[0]);
         if (directHead && ghMutation(directHead) && !guardedMutationRunnerCall(file, node)) {
           findings.push(report(parsed, file, node, 'direct injected GitHub mutation outside guarded adapter'));
+        } else if (directHead && !guardedMutationRunnerCall(file, node) && !approvedDirectGithubReadCall(file, parsed, node)) {
+          findings.push(report(parsed, file, node, 'direct injected GitHub read outside guarded adapter'));
         } else if (!directArgs && !directHead
           && !readOnlyRunnerForwarding(node, readOnlyFactories)
           && !guardedDynamicRunnerForwarding(file, node)) {
@@ -506,9 +545,6 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
     // CI workflow scripts are classified explicitly; every other executable
     // site is audited as an operator-harness invocation.
     const sites = findGithubInvocationSites(runtimeFile, source);
-    if (runtimeFile in SHIPPED_GITHUB_INVOCATION_SITE_INVENTORY) {
-      continue;
-    }
     findings.push(...auditGithubInvocationSource(runtimeFile, source));
     for (const site of sites) {
       if (site.classification === 'remote-write') {

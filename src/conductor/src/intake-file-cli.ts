@@ -16,7 +16,7 @@ import { createInterface } from 'node:readline/promises';
 import { makeProductionGh } from './engine/pr-labels.js';
 import { createIntakeFilingOperations, fileIntakeIssue, type FileIntakeIssueOpts } from './engine/engineer/intake/file-issue.js';
 import { describeRedactions } from './engine/engineer/intake/sanitize.js';
-import type { GhRunner } from './engine/tracker-client.js';
+import { runTrackerRead, type GhRunner } from './engine/tracker-client.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 
 function parseArgs(argv: string[]): FileIntakeIssueOpts | null {
@@ -76,7 +76,17 @@ async function resolveFilingRepository(gh: GhRunner, requested: string | undefin
     if (!explicit) throw new Error(`invalid --repo "${requested}" (expected owner/repo)`);
     return explicit;
   }
-  const { stdout } = await gh(['repo', 'view', '--json', 'nameWithOwner'], { cwd });
+  // `gh repo view` resolves the checkout-selected repository. It still enters
+  // the closed read interface; the placeholder is only the typed discovery
+  // subject and is replaced by GitHub's canonical nameWithOwner response.
+  const stdout = await runTrackerRead(
+    gh,
+    cwd,
+    'repository.read',
+    process.env.GITHUB_REPOSITORY ?? 'github/current-repository',
+    { kind: 'repository' },
+    ['repo', 'view', '--json', 'nameWithOwner'],
+  );
   const discovered = canonicalRepository((JSON.parse(stdout || '{}') as { nameWithOwner?: unknown }).nameWithOwner);
   if (!discovered) throw new Error('could not resolve the filing repository; pass --repo owner/repo');
   return discovered;

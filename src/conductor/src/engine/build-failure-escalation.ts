@@ -180,7 +180,15 @@ export async function escalateBuildFailure(
   // each individual write.
   let operations = Object.assign(
     (args: string[], options: { cwd: string }) => runGh(args, options),
-    createGuardedGithubOperationRunner(runGh, { cwd, mutation }),
+    createGuardedGithubOperationRunner(runGh, {
+      cwd,
+      ...(mutation === undefined ? {} : {
+        mutation: {
+          ...mutation,
+          provenance: { ...mutation.provenance, target: { repository: mutation.provenance.repository, kind: 'repository' } },
+        },
+      }),
+    }),
   );
 
   // ── Step 4: find or create a draft PR ────────────────────────────────────

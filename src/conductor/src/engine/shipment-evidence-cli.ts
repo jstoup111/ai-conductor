@@ -27,6 +27,8 @@ import {
   type GhRunner,
   type GitRunner,
 } from './pr-labels.js';
+import { runTrackerRead } from './tracker-client.js';
+import { GhRunnerError } from './tracker-client.js';
 import { specHash } from './shipped-record.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import {
@@ -347,7 +349,10 @@ async function readMergedDate(
   cwd: string,
   pullRequestUrl: string,
 ): Promise<string | null> {
-  const { stdout } = await runGh(['pr', 'view', pullRequestUrl, '--json', 'mergedAt'], { cwd });
+  const stdout = await runTrackerRead(
+    runGh, cwd, 'pull-request.read', repositoryForPullRequest(pullRequestUrl), { kind: 'repository' },
+    ['pr', 'view', pullRequestUrl, '--json', 'mergedAt'],
+  );
   const mergedAt = (JSON.parse(stdout) as { mergedAt?: unknown }).mergedAt;
   return typeof mergedAt === 'string' && /^\d{4}-\d{2}-\d{2}/.test(mergedAt)
     ? mergedAt.slice(0, 'YYYY-MM-DD'.length)
@@ -363,7 +368,10 @@ async function resolveRepairRepository(
   cwd: string,
 ): Promise<string | undefined> {
   if (process.env.GITHUB_REPOSITORY) return process.env.GITHUB_REPOSITORY;
-  const { stdout } = await runGh(['repo', 'view', '--json', 'nameWithOwner'], { cwd });
+  const stdout = await runTrackerRead(
+    runGh, cwd, 'repository.read', 'github/current-repository', { kind: 'repository' },
+    ['repo', 'view', '--json', 'nameWithOwner'],
+  );
   const nameWithOwner = (JSON.parse(stdout) as { nameWithOwner?: unknown }).nameWithOwner;
   return typeof nameWithOwner === 'string' && nameWithOwner ? nameWithOwner : undefined;
 }
@@ -439,9 +447,9 @@ export function makeProductionRepairPublisher(input: {
   return {
     ensureRepairBranch: async ({ branch, base }) => {
       const remoteBranch = `refs/heads/${branch}`;
-      const exists = await input.runGh(
+      const exists = await runTrackerRead(
+        input.runGh, input.cwd, 'repository.read', repo, { kind: 'repository' },
         ['api', `repos/${repo}/git/ref/heads/${branch}`],
-        { cwd: input.cwd },
       ).then(() => true, () => false);
       await input.runGit(['fetch', 'origin', exists ? remoteBranch : base], { cwd: input.cwd });
       const startPoint = exists ? `origin/${branch}` : `origin/${base}`;
@@ -474,11 +482,11 @@ export function makeProductionRepairPublisher(input: {
       return { headSha: (await input.runGit(['rev-parse', 'HEAD'], { cwd: input.cwd })).stdout.trim() };
     },
     findOrCreateRepairPullRequest: async ({ branch, base, identity }) => {
-      const existing = await input.runGh(
+      const existing = await runTrackerRead(
+        input.runGh, input.cwd, 'pull-request.read', repo, { kind: 'repository' },
         ['pr', 'list', '--head', branch, '--base', base, '--state', 'open', '--json', 'url', '--limit', '1'],
-        { cwd: input.cwd },
       );
-      const existingUrl = (JSON.parse(existing.stdout) as Array<{ url?: unknown }>)[0]?.url;
+      const existingUrl = (JSON.parse(existing) as Array<{ url?: unknown }>)[0]?.url;
       if (typeof existingUrl === 'string') {
         return readRepairPullRequestHead(input.runGh, input.cwd, existingUrl);
       }
@@ -494,11 +502,11 @@ export function makeProductionRepairPublisher(input: {
           base,
         },
       });
-      const observed = await input.runGh(
+      const observed = await runTrackerRead(
+        input.runGh, input.cwd, 'pull-request.read', repo, { kind: 'repository' },
         ['pr', 'list', '--head', branch, '--base', base, '--state', 'open', '--json', 'url', '--limit', '1'],
-        { cwd: input.cwd },
       );
-      const observedUrl = (JSON.parse(observed.stdout) as Array<{ url?: unknown }>)[0]?.url;
+      const observedUrl = (JSON.parse(observed) as Array<{ url?: unknown }>)[0]?.url;
       if (typeof observedUrl !== 'string') {
         throw new Error(`repair PR creation did not yield an open PR for ${branch}`);
       }
@@ -561,9 +569,9 @@ async function readRepairPullRequestHead(
   cwd: string,
   pullRequestUrl: string,
 ): Promise<{ url: string; headSha: string }> {
-  const { stdout } = await runGh(
+  const stdout = await runTrackerRead(
+    runGh, cwd, 'pull-request.read', repositoryForPullRequest(pullRequestUrl), { kind: 'repository' },
     ['pr', 'view', pullRequestUrl, '--json', 'url,headRefOid'],
-    { cwd },
   );
   const value = JSON.parse(stdout) as { url?: unknown; headRefOid?: unknown };
   if (value.url !== pullRequestUrl || typeof value.headRefOid !== 'string' || !value.headRefOid) {
@@ -577,10 +585,18 @@ async function readPullRequestEvidenceMetadata(
   cwd: string,
   pr: string,
 ): Promise<PullRequestEvidenceMetadata> {
-  const { stdout } = await runGh(
-    ['pr', 'view', pr, '--json', 'url,body,files,headRefOid'],
-    { cwd },
-  );
+  let stdout: string;
+  try {
+    stdout = await runTrackerRead(
+      runGh, cwd, 'pull-request.read', repositoryForPullRequest(pr), { kind: 'repository' },
+      ['pr', 'view', pr, '--json', 'url,body,files,headRefOid'],
+    );
+  } catch (error) {
+    // Preserve the caller's established error wording while the read itself
+    // stays on the canonical guarded interface.
+    if (error instanceof GhRunnerError && error.cause instanceof Error) throw error.cause;
+    throw error;
+  }
   const value = JSON.parse(stdout) as {
     url?: unknown;
     body?: unknown;
@@ -598,6 +614,12 @@ async function readPullRequestEvidenceMetadata(
       : [],
     headRefOid: typeof value.headRefOid === 'string' ? value.headRefOid : '',
   };
+}
+
+/** Read calls still carry a canonical repository target when their CLI handle is a PR URL. */
+function repositoryForPullRequest(value: string): string {
+  const match = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/\d+\/?$/.exec(value);
+  return match ? `${match[1]!.toLowerCase()}/${match[2]!.toLowerCase()}` : process.env.GITHUB_REPOSITORY ?? 'github/current-repository';
 }
 
 /**

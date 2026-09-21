@@ -631,7 +631,16 @@ function initialSpecPublication(
       runRemoteGit: git,
       mutation,
     },
-    operations: createGuardedGithubOperationRunner(gh, { cwd, mutation }),
+    // The branch provenance authorizes the push only. PR creation is an
+    // independently bound repository target; later presentation rebinds the
+    // created PR identity rather than reusing this repository context.
+    operations: createGuardedGithubOperationRunner(gh, {
+      cwd,
+      mutation: {
+        ...mutation,
+        provenance: { ...mutation.provenance, target: { repository, kind: 'repository' } },
+      },
+    }),
   };
 }
 
