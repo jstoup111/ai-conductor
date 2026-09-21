@@ -1,5 +1,6 @@
 // Covers: task:13
 import { describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 
 import {
   composeReviewLaunchMounts,
@@ -8,9 +9,12 @@ import {
   type BuildReviewRuntimeHost,
 } from '../../src/engine/build-review-containment.js';
 import {
+  acquireReviewScratchHome,
   resolveReviewScratchHome,
   resolveScratchHome,
+  type ReviewScratchFs,
 } from '../../src/engine/self-host/provider-scratch.js';
+import { copySelectedCodexLogin } from '../../src/execution/codex-self-host-auth.js';
 
 const PATHS = {
   frozenSource: '/review/frozen-source', policyMaterial: '/review/policy',
@@ -54,6 +58,17 @@ function bindTriples(args: readonly string[]): Array<readonly [string, string, s
   return triples;
 }
 
+function secureReviewScratchFs(overrides: Partial<ReviewScratchFs> = {}): ReviewScratchFs {
+  return {
+    mkdir: async () => {},
+    lstat: async () => ({ uid: process.getuid?.() ?? 0, mode: 0o700, isSymbolicLink: () => false, isDirectory: () => true }),
+    mkdtemp: async (prefix) => `${prefix}unique`,
+    chmod: async () => {},
+    rm: async () => {},
+    ...overrides,
+  };
+}
+
 describe('engine/build-review-containment', () => {
   it('derives review bookkeeping outside the protected candidate checkout', () => {
     const options: {
@@ -76,6 +91,67 @@ describe('engine/build-review-containment', () => {
 
     expect(resolveReviewScratchHome({ ...options, memberId: 'security' })).toContain('/review-security');
     expect(resolveReviewScratchHome(options)).not.toEqual(resolveScratchHome(options));
+  });
+
+  it('refuses a pre-created review scratch root that is group-accessible before creating a leaf', async () => {
+    const mkdtemp = vi.fn(async (prefix: string) => `${prefix}unexpected`);
+    await expect(acquireReviewScratchHome({
+      worktreeRoot: '/worktree', runId: 'run-7', attempt: 2, provider: 'codex',
+      fs: secureReviewScratchFs({
+        lstat: async () => ({ uid: process.getuid?.() ?? 0, mode: 0o750, isSymbolicLink: () => false, isDirectory: () => true }),
+        mkdtemp,
+      }),
+    })).rejects.toThrow('group/world-accessible');
+    expect(mkdtemp).not.toHaveBeenCalled();
+  });
+
+  it('refuses a symlinked review scratch root before creating a leaf', async () => {
+    const mkdtemp = vi.fn(async (prefix: string) => `${prefix}unexpected`);
+    await expect(acquireReviewScratchHome({
+      worktreeRoot: '/worktree', runId: 'run-7', attempt: 2, provider: 'codex',
+      fs: secureReviewScratchFs({
+        lstat: async () => ({ uid: process.getuid?.() ?? 0, mode: 0o700, isSymbolicLink: () => true, isDirectory: () => false }),
+        mkdtemp,
+      }),
+    })).rejects.toThrow('is a symlink');
+    expect(mkdtemp).not.toHaveBeenCalled();
+  });
+
+  it('creates unique 0700 review leaves and seeds auth.json with mode 0600', async () => {
+    let sequence = 0;
+    let lstatCalls = 0;
+    const rootModes: number[] = [];
+    const leafModes: Array<readonly [string, number]> = [];
+    const authModes: Array<readonly [string, number]> = [];
+    const removed: string[] = [];
+    const fs = secureReviewScratchFs({
+      mkdir: async (_path, options) => { rootModes.push(options.mode!); },
+      lstat: async () => {
+        if (++lstatCalls === 1) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        return { uid: process.getuid?.() ?? 0, mode: 0o700, isSymbolicLink: () => false, isDirectory: () => true };
+      },
+      mkdtemp: async (prefix) => `${prefix}${++sequence}`,
+      chmod: async (path, mode) => { leafModes.push([path, mode]); },
+      rm: async (path) => { removed.push(path); },
+    });
+    const seed = async (home: string) => copySelectedCodexLogin({
+      source: '/prepared/auth.json', homeDir: join(home, 'codex-home'),
+      fs: {
+        mkdir: async () => {}, copyFile: async () => {},
+        chmod: async (path, mode) => { authModes.push([path, mode]); },
+      },
+    });
+    const options = { worktreeRoot: '/worktree', runId: 'run-7', attempt: 2, provider: 'codex' as const, fs, seed };
+    const first = await acquireReviewScratchHome(options);
+    const second = await acquireReviewScratchHome(options);
+
+    expect(first.home).not.toBe(second.home);
+    expect(rootModes).toEqual([0o700]);
+    expect(leafModes).toEqual([[first.home, 0o700], [second.home, 0o700]]);
+    expect(authModes).toEqual([[join(first.home, 'codex-home', 'auth.json'), 0o600], [join(second.home, 'codex-home', 'auth.json'), 0o600]]);
+    await first.release();
+    await second.release();
+    expect(removed).toEqual([first.home, second.home]);
   });
 
   it('proves read-only review access through the production process boundary', async () => {

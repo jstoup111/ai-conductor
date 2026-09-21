@@ -24,18 +24,27 @@ describe('provider scratch homes', () => {
   it('acquires and idempotently releases external review scratch', async () => {
     const created: string[] = [];
     const removed: string[] = [];
+    let leaf = 0;
+    let lstatCalls = 0;
     const lease = await acquireReviewScratchHome({
       worktreeRoot: '/worktree', runId: 'review-run', attempt: 2, provider: 'codex', memberId: 'quality',
       fs: {
         mkdir: async (path) => { created.push(path); },
+        lstat: async () => {
+          if (++lstatCalls === 1) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+          return { uid: process.getuid?.() ?? 0, mode: 0o700, isSymbolicLink: () => false, isDirectory: () => true };
+        },
+        mkdtemp: async (prefix) => `${prefix}${++leaf}`,
+        chmod: async () => {},
         rm: async (path) => { removed.push(path); },
       },
     });
 
-    expect(lease.home).toContain('/ai-conductor-build-review/review-run/2-codex/review-quality');
+    expect(lease.home).toContain('/ai-conductor-build-review/review-run/2-codex/review-quality/review-');
     await lease.release();
     await lease.release();
-    expect(created).toEqual([lease.home]);
+    expect(created).toHaveLength(1);
+    expect(lease.home).toContain(created[0]!);
     expect(removed).toEqual([lease.home]);
   });
 
@@ -43,7 +52,13 @@ describe('provider scratch homes', () => {
     const seeded: string[] = [];
     const lease = await acquireReviewScratchHome({
       worktreeRoot: '/worktree', runId: 'review-auth', attempt: 1, provider: 'codex',
-      fs: { mkdir: async () => {}, rm: async () => {} },
+      fs: {
+        mkdir: async () => {},
+        lstat: async () => ({ uid: process.getuid?.() ?? 0, mode: 0o700, isSymbolicLink: () => false, isDirectory: () => true }),
+        mkdtemp: async (prefix) => `${prefix}unique`,
+        chmod: async () => {},
+        rm: async () => {},
+      },
       seed: async (home) => { seeded.push(join(home, 'codex-home', 'auth.json')); },
     });
 

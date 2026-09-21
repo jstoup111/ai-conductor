@@ -562,17 +562,80 @@ export interface ReviewScratchLease {
   release(): Promise<void>;
 }
 
+/** Filesystem boundary for externally located review scratch credentials. */
+export interface ReviewScratchFs {
+  mkdir(path: string, options: { recursive: true; mode?: number }): Promise<void>;
+  lstat(path: string): Promise<{
+    readonly uid: number;
+    readonly mode: number;
+    isSymbolicLink(): boolean;
+    isDirectory(): boolean;
+  }>;
+  mkdtemp(prefix: string): Promise<string>;
+  chmod(path: string, mode: number): Promise<void>;
+  rm(path: string, options: { recursive: true; force: true }): Promise<void>;
+}
+
+type ReviewScratchEntry = Awaited<ReturnType<ReviewScratchFs['lstat']>>;
+
+const realReviewScratchFs: ReviewScratchFs = {
+  mkdir: (path, options) => fsp.mkdir(path, options).then(() => {}),
+  lstat: (path) => fsp.lstat(path),
+  mkdtemp: (prefix) => fsp.mkdtemp(prefix),
+  chmod: (path, mode) => fsp.chmod(path, mode),
+  rm: (path, options) => fsp.rm(path, options),
+};
+
+function verifyReviewScratchRoot(root: string, entry: ReviewScratchEntry): void {
+  const uid = process.getuid?.();
+  if (uid === undefined) throw new Error('cannot verify review scratch root ownership: current uid is unavailable');
+  if (entry.isSymbolicLink()) throw new Error(`review scratch root is a symlink: ${root}`);
+  if (!entry.isDirectory()) throw new Error(`review scratch root is not a directory: ${root}`);
+  if (entry.uid !== uid) throw new Error(`review scratch root is not owned by the current uid: ${root}`);
+  if ((entry.mode & 0o077) !== 0) throw new Error(`review scratch root is group/world-accessible: ${root}`);
+}
+
+function isMissingPath(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT';
+}
+
+async function ensureVerifiedReviewScratchRoot(root: string, fs: ReviewScratchFs): Promise<void> {
+  try {
+    verifyReviewScratchRoot(root, await fs.lstat(root));
+    return;
+  } catch (error) {
+    if (!isMissingPath(error)) {
+      if (error instanceof Error && error.message.startsWith('review scratch root')) throw error;
+      throw new Error(`cannot verify review scratch root ${root}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  try {
+    verifyReviewScratchRoot(root, await fs.lstat(root));
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('review scratch root')) throw error;
+    throw new Error(`cannot verify review scratch root ${root}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export async function acquireReviewScratchHome(
   options: ResolveScratchHomeOptions & {
-    readonly fs?: Pick<ScratchFs, 'mkdir' | 'rm'>;
+    readonly fs?: ReviewScratchFs;
     /** Seed provider-private read-only credentials before review containment starts. */
     readonly seed?: (home: string) => Promise<void>;
   },
 ): Promise<ReviewScratchLease> {
-  const fs = options.fs ?? realScratchFs;
-  const home = resolveReviewScratchHome(options);
-  await fs.mkdir(home, { recursive: true });
-  await options.seed?.(home);
+  const fs = options.fs ?? realReviewScratchFs;
+  const root = resolveReviewScratchHome(options);
+  await ensureVerifiedReviewScratchRoot(root, fs);
+  const home = await fs.mkdtemp(join(root, 'review-'));
+  await fs.chmod(home, 0o700);
+  try {
+    await options.seed?.(home);
+  } catch (error) {
+    await fs.rm(home, { recursive: true, force: true });
+    throw error;
+  }
   let released = false;
   return {
     home,
