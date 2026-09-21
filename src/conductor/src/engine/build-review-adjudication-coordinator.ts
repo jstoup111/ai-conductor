@@ -547,7 +547,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // The context, not the judge, selects the case contract.  A custom lap's
   // case-v2 consistency decision and admission evidence cannot be shed by
   // answering in the older mode, whose acts would all be authorized.
-  if (judgement.mode !== freshContext.context.mode) {
+  // The stricter v2 answer to a v1 request keeps every gate and stays valid.
+  if (freshContext.context.mode === 'case-v2' && judgement.mode !== 'case-v2') {
     return failUnlessAccepted(`remediation judgement mode mismatch: requested ${freshContext.context.mode}, received ${String(judgement.mode)}`, { settleAbsentAttempted: true });
   }
   // Do not reconcile or effect a provider result after a late exact operator
