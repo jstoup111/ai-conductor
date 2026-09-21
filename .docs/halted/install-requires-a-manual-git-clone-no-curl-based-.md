@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-21T19:11:48.968Z
 Slug: install-requires-a-manual-git-clone-no-curl-based-
 Class: needs-human
 Halting step: prd_audit
