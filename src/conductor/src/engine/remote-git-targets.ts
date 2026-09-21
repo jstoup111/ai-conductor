@@ -129,10 +129,15 @@ function destinationForRefspec(refspec: string, deleteRequested: boolean): { ref
   };
 }
 
+/**
+ * Resolve the actual endpoint Git will use for a named remote write.  `get-url
+ * --push` applies both a remote's pushurl and pushInsteadOf rewrites, unlike a
+ * direct read of the fetch URL configuration.
+ */
 async function repositoryForRemote(remote: string, gitConfig: RemoteGitConfigReader): Promise<string | undefined> {
   let output: { readonly stdout: string };
   try {
-    output = await gitConfig(['config', '--get', `remote.${remote}.url`]);
+    output = await gitConfig(['remote', 'get-url', '--push', remote]);
   } catch {
     return undefined;
   }

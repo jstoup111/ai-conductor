@@ -22,7 +22,7 @@ describe('engine/remote-git-targets — explicit remote destination sets', () =>
         { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/two' },
       ],
     });
-    expect(gitConfig).toHaveBeenCalledWith(['config', '--get', 'remote.origin.url']);
+    expect(gitConfig).toHaveBeenCalledWith(['remote', 'get-url', '--push', 'origin']);
   });
 
   it('normalizes named remote deletion to its explicit destination ref', async () => {

@@ -51,6 +51,13 @@ function configReader(url = 'git@github.com:acme/rocket.git') {
   return vi.fn().mockResolvedValue({ stdout: `${url}\n` });
 }
 
+/** Keep the local bare transport fixture while modeling Git's public push endpoint. */
+function fixtureConfigReader(repository: string) {
+  return async (args: string[]) => args.join(' ') === 'remote get-url --push origin'
+    ? { stdout: 'git@github.com:acme/rocket.git\n' }
+    : runGit(repository, args);
+}
+
 function mutationContext(resolveMachineOwner = vi.fn().mockResolvedValue({ resolved: true as const, id: 'alice' })) {
   return {
     provenance: {
@@ -90,6 +97,57 @@ describe('engine/remote-git-operations — guarded remote writes', () => {
     expect(runRemoteGit).not.toHaveBeenCalled();
   });
 
+  it('refuses a named remote whose push URL is foreign before the remote write', async () => {
+    const config = vi.fn().mockImplementation(async (args: string[]) => {
+      if (args[0] === 'config') return { stdout: 'git@github.com:acme/rocket.git\n' };
+      if (args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:foreign/rocket.git\n' };
+      throw new Error(`unexpected git read: ${args.join(' ')}`);
+    });
+    const runRemoteGit = vi.fn().mockResolvedValue({ stdout: '' });
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feature/owned'],
+      { cwd: '/fixture', config, runRemoteGit, mutation: mutationContext() },
+    )).resolves.toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+    expect(config).toHaveBeenCalledWith(['remote', 'get-url', '--push', 'origin']);
+    expect(runRemoteGit).not.toHaveBeenCalled();
+  });
+
+  it('refuses a foreign pushInsteadOf rewrite before the remote write', async () => {
+    const config = vi.fn().mockImplementation(async (args: string[]) => {
+      if (args[0] === 'config') return { stdout: 'git@github.com:acme/rocket.git\n' };
+      if (args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:foreign/rocket.git\n' };
+      throw new Error(`unexpected git read: ${args.join(' ')}`);
+    });
+    const runRemoteGit = vi.fn().mockResolvedValue({ stdout: '' });
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feature/owned'],
+      { cwd: '/fixture', config, runRemoteGit, mutation: mutationContext() },
+    )).resolves.toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+    expect(config).toHaveBeenCalledWith(['remote', 'get-url', '--push', 'origin']);
+    expect(runRemoteGit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['empty', ''],
+    ['unparseable', 'not a GitHub remote'],
+  ])('fails closed when the push URL output is %s', async (_caseName, pushUrl) => {
+    const config = vi.fn().mockImplementation(async (args: string[]) => {
+      if (args[0] === 'config') return { stdout: 'git@github.com:acme/rocket.git\n' };
+      if (args.join(' ') === 'remote get-url --push origin') return { stdout: `${pushUrl}\n` };
+      throw new Error(`unexpected git read: ${args.join(' ')}`);
+    });
+    const runRemoteGit = vi.fn().mockResolvedValue({ stdout: '' });
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feature/owned'],
+      { cwd: '/fixture', config, runRemoteGit, mutation: mutationContext() },
+    )).resolves.toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+    expect(config).toHaveBeenCalledWith(['remote', 'get-url', '--push', 'origin']);
+    expect(runRemoteGit).not.toHaveBeenCalled();
+  });
+
   it('authorizes the complete explicit push set before exactly one injected remote write', async () => {
     const config = configReader();
     const runRemoteGit = vi.fn().mockResolvedValue({ stdout: '' });
@@ -125,7 +183,7 @@ describe('engine/remote-git-operations — guarded remote writes', () => {
       ['push', 'origin', 'HEAD:refs/heads/feature/one', 'HEAD:refs/heads/feature/two'],
       {
         cwd: repository,
-        config: (args) => runGit(repository, args),
+        config: fixtureConfigReader(repository),
         runRemoteGit: (args, options) => runGit(options.cwd, args),
         mutation: mutationContext(),
       },
@@ -187,7 +245,7 @@ describe('engine/remote-git-operations — guarded remote writes', () => {
       ['push', 'origin', '--delete', 'refs/heads/feature/obsolete'],
       {
         cwd: repository,
-        config: (args) => runGit(repository, args),
+        config: fixtureConfigReader(repository),
         runRemoteGit: (args, options) => runGit(options.cwd, args),
         mutation: mutationContext(),
       },
