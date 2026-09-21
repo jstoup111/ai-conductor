@@ -131,9 +131,11 @@ describe('DefaultStepRunner', () => {
         rubrics: { testQuality: { enabled: false } },
         custom_rubrics: {
           portable: { enabled: true, skill: 'portable-policy', question: 'Check the frozen input.', llm_provider: 'claude' },
+          portableTwo: { enabled: true, skill: 'portable-two-policy', question: 'Check the frozen input again.', llm_provider: 'claude' },
         },
       },
     } as HarnessConfig, CLAUDE_POLICY);
+    expect(config.catalog).toHaveLength(2);
     const inputs = {
       sourceSnapshot: {
         digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main',
@@ -153,7 +155,7 @@ describe('DefaultStepRunner', () => {
       }).runRubricBuildReview(inputs, config, 'S');
 
       expect(settle.mock.calls.map(([memberId]) => memberId).sort()).toEqual(
-        config.catalog.map((entry) => entry.id).sort(),
+        ['portable', 'portableTwo'],
       );
     } finally {
       await rm(projectDir, { recursive: true, force: true });
