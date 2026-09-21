@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Covers: task:1, task:2, task:3, task:4
+# Covers: task:1, task:2, task:3, task:4, task:5
 # Exercises the public bootstrap entry point with only a local stand-in source.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -30,6 +30,12 @@ chmod +x "$SOURCE_REPO/bin/install" "$SOURCE_REPO/bin/update"
 git -C "$SOURCE_REPO" add bin
 git -C "$SOURCE_REPO" commit -qm fixture
 git -C "$SOURCE_REPO" branch -M stable
+STABLE_HEAD=$(git -C "$SOURCE_REPO" rev-parse stable)
+MAIN_HEAD=$(git -C "$SOURCE_REPO" commit-tree "$STABLE_HEAD^{tree}" -p "$STABLE_HEAD" -m main)
+git -C "$SOURCE_REPO" update-ref refs/heads/main "$MAIN_HEAD"
+git -C "$SOURCE_REPO" tag v0.1.0 "$STABLE_HEAD"
+git -C "$SOURCE_REPO" tag v0.2.0 "$MAIN_HEAD"
+git -C "$SOURCE_REPO" tag nightly "$MAIN_HEAD"
 
 PREREQUISITE_PATH="$TMP_ROOT/prerequisites"
 mkdir -p "$PREREQUISITE_PATH"
@@ -88,8 +94,12 @@ run_case() {
   : > "$RECORD"
 
   set +e
-  env -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_CREDENTIAL_HELPER \
-    HOME="$case_home" PATH="${CASE_PATH-$PATH}" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" INSTALLER_EXIT_CODE="${INSTALLER_EXIT_CODE-0}" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
+  local channel_env=()
+  if [ "${CASE_CHANNEL_SET-}" = true ]; then
+    channel_env=("AI_CONDUCTOR_CHANNEL=$CASE_CHANNEL")
+  fi
+  env -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_CREDENTIAL_HELPER -u AI_CONDUCTOR_CHANNEL \
+    "${channel_env[@]}" HOME="$case_home" PATH="${CASE_PATH-$PATH}" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" INSTALLER_EXIT_CODE="${INSTALLER_EXIT_CODE-0}" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
   CASE_STATUS=$?
   set -e
   CASE_STDOUT=$(< "$case_stdout")
@@ -234,6 +244,86 @@ if [ "$CASE_STATUS" -eq 23 ] && [ -d "$CASE_HOME/.ai-conductor/harness/.git" ]; 
   echo 'PASS bootstrap mirrors the installer exit status'
 else
   failures+="installer status was not mirrored: exit $CASE_STATUS; $CASE_OUTPUT\\n"
+fi
+
+CASE_PATH="$FRESH_INSTALL_PATH" run_case default-channel
+if [ "$CASE_STATUS" -eq 0 ] \
+  && [ "$(git -C "$CASE_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$STABLE_HEAD" ] \
+  && [ "$(< "$RECORD")" = "$CASE_HOME/.ai-conductor/harness|./bin/install||" ]; then
+  echo 'PASS default channel acquires stable without forwarding a channel'
+else
+  failures+="default channel did not acquire stable without a channel argument: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
+fi
+
+CASE_PATH="$FRESH_INSTALL_PATH" run_case option-stable --channel stable
+if [ "$CASE_STATUS" -eq 0 ] \
+  && [ "$(git -C "$CASE_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$STABLE_HEAD" ] \
+  && [ "$(< "$RECORD")" = "$CASE_HOME/.ai-conductor/harness|./bin/install|--channel stable|" ]; then
+  echo 'PASS stable option selects stable and reaches the installer'
+else
+  failures+="stable option did not select stable: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
+fi
+
+CASE_CHANNEL_SET=true CASE_CHANNEL=stable CASE_PATH="$FRESH_INSTALL_PATH" run_case environment-stable
+if [ "$CASE_STATUS" -eq 0 ] \
+  && [ "$(git -C "$CASE_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$STABLE_HEAD" ] \
+  && [ "$(< "$RECORD")" = "$CASE_HOME/.ai-conductor/harness|./bin/install||stable" ]; then
+  echo 'PASS stable environment selects stable and reaches the installer'
+else
+  failures+="stable environment did not select stable: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
+fi
+
+CASE_PATH="$FRESH_INSTALL_PATH" run_case option-main --channel main
+if [ "$CASE_STATUS" -eq 0 ] \
+  && [ "$(git -C "$CASE_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$MAIN_HEAD" ] \
+  && [ "$(< "$RECORD")" = "$CASE_HOME/.ai-conductor/harness|./bin/install|--channel main|" ]; then
+  echo 'PASS main option selects main and reaches the installer'
+else
+  failures+="main option did not select main: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
+fi
+
+CASE_CHANNEL_SET=true CASE_CHANNEL=main CASE_PATH="$FRESH_INSTALL_PATH" run_case environment-main
+if [ "$CASE_STATUS" -eq 0 ] \
+  && [ "$(git -C "$CASE_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$MAIN_HEAD" ] \
+  && [ "$(< "$RECORD")" = "$CASE_HOME/.ai-conductor/harness|./bin/install||main" ]; then
+  echo 'PASS main environment selects main and reaches the installer'
+else
+  failures+="main environment did not select main: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
+fi
+
+CASE_PATH="$FRESH_INSTALL_PATH" run_case option-tagged --channel tagged
+if [ "$CASE_STATUS" -eq 0 ] \
+  && [ "$(git -C "$CASE_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$MAIN_HEAD" ] \
+  && [ "$(< "$RECORD")" = "$CASE_HOME/.ai-conductor/harness|./bin/install|--channel tagged|" ]; then
+  echo 'PASS tagged option selects the latest release tag and reaches the installer'
+else
+  failures+="tagged option did not select the latest release tag: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
+fi
+
+CASE_CHANNEL_SET=true CASE_CHANNEL=tagged CASE_PATH="$FRESH_INSTALL_PATH" run_case environment-tagged
+if [ "$CASE_STATUS" -eq 0 ] \
+  && [ "$(git -C "$CASE_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$MAIN_HEAD" ] \
+  && [ "$(< "$RECORD")" = "$CASE_HOME/.ai-conductor/harness|./bin/install||tagged" ]; then
+  echo 'PASS tagged environment selects the latest release tag and reaches the installer'
+else
+  failures+="tagged environment did not select the latest release tag: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
+fi
+
+CASE_CHANNEL_SET=true CASE_CHANNEL=main CASE_PATH="$FRESH_INSTALL_PATH" run_case option-precedence --channel stable
+if [ "$CASE_STATUS" -eq 0 ] \
+  && [ "$(git -C "$CASE_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$STABLE_HEAD" ] \
+  && [ "$(< "$RECORD")" = "$CASE_HOME/.ai-conductor/harness|./bin/install|--channel stable|main" ]; then
+  echo 'PASS channel option overrides the environment channel'
+else
+  failures+="channel option did not override the environment: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
+fi
+
+CASE_PATH="$FRESH_INSTALL_PATH" run_case providers-forwarded --providers claude,codex
+if [ "$CASE_STATUS" -eq 0 ] \
+  && [ "$(< "$RECORD")" = "$CASE_HOME/.ai-conductor/harness|./bin/install|--providers claude,codex|" ]; then
+  echo 'PASS providers option reaches the installer verbatim'
+else
+  failures+="providers option did not reach the installer verbatim: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
 fi
 
 BOOTSTRAP_HOME="$TMP_ROOT/home-bootstrap-parity"

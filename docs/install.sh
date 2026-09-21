@@ -90,6 +90,51 @@ check_prerequisites() {
   [ -z "$missing" ] || fail "missing prerequisites: $missing"
 }
 
+resolve_ref() {
+  if [ -n "$CHANNEL_OPTION" ]; then
+    CHANNEL=$CHANNEL_OPTION
+  elif [ -n "${AI_CONDUCTOR_CHANNEL+x}" ]; then
+    CHANNEL=$AI_CONDUCTOR_CHANNEL
+  else
+    CHANNEL=stable
+  fi
+
+  case "$CHANNEL" in
+    stable|main)
+      REF=$CHANNEL
+      ;;
+    tagged)
+      tags=$(git ls-remote --tags --refs "$REPO_URL") || fail "could not list release tags at $REPO_URL"
+      REF=''
+      latest_major=0
+      latest_minor=0
+      latest_patch=0
+      while IFS='	' read -r _ tag_ref; do
+        tag=${tag_ref#refs/tags/}
+        case "$tag" in v*.*.*) ;; *) continue ;; esac
+        old_ifs=$IFS
+        IFS=.
+        set -- ${tag#v}
+        IFS=$old_ifs
+        [ "$#" -eq 3 ] || continue
+        case "$1:$2:$3" in *[!0-9:]*|'') continue ;; esac
+        if [ -z "$REF" ] \
+          || [ "$1" -gt "$latest_major" ] \
+          || { [ "$1" -eq "$latest_major" ] && [ "$2" -gt "$latest_minor" ]; } \
+          || { [ "$1" -eq "$latest_major" ] && [ "$2" -eq "$latest_minor" ] && [ "$3" -gt "$latest_patch" ]; }; then
+          REF=$tag
+          latest_major=$1
+          latest_minor=$2
+          latest_patch=$3
+        fi
+      done <<EOF
+$tags
+EOF
+      [ -n "$REF" ] || fail "no vX.Y.Z release tag found at $REPO_URL"
+      ;;
+  esac
+}
+
 announce() {
   printf '%s\n' "Installing ai-conductor in $TARGET (channel $REF) from $REPO_URL"
 }
@@ -117,9 +162,12 @@ run_installer() {
 main() {
   REPO_URL=${AI_CONDUCTOR_REPO_URL:-https://github.com/jstoup111/ai-conductor.git}
   TARGET="$HOME/.ai-conductor/harness"
-  REF=stable
   parse_args "$@"
+  if [ -n "${AI_CONDUCTOR_CHANNEL+x}" ]; then
+    validate_channel "$AI_CONDUCTOR_CHANNEL"
+  fi
   check_prerequisites
+  resolve_ref
   announce
   acquire
   run_installer
