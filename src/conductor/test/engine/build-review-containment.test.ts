@@ -371,6 +371,33 @@ describe('engine/build-review-containment', () => {
     expect(() => composeReviewLaunchMounts(result.profile, SELF_HOST_WRAP, runtimeHost)).toThrow(/proved/);
   });
 
+  it.each([
+    ['the operator home', '/home/op'],
+    ['a directory holding the operator home', '/home'],
+    ['a provider config directory directly under home', '/home/op/.claude'],
+    ['the filesystem root', '/'],
+  ])('refuses an installed policy package rooted at %s', async (_name, originalInstallation) => {
+    const runProcess = vi.fn(async () => ({ exitCode: 0, stderr: '', stdout: HEALTHY_PROBE.join('\n') }));
+    const result = await prepareBuildReviewContainment({
+      provider: 'claude', runtimeHost, runProcess,
+      paths: { ...PATHS, originalInstallation, installationWriteProbe: join(originalInstallation, 'sentinel') },
+    });
+
+    expect(result).toMatchObject({ kind: 'unsupported', reason: expect.stringMatching(/too broad/) });
+    expect(runProcess).not.toHaveBeenCalled();
+  });
+
+  it('refuses a checkout that would bind the operator home', async () => {
+    const runProcess = vi.fn(async () => ({ exitCode: 0, stderr: '', stdout: HEALTHY_PROBE.join('\n') }));
+    const result = await prepareBuildReviewContainment({
+      provider: 'claude', runtimeHost, runProcess,
+      paths: { ...PATHS, originalCheckout: '/home/op' },
+    });
+
+    expect(result).toMatchObject({ kind: 'unsupported', reason: expect.stringMatching(/too broad/) });
+    expect(runProcess).not.toHaveBeenCalled();
+  });
+
   it('refuses a host sentinel that an allowlisted root would expose', async () => {
     const runProcess = vi.fn(async () => ({ exitCode: 0, stderr: '', stdout: HEALTHY_PROBE.join('\n') }));
     const result = await prepareBuildReviewContainment({

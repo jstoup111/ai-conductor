@@ -182,6 +182,17 @@ const SYSTEM_RUNTIME_ROOTS = [
   '/run/systemd/resolve',
 ] as const;
 
+/**
+ * A bound review root that would carry the operator home into the sandbox. An
+ * installed policy package comes from provider/plugin metadata, so it is held
+ * to the stricter executable rule (never HOME's direct child, e.g. ~/.claude).
+ */
+function broadBoundRoot(paths: BuildReviewContainmentPaths, home: string): string | undefined {
+  if (isTooBroad(paths.originalInstallation, home)) return paths.originalInstallation;
+  return [paths.frozenSource, paths.frozenBaseline, paths.policyMaterial, paths.originalCheckout, paths.engineEvidence, paths.scratch]
+    .find((root) => root === sep || isWithin(root, home));
+}
+
 const liveRuntimeHost = (): BuildReviewRuntimeHost => ({
   execPath: process.execPath,
   pathEnv: process.env.PATH,
@@ -479,10 +490,14 @@ function interpretProbe(output: string): string | undefined {
 export async function prepareBuildReviewContainment(
   options: BuildReviewContainmentOptions,
 ): Promise<BuildReviewContainmentResult> {
+  const host = options.runtimeHost ?? liveRuntimeHost();
+  const broad = broadBoundRoot(options.paths, host.home);
+  if (broad !== undefined) {
+    return unsupported(options.provider, `review containment root ${broad} is too broad: binding it would expose the operator home or provider configuration`);
+  }
   if (!hasSafePaths(options.paths)) {
     return unsupported(options.provider, 'review containment paths must be absolute, candidate scratch must not be protected, and the host-state sentinel must lie outside every bound root');
   }
-  const host = options.runtimeHost ?? liveRuntimeHost();
   const runtimeMountArgs = deriveRuntimeMountArgs(options.provider, host);
   const reviewMountArgs = deriveReviewMountArgs(options.paths);
   const mountArgs = composeLaunchMounts(runtimeMountArgs, reviewMountArgs, options.launch ?? { executable: options.provider, args: [] }, host);
