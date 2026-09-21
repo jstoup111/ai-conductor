@@ -12,6 +12,7 @@ import {
   assertRealExecAllowed,
   createGithubTrackerClient,
   DEFAULT_ASSIGNED_ISSUES_LIMIT,
+  runTrackerRead,
   type GhRunner,
   type GithubMutationExecutionContext,
 } from '../src/engine/tracker-client.js';
@@ -363,6 +364,55 @@ describe('createGithubTrackerClient — read ops argv parity', () => {
 
     expect(calls[0]?.args).toContain('--limit');
     expect(calls[0]?.args[calls[0]?.args.indexOf('--limit') + 1]).toBe('45');
+  });
+});
+
+describe('runTrackerRead — closed argv binding', () => {
+  it.each([
+    ['issue edit', ['issue', 'edit', '7', '-R', 'acme/repo']],
+    ['API PATCH', ['api', '-X', 'PATCH', 'repos/acme/repo/issues/7']],
+    ['API field flag', ['api', 'repos/acme/repo/issues/7', '-f', 'title=changed']],
+  ])('refuses %s before the GhRunner receives it', async (_name, args) => {
+    const { runner, calls } = fakeRunner('{}');
+
+    await expect(runTrackerRead(
+      runner, '/worktree', 'issue.read', 'acme/repo', { kind: 'issue', number: 7 }, args,
+    )).rejects.toMatchObject({ operation: 'issue.read', reason: 'invalid-target' });
+
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses a declared read whose repository flag targets another repository', async () => {
+    const { runner, calls } = fakeRunner('{}');
+
+    await expect(runTrackerRead(
+      runner, '/worktree', 'issue.read', 'acme/repo', { kind: 'issue', number: 7 },
+      ['issue', 'view', '7', '-R', 'other/repo'],
+    )).rejects.toMatchObject({ operation: 'issue.read', reason: 'invalid-target' });
+
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses a declared read whose API path targets another repository', async () => {
+    const { runner, calls } = fakeRunner('{}');
+
+    await expect(runTrackerRead(
+      runner, '/worktree', 'issue.read', 'acme/repo', { kind: 'issue', number: 7 },
+      ['api', 'repos/other/repo/issues/7'],
+    )).rejects.toMatchObject({ operation: 'issue.read', reason: 'invalid-target' });
+
+    expect(calls).toEqual([]);
+  });
+
+  it('forwards a matching registered read argv unchanged', async () => {
+    const { runner, calls } = fakeRunner('{"state":"OPEN"}');
+    const args = ['issue', 'view', '7', '-R', 'acme/repo'];
+
+    await expect(runTrackerRead(
+      runner, '/worktree', 'issue.read', 'acme/repo', { kind: 'issue', number: 7 }, args,
+    )).resolves.toBe('{"state":"OPEN"}');
+
+    expect(calls).toEqual([{ args, opts: { cwd: '/worktree' } }]);
   });
 });
 

@@ -52,7 +52,7 @@ const APPROVED_DIRECT_GITHUB_READ_SITES = new Set([
   'engine/pr-criticality-labels.ts:84', 'engine/pr-labels.ts:527', 'engine/pr-labels.ts:633',
   'engine/pr-labels.ts:665', 'engine/pr-labels.ts:697', 'engine/pr-labels.ts:822',
   'engine/pr-labels.ts:907', 'engine/pr-labels.ts:1008', 'engine/ship-draft-pr.ts:298',
-  'engine/shipment-audit.ts:744', 'engine/shipment-evidence.ts:92', 'engine/tracker-client.ts:723',
+  'engine/shipment-audit.ts:744', 'engine/shipment-evidence.ts:92', 'engine/tracker-client.ts:797',
   'intake-backfill-cli.ts:40',
 ]);
 
@@ -325,12 +325,26 @@ function approvedDirectGithubReadCall(file: string, parsed: ts.SourceFile, node:
   return APPROVED_DIRECT_GITHUB_READ_SITES.has(`${normalizedFile(file)}:${location(parsed, node).line}`);
 }
 
+/** Every dynamic GhRunner forwarding exemption is bound to its real owner. */
+const GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS: Readonly<Record<
+  'runTrackerRead' | 'runTrackerIssueOperation' | 'graphqlPage' | 'guardedPrRunner',
+  readonly string[]
+>> = {
+  runTrackerRead: ['engine/tracker-client.ts'],
+  runTrackerIssueOperation: ['engine/tracker-client.ts'],
+  graphqlPage: ['engine/shipment-audit.ts'],
+  guardedPrRunner: ['engine/gate-writeback.ts', 'engine/pr-labels.ts'],
+};
+
 /** Dynamic runner forwarding is safe only inside an explicitly typed read or adapter seam. */
 function guardedDynamicRunnerForwarding(file: string, node: ts.CallExpression): boolean {
   const owner = enclosingFunctionName(node);
   if (isCanonicalGuardedAdapterTransportCall(file, node)) return true;
-  if (owner === 'runTrackerRead' || owner === 'graphqlPage' || owner === 'runTrackerIssueOperation') return true;
+  if (owner === 'runTrackerRead' || owner === 'graphqlPage' || owner === 'runTrackerIssueOperation') {
+    return GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS[owner].includes(normalizedFile(file));
+  }
   if (owner !== 'guardedPrRunner') return false;
+  if (!GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS.guardedPrRunner.includes(normalizedFile(file))) return false;
   const declaration = node.parent.parent;
   return ts.isVariableDeclaration(declaration)
     && ts.isIdentifier(declaration.name)

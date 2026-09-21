@@ -553,6 +553,79 @@ function pullRequestTargetFromUrl(url: string): { readonly repository: string; r
   return Number.isSafeInteger(number) ? { repository: match[1], number } : undefined;
 }
 
+type TrackerReadOperation = Extract<GithubOperationName, 'issue.read' | 'pull-request.read' | 'repository.read'>;
+
+/**
+ * The read boundary accepts the legacy argv variants needed by its typed read
+ * operations, but never treats argv itself as authority.  Keeping this map
+ * closed makes a new command shape an explicit registry decision rather than
+ * an accidental escape from the mutation guard.
+ */
+const TRACKER_READ_COMMANDS: Readonly<Record<TrackerReadOperation, readonly [string, string?][]>> = {
+  'issue.read': [['issue', 'view'], ['api']],
+  'pull-request.read': [['pr', 'view'], ['pr', 'list']],
+  'repository.read': [['api'], ['issue', 'list'], ['repo', 'view'], ['run', 'view']],
+};
+
+function argvHasReadCommand(operation: TrackerReadOperation, args: readonly string[]): boolean {
+  return TRACKER_READ_COMMANDS[operation].some(([command, subcommand]) => (
+    args[0] === command && (subcommand === undefined || args[1] === subcommand)
+  ));
+}
+
+function repositoryFlagsMatch(args: readonly string[], repository: string): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === '-R' || argument === '--repo') {
+      if (args[index + 1] !== repository) return false;
+      index += 1;
+    } else if (argument.startsWith('--repo=')) {
+      if (argument.slice('--repo='.length) !== repository) return false;
+    } else if (argument.startsWith('-R') && argument.length > 2) {
+      if (argument.slice(2) !== repository) return false;
+    }
+  }
+  return true;
+}
+
+function apiRepositoriesMatch(args: readonly string[], repository: string): boolean {
+  for (const argument of args) {
+    const match = /(?:^|\/)repos\/([^/\s]+\/[^/\s]+)(?:\/|$)/.exec(argument);
+    if (match && match[1] !== repository) return false;
+  }
+  return true;
+}
+
+function isMutatingApiInvocation(args: readonly string[]): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    const method = argument === '-X' || argument === '--method'
+      ? args[index + 1]
+      : argument.startsWith('--method=')
+        ? argument.slice('--method='.length)
+        : argument.startsWith('-X') && argument.length > 2
+          ? argument.slice(2)
+          : undefined;
+    if (method !== undefined && method.toUpperCase() !== 'GET') return true;
+    if (argument === '-f' || argument === '-F' || argument.startsWith('-f') || argument.startsWith('-F')) return true;
+  }
+  return false;
+}
+
+/** Refuse arbitrary or cross-repository argv before it reaches the runner. */
+function assertTrackerReadArgs(
+  operation: TrackerReadOperation,
+  repository: string,
+  args: readonly string[],
+): void {
+  if (!argvHasReadCommand(operation, args)
+    || !repositoryFlagsMatch(args, repository)
+    || !apiRepositoriesMatch(args, repository)
+    || (args[0] === 'api' && isMutatingApiInvocation(args))) {
+    throw new GithubTrackerOperationRefusalError(operation, 'invalid-target');
+  }
+}
+
 /**
  * Keep TrackerClient's backend-neutral methods while making each GitHub issue
  * mutation a closed guarded request. A refusal remains a typed error rather
@@ -614,6 +687,7 @@ export async function runTrackerRead(
   args: string[],
   runnerOpts: { timeout?: number; maxBuffer?: number } = {},
 ): Promise<string> {
+  assertTrackerReadArgs(operation, repository, args);
   let stdout = '';
   let runnerError: GhRunnerError | undefined;
   const result = await executeGithubOperation({

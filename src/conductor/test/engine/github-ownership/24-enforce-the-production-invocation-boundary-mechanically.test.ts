@@ -78,6 +78,25 @@ describe('GitHub invocation audit', () => {
     expect(auditGithubInvocationSource('engine/tracker-client.ts', direct)[0]).toMatchObject({ message: 'direct injected GitHub mutation outside guarded adapter' });
   });
 
+  it('scopes dynamic GhRunner-forwarding exemptions to their defining files', () => {
+    const forwarded = (name: string) => [
+      "import type { GhRunner } from './tracker-client.js';",
+      `async function ${name}(runner: GhRunner, argv: string[]) {`,
+      "  await runner(argv, { cwd: '/tmp' });",
+      '}',
+    ].join('\n');
+
+    expect(auditGithubInvocationSource('engine/pr-labels.ts', forwarded('runTrackerRead'))).toEqual([
+      expect.objectContaining({ line: 3, message: 'unresolvable mutable GitHub command forwarding outside guarded adapter' }),
+    ]);
+    expect(auditGithubInvocationSource('engine/pr-labels.ts', forwarded('graphqlPage'))).toEqual([
+      expect.objectContaining({ line: 3, message: 'unresolvable mutable GitHub command forwarding outside guarded adapter' }),
+    ]);
+    expect(auditGithubInvocationSource('engine/tracker-client.ts', forwarded('runTrackerRead'))).toEqual([]);
+    expect(auditGithubInvocationSource('engine/shipment-audit.ts', forwarded('graphqlPage'))).toEqual([]);
+    expect(auditGithubInvocationSource('engine/tracker-client.ts', forwarded('runTrackerIssueOperation'))).toEqual([]);
+  });
+
   it('does not exempt a daemon composition file from injected runner mutations', () => {
     const source = [
       "import type { GhRunner } from './engine/tracker-client.js';",
