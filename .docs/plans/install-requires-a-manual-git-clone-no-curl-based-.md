@@ -87,6 +87,7 @@ Add one self-contained POSIX shell bootstrap script, published by the documentat
 - `acquire` clones the default `https://` `REPO_URL` (overridable only through `AI_CONDUCTOR_REPO_URL`) into `$HOME/.ai-conductor/harness`, asserted by the fresh-install test finding a `.git` directory there and exit 0 when the script is fed to `sh -s` on stdin with no credentials in the environment.
 - `run_installer` executes `bin/install` from inside `$HOME/.ai-conductor/harness` and the script exits with its status, asserted by the stub installer's record naming that directory and by the script mirroring a stub exit code.
 - `announce` prints the canonical location and the channel before `acquire` runs, asserted by the fresh-install test checking both strings appear in stdout ahead of the first clone output.
+- The resulting machine state matches what a manual install on the same channel produces, asserted by the manual-parity test running the one-liner in one isolated `HOME` and a direct manual `git clone --branch <ref>` plus `bin/install` in a second isolated `HOME` on the same channel, then finding the stub installer's recorded arguments and working directory (relative to each `HOME`), the checked-out HEAD commit and branch, and `git status --porcelain` identical between the two.
 
 **Files:** `docs/install.sh`; `test/test_bootstrap_installer.sh`
 
@@ -212,6 +213,8 @@ Add one self-contained POSIX shell bootstrap script, published by the documentat
 - `main` routes an `ours` target to `run_updater` and never to `acquire`, asserted by the second-run test finding one new stub-updater record at the canonical location, no `clone` in the recorded git subcommands, exit 0, the updater's status line in stdout, and an unchanged HEAD.
 - `run_updater` executes the checkout's own `bin/update` when the channel has advanced, asserted by the behind-channel test finding the stub-updater record and no new stub-installer record.
 - `run_updater` propagates the updater's exit status and output, asserted by the failing-updater test observing exit 7 and the stub's message.
+- When the canonical location holds a checkout that is already current, the one-liner reports that the installation is current, exits 0, and leaves the checkout's commit unchanged, asserted by the already-current test finding the text `installation is current` in stdout, exit 0, and the same `git rev-parse HEAD` before and after the run.
+- When the existing updater fails, the checkout is left exactly as the updater left it, asserted by the failing-updater test whose stub updater writes a marker file and records the checkout's HEAD and `git status --porcelain` as its last act, and finding both values and the marker identical after the one-liner exits 7.
 
 **Files:** `docs/install.sh`; `test/test_bootstrap_installer.sh`
 
@@ -232,6 +235,7 @@ Add one self-contained POSIX shell bootstrap script, published by the documentat
 **Done when:**
 - `acquire` takes `harness.lock` with an atomic `mkdir` and calls `fail` naming the lock when it already exists, asserted by the held-lock test observing a non-zero exit, an absent harness directory, and the foreign lock still present.
 - `cleanup` removes the lock only when this process set `LOCK_HELD`, asserted by the two-runs test finding exactly one checkout that passes `git fsck`, no leftover lock or partial directory, and at most one non-zero exit.
+- A losing concurrent run that does not exit non-zero hands off to the update path and never clones a second time, asserted by the two-runs test requiring every run that exited 0 without creating the checkout to have left exactly one stub-updater record at the canonical location and no stub-installer record, and by the lost-race test, which creates a complete checkout while the run waits on the lock, observing exit 0 with a stub-updater record.
 
 **Files:** `docs/install.sh`; `test/test_bootstrap_installer.sh`
 
@@ -273,6 +277,7 @@ Add one self-contained POSIX shell bootstrap script, published by the documentat
 - The integrity block asserts `docs/_config.yml` contains no `exclude` pattern matching `docs/install.sh`, so the site configuration publishes the script from the documentation tree.
 - The integrity block asserts `bin/bootstrap` is a symbolic link with target `../docs/install.sh` and that both paths resolve to the same file via `readlink -f`.
 - The integrity block asserts `docs/install.sh` is a regular non-symlink file whose first line is `#!/bin/sh`, and fails when a `---` front-matter line is placed at the top.
+- An automated check fails when the documentation site's build would transform or drop the script, asserted by the integrity block building the site from `docs/` into a temporary directory with `jekyll build` when `jekyll` is on `PATH`, and otherwise simulating the build's static-file rule (no front matter, no `exclude` match, no path segment starting with `_` or `.`) by copying the file, then failing unless the output `install.sh` exists and `cmp` reports it byte-identical to `docs/install.sh`; the block is shown failing for a front-matter line and for an `exclude` entry during RED.
 
 **Files:** `test/test_harness_integrity.sh`; `bin/bootstrap`; `docs/install.sh`
 
