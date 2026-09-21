@@ -867,6 +867,58 @@ fi
 bootstrap_doc_script="${HARNESS_DIR}/docs/install.sh"
 bootstrap_bin_link="${HARNESS_DIR}/bin/bootstrap"
 bootstrap_site_config="${HARNESS_DIR}/docs/_config.yml"
+
+# Return success only when Jekyll's static-file path can publish SCRIPT unchanged.
+# This is intentionally independent of the fallback copy below: copying a file is
+# not evidence that the site configuration would leave it alone.
+bootstrap_static_publishable() {
+  bootstrap_static_script=$1
+  bootstrap_static_config=$2
+  bootstrap_static_relative=$3
+
+  [ "$(head -n 1 "$bootstrap_static_script")" != '---' ] || return 1
+  case "/$bootstrap_static_relative" in
+    */_*|*/.*) return 1 ;;
+  esac
+
+  awk '
+    function claims_install(value) {
+      return value ~ /(^|[^[:alnum:]_.-])(install\.sh|\*\.sh)([^[:alnum:]_.-]|$)/
+    }
+    function defaults_cover_install(    normalized, normalized_type) {
+      normalized = default_path
+      gsub(/["'"'"'[:space:]]/, "", normalized)
+      normalized_type = default_type
+      gsub(/["'"'"'[:space:]]/, "", normalized_type)
+      return default_layout && (normalized_type == "" || normalized_type ~ /[*?]/) && (normalized == "" || normalized == "." || normalized == "/" || normalized ~ /(^|\/)install\.sh$/ || normalized ~ /[*?]/)
+    }
+    function finish_default() {
+      if (defaults_cover_install()) found = 1
+      default_path = ""
+      default_type = ""
+      default_layout = 0
+    }
+    /^[[:space:]]*(exclude|include|plugins|gems):/ {
+      active = $0
+      if (claims_install($0)) found = 1
+    }
+    /^[^[:space:]][^:]*:/ && $0 !~ /^defaults:/ { active = "" }
+    active != "" && /^[[:space:]]*-[[:space:]]/ && claims_install($0) { found = 1 }
+    /^defaults:[[:space:]]*$/ { in_defaults = 1; next }
+    in_defaults && /^[^[:space:]]/ { finish_default(); in_defaults = 0 }
+    in_defaults && /^[[:space:]]*-[[:space:]]/ { finish_default() }
+    in_defaults && /^[[:space:]]*path:[[:space:]]*/ {
+      default_path = $0
+      sub(/^[^:]*:[[:space:]]*/, "", default_path)
+    }
+    in_defaults && /^[[:space:]]*type:[[:space:]]*/ {
+      default_type = $0
+      sub(/^[^:]*:[[:space:]]*/, "", default_type)
+    }
+    in_defaults && /^[[:space:]]*layout:[[:space:]]*/ { default_layout = 1 }
+    END { if (in_defaults) finish_default(); exit found ? 1 : 0 }
+  ' "$bootstrap_static_config"
+}
 if [ -f "$bootstrap_doc_script" ] && [ ! -L "$bootstrap_doc_script" ] \
   && [ "$(head -n 1 "$bootstrap_doc_script")" = '#!/bin/sh' ]; then
   assert "docs/install.sh is a plain published shell script" 0
@@ -881,20 +933,34 @@ else
   assert "bin/bootstrap links to docs/install.sh" 1
 fi
 
-if ! awk '
-  /^[[:space:]]*exclude:[[:space:]]*\[/ {
-    if ($0 ~ /(install\.sh|\*\.sh)/) found = 1
-    next
-  }
-  /^[[:space:]]*exclude:[[:space:]]*$/ { in_exclude = 1; next }
-  in_exclude && /^[^[:space:]]/ { in_exclude = 0 }
-  in_exclude && /^[[:space:]]*-/ && /(install\.sh|\*\.sh)/ { found = 1 }
-  END { exit !found }
-' "$bootstrap_site_config"; then
+if bootstrap_static_publishable "$bootstrap_doc_script" "$bootstrap_site_config" install.sh; then
   assert "docs site does not exclude install.sh" 0
 else
   assert "docs site does not exclude install.sh" 1
 fi
+
+bootstrap_mutation_dir=$(mktemp -d)
+cp "$bootstrap_site_config" "$bootstrap_mutation_dir/_config.yml"
+printf '%s\n' 'defaults:' '  - scope:' '      path: ""' '    values:' '      layout: default' >> "$bootstrap_mutation_dir/_config.yml"
+if bootstrap_static_publishable "$bootstrap_doc_script" "$bootstrap_mutation_dir/_config.yml" install.sh; then
+  assert "static publication fallback rejects defaults layout covering install.sh" 1
+else
+  assert "static publication fallback rejects defaults layout covering install.sh" 0
+fi
+printf '%s\n' 'exclude: [install.sh]' > "$bootstrap_mutation_dir/exclude-config.yml"
+if bootstrap_static_publishable "$bootstrap_doc_script" "$bootstrap_mutation_dir/exclude-config.yml" install.sh; then
+  assert "static publication fallback rejects inline exclude for install.sh" 1
+else
+  assert "static publication fallback rejects inline exclude for install.sh" 0
+fi
+printf '%s\n' '---' 'layout: default' '---' > "$bootstrap_mutation_dir/install.sh"
+cat "$bootstrap_doc_script" >> "$bootstrap_mutation_dir/install.sh"
+if bootstrap_static_publishable "$bootstrap_mutation_dir/install.sh" "$bootstrap_site_config" install.sh; then
+  assert "static publication fallback rejects script front matter" 1
+else
+  assert "static publication fallback rejects script front matter" 0
+fi
+rm -rf "$bootstrap_mutation_dir"
 
 bootstrap_publish_dir=$(mktemp -d)
 if command -v jekyll >/dev/null 2>&1; then
@@ -904,15 +970,7 @@ if command -v jekyll >/dev/null 2>&1; then
     bootstrap_publish_status=1
   fi
 else
-  if grep -q '^---$' "$bootstrap_doc_script" \
-    || (cd "${HARNESS_DIR}/docs" && find . -path './[_\.]*/install.sh' -print -quit | grep -q .) \
-    || ! awk '
-      /^[[:space:]]*exclude:[[:space:]]*\[/ { if ($0 ~ /(install\.sh|\*\.sh)/) found = 1; next }
-      /^[[:space:]]*exclude:[[:space:]]*$/ { in_exclude = 1; next }
-      in_exclude && /^[^[:space:]]/ { in_exclude = 0 }
-      in_exclude && /^[[:space:]]*-/ && /(install\.sh|\*\.sh)/ { found = 1 }
-      END { exit found ? 1 : 0 }
-    ' "$bootstrap_site_config"; then
+  if ! bootstrap_static_publishable "$bootstrap_doc_script" "$bootstrap_site_config" install.sh; then
     bootstrap_publish_status=1
   else
     cp "$bootstrap_doc_script" "$bootstrap_publish_dir/install.sh"
