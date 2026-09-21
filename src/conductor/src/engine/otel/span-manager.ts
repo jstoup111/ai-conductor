@@ -115,7 +115,11 @@ export class SpanManager {
     const startTimeMs = this.now();
     const span = this.tracer.startSpan(
       identity.subjectLabel,
-      event.executionContext === undefined ? {} : { startTime: startTimeMs },
+      // A numeric TimeInput below the runtime's performance clock is treated
+      // as a relative timestamp by OTel. The event clock is epoch milliseconds
+      // (and deterministic fixtures deliberately use small values), so use a
+      // Date to make its epoch semantics unambiguous at both boundaries.
+      event.executionContext === undefined ? {} : { startTime: new Date(startTimeMs) },
       this.runCtx,
     );
     // Set index and step name now; status + retryCount set at close.
@@ -334,9 +338,9 @@ export class SpanManager {
 
   private endSpan(state: StepState): void {
     if (state.settlementEndTimeMs !== undefined) {
-      state.span.end(state.settlementEndTimeMs);
+      state.span.end(new Date(state.settlementEndTimeMs));
     } else if (state.usesEventClock) {
-      state.span.end(this.now());
+      state.span.end(new Date(this.now()));
     } else {
       state.span.end();
     }
