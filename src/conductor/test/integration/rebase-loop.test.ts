@@ -1422,11 +1422,24 @@ describe('integration/rebase-loop', () => {
           completed = true;
         });
 
-        await runThroughShip(runCountingRunner(counts));
+        const order: string[] = [];
+        await runThroughShip({
+          run: async (step) => {
+            order.push(step);
+            counts[step] = (counts[step] ?? 0) + 1;
+            return satisfy(step);
+          },
+        });
 
         expect(completed).toBe(true);
         expect(counts.acceptance_specs ?? 0).toBe(0);
-        expect(counts.build ?? 0).toBe(2);
+        // One BUILD dispatch in total: the ordinary one before the rebase. A
+        // clean replay adds none (Story 1, ADR D4/D8).
+        expect(counts.build ?? 0).toBe(1);
+        // This fixture's coverage was never judged, so the rebase refreshes it
+        // in place; continuation then resumes in the verification tail.
+        expect(counts.coverage_binding ?? 0).toBe(1);
+        expect(order.slice(order.indexOf('coverage_binding') + 1)).toEqual(['manual_test', 'finish']);
         // The count includes the ordinary first-pass review before rebase.
         // Clean replay preservation must prevent a second dispatch, not erase
         // that already-completed review.
