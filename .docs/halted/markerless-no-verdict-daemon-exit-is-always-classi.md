@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-21T11:17:31.229Z
 Slug: markerless-no-verdict-daemon-exit-is-always-classi
 Class: needs-human
 Halting step: unknown
