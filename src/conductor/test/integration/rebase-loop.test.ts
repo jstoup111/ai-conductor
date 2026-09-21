@@ -1517,6 +1517,68 @@ describe('integration/rebase-loop', () => {
       });
     });
 
+    // ── Story 3 / ADR D4 on the daemon's mandatory re-kick tail ────────────────
+    describe('Story: the re-kick tail refreshes invalidated coverage in place', () => {
+      it('continues from the verification tail after resumeRebaseFirst, dispatching neither acceptance_specs nor BUILD', async () => {
+        await initRepoOnFeatureBranchWithSharedRuntimeFile();
+        await addFeatureTestFile();
+        await writeState(statePath, { ...FRONT_DONE_M });
+
+        // First process: reaches finish on an up-to-date base, then dies.
+        const crash = new Error('process died before finish');
+        await runThroughShip({
+          run: async (step) => {
+            if (step === 'finish') throw crash;
+            return satisfy(step);
+          },
+        });
+        await rm(join(dir, '.pipeline/HALT'), { force: true });
+        await rm(join(dir, '.pipeline/HALT.class'), { force: true });
+
+        // The base advances while parked; the daemon re-kicks rebase-first.
+        // (`.pipeline/` is ignored in a real worktree; keep the helper's `git add .`
+        // from committing this process's state onto the base.)
+        await writeFile(join(dir, '.git/info/exclude'), '.pipeline/\n', 'utf-8');
+        await advanceBaseWithDivergentEditToSharedFile([
+          { path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" },
+        ]);
+        const { resumeRebaseFirst, REKICK_SENTINEL } = await import('../../src/engine/daemon-rekick.js');
+        await writeFile(join(dir, REKICK_SENTINEL), 'rekick\n', 'utf-8');
+        expect(await resumeRebaseFirst({ worktreePath: dir, localBase: BASE, events, ranManualTest: true }))
+          .toBe('rebased');
+        expect((await readGateVerdict('coverage_binding'))?.kickback?.from).toBe('rebase');
+
+        const order: string[] = [];
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+        const fakeGit: GitRunner = async (args) =>
+          args.includes('--symbolic-full-name')
+            ? { stdout: 'refs/remotes/origin/feature/x\n' }
+            : { stdout: '' };
+        await new Conductor({
+          stateFilePath: statePath,
+          stepRunner: { run: async (step) => { order.push(step); return satisfy(step); } },
+          events,
+          projectRoot: dir,
+          daemon: true,
+          verifyArtifacts: true,
+          mode: 'auto',
+          resume: true,
+          maxRetries: 1,
+          config: { rebase_resolution_attempts: 0 },
+          git: fakeGit,
+          shipmentEvidence: validShipmentEvidence,
+        }).run();
+
+        expect(completed).toBe(true);
+        expect(order[0]).toBe('coverage_binding');
+        expect(order).not.toContain('acceptance_specs');
+        expect(order).not.toContain('build');
+      });
+    });
+
     // ── Story: A change to the feature's own runtime source re-runs the
     // judged audit gates ──────────────────────────────────────────────────────
     describe("Story: feature-owned runtime source in the delta re-runs prd_audit and architecture_review_as_built", () => {

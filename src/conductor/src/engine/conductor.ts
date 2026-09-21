@@ -413,7 +413,7 @@ import {
   type CiFailureAttempt,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
-import { applyRebaseTransition } from './rebase-transition.js';
+import { applyRebaseTransition, clampRebaseContinuation, isRebaseCoverageRefresh } from './rebase-transition.js';
 import { classifyGateInvalidation } from './gate-invalidation.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
@@ -13681,6 +13681,13 @@ export class Conductor {
 
     const topo = deriveGateTopology(steps);
 
+    // Read before this pass recomputes the verdict: a rebase-origin kickback on
+    // coverage_binding is the durable mark, written by both rebase tails (the
+    // foreground step and the mandatory re-kick), that the dispatch which just
+    // finished was an in-place post-rebase refresh and not lifecycle authoring.
+    const coverageRefreshedAfterRebase = step.name === 'coverage_binding' &&
+      await isRebaseCoverageRefresh(this.projectRoot);
+
     // The `rebase` step is engine-native: its gate verdict (and any FR-5
     // downstream kickbacks) were already written authoritatively by
     // runRebaseStep from git state, not from a file artifact. Recomputing it
@@ -13853,7 +13860,13 @@ export class Conductor {
         { navigate: false },
       );
       if (frontKickback === 'halt') return 'halt';
-      return null; // front half stays linear (before the first loop gate)
+      // adr-2026-09-11-selective-post-rebase-verification D4: coverage refreshed
+      // after a rebase continues from the verification tail. Linear i++ here
+      // would walk acceptance authoring and a completed BUILD again.
+      const refreshed = coverageRefreshedAfterRebase
+        ? (await readVerdict(this.projectRoot, 'coverage_binding'))?.satisfied === true
+        : false;
+      if (!refreshed) return null; // front half stays linear (before the first loop gate)
     }
 
     // Mark tier/mode-skipped steps in the looped region as 'skipped' so the
@@ -13957,10 +13970,11 @@ export class Conductor {
     // Apply the same backward-only, bounded reconciliation as resume entry so
     // the tail never selects a step whose own gate immediately rejects an
     // earlier prerequisite.
-    const selectedIndex = clampToRunnablePrerequisite(
+    const selectedIndex = clampRebaseContinuation(
       steps,
       state,
-      indexOf(decision.step),
+      clampToRunnablePrerequisite(steps, state, indexOf(decision.step)),
+      coverageRefreshedAfterRebase,
     );
     const selectedStep = steps[selectedIndex];
     if (!selectedStep) return indexOf(decision.step);

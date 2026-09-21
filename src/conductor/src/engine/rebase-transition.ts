@@ -231,3 +231,41 @@ export async function applyRebaseTransition(
     ...(convergenceCredit ? { convergenceCredit } : {}),
   };
 }
+
+/**
+ * True while coverage_binding carries the rebase-origin invalidation that an
+ * applied rebase operation named. Both production tails (the foreground rebase
+ * step and the mandatory re-kick) write exactly this pair through
+ * `applyRebaseVerdicts` + `applyRebaseTransition`, so the dispatch that follows
+ * is the in-place refresh of adr-2026-09-11-selective-post-rebase-verification
+ * D4 on either path, including after a process restart.
+ */
+export async function isRebaseCoverageRefresh(projectRoot: string): Promise<boolean> {
+  const [coverage, rebase] = await Promise.all([
+    readVerdict(projectRoot, 'coverage_binding'),
+    readVerdict(projectRoot, 'rebase'),
+  ]);
+  const operation = rebase?.rebaseOperation;
+  return coverage?.satisfied === false && coverage.kickback?.from === 'rebase' &&
+    operation?.status === 'applied' && operation.transition.invalidated.includes('coverage_binding');
+}
+
+/**
+ * D4 clamp: continuation after a post-rebase coverage refresh starts no
+ * earlier than test_suite. Completed (or skipped) authoring/BUILD work is never
+ * selected merely because it sits after coverage_binding; a step that is
+ * genuinely open keeps its existing owner and is left selected.
+ */
+export function clampRebaseContinuation(
+  steps: readonly { name: StepName }[],
+  state: ConductState,
+  selectedIndex: number,
+  coverageRefreshedAfterRebase: boolean,
+): number {
+  if (!coverageRefreshedAfterRebase) return selectedIndex;
+  const testSuiteIndex = steps.findIndex((step) => step.name === 'test_suite');
+  const selected = steps[selectedIndex];
+  if (testSuiteIndex === -1 || !selected || selectedIndex >= testSuiteIndex) return selectedIndex;
+  const status = state[selected.name];
+  return status === 'done' || status === 'skipped' ? testSuiteIndex : selectedIndex;
+}

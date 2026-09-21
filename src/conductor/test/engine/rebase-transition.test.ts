@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
-import { applyRebaseTransition } from '../../src/engine/rebase-transition.js';
+import { applyRebaseTransition, clampRebaseContinuation } from '../../src/engine/rebase-transition.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
 function preservedCandidate(gate: 'prd_audit', checkedAt = 2) {
@@ -216,5 +216,20 @@ describe('applyRebaseTransition', () => {
     expect(result.stateResult).toBe('refused');
     expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({ build_review: 'in_progress' });
     expect((await readVerdict(dir, 'rebase'))?.rebaseOperation?.status).not.toBe('applied');
+  });
+});
+
+describe('clampRebaseContinuation', () => {
+  const steps = [{ name: 'coverage_binding' }, { name: 'acceptance_specs' }, { name: 'build' }, { name: 'test_suite' }, { name: 'manual_test' }] as const;
+
+  it('moves a completed pre-suite selection to test_suite after a post-rebase coverage refresh', () => {
+    expect(clampRebaseContinuation(steps, { acceptance_specs: 'skipped', build: 'done' }, 2, true)).toBe(3);
+    expect(clampRebaseContinuation(steps, { acceptance_specs: 'skipped', build: 'done' }, 1, true)).toBe(3);
+  });
+
+  it('leaves a genuinely open BUILD, a later gate, and ordinary lifecycle selection alone', () => {
+    expect(clampRebaseContinuation(steps, { build: 'pending' }, 2, true)).toBe(2);
+    expect(clampRebaseContinuation(steps, { build: 'done' }, 4, true)).toBe(4);
+    expect(clampRebaseContinuation(steps, { build: 'done' }, 2, false)).toBe(2);
   });
 });
