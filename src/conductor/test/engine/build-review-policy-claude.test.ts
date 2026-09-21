@@ -5,6 +5,7 @@ import {
   discoverClaudeReviewPolicies,
   type ClaudeReviewPolicyFilesystem,
 } from '../../src/engine/build-review-policy-claude.js';
+import { resolveInstalledReviewPolicy } from '../../src/engine/build-review-policy-resolver.js';
 
 function fakeFilesystem(): ClaudeReviewPolicyFilesystem {
   const directories: Record<string, readonly string[]> = {
@@ -130,6 +131,7 @@ describe('engine/build-review-policy-claude', () => {
         packageRoot: 'marketplace:marketplace-only',
         declaredDependencies: [],
         availability: 'marketplace-only',
+        pluginWide: true,
       },
     ]);
   });
@@ -197,5 +199,33 @@ describe('engine/build-review-policy-claude', () => {
       expect.objectContaining({ semanticName: 'marketplace-only', plugin: { id: 'marketplace-only', version: '1.0.0' }, availability: 'marketplace-only' }),
     ]));
     expect(policies.filter((policy) => policy.source === 'plugin' && policy.availability === 'available')).toEqual([]);
+  });
+
+  it('resolves a plugin-qualified selection of a listing-only plugin to its typed unavailable diagnosis', async () => {
+    const policies = await discoverClaudeReviewPolicies({
+      candidate: { cwd: '/prepared/project', env: {}, projectSkillRoots: [], userSkillRoots: [] },
+      command: async () => ({ stdout: JSON.stringify([
+        { id: 'market-plugin', enabled: true, scope: 'user', version: '1.0.0' },
+        { id: 'off-plugin', enabled: false, scope: 'user' },
+      ]) }),
+      filesystem: fakeFilesystem(),
+    });
+
+    expect(resolveInstalledReviewPolicy({ skill: 'market-plugin:deep-review' }, policies)).toEqual({
+      kind: 'failure',
+      failure: { code: 'marketplace-only', skill: 'market-plugin:deep-review' },
+    });
+    expect(resolveInstalledReviewPolicy({ skill: 'off-plugin:deep-review', source: 'plugin' }, policies)).toEqual({
+      kind: 'failure',
+      failure: { code: 'disabled', skill: 'off-plugin:deep-review', source: 'plugin' },
+    });
+    expect(resolveInstalledReviewPolicy({ skill: 'other-plugin:deep-review' }, policies)).toEqual({
+      kind: 'failure',
+      failure: { code: 'absent', skill: 'other-plugin:deep-review' },
+    });
+    expect(resolveInstalledReviewPolicy({ skill: 'deep-review' }, policies)).toEqual({
+      kind: 'failure',
+      failure: { code: 'absent', skill: 'deep-review' },
+    });
   });
 });

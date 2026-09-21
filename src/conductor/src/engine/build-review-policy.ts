@@ -30,6 +30,11 @@ export interface InstalledReviewSkill {
   readonly requiredTools?: readonly string[];
   readonly declaredDependencies: readonly string[];
   readonly availability: InstalledReviewSkillAvailability;
+  /**
+   * Marks a listing-only plugin whose skills cannot be enumerated locally. It
+   * stands for every skill qualified by that plugin and is never available.
+   */
+  readonly pluginWide?: true;
 }
 
 /** The installed semantic policy requested by one validated custom declaration. */

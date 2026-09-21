@@ -281,6 +281,7 @@ function unavailablePlugin(
     packageRoot,
     declaredDependencies: [],
     availability,
+    pluginWide: true,
   };
 }
 

@@ -88,10 +88,16 @@ export function resolveInstalledReviewPolicy(
   catalog: readonly InstalledReviewSkill[],
 ): ReviewPolicyResolution {
   const reference = parseReviewPolicyReference(declaration.skill);
+  // A listing-only plugin has no enumerable skills, so its plugin-wide
+  // descriptor answers every selection qualified by that plugin. It can only
+  // yield a typed unavailable diagnosis, never a resolved policy.
   const matching = catalog.filter((policy) => (
-    policy.semanticName === reference.semanticName
-    && (declaration.source === undefined || policy.source === declaration.source)
+    (declaration.source === undefined || policy.source === declaration.source)
     && (reference.pluginId === undefined || policy.plugin?.id === reference.pluginId)
+    && (
+      policy.semanticName === reference.semanticName
+      || (policy.pluginWide === true && reference.pluginId !== undefined && policy.availability !== 'available')
+    )
   ));
 
   if (matching.length === 0) {
