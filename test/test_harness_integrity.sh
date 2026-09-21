@@ -863,6 +863,7 @@ else
 fi
 
 # 9f. The bootstrap script is a published plain file with one checkout path.
+# Covers: task:12
 bootstrap_doc_script="${HARNESS_DIR}/docs/install.sh"
 bootstrap_bin_link="${HARNESS_DIR}/bin/bootstrap"
 bootstrap_site_config="${HARNESS_DIR}/docs/_config.yml"
