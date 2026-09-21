@@ -24,6 +24,11 @@ import {
   type GithubMutationExecutionContext,
 } from './tracker-client.js';
 
+type FeatureMutationResolution =
+  | { readonly kind: 'resolved'; readonly mutation: GithubMutationExecutionContext }
+  | { readonly kind: 'unavailable' }
+  | { readonly kind: 'refused'; readonly reason: 'invalid-target' };
+
 export interface GithubOperationCliCommand {
   readonly requestFile: string;
 }
@@ -69,19 +74,25 @@ async function featureMutationForRequest(
   input: GithubOperationCliInput,
   gh: ReturnType<typeof makeProductionGh>,
   git: GitRunner,
-): Promise<GithubMutationExecutionContext | undefined> {
-  if (request.access === 'read' || request.access === 'intake-write' || request.access === 'shared-write') return undefined;
+): Promise<FeatureMutationResolution> {
+  if (request.access === 'read' || request.access === 'intake-write' || request.access === 'shared-write') {
+    return { kind: 'unavailable' };
+  }
   const { stdout } = await git(['branch', '--show-current'], { cwd: input.cwd });
   const branch = stdout.trim();
-  if (!branch) return undefined;
+  if (!branch) return { kind: 'unavailable' };
+  const slug = branch.replace(/^spec\//, '');
+  if (request.context.feature !== undefined && request.context.feature !== slug) {
+    return { kind: 'refused', reason: 'invalid-target' };
+  }
   const resolved = await resolveFeatureRemoteMutation({
     cwd: input.cwd,
-    slug: request.context.feature ?? branch.replace(/^spec\//, ''),
+    slug,
     branch,
     git: async (args) => git(args, { cwd: input.cwd }),
     gh,
   });
-  if (!resolved) return undefined;
+  if (!resolved) return { kind: 'unavailable' };
   if (request.target.kind === 'pull-request') {
     try {
       const stdout = await runTrackerRead(
@@ -92,24 +103,29 @@ async function featureMutationForRequest(
         { kind: 'pull-request', number: request.target.number },
         ['pr', 'view', branch, '-R', resolved.provenance.repository, '--json', 'number'],
       );
-      if ((JSON.parse(stdout) as { number?: unknown }).number !== request.target.number) return undefined;
+      if ((JSON.parse(stdout) as { number?: unknown }).number !== request.target.number) {
+        return { kind: 'unavailable' };
+      }
     } catch {
-      return undefined;
+      return { kind: 'unavailable' };
     }
   }
   return {
-    // The resolved feature branch is the only remote-ref capability this CLI
-    // composition can supply.  The mutation policy compares it to the
-    // requested destination before the remote transport is invoked.
-    provenance: request.target.kind === 'pull-request'
-      // The branch-to-PR lookup above independently resolved this exact PR.
-      // Preserve that binding for the policy instead of letting a ref grant
-      // repository-wide PR authority.
-      ? { ...resolved.provenance, target: request.target }
-      : resolved.provenance,
-    dependencies: {
-      ...resolved.dependencies,
-      ...(input.resolveMachineOwner === undefined ? {} : { resolveMachineOwner: input.resolveMachineOwner }),
+    kind: 'resolved',
+    mutation: {
+      // The resolved feature branch is the only remote-ref capability this CLI
+      // composition can supply. The mutation policy compares it to the
+      // requested destination before the remote transport is invoked.
+      provenance: request.target.kind === 'pull-request'
+        // The branch-to-PR lookup above independently resolved this exact PR.
+        // Preserve that binding for the policy instead of letting a ref grant
+        // repository-wide PR authority.
+        ? { ...resolved.provenance, target: request.target }
+        : resolved.provenance,
+      dependencies: {
+        ...resolved.dependencies,
+        ...(input.resolveMachineOwner === undefined ? {} : { resolveMachineOwner: input.resolveMachineOwner }),
+      },
     },
   };
 }
@@ -157,7 +173,12 @@ export async function dispatchGithubOperationCommand(
   const gh = input.gh ?? makeProductionGh();
   const git = input.git ?? makeProductionGit();
   if (decoded.request.access === 'remote-ref-write') {
-    const mutation = await featureMutationForRequest(decoded.request, input, gh, git);
+    const featureMutation = await featureMutationForRequest(decoded.request, input, gh, git);
+    if (featureMutation.kind === 'refused') {
+      write(`${JSON.stringify({ kind: 'refused', operation: decoded.request.operation, target: decoded.request.target, reason: featureMutation.reason })}\n`);
+      return 1;
+    }
+    const mutation = featureMutation.kind === 'resolved' ? featureMutation.mutation : undefined;
     const approval = mutation === undefined && decoded.request.operation === 'remote-ref.push'
       ? await requestExplicitGithubOperationApproval(decoded.request, input.confirmation)
       : undefined;
@@ -195,9 +216,14 @@ export async function dispatchGithubOperationCommand(
     return result.kind === 'executed' ? 0 : 1;
   }
 
+  const featureMutation = await featureMutationForRequest(decoded.request, input, gh, git);
+  if (featureMutation.kind === 'refused') {
+    write(`${JSON.stringify({ kind: 'refused', operation: decoded.request.operation, target: decoded.request.target, reason: featureMutation.reason })}\n`);
+    return 1;
+  }
   const runner = input.runner ?? createGuardedGithubOperationRunner(gh, {
     cwd: input.cwd,
-    mutation: await featureMutationForRequest(decoded.request, input, gh, git),
+    ...(featureMutation.kind === 'resolved' ? { mutation: featureMutation.mutation } : {}),
     intake: createGithubIntakeAuthorization({ gh, cwd: input.cwd, confirmation: input.confirmation }),
     events: input.events,
   });

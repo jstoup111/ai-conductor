@@ -77,7 +77,7 @@ describe('github-operation CLI', () => {
   it('composes owned-worktree PR authority per request, refuses a foreign PR, and routes refs to guarded remote Git', async () => {
     const writes: string[][] = [];
     const git = vi.fn(async (args: string[]) => {
-      if (args.join(' ') === 'branch --show-current') return { stdout: 'feat/widget\n' };
+      if (args.join(' ') === 'branch --show-current') return { stdout: 'spec/widget\n' };
       if (args[0] === 'config') return { stdout: 'git@github.com:acme/widgets.git\n' };
       if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
       if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
@@ -110,7 +110,7 @@ describe('github-operation CLI', () => {
       cwd: '/fixture',
       readRequest: readRequest({
         operation: 'remote-ref.push', repository: 'acme/widgets',
-        resource: { kind: 'remote-ref', ref: 'refs/heads/feat/widget' },
+        resource: { kind: 'remote-ref', ref: 'refs/heads/spec/widget' },
         context: { actor: 'alice', feature: 'widget' },
       }),
       gh, git, remoteGit, resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }), write: output,
@@ -120,9 +120,53 @@ describe('github-operation CLI', () => {
     expect(remoteGit).toHaveBeenCalledOnce();
   });
 
+  it('refuses a request-file feature that differs from the resolved spec branch before any mutation boundary', async () => {
+    const git = vi.fn(async (args: string[]) => {
+      if (args.join(' ') === 'branch --show-current') return { stdout: 'spec/foreign\n' };
+      if (args[0] === 'config') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
+      if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
+      if (args[0] === 'push') return { stdout: '' };
+      throw new Error(`unexpected git command: ${args.join(' ')}`);
+    });
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ number: 7 }) };
+      return { stdout: '' };
+    });
+    const remoteGit = vi.fn(async () => ({ kind: 'executed' as const, targets: [] }));
+
+    const prWrite = vi.fn();
+    const prExit = await dispatchGithubOperationCommand({ requestFile: '/pr.json' }, {
+      cwd: '/fixture',
+      readRequest: readRequest({
+        operation: 'pull-request.edit', repository: 'acme/widgets',
+        resource: { kind: 'pull-request', number: 7 },
+        context: { actor: 'alice', feature: 'owned' }, payload: { body: 'must not mutate foreign PR' },
+      }),
+      git, gh, resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }), write: prWrite,
+    });
+    const pushWrite = vi.fn();
+    const pushExit = await dispatchGithubOperationCommand({ requestFile: '/push.json' }, {
+      cwd: '/fixture',
+      readRequest: readRequest({
+        operation: 'remote-ref.push', repository: 'acme/widgets',
+        resource: { kind: 'remote-ref', ref: 'refs/heads/spec/foreign' },
+        context: { actor: 'alice', feature: 'owned' },
+      }),
+      git, gh, remoteGit, resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }), write: pushWrite,
+    });
+
+    expect(prExit).toBe(1);
+    expect(pushExit).toBe(1);
+    expect(JSON.parse(prWrite.mock.calls[0]?.[0] ?? '')).toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+    expect(JSON.parse(pushWrite.mock.calls[0]?.[0] ?? '')).toMatchObject({ kind: 'refused', reason: 'invalid-target' });
+    expect(gh).not.toHaveBeenCalled();
+    expect(remoteGit).not.toHaveBeenCalled();
+  });
+
   it('refuses a request for another feature or default branch before the push boundary', async () => {
     const git = vi.fn(async (args: string[]) => {
-      if (args.join(' ') === 'branch --show-current') return { stdout: 'feat/widget\n' };
+      if (args.join(' ') === 'branch --show-current') return { stdout: 'spec/widget\n' };
       if (args[0] === 'config') return { stdout: 'git@github.com:acme/widgets.git\n' };
       if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
       if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
@@ -132,7 +176,7 @@ describe('github-operation CLI', () => {
     const gh = vi.fn().mockResolvedValue({ stdout: 'alice\n' });
     const owner = async () => ({ resolved: true as const, id: 'alice' });
 
-    for (const ref of ['refs/heads/feat/another-owner', 'refs/heads/main']) {
+    for (const ref of ['refs/heads/spec/another-owner', 'refs/heads/main']) {
       const write = vi.fn();
       await expect(dispatchGithubOperationCommand({ requestFile: '/request.json' }, {
         cwd: '/fixture',
@@ -151,12 +195,12 @@ describe('github-operation CLI', () => {
       cwd: '/fixture',
       readRequest: readRequest({
         operation: 'remote-ref.push', repository: 'acme/widgets',
-        resource: { kind: 'remote-ref', ref: 'refs/heads/feat/widget' },
+        resource: { kind: 'remote-ref', ref: 'refs/heads/spec/widget' },
         context: { actor: 'alice', feature: 'widget' },
       }),
       gh, git, resolveMachineOwner: owner, write: vi.fn(),
     })).resolves.toBe(0);
-    expect(git).toHaveBeenCalledWith(['push', 'origin', 'HEAD:refs/heads/feat/widget'], { cwd: '/fixture' });
+    expect(git).toHaveBeenCalledWith(['push', 'origin', 'HEAD:refs/heads/spec/widget'], { cwd: '/fixture' });
   });
 
   it('permits only an exact interactive initial-publication approval when no feature provenance exists', async () => {
