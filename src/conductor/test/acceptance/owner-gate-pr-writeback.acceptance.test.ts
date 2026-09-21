@@ -194,9 +194,11 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
     const mod = await loadGateWriteback();
     const logs: string[] = [];
     let ghCallCount = 0;
+    let commentLookupAttempts = 0;
     const gh: GhRunner = async (args) => {
       ghCallCount++;
       if (args[0] === 'pr' && args[1] === 'view' && args.includes('comments')) {
+        commentLookupAttempts++;
         throw new Error('rate limited');
       }
       return { stdout: '' };
@@ -204,13 +206,14 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
 
     await mod.announceGatedPr(OTHER_OWNER_ENTRY, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
 
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toContain('prMergeState');
+    expect(logs).toEqual([]);
+    expect(commentLookupAttempts).toBe(0);
     const callsAfterFirstFailure = ghCallCount;
     // A second invocation (simulating the next scan pass) must not compound
     // into an unbounded retry storm within a single pass.
     await mod.announceGatedPr(OTHER_OWNER_ENTRY, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
     expect(ghCallCount).toBe(callsAfterFirstFailure * 2);
+    expect(commentLookupAttempts).toBe(0);
   });
 
   it('the marker-comment lookup succeeds but the in-place PATCH fails: NO fallback create is attempted (mirrors upsertComment terminal PATCH semantics)', async () => {
