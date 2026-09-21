@@ -576,3 +576,46 @@ Overlap with origin/spec/daemon-self-host-guardrails: src/conductor/src/engine/c
 Overlap with origin/spec/self-host-phase6-wiring: src/conductor/src/engine/conductor.ts
 
 Note: renames or name-only diffs may not be detected by this scan. This is advisory, not a prerequisite.
+
+### Task rem-as-built-rem-ab1-1: src/conductor/src/engine/github-operations-cli.ts remote-ref-write branch (~L151-163): when featureMutationForRequest returns no feature provenance for a remote-ref.push, authorize through the exact explicit-approval adapter (github-operation-approval.ts, the ADR D4 shared-resource path) bound to actor, canonical repository, exact ref, operation, and payload, using input.confirmation. Refuse when confirmation is absent, declined, or noninteractive. Never fall back to repository-wide authority. Keep the existing owned feature-branch push path unchanged (Task 22 coverage preserved).
+**Gate:** as-built
+**Rationale:** skills/bootstrap/SKILL.md:478-483 sends a fresh repository's first push through remote-ref.push, but github-operations-cli.ts:151-163 only supplies feature provenance, and resolveFeatureRemoteMutation (remote-git-operations.ts:60-99) needs origin/HEAD plus a committed bootstrap intake marker, which an empty remote cannot have, so executeRemoteGit refuses at :149-152. A default branch with no feature owner is a shared resource under ADR D4, which already prescribes exact explicit operator approval (the Task 5 adapter), so no new architecture decision is needed. Task 22's existing owned-feature push coverage must keep passing. No current task lists skills/bootstrap/SKILL.md among its files, so this becomes new build work.
+**Parent task:** 22
+**Governing clause:** Task 22
+**Done when:**
+- Task 22 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab1-1 is complete.
+
+### Task rem-as-built-rem-ab1-2: skills/bootstrap/SKILL.md step 4 (~L478-490): make the guarded push request match the explicit-approval initial-publication path (drop the fake feature context that implies intake provenance), and keep the promised upstream behavior. After an executed push, set the upstream with local `git branch --set-upstream-to=origin/main` so later git push/pull and gh pr create work without flags. Keep the no-force rule for a rejected push.
+**Gate:** as-built
+**Rationale:** skills/bootstrap/SKILL.md:478-483 sends a fresh repository's first push through remote-ref.push, but github-operations-cli.ts:151-163 only supplies feature provenance, and resolveFeatureRemoteMutation (remote-git-operations.ts:60-99) needs origin/HEAD plus a committed bootstrap intake marker, which an empty remote cannot have, so executeRemoteGit refuses at :149-152. A default branch with no feature owner is a shared resource under ADR D4, which already prescribes exact explicit operator approval (the Task 5 adapter), so no new architecture decision is needed. Task 22's existing owned-feature push coverage must keep passing. No current task lists skills/bootstrap/SKILL.md among its files, so this becomes new build work.
+**Parent task:** 22
+**Governing clause:** Task 22
+**Done when:**
+- Task 22 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab1-2 is complete.
+
+### Task rem-as-built-rem-ab1-3: src/conductor/test/engine/github-ownership/22-expose-guarded-cli-operations-to-supported-hosts.test.ts: add coverage for an initial push to a remote with no origin/HEAD and no feature marker. With exact positive confirmation it reaches the faked remote-git boundary once for exactly refs/heads/main. Without confirmation, declined, or mismatched ref/repository it is refused with zero push invocations. Mock the process boundary and assert refused calls never reach it.
+**Gate:** as-built
+**Rationale:** skills/bootstrap/SKILL.md:478-483 sends a fresh repository's first push through remote-ref.push, but github-operations-cli.ts:151-163 only supplies feature provenance, and resolveFeatureRemoteMutation (remote-git-operations.ts:60-99) needs origin/HEAD plus a committed bootstrap intake marker, which an empty remote cannot have, so executeRemoteGit refuses at :149-152. A default branch with no feature owner is a shared resource under ADR D4, which already prescribes exact explicit operator approval (the Task 5 adapter), so no new architecture decision is needed. Task 22's existing owned-feature push coverage must keep passing. No current task lists skills/bootstrap/SKILL.md among its files, so this becomes new build work.
+**Parent task:** 22
+**Governing clause:** Task 22
+**Done when:**
+- Task 22 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab1-3 is complete.
+
+### Task rem-as-built-rem-ab4-1: Route the four feature-added direct GitHub reads through runTrackerRead (tracker-client.ts) with the matching registered read operation: repository discovery in src/conductor/src/intake-file-cli.ts (~L73-81, repository.read), post-create PR observation in src/conductor/src/engine/engineer/handoff.ts (~L144-155, pull-request.read), dependency discovery in src/conductor/src/engine/engineer/intake/file-issue.ts (~L195-199, issue.read), and repair-PR discovery in src/conductor/src/engine/shipment-evidence-cli.ts (~L476-505, pull-request.read). Keep each caller's parsing, error handling, and Task 15/16/20 behavior unchanged. Sweep these four files for any other raw-runner gh read and migrate it in the same change.
+**Gate:** as-built
+**Rationale:** ADR D1 says GitHub reads enter the typed interface, and runTrackerRead (tracker-client.ts:605-642) is that canonical read path. Four feature-added reads call raw injected runners instead: intake-file-cli.ts:73-81, engineer/handoff.ts:144-155, engineer/intake/file-issue.ts:195-199, and shipment-evidence-cli.ts:476-505. None of Tasks 15, 16, or 20 has a Done-when about read routing, so this is new build work in those tasks' files, not a plan gap. It must preserve Task 15/16/20 behavior. It is paired with AB-5: once these sites migrate, the audit can fail on literal direct reads.
+**Governing clause:** adr-2026-09-11-github-operation-ownership D1
+**Done when:**
+- adr-2026-09-11-github-operation-ownership D1 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab4-1 is complete.
+
+### Task rem-as-built-rem-ab4-2: src/conductor/test/engine/github-ownership/: extend the existing Task 15, 16, and 20 tests so each migrated read is observed passing through executeGithubOperation with its registered read operation name (spy on the guarded runner or the event and decoder path), still using a faked gh boundary. Keep every existing assertion.
+**Gate:** as-built
+**Rationale:** ADR D1 says GitHub reads enter the typed interface, and runTrackerRead (tracker-client.ts:605-642) is that canonical read path. Four feature-added reads call raw injected runners instead: intake-file-cli.ts:73-81, engineer/handoff.ts:144-155, engineer/intake/file-issue.ts:195-199, and shipment-evidence-cli.ts:476-505. None of Tasks 15, 16, or 20 has a Done-when about read routing, so this is new build work in those tasks' files, not a plan gap. It must preserve Task 15/16/20 behavior. It is paired with AB-5: once these sites migrate, the audit can fail on literal direct reads.
+**Governing clause:** adr-2026-09-11-github-operation-ownership D1
+**Done when:**
+- adr-2026-09-11-github-operation-ownership D1 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab4-2 is complete.
