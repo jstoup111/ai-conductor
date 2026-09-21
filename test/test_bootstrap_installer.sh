@@ -81,6 +81,27 @@ for tool in gh node npm tmux; do
 done
 ln -s "$PREREQUISITE_PATH/python3" "$FRESH_INSTALL_PATH/python3"
 
+LOST_RACE_PATH="$TMP_ROOT/prerequisites-lost-race"
+mkdir -p "$LOST_RACE_PATH"
+cat > "$LOST_RACE_PATH/mkdir" <<'EOF'
+#!/bin/sh
+if [ "$1" = "${LOST_RACE_LOCK-}" ]; then
+  : > "$LOST_RACE_READY"
+  while [ -e "$LOST_RACE_LOCK" ]; do
+    /bin/sleep 0.01
+  done
+fi
+exec "$REAL_MKDIR" "$@"
+EOF
+chmod +x "$LOST_RACE_PATH/mkdir"
+for tool in git mv rm rmdir; do
+  ln -s "$(command -v "$tool")" "$LOST_RACE_PATH/$tool"
+done
+for tool in gh node npm tmux; do
+  ln -s "$PREREQUISITE_PATH/present" "$LOST_RACE_PATH/$tool"
+done
+ln -s "$PREREQUISITE_PATH/python3" "$LOST_RACE_PATH/python3"
+
 INTERRUPTED_CLONE_PATH="$TMP_ROOT/prerequisites-interrupted-clone"
 mkdir -p "$INTERRUPTED_CLONE_PATH"
 cat > "$INTERRUPTED_CLONE_PATH/git" <<'EOF'
@@ -530,21 +551,66 @@ else
 fi
 
 CONCURRENT_HOME="$TMP_ROOT/home-concurrent"
+CONCURRENT_INSTALLER_RECORD="$TMP_ROOT/concurrent-installer-record"
+CONCURRENT_UPDATE_RECORD="$TMP_ROOT/concurrent-updater-record"
 mkdir -p "$CONCURRENT_HOME"
+: > "$CONCURRENT_INSTALLER_RECORD"
+: > "$CONCURRENT_UPDATE_RECORD"
 set +e
-env HOME="$CONCURRENT_HOME" PATH="$FRESH_INSTALL_PATH" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-one.stdout" 2> "$TMP_ROOT/concurrent-one.stderr" & concurrent_one=$!
-env HOME="$CONCURRENT_HOME" PATH="$FRESH_INSTALL_PATH" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-two.stdout" 2> "$TMP_ROOT/concurrent-two.stderr" & concurrent_two=$!
+env HOME="$CONCURRENT_HOME" PATH="$FRESH_INSTALL_PATH" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$CONCURRENT_INSTALLER_RECORD" UPDATE_RECORD="$CONCURRENT_UPDATE_RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-one.stdout" 2> "$TMP_ROOT/concurrent-one.stderr" & concurrent_one=$!
+env HOME="$CONCURRENT_HOME" PATH="$FRESH_INSTALL_PATH" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$CONCURRENT_INSTALLER_RECORD" UPDATE_RECORD="$CONCURRENT_UPDATE_RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/concurrent-two.stdout" 2> "$TMP_ROOT/concurrent-two.stderr" & concurrent_two=$!
 wait "$concurrent_one"; concurrent_one_status=$?
 wait "$concurrent_two"; concurrent_two_status=$?
 set -e
+concurrent_successes=0
+[ "$concurrent_one_status" -ne 0 ] || concurrent_successes=$((concurrent_successes + 1))
+[ "$concurrent_two_status" -ne 0 ] || concurrent_successes=$((concurrent_successes + 1))
+concurrent_expected_updates=$((concurrent_successes - 1))
 if [ -d "$CONCURRENT_HOME/.ai-conductor/harness/.git" ] \
   && git -C "$CONCURRENT_HOME/.ai-conductor/harness" fsck --no-dangling >/dev/null \
   && [ ! -e "$CONCURRENT_HOME/.ai-conductor/harness.lock" ] \
   && ! find "$CONCURRENT_HOME/.ai-conductor" -maxdepth 1 -name 'harness.partial.*' -print -quit | grep -q . \
+  && ! find "$CONCURRENT_HOME/.ai-conductor/harness" -type d -name 'harness.partial.*' -print -quit | grep -q . \
+  && [ "$(wc -l < "$CONCURRENT_INSTALLER_RECORD")" -eq 1 ] \
+  && [ "$(wc -l < "$CONCURRENT_UPDATE_RECORD")" -eq "$concurrent_expected_updates" ] \
   && { [ "$concurrent_one_status" -eq 0 ] || [ "$concurrent_two_status" -eq 0 ]; }; then
   echo 'PASS simultaneous first runs leave one healthy checkout'
 else
-  failures+="simultaneous first runs did not leave one healthy checkout\\n"
+  failures+="simultaneous first runs did not leave one healthy checkout (installers: $(wc -l < "$CONCURRENT_INSTALLER_RECORD"), updaters: $(wc -l < "$CONCURRENT_UPDATE_RECORD"), successful runs: $concurrent_successes)\\n"
+fi
+
+LOST_RACE_HOME="$TMP_ROOT/home-lost-race"
+LOST_RACE_TARGET="$LOST_RACE_HOME/.ai-conductor/harness"
+LOST_RACE_LOCK="$LOST_RACE_HOME/.ai-conductor/harness.lock"
+LOST_RACE_READY="$TMP_ROOT/lost-race-ready"
+LOST_RACE_INSTALLER_RECORD="$TMP_ROOT/lost-race-installer-record"
+LOST_RACE_UPDATE_RECORD="$TMP_ROOT/lost-race-updater-record"
+mkdir -p "${LOST_RACE_LOCK%/*}" "$LOST_RACE_LOCK"
+: > "$LOST_RACE_INSTALLER_RECORD"
+: > "$LOST_RACE_UPDATE_RECORD"
+env HOME="$LOST_RACE_HOME" PATH="$LOST_RACE_PATH" REAL_MKDIR="$(command -v mkdir)" LOST_RACE_LOCK="$LOST_RACE_LOCK" LOST_RACE_READY="$LOST_RACE_READY" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$LOST_RACE_INSTALLER_RECORD" UPDATE_RECORD="$LOST_RACE_UPDATE_RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/lost-race.stdout" 2> "$TMP_ROOT/lost-race.stderr" & lost_race_pid=$!
+for _ in $(seq 1 100); do
+  [ -e "$LOST_RACE_READY" ] && break
+  /bin/sleep 0.01
+done
+if [ -e "$LOST_RACE_READY" ]; then
+  git clone -q "$SOURCE_REPO" "$LOST_RACE_TARGET"
+  rmdir "$LOST_RACE_LOCK"
+  set +e
+  wait "$lost_race_pid"; lost_race_status=$?
+  set -e
+  if [ "$lost_race_status" -eq 0 ] \
+    && [ "$(wc -l < "$LOST_RACE_INSTALLER_RECORD")" -eq 0 ] \
+    && [ "$(wc -l < "$LOST_RACE_UPDATE_RECORD")" -eq 1 ] \
+    && grep -Fqx "$LOST_RACE_TARGET||" "$LOST_RACE_UPDATE_RECORD"; then
+    echo 'PASS a delayed first run hands off to updater after the lock race'
+  else
+    failures+="lost-race run did not hand off to updater: $(< "$TMP_ROOT/lost-race.stderr")\\n"
+  fi
+else
+  kill "$lost_race_pid" 2>/dev/null || true
+  wait "$lost_race_pid" 2>/dev/null || true
+  failures+='lost-race run did not reach the acquisition lock\n'
 fi
 
 HAND_HOME="$TMP_ROOT/home-hand-fetched"

@@ -880,23 +880,50 @@ else
   assert "bin/bootstrap links to docs/install.sh" 1
 fi
 
-if ! grep -Eq '^[[:space:]]*-[[:space:]]*([^#]*install\.sh|[^#]*\*\.sh)' "$bootstrap_site_config"; then
+if ! awk '
+  /^[[:space:]]*exclude:[[:space:]]*\[/ {
+    if ($0 ~ /(install\.sh|\*\.sh)/) found = 1
+    next
+  }
+  /^[[:space:]]*exclude:[[:space:]]*$/ { in_exclude = 1; next }
+  in_exclude && /^[^[:space:]]/ { in_exclude = 0 }
+  in_exclude && /^[[:space:]]*-/ && /(install\.sh|\*\.sh)/ { found = 1 }
+  END { exit !found }
+' "$bootstrap_site_config"; then
   assert "docs site does not exclude install.sh" 0
 else
   assert "docs site does not exclude install.sh" 1
 fi
 
 bootstrap_publish_dir=$(mktemp -d)
-if grep -q '^---$' "$bootstrap_doc_script" \
-  || (cd "${HARNESS_DIR}/docs" && find . -path './[_\.]*/install.sh' -print -quit | grep -q .); then
-  assert "docs/install.sh is published verbatim" 1
-else
-  cp "$bootstrap_doc_script" "$bootstrap_publish_dir/install.sh"
-  if [ -f "$bootstrap_publish_dir/install.sh" ] && cmp -s "$bootstrap_doc_script" "$bootstrap_publish_dir/install.sh"; then
-    assert "docs/install.sh is published verbatim" 0
+if command -v jekyll >/dev/null 2>&1; then
+  if (cd "${HARNESS_DIR}/docs" && jekyll build --destination "$bootstrap_publish_dir"); then
+    bootstrap_publish_status=0
   else
-    assert "docs/install.sh is published verbatim" 1
+    bootstrap_publish_status=1
   fi
+else
+  if grep -q '^---$' "$bootstrap_doc_script" \
+    || (cd "${HARNESS_DIR}/docs" && find . -path './[_\.]*/install.sh' -print -quit | grep -q .) \
+    || ! awk '
+      /^[[:space:]]*exclude:[[:space:]]*\[/ { if ($0 ~ /(install\.sh|\*\.sh)/) found = 1; next }
+      /^[[:space:]]*exclude:[[:space:]]*$/ { in_exclude = 1; next }
+      in_exclude && /^[^[:space:]]/ { in_exclude = 0 }
+      in_exclude && /^[[:space:]]*-/ && /(install\.sh|\*\.sh)/ { found = 1 }
+      END { exit found ? 1 : 0 }
+    ' "$bootstrap_site_config"; then
+    bootstrap_publish_status=1
+  else
+    cp "$bootstrap_doc_script" "$bootstrap_publish_dir/install.sh"
+    bootstrap_publish_status=0
+  fi
+fi
+if [ "$bootstrap_publish_status" -eq 0 ] \
+  && [ -f "$bootstrap_publish_dir/install.sh" ] \
+  && cmp -s "$bootstrap_doc_script" "$bootstrap_publish_dir/install.sh"; then
+  assert "docs/install.sh is published verbatim" 0
+else
+  assert "docs/install.sh is published verbatim" 1
 fi
 rm -rf "$bootstrap_publish_dir"
 

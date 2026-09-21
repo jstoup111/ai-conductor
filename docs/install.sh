@@ -145,6 +145,10 @@ acquire() {
     fail "another install is in progress at $LOCK"
   fi
   LOCK_HELD=1
+  classify_target
+  if [ "$TARGET_KIND" = ours ]; then
+    return
+  fi
   if ! git clone --branch "$REF" "$REPO_URL" "$PARTIAL"; then
     fail "could not acquire ai-conductor from $REPO_URL"
   fi
@@ -154,8 +158,13 @@ acquire() {
 cleanup() {
   [ -z "${PARTIAL-}" ] || rm -rf "$PARTIAL"
   if [ "${LOCK_HELD-0}" -eq 1 ]; then
-    rmdir "$LOCK" 2>/dev/null || true
+    release_lock
   fi
+}
+
+release_lock() {
+  rmdir "$LOCK" 2>/dev/null || true
+  LOCK_HELD=0
 }
 
 is_our_origin() {
@@ -223,7 +232,12 @@ main() {
     resolve_ref
     announce
     acquire
-    run_installer
+    if [ "$TARGET_KIND" = ours ]; then
+      release_lock
+      run_updater
+    else
+      run_installer
+    fi
   fi
 }
 
