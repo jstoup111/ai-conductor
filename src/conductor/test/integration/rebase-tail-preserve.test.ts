@@ -339,9 +339,17 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     await writeState(statePath, { ...FRONT_DONE_M });
 
     const order: string[] = [];
+    let postReplayProofEstablished = false;
     const runner: StepRunner = {
       run: async (step) => {
         order.push(step);
+        // The ordering observation ends at the first post-replay manual test.
+        // Continuing through the rest of the ship tail adds unrelated gates to
+        // this fixture and can leave a full Conductor loop running after the
+        // behavior under test has already been established.
+        if (step === 'manual_test' && postReplayProofEstablished) {
+          return { success: false, error: 'expected stop after post-replay ordering observation' };
+        }
         return satisfy(step);
       },
     };
@@ -357,6 +365,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
       ensure: async () => {
         provedHead = await git('rev-parse', 'HEAD');
         order.push(`suite-proof@${provedHead}`);
+        postReplayProofEstablished = provedHead !== headBeforeReplay;
         return {
           status: 'EXECUTED',
           freshness: { status: 'STALE', reason: 'fingerprint_mismatch' },
