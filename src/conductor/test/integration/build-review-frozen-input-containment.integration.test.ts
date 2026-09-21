@@ -94,6 +94,12 @@ describe('custom review containment exposes the complete frozen baseline/head in
     expect(bound('--bind')).not.toContain(baseline);
     expect(probeArgs).toContain(join(baseline!, '.build-review-write-probe'));
 
+    // Sibling lap artifacts and the cache live under the evidence root of the
+    // ro-bound checkout; production masks that root and probes a real file in it.
+    const evidenceRoot = join(project, '.pipeline', 'build-review');
+    expect(bound('--tmpfs')).toContain(evidenceRoot);
+    expect(probeArgs).toContain(join(evidenceRoot, '.sibling-evidence-probe'));
+
     const invocation = (invoke.mock.calls as unknown as Array<[{ prompt: string; cwd: string; reviewAccess?: { profile: { mountArgs: string[] } } }]>)[0]![0];
     expect(invocation.cwd).toBe(head);
     expect(invocation.reviewAccess?.profile.mountArgs).toEqual(expect.arrayContaining(['--ro-bind', baseline!, baseline!]));

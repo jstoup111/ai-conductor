@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, relative, sep } from 'node:path';
 
@@ -22,6 +22,12 @@ export interface BuildReviewContainmentPaths {
   readonly originalCheckout: string;
   readonly originalInstallation: string;
   readonly engineEvidence: string;
+  /**
+   * The checkout's whole build-review evidence root: lap branch artifacts,
+   * aggregates and the cache.  It is masked inside the sandbox; only policy
+   * material and engine evidence are re-exposed beneath it, read-only.
+   */
+  readonly reviewEvidenceRoot: string;
   readonly siblingEvidence: string;
   readonly scratch: string;
   readonly sourceWriteProbe: string;
@@ -152,7 +158,7 @@ function hasSafePaths(paths: BuildReviewContainmentPaths): boolean {
     && isWithin(paths.originalInstallation, paths.installationWriteProbe)
     && isWithin(paths.engineEvidence, paths.engineStateWriteProbe)
     && isWithin(paths.scratch, paths.scratchWriteProbe)
-    && isWithin(paths.siblingEvidence, paths.siblingEvidenceProbe);
+    && (isWithin(paths.siblingEvidence, paths.siblingEvidenceProbe) || isWithin(paths.reviewEvidenceRoot, paths.siblingEvidenceProbe));
 }
 
 /**
@@ -310,8 +316,13 @@ function deriveReviewMountArgs(paths: BuildReviewContainmentPaths): readonly str
   return [
     '--ro-bind', paths.frozenSource, paths.frozenSource,
     '--ro-bind', paths.frozenBaseline, paths.frozenBaseline,
-    '--ro-bind', paths.policyMaterial, paths.policyMaterial,
     '--ro-bind', paths.originalCheckout, paths.originalCheckout,
+    // The checkout bind above would expose every sibling branch artifact,
+    // aggregate and cache entry under the evidence root.  Mask the root, then
+    // re-expose only what this reviewer may read; bubblewrap applies these in
+    // order, so the binds below land inside the empty mask.
+    '--tmpfs', paths.reviewEvidenceRoot,
+    '--ro-bind', paths.policyMaterial, paths.policyMaterial,
     '--ro-bind', paths.originalInstallation, paths.originalInstallation,
     // Engine evidence is an existing engine-owned directory. Bind it read-only
     // so the mandatory probe proves it cannot be changed by a reviewer.
@@ -319,6 +330,30 @@ function deriveReviewMountArgs(paths: BuildReviewContainmentPaths): readonly str
     '--tmpfs', paths.siblingEvidence,
     '--bind', paths.scratch, paths.scratch,
   ];
+}
+
+/**
+ * Evidence paths of one production review launch, all derived from the feature
+ * checkout.  The read sentinel sits directly in the evidence root, beside the
+ * lap directories, so the probe proves real sibling artifacts are withheld.
+ */
+export function buildReviewEvidencePaths(projectDir: string): Pick<BuildReviewContainmentPaths, 'reviewEvidenceRoot' | 'engineEvidence' | 'siblingEvidence' | 'engineStateWriteProbe' | 'siblingEvidenceProbe'> {
+  const reviewEvidenceRoot = join(projectDir, '.pipeline', 'build-review');
+  const engineEvidence = join(reviewEvidenceRoot, 'engine-evidence');
+  return {
+    reviewEvidenceRoot, engineEvidence,
+    siblingEvidence: join(reviewEvidenceRoot, 'sibling-evidence'),
+    engineStateWriteProbe: join(engineEvidence, '.build-review-write-probe'),
+    siblingEvidenceProbe: join(reviewEvidenceRoot, '.sibling-evidence-probe'),
+  };
+}
+
+/** Creates the evidence directories and the readable host sentinel the probe must find withheld. */
+export async function prepareBuildReviewEvidencePaths(projectDir: string): Promise<ReturnType<typeof buildReviewEvidencePaths>> {
+  const paths = buildReviewEvidencePaths(projectDir);
+  await Promise.all([mkdir(paths.engineEvidence, { recursive: true }), mkdir(paths.siblingEvidence, { recursive: true })]);
+  await writeFile(paths.siblingEvidenceProbe, 'sibling review evidence that containment must withhold\n', 'utf8');
+  return paths;
 }
 
 const BWRAP_BIND_FLAGS = new Set(['--bind', '--bind-try', '--ro-bind', '--ro-bind-try', '--dev-bind', '--dev-bind-try']);

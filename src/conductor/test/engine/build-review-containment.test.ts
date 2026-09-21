@@ -17,7 +17,7 @@ import {
 import { copySelectedCodexLogin } from '../../src/execution/codex-self-host-auth.js';
 
 const PATHS = {
-  frozenSource: '/review/frozen-source', frozenBaseline: '/review/frozen-baseline', baselineWriteProbe: '/review/frozen-baseline/sentinel', policyMaterial: '/review/policy',
+  reviewEvidenceRoot: '/review/original/.pipeline/build-review', frozenSource: '/review/frozen-source', frozenBaseline: '/review/frozen-baseline', baselineWriteProbe: '/review/frozen-baseline/sentinel', policyMaterial: '/review/policy',
   originalCheckout: '/review/original', originalInstallation: '/review/installed-policy',
   engineEvidence: '/review/engine-evidence', siblingEvidence: '/review/sibling-evidence',
   scratch: '/review/private-scratch', sourceWriteProbe: '/review/frozen-source/sentinel',
@@ -159,7 +159,7 @@ describe('engine/build-review-containment', () => {
     const result = await prepareBuildReviewContainment({
       provider: 'codex',
       paths: {
-        frozenSource: '/review/frozen-source', frozenBaseline: '/review/frozen-baseline', baselineWriteProbe: '/review/frozen-baseline/sentinel', policyMaterial: '/review/policy',
+        reviewEvidenceRoot: '/review/original/.pipeline/build-review', frozenSource: '/review/frozen-source', frozenBaseline: '/review/frozen-baseline', baselineWriteProbe: '/review/frozen-baseline/sentinel', policyMaterial: '/review/policy',
         originalCheckout: '/review/original', originalInstallation: '/review/installed-policy',
         engineEvidence: '/review/engine-evidence', siblingEvidence: '/review/sibling-evidence',
         scratch: '/review/private-scratch', sourceWriteProbe: '/review/frozen-source/sentinel',
@@ -208,6 +208,43 @@ describe('engine/build-review-containment', () => {
     expect(processCalls[0]!.args.slice(-3)).toEqual([
       '/review/sibling-evidence/result.json', '/review/private-scratch.host-state-probe', '/review/frozen-baseline/sentinel',
     ]);
+  });
+
+  it('masks the whole build-review evidence root so sibling lap artifacts and the cache are withheld', async () => {
+    const paths = {
+      ...PATHS,
+      policyMaterial: '/review/original/.pipeline/build-review/policy-material/p1',
+      engineEvidence: '/review/original/.pipeline/build-review/engine-evidence',
+      engineStateWriteProbe: '/review/original/.pipeline/build-review/engine-evidence/sentinel',
+      siblingEvidence: '/review/original/.pipeline/build-review/sibling-evidence',
+      siblingEvidenceProbe: '/review/original/.pipeline/build-review/.sibling-evidence-probe',
+    };
+    const result = await prepareBuildReviewContainment({
+      provider: 'claude', paths, runtimeHost,
+      runProcess: async () => ({ exitCode: 0, stderr: '', stdout: HEALTHY_PROBE.join('\n') }),
+    });
+    if (result.kind !== 'ready') throw new Error(`expected ready containment: ${result.reason}`);
+    const review = result.profile.reviewMountArgs!;
+    const at = (...needle: string[]) => review.findIndex((_, index) => needle.every((part, offset) => review[index + offset] === part));
+    const checkout = at('--ro-bind', '/review/original', '/review/original');
+    const mask = at('--tmpfs', '/review/original/.pipeline/build-review');
+    const policy = at('--ro-bind', paths.policyMaterial, paths.policyMaterial);
+    const evidence = at('--ro-bind', paths.engineEvidence, paths.engineEvidence);
+    // The mask must follow the checkout bind it hides, and precede what is re-exposed beneath it.
+    expect(checkout).toBeGreaterThanOrEqual(0);
+    expect(mask).toBeGreaterThan(checkout);
+    expect(policy).toBeGreaterThan(mask);
+    expect(evidence).toBeGreaterThan(mask);
+  });
+
+  it('refuses a sibling probe that lies outside the masked evidence root', async () => {
+    const runProcess = vi.fn();
+    const result = await prepareBuildReviewContainment({
+      provider: 'claude', runtimeHost, runProcess,
+      paths: { ...PATHS, siblingEvidenceProbe: '/review/elsewhere/result.json' },
+    });
+    expect(result.kind).toBe('unsupported');
+    expect(runProcess).not.toHaveBeenCalled();
   });
 
   it('enumerates runtime roots instead of binding the host root, HOME, or a host config directory', async () => {
@@ -312,7 +349,7 @@ describe('engine/build-review-containment', () => {
     const result = await prepareBuildReviewContainment({
       provider: 'claude',
       paths: {
-        frozenSource: '/review/frozen-source', frozenBaseline: '/review/frozen-baseline', baselineWriteProbe: '/review/frozen-baseline/sentinel', policyMaterial: '/review/policy',
+        reviewEvidenceRoot: '/review/original/.pipeline/build-review', frozenSource: '/review/frozen-source', frozenBaseline: '/review/frozen-baseline', baselineWriteProbe: '/review/frozen-baseline/sentinel', policyMaterial: '/review/policy',
         originalCheckout: '/review/original', originalInstallation: '/review/installed-policy',
         engineEvidence: '/review/engine-evidence', siblingEvidence: '/review/sibling-evidence',
         scratch: '/review/private-scratch', sourceWriteProbe: '/review/frozen-source/sentinel',
