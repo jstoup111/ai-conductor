@@ -66,7 +66,9 @@ only within bounds, so the daemon never churns on a hopeless conflict.
 #### Negative Paths
 - Given a conflicting PR carrying the `needs-remediation` label, when any number of sweep
   ticks run, then no resolution is ever attempted and a skip is logged once per tick —
-  clearing the label is the only way to re-enable (sticky escalation).
+  the label stays sticky for as long as the PR is conflicting; once the PR is no longer
+  conflicting, a label whose recorded escalation cause is conflict resolution is cleared by
+  the sweep, and any other `needs-remediation` label is cleared only by the operator.
 - Given `lastResolveAt` is 10 minutes ago with `cooldown_minutes: 60`, when the sweep tick
   runs, then the attempt is skipped with a cooldown log line and `resolveAttempts` does NOT
   increment.
@@ -233,9 +235,11 @@ rejected outright, because git drops commits silently during rebase.
   then verification proceeds to the suite gate.
 
 #### Negative Paths
-- Given a resolution that `--skip`ped a commit (a pre-rebase subject missing afterward), when
-  `featureCommitsPreserved` runs, then the attempt is rejected, the flow aborts, nothing is
-  pushed, and the escalation comment names the guard that failed.
+- Given a resolution that left a pre-rebase subject missing afterward without a qualifying
+  declaration (the resolver's verdict naming it superseded, the commit replayed by this
+  rebase, and every path it touched a test path), when `featureCommitsPreserved` runs, then
+  the attempt is rejected, the flow aborts, nothing is pushed, and the escalation comment
+  names the guard that failed.
 - Given the default branch advanced again mid-resolution so the rebased branch is no longer
   current with the base it rebased onto, when `isBranchCurrent` runs, then the attempt is
   rejected and nothing is pushed.
