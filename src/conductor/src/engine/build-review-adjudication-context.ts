@@ -262,7 +262,7 @@ function validateCustomScope(
     // A captured policy body is text, not a reference.  It is delivered whole
     // or the lap stops before dispatch; the judge never sees an excerpt.
     for (const criterion of policy.criteria) {
-      const criterionStop = boundedString(criterion, LIMITS.maxTextBytes, 'policy-context', 'criteria[]');
+      const criterionStop = boundedString(criterion, LIMITS.maxReferenceBytes, 'policy-context', 'criteria[]');
       if (criterionStop) return criterionStop;
     }
   }

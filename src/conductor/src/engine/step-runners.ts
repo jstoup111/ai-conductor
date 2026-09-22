@@ -2954,10 +2954,10 @@ export class DefaultStepRunner implements StepRunner {
               ...(policy.plugin === undefined ? {} : { plugin: policy.plugin }),
             },
           effectivePolicy: stamped.policy,
-            // Evidence text is optional reviewer context, never a lossy
-            // representation of binary package resources. The bundle digest
-            // still binds every captured byte.
-            criteria: Object.freeze(bundle.manifest.filter((file) => isUtf8(file.bytes)).map((file) => file.bytes.toString('utf8'))),
+            // No `criteria`: a captured package file is reviewer instruction
+            // text (and, for a plugin, sibling skills too), not an adjudication
+            // criterion. The adjudicator falls back to the short declared
+            // `resources` references; the bundle digest binds every byte.
             reviewedInput: stamped.reviewedInput,
             producer: stamped.candidate,
           },

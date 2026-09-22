@@ -806,9 +806,9 @@ describe('coordinateBuildReviewAdjudication', () => {
   });
 
   it.each([
-    ['one byte over the text bound', 8_001, false],
-    ['exactly at the text bound', 8_000, true],
-  ])('dispatches captured custom policy criteria only when complete: %s', async (_label, bytes, dispatched) => {
+    ['one byte over the reference bound', 257, false],
+    ['exactly at the reference bound', 256, true],
+  ])('dispatches custom policy criteria only when complete: %s', async (_label, bytes, dispatched) => {
     const root = await projectRoot();
     const criterion = 'c'.repeat(bytes);
     const events: string[] = [];
