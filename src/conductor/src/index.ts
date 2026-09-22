@@ -2,11 +2,6 @@ export * from './types/index.js';
 export { wireOtelVisualizer } from './engine/otel/wire.js';
 export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, detectKickbackBudgetCommand, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
-export { runReleaseMetadataCheckAction } from './engine/release-metadata-check-action.js';
-export { runReleasePrAction } from './engine/release-pr-action.js';
-export { collectReleaseCandidates } from './engine/release-candidates.js';
-export { renderReleaseCandidate, renderReleaseCandidateAudit } from './engine/release-renderer.js';
-export { classifyReleasePublication, runReleasePublisherAction } from './engine/release-publisher-action.js';
 
 import type { RunMode } from './types/index.js';
 import { recoverCommandState, replaceCommandState } from './engine/command-state.js';
