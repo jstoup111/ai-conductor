@@ -46,6 +46,25 @@ Choose Option C.
 3. Completion requires the exact file to exist and have an mtime at or after the current attempt
    start. A non-dispatch check falls back to the conductor session start. No available freshness
    floor fails closed for the configured gate.
+
+> **Amended 2026-09-20 by #1344:** the FINISH prerequisite is a non-dispatch check that must
+> survive a process restart, so it cannot use the conductor session start as its floor. The
+> original sentence stays in force for every other non-dispatch check.
+>
+> **D3.1** When FINISH observes a custom step's completion artifact as a publication
+> prerequisite, the freshness floor is the feature run start, not the conductor session start.
+> FINISH is resumable across sessions (adr-2026-08-01-engine-owned-resumable-finish-publication),
+> and a session-start floor would reject a marker legitimately written earlier in the same
+> feature run. An unavailable feature run start still fails closed.
+>
+> **D6** Every custom step that is gating, declares a `completion_artifact`, and is ordered before
+> `finish` is a FINISH publication prerequisite: it must be `done` with a fresh marker. Any other
+> recorded status, including `skipped`, leaves the prerequisite unsatisfied, because a gating
+> custom step cannot be disabled or made conditional by configuration. No step name is reserved
+> for this role. An unsatisfied prerequisite resolves to FINISH's existing blocked
+> release-readiness conditions, and the operator-visible reason names the step key. A repository
+> that declares no such step has no prerequisite.
+
 4. The skill owns marker creation. A blocking result omits the marker. The engine does not infer a
    pass from a review report or process exit alone.
 5. Built-in completion predicates and artifact globs remain unchanged.
