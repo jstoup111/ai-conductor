@@ -17,7 +17,7 @@ import {
 } from '../../src/engine/build-review-finding-identity.js';
 import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
 import { BUILD_REVIEW_RUBRIC_REGISTRY, createBuildReviewRubricRegistry } from '../../src/engine/build-review-registry.js';
-import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
+import { resolveBuildReviewConfig, resolveBuildReviewCustomCatalog } from '../../src/engine/resolved-config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
 function fixedFinding(rubric: 'testQuality' | 'security') {
@@ -189,6 +189,29 @@ describe('engine/build-review-contract', () => {
       { id: 'testQuality', descriptor: malformed as unknown as typeof BUILD_REVIEW_RUBRIC_REGISTRY.testQuality },
       { id: 'security', descriptor: BUILD_REVIEW_RUBRIC_REGISTRY.security },
     ])).toThrow(/testQuality.*output\.jsonSchema/i);
+  });
+
+  it('rejects an incomplete descriptor at the live custom catalog construction boundary', () => {
+    const resolved = resolveBuildReviewConfig({
+      build_review: {
+        custom_rubrics: {
+          boundaryPolicy: { enabled: true, skill: 'boundary-review', question: 'Are changed boundaries safe?' },
+        },
+      },
+    } as HarnessConfig);
+    const custom = resolved.catalog.find((member) => member.kind === 'custom');
+    if (custom?.kind !== 'custom') throw new Error('expected resolved custom member');
+    const malformed = {
+      ...custom,
+      contract: {
+        ...custom.contract,
+        output: { ...custom.contract.output, jsonSchema: undefined },
+      },
+    };
+
+    expect(() => resolveBuildReviewCustomCatalog([
+      malformed as unknown as typeof custom,
+    ])).toThrow(/boundaryPolicy.*output\.jsonSchema/i);
   });
 
   it('closes judged-v3 output to the four provider-owned fields', () => {
