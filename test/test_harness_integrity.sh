@@ -969,20 +969,19 @@ if command -v jekyll >/dev/null 2>&1; then
   else
     bootstrap_publish_status=1
   fi
-else
-  if ! bootstrap_static_publishable "$bootstrap_doc_script" "$bootstrap_site_config" install.sh; then
-    bootstrap_publish_status=1
+  if [ "$bootstrap_publish_status" -eq 0 ] \
+    && [ -f "$bootstrap_publish_dir/install.sh" ] \
+    && cmp -s "$bootstrap_doc_script" "$bootstrap_publish_dir/install.sh"; then
+    assert "docs/install.sh is published verbatim" 0
   else
-    cp "$bootstrap_doc_script" "$bootstrap_publish_dir/install.sh"
-    bootstrap_publish_status=0
+    assert "docs/install.sh is published verbatim" 1
   fi
-fi
-if [ "$bootstrap_publish_status" -eq 0 ] \
-  && [ -f "$bootstrap_publish_dir/install.sh" ] \
-  && cmp -s "$bootstrap_doc_script" "$bootstrap_publish_dir/install.sh"; then
-  assert "docs/install.sh is published verbatim" 0
 else
-  assert "docs/install.sh is published verbatim" 1
+  # Without a site builder there is nothing to compare against: copying the
+  # script and cmp-ing it with itself passes by construction. The static-file
+  # rule is already asserted above; the byte-identical proof is recorded as
+  # not run rather than claimed.
+  warn_check "docs/install.sh is published verbatim (jekyll not on PATH; comparison not run)" 1
 fi
 rm -rf "$bootstrap_publish_dir"
 
