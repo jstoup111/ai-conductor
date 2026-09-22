@@ -359,6 +359,65 @@ Lets the mergeable sweep settle a rebase conflict confined to test code without 
 
 **Dependencies:** Task 2
 
+### Task 18: Distinguish judgement mode from legacy strict callers in the preservation guard
+**Story:** 3
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests against the existing scratch-repository guard fixtures: with `declaredSuperseded` omitted (`undefined`) an undeclared missing commit that upstream superseded still passes through `supersededByBase` exactly as before; with `declaredSuperseded: []` the same undeclared missing commit fails naming the subject; with a non-empty array an undeclared missing commit fails even when upstream superseded it.
+2. Verify tests fail (RED)
+3. Implement: in `runAcceptanceGuards` treat `declaredSuperseded === undefined` as legacy strict mode (unchanged behavior, `supersededByBase` may excuse) and any array, including an empty one, as judgement mode where a missing commit is excused only by an explicit declaration. Make the sweep resolution flow in `resolveConflictingPr` always pass an array (empty when the verdict declares nothing) and leave finish-time and re-kick callers passing nothing. Do not default the parameter to `[]`.
+4. Verify tests pass (GREEN)
+5. Commit
+
+**Done when:**
+- `runAcceptanceGuards` called with `declaredSuperseded` omitted returns results identical to the pre-change guard for an undeclared missing commit that upstream superseded, asserted by the legacy-mode test reusing the existing supersededByBase fixture.
+- `runAcceptanceGuards` called with `declaredSuperseded: []` returns a `featureCommitsPreserved` failure naming the subject for that same fixture, asserted by the judgement-mode empty-declarations test.
+- `resolveConflictingPr` passes an array to `runAcceptanceGuards` on every sweep resolution, including one whose verdict declares nothing, asserted by a spy on the guard call in the sweep integration test, while the finish-time rebase step passes no `declaredSuperseded` argument, asserted by the finish-time boundary test.
+
+**Files:** `src/conductor/src/engine/autoresolve.ts`; `src/conductor/src/engine/rebase.ts`; `src/conductor/test/engine/autoresolve-guards.test.ts`; `src/conductor/test/engine/autoresolve-supersession.test.ts`
+
+**Dependencies:** Task 6, Task 7
+
+### Task 19: Name why each excused commit was excused on the guard result
+**Story:** 3
+**Type:** happy-path
+
+**Steps:**
+1. Write a failing test: for the declared-drop scratch-repository fixture, the ok guard result's `excused` entry carries `reason: "declared-superseded-test-only"` and a `paths` array equal to the test paths the commit touched.
+2. Verify test fails (RED)
+3. Implement: widen the `excused` element type on the ok result of `runAcceptanceGuards` to `{ sha, subject, reason, paths }` with `reason` a closed literal union whose only current member is `declared-superseded-test-only`; populate `paths` from the same `git show --name-only` listing the excuse check already reads. Make the residue event in Task 10 take its reason from the guard result instead of a hard-coded string.
+4. Verify test passes (GREEN)
+5. Commit
+
+**Done when:**
+- The ok result of `runAcceptanceGuards` lists each excused commit with `sha`, `subject`, `reason` equal to `declared-superseded-test-only`, and `paths` equal to the test paths that commit touched, asserted by the declared-drop scratch-repository test.
+- The `rebase_citation_residue` event emitted for an excused commit carries the reason read from the guard result rather than a literal in the emitter, asserted by a test that substitutes a guard result with a different reason value and observes it on the event.
+
+**Files:** `src/conductor/src/engine/autoresolve.ts`; `src/conductor/test/engine/autoresolve-guards.test.ts`; `src/conductor/test/engine/autoresolve-supersession.test.ts`
+
+**Dependencies:** Task 6, Task 10
+
+### Task 20: Drop any verdict returned on a strict-path resolution
+**Story:** 2
+**Type:** negative-path
+
+**Steps:**
+1. Write failing integration tests on `resolveConflictingPr` with scope `mixed`: the resolver returns a resolved result carrying a schema-valid verdict with an empty `superseded` list, and separately a verdict with `choice: "merged"`; expect `refreshed`, one lease push, no `rebase_supersession_verdict` event, no audit comment, the guard called with no `declaredSuperseded` argument, and one log line stating the verdict was ignored because the exception was not in force.
+2. Verify tests fail (RED)
+3. Implement: in the strict path (scope `mixed`, or judgement not in force), discard any verdict on the resolved attempt before validation, guards, publication, audit, and event emission, and log one line naming the pull request; only a non-empty `superseded` list still escalates `tier2-verdict` per Task 3.
+4. Verify tests pass (GREEN)
+5. Commit
+
+**Done when:**
+- `resolveConflictingPr` returns `refreshed` for a non-test conflict whose resolved attempt carries a schema-valid empty verdict, with the event stub and audit comment stub never called and the guard spy receiving no `declaredSuperseded` argument, asserted by the strict-path empty-verdict integration test.
+- The same holds for a strict-path attempt whose verdict has `choice` `merged` and no superseded commits, and exactly one log line containing the pull request URL and the word `ignored` is written, asserted by the strict-path merged-verdict integration test.
+- A strict-path verdict whose `superseded` list is non-empty still escalates at `tier2-verdict`, asserted by the existing Task 3 mixed-scope rejection test continuing to pass.
+
+**Files:** `src/conductor/src/engine/autoresolve.ts`; `src/conductor/test/engine/autoresolve-supersession.test.ts`
+
+**Dependencies:** Task 9
+
 ## Task Dependency Graph
 
 ```text
@@ -379,6 +438,9 @@ Task 14 <- none
 Task 15 <- Task 13, Task 14
 Task 16 <- Task 15
 Task 17 <- Task 2
+Task 18 <- Task 6, Task 7
+Task 19 <- Task 6, Task 10
+Task 20 <- Task 9
 ```
 
 ## Integration Points
@@ -386,6 +448,7 @@ Task 17 <- Task 2
 - After Task 7: a test-only supersession conflict resolves end to end through `resolveConflictingPr` with stubbed boundaries.
 - After Task 12: a judged publication is visible on the pull request and in the persisted event log.
 - After Task 16: a conflict-caused label clears itself across sweep ticks, with bounded retries.
+- After Task 20: the strict path ignores unsolicited verdicts and judgement mode is distinguishable from legacy callers (as-built AB-2, AB-3, AB-4 amendments, 2026-09-22).
 
 ## Coverage Check
 
@@ -404,7 +467,7 @@ Task 17 <- Task 2
 | Story 2 negative: Given a daemon re-kick that resumes a paused rebase with a test-only conflict, when the resolver is dispatched, then the exception is not in force. | 5 | "The daemon re-kick resume path hands its resolver a context with `supersessionJudgement` false for a test-only conflict fixture, asserted by the re-kick boundary test capturing the stub resolver argument." | diff-local |
 | Story 3 happy: Given a verdict declaring one commit superseded, when that commit was replayed by this rebase and every path it touched is a test path, then the work-preservation guard passes although the commit's subject is absent from the rebased branch. | 6 | "`runAcceptanceGuards` returns ok with the commit listed in `excused` when its sha is in `declaredSuperseded` and every path it touched satisfies `isTestPath`, asserted by the declared-drop scratch-repository test." | diff-local |
 | Story 3 happy: Given a declared-superseded commit that passed the guard, when the resolution completes, then the commit is recorded as rebase residue on the existing residue event. | 10 | "`resolveConflictingPr` emits one `rebase_citation_residue` event containing each excused sha with reason `declared-superseded`, asserted by the residue test on the injected emitter stub." | diff-local |
-| Story 3 negative: Given a rebased branch missing a feature commit the verdict did not declare, when the guard runs, then it fails naming the missing subject and the pull request is escalated at the acceptance-guards stage. | 6 | "`runAcceptanceGuards` returns a `featureCommitsPreserved` failure naming the subject when the missing commit is not declared, asserted by the undeclared-drop test, and `resolveConflictingPr` returns `escalated` at stage `acceptance-guards` with the push stub never called on that failure, asserted by the undeclared-drop integration test." | diff-local |
+| Story 3 negative: Given a rebased branch missing a feature commit the verdict did not declare, when the guard runs, then it fails naming the missing subject and the pull request is escalated at the acceptance-guards stage. | 18 | "`runAcceptanceGuards` called with `declaredSuperseded: []` returns a `featureCommitsPreserved` failure naming the subject for that same fixture, asserted by the judgement-mode empty-declarations test." | diff-local |
 | Story 3 negative: Given a verdict declaring a commit that touched one test file and one non-test file, when the guard runs, then the declaration is refused and the guard fails. | 6 | "`runAcceptanceGuards` refuses a declaration whose commit touched any non-test path and evaluates every declaration individually, asserted by the mixed-path and all-declared tests." | diff-local |
 | Story 3 negative: Given a verdict declaring a commit id that this rebase never replayed, when the verdict is validated, then it is rejected and nothing is published. | 3 | "`validateResolutionVerdict` returns `ok: false` when a `superseded` sha is absent from `replayedShas`, asserted by the never-replayed unit test, and `resolveConflictingPr` given that verdict publishes nothing (push stub and comment upsert never called) and returns `escalated`, asserted by the never-replayed integration test." | diff-local |
 | Story 3 negative: Given a verdict declaring every feature commit superseded, when the guard runs, then each declaration is checked individually and any non-test commit among them fails the guard. | 6 | "`runAcceptanceGuards` refuses a declaration whose commit touched any non-test path and evaluates every declaration individually, asserted by the mixed-path and all-declared tests." | diff-local |
@@ -413,7 +476,7 @@ Task 17 <- Task 2
 | Story 4 happy: Given a second judged resolution on the same pull request, when it is published, then the existing audit comment is updated in place rather than duplicated. | 11 | "A second judged publication calls `upsertComment` with the same marker so the comment is edited in place, asserted by the repeat-publication test." | diff-local |
 | Story 4 negative: Given a resolution published under the exception, when posting the audit comment fails, then the push is not reverted, the failure is logged, and the verdict event is still persisted. | 11 | "When the comment stub throws, `resolveConflictingPr` still returns `refreshed`, logs the failure, the verdict event stub has been called, and the already-invoked lease push is not reverted (no further push, reset, or force-push call reaches the git stub), asserted by the comment-failure test." | diff-local |
 | Story 4 negative: Given a repository with no suite command configured, when a test-only conflict is settled, then nothing is published and no audit comment claims a verification. | 8 | "With the suite stub reporting not configured, `resolveConflictingPr` escalates with reason `no suite command configured`, the push stub is never called, and the comment stub receives no audit comment, asserted by the not-configured test." | diff-local |
-| Story 4 negative: Given a resolution published without the exception, when publication succeeds, then no supersession audit comment is posted. | 11 | "`postSupersessionAudit` is not called when the published attempt carried no verdict, and is never called before the suite stub has returned, asserted by the call-order assertions in the strict-path and audit tests." | diff-local |
+| Story 4 negative: Given a resolution published without the exception, when publication succeeds, then no supersession audit comment is posted. | 20 | "`resolveConflictingPr` returns `refreshed` for a non-test conflict whose resolved attempt carries a schema-valid empty verdict, with the event stub and audit comment stub never called and the guard spy receiving no `declaredSuperseded` argument, asserted by the strict-path empty-verdict integration test." | diff-local |
 | Story 5 happy: Given autoresolve escalates a conflicting pull request, when the sweep records the outcome, then the watch entry stores conflict resolution as the escalation cause. | 13 | "The sweep writes `escalationCause: "conflict-resolution"` on the surviving watch entry when the autoresolve dispatch result kind is `escalated`, asserted by the sweep cause test reading the persisted registry." | diff-local |
 | Story 5 happy: Given a pull request labeled needs-remediation with a recorded conflict cause, when a sweep tick finds it no longer conflicting and its body carries no halt marker, then the sweep issues the label removal, and once a later read shows the label gone the recorded cause is cleared. | 15 | "`maybeClearConflictLabel` calls `removeLabel` for `needs-remediation` exactly once when the entry cause is `conflict-resolution`, `state.mergeable` is `MERGEABLE`, and `hasHaltBodyMarker` is false, asserted by the clear test." | diff-local |
 | Story 5 happy: Given a pull request whose label was cleared this way, when it later becomes conflicting again, then it passes the sticky-label eligibility gate. | 15 | "On a tick where the cause is set and the label is absent, the sweep clears `escalationCause` and `labelClearAttempts`, and a later conflicting tick is not skipped by the sticky-label gate, asserted by the two-tick eligibility test." | diff-local |
