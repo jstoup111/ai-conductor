@@ -1314,6 +1314,15 @@ export type ConductorEvent =
       directory: string;
     }
   | {
+      /** A persisted repair-obligation boundary was translated after a rebase. */
+      type: 'repair_boundary_translated';
+      obligationId: string;
+      from: string;
+      to: string;
+      rule: 'direct' | 'successor';
+      projectRoot: string;
+    }
+  | {
       /**
        * Residue: pre-image shas cited by evidence but with no patch-id
        * match post-rebase (dropped or content-changed). Surfaced instead of

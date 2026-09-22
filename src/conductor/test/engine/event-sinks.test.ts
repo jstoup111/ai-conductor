@@ -151,6 +151,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   // is already persisted, so an unpersisted preservation reads as silence.
   'rebase_gate_preserved',
   'rebase_untracked_quarantined',
+  'repair_boundary_translated',
   'operator_rewind',
   'setup_repair',
   'project_setup',
@@ -354,6 +355,37 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  it('persists translated repair boundaries without rendering, audit, or OpenTelemetry', () => {
+    const translated = [
+      {
+        type: 'repair_boundary_translated',
+        obligationId: 'repair-direct',
+        from: 'pre-rebase-sha',
+        to: 'post-rebase-sha',
+        rule: 'direct',
+        projectRoot: '/workspace/project',
+      },
+      {
+        type: 'repair_boundary_translated',
+        obligationId: 'repair-successor',
+        from: 'dropped-pre-rebase-sha',
+        to: 'successor-post-rebase-sha',
+        rule: 'successor',
+        projectRoot: '/workspace/project',
+      },
+    ] satisfies ConductorEvent[];
+
+    expect({
+      translated,
+      sink: EVENT_SINKS.repair_boundary_translated,
+      persisted: persistedEventTypes().includes('repair_boundary_translated'),
+    }).toEqual({
+      translated,
+      sink: { render: false, persist: true, audit: false, otel: false },
+      persisted: true,
+    });
+  });
+
   // Covers: task:1
   it('persists, renders, and exports memory setup without widening audit', () => {
     expect({
