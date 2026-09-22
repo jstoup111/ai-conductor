@@ -346,13 +346,13 @@ function guardedMutationRunnerCall(file: string, node: ts.CallExpression): boole
 
 /** Every dynamic GhRunner forwarding exemption is bound to its real owner. */
 const GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS: Readonly<Record<
-  'runTrackerRead' | 'runTrackerAmbientRead' | 'runTrackerIssueOperation' | 'graphqlPage' | 'guardedPrRunner',
+  'runTrackerRead' | 'runTrackerAmbientRead' | 'runTrackerGraphqlRead' | 'runTrackerIssueOperation' | 'guardedPrRunner',
   readonly string[]
 >> = {
   runTrackerRead: ['engine/tracker-client.ts'],
   runTrackerAmbientRead: ['engine/tracker-client.ts'],
+  runTrackerGraphqlRead: ['engine/tracker-client.ts'],
   runTrackerIssueOperation: ['engine/tracker-client.ts'],
-  graphqlPage: ['engine/shipment-audit.ts'],
   guardedPrRunner: ['engine/gate-writeback.ts', 'engine/pr-labels.ts'],
 };
 
@@ -360,7 +360,7 @@ const GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS: Readonly<Record<
 function guardedDynamicRunnerForwarding(file: string, node: ts.CallExpression): boolean {
   const owner = enclosingFunctionName(node);
   if (isCanonicalGuardedAdapterTransportCall(file, node)) return true;
-  if (owner === 'runTrackerRead' || owner === 'runTrackerAmbientRead' || owner === 'graphqlPage' || owner === 'runTrackerIssueOperation') {
+  if (owner === 'runTrackerRead' || owner === 'runTrackerAmbientRead' || owner === 'runTrackerGraphqlRead' || owner === 'runTrackerIssueOperation') {
     return GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS[owner].includes(normalizedFile(file));
   }
   if (owner !== 'guardedPrRunner') return false;
@@ -795,11 +795,14 @@ export function shippedRuntimeTypescriptFiles(conductorRoot: string): string[] {
       else if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.mts')) && !entry.name.endsWith('.d.ts')) files.push(path);
     }
   };
-  walk(join(conductorRoot, 'src'));
+  for (const runtimeRoot of ['src', 'scripts']) {
+    const directory = join(conductorRoot, runtimeRoot);
+    if (existsSync(directory)) walk(directory);
+  }
   return files.sort();
 }
 
-/** Run the shipped-runtime audit and report paths relative to src/. */
+/** Run the shipped-runtime audit and report paths relative to the runtime root. */
 export function auditShippedGithubInvocationBoundary(conductorRoot: string): GithubInvocationAuditFinding[] {
   const findings: GithubInvocationAuditFinding[] = [];
   for (const operation of Object.keys(GITHUB_OPERATION_REGISTRY) as GithubOperationName[]) {
@@ -808,12 +811,13 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
     }
   }
   for (const file of shippedRuntimeTypescriptFiles(conductorRoot)) {
-    const runtimeFile = relative(join(conductorRoot, 'src'), file).split(sep).join('/');
+    const runtimeFile = relative(conductorRoot, file).split(sep).join('/');
+    const auditFile = runtimeFile.startsWith('src/') ? runtimeFile.slice('src/'.length) : runtimeFile;
     const source = readFileSync(file, 'utf8');
     // Every runtime file is audited in full: there is no file-level inventory
     // or exemption, so a new executable site is classified where it appears.
-    const sites = findGithubInvocationSites(runtimeFile, source);
-    findings.push(...auditGithubInvocationSource(runtimeFile, source));
+    const sites = findGithubInvocationSites(auditFile, source);
+    findings.push(...auditGithubInvocationSource(auditFile, source));
     for (const site of sites) {
       if (site.classification === 'remote-write') {
         findings.push({ file: site.file, line: site.line, column: 1, message: 'unclassified executable GitHub invocation site' });

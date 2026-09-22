@@ -11,7 +11,7 @@ import {
 } from './shipment-evidence.js';
 import type { GhRunner, GitRunner } from './pr-labels.js';
 import { renderShippedRecord, specHash } from './shipped-record.js';
-import { runTrackerAmbientRead } from './tracker-client.js';
+import { runTrackerAmbientRead, runTrackerGraphqlRead } from './tracker-client.js';
 
 export const DEFAULT_SHIPMENT_AUDIT_REPORT =
   '.docs/audits/2026-07-25-durable-shipped-record-backfill.json';
@@ -366,33 +366,28 @@ function graphqlVariables(
   name: string,
   number: number | undefined,
   endCursor: string | null,
-): Array<[name: string, value: string, typed?: boolean]> {
-  const variables: Array<[name: string, value: string, typed?: boolean]> = [
-    ['owner', owner],
-    ['name', name],
-  ];
-  if (number !== undefined) variables.push(['number', String(number), true]);
-  if (endCursor !== null) variables.push(['endCursor', endCursor]);
-  return variables;
+): Record<string, string | number> {
+  return {
+    owner,
+    name,
+    ...(number === undefined ? {} : { number }),
+    ...(endCursor === null ? {} : { endCursor }),
+  };
 }
 
 async function graphqlPage(
   options: ShipmentAuditOptions,
   query: string,
-  variables: Array<[name: string, value: string, typed?: boolean]>,
+  variables: Record<string, string | number>,
   context: string,
 ): Promise<unknown> {
-  const args = [
-    'api',
-    'graphql',
-    '-f',
-    `query=${query}`,
-    ...variables.flatMap(([name, value, typed]) => [typed ? '-F' : '-f', `${name}=${value}`]),
-  ];
   let lastTransportError: unknown;
   for (let attempt = 1; attempt <= GRAPHQL_TRANSPORT_ATTEMPTS; attempt += 1) {
     try {
-      const { stdout } = await options.runGh(args, { cwd: options.cwd });
+      const stdout = await runTrackerGraphqlRead(options.runGh, options.cwd, {
+        query,
+        variables,
+      });
       return parseGraphqlPage(stdout, context);
     } catch (error) {
       if (!isTransientGithubTransportError(error)) throw error;

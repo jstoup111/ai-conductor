@@ -158,6 +158,70 @@ export function decodeGithubAmbientRead(
   return { kind: 'accepted', request: { operation: operation as GithubAmbientReadOperation, args } };
 }
 
+/**
+ * GraphQL discovery has its own closed read shape.  It cannot use the generic
+ * ambient argv decoder because `gh api graphql` deliberately uses `-f`/`-F`,
+ * which that decoder correctly treats as a potential REST write.
+ */
+export const GITHUB_GRAPHQL_READ_REGISTRY = {
+  'ambient.graphql.read': { command: ['api', 'graphql'] },
+} as const;
+
+export type GithubGraphqlReadOperation = keyof typeof GITHUB_GRAPHQL_READ_REGISTRY;
+export type GithubGraphqlVariable = string | number | boolean;
+
+export interface GithubGraphqlReadRequest {
+  readonly operation: GithubGraphqlReadOperation;
+  readonly query: string;
+  readonly variables: Readonly<Record<string, GithubGraphqlVariable>>;
+}
+
+const GRAPHQL_VARIABLE_NAME = /^[_A-Za-z][_0-9A-Za-z]*$/;
+
+/** Decode the structured GraphQL read before its argv is constructed. */
+export function decodeGithubGraphqlRead(
+  value: unknown,
+): { readonly kind: 'accepted'; readonly request: GithubGraphqlReadRequest } | { readonly kind: 'refused'; readonly reason: GithubOperationRefusalReason } {
+  if (typeof value !== 'object' || value === null) return { kind: 'refused', reason: 'invalid-target' };
+  const { operation, query, variables } = value as { operation?: unknown; query?: unknown; variables?: unknown };
+  if (typeof operation !== 'string' || !Object.hasOwn(GITHUB_GRAPHQL_READ_REGISTRY, operation)) {
+    return { kind: 'refused', reason: 'unsupported-operation' };
+  }
+  if (typeof query !== 'string' || query.trim() === '' || /\b(?:mutation|subscription)\b/.test(query)) {
+    return { kind: 'refused', reason: 'invalid-target' };
+  }
+  if (typeof variables !== 'object' || variables === null || Array.isArray(variables)) {
+    return { kind: 'refused', reason: 'invalid-target' };
+  }
+  if (!Object.entries(variables).every(([name, variable]) => (
+    GRAPHQL_VARIABLE_NAME.test(name)
+    && (typeof variable === 'string' || typeof variable === 'number' || typeof variable === 'boolean')
+  ))) {
+    return { kind: 'refused', reason: 'invalid-target' };
+  }
+  return {
+    kind: 'accepted',
+    request: {
+      operation: operation as GithubGraphqlReadOperation,
+      query,
+      variables: variables as Readonly<Record<string, GithubGraphqlVariable>>,
+    },
+  };
+}
+
+/** Build GraphQL's field-bearing `gh api` invocation only after typed decode. */
+export function githubGraphqlReadArgs(request: GithubGraphqlReadRequest): string[] {
+  return [
+    ...GITHUB_GRAPHQL_READ_REGISTRY[request.operation].command,
+    '-f',
+    `query=${request.query}`,
+    ...Object.entries(request.variables).flatMap(([name, value]) => [
+      typeof value === 'string' ? '-f' : '-F',
+      `${name}=${value}`,
+    ]),
+  ];
+}
+
 interface GithubOperationDefinition {
   readonly access: GithubOperationAccess;
   readonly targetKinds: readonly GithubResourceKind[];

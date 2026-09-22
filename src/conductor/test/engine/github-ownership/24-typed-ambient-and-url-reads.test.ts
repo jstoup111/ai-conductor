@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   GithubTrackerOperationRefusalError,
   runTrackerAmbientRead,
+  runTrackerGraphqlRead,
   runTrackerUrlRead,
   type GhRunner,
 } from '../../../src/engine/tracker-client.js';
@@ -53,6 +54,33 @@ describe('typed ambient reads', () => {
     const gh = vi.fn<GhRunner>(async () => { throw failure; });
     await expect(runTrackerAmbientRead(gh, '/w', 'ambient.repository.read', ['repo', 'view'])).rejects.toBe(failure);
   });
+});
+
+describe('typed GraphQL reads', () => {
+  it('builds a registered query argv inside the adapter and reaches the fake gh once', async () => {
+    const gh = fakeGh('{"data":{"viewer":{"login":"octo"}}}');
+
+    await expect(runTrackerGraphqlRead(gh, '/w', {
+      query: 'query Viewer($owner: String!, $number: Int!) { viewer { login } }',
+      variables: { owner: 'octo', number: 7 },
+    })).resolves.toBe('{"data":{"viewer":{"login":"octo"}}}');
+
+    expect(gh).toHaveBeenCalledExactlyOnceWith([
+      'api', 'graphql', '-f', 'query=query Viewer($owner: String!, $number: Int!) { viewer { login } }',
+      '-f', 'owner=octo', '-F', 'number=7',
+    ], { cwd: '/w' });
+  });
+
+  it.each(['mutation Update { updateIssue(input: {}) { clientMutationId } }', 'subscription Events { issueComment { id } }'])(
+    'refuses a %s document before the fake gh boundary is reached',
+    async (query) => {
+      const gh = fakeGh();
+      await expect(runTrackerGraphqlRead(gh, '/w', {
+        query, variables: {},
+      })).rejects.toMatchObject({ operation: 'ambient.graphql.read', reason: 'invalid-target' });
+      expect(gh).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('typed URL reads', () => {

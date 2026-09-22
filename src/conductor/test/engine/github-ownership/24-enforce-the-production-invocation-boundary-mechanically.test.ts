@@ -93,7 +93,10 @@ describe('GitHub invocation audit', () => {
       expect.objectContaining({ line: 3, message: 'unresolvable mutable GitHub command forwarding outside guarded adapter' }),
     ]);
     expect(auditGithubInvocationSource('engine/tracker-client.ts', forwarded('runTrackerRead'))).toEqual([]);
-    expect(auditGithubInvocationSource('engine/shipment-audit.ts', forwarded('graphqlPage'))).toEqual([]);
+    expect(auditGithubInvocationSource('engine/tracker-client.ts', forwarded('runTrackerGraphqlRead'))).toEqual([]);
+    expect(auditGithubInvocationSource('engine/shipment-audit.ts', forwarded('graphqlPage'))).toEqual([
+      expect.objectContaining({ line: 3, message: 'unresolvable mutable GitHub command forwarding outside guarded adapter' }),
+    ]);
     expect(auditGithubInvocationSource('engine/tracker-client.ts', forwarded('runTrackerIssueOperation'))).toEqual([]);
   });
 
@@ -297,6 +300,23 @@ describe('GitHub invocation audit', () => {
     expect(findGithubInvocationSites('engine/bypass.ts', await readFile(join(root, 'src', 'engine', 'bypass.ts'), 'utf8'))).toEqual([
       expect.objectContaining({ command: 'git', classification: 'remote-write' }),
     ]);
+  });
+
+  it('enumerates runtime scripts and retains their scripts-relative audit label', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'github-invocation-audit-'));
+    directories.push(root);
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'scripts'), { recursive: true });
+    await writeFile(join(root, 'scripts', 'bypass.mts'), "import { execFile } from 'node:child_process'; await execFile('gh', ['issue', 'edit', '1']);");
+
+    expect(auditShippedGithubInvocationBoundary(root)).toContainEqual(expect.objectContaining({
+      file: 'scripts/bypass.mts', message: 'direct GitHub mutation outside guarded adapter',
+    }));
+  });
+
+  it('finds no bypass in the production intake-label workflow script', async () => {
+    const file = resolve(__dirname, '../../../scripts/intake-label-sync-apply.mts');
+    expect(auditGithubInvocationSource('scripts/intake-label-sync-apply.mts', await readFile(file, 'utf8'))).toEqual([]);
   });
 
   it('requires an explicit caller proof for every registered mutation', () => {

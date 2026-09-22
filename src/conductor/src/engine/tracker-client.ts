@@ -23,7 +23,15 @@ import type {
   GithubIntakeWriteOperationRequest,
   GithubSharedWriteOperationRequest,
 } from './github-operations.js';
-import { decodeGithubAmbientRead, executeGithubOperation, type GithubAmbientReadOperation } from './github-operations.js';
+import {
+  decodeGithubAmbientRead,
+  decodeGithubGraphqlRead,
+  executeGithubOperation,
+  githubGraphqlReadArgs,
+  type GithubAmbientReadOperation,
+  type GithubGraphqlReadOperation,
+  type GithubGraphqlVariable,
+} from './github-operations.js';
 import { parseGithubUrl } from './github-target.js';
 import { hasExplicitGithubOperationApproval } from './github-operation-approval.js';
 import { authorizeGithubMutation } from './owner-gate/mutation-policy.js';
@@ -492,10 +500,10 @@ export class GhRunnerError extends Error {
 
 /** A guarded TrackerClient mutation was denied before the terminal transport. */
 export class GithubTrackerOperationRefusalError extends Error {
-  readonly operation: GithubOperationName | GithubAmbientReadOperation;
+  readonly operation: GithubOperationName | GithubAmbientReadOperation | GithubGraphqlReadOperation;
   readonly reason: GithubOperationRefusalReason;
 
-  constructor(operation: GithubOperationName | GithubAmbientReadOperation, reason: GithubOperationRefusalReason) {
+  constructor(operation: GithubOperationName | GithubAmbientReadOperation | GithubGraphqlReadOperation, reason: GithubOperationRefusalReason) {
     super(`GitHub tracker operation '${operation}' was refused: ${reason}`);
     this.name = 'GithubTrackerOperationRefusalError';
     this.operation = operation;
@@ -747,6 +755,28 @@ export async function runTrackerAmbientRead(
   const decoded = decodeGithubAmbientRead({ operation, args });
   if (decoded.kind === 'refused') throw new GithubTrackerOperationRefusalError(operation, decoded.reason);
   const { stdout } = await runner([...decoded.request.args], { cwd, ...runnerOpts });
+  return stdout;
+}
+
+/**
+ * Run a registered structured GraphQL discovery read.  GraphQL field flags are
+ * constructed here, never supplied as caller-owned argv, and mutation or
+ * subscription documents are refused before the transport is reached.
+ */
+export async function runTrackerGraphqlRead(
+  runner: GhRunner,
+  cwd: string,
+  input: {
+    readonly query: string;
+    readonly variables: Readonly<Record<string, GithubGraphqlVariable>>;
+  },
+  runnerOpts: { timeout?: number; maxBuffer?: number } = {},
+): Promise<string> {
+  const operation = 'ambient.graphql.read' as const;
+  const decoded = decodeGithubGraphqlRead({ operation, ...input });
+  if (decoded.kind === 'refused') throw new GithubTrackerOperationRefusalError(operation, decoded.reason);
+  const args = githubGraphqlReadArgs(decoded.request);
+  const { stdout } = await runner(args, { cwd, ...runnerOpts });
   return stdout;
 }
 
