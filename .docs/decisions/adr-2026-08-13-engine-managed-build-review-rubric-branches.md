@@ -280,6 +280,36 @@ Publication reads the authoritative disposition state and deterministically rend
 risk section into the retained PR and shipped record; it does not ask a grader or finish agent to
 reconstruct acceptance from prose.
 
+> **Amended 2026-09-22 by #2384:** §1 names the engine as the exclusive owner of evidence assembly,
+> result validation, and finding identity, and §2 names one closed versioned projection per rubric.
+> Two dispatch paths grew under that rule — the built-in rubric path and the custom-policy path from
+> adr-2026-09-10-portable-build-review-policy — each rendering its own output shape as prompt prose and
+> each scraping a JSON object out of the provider's final message. This amendment names the single
+> engine-owned surface through which every catalog member is dispatched.
+>
+> **D1.1 — Every catalog member supplies one rubric contract descriptor.** A descriptor carries the
+> member's input projection (version and builder over the frozen source snapshot), its output contract
+> (version, a JSON Schema object, and a parser from the provider's structured result to the provider
+> payload), and its finding-identity canonicalizer. The built-in `testQuality` and `security` members
+> and the custom-policy `custom-v1` member are descriptors on this seam; nothing else about a member
+> is consulted at dispatch. A member without a complete descriptor is an authoring-time contract
+> defect, never a runtime fallback.
+>
+> **D1.2 — One generic dispatch path serves every descriptor.** The coordinator renders the
+> projection, requests the provider's native structured output with the descriptor's JSON Schema,
+> validates the terminal structured result with the descriptor's parser, stamps the envelope, and
+> canonicalizes identity, without branching on member kind after the catalog lookup. The prose-scrape
+> extraction of a JSON object from the provider's output text is retired for build_review; no rubric
+> output is parsed from markdown or free text. The shape shown to the model is rendered from the same
+> JSON Schema the engine validates against, so the advertised and accepted contracts have one source.
+>
+> **D2.2 — Output version joins the cache identity.** §7's cache key already carries the rubric
+> contract version and the projection version from the registry descriptor. Those two fields are now
+> read from the member's rubric contract descriptor, and advancing either invalidates deterministically
+> exactly as before. No cached judgement from a prose-scraped dispatch is reused by a native-schema
+> dispatch: the engine identity component changes with the engine dist and the rewritten skill text,
+> which is the accepted cost of this migration.
+
 ## Claim Verification
 
 | Claim | Confidence | Basis |
