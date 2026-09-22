@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:5
+// Covers: task:3, task:4, task:5, task:6
 import { mkdtemp, mkdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -308,6 +308,87 @@ describe('production FINISH custom-step release readiness', () => {
     } finally {
       vi.doUnmock('node:fs/promises');
       vi.resetModules();
+    }
+  });
+
+  it('does not require a gating custom step ordered after finish when its marker is absent', async () => {
+    const observe = createProductionReleaseReadinessObserver({
+      projectRoot: '.',
+      config: {
+        steps: {
+          'post-finish-gate': {
+            after: 'finish', skill: 'post-finish/SKILL.md', enforcement: 'gating',
+            completion_artifact: '.pipeline/post-finish-gate-pass',
+          },
+        },
+      },
+    });
+
+    await expect(observe({ 'post-finish-gate': 'done' } as ConductState))
+      .resolves.toEqual({ observation: 'present', steps: [] });
+  });
+
+  it('does not require an advisory custom step when its marker is absent', async () => {
+    const observe = createProductionReleaseReadinessObserver({
+      projectRoot: '.',
+      config: {
+        steps: {
+          'advisory-gate': {
+            after: 'rebase', skill: 'advisory/SKILL.md', enforcement: 'advisory',
+            completion_artifact: '.pipeline/advisory-gate-pass',
+          },
+        },
+      },
+    });
+
+    await expect(observe({ 'advisory-gate': 'done' } as ConductState))
+      .resolves.toEqual({ observation: 'present', steps: [] });
+  });
+
+  it('does not require a gating custom step without a completion artifact', async () => {
+    const observe = createProductionReleaseReadinessObserver({
+      projectRoot: '.',
+      config: {
+        steps: {
+          'markerless-gate': {
+            after: 'rebase', skill: 'markerless/SKILL.md', enforcement: 'gating',
+          },
+        },
+      },
+    });
+
+    await expect(observe({ 'markerless-gate': 'done' } as ConductState))
+      .resolves.toEqual({ observation: 'present', steps: [] });
+  });
+
+  it('reports only a stale selected gate when a post-finish gate is also absent', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      const staleMarker = join(root, '.pipeline', 'selected-gate-pass');
+      await writeFile(staleMarker, 'PASS\n');
+      await writeRunState(root);
+      await utimes(staleMarker, new Date(runStartedAt - 1), new Date(runStartedAt - 1));
+      const observe = createProductionReleaseReadinessObserver({
+        projectRoot: root,
+        config: {
+          steps: {
+            'selected-gate': {
+              after: 'rebase', skill: 'selected/SKILL.md', enforcement: 'gating',
+              completion_artifact: '.pipeline/selected-gate-pass',
+            },
+            'post-finish-gate': {
+              after: 'finish', skill: 'post-finish/SKILL.md', enforcement: 'gating',
+              completion_artifact: '.pipeline/post-finish-gate-pass',
+            },
+          },
+        },
+      });
+
+      await expect(observe(doneState(['selected-gate', 'post-finish-gate'])))
+        .resolves.toEqual({ observation: 'stale', steps: ['selected-gate'] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 
