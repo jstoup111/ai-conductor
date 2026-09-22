@@ -40,7 +40,11 @@ import {
 } from './remediation-case-store.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
-import { resolveTaskIdsWithDiagnostics } from './task-progress.js';
+import {
+  HALT_MARKER_RELATIVE as HALT_MARKER,
+  resolveTaskIdsWithDiagnostics,
+} from './task-progress.js';
+export { HALT_MARKER };
 import { FULL_SUITE_EVIDENCE_PATH } from './full-suite-evidence.js';
 import {
   FullSuiteVerifier,
@@ -526,8 +530,6 @@ export function verdictFreshnessComparand(ctx: CompletionContext): number | unde
   if (floor === undefined) return undefined;
   return ctx.attemptStartedAt !== undefined ? floor - VERDICT_FRESHNESS_FS_TOLERANCE_MS : floor;
 }
-
-export const HALT_MARKER = '.pipeline/halt-user-input-required';
 
 /**
  * Single source of truth for deriving a plan-stem key from a plan file path.

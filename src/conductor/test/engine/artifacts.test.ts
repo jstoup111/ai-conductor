@@ -108,6 +108,7 @@ import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-agg
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { verdictProducedByRun } from '../../src/engine/gate-code-validity.js';
 import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
+import { HALT_MARKER_RELATIVE } from '../../src/engine/task-progress.js';
 
 describe('engine/artifacts', () => {
   let dir: string;
@@ -2585,12 +2586,23 @@ describe('engine/artifacts', () => {
       );
     }
 
-    it('fails when .pipeline/halt-user-input-required is present, even with all-complete tasks', async () => {
+    it('uses the task-progress user-input halt marker path and does not declare it locally', async () => {
       await writeAllCompleteTaskStatus();
-      await createFile(HALT_MARKER, 'user requested exit; 1 regression pending');
+      await createFile(HALT_MARKER_RELATIVE, 'user requested exit; 1 regression pending');
       const result = await checkStepCompletion(dir, 'build');
       expect(result.done).toBe(false);
-      expect(result.reason).toMatch(/halt-user-input-required/);
+      expect(result.reason).toContain(HALT_MARKER_RELATIVE);
+
+      const artifactsSource = await readFile(
+        new URL('../../src/engine/artifacts.ts', import.meta.url),
+        'utf8',
+      );
+      expect(artifactsSource).toMatch(
+        /HALT_MARKER_RELATIVE as HALT_MARKER,[\s\S]*from '\.\/task-progress\.js';/,
+      );
+      expect(artifactsSource).not.toContain(
+        "export const HALT_MARKER = '.pipeline/halt-user-input-required'",
+      );
     });
 
     it('passes when no halt marker and all tasks completed', async () => {
