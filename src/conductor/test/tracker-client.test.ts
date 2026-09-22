@@ -372,6 +372,13 @@ describe('runTrackerRead — closed argv binding', () => {
     ['issue edit', ['issue', 'edit', '7', '-R', 'acme/repo']],
     ['API PATCH', ['api', '-X', 'PATCH', 'repos/acme/repo/issues/7']],
     ['API field flag', ['api', 'repos/acme/repo/issues/7', '-f', 'title=changed']],
+    ['API --field flag', ['api', 'repos/acme/repo/issues/7/labels', '--field', 'labels[]=x']],
+    ['API --raw-field flag', ['api', 'repos/acme/repo/issues/7', '--raw-field', 'title=changed']],
+    ['API --input body', ['api', 'repos/acme/repo/issues/7', '--input', '-']],
+    ['API org endpoint', ['api', 'orgs/acme/repos', '--jq', '.[].name']],
+    ['API user endpoint', ['api', 'user']],
+    ['API graphql endpoint', ['api', 'graphql', '-f', 'query=x']],
+    ['API endpoint after a flag', ['api', '--jq', '.state', 'repos/acme/repo/issues/7']],
   ])('refuses %s before the GhRunner receives it', async (_name, args) => {
     const { runner, calls } = fakeRunner('{}');
 

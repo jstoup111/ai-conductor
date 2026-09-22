@@ -589,7 +589,17 @@ function repositoryFlagsMatch(args: readonly string[], repository: string): bool
   return true;
 }
 
+/**
+ * A registered `gh api` read names its endpoint as the first positional
+ * argument and that endpoint must be the declared repository's own path:
+ * `repos/<owner>/<name>` or a resource under it. Any other endpoint (another
+ * repository, an org, a user, GraphQL) is outside the declared target.
+ */
 function apiRepositoriesMatch(args: readonly string[], repository: string): boolean {
+  if (args[0] !== 'api') return true;
+  const endpoint = args[1];
+  if (endpoint === undefined || endpoint.startsWith('-')) return false;
+  if (endpoint !== `repos/${repository}` && !endpoint.startsWith(`repos/${repository}/`)) return false;
   for (const argument of args) {
     const match = /(?:^|\/)repos\/([^/\s]+\/[^/\s]+)(?:\/|$)/.exec(argument);
     if (match && match[1] !== repository) return false;
@@ -609,6 +619,8 @@ function isMutatingApiInvocation(args: readonly string[]): boolean {
           : undefined;
     if (method !== undefined && method.toUpperCase() !== 'GET') return true;
     if (argument === '-f' || argument === '-F' || argument.startsWith('-f') || argument.startsWith('-F')) return true;
+    // `gh api` turns any of these into a POST body, so they mutate as surely as `-f`.
+    if (/^(?:--field|--raw-field|--input)(?:=|$)/.test(argument)) return true;
   }
   return false;
 }
