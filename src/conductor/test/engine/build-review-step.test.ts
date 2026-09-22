@@ -395,7 +395,17 @@ describe('build_review structured rubric dispatch', () => {
     };
     const entry: ResolvedBuildReviewCustomCatalogEntry = {
       id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
-      policy: branch.policy, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+      policy: branch.policy,
+      contract: Object.freeze({
+        ...BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+        output: Object.freeze({
+          ...BUILD_REVIEW_CUSTOM_V1_CONTRACT.output,
+          jsonSchema: Object.freeze({
+            type: 'object', additionalProperties: false, required: ['sentinel'],
+            properties: { sentinel: { type: 'string', enum: ['selected-custom-contract'] } },
+          }),
+        }),
+      }),
     };
     const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'custom-review', projectDir, {
       gitRunner: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
@@ -425,8 +435,10 @@ describe('build_review structured rubric dispatch', () => {
       }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8');
       const options = invoke.mock.calls[0]?.[0];
 
-      expect(options?.nativeSchema).toBe(BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema);
+      expect(options?.nativeSchema).toBe(entry.contract.output.jsonSchema);
       expect(options?.prompt.indexOf('# policy bundle')).toBeLessThan(options?.prompt.indexOf('/custom-policy') ?? -1);
+      expect(options?.prompt).toContain('`sentinel`');
+      expect(options?.prompt).toContain('`selected-custom-contract`');
       expect(outcome).toMatchObject({ success: true, id: 'custom-policy' });
     } finally {
       await rm(projectDir, { recursive: true, force: true });

@@ -2888,7 +2888,7 @@ export class DefaultStepRunner implements StepRunner {
           descriptor: entry.contract,
           options: {
             prompt: `${renderBuildReviewPolicyContract({
-            bundle, question: entry.question,
+            bundle, question: entry.question, contract: entry.contract,
             scope: renderBuildReviewFrozenInputScope({
               contentDigest: inputs.sourceSnapshot.contentDigest, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha,
               changes: inputs.sourceSnapshot.sourceChanges ?? [], ...(source === undefined ? {} : { view: source }),
