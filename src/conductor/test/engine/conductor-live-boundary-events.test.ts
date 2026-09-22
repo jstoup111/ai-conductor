@@ -1,3 +1,4 @@
+// Covers: task:6
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,7 +13,7 @@ import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { writeState } from '../../src/engine/state.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import type { ConductState, StepName } from '../../src/types/index.js';
+import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 
 const BUILD_ONLY: ConductState = {
   worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
@@ -77,7 +78,7 @@ describe('self-host live-boundary events', () => {
       provisionSandbox: vi.fn(async () => ({ configDir: join(projectRoot, '.pipeline', 'sandbox'), childEnv: () => ({}), teardown: vi.fn(async () => {}) })) as never,
       versionGate: vi.fn(async () => ({ ok: true as const })), releaseGate: vi.fn(async () => ({ ok: true as const })),
     };
-    return { conductor: new Conductor({ stateFilePath: join(projectRoot, 'conduct-state.json'), stepRunner: runner, events, projectRoot, fromStep: 'build', mode: 'auto', daemon: true, selfHost: true, verifyArtifacts: false, maxRetries: 1, baseBranch: 'main', selfHostGuardrails: guardrails, escalateBuildFailure: async () => ({}), providerExecution, fullSuiteVerifier: fullSuiteVerifierStub(), sleepFn: vi.fn(async () => {}), config: { harness_self_host: { build_auth: { mode: 'api-key' } } } as never }), persister };
+    return { conductor: new Conductor({ stateFilePath: join(projectRoot, 'conduct-state.json'), stepRunner: runner, events, projectRoot, fromStep: 'build', mode: 'auto', daemon: true, selfHost: true, verifyArtifacts: false, maxRetries: 1, baseBranch: 'main', selfHostGuardrails: guardrails, escalateBuildFailure: async () => ({}), providerExecution, fullSuiteVerifier: fullSuiteVerifierStub(), sleepFn: vi.fn(async () => {}), config: { harness_self_host: { build_auth: { mode: 'api-key' } } } as never }), eventEmitter: events, persister };
   }
 
   async function events() { return (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); }
@@ -102,6 +103,35 @@ describe('self-host live-boundary events', () => {
     const recorded = await events();
     expect(recorded.filter(event => event.type === 'contained_live_checkout_drift')).toEqual([]);
     expect(recorded.filter(event => event.type === 'self_host_containment_verdict')).toEqual([expect.objectContaining({ contained: true, evidence: expect.any(String) })]);
+  });
+
+  it('emits and persists one completed fingerprint before the provider is invoked', async () => {
+    const emitted: Extract<ConductorEvent, { type: 'self_host_boundary_fingerprint' }>[] = [];
+    const { conductor, eventEmitter, persister } = harness(async () => {
+      expect(emitted).toHaveLength(1);
+      return { success: true, output: 'done' };
+    });
+    eventEmitter.on('self_host_boundary_fingerprint', (event) => {
+      if (event.type === 'self_host_boundary_fingerprint') emitted.push(event);
+    });
+
+    await conductor.run();
+    persister.stop();
+
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        surfaces: expect.arrayContaining([
+          expect.objectContaining({ label: 'live checkout', elapsedMs: expect.any(Number), fileCount: expect.any(Number) }),
+          expect.objectContaining({ label: 'provider state', elapsedMs: expect.any(Number), fileCount: expect.any(Number) }),
+        ]),
+      }),
+    ]);
+    for (const surface of emitted[0].surfaces) {
+      expect(Number.isInteger(surface.elapsedMs)).toBe(true);
+      expect(Number.isInteger(surface.fileCount)).toBe(true);
+    }
+    expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint'))
+      .toEqual([expect.objectContaining({ type: emitted[0].type, surfaces: emitted[0].surfaces })]);
   });
 
   it('maps the original provider catalog home onto the prepared candidate explicitly', async () => {
