@@ -4,6 +4,12 @@ spec_hash: b3c9aa3ecd6baf2bf051973b7a0528b3230643d6c7c851d9b735b6d12e2a1609
 pr: https://github.com/jstoup111/ai-conductor/pull/2523
 shipped: 2026-09-22
 engine_version: 20260921T190121Z-82744e8bd62d
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/engine/otel/span-manager.ts:122,341-343 — execution-context step spans now pass their event-clock start and end times to OTel as Date objects instead of numbers; no task Files entry or story criterion covers span timing"
+    accepted: true
 ---
 
 ## Cost
