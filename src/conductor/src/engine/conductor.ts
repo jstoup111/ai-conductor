@@ -358,11 +358,13 @@ import { preflightBuildAuthCheck as checkBuildAuth } from './self-host/build-aut
 import { readDaemonBuildToken, createDaemonTokenContentClassifier } from './self-host/daemon-build-token.js';
 import type { ChangedFile } from './self-host/release-gate.js';
 import { writeSelfHostHalt, type GateVerdict } from './self-host/gate-halt.js';
+import { parseReleaseDisposition } from './release-metadata.js';
 import {
-  mergeReleaseMetadataBlock,
-  parseReleaseDisposition,
-  snapshotReleaseMetadataBlock,
-} from './release-metadata.js';
+  clearPersistedReleaseMetadataSnapshot,
+  readPersistedReleaseMetadataSnapshot,
+  restoreReleaseMetadata,
+  snapshotReleaseMetadata,
+} from './self-host/release-metadata-flow.js';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
 import { LiveBoundaryCoordinator, type OpenAdmittedWindow } from './self-host/live-boundary-coordinator.js';
 import {
@@ -6690,28 +6692,6 @@ export class Conductor {
     if (outcome !== 'partial') this.resumeHaltStateClearAttempted = true;
   }
 
-  /** Path of the durable pre-finish capture, readable by a re-dispatched process. */
-  private releaseMetadataSnapshotPath(): string {
-    return join(this.projectRoot, '.pipeline', 'release-metadata-snapshot.json');
-  }
-
-  /** Read the persisted capture, ignoring anything that is not a valid canonical block. */
-  private async readPersistedReleaseMetadataSnapshot(): Promise<
-    { prUrl: string; block: string } | undefined
-  > {
-    try {
-      const raw = await readFile(this.releaseMetadataSnapshotPath(), 'utf-8');
-      const value = JSON.parse(raw) as { prUrl?: unknown; block?: unknown };
-      if (typeof value.prUrl !== 'string' || typeof value.block !== 'string') return undefined;
-      // A capture that no longer round-trips is not restorable; treat it as absent
-      // so the caller re-derives from the PR body rather than merging garbage.
-      if (snapshotReleaseMetadataBlock(value.block) !== value.block) return undefined;
-      return { prUrl: value.prUrl, block: value.block };
-    } catch {
-      return undefined;
-    }
-  }
-
   /**
    * Drop the capture so the next finish dispatch re-derives it. Called before
    * `release-disposition` dispatches: whatever that step writes supersedes any
@@ -6719,7 +6699,7 @@ export class Conductor {
    */
   private async clearFinishReleaseMetadataSnapshot(): Promise<void> {
     this.releaseMetadataSnapshot = undefined;
-    await unlinkFile(this.releaseMetadataSnapshotPath()).catch(() => {});
+    await clearPersistedReleaseMetadataSnapshot(this.projectRoot);
   }
 
   /** Capture only a valid, re-readable release block before finish can replace the body. */
@@ -6740,34 +6720,15 @@ export class Conductor {
     // feature on its last step. An existing capture for this same PR is therefore
     // authoritative and is never re-derived from a body finish has already touched;
     // the persisted copy carries it across a re-dispatch in a fresh process.
-    const retained =
-      this.releaseMetadataSnapshot?.prUrl === prUrl
-        ? this.releaseMetadataSnapshot
-        : await this.readPersistedReleaseMetadataSnapshot();
-    if (retained && retained.prUrl === prUrl) {
-      this.releaseMetadataSnapshot = retained;
-      return;
-    }
-    this.releaseMetadataSnapshot = undefined;
-
-    try {
-      const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
-      const body = (JSON.parse(stdout) as { body?: unknown }).body;
-      if (typeof body !== 'string') throw new Error('PR body is absent');
-      const block = snapshotReleaseMetadataBlock(body);
-      if (block === null) throw new Error('release metadata is malformed or non-canonical');
-      this.releaseMetadataSnapshot = { prUrl, block };
-      await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
-      await writeFile(
-        this.releaseMetadataSnapshotPath(),
-        `${JSON.stringify({ prUrl, block }, null, 2)}\n`,
-        'utf-8',
-      ).catch(() => {});
-    } catch (error) {
-      throw new Error(
-        `pre-finish snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    const retained = this.releaseMetadataSnapshot?.prUrl === prUrl
+      ? this.releaseMetadataSnapshot
+      : await readPersistedReleaseMetadataSnapshot(this.projectRoot);
+    this.releaseMetadataSnapshot = await snapshotReleaseMetadata({
+      gh: this.gh,
+      projectRoot: this.projectRoot,
+      prUrl,
+      retained,
+    });
   }
 
   /** Restore the snapshot only after a verified remote read/write cycle. */
@@ -6778,45 +6739,12 @@ export class Conductor {
       throw new Error('pre-finish snapshot unavailable for the retained draft PR');
     }
 
-    try {
-      const readBody = async (): Promise<string> => {
-        const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
-        const body = (JSON.parse(stdout) as { body?: unknown }).body;
-        if (typeof body !== 'string') throw new Error('PR body is absent');
-        return body;
-      };
-      const before = await readBody();
-      if (snapshotReleaseMetadataBlock(before) === snapshot.block) return;
-      const merged = mergeReleaseMetadataBlock(before, snapshot.block);
-      if (merged === null) throw new Error('captured release metadata is no longer valid');
-      const publication = await this.resolveShipDraftPublicationDependencies({
-        cwd: this.projectRoot,
-        branch: this.worktreeBranch,
-        baseBranch: this.baseBranch,
-        featureDesc: this.featureDesc,
-        prUrl,
-        git: this.git,
-        gh: this.gh,
-      });
-      const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/([1-9]\d*)$/.exec(prUrl);
-      if (!publication || !match) throw new Error('guarded release metadata restore is unavailable at this composition boundary');
-      const result = await executeGithubOperation({
-        operation: 'pull-request.edit',
-        repository: match[1],
-        resource: { kind: 'pull-request', number: Number(match[2]) },
-        context: { actor: 'finish-release-metadata-restore' },
-        payload: { body: merged },
-      }, publication.operations);
-      if (result.kind !== 'executed') throw new Error('guarded release metadata restore was refused or failed');
-      const after = await readBody();
-      if (snapshotReleaseMetadataBlock(after) !== snapshot.block) {
-        throw new Error('release metadata restore could not be verified');
-      }
-    } catch (error) {
-      throw new Error(
-        `post-finish restore unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    await restoreReleaseMetadata({
+      gh: this.gh,
+      projectRoot: this.projectRoot,
+      prUrl,
+      snapshot,
+    });
   }
 
   /** Read and parse the exact retained draft body through the injected GitHub seam. */
