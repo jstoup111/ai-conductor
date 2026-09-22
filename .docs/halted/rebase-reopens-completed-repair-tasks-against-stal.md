@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-22T15:56:39.353Z
 Slug: rebase-reopens-completed-repair-tasks-against-stal
 Class: needs-human
 Halting step: unknown
