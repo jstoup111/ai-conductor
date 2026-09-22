@@ -9,29 +9,32 @@ const entry = { id: 'portable', kind: 'custom' } as never;
 describe('production installed-policy catalog under a self-host prepared candidate', () => {
   it('runs Claude discovery against the explicitly mapped original catalog home', async () => {
     const command = vi.fn(async () => ({ stdout: '[]', exitCode: 0 }));
-    const listed: string[] = [];
+    const enumerated: string[] = [];
+    const read: string[] = [];
     const catalog = productionBuildReviewPolicyCatalog('/project', {
       claudeCommand: command,
       claudeFilesystem: {
-        readdir: async (path: string) => { listed.push(path); return []; },
-        readFile: async () => { throw Object.assign(new Error('ENOENT: missing'), { code: 'ENOENT' }); },
+        readdir: async (path: string) => { enumerated.push(path); return []; },
+        readFile: async (path: string) => { read.push(path); throw Object.assign(new Error('ENOENT: missing'), { code: 'ENOENT' }); },
       } as never,
     });
     await catalog({
-      provider: 'claude', entry,
+      provider: 'claude', entry, skill: 'portable',
       preparedEnv: { CLAUDE_CONFIG_DIR: '/scratch/throwaway', PATH: '/bin' },
       originalCatalogHome: '/operator/.claude',
     });
     expect(command).toHaveBeenCalledWith('claude', ['plugin', 'list', '--json'], expect.objectContaining({
       env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/operator/.claude', PATH: '/bin' }),
     }));
-    expect(listed).toEqual(expect.arrayContaining(['/operator/.claude/skills']));
+    // The named policy is read from the mapped home; the skills root is never enumerated.
+    expect(read).toContain('/operator/.claude/skills/portable/SKILL.md');
+    expect(enumerated).toEqual([]);
   });
 
   it('keeps the prepared home when preparation mapped no original root', async () => {
     const command = vi.fn(async (_file: string, _args: readonly string[], _options: { env: Record<string, string | undefined> }) => ({ stdout: '[]', exitCode: 0 }));
     const catalog = productionBuildReviewPolicyCatalog('/project', { claudeCommand: command, claudeFilesystem: { readdir: async () => [], readFile: async () => { throw Object.assign(new Error('ENOENT: missing'), { code: 'ENOENT' }); } } as never });
-    await catalog({ provider: 'claude', entry, preparedEnv: { CLAUDE_CONFIG_DIR: '/prepared/home' } });
+    await catalog({ provider: 'claude', entry, skill: 'portable', preparedEnv: { CLAUDE_CONFIG_DIR: '/prepared/home' } });
     expect(command.mock.calls[0]![2]!.env.CLAUDE_CONFIG_DIR).toBe('/prepared/home');
   });
 
@@ -44,7 +47,7 @@ describe('production installed-policy catalog under a self-host prepared candida
     const catalog = productionBuildReviewPolicyCatalog('/project', { codexTransport: createCodexAppServerTransport('codex', launch) });
     const prepared = ['--dev-bind', '/', '/', '--', '/isolated/codex'];
     await expect(catalog({
-      provider: 'codex', entry,
+      provider: 'codex', entry, skill: 'portable',
       preparedEnv: { CODEX_HOME: '/scratch/throwaway' }, preparedExecutable: 'bwrap', preparedArgs: prepared,
       originalCatalogHome: '/operator/.codex',
     })).rejects.toThrow();
@@ -66,7 +69,7 @@ describe('production installed-policy catalog under a self-host prepared candida
       };
     } } as never;
     const catalog = productionBuildReviewPolicyCatalog('/project', { codexTransport });
-    const skills = await catalog({ provider: 'codex', entry, preparedEnv: { CODEX_HOME: '/scratch/throwaway' }, originalCatalogHome: '/operator/.codex' });
+    const skills = await catalog({ provider: 'codex', entry, skill: 'portable', preparedEnv: { CODEX_HOME: '/scratch/throwaway' }, originalCatalogHome: '/operator/.codex' });
     expect(homes).toEqual(['/scratch/throwaway', '/operator/.codex']);
     expect(skills.map((found) => found.canonicalSkillPath)).toEqual([
       '/scratch/throwaway/skills/shared/SKILL.md', '/operator/.codex/skills/operator-only/SKILL.md',
