@@ -201,6 +201,12 @@ function makeGit(world: GitWorld): { run: ReturnType<typeof vi.fn<GitRunner>>; d
         return { stdout: '' };
       case 'log':
         return { stdout: `${(world.unmergedLog ?? []).join('\n')}\n` };
+      // These fixtures model a clean, registered candidate.  The production
+      // deletion guard now probes porcelain before any destructive command;
+      // leaving that command unmodelled would correctly be treated as an
+      // unreadable (and therefore dirty) worktree instead.
+      case 'status':
+        return { stdout: '' };
       case 'worktree':
         return { stdout: '' };
       case 'branch':
