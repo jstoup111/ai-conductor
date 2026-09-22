@@ -124,6 +124,62 @@ export function resolveThroughMap(sha: string, map: Record<string, string>): str
   return current;
 }
 
+/**
+ * Lists the commits that form the pre-rebase branch spine, oldest first.
+ * Merge-side commits are deliberately excluded: a repair boundary may only
+ * advance along the first-parent history that led to the pre-rebase head.
+ */
+export async function listFirstParentPreImageOldestFirst(
+  git: GitRunner,
+  onto: string,
+  origHead: string,
+): Promise<string[]> {
+  const result = await git(['rev-list', '--first-parent', '--reverse', `${onto}..${origHead}`]);
+  return parseShaList(result.stdout);
+}
+
+export type RepairBoundaryTranslation =
+  | { kind: 'direct'; to: string }
+  | { kind: 'successor'; to: string }
+  | { kind: 'unchanged'; reason: string };
+
+/**
+ * Selects a post-rebase repair boundary without touching stores or Git.
+ *
+ * A directly mapped boundary keeps its exact correspondence. For residue,
+ * only a mapped commit strictly after the boundary on the supplied
+ * oldest-first first-parent spine can become its successor. This preserves
+ * the evidence-range subset invariant: the new boundary can never move
+ * backward into commits already included by the old range.
+ */
+export function selectRepairBoundaryTranslation(
+  boundary: string,
+  preImageFirstParentOldestFirst: string[],
+  map: Record<string, string>,
+  reachable: (sha: string) => boolean,
+): RepairBoundaryTranslation {
+  if (Object.prototype.hasOwnProperty.call(map, boundary)) {
+    return { kind: 'direct', to: resolveThroughMap(boundary, map) };
+  }
+
+  const boundaryIndex = preImageFirstParentOldestFirst.indexOf(boundary);
+  if (boundaryIndex === -1) {
+    return { kind: 'unchanged', reason: 'boundary is outside pre-image first-parent history' };
+  }
+
+  for (const successor of preImageFirstParentOldestFirst.slice(boundaryIndex + 1)) {
+    if (!Object.prototype.hasOwnProperty.call(map, successor)) continue;
+
+    const to = resolveThroughMap(successor, map);
+    if (!reachable(to)) {
+      return { kind: 'unchanged', reason: 'mapped successor is not reachable' };
+    }
+    return { kind: 'successor', to };
+  }
+
+  return { kind: 'unchanged', reason: 'no mapped successor after boundary' };
+}
+
 interface EvidenceStampLike {
   sha?: string;
   citedShas?: string[];

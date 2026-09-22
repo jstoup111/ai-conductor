@@ -31,7 +31,9 @@ import type { GitResult } from '../../src/engine/rebase.js';
 import {
   buildRewriteMap,
   derivePendingTaskIds,
+  listFirstParentPreImageOldestFirst,
   resolveThroughMap,
+  selectRepairBoundaryTranslation,
   translateAfterRebase,
 } from '../../src/engine/rebase-translate.js';
 import { applyMapToStores } from '../../src/engine/rebase-translate.js';
@@ -87,6 +89,100 @@ function makeFakeGit(opts: {
 }
 
 const ONTO = 'onto-sha';
+
+describe('selectRepairBoundaryTranslation (Task 2)', () => {
+  const reachable = (sha: string) => sha.startsWith('reachable-');
+
+  it('returns a direct translation for a map-key boundary', () => {
+    expect(selectRepairBoundaryTranslation(
+      'boundary',
+      ['boundary', 'later'],
+      { boundary: 'direct-post-image' },
+      reachable,
+    )).toEqual({ kind: 'direct', to: 'direct-post-image' });
+  });
+
+  it('selects the earliest mapped first-parent successor strictly after a squashed boundary', () => {
+    const preImageFirstParentOldestFirst = ['before', 'squashed-boundary', 'first-later', 'second-later'];
+    const result = selectRepairBoundaryTranslation(
+      'squashed-boundary',
+      preImageFirstParentOldestFirst,
+      {
+        before: 'reachable-before-post-image',
+        'first-later': 'reachable-first-later-post-image',
+        'second-later': 'reachable-second-later-post-image',
+      },
+      reachable,
+    );
+
+    expect(result).toEqual({ kind: 'successor', to: 'reachable-first-later-post-image' });
+    expect(preImageFirstParentOldestFirst.indexOf('first-later')).toBeGreaterThan(
+      preImageFirstParentOldestFirst.indexOf('squashed-boundary'),
+    );
+  });
+
+  it('leaves a residue boundary unchanged when every map key is at or before it', () => {
+    expect(selectRepairBoundaryTranslation(
+      'residue-boundary',
+      ['first-survivor', 'residue-boundary', 'later-residue'],
+      { 'first-survivor': 'reachable-first-post-image' },
+      reachable,
+    )).toEqual({ kind: 'unchanged', reason: 'no mapped successor after boundary' });
+  });
+
+  it('leaves a residue boundary unchanged when its earliest mapped successor is unreachable', () => {
+    expect(selectRepairBoundaryTranslation(
+      'residue-boundary',
+      ['residue-boundary', 'later'],
+      { later: 'unreachable-later-post-image' },
+      reachable,
+    )).toEqual({ kind: 'unchanged', reason: 'mapped successor is not reachable' });
+  });
+
+  it('leaves a boundary outside the pre-image first-parent list unchanged', () => {
+    expect(selectRepairBoundaryTranslation(
+      'outside',
+      ['before', 'later'],
+      { later: 'reachable-later-post-image' },
+      reachable,
+    )).toEqual({ kind: 'unchanged', reason: 'boundary is outside pre-image first-parent history' });
+  });
+
+  it('lists only the oldest-first first-parent pre-image chain, excluding a merge second parent', async () => {
+    const calls: string[][] = [];
+    const git: GitRunner = async (args) => {
+      calls.push(args);
+      return {
+        exitCode: 0,
+        stdout: 'boundary\nfirst-parent-successor\n',
+        stderr: '',
+      };
+    };
+
+    const preImageFirstParentOldestFirst = await listFirstParentPreImageOldestFirst(
+      git,
+      'onto',
+      'orig-head-with-merge',
+    );
+
+    expect(calls).toEqual([[
+      'rev-list', '--first-parent', '--reverse', 'onto..orig-head-with-merge',
+    ]]);
+    expect(preImageFirstParentOldestFirst).toEqual(['boundary', 'first-parent-successor']);
+    expect(preImageFirstParentOldestFirst.indexOf('first-parent-successor')).toBeGreaterThan(
+      preImageFirstParentOldestFirst.indexOf('boundary'),
+    );
+    expect(selectRepairBoundaryTranslation(
+      'boundary',
+      preImageFirstParentOldestFirst,
+      {
+        'first-parent-successor': 'reachable-first-parent-post-image',
+        'merge-second-parent-only': 'reachable-second-parent-post-image',
+      },
+      reachable,
+    )).toEqual({ kind: 'successor', to: 'reachable-first-parent-post-image' });
+  });
+});
 
 describe('buildRewriteMap (RED — module does not exist yet)', () => {
   it('maps each pre-image sha to its post-image sha by matching patch-id (1:1 unconflicted)', async () => {
