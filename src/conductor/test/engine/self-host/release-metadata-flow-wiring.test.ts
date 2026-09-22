@@ -8,6 +8,7 @@ import { Conductor } from '../../test-conductor.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { writeSelfHostHalt } from '../../../src/engine/self-host/gate-halt.js';
 import { resolveReleaseMetadataFlow } from '../../../src/engine/self-host/release-metadata-flow.js';
+import type { GhRunner } from '../../../src/engine/tracker-client.js';
 
 const roots: string[] = [];
 
@@ -26,7 +27,7 @@ describe('self-host release metadata flow wiring', () => {
     projectRoot: string,
     steps: Record<string, unknown>,
     releaseGate = vi.fn(async () => ({ ok: true as const })),
-    runGh = vi.fn(async () => ({ stdout: JSON.stringify({ body: 'Release-Disposition: no-note' }) })),
+    runGh: GhRunner = vi.fn(async () => ({ stdout: JSON.stringify({ body: 'Release-Disposition: no-note' }) })),
   ) {
     return {
       conductor: new Conductor({
@@ -41,7 +42,10 @@ describe('self-host release metadata flow wiring', () => {
           harness_self_host: { release_artifact_gate: true },
           steps,
         } as never,
-        selfHostGuardrails: { releaseGate } as never,
+        selfHostGuardrails: {
+          versionGate: vi.fn(async () => ({ ok: true as const })),
+          releaseGate,
+        } as never,
         gh: vi.fn(async () => ({ stdout: JSON.stringify({ state: 'OPEN' }) })),
         runGh,
       }),
