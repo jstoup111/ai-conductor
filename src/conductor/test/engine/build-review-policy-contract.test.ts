@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:2, task:3
 // Covers: task:10, task:11
 import { describe, expect, it, vi } from 'vitest';
 
@@ -116,7 +116,7 @@ describe('engine/build-review-policy-contract', () => {
     expect(rendered).toContain(standalonePresentation);
     expect(rendered).toContain('Do not choose an aggregate verdict, authorize repair work, edit code, install dependencies, or publish comments.');
     expect(rendered).toContain('The engine alone validates findings and owns aggregate verdicts and repair work orders.');
-    expect(rendered).toContain("{ kind: 'custom-findings', version: 'v1', findings: [...] }");
+    expect(rendered).toContain('`custom-findings`');
   });
 
   it('renders only the selected descriptor schema', () => {

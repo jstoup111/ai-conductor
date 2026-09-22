@@ -110,6 +110,34 @@ describe('engine/build-review-contract', () => {
     },
   );
 
+  it('renders nested provider result guidance from object, array, required, and enum schema nodes', () => {
+    const descriptor = {
+      output: {
+        jsonSchema: {
+          type: 'object', additionalProperties: false, required: ['findings'],
+          properties: {
+            findings: {
+              type: 'array', items: {
+                type: 'object', additionalProperties: false, required: ['anchor'],
+                properties: {
+                  anchor: {
+                    type: 'object', additionalProperties: false, required: ['kind'],
+                    properties: { kind: { type: 'string', enum: ['nested-schema-kind'] } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as Pick<typeof BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract, 'output'>;
+
+    expect(renderRubricContractShape(descriptor)).toContain('`findings`: array of');
+    expect(renderRubricContractShape(descriptor)).toContain('anchor: { kind:');
+    expect(renderRubricContractShape(descriptor)).toContain('required: findings');
+    expect(renderRubricContractShape(descriptor)).toContain('`nested-schema-kind`');
+  });
+
   it('gives a resolved custom member the shared v1 descriptor with schema and identity semantics', () => {
     const resolved = resolveBuildReviewConfig({
       build_review: {

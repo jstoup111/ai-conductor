@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:2, task:4
 // Covers: task:9, task:10
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -25,6 +25,7 @@ import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import type { ResolvedBuildReviewCustomCatalogEntry } from '../../src/engine/resolved-config.js';
 
 const buildReviewPublication = vi.hoisted(() => ({ count: 0 }));
+const buildReviewRegistryOverride = vi.hoisted(() => ({ descriptor: undefined as unknown }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -43,6 +44,15 @@ vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) =
   ...await importOriginal<typeof import('../../src/engine/build-review-coordinator.js')>(),
   coordinateBuildReviewRubrics: vi.fn(),
 }));
+
+vi.mock('../../src/engine/build-review-registry.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/build-review-registry.js')>();
+  return {
+    ...actual,
+    getBuildReviewRubricDescriptor: (rubric: 'testQuality' | 'security') =>
+      buildReviewRegistryOverride.descriptor ?? actual.getBuildReviewRubricDescriptor(rubric),
+  };
+});
 
 const state = {};
 const plan = '# Plan\n\n### Task 1: Cover the thing\n**Files:** src/covered.ts\n';
@@ -328,6 +338,48 @@ describe('build_review structured rubric dispatch', () => {
     );
     expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
     expect(proseScrape).not.toHaveBeenCalled();
+  });
+
+  it('derives the live nested result guidance from the selected built-in schema fixture', async () => {
+    buildReviewRegistryOverride.descriptor = {
+      ...BUILD_REVIEW_RUBRIC_REGISTRY.testQuality,
+      contract: {
+        ...BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract,
+        output: {
+          ...BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output,
+          jsonSchema: {
+            type: 'object', additionalProperties: false, required: ['findings'],
+            properties: {
+              findings: {
+                type: 'array', items: {
+                  type: 'object', additionalProperties: false, required: ['anchor'],
+                  properties: {
+                    anchor: {
+                      type: 'object', additionalProperties: false, required: ['kind'],
+                      properties: { kind: { type: 'string', enum: ['nested-built-in-fixture'] } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const invoke = vi.fn(async (_options: InvokeOptions) => ({
+      success: true, output: 'ignored prose', exitCode: 0, finalStructuredResult: { findings: [] },
+    }));
+    try {
+      await dispatchBuiltIn(invoke);
+      const prompt = invoke.mock.calls[0]?.[0]?.prompt ?? '';
+
+      expect(prompt).toContain('anchor: { kind: enum(`nested-built-in-fixture`)');
+      expect(prompt).toContain('required: findings');
+      expect(prompt).not.toContain('anchor values follow the schema below exactly');
+      expect(prompt).not.toContain('scopeResolutions has exactly one entry');
+    } finally {
+      buildReviewRegistryOverride.descriptor = undefined;
+    }
   });
 
   it('rejects a prose-only success at root without a repair or prose finding', async () => {

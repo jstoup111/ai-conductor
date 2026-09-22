@@ -3263,21 +3263,17 @@ export class DefaultStepRunner implements StepRunner {
       security: 'Security',
     };
     const contractShape = renderRubricContractShape(getBuildReviewRubricDescriptor(branch.rubric).contract);
-    const payloadInstruction: Record<BuildReviewDispatchableRubric['rubric'], string> = {
-      testQuality: '`findings` is an array; `scopeResolutions` has exactly one entry per supplied candidate (or [] when no candidates); and `counterfactualSensitivity` is optional.',
-      security: '`findings` is an array using only the Security concern kinds. Do not return scope resolutions or counterfactual sensitivity.',
-    };
     const rubricPrompt = [
         `Build Review ${label[branch.rubric]} rubric.`,
         'You are running inside the feature worktree. The closed projection below identifies the implementation diff BY REFERENCE instead of embedding it: changedFiles lists each changed file\'s path, change kind, and hunk line ranges (oldStart,oldCount -> newStart,newCount) from the graded diff. Read the working-tree files and run git yourself for any content you need — for example `git diff <mergeBase>..HEAD -- <path>` for one file\'s diff, or `git show <mergeBase>:<path>` for its pre-change form — using the mergeBase and headSha fields of the projection. Judge only the referenced changes; treat the projection as the complete list of what changed.',
-        `Return only the provider payload shape below: ${payloadInstruction[branch.rubric]} The engine stamps the judged envelope identity afterward. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
+        'Return only the provider payload defined by the schema below. The engine stamps the judged envelope identity afterward.',
         ...(branch.rubric === 'testQuality'
           ? [
               'For each testScope.evidence record, re-read its region at the pinned ref instead of the mutable working tree: use `git show <mergeBase>:<path>` for a base-side region or `git show <headSha>:<path>` for a head-side region, and verify `contentHash` as sha256 of the raw bytes from `byteRegion.start` (inclusive) to `byteRegion.end` (exclusive) of that exact output. `byteRegion` is in UTF-8 bytes; `region`, `startLine`, and `endLine` are character positions for identity and orientation only and must not be used as byte offsets. The evidence record for a candidate is the one whose `id` equals its `candidateId`. A hash-mismatched or unreadable region is not judged; return its fallback candidate as `indeterminate` with a non-empty `missingEvidenceReason`.',
               `Candidate-resolution authority (use only these ids, regions, and obligations):\n${JSON.stringify(buildReviewCandidateScopeResolutionContext(projection))}`,
             ]
           : []),
-        `Your final message MUST end with a JSON object of exactly this shape (an empty findings array means no concern; anchor values follow the schema below exactly — content-region fields (\`changedTest\`, \`locus\`) are structured \`{path, contentHash, display, occurrence?}\` objects; \`occurrence\` is the 0-based ordinal among equal-content regions in one path and is omitted for a unique or first region; every other anchor value is a plain string, all nested under \`anchor\` — never flattened to the finding's top level and never renamed):\n${contractShape}`,
+        `Your final message MUST end with one JSON object matching this schema:\n${contractShape}`,
         JSON.stringify(buildReviewRubricPromptView(projection)),
       ].join('\n\n');
     // Regression visibility for prompt bloat (#projection-size): record the

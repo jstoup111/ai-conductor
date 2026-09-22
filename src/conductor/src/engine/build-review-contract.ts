@@ -75,58 +75,38 @@ export function resolveBuildReviewContractCatalog<
   return Object.freeze([...members]);
 }
 
-function recordTokens(value: unknown, tokens: Set<string>, seen: WeakSet<object>): void {
-  if (Array.isArray(value)) {
-    for (const entry of value) recordTokens(entry, tokens, seen);
-    return;
-  }
-  if (value === null || typeof value !== 'object') return;
-  if (seen.has(value)) return;
-  seen.add(value);
-  const source = value as Record<string, unknown>;
-  if (Array.isArray(source.enum)) {
-    for (const member of source.enum) {
-      if (typeof member === 'string' || typeof member === 'number') tokens.add(String(member));
-    }
-  }
-  for (const child of Object.values(source)) recordTokens(child, tokens, seen);
-}
-
 function enumShape(schema: Record<string, unknown>): string | undefined {
   return Array.isArray(schema.enum) && schema.enum.every((member) => typeof member === 'string' || typeof member === 'number')
-    ? schema.enum.map((member) => `'${String(member)}'`).join(' | ')
+    ? `enum(${schema.enum.map((member) => `\`${String(member)}\``).join(' | ')})`
     : undefined;
 }
 
-function propertyShape(schema: unknown): string {
+function schemaShape(schema: unknown, topLevel = false): string {
   const source = record(schema);
   if (!source) return 'value';
   const enumeration = enumShape(source);
   if (enumeration !== undefined) return enumeration;
-  if (source.type === 'array') return '[...]';
+  if (Array.isArray(source.oneOf)) return source.oneOf.map((alternative) => schemaShape(alternative, topLevel)).join(' Or ');
+  if (source.type === 'array') return `array of ${schemaShape(source.items)}`;
   if (source.type === 'string') return 'string';
   if (source.type === 'integer') return 'integer';
-  return source.type === 'object' ? '{ ... }' : 'value';
+  if (source.type !== 'object') return 'value';
+
+  const properties = record(source.properties) ?? {};
+  const fields = Object.entries(properties).map(([key, property]) =>
+    `${topLevel ? `\`${key}\`` : key}: ${schemaShape(property)}`,
+  );
+  const required = Array.isArray(source.required) && source.required.every((key) => typeof key === 'string')
+    ? source.required.join(', ')
+    : '';
+  const constraints = [
+    ...(required ? [`required: ${required}`] : []),
+    ...(source.additionalProperties === false ? ['additionalProperties: false'] : []),
+  ];
+  return `{ ${fields.join(', ')} }${constraints.length ? ` (${constraints.join('; ')})` : ''}`;
 }
 
-function objectShape(schema: unknown): string | undefined {
-  const source = record(schema);
-  if (!source || source.type !== 'object') return undefined;
-  const properties = record(source.properties);
-  if (!properties) return undefined;
-  return `{ ${Object.entries(properties).map(([key, property]) => `${key}: ${propertyShape(property)}`).join(', ')} }`;
-}
-
-/** Render the provider-visible field and enum vocabulary from the descriptor's own schema. */
+/** Render the complete provider-visible result shape from the descriptor's own schema. */
 export function renderRubricContractShape(descriptor: Pick<RubricContractDescriptor, 'output'>): string {
-  const alternatives = record(descriptor.output.jsonSchema)?.oneOf;
-  if (Array.isArray(alternatives)) {
-    const shapes = alternatives.map(objectShape);
-    if (shapes.every((shape): shape is string => shape !== undefined)) return shapes.join(' Or ');
-  }
-  const properties = record(descriptor.output.jsonSchema.properties);
-  const fields = properties ? Object.keys(properties) : [];
-  const tokens = new Set(fields);
-  recordTokens(descriptor.output.jsonSchema, tokens, new WeakSet());
-  return [...tokens].sort().map((token) => `\`${token}\``).join(', ');
+  return schemaShape(descriptor.output.jsonSchema, true);
 }
