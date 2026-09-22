@@ -15,6 +15,14 @@ export interface ClaudeReviewPolicyCandidate {
   readonly env: NodeJS.ProcessEnv;
   readonly projectSkillRoots: readonly string[];
   readonly userSkillRoots: readonly string[];
+  /**
+   * The policy reference being resolved. When present, standalone roots are
+   * read only at `<root>/<name>/SKILL.md` — never enumerated. bin/install
+   * places HARNESS.md and ARCHITECTURE.md beside the skill directories, and an
+   * operator may keep anything else there; none of it is this candidate's
+   * business. Plugin skills stay manifest-enumerated.
+   */
+  readonly skill?: string;
   /** The owning candidate cancels the metadata child process. */
   readonly signal?: AbortSignal;
 }
@@ -192,6 +200,16 @@ async function containedPluginDirectory(
   return canonical;
 }
 
+/**
+ * The directory a standalone reference names. A plugin-qualified reference
+ * (`plugin:skill`) can only resolve to a plugin skill, so its bare name is
+ * still the only directory worth reading under a standalone root.
+ */
+function standaloneSkillName(skill: string): string {
+  const separator = skill.indexOf(':');
+  return separator === -1 ? skill : skill.slice(separator + 1);
+}
+
 async function installedSkillsInDirectory(
   filesystem: ClaudeReviewPolicyFilesystem,
   directory: string,
@@ -352,9 +370,13 @@ export async function discoverClaudeReviewPolicies(
     }
     const pluginInventory = parsePluginInventory(commandResult.stdout);
 
+    const standaloneName = candidate.skill === undefined ? undefined : standaloneSkillName(candidate.skill);
+    const standaloneSkills = (root: string, source: 'project' | 'global'): Promise<readonly InstalledReviewSkill[]> => standaloneName === undefined
+      ? installedSkillsInDirectory(filesystem, root, source)
+      : installedSkillAtDirectory(filesystem, join(root, standaloneName), source).then((skill) => skill ? [skill] : []);
     const standalone = await Promise.all([
-      ...candidate.projectSkillRoots.map((root) => installedSkillsInDirectory(filesystem, root, 'project')),
-      ...candidate.userSkillRoots.map((root) => installedSkillsInDirectory(filesystem, root, 'global')),
+      ...candidate.projectSkillRoots.map((root) => standaloneSkills(root, 'project')),
+      ...candidate.userSkillRoots.map((root) => standaloneSkills(root, 'global')),
     ]);
     abortIfNeeded(candidate.signal);
     const policies = standalone.flat();

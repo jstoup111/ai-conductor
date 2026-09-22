@@ -580,6 +580,8 @@ export interface StepRunnerOptions {
   buildReviewPolicyCatalog?: (input: {
     readonly provider: string;
     readonly entry: ResolvedBuildReviewCatalogEntry;
+    /** The policy reference this candidate resolves; discovery reads no other standalone skill. */
+    readonly skill: string;
     readonly preparedEnv?: NodeJS.ProcessEnv;
     readonly preparedExecutable?: string;
     /** Leading arguments of the prepared invocation (for example a containment wrap). */
@@ -638,7 +640,7 @@ export function productionBuildReviewPolicyCatalog(
   } = {},
 ): NonNullable<StepRunnerOptions['buildReviewPolicyCatalog']> {
   const codexTransport = deps.codexTransport ?? createCodexAppServerTransport();
-  return async ({ provider, preparedEnv, preparedExecutable, preparedArgs, originalCatalogHome, signal }) => {
+  return async ({ provider, skill, preparedEnv, preparedExecutable, preparedArgs, originalCatalogHome, signal }) => {
     const env = preparedEnv ?? process.env;
     if (provider !== 'claude' && provider !== 'codex') {
       throw new Error(`Build-review custom policies are unsupported for provider ${provider}`);
@@ -651,6 +653,7 @@ export function productionBuildReviewPolicyCatalog(
             env: catalogEnv,
             projectSkillRoots: includeProject ? [join(projectDir, '.claude', 'skills'), join(projectDir, '.agents', 'skills')] : [],
             userSkillRoots: [join(home, 'skills')],
+            skill,
             ...(signal === undefined ? {} : { signal }),
           },
           ...(deps.claudeCommand === undefined ? {} : { command: deps.claudeCommand }),
@@ -2671,6 +2674,7 @@ export class DefaultStepRunner implements StepRunner {
           const request = this.buildReviewPolicyCatalog!({
             provider: context.candidate.providerKey,
             entry,
+            skill: entry.skill,
             ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
             ...(context.prepared === undefined ? {} : { preparedExecutable: context.prepared.executable, preparedArgs: context.prepared.args }),
             ...(context.prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: context.prepared.originalCatalogHome }),
@@ -3299,6 +3303,7 @@ export class DefaultStepRunner implements StepRunner {
                 const catalog = await this.buildReviewPolicyCatalog!({
                   provider: context.candidate.providerKey,
                   entry: builtinEntry,
+                  skill: branch.skillName,
                   ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
                   ...(context.prepared === undefined ? {} : { preparedExecutable: context.prepared.executable, preparedArgs: context.prepared.args }),
             ...(context.prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: context.prepared.originalCatalogHome }),

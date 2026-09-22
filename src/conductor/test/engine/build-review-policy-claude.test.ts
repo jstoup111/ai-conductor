@@ -138,6 +138,50 @@ describe('engine/build-review-policy-claude', () => {
     ]);
   });
 
+  it('reads only the named skill under standalone roots and never enumerates them', async () => {
+    // bin/install places HARNESS.md and ARCHITECTURE.md beside the skill
+    // directories, so an enumerating loader reads `<file>/SKILL.md` and dies
+    // on ENOTDIR before any rubric runs. The candidate names its policy;
+    // only that directory is read.
+    const enumerated: string[] = [];
+    const read: string[] = [];
+    const filesystem: ClaudeReviewPolicyFilesystem = {
+      async readdir(path) {
+        enumerated.push(path);
+        return ['ARCHITECTURE.md', 'HARNESS.md', 'build-review-security', 'unrelated'];
+      },
+      async readFile(path) {
+        read.push(path);
+        if (path === '/prepared/user/skills/build-review-security/SKILL.md') return '---\nname: build-review-security\n---\n';
+        if (/\.md\/SKILL\.md$/.test(path)) throw new Error(`ENOTDIR: not a directory, open '${path}'`);
+        throw new Error(`ENOENT: ${path}`);
+      },
+      async realpath(path) {
+        if (path === '/prepared/user/skills/build-review-security') return '/canonical/build-review-security';
+        throw new Error(`ENOENT: ${path}`);
+      },
+    };
+
+    const policies = await discoverClaudeReviewPolicies({
+      candidate: {
+        cwd: '/prepared/project',
+        env: {},
+        projectSkillRoots: ['/prepared/project/.claude/skills'],
+        userSkillRoots: ['/prepared/user/skills'],
+        skill: 'build-review-security',
+      },
+      command: async () => ({ stdout: '[]' }),
+      filesystem,
+    });
+
+    expect(enumerated).toEqual([]);
+    expect(read).toEqual([
+      '/prepared/project/.claude/skills/build-review-security/SKILL.md',
+      '/prepared/user/skills/build-review-security/SKILL.md',
+    ]);
+    expect(policies.map((policy) => [policy.semanticName, policy.source])).toEqual([['build-review-security', 'global']]);
+  });
+
   it('reads a manifest-declared skill directory without treating commands as skills', async () => {
     const filesystem: ClaudeReviewPolicyFilesystem = {
       async readdir(path) {
