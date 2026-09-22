@@ -206,7 +206,7 @@ describe('build-review candidate cache runner ordering', () => {
       { key: 'claude', provider: claude, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
     ]);
     const events = new ConductorEventEmitter();
-    const failures: Array<{ provider: string; stage: string; reason: string }> = [];
+    const failures: unknown[] = [];
     events.on('build_review_policy_failed', (event) => { failures.push(event); });
     const installed = (source: 'project' | 'global') => ({
       semanticName: 'portable-policy', source, installationOrigin: `/fixture/${source}`, canonicalSkillPath: `/fixture/${source}/SKILL.md`, packageRoot: `/fixture/${source}`, declaredDependencies: [], availability: 'available' as const,
