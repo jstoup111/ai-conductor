@@ -183,3 +183,34 @@ describe('exhaustive direct GitHub transport detection', () => {
     expect(messages('engine/other.ts', transport)).toEqual([UNRESOLVABLE]);
   });
 });
+
+describe('runner adapters and remote Git reads', () => {
+  it('treats an identity adapter as a runner value, not a command construction', () => {
+    const adapter = [
+      "import { makeProductionGh } from './tracker-client.js';",
+      'export function runners() {',
+      '  const gh = makeProductionGh();',
+      "  return { runGh: async (args: string[], opts?: { cwd: string }) => gh(args, { cwd: opts?.cwd ?? process.cwd() }) };",
+      '}',
+    ].join('\n');
+    const capturedForwarding = [
+      "import { makeProductionGh } from './tracker-client.js';",
+      'export function runners(argv: string[]) {',
+      '  const gh = makeProductionGh();',
+      "  return { runGh: async (cwd: string) => gh(argv, { cwd }) };",
+      '}',
+    ].join('\n');
+    expect(auditGithubInvocationSource('engine/finish-record-cli.ts', adapter)).toEqual([]);
+    expect(auditGithubInvocationSource('engine/finish-record-cli.ts', capturedForwarding)).toEqual([
+      expect.objectContaining({ line: 4, message: 'unresolvable mutable GitHub command forwarding outside guarded adapter' }),
+    ]);
+  });
+
+  it('classifies git fetch/clone/ls-remote as remote reads, never as unclassified writes', () => {
+    const source = "import { execa } from 'execa'; await execa('git', ['fetch', 'origin'], { cwd: '/x' }); await execa('git', ['push', 'origin', 'main']);";
+    expect(findGithubInvocationSites('engine/ci-fix.ts', source)).toEqual([
+      expect.objectContaining({ command: 'git', classification: 'remote-read' }),
+      expect.objectContaining({ command: 'git', classification: 'remote-write' }),
+    ]);
+  });
+});
