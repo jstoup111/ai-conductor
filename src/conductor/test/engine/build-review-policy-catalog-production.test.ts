@@ -29,10 +29,10 @@ describe('production installed-policy catalog under a self-host prepared candida
   });
 
   it('keeps the prepared home when preparation mapped no original root', async () => {
-    const command = vi.fn(async () => ({ stdout: '[]', exitCode: 0 }));
+    const command = vi.fn(async (_file: string, _args: readonly string[], _options: { env: Record<string, string | undefined> }) => ({ stdout: '[]', exitCode: 0 }));
     const catalog = productionBuildReviewPolicyCatalog('/project', { claudeCommand: command, claudeFilesystem: { readdir: async () => [], readFile: async () => { throw Object.assign(new Error('ENOENT: missing'), { code: 'ENOENT' }); } } as never });
     await catalog({ provider: 'claude', entry, preparedEnv: { CLAUDE_CONFIG_DIR: '/prepared/home' } });
-    expect(command.mock.calls[0]![2].env.CLAUDE_CONFIG_DIR).toBe('/prepared/home');
+    expect(command.mock.calls[0]![2]!.env.CLAUDE_CONFIG_DIR).toBe('/prepared/home');
   });
 
   it('launches Codex discovery through the whole prepared invocation with the original catalog home', async () => {

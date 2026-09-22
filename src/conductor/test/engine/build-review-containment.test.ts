@@ -136,13 +136,13 @@ describe('engine/build-review-containment', () => {
       chmod: async (path, mode) => { leafModes.push([path, mode]); },
       rm: async (path) => { removed.push(path); },
     });
-    const seed = async (home: string) => copySelectedCodexLogin({
+    const seed = async (home: string): Promise<void> => { await copySelectedCodexLogin({
       source: '/prepared/auth.json', homeDir: join(home, 'codex-home'),
       fs: {
         mkdir: async () => {}, copyFile: async () => {},
         chmod: async (path, mode) => { authModes.push([path, mode]); },
       },
-    });
+    }); };
     const options = { worktreeRoot: '/worktree', runId: 'run-7', attempt: 2, provider: 'codex' as const, fs, seed };
     const first = await acquireReviewScratchHome(options);
     const second = await acquireReviewScratchHome(options);

@@ -7,7 +7,12 @@ export interface CodexSelfHostAuthFs {
   chmod(path: string, mode: number): Promise<void>;
 }
 
-const realCodexSelfHostAuthFs: CodexSelfHostAuthFs = { mkdir, copyFile, chmod };
+const realCodexSelfHostAuthFs: CodexSelfHostAuthFs = {
+  // fs.mkdir resolves to the first created path; the seam only needs completion.
+  mkdir: (path, options) => mkdir(path, options).then(() => undefined),
+  copyFile,
+  chmod,
+};
 
 /** Copy the selected native Codex login as opaque bytes into a throwaway home. */
 export async function copySelectedCodexLogin(args: {
