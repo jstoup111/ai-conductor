@@ -1354,7 +1354,7 @@ export function validateConfig(
       const resolvedBuildReview = {
         ...br,
         enabled: typeof br.enabled === 'boolean' ? br.enabled : true,
-        maxParallel: typeof br.maxParallel === 'number' ? br.maxParallel : 1,
+        maxParallel: typeof br.maxParallel === 'number' ? br.maxParallel : 4,
         adjudication: {
           enabled:
             typeof (br.adjudication as Record<string, unknown> | undefined)?.enabled === 'boolean'
@@ -1381,7 +1381,7 @@ export function validateConfig(
       );
       obj.build_review = {
         enabled: true,
-        maxParallel: 1,
+        maxParallel: 4,
         adjudication: { enabled: true },
         rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: false }])),
       };
@@ -1389,7 +1389,7 @@ export function validateConfig(
   } else if (obj.build_review === null || materializeDefaults) {
     obj.build_review = {
       enabled: true,
-      maxParallel: 1,
+      maxParallel: 4,
       adjudication: { enabled: true },
       rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: false }])),
     };

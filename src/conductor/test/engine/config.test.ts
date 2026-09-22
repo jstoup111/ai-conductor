@@ -2738,7 +2738,7 @@ steps:
       const defaults = validateConfig({ build_review: {} });
       const configured = validateConfig({
         build_review: {
-          maxParallel: 1,
+          maxParallel: 4,
           rubrics: {
             testQuality: {
               enabled: true,
@@ -2759,7 +2759,7 @@ steps:
       }).toEqual({
         defaults: {
           enabled: true,
-          maxParallel: 1,
+          maxParallel: 4,
           adjudication: { enabled: true },
           rubrics: {
             testQuality: { enabled: false },
@@ -2768,7 +2768,7 @@ steps:
         },
         configured: {
           enabled: true,
-          maxParallel: 1,
+          maxParallel: 4,
           adjudication: { enabled: true },
           rubrics: {
             testQuality: {
@@ -2890,7 +2890,7 @@ steps:
       }).toEqual({
         build_review: {
           enabled: false,
-          maxParallel: 1,
+          maxParallel: 4,
           adjudication: { enabled: true },
           rubrics: {
             testQuality: { enabled: false },
