@@ -1,20 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-22T03:06:17.026Z
+Status: halted
 Slug: enforce-ownership-across-all-harness-github-operat
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-enforce-ownership-across-all-harness-github-operat
-Head SHA: 83cd62506a76ecd3e0e20d7c5a35bc9771a62846
-Halted at: 2026-09-22T01:48:56.188Z
+Head SHA: bcca0ace9c2e3ee1af985141a7d12845874db221
+Halted at: 2026-09-22T10:50:25.457Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: semantic remediation case regression 17a358da-b9a4-478b-a747-0a3bcee642b2
+build_review mechanical fault allowance exhausted: 3 of 3 shared faults consumed.
+Current lap lap-bcca0ace9c2e3ee1af985141a7d12845874db221: testQuality closed cause malformed-artifact (invalid-provider-result).
+1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap lap-bcca0ace9c2e3ee1af985141a7d12845874db221 --rubric testQuality --rationale "<rationale>".
+2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.
 ```
