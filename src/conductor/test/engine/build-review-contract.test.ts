@@ -1,5 +1,5 @@
-// Covers: task:3
-// Covers: task:1, task:2
+// Covers: task:1, task:3
+// Covers: task:2
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -16,7 +16,7 @@ import {
   stampBuildReviewCustomJudgedResult,
 } from '../../src/engine/build-review-finding-identity.js';
 import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
-import { BUILD_REVIEW_RUBRIC_REGISTRY } from '../../src/engine/build-review-registry.js';
+import { BUILD_REVIEW_RUBRIC_REGISTRY, createBuildReviewRubricRegistry } from '../../src/engine/build-review-registry.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
@@ -171,6 +171,24 @@ describe('engine/build-review-contract', () => {
     const duplicate = { ...first!, id: first!.id };
 
     expect(() => resolveBuildReviewContractCatalog([first!, duplicate])).toThrow(/testQuality/i);
+  });
+
+  it('rejects an incomplete descriptor at the live registry construction boundary', () => {
+    const malformed = {
+      ...BUILD_REVIEW_RUBRIC_REGISTRY.testQuality,
+      contract: {
+        ...BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract,
+        output: {
+          ...BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output,
+          jsonSchema: undefined,
+        },
+      },
+    };
+
+    expect(() => createBuildReviewRubricRegistry([
+      { id: 'testQuality', descriptor: malformed as unknown as typeof BUILD_REVIEW_RUBRIC_REGISTRY.testQuality },
+      { id: 'security', descriptor: BUILD_REVIEW_RUBRIC_REGISTRY.security },
+    ])).toThrow(/testQuality.*output\.jsonSchema/i);
   });
 
   it('closes judged-v3 output to the four provider-owned fields', () => {
