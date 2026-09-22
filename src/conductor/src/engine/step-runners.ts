@@ -86,7 +86,7 @@ import {
 import type { ResolvedBuildReviewCatalogEntry, ResolvedBuildReviewCustomCatalogEntry } from './resolved-config.js';
 import { fingerprintBuildReviewPolicyDeclaration, type InstalledReviewSkill } from './build-review-policy.js';
 import { resolveInstalledReviewPolicyCatalog, ReviewPolicyCatalogError } from './build-review-policy-resolver.js';
-import type { RubricContractDescriptor } from './build-review-contract.js';
+import { renderRubricContractShape, type RubricContractDescriptor } from './build-review-contract.js';
 import { captureInstalledReviewPolicyBundle, resolveReviewPolicyPackageReference, type CapturedReviewPolicyBundle } from './build-review-policy-bundle.js';
 import {
   evaluateBuildReviewPolicyPreflight,
@@ -144,7 +144,6 @@ import {
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
   renderBuildReviewUnresolvedSkillRemedy,
-  renderBuildReviewProviderPayloadShape,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
 import { buildReviewRubricPromptView, type BuildReviewRubricProjection } from './build-review-projections.js';
@@ -3262,7 +3261,7 @@ export class DefaultStepRunner implements StepRunner {
       testQuality: 'Test Quality',
       security: 'Security',
     };
-    const contractShape = renderBuildReviewProviderPayloadShape(branch.rubric);
+    const contractShape = renderRubricContractShape(getBuildReviewRubricDescriptor(branch.rubric).contract);
     const payloadInstruction: Record<BuildReviewDispatchableRubric['rubric'], string> = {
       testQuality: '`findings` is an array; `scopeResolutions` has exactly one entry per supplied candidate (or [] when no candidates); and `counterfactualSensitivity` is optional.',
       security: '`findings` is an array using only the Security concern kinds. Do not return scope resolutions or counterfactual sensitivity.',
@@ -3358,7 +3357,22 @@ export class DefaultStepRunner implements StepRunner {
               // they have no frozen inputs or run-level engine identity from
               // which a candidate-bound cache key could be derived.
               if (!inputs || !engineIdentity) {
-                return { kind: 'judged' as const, result: await context.invoke({}) };
+                const dispatched = await dispatchRubricContract({
+                  descriptor: getBuildReviewRubricDescriptor(branch.rubric).contract,
+                  prepareStructured: (value) => stampBuildReviewDispatchedCandidate(value, branch.rubric, projection),
+                  options: {
+                    prompt: `${renderAuxiliarySkillInvocation(branch.skillName, context.candidate.providerKey)}\n\n${prompt}`,
+                    cwd: materialized?.headPath ?? this.projectDir,
+                    dangerouslySkipPermissions: true,
+                  },
+                  invoke: (options) => context.invoke(options),
+                });
+                return {
+                  kind: 'judged' as const,
+                  result: dispatched.kind === 'structured'
+                    ? { ...dispatched.invocation, finalStructuredResult: dispatched.parsed }
+                    : dispatched.invocation,
+                };
               }
               // Built-ins use the same candidate-local installed definition
               // contract as custom policies. The old harness-root digest was

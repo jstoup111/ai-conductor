@@ -17,6 +17,7 @@ import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
 import { BUILD_REVIEW_RUBRIC_REGISTRY } from '../../src/engine/build-review-registry.js';
 import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
+import { renderRubricContractShape } from '../../src/engine/build-review-contract.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -322,6 +323,9 @@ describe('build_review structured rubric dispatch', () => {
     const { result, proseScrape } = await dispatchBuiltIn(invoke);
 
     expect(invoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output.jsonSchema);
+    expect(invoke.mock.calls[0]?.[0]?.prompt).toContain(
+      renderRubricContractShape(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract),
+    );
     expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
     expect(proseScrape).not.toHaveBeenCalled();
   });
@@ -337,6 +341,31 @@ describe('build_review structured rubric dispatch', () => {
     expect(result).toMatchObject({ kind: 'dispatch-failure', detail: 'root: a structured result is required' });
     expect(invoke).toHaveBeenCalledOnce();
     expect(proseScrape).not.toHaveBeenCalled();
+  });
+
+  it('uses the rubric dispatcher for a runtime-provider dispatch without frozen inputs', async () => {
+    const invoke = vi.fn(async (_options: InvokeOptions) => ({
+      success: true, output: 'ignored prose', exitCode: 0, finalStructuredResult: { findings: [] },
+    }));
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke,
+    };
+    const runner = new DefaultStepRunner(provider, 'runtime-review', '/fixture', {
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider, lifecycleCapability: provider.lifecycleCapability,
+        policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'],
+    });
+    const result = await (runner as unknown as {
+      dispatchBuildReviewRubric: (value: typeof branch, reviewProjection: typeof projection) => Promise<unknown>;
+    }).dispatchBuildReviewRubric(branch, projection);
+
+    expect(invoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output.jsonSchema);
+    expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
   });
 
   it('carries custom-v1 through the same dispatcher with its policy bundle before skill invocation', async () => {
