@@ -28,6 +28,7 @@ import {
   isMergeable,
   upsertComment,
   type PrMergeState,
+  type PrRunner,
 } from './pr-labels.js';
 import { createGithubTrackerClient, type TrackerClient } from './tracker-client.js';
 import type { ConductorEvent } from '../types/events.js';
@@ -76,6 +77,32 @@ export interface WatchEntry {
   ciFailureDetected?: boolean;
   escalationCause?: 'conflict-resolution';
   labelClearAttempts?: number;
+}
+
+/**
+ * Retire a conflict-resolution remediation label only after GitHub reports a
+ * safe, readable mergeable state. The returned entry is the single source of
+ * truth for the next sweep tick, including bounded retry bookkeeping.
+ */
+export async function maybeClearConflictLabel(
+  entry: WatchEntry,
+  state: PrMergeState,
+  gh: PrRunner,
+  log?: (message: string) => void,
+): Promise<WatchEntry> {
+  if (entry.escalationCause !== 'conflict-resolution') return entry;
+  const clear = (): WatchEntry => {
+    const { escalationCause: _cause, labelClearAttempts: _attempts, ...cleared } = entry;
+    return cleared;
+  };
+  if (!state.labels.includes('needs-remediation')) return clear();
+  if (state.mergeable !== 'MERGEABLE' || state.hasHaltBodyMarker || state.readFailure) return entry;
+  if ((entry.labelClearAttempts ?? 0) >= 3) {
+    log?.(`[mergeable-sweep] label clear retry cap reached for ${entry.prUrl}`);
+    return clear();
+  }
+  await removeLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+  return { ...entry, labelClearAttempts: (entry.labelClearAttempts ?? 0) + 1 };
 }
 
 const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
@@ -472,33 +499,9 @@ export async function sweepMergeableLabels({
         }
 
         // A conflict-resolution label becomes stale once GitHub reports the PR
-        // mergeable again.  Legacy/unattributed labels remain sticky.
-        if (entry.escalationCause === 'conflict-resolution' && !state.labels.includes('needs-remediation')) {
-          const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
-          if (idx >= 0) {
-            const { escalationCause: _cause, labelClearAttempts: _attempts, ...cleared } = survivors[idx];
-            survivors[idx] = cleared;
-          }
-        } else if (
-          entry.escalationCause === 'conflict-resolution' &&
-          state.labels.includes('needs-remediation') &&
-          state.mergeable === 'MERGEABLE' &&
-          !state.hasHaltBodyMarker &&
-          !state.readFailure
-        ) {
-          if ((entry.labelClearAttempts ?? 0) >= 3) {
-            const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
-            if (idx >= 0) {
-              const { escalationCause: _cause, labelClearAttempts: _attempts, ...cleared } = survivors[idx];
-              survivors[idx] = cleared;
-            }
-            log?.(`[mergeable-sweep] label clear retry cap reached for ${entry.prUrl}`);
-          } else {
-            await removeLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
-            const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
-            if (idx >= 0) survivors[idx] = { ...survivors[idx], labelClearAttempts: (entry.labelClearAttempts ?? 0) + 1 };
-          }
-        }
+        // mergeable again. Legacy/unattributed labels remain sticky.
+        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
+        if (idx >= 0) survivors[idx] = await maybeClearConflictLabel(entry, state, entryGh, log);
 
         // FR-12: if the PR carries `needs-remediation`, ensure `mergeable` is absent.
         let hasRemediation = state.labels.includes('needs-remediation');

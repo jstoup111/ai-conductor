@@ -1015,11 +1015,33 @@ export async function resolveConflictingPr(
     const replayedShas = shaR.exitCode === 0
       ? shaR.stdout.split('\n').map((sha) => sha.trim()).filter(Boolean)
       : [];
-    let conflictScope: 'test-only' | 'mixed' = 'mixed';
     let resolutionVerdict: import('./rebase.js').ResolutionVerdict | undefined;
+    const declaredSuperseded = new Set<string>();
+    let verdictFailure: string | undefined;
     const capturingResolver: RebaseResolver = async (ctx) => {
       const result = await deps.resolver(ctx);
-      if (result.resolved) resolutionVerdict = result.verdict;
+      if (!result.resolved) return result;
+
+      const scope = classifyConflictScope(ctx.conflicts);
+      // The parser deliberately accepts bare success for strict callers. In
+      // the narrowly-enabled judgement path, however, a verdict is the
+      // authority for any declared drop and is therefore mandatory.
+      if (ctx.supersessionJudgement && result.verdict === undefined) {
+        verdictFailure ??= 'malformed verdict: missing verdict';
+        // Prevent the shared loop from reaching its preservation guard with
+        // unauthorised success. The caller translates this to tier2-verdict.
+        return { resolved: false, reason: verdictFailure };
+      }
+      if (result.verdict !== undefined) {
+        const checked = validateResolutionVerdict(result.verdict, { scope, replayedShas });
+        if (!checked.ok) {
+          verdictFailure ??= checked.reason;
+          return { resolved: false, reason: verdictFailure };
+        } else {
+          resolutionVerdict = checked.verdict;
+          for (const sha of checked.verdict.superseded) declaredSuperseded.add(sha);
+        }
+      }
       return result;
     };
 
@@ -1052,7 +1074,7 @@ export async function resolveConflictingPr(
       // Stage 2: Assistant dispatch for remaining conflicts
       let tier2Outcome: RebaseOutcome | null = null;
       if (tier1Result.remaining.length > 0) {
-        conflictScope = classifyConflictScope(tier1Result.remaining);
+        const conflictScope = classifyConflictScope(tier1Result.remaining);
         tier2Outcome = await runTier2(
           git,
           worktreePath,
@@ -1063,6 +1085,19 @@ export async function resolveConflictingPr(
           conflictScope,
         );
         log(`${prUrl}: tier2 outcome: ${tier2Outcome.kind}`);
+
+        // The resolver wrapper converts malformed successful results to a
+        // stopped loop so validation remains before every guard and push.
+        if (verdictFailure !== undefined) {
+          await escalate(prUrl, 'tier2-verdict', verdictFailure, {
+            runGh: deps.runGh,
+            operations,
+            cwd: repoCwd,
+            log,
+          });
+          logOutcome(log, prUrl, 'tier2-verdict', 'escalated');
+          return { kind: 'escalated' };
+        }
 
         // If tier2 failed (unresolved conflicts), escalate immediately
         if (tier2Outcome.kind === 'conflict_halt') {
@@ -1084,26 +1119,20 @@ export async function resolveConflictingPr(
 
     }
 
-    // A resolver verdict is a closed-schema claim regardless of scope. Mixed
-    // conflicts may only carry a valid empty-supersession verdict.
-    if (resolutionVerdict !== undefined) {
-      const checked = validateResolutionVerdict(resolutionVerdict, { scope: conflictScope, replayedShas });
-      if (!checked.ok) {
-        await escalate(prUrl, 'tier2-verdict', checked.reason, {
-          runGh: deps.runGh,
-          operations,
-          cwd: repoCwd,
-          log,
-        });
-        logOutcome(log, prUrl, 'tier2-verdict', 'escalated');
-        return { kind: 'escalated' };
-      }
-      resolutionVerdict = checked.verdict;
+    if (verdictFailure !== undefined) {
+      await escalate(prUrl, 'tier2-verdict', verdictFailure, {
+        runGh: deps.runGh,
+        operations,
+        cwd: repoCwd,
+        log,
+      });
+      logOutcome(log, prUrl, 'tier2-verdict', 'escalated');
+      return { kind: 'escalated' };
     }
 
     // Work-preservation guards: verify the rebase succeeded correctly.
     const guardsResult = await runAcceptanceGuards(
-      git, baseRef, subjectsBefore, resolutionVerdict?.superseded ?? [],
+      git, baseRef, subjectsBefore, [...declaredSuperseded],
     );
     if (!guardsResult.ok) {
       const reason = `${guardsResult.guard}: ${guardsResult.reason}`;

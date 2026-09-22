@@ -214,6 +214,23 @@ describe('DefaultStepRunner.resolveRebaseConflict', () => {
     expect(opts.systemPrompt).toContain('deadbeef');
   });
 
+  it('requires a verdict-bearing success only when sweep judgement is enabled', async () => {
+    const judgementProvider = makeProvider({ success: true, output: '{"resolved": true}', exitCode: 0 });
+    const judgementRunner = new DefaultStepRunner(judgementProvider, 'session-1', '/wt/feature-x');
+    await judgementRunner.resolveRebaseConflict({ ...sampleCtx, supersessionJudgement: true });
+    const judged = (judgementProvider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(judged.systemPrompt).toContain('Sweep Test-Only Judgement is in force');
+    expect(judged.systemPrompt).toContain('"verdict"');
+    expect(judged.systemPrompt).not.toContain('{"resolved": true}\n');
+
+    const strictProvider = makeProvider({ success: true, output: '{"resolved": true}', exitCode: 0 });
+    const strictRunner = new DefaultStepRunner(strictProvider, 'session-1', '/wt/feature-x');
+    await strictRunner.resolveRebaseConflict(sampleCtx);
+    const strict = (strictProvider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(strict.systemPrompt).not.toContain('Sweep Test-Only Judgement');
+    expect(strict.systemPrompt).toContain('{"resolved": true}\n');
+  });
+
   it('does not advance callCount (isolated from main step dispatch)', async () => {
     const provider = makeProvider({ success: true, output: '{"resolved": true}', exitCode: 0 });
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x');

@@ -1536,8 +1536,18 @@ async function resolveRebaseConflictsInner(
     // retry must see the current conflicts, not the snapshot from conflict time.
     const attemptConflicts = await conflictedFiles(git);
     const ctxConflicts = attemptConflicts.length > 0 ? attemptConflicts : conflicts;
-    const result = await resolver({ conflicts: ctxConflicts, projectRoot, baseRef: onto, supersessionJudgement: opts?.supersessionJudgement === true });
-    for (const sha of result.verdict?.superseded ?? []) declaredSuperseded.add(sha);
+    // The sweep-only exception is scoped to the conflict set for *this*
+    // replay attempt. A later runtime conflict must immediately return to the
+    // ordinary strict resolver path.
+    const supersessionJudgement = opts?.supersessionJudgement === true
+      && ctxConflicts.length > 0
+      && ctxConflicts.every(isTestPath);
+    const result = await resolver({ conflicts: ctxConflicts, projectRoot, baseRef: onto, supersessionJudgement });
+    // Strict callers may receive an unsolicited verdict from a provider, but
+    // it must never relax their preservation guard.
+    if (supersessionJudgement) {
+      for (const sha of result.verdict?.superseded ?? []) declaredSuperseded.add(sha);
+    }
 
     if (!result.resolved) {
       if (result.providerSetupExhaustion) {

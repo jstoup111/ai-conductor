@@ -2016,9 +2016,13 @@ export class DefaultStepRunner implements StepRunner {
       (ctx.supersessionJudgement
         ? 'Sweep Test-Only Judgement is in force. A successful final JSON must include verdict: { choice: "superseded" | "merged" | "source", rationale: string, superseded: string[] }.\n'
         : '') +
-      'Your FINAL output line MUST be exactly one of:\n' +
-      '{"resolved": true}\n' +
-      '{"resolved": false, "reason": "<explanation>"}';
+      (ctx.supersessionJudgement
+        ? 'Your FINAL output line MUST be exactly one of:\n' +
+          '{"resolved": true, "verdict": {"choice":"superseded"|"merged"|"source","rationale":"<explanation>","superseded":["<replayed-sha>"]}}\n' +
+          '{"resolved": false, "reason": "<explanation>"}'
+        : 'Your FINAL output line MUST be exactly one of:\n' +
+          '{"resolved": true}\n' +
+          '{"resolved": false, "reason": "<explanation>"}');
 
     const providerResult = await this.executeProviderAwareSkillOneShot(
       'rebase',

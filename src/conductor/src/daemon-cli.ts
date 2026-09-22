@@ -2402,14 +2402,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                   }
                 };
 
-                // Create a real Tier-2 resolver that dispatches to the /rebase skill
-                // FR-7: wire stepRunner and events for rebase resolution dispatch
-                let attempt = 0;
-                const attemptCap = resolveRebaseResolutionAttempts(config);
-                const resolver: RebaseResolver = async (ctx) => {
+                // Resolution events belong to the feature being refreshed, not
+                // the daemon's aggregate ledger. The forwarding emitter keeps
+                // daemon observers live while persisting the canonical copy in
+                // this feature worktree.
+                const featureScope = startFeatureEventPersistence(
+                  join(projectRoot, '.worktrees', entry.slug), events, entry.slug,
+                );
+                try {
+                  // Create a real Tier-2 resolver that dispatches to the /rebase skill
+                  // FR-7: wire stepRunner and events for rebase resolution dispatch
+                  let attempt = 0;
+                  const attemptCap = resolveRebaseResolutionAttempts(config);
+                  const resolver: RebaseResolver = async (ctx) => {
                   attempt += 1;
                   try {
-                    await events.emit({ type: 'rebase_resolution_attempt', index: attempt, cap: attemptCap });
+                    await featureScope.events.emit({ type: 'rebase_resolution_attempt', index: attempt, cap: attemptCap });
                   } catch {
                     /* best-effort: event emission must not block resolution */
                   }
@@ -2444,10 +2452,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                       reason: err instanceof Error ? err.message : String(err),
                     };
                   }
-                };
+                  };
 
-                // Run the full resolution pipeline
-                const outcome = await resolveConflictingPr(
+                  // Run the full resolution pipeline
+                  const outcome = await resolveConflictingPr(
                   entry,
                   branch,
                   {
@@ -2456,19 +2464,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
                     attemptCap,
                   },
-                  {
-                    runGh: ghRunner,
-                    runSuite,
-                    resolver,
-                    log,
-                    isFeatureInFlight: isWorkClaimActive,
-                    worktreeLifecycle,
-                    events,
-                  },
-                );
+                    { runGh: ghRunner, runSuite, resolver, log, isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, events: featureScope.events },
+                  );
 
-                log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
-                return { kind: outcome.kind };
+                  log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
+                  return { kind: outcome.kind };
+                } finally {
+                  featureScope.stop();
+                }
               } catch (err: any) {
                 log(`[autoresolve] error resolving ${entry.prUrl}: ${err?.message || err}`);
                 return { kind: 'escalated' };
