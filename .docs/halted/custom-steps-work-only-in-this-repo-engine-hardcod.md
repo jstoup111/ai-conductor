@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-22T15:56:39.368Z
 Slug: custom-steps-work-only-in-this-repo-engine-hardcod
 Class: needs-human
 Halting step: unknown
