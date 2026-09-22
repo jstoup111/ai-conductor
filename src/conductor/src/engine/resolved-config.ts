@@ -21,6 +21,11 @@ import {
 import { escalateAttempt } from './escalation.js';
 import { normalizeProviderSelection } from './provider-selection.js';
 import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
+import { resolveBuildReviewCustomContract } from './build-review-policy-resolver.js';
+import type { RubricContractDescriptor } from './build-review-contract.js';
+import type { BuildReviewCustomReviewerPayload } from './build-review-domain.js';
+import type { BuildReviewCustomFindingIdentity } from './build-review-finding-identity.js';
+import type { BuildReviewFrozenInputScope } from './build-review-containment.js';
 
 // Legacy aliases retained for existing consumers. New resolution accepts a
 // provider policy explicitly, so these never participate in provider-aware
@@ -729,6 +734,12 @@ export interface ResolvedBuildReviewCustomCatalogEntry {
   readonly source?: string;
   readonly resources: readonly string[];
   readonly policy: ResolvedBuildReviewRubricPolicy;
+  readonly contract: RubricContractDescriptor<
+    BuildReviewFrozenInputScope,
+    BuildReviewFrozenInputScope,
+    BuildReviewCustomReviewerPayload,
+    BuildReviewCustomFindingIdentity
+  >;
 }
 
 export type ResolvedBuildReviewCatalogEntry =
@@ -904,7 +915,7 @@ export function resolveBuildReviewConfig(
         const declaration = custom as BuildReviewCustomRubricConfig;
         const policy = resolveRubricPolicy(declaration, false);
         return policy.enabled
-          ? [Object.freeze({
+          ? [resolveBuildReviewCustomContract({
               id,
               kind: 'custom' as const,
               skill: declaration.skill,

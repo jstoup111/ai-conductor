@@ -272,6 +272,64 @@ export const MAX_CUSTOM_SUMMARY_LENGTH = 4_096;
 export const MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH = 1_024;
 export const MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH = 512;
 export const CUSTOM_SOURCE_REGION_CONTENT_HASH = /^sha256:[a-f0-9]{64}$/;
+
+/**
+ * Native structural schema for the reviewer-owned custom-v1 payload. Bounds
+ * remain enforced by the parser below; this schema deliberately stays in the
+ * provider's object/array/string/integer/enum subset.
+ */
+export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
+  oneOf: [
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'version', 'findings'],
+      properties: {
+        kind: { type: 'string', enum: ['custom-findings'] },
+        version: { type: 'string', enum: ['v1'] },
+        findings: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['concernId', 'summary', 'evidenceLocations', 'sourceRegions'],
+            properties: {
+              concernId: { type: 'string' },
+              summary: { type: 'string' },
+              confidence: { type: 'integer', enum: BUILD_REVIEW_CONFIDENCE_VALUES },
+              evidenceLocations: { type: 'array', items: { type: 'string' } },
+              sourceRegions: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['path', 'startLine', 'endLine', 'contentHash', 'display'],
+                  properties: {
+                    path: { type: 'string' },
+                    startLine: { type: 'integer' },
+                    endLine: { type: 'integer' },
+                    contentHash: { type: 'string' },
+                    display: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'requirement'],
+      properties: {
+        kind: { type: 'string', enum: ['unsupported-policy'] },
+        requirement: { type: 'string' },
+      },
+    },
+  ],
+}) satisfies RubricOutputJsonSchema;
+
 /**
  * The reviewer-facing shape is rendered by the policy contract. Keep its
  * structure and bounds beside the parser so the advertised and accepted

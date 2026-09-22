@@ -1,3 +1,4 @@
+// Covers: task:3
 // Covers: task:10, task:11
 import { describe, expect, it, vi } from 'vitest';
 
@@ -13,9 +14,9 @@ import type { CapturedReviewPolicyBundle } from '../../src/engine/build-review-p
 import {
   classifyBuildReviewPolicyIncompatibility,
   mapBuildReviewPolicyIncompatibilityToCoordinatorFailureReason,
-  renderBuildReviewCustomReviewerPayloadShape,
 } from '../../src/engine/build-review-domain.js';
 import { parseBuildReviewReviewerPayload } from '../../src/engine/build-review-projections.js';
+import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
 
 const ordinarySkillText = [
   '---',
@@ -108,7 +109,7 @@ describe('engine/build-review-policy-contract', () => {
     expect(rendered).toContain("{ kind: 'custom-findings', version: 'v1', findings: [...] }");
   });
 
-  it('renders only custom-reviewer payloads accepted by the production parser', () => {
+  it('renders the custom alternatives directly from the shared descriptor schema', () => {
     const rendered = renderBuildReviewPolicyContract({
       bundle: bundle(),
       question: 'Are boundary changes safe?',
@@ -128,9 +129,9 @@ describe('engine/build-review-policy-contract', () => {
     const unsupported = { kind: 'unsupported-policy', requirement: 'requires deployment credentials' };
     const descriptor = { kind: 'custom', rubric: 'boundaryPolicy', parser: 'custom-findings-v1' } as const;
 
-    expect(rendered).toContain(renderBuildReviewCustomReviewerPayloadShape());
-    expect(rendered).toContain("kind: 'custom-findings'");
-    expect(rendered).toContain("kind: 'unsupported-policy'");
+    expect(rendered).toContain("{ kind: 'custom-findings', version: 'v1', findings: [...] }");
+    expect(rendered).toContain("{ kind: 'unsupported-policy', requirement: string }");
+    expect(rendered).toContain(BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.version);
     expect(parseBuildReviewReviewerPayload(empty, descriptor)).toEqual(empty);
     expect(parseBuildReviewReviewerPayload({ ...empty, findings: [finding, withConfidence] }, descriptor)).toEqual({
       ...empty,

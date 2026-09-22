@@ -1,3 +1,4 @@
+// Covers: task:3
 // Covers: task:6, task:11
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
@@ -24,6 +25,7 @@ import {
   renderBuildReviewProviderPayloadShape,
   type BuildReviewInfrastructureFailureReason, describeBuildReviewJudgedResultRejection } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
 import { matchesBuildReviewDisposition, type BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import {
   buildReviewEffectiveResultDescriptor,
@@ -49,6 +51,7 @@ function finding(overrides: Record<string, unknown> = {}): Record<string, unknow
 const customCatalogEntry: ResolvedBuildReviewCatalogEntry = {
   id: 'portablePolicy', kind: 'custom', skill: 'portable-policy',
   question: 'Does this preserve the portable policy contract?', resources: [],
+  contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
   policy: {
     enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium',
     model_fallback_ladder: [], max_retries: 1, escalate: false, min_confidence: 0,

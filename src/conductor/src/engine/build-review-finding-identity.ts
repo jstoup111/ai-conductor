@@ -150,6 +150,70 @@ function customIdentity<T extends object>(canonicalPayload: T): { readonly id: s
     canonicalJson: canonicalJsonValue,
   });
 }
+
+function parseBuildReviewCustomCanonicalDeclaration(value: unknown): BuildReviewCustomDeclarationIdentity | undefined {
+  const source = object(value);
+  const resources = source?.resources;
+  const declarationSource = source?.source;
+  if (!source || !Array.isArray(resources) || typeof source.rubricId !== 'string' || typeof source.semanticSkill !== 'string' || typeof source.question !== 'string' || (declarationSource !== undefined && declarationSource !== 'project' && declarationSource !== 'global' && declarationSource !== 'plugin')) return undefined;
+  const declaration: BuildReviewCustomDeclarationIdentity = {
+    version: 'v1', rubricId: source.rubricId, semanticSkill: source.semanticSkill, question: source.question,
+    ...(declarationSource === undefined ? {} : { source: declarationSource }),
+    resources: Object.freeze(resources.filter((resource): resource is string => typeof resource === 'string')),
+  };
+  return declaration.resources.length === resources.length && validDeclaration(declaration) ? declaration : undefined;
+}
+
+function parseBuildReviewCustomFindingCanonicalPayload(value: unknown): BuildReviewCustomFindingCanonicalPayload | undefined {
+  const source = object(value);
+  if (!source || !exact(source, ['version', 'rubric', 'declaration', 'policy', 'candidate', 'reviewedInput', 'concernId', 'sourceRegions']) || source.version !== 'v1' || typeof source.rubric !== 'string' || !CUSTOM_RUBRIC.test(source.rubric) || typeof source.concernId !== 'string' || !CUSTOM_CONCERN.test(source.concernId) || !Array.isArray(source.sourceRegions)) return undefined;
+  const declaration = parseBuildReviewCustomCanonicalDeclaration(source.declaration);
+  const policy = object(source.policy);
+  const candidate = object(source.candidate);
+  const reviewedInput = object(source.reviewedInput);
+  const sourceRegions = source.sourceRegions.map((entry): BuildReviewCustomCanonicalSourceRegion | undefined => {
+    const region = object(entry);
+    const path = region?.path;
+    const startLine = region?.startLine;
+    const endLine = region?.endLine;
+    const contentHash = region?.contentHash;
+    return region && exact(region, ['path', 'startLine', 'endLine', 'contentHash']) && typeof path === 'string' && parseBuildReviewCanonicalPathReference(path) !== undefined && typeof startLine === 'number' && Number.isInteger(startLine) && startLine > 0 && typeof endLine === 'number' && Number.isInteger(endLine) && endLine >= startLine && hash(contentHash)
+      ? { path, startLine, endLine, contentHash }
+      : undefined;
+  });
+  const policyDigest = policy?.version === 'v1' && hash(policy.bundleDigest) ? policy.bundleDigest : undefined;
+  const provider = candidate && nonEmptyText(candidate.provider, 64) ? candidate.provider : undefined;
+  const model = candidate && nonEmptyText(candidate.model, 256) ? candidate.model : undefined;
+  const effort = candidate && nonEmptyText(candidate.effort, 64) ? candidate.effort : undefined;
+  const inputDigest = reviewedInput?.version === 'v1' && hash(reviewedInput.contentDigest) ? reviewedInput.contentDigest : undefined;
+  if (!declaration || !policyDigest || !provider || !model || !effort || !inputDigest || sourceRegions.some((region) => !region)) return undefined;
+  const regions = Object.freeze(sourceRegions.filter((region): region is BuildReviewCustomCanonicalSourceRegion => region !== undefined));
+  const customPolicy: BuildReviewCustomEffectivePolicyIdentity = { version: 'v1', bundleDigest: policyDigest };
+  const customCandidate: BuildReviewCustomCandidateIdentity = { provider, model, effort };
+  const customReviewedInput: BuildReviewCustomReviewedInputIdentity = { version: 'v1', contentDigest: inputDigest };
+  return Object.freeze({
+    version: 'v1', rubric: source.rubric, declaration,
+    policy: customPolicy, candidate: customCandidate, reviewedInput: customReviewedInput,
+    concernId: source.concernId, sourceRegions: regions,
+  });
+}
+
+/**
+ * Custom reviewer findings only acquire identity after engine stamping. The
+ * descriptor therefore accepts that stamped finding (or its identity) and
+ * rehydrates it only when its stored digest still matches its canonical form.
+ */
+export function canonicalizeBuildReviewCustomFindingIdentity(value: unknown): BuildReviewCustomFindingIdentity | undefined {
+  const source = object(value);
+  const stored = object(source?.identity) ?? source;
+  const canonicalPayload = stored && parseBuildReviewCustomFindingCanonicalPayload(stored.canonicalPayload);
+  if (!stored || !canonicalPayload || typeof stored.id !== 'string' || typeof stored.canonicalJson !== 'string') return undefined;
+  const rehydrated = customIdentity(canonicalPayload);
+  return stored.id === rehydrated.id && stored.canonicalJson === rehydrated.canonicalJson
+    ? rehydrated
+    : undefined;
+}
+
 function validDeclaration(value: BuildReviewCustomDeclarationIdentity): boolean {
   if (value.version !== 'v1' || !CUSTOM_RUBRIC.test(value.rubricId) || !CUSTOM_SEMANTIC_NAME.test(value.semanticSkill) || !nonEmptyText(value.question) || (value.source !== undefined && !['project', 'global', 'plugin'].includes(value.source))) return false;
   return Array.isArray(value.resources) && value.resources.every((resource) => typeof resource === 'string' && parseBuildReviewCanonicalPathReference(resource) !== undefined) && new Set(value.resources).size === value.resources.length;

@@ -92,8 +92,38 @@ function recordTokens(value: unknown, tokens: Set<string>, seen: WeakSet<object>
   for (const child of Object.values(source)) recordTokens(child, tokens, seen);
 }
 
+function enumShape(schema: Record<string, unknown>): string | undefined {
+  return Array.isArray(schema.enum) && schema.enum.every((member) => typeof member === 'string' || typeof member === 'number')
+    ? schema.enum.map((member) => `'${String(member)}'`).join(' | ')
+    : undefined;
+}
+
+function propertyShape(schema: unknown): string {
+  const source = record(schema);
+  if (!source) return 'value';
+  const enumeration = enumShape(source);
+  if (enumeration !== undefined) return enumeration;
+  if (source.type === 'array') return '[...]';
+  if (source.type === 'string') return 'string';
+  if (source.type === 'integer') return 'integer';
+  return source.type === 'object' ? '{ ... }' : 'value';
+}
+
+function objectShape(schema: unknown): string | undefined {
+  const source = record(schema);
+  if (!source || source.type !== 'object') return undefined;
+  const properties = record(source.properties);
+  if (!properties) return undefined;
+  return `{ ${Object.entries(properties).map(([key, property]) => `${key}: ${propertyShape(property)}`).join(', ')} }`;
+}
+
 /** Render the provider-visible field and enum vocabulary from the descriptor's own schema. */
 export function renderRubricContractShape(descriptor: Pick<RubricContractDescriptor, 'output'>): string {
+  const alternatives = record(descriptor.output.jsonSchema)?.oneOf;
+  if (Array.isArray(alternatives)) {
+    const shapes = alternatives.map(objectShape);
+    if (shapes.every((shape): shape is string => shape !== undefined)) return shapes.join(' Or ');
+  }
   const properties = record(descriptor.output.jsonSchema.properties);
   const fields = properties ? Object.keys(properties) : [];
   const tokens = new Set(fields);

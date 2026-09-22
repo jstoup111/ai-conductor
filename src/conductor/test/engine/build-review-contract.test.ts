@@ -1,5 +1,5 @@
-// Covers: task:1
-// Covers: task:2
+// Covers: task:3
+// Covers: task:1, task:2
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -11,8 +11,14 @@ import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
   BUILD_REVIEW_JUDGED_V3_SCHEMA,
 } from '../../src/engine/build-review-domain.js';
-import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import {
+  canonicalizeBuildReviewFindingIdentity,
+  stampBuildReviewCustomJudgedResult,
+} from '../../src/engine/build-review-finding-identity.js';
+import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
 import { BUILD_REVIEW_RUBRIC_REGISTRY } from '../../src/engine/build-review-registry.js';
+import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 
 function fixedFinding(rubric: 'testQuality' | 'security') {
   return {
@@ -74,6 +80,21 @@ function expectClosedJudgedV3TopLevel(schema: unknown): void {
   expect(record(schema).additionalProperties).toBe(false);
 }
 
+function schemaAccepts(schema: unknown, value: unknown): boolean {
+  const source = record(schema);
+  if (Array.isArray(source.oneOf)) return source.oneOf.some((alternative) => schemaAccepts(alternative, value));
+  if (Array.isArray(source.enum) && !source.enum.includes(value)) return false;
+  if (source.type === 'string') return typeof value === 'string';
+  if (source.type === 'integer') return typeof value === 'number' && Number.isInteger(value);
+  if (source.type === 'array') return Array.isArray(value) && value.every((entry) => schemaAccepts(source.items, entry));
+  if (source.type !== 'object' || value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  const schemaProperties = properties(source);
+  if ((source.required as readonly string[]).some((key) => candidate[key] === undefined)) return false;
+  if (source.additionalProperties === false && Object.keys(candidate).some((key) => !(key in schemaProperties))) return false;
+  return Object.entries(candidate).every(([key, entry]) => schemaProperties[key] === undefined || schemaAccepts(schemaProperties[key], entry));
+}
+
 describe('engine/build-review-contract', () => {
   it.each(['testQuality', 'security'] as const)(
     'gives %s an engine-owned v3 descriptor with canonical identity',
@@ -88,6 +109,47 @@ describe('engine/build-review-contract', () => {
       expect(contract.identity.canonicalize(finding)?.id).toBe(expected?.id);
     },
   );
+
+  it('gives a resolved custom member the shared v1 descriptor with schema and identity semantics', () => {
+    const resolved = resolveBuildReviewConfig({
+      build_review: {
+        custom_rubrics: {
+          boundaryPolicy: {
+            enabled: true,
+            skill: 'boundary-review',
+            question: 'Are changed boundaries safe?',
+          },
+        },
+      },
+    } as HarnessConfig);
+    const custom = resolved.catalog.find((member) => member.kind === 'custom');
+    if (custom?.kind !== 'custom') throw new Error('expected resolved custom member');
+    const customFinding = {
+      concernId: 'public-boundary-gap',
+      summary: 'The changed public boundary lacks compatibility evidence.',
+      evidenceLocations: ['src/public-api.ts:8'],
+      sourceRegions: [{
+        path: 'src/public-api.ts', startLine: 8, endLine: 12,
+        contentHash: `sha256:${'a'.repeat(64)}`, display: 'public boundary',
+      }],
+    };
+    const stamped = stampBuildReviewCustomJudgedResult({
+      kind: 'custom-findings', version: 'v1', findings: [customFinding],
+    }, {
+      rubric: custom.id,
+      lapId: 'lap-1',
+      declaration: { version: 'v1', rubricId: custom.id, semanticSkill: custom.skill, question: custom.question, resources: custom.resources },
+      policy: { version: 'v1', bundleDigest: `sha256-v1:${'b'.repeat(64)}` },
+      candidate: { provider: 'codex', model: 'gpt-5.6', effort: 'high' },
+      reviewedInput: { version: 'v1', contentDigest: `sha256:${'c'.repeat(64)}` },
+    }, { sourceRegions: customFinding.sourceRegions });
+
+    expect(custom.contract).toBe(BUILD_REVIEW_CUSTOM_V1_CONTRACT);
+    expect(custom.contract.output.version).toBe('v1');
+    expect(schemaAccepts(custom.contract.output.jsonSchema, { kind: 'custom-findings', version: 'v1', findings: [] })).toBe(true);
+    expect(schemaAccepts(custom.contract.output.jsonSchema, { kind: 'unsupported-policy', requirement: 'x' })).toBe(true);
+    expect(custom.contract.identity.canonicalize(stamped?.findings[0])?.id).toBe(stamped?.findings[0]?.identity.id);
+  });
 
   it('rejects a member without output.jsonSchema while resolving the contract catalog', () => {
     const member = {
