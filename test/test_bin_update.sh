@@ -1600,6 +1600,32 @@ run_update_tty "$REPO" "$HOME_DIR" y
 assert "stable untagged: rejects the advance without moving, migrating, or changing version identity" \
   "$( [ "$CODE" -ne 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && printf '%s\n' "$OUT" | grep -Eqi 'exact[- ]semver' && echo 0 || echo 1)"
 
+# adr-2026-08-09: a stable HEAD on no release tag is undeterminable. The
+# persisted currentVersion must not stand in for it — here it would say
+# v0.3.0 and route a v1.0.0 target through the major gate on a guess.
+PAIR=$(make_main_repo "stable-untagged-head")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" commit -q --allow-empty -m "untagged local stable head"
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-untagged-head-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v1.0.0"
+git -C "$WORK" tag v1.0.0
+git -C "$WORK" push -q origin stable v1.0.0
+
+run_update_tty "$REPO" "$HOME_DIR" v1.0.0
+assert "stable untagged HEAD: refuses as undeterminable without consulting currentVersion, moving, or migrating" \
+  "$( [ "$CODE" -ne 0 ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && printf '%s\n' "$OUT" | grep -Fq 'installed release undeterminable' && ! printf '%s\n' "$OUT" | grep -Fq 'MAJOR update v0.3.0' && echo 0 || echo 1)"
+
 PAIR=$(make_main_repo "stable-migrate-failure")
 REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
 git -C "$REPO" checkout -q -b stable
@@ -1616,7 +1642,10 @@ EOF
 chmod +x "$REPO/bin/migrate"
 git -C "$REPO" add bin/migrate
 git -C "$REPO" commit -q -m "install failing migrate fixture"
-git -C "$REPO" push -q origin stable
+# A stable HEAD must sit on a release tag (adr-2026-08-09); tag the fixture
+# commit so this case keeps exercising the migrate failure, not the refusal.
+git -C "$REPO" tag v0.3.1
+git -C "$REPO" push -q origin stable v0.3.1
 STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
 
 WORK="$TMP_ROOT/stable-migrate-failure-push"

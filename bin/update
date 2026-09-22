@@ -325,9 +325,17 @@ check_harness_update_stable() {
   # The installed release this move starts from. A detached recovery has
   # local_head == remote_head, so from == to and the gate correctly no-ops:
   # re-attaching the branch is not a version change.
+  #
+  # The checkout is the sole authority for what is installed
+  # (adr-2026-08-09): a stable HEAD that sits on no release tag is
+  # undeterminable, and the persisted currentVersion is never consulted in
+  # its place — guessing here would let a major crossing skip its gate.
   local stable_from
   stable_from=$(git -C "$HARNESS_DIR" describe --tags --exact-match "$local_head" --match 'v*.*.*' 2>/dev/null || echo "")
-  [ -n "$stable_from" ] || stable_from=$(conductor_cfg_get currentVersion "" 2>/dev/null || echo "")
+  if [ -z "$stable_from" ]; then
+    fail "Stable update refused: installed release undeterminable — HEAD ${local_head:0:12} sits on no vX.Y.Z release tag (run: git -C ${HARNESS_DIR} fetch --tags origin, then re-run bin/update)"
+    return 1
+  fi
 
   if is_major_upgrade "$stable_from" "$target_version"; then
     # The typed confirmation inside the gate IS this update's approval.
