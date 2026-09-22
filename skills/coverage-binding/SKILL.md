@@ -16,6 +16,16 @@ Return `asserts` only when a cited check explicitly requires the criterion's beh
 adjacency, related implementation work, or a plausible inference is `does-not-assert` when the
 check does not actually require that behavior.
 
+Judge observable outcomes, not wording. A check that requires the same observable outcome with
+equal or greater precision asserts it, even when phrased differently: "rejected naming the field"
+asserts "the rejection names the field", and "byte-identical" asserts "equal". A check with lesser
+precision does not: "deep-equal" does not assert "byte-identical". A criterion clause that only
+restates the consequence of an asserted check's failure under an existing gate (for example "fails
+before the change can land" when the check asserts the integrity suite fails) is asserted by that
+check.
+Every other outcome in the criterion, including absence and no-op outcomes, still needs a check
+that requires it.
+
 Do not read files, inspect a diff, use a transcript, or infer facts beyond the supplied pair.
 
 ## Result contract
