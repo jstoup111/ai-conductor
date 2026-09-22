@@ -34,6 +34,10 @@ scoped strictly to `.docs/` paths), the acceptance guards, the suite gate, and t
 lease-protected push. Tier 2 dispatch fires only when Tier 1 leaves conflicts, bounded by the
 same configured cap (default 3).
 
+> **Amended 2026-09-20 by #2607 (operator decision):** "One resolution policy, two entry points" gains one bounded divergence. No third dispatch site is added.
+>
+> **D1** Sweep-only test-only judgement. The sweep call site alone may dispatch the resolver with the test-only supersession exception of adr-2026-08-01-rebase-full-replay-intent-validation in force, and alone applies the declared-drop excusal of adr-2026-06-29-rebase-conflict-resolution-dispatch. Cap, Tier 1, the suite gate, and the lease-protected push are unchanged and still precede publication. After a publication that used the exception, the engine records the verdict on the pull request, naming the choice, the rationale, the declared-superseded commits, and the verification command that passed, and emits it on the existing event spine. Nothing is published unless that verification is named and passed.
+
 ## Consequences
 
 - One resolution policy, two entry points; fixes and strategy improvements apply to both.
