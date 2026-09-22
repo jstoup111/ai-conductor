@@ -1329,7 +1329,12 @@ export type ConductorEvent =
        * silently repointed — see `writeResidue` in engine/rebase-translate.ts.
        */
       type: 'rebase_citation_residue';
-      residue: Array<{ sha: string; citingTaskIds: string[]; reason: string }>;
+      residue: Array<{
+        sha: string;
+        citingTaskIds: string[];
+        citingObligationIds: string[];
+        reason: string;
+      }>;
     }
   // ── Rebase auto-resolution lifecycle (Phase 9 / rebase-resolution) ──
   | {

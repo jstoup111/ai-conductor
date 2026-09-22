@@ -28,6 +28,7 @@ import { execa } from 'execa';
 //   git(['show', sha])                                  -> diff text, per sha in both lists
 //   git(['patch-id', '--stable'], { input: diffText })  -> "<patch-id> <sha>" per sha
 import type { GitResult } from '../../src/engine/rebase.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 import {
   buildRewriteMap,
   derivePendingTaskIds,
@@ -685,7 +686,7 @@ async function mkdirForFixtures(dir: string): Promise<void> {
 //   writeResidue(
 //     projectRoot: string,
 //     events: ConductorEventEmitter,
-//     residueEntries: Array<{ sha: string; citingTaskIds: string[]; reason: string }>,
+//     residueEntries: Array<{ sha: string; citingTaskIds: string[]; citingObligationIds: string[]; reason: string }>,
 //   ): Promise<void>
 import { writeResidue } from '../../src/engine/rebase-translate.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -752,10 +753,12 @@ describe('writeResidue (RED — not implemented yet, Task 11)', () => {
 
   it('emits a rebase_citation_residue structured event mirroring the rebase_gate_reverified pattern', async () => {
     const events = new ConductorEventEmitter();
-    const seen: Array<{ type: string; residue?: unknown }> = [];
+    const seen: Array<Extract<ConductorEvent, { type: 'rebase_citation_residue' }>> = [];
 
-    events.on('rebase_citation_residue' as never, (e: { type: string; residue?: unknown }) => {
-      seen.push({ type: e.type, residue: e.residue });
+    events.on('rebase_citation_residue', (event) => {
+      if (event.type === 'rebase_citation_residue') {
+        seen.push(event);
+      }
     });
 
     await writeResidue(projectRoot, events, RESIDUE_ENTRIES);
@@ -802,10 +805,12 @@ describe('repair-obligation residue citations (Task 7)', () => {
     const keptPreImageSha = 'dddddddddddddddddddddddddddddddddddddddd';
     const keptPostImageSha = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
     const events = new ConductorEventEmitter();
-    const seen: Array<{ residue: Array<{ sha: string; citingObligationIds?: string[] }> }> = [];
-    events.on('rebase_citation_residue' as never, ((event: { residue: Array<{ sha: string; citingObligationIds?: string[] }> }) => {
-      seen.push(event);
-    }) as never);
+    const seen: Array<Extract<ConductorEvent, { type: 'rebase_citation_residue' }>> = [];
+    events.on('rebase_citation_residue', (event) => {
+      if (event.type === 'rebase_citation_residue') {
+        seen.push(event);
+      }
+    });
 
     try {
       await mkdir(join(projectRoot, '.pipeline'), { recursive: true });

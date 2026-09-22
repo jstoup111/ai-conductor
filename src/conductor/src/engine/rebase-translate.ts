@@ -2,6 +2,7 @@ import { access, readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises
 import { join } from 'node:path';
 import type { GitRunner } from './rebase.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEvent } from '../types/events.js';
 import { rekeyMemoAfterRebase } from './attribution-lane.js';
 import type { TaskStatusFile, TaskStatusRecord } from './task-seed.js';
 import { createRepairObligationStore } from './repair-obligations.js';
@@ -346,12 +347,10 @@ export async function persistRewriteMap(
 }
 
 /** One residue entry: a pre-image sha with no patch-id match post-rebase. */
-export interface ResidueEntry {
-  sha: string;
-  citingTaskIds: string[];
-  citingObligationIds: string[];
-  reason: string;
-}
+export type ResidueEntry = Extract<
+  ConductorEvent,
+  { type: 'rebase_citation_residue' }
+>['residue'][number];
 
 interface SerializedResidue {
   residue: ResidueEntry[];

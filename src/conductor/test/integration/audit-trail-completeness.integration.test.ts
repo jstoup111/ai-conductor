@@ -660,7 +660,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   rebase_citation_residue: {
     type: 'rebase_citation_residue',
-    residue: [{ sha: 'abc123', citingTaskIds: ['1'], reason: 'no patch-id match' }],
+    residue: [{ sha: 'abc123', citingTaskIds: ['1'], citingObligationIds: [], reason: 'no patch-id match' }],
   },
   rebase_resolution_attempt: { type: 'rebase_resolution_attempt', index: 1, cap: 3 },
   rebase_resolution_succeeded: { type: 'rebase_resolution_succeeded' },
