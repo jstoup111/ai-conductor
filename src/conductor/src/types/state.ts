@@ -74,12 +74,6 @@ export interface ArtifactApproval {
   approved_at: string;
 }
 
-export interface TaskStatus {
-  status: 'pending' | 'in_progress' | 'completed';
-}
-
-export type TaskStatusFile = Record<string, TaskStatus>;
-
 export type StateError = {
   type: 'corrupted' | 'missing' | 'io_error';
   message: string;

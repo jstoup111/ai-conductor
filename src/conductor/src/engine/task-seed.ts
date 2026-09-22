@@ -12,14 +12,15 @@ import {
 import { createTaskEvidence } from './task-evidence.js';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
 import { createRepairObligationStore, repairPlanIdentity } from './repair-obligations.js';
-interface TaskStatusRecord {
+export interface TaskStatusRecord {
   id: string;
   name?: string;
   status?: string;
+  commit?: string;
   [key: string]: unknown;
 }
 
-interface TaskStatusFile {
+export interface TaskStatusFile {
   plan_ref?: string;
   tasks?: TaskStatusRecord[];
   [key: string]: unknown;

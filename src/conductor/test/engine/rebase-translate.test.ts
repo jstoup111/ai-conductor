@@ -30,6 +30,7 @@ import { execa } from 'execa';
 import type { GitResult } from '../../src/engine/rebase.js';
 import {
   buildRewriteMap,
+  derivePendingTaskIds,
   resolveThroughMap,
   translateAfterRebase,
 } from '../../src/engine/rebase-translate.js';
@@ -517,6 +518,50 @@ describe('applyMapToStores (RED — not implemented yet, Task 5)', () => {
       (t) => t.id === 'T4',
     );
     expect(t4?.status).toBe('pending');
+  });
+});
+
+describe('task-status translation guards (Task 2)', () => {
+  let projectRoot = '';
+  let statusPath = '';
+
+  beforeAll(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'task-status-translation-'));
+    statusPath = join(projectRoot, '.pipeline', 'task-status.json');
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+  });
+
+  afterAll(async () => {
+    if (projectRoot) await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['an absent task list', '{\n  "plan_ref": "plan.md"\n}\n'],
+    ['a non-array task list', '{\n  "tasks": { "T1": { "status": "pending" } }\n}\n'],
+  ])('leaves $0 byte-identical and derives no pending ids', async (_caseName, statusBefore) => {
+    await writeFile(statusPath, statusBefore);
+
+    await applyMapToStores(projectRoot, { oldsha: 'newsha' });
+
+    await expect(readFile(statusPath, 'utf8')).resolves.toBe(statusBefore);
+    await expect(derivePendingTaskIds(projectRoot)).resolves.toEqual([]);
+  });
+
+  it('rewrites commit shas for a normal task array', async () => {
+    await writeFile(statusPath, JSON.stringify({
+      tasks: [
+        { id: 'T1', status: 'pending', commit: 'old-full' },
+        { id: 'T2', status: 'completed', commit: 'old-short' },
+      ],
+    }, null, 2));
+
+    await applyMapToStores(projectRoot, {
+      'old-full': 'new-full',
+      'old-short': 'new-short',
+    });
+
+    await expect(readFile(statusPath, 'utf8')).resolves.toContain('"commit": "new-full"');
+    await expect(readFile(statusPath, 'utf8')).resolves.toContain('"commit": "new-short"');
   });
 });
 
