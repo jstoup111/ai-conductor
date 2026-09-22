@@ -223,7 +223,8 @@ reached, still within this single invocation.
   The conductor's engine guards (FR-8 not-current / FR-9 dropped-commit) will
   reject it, but do not attempt it in the first place.
 - **NEVER run `git rebase --skip`** — this discards the conflicting commit
-  entirely, causing data loss. The engine guards reject this too; do not attempt it.
+  entirely, causing data loss. The sole exception is a declared-superseded commit
+  under **Sweep Test-Only Judgement** below.
 - **NEVER run `git push --force` or any destructive branch operation** during
   rebase resolution.
 - **NEVER invoke this skill mid-build** — only the conductor's finish-time rebase
@@ -232,6 +233,24 @@ reached, still within this single invocation.
   harness "no ad-hoc rebase mid-build" rule.
 
 ### 8. Result Contract
+
+### Sweep Test-Only Judgement
+
+This exception applies only when the engine dispatch prompt explicitly says it is
+in force. Full replay inspection, staged-change attribution, and the
+post-continue recheck above remain mandatory. The resolver may keep the source,
+merge both sides, or keep upstream by declaring that one replayed test-only
+commit is superseded. Only that declared-superseded commit may use `git rebase
+--skip`.
+
+On a successful sweep-judgement resolution, the final JSON line is:
+
+```json
+{"resolved":true,"verdict":{"choice":"superseded"|"merged"|"source","rationale":"why","superseded":["replayed-sha"]}}
+```
+
+If no safe choice can be made, return the ordinary unresolved result with the
+specific competing intents and missing decision.
 
 The conductor's `DefaultStepRunner` parses the last JSON object emitted to
 stdout. This contract is **load-bearing** — the conductor decides whether to

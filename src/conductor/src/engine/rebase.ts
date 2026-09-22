@@ -1141,10 +1141,22 @@ async function classifyClean(
 
 // ── Resolution loop (feat/rebase-resolution-skill) ───────────────────────────
 
+export interface ResolutionVerdict {
+  choice: 'superseded' | 'merged' | 'source';
+  rationale: string;
+  superseded: string[];
+}
+
 export type ResolutionAttempt = (
   { resolved: true } | { resolved: false; reason: string }
-) & ProviderAttributionMetadata;
-export interface ResolutionContext { conflicts: string[]; projectRoot: string; baseRef: string }
+) & { verdict?: ResolutionVerdict } & ProviderAttributionMetadata;
+export interface ResolutionContext {
+  conflicts: string[];
+  projectRoot: string;
+  baseRef: string;
+  /** Explicit sweep-only exception; all normal callers remain strict. */
+  supersessionJudgement?: boolean;
+}
 export type RebaseResolver = (ctx: ResolutionContext) => Promise<ResolutionAttempt>;
 
 // ── Setup failure resolution (TS-3 / Task 9) ────────────────────────────────
@@ -1358,7 +1370,8 @@ export async function featureCommitsPreserved(
   git: GitRunner,
   baseRef: string,
   subjectsBefore: string[],
-): Promise<FeatureCommitPreservationVerdict> {
+  declaredSuperseded: string[] = [],
+): Promise<FeatureCommitPreservationVerdict & { excused?: Array<{ sha: string; subject: string }> }> {
   if (subjectsBefore.length === 0) return { kind: 'preserved' };
   const r = await git(['log', '--format=%s', `${baseRef}..HEAD`]);
   if (r.exitCode !== 0) return {
@@ -1386,18 +1399,30 @@ export async function featureCommitsPreserved(
   }
 
   const rejected: FeatureCommitPreservationFailure[] = [];
+  const excused: Array<{ sha: string; subject: string }> = [];
   for (const subject of missing) {
     const sha = shaBySubject.get(subject);
     if (!sha) {
       rejected.push({ subject, cause: 'could not resolve pre-rebase commit', path: null });
       continue;
     }
+    if (declaredSuperseded.includes(sha)) {
+      const paths = await git(['show', '--format=', '--name-only', sha]);
+      const changed = paths.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
+      const testOnly = paths.exitCode === 0 && changed.length > 0 && changed.every(
+        (path) => /(^|\/)(test|tests)\/|\.(test|spec)\.[^/]+$/.test(path),
+      );
+      if (testOnly) {
+        excused.push({ sha, subject });
+        continue;
+      }
+    }
     const supersession = await supersededByBase(git, sha);
     if (supersession.kind === 'rejected') {
       rejected.push({ subject, sha, cause: supersession.cause, path: supersession.path });
     }
   }
-  return rejected.length === 0 ? { kind: 'preserved' } : { kind: 'rejected', missing: rejected };
+  return rejected.length === 0 ? { kind: 'preserved', excused } : { kind: 'rejected', missing: rejected };
 }
 
 /**
@@ -1420,7 +1445,7 @@ async function resolveRebaseConflictsInner(
   conflictOutcome: RebaseOutcome,
   resolver: RebaseResolver,
   cap: number,
-  opts?: Pick<PerformRebaseOpts, 'translateAfterRebase'>,
+  opts?: Pick<PerformRebaseOpts, 'translateAfterRebase'> & { supersessionJudgement?: boolean },
 ): Promise<RebaseOutcome> {
   // FR-7: cap of 0 disables resolution entirely.
   if (cap <= 0) return conflictOutcome;
@@ -1496,7 +1521,7 @@ async function resolveRebaseConflictsInner(
     // retry must see the current conflicts, not the snapshot from conflict time.
     const attemptConflicts = await conflictedFiles(git);
     const ctxConflicts = attemptConflicts.length > 0 ? attemptConflicts : conflicts;
-    const result = await resolver({ conflicts: ctxConflicts, projectRoot, baseRef: onto });
+    const result = await resolver({ conflicts: ctxConflicts, projectRoot, baseRef: onto, supersessionJudgement: opts?.supersessionJudgement === true });
 
     if (!result.resolved) {
       if (result.providerSetupExhaustion) {
@@ -1649,7 +1674,7 @@ export async function resolveRebaseConflicts(
   conflictOutcome: RebaseOutcome,
   resolver: RebaseResolver,
   cap: number,
-  opts?: Pick<PerformRebaseOpts, 'translateAfterRebase'>,
+  opts?: Pick<PerformRebaseOpts, 'translateAfterRebase'> & { supersessionJudgement?: boolean },
 ): Promise<RebaseOutcome> {
   const resolved = await resolveRebaseConflictsInner(
     git,

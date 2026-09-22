@@ -43,8 +43,16 @@ import { prepareWorktree as defaultPrepareWorktree } from './worktree-prepare.js
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from './tracker-client.js';
 import type { GithubOperationEventEmitter, GithubOperationRunner } from './github-operations.js';
+import { isTestPath } from './gate-invalidation.js';
 
 const execFile = promisify(execFileCb);
+
+/**
+ * Classifies a conflict set for resolution routing.
+ */
+export function classifyConflictScope(conflicts: string[]): 'test-only' | 'mixed' {
+  return conflicts.length > 0 && conflicts.every(isTestPath) ? 'test-only' : 'mixed';
+}
 
 /**
  * Read-only feature-run activity predicate injected by the daemon pool.
@@ -421,6 +429,7 @@ export async function runTier2(
   remaining: string[],
   cap: number,
   resolver: RebaseResolver,
+  scope: 'test-only' | 'mixed' = 'mixed',
 ): Promise<RebaseOutcome> {
   // FR-7: cap=0 disables resolution entirely — return the conflict unchanged
   if (cap <= 0) {
@@ -440,7 +449,9 @@ export async function runTier2(
 
   // Delegate to resolveRebaseConflicts with the bounded cap
   // This will retry up to `cap` times until success or the resolver explicitly gives up
-  return resolveRebaseConflicts(git, projectRoot, conflictOutcome, resolver, cap);
+  return resolveRebaseConflicts(git, projectRoot, conflictOutcome, resolver, cap, {
+    supersessionJudgement: scope === 'test-only',
+  });
 }
 
 /**
@@ -464,13 +475,14 @@ export async function runTier2(
  * @returns               { ok: true } if all guards pass, or { ok: false, guard, reason } on failure
  */
 export type AcceptanceGuardResult =
-  | { ok: true }
+  | { ok: true; excused: Array<{ sha: string; subject: string }> }
   | { ok: false; guard: string; reason: string };
 
 export async function runAcceptanceGuards(
   git: GitRunner,
   baseRef: string,
   subjectsBefore: string[],
+  declaredSuperseded: string[] = [],
 ): Promise<AcceptanceGuardResult> {
   // Determine the project root from the git runner by asking git where it is.
   // This allows the function to work with git runners bound to any directory.
@@ -498,7 +510,7 @@ export async function runAcceptanceGuards(
   }
 
   // Guard 3: all feature commits (by subject) must be preserved
-  const preserved = await featureCommitsPreserved(git, baseRef, subjectsBefore);
+  const preserved = await featureCommitsPreserved(git, baseRef, subjectsBefore, declaredSuperseded);
   if (preserved.kind === 'rejected') {
     return {
       ok: false,
@@ -507,7 +519,22 @@ export async function runAcceptanceGuards(
     };
   }
 
-  return { ok: true };
+  return { ok: true, excused: preserved.excused ?? [] };
+}
+
+export function validateResolutionVerdict(
+  verdict: unknown,
+  opts: { scope: 'test-only' | 'mixed'; replayedShas: string[] },
+): { ok: true; verdict: import('./rebase.js').ResolutionVerdict } | { ok: false; reason: string } {
+  const bad = (reason: string) => ({ ok: false as const, reason: `malformed verdict: ${reason}` });
+  if (!verdict || typeof verdict !== 'object') return bad('missing verdict');
+  const value = verdict as Record<string, unknown>;
+  if (value.choice !== 'superseded' && value.choice !== 'merged' && value.choice !== 'source') return bad('unknown choice');
+  if (typeof value.rationale !== 'string' || value.rationale.trim() === '') return bad('missing rationale');
+  if (!Array.isArray(value.superseded) || !value.superseded.every((sha) => typeof sha === 'string')) return bad('invalid superseded');
+  if (opts.scope === 'mixed' && value.superseded.length > 0) return bad('superseded commits require test-only scope');
+  if (value.superseded.some((sha) => !opts.replayedShas.includes(sha))) return bad('superseded commit was not replayed');
+  return { ok: true, verdict: value as unknown as import('./rebase.js').ResolutionVerdict };
 }
 
 /**
@@ -982,6 +1009,17 @@ export async function resolveConflictingPr(
       subjR.exitCode === 0
         ? subjR.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)
         : [];
+    const shaR = await git(['log', '--format=%H', `${baseRef}..HEAD`]);
+    const replayedShas = shaR.exitCode === 0
+      ? shaR.stdout.split('\n').map((sha) => sha.trim()).filter(Boolean)
+      : [];
+    let conflictScope: 'test-only' | 'mixed' = 'mixed';
+    let resolutionVerdict: import('./rebase.js').ResolutionVerdict | undefined;
+    const capturingResolver: RebaseResolver = async (ctx) => {
+      const result = await deps.resolver(ctx);
+      if (result.resolved) resolutionVerdict = result.verdict;
+      return result;
+    };
 
     // Start the rebase; this will fail with conflicts if base and feature diverged
     const rebaseAttempt = await git(['rebase', '--autostash', baseRef]);
@@ -1012,13 +1050,15 @@ export async function resolveConflictingPr(
       // Stage 2: Assistant dispatch for remaining conflicts
       let tier2Outcome: RebaseOutcome | null = null;
       if (tier1Result.remaining.length > 0) {
+        conflictScope = classifyConflictScope(tier1Result.remaining);
         tier2Outcome = await runTier2(
           git,
           worktreePath,
           baseRef,
           tier1Result.remaining,
           config.attemptCap,
-          deps.resolver,
+          capturingResolver,
+          conflictScope,
         );
         log(`${prUrl}: tier2 outcome: ${tier2Outcome.kind}`);
 
@@ -1042,8 +1082,25 @@ export async function resolveConflictingPr(
 
     }
 
-    // Work-preservation guards: verify the rebase succeeded correctly
-    const guardsResult = await runAcceptanceGuards(git, baseRef, subjectsBefore);
+    if (conflictScope === 'test-only') {
+      const checked = validateResolutionVerdict(resolutionVerdict, { scope: conflictScope, replayedShas });
+      if (!checked.ok) {
+        await escalate(prUrl, 'tier2-verdict', checked.reason, {
+          runGh: deps.runGh,
+          operations,
+          cwd: repoCwd,
+          log,
+        });
+        logOutcome(log, prUrl, 'tier2-verdict', 'escalated');
+        return { kind: 'escalated' };
+      }
+      resolutionVerdict = checked.verdict;
+    }
+
+    // Work-preservation guards: verify the rebase succeeded correctly.
+    const guardsResult = await runAcceptanceGuards(
+      git, baseRef, subjectsBefore, resolutionVerdict?.superseded ?? [],
+    );
     if (!guardsResult.ok) {
       const reason = `${guardsResult.guard}: ${guardsResult.reason}`;
       log(`${prUrl}: acceptance guard failed: ${reason}`);

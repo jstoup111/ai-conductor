@@ -502,7 +502,10 @@ export function parseRebaseResolutionOutput(output: string): ResolutionAttempt {
       ) {
         const obj = parsed as Record<string, unknown>;
         if (obj.resolved === true) {
-          return { resolved: true };
+          return {
+            resolved: true,
+            ...('verdict' in obj ? { verdict: obj.verdict as ResolutionAttempt['verdict'] } : {}),
+          };
         }
         const reason =
           typeof obj.reason === 'string' && obj.reason.length > 0
@@ -2010,6 +2013,9 @@ export class DefaultStepRunner implements StepRunner {
       'captured source intent and upstream intent before continuing. At the first semantic ' +
       'ambiguity, HALT this attempt and return a false result with the missing decision; ' +
       'do not replace that workflow with a condensed procedure.\n' +
+      (ctx.supersessionJudgement
+        ? 'Sweep Test-Only Judgement is in force. A successful final JSON must include verdict: { choice: "superseded" | "merged" | "source", rationale: string, superseded: string[] }.\n'
+        : '') +
       'Your FINAL output line MUST be exactly one of:\n' +
       '{"resolved": true}\n' +
       '{"resolved": false, "reason": "<explanation>"}';
