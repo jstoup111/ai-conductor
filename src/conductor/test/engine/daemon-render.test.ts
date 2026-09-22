@@ -373,6 +373,18 @@ describe('renderDaemonEvent', () => {
       refusal: 'branch-delete-failed',
     })).toHaveLength(1);
     expect(lines({
+      type: 'worktree_reclaim_failed',
+      slug: 'dirty-feature',
+      branch: 'hotfix/dirty-feature',
+      refusal: 'dirty-worktree',
+    }).join('\n')).toContain('dirty-feature');
+    expect(lines({
+      type: 'worktree_reclaim_failed',
+      slug: 'dirty-feature',
+      branch: 'hotfix/dirty-feature',
+      refusal: 'dirty-worktree',
+    }).join('\n')).toContain('dirty-worktree');
+    expect(lines({
       type: 'worktree_reclaim_retained',
       slug: 'active-feature',
       reason: 'in-flight',

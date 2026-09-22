@@ -473,19 +473,20 @@ async function gatherMergeEvidence(
   prefetched?: { shippedStems: string[] | null; branchesBySlug: Map<string, string[]> | null },
   branch?: string,
 ): Promise<MergeEvidence | null> {
-  const recordRequired = requiresShippedRecord(branch);
-  const shippedStems = recordRequired
-    ? prefetched?.shippedStems ?? (await listShippedStemsOnMain(runGit, projectRoot))
-    : [];
-  if (recordRequired && shippedStems === null) return null;
+  // A record is mandatory only for daemon branches, but it is corroborating
+  // evidence for every branch.  In particular, ancestry by itself no longer
+  // authorizes reclaiming a non-daemon worktree: a record can corroborate it
+  // without a GitHub lookup.
+  const shippedStems = prefetched === undefined
+    ? await listShippedStemsOnMain(runGit, projectRoot)
+    : prefetched.shippedStems;
+  if (shippedStems === null) return null;
   const branchesBySlug =
     prefetched?.branchesBySlug ?? (await listBranchesBySlug(runGit, projectRoot));
   if (branchesBySlug === null) return null;
 
   const key = undatedStem(slug);
-  const shippedRecordOnMain = recordRequired
-    && shippedStems !== null
-    && shippedStems.some((stem) => undatedStem(stem) === key);
+  const shippedRecordOnMain = shippedStems.some((stem) => undatedStem(stem) === key);
   const branches = branch === undefined
     ? branchesBySlug.get(key) ?? []
     : [...branchesBySlug.values()].some((refs) => refs.includes(branch)) ? [branch] : [];
@@ -560,15 +561,10 @@ export async function reconcileParkedFeatures(
   const enumeratedCandidates = [...candidates.values()]
     .filter((candidate) => !candidate.parked).length;
 
-  // Read pass-invariant evidence once. A record listing is unnecessary when
-  // every candidate is a non-daemon listed branch, so do not consult it then.
-  const hasRecordGatedCandidate = [...candidates.values()].some((candidate) =>
-    candidate.reclaimable && requiresShippedRecord(candidate.branch),
-  );
   const prefetched = {
-    shippedStems: hasRecordGatedCandidate
-      ? await listShippedStemsOnMain(runGit, opts.projectRoot)
-      : [],
+    // Records corroborate ancestry for every reclaimable branch, not only
+    // daemon branches whose cleanup is record-gated.
+    shippedStems: await listShippedStemsOnMain(runGit, opts.projectRoot),
     branchesBySlug: await listBranchesBySlug(runGit, opts.projectRoot),
   };
 
@@ -698,7 +694,12 @@ export async function reconcileParkedFeatures(
       else {
         counts.refused++;
         refusedByReason[outcome.refusal] = (refusedByReason[outcome.refusal] ?? 0) + 1;
-        if (outcome.refusal === 'worktree-remove-failed' || outcome.refusal === 'branch-delete-failed') {
+      if (
+        outcome.refusal === 'worktree-remove-failed'
+        || outcome.refusal === 'branch-delete-failed'
+        || outcome.refusal === 'dirty-worktree'
+        || outcome.refusal === 'no-merge-proof'
+      ) {
           try {
             opts.onEvent?.({ type: 'worktree_reclaim_failed', slug, branch: candidate.branch, refusal: outcome.refusal });
           } catch {
@@ -839,10 +840,19 @@ export async function reconcileMergedPark(
   //       is structurally always false).
   // Neither proof available ⇒ refuse, exactly as before.
   let proof: ReclaimProof = 'ancestry';
-  const unproven = evidence.branches.filter((ref) => !evidence.mergedBranches.includes(ref));
-  if (unproven.length > 0) {
+  // A shipped record corroborates ancestry. Without one, ancestry must be
+  // corroborated by the merged PR's exact head too; otherwise a branch that
+  // merely happens to be an ancestor can still carry an unreconciled checkout.
+  const branchesRequiringPrProof = evidence.shippedRecordOnMain
+    ? evidence.branches.filter((ref) => !evidence.mergedBranches.includes(ref))
+    // Daemon branches retain their record-repair path. Non-daemon ancestry
+    // needs PR-head corroboration when no record exists.
+    : requiresShippedRecord(opts.branch)
+      ? evidence.branches.filter((ref) => !evidence.mergedBranches.includes(ref))
+      : evidence.branches;
+  if (branchesRequiringPrProof.length > 0) {
     const runGh = opts.runGh ?? makeProductionGh();
-    for (const ref of unproven) {
+    for (const ref of branchesRequiringPrProof) {
       const diagnosis = await proveByMergedPrHead(runGit, runGh, opts.projectRoot, ref, (error) => {
         (opts.capabilityLog ?? opts.log)?.(
           `[parked-reconciliation] ${opts.slug}: gh capability unavailable for ${error.field}`,
@@ -870,7 +880,11 @@ export async function reconcileMergedPark(
         case 'behind':
           return { slug: opts.slug, steps: [], refusal: 'branch-behind-merged-head' };
         case 'indeterminate':
-          return { slug: opts.slug, steps: [], refusal: 'ancestry-check-failed' };
+          return {
+            slug: opts.slug,
+            steps: [],
+            refusal: evidence.mergedBranches.includes(ref) ? 'no-merge-proof' : 'ancestry-check-failed',
+          };
       }
     }
   }
@@ -929,8 +943,12 @@ export async function reconcileMergedPark(
   }
 
   if (worktreeOnDisk) {
-    const { stdout } = await runGit(['status', '--porcelain'], { cwd: worktreePath });
-    if (stdout.length > 0) {
+    try {
+      const { stdout } = await runGit(['status', '--porcelain'], { cwd: worktreePath });
+      if (stdout.length > 0) {
+        return { slug: opts.slug, steps, refusal: 'dirty-worktree' };
+      }
+    } catch {
       return { slug: opts.slug, steps, refusal: 'dirty-worktree' };
     }
   }
