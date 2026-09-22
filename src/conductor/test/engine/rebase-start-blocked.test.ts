@@ -115,7 +115,7 @@ describe('engine/rebase — refusal before rebase starts', () => {
     }
   });
 
-  it('treats a healed active review-input document delta as changed without invalidating BUILD or aggregate tests', async () => {
+  it('conservatively revalidates aggregate gates for a healed review-input delta whose prior PASS lacks evidence', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rebase-start-blocked-git-'));
     const g = (args: string[]) => execFile('git', args, { cwd: root });
     const planPath = '.docs/plans/document-only-rebase.md';
@@ -157,11 +157,22 @@ describe('engine/rebase — refusal before rebase starts', () => {
         documentInputs: expect.arrayContaining([planPath]),
       });
       const verdicts = await applyRebaseVerdicts(root, outcome, false);
-      expect(verdicts.kickedBack).toEqual(['coverage_binding']);
+      // The active plan is a declared coverage input, so coverage_binding is
+      // directly invalidated. The bare PASS verdicts for the other candidate
+      // preservations carry no durable, applicable evidence, so the selective
+      // rebase policy conservatively revalidates them too. BUILD remains
+      // untouched for a document-only delta.
+      expect(verdicts.kickedBack).toEqual([
+        'coverage_binding',
+        'build_review',
+        'test_suite',
+        'prd_audit',
+        'architecture_review_as_built',
+      ]);
       expect(await readVerdict(root, 'coverage_binding')).toMatchObject({ satisfied: false });
       await expect(readVerdict(root, 'build')).resolves.toMatchObject({ satisfied: true, reason: 'prior BUILD' });
-      await expect(readVerdict(root, 'test_suite')).resolves.toMatchObject({ satisfied: true, reason: 'prior aggregate tests' });
-      await expect(readVerdict(root, 'build_review')).resolves.toMatchObject({ satisfied: true, reason: 'prior judged review' });
+      await expect(readVerdict(root, 'test_suite')).resolves.toMatchObject({ satisfied: false, kickback: { from: 'rebase' } });
+      await expect(readVerdict(root, 'build_review')).resolves.toMatchObject({ satisfied: false, kickback: { from: 'rebase' } });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

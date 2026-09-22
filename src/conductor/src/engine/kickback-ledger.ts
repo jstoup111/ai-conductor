@@ -119,6 +119,8 @@ export interface KickbackLedger {
   growth?: PlanGrowthRecord;
   pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
   settlementReceipts?: Record<string, { gates: string[] }>;
+  /** Applied-rebase operation ids whose build-review convergence laps were refunded. */
+  convergenceCreditReceipts?: Record<string, { gate: 'build_review' }>;
 }
 
 type PersistedKickbackGateEntry = Omit<
@@ -136,6 +138,7 @@ interface PersistedKickbackLedger {
   growth?: PlanGrowthRecord;
   pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
   settlementReceipts?: Record<string, { gates: string[] }>;
+  convergenceCreditReceipts?: Record<string, { gate: 'build_review' }>;
 }
 
 export const KICKBACK_LEDGER_PATH = '.pipeline/kickback-ledger.json';
@@ -528,6 +531,13 @@ function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
     ledger.pendingAsBuiltRemediationFindings !== undefined &&
     !isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
   ) return unreadableLedger(normalizeKickbackLedger({ version: 1, gates }).gates);
+  const receipts = ledger.convergenceCreditReceipts;
+  if (receipts !== undefined && (
+    typeof receipts !== 'object' || receipts === null || Array.isArray(receipts) ||
+    !Object.entries(receipts).every(([id, receipt]) => id.trim().length > 0 &&
+      typeof receipt === 'object' && receipt !== null && !Array.isArray(receipt) &&
+      (receipt as { gate?: unknown }).gate === 'build_review')
+  )) return unreadableLedger(normalizeKickbackLedger({ version: 1, gates }).gates);
   const parsed: PersistedKickbackLedger = {
     version: 1,
     gates,
@@ -538,6 +548,7 @@ function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
     ...(ledger.settlementReceipts === undefined || isSettlementReceipts(ledger.settlementReceipts)
       ? { settlementReceipts: ledger.settlementReceipts }
       : {}),
+    ...(receipts === undefined ? {} : { convergenceCreditReceipts: receipts as Record<string, { gate: 'build_review' }> }),
   };
   const normalized = normalizeKickbackLedger(parsed);
   return unreadableGates.length > 0 ? unreadableLedger(normalized.gates, unreadableGates) : normalized;

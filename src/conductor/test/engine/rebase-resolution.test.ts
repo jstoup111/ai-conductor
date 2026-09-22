@@ -47,6 +47,7 @@ import {
   conflictedFiles,
   writeHalt,
 } from '../../src/engine/rebase.js';
+import { translateAfterRebase } from '../../src/engine/rebase-translate.js';
 
 const execFile = promisify(execFileCb);
 
@@ -107,6 +108,72 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
     expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
     // feature commit subject survived
     expect((await g(['log', '--format=%s', 'main..HEAD'])).stdout).toContain('feat: change a');
+  });
+
+  it('translates evidence citations after a conflict-resolved rebase completes', async () => {
+    const originalHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    const onto = (await g(['rev-parse', 'main'])).stdout.trim();
+    const { git, pre } = await intoConflict();
+    const translated: Array<[string, string, string]> = [];
+
+    const outcome = await resolveRebaseConflicts(git, repo, pre, async () => {
+      await writeFile(join(repo, 'a.ts'), 'merged\n');
+      await g(['add', 'a.ts']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true };
+    }, 3, {
+      translateAfterRebase: async (_git, _root, resolvedOnto, origHead, head) => {
+        translated.push([resolvedOnto, origHead, head]);
+      },
+    });
+
+    expect(outcome.kind).toBe('changed');
+    expect(translated).toEqual([[onto, originalHead, (await g(['rev-parse', 'HEAD'])).stdout.trim()]]);
+  });
+
+  it('persists patch-id rewrite correspondence after resolver completion', async () => {
+    // This commit replays cleanly after the resolver handles a.ts, giving the
+    // translation seam one stable patch-id pair even though the conflict
+    // resolution itself intentionally lands in residue.
+    await writeFile(join(repo, 'b.ts'), 'feature-only\n');
+    await g(['add', 'b.ts']);
+    await g(['commit', '-q', '-m', 'feat: add b']);
+    const originalB = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    const { git, pre } = await intoConflict();
+
+    const outcome = await resolveRebaseConflicts(git, repo, pre, async () => {
+      await writeFile(join(repo, 'a.ts'), 'merged\n');
+      await g(['add', 'a.ts']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true };
+    }, 3, { translateAfterRebase });
+
+    expect(outcome.kind).toBe('changed');
+    const rewrites = JSON.parse(await readFile(join(repo, '.pipeline', 'rebase-rewrites.json'), 'utf-8')) as Record<string, string>;
+    expect(rewrites[originalB]).toMatch(/^[0-9a-f]{40}$/);
+    expect(rewrites[originalB]).not.toBe(originalB);
+  });
+
+  it('retains the pre-replay P/B/O identities when ORIG_HEAD moves before resolver continuation', async () => {
+    const preRebaseHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    const mergeBase = (await g(['merge-base', preRebaseHead, 'main'])).stdout.trim();
+    const target = (await g(['rev-parse', 'main'])).stdout.trim();
+    const { git, pre } = await intoConflict();
+
+    // ORIG_HEAD is mutable recovery state, not replay authority. Move it after
+    // performRebase has paused so the resolver must use the captured identity.
+    await g(['update-ref', 'ORIG_HEAD', target]);
+    const outcome = await resolveRebaseConflicts(git, repo, pre, async () => {
+      await writeFile(join(repo, 'a.ts'), 'merged\n');
+      await g(['add', 'a.ts']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true };
+    }, 3);
+
+    expect(outcome).toMatchObject({
+      kind: 'changed',
+      replay: { preRebaseHead, mergeBase, target, completedHead: expect.stringMatching(/^[0-9a-f]{40}$/) },
+    });
   });
 
   it('FR-6: an explicit cannot-resolve signal short-circuits to HALT after one attempt', async () => {
@@ -190,7 +257,10 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
       return { resolved: true };
     };
 
-    const outcome = await resolveRebaseConflicts(git, repo, pre, resolver, 3);
+    let translated = false;
+    const outcome = await resolveRebaseConflicts(git, repo, pre, resolver, 3, {
+      translateAfterRebase: async () => { translated = true; },
+    });
 
     expect(calls).toBe(1);
     expect(outcome.kind).toBe('conflict_halt');
@@ -200,6 +270,7 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
     // sanity: the branch WOULD have looked "current" (the trap FR-9 guards against)
     expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
     expect((await g(['log', '--format=%s', 'main..HEAD'])).stdout).not.toContain('feat: change a');
+    expect(translated).toBe(false);
   });
 
   it('FR-7: cap of 0 disables resolution — resolver is never called, HALT passes through', async () => {

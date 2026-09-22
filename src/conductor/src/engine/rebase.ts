@@ -1,8 +1,14 @@
 import { execa } from 'execa';
-import { writeFile, readFile, access, mkdir, rename } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { writeFile, readFile, access, mkdir, rename, readdir } from 'node:fs/promises';
 import { join, isAbsolute, relative, basename, resolve, dirname } from 'node:path';
 import type { CiRepairDiagnosticReason, StepName } from '../types/index.js';
-import { writeVerdict, type GateVerdict } from './gate-verdicts.js';
+import {
+  isSkipVerdict,
+  readVerdict,
+  writeVerdict,
+  type GateVerdict,
+} from './gate-verdicts.js';
 import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
@@ -10,11 +16,16 @@ import { withEngineCommitEnv } from './engine-commit-env.js';
 import { saveStepStatus } from './state.js';
 import {
   classifyGateInvalidation,
+  classifyReplayGateInvalidation,
   GATE_SURFACE,
   isReviewDocumentPath,
   projectGateSurfaces,
 } from './gate-invalidation.js';
-import { buildArtifactResolutionContext, resolveFeaturePlanPath, resolveFeaturePrdPaths } from './artifacts.js';
+import {
+  buildArtifactResolutionContext,
+  resolveFeaturePlanPath,
+  resolveFeaturePrdPaths,
+} from './artifacts.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { ALL_STEPS } from './steps.js';
 import type { ProviderAttributionMetadata } from './provider-execution.js';
@@ -22,6 +33,15 @@ import {
   PROTECTED_ARTIFACT_SEAL_PATH,
   verifyProtectedArtifactSeal,
 } from './protected-artifact-seal.js';
+import {
+  captureReplayIdentity,
+  compareReplayTree,
+  type ReplayIdentity,
+  type ReplayIdentitySeed,
+} from './rebase-replay.js';
+import type { ReplayEvidence } from './gate-verdicts.js';
+import { currentPreservedJudgeIdentity, gateVerdictStillValid, isApplicableOriginalPass } from './gate-code-validity.js';
+import type { RebasePreservedCandidate } from './rebase-transition.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -632,6 +652,7 @@ type RebaseOutcomeKind =
       kind: 'noop';
       /** Complete rebase delta when the base advanced without touching code/test paths. */
       allChangedPaths?: string[];
+      replay?: ReplayIdentity;
     }
   | {
       kind: 'mergeable_skip';
@@ -650,11 +671,15 @@ type RebaseOutcomeKind =
       featureSurface?: string[];
       /** Exact active feature review inputs, resolved through existing artifact conventions. */
       documentInputs?: string[];
+      /** Present only when the completed replay has a complete immutable identity. */
+      replay?: ReplayIdentity;
     }
   | {
       kind: 'conflict_halt';
       conflicts: string[];
       reason: string;
+      /** Immutable P/B/O captured before replay; not completed replay authority. */
+      replaySeed?: ReplayIdentitySeed;
       /** A completed rebase failed a post-resolution acceptance guard. */
       resumeShape?: RebaseResumeShape;
       /** Git refused before creating rebase state; `--continue` is invalid. */
@@ -799,9 +824,11 @@ async function resolveFeatureDesc(projectRoot: string): Promise<string | undefin
   }
 }
 
-/** Resolve only when a document delta exists; no additional persisted state. */
-export async function resolveReviewInputs(projectRoot: string, delta: string[]): Promise<string[]> {
-  if (!delta.some(isReviewDocumentPath)) return [];
+/** Resolve review inputs.  Ordinary callers resolve only for a document
+ * delta; preservation additionally requests the full declared set to bind
+ * authority against later input edits. */
+export async function resolveReviewInputs(projectRoot: string, delta: string[], force = false): Promise<string[]> {
+  if (!force && !delta.some(isReviewDocumentPath)) return [];
   const featureDesc = await resolveFeatureDesc(projectRoot);
   const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
   const context = await buildArtifactResolutionContext(projectRoot, { planPath, featureDesc });
@@ -821,7 +848,18 @@ export async function resolveReviewInputs(projectRoot: string, delta: string[]):
     for (const prefix of ['stories', 'specs', 'plans', 'coherence']) {
       inputs.push(`.docs/${prefix}/${identity}.md`);
     }
+    inputs.push(`.docs/decisions/adr-${identity}.md`);
   }
+  // Decision records are declared architecture authority, not merely a
+  // same-stem feature artifact.  Governing ADRs use date-prefixed names, so
+  // the synthetic adr-<feature> path above cannot see a rebase that changes
+  // one.  Bind the resolver to the actual decision records present in this
+  // feature checkout; a later decision edit then invalidates its owning
+  // architecture review instead of silently preserving an older judgement.
+  const decisions = await readdir(join(projectRoot, '.docs', 'decisions')).catch(() => []);
+  inputs.push(...decisions
+    .filter((entry) => entry.endsWith('.md'))
+    .map((entry) => `.docs/decisions/${entry}`));
   return [...new Set(inputs.map(repoPath))];
 }
 
@@ -936,8 +974,21 @@ export async function performRebase(
 
   // Snapshot the pre-rebase tree before the rebase moves HEAD so clean replay
   // classification and evidence translation can use the original commit.
-  const preTree = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-  const mergeBase = (await git(['merge-base', 'HEAD', base.ref])).stdout.trim();
+  const replaySeed: ReplayIdentitySeed = {
+    preRebaseHead: (await git(['rev-parse', 'HEAD'])).stdout.trim(),
+    mergeBase: (await git(['merge-base', 'HEAD', base.ref])).stdout.trim(),
+    target: (await git(['rev-parse', base.ref])).stdout.trim(),
+  };
+  const { preRebaseHead: preTree, mergeBase, target } = replaySeed;
+  const attachReplayIdentity = async (outcome: RebaseOutcome): Promise<RebaseOutcome> => {
+    if (outcome.kind !== 'changed' && outcome.kind !== 'noop') return outcome;
+    const replay = await captureReplayIdentity(git, preTree, mergeBase, target);
+    return replay === undefined ? outcome : { ...outcome, replay };
+  };
+  const attachReplaySeed = (outcome: Extract<RebaseOutcome, { kind: 'conflict_halt' }>): RebaseOutcome => ({
+    ...outcome,
+    replaySeed,
+  });
   const translateCompletedRebase = async (): Promise<void> => {
     if (!opts?.translateAfterRebase) return;
     const ontoSha = (await git(['rev-parse', base.ref])).stdout.trim();
@@ -962,7 +1013,7 @@ export async function performRebase(
     // any evidence citation pinned to the pre-rebase shas. Translate
     // unconditionally on any real rebase, not gated on that heuristic.
     await translateCompletedRebase();
-    return outcome;
+    return attachReplayIdentity(outcome);
   }
 
   // Non-zero → conflicts (or another error). Inspect unmerged paths.
@@ -983,51 +1034,51 @@ export async function performRebase(
           if (retry.exitCode === 0) {
             const outcome = await classifyClean(git, preTree, mergeBase, projectRoot);
             await translateCompletedRebase();
-            return { ...outcome, quarantine };
+            return attachReplayIdentity({ ...outcome, quarantine });
           }
           const retryConflicts = await conflictedFiles(git);
           if (retryConflicts.length > 0) {
-            return {
+            return attachReplaySeed({
               kind: 'conflict_halt',
               conflicts: retryConflicts,
               reason: 'rebase conflict requires human resolution',
               quarantine,
-            };
+            });
           }
-          return {
+          return attachReplaySeed({
             kind: 'conflict_halt',
             conflicts: [],
             reason: retry.stderr.trim() || 'rebase failed without reported conflicts',
             startFailure: !(await rebaseStateActive(git, projectRoot)),
             quarantine,
-          };
+          });
         } catch (error) {
-          return {
+          return attachReplaySeed({
             kind: 'conflict_halt',
             conflicts: [],
             reason: `${rebase.stderr.trim() || 'rebase failed without reported conflicts'}\n${(error as Error).message}`,
             startFailure: true,
             ...(quarantine === undefined ? {} : { quarantine }),
-          };
+          });
         }
       }
     }
     // No unmerged files but rebase failed — treat as a HALT-worthy error,
     // leaving the rebase in whatever state git left it.
-    return {
+    return attachReplaySeed({
       kind: 'conflict_halt',
       conflicts: [],
       reason: rebase.stderr.trim() || 'rebase failed without reported conflicts',
       startFailure: !(await rebaseStateActive(git, projectRoot)),
-    };
+    });
   }
 
   // Any conflict remains paused for the generic resolver or a human.
-  return {
+  return attachReplaySeed({
     kind: 'conflict_halt',
     conflicts,
     reason: 'rebase conflict requires human resolution',
-  };
+  });
 }
 
 /** Classify a clean rebase by whether it touched any code/test path. */
@@ -1369,6 +1420,7 @@ async function resolveRebaseConflictsInner(
   conflictOutcome: RebaseOutcome,
   resolver: RebaseResolver,
   cap: number,
+  opts?: Pick<PerformRebaseOpts, 'translateAfterRebase'>,
 ): Promise<RebaseOutcome> {
   // FR-7: cap of 0 disables resolution entirely.
   if (cap <= 0) return conflictOutcome;
@@ -1405,6 +1457,23 @@ async function resolveRebaseConflictsInner(
     preAdvanceBaseResult.exitCode === 0 && preAdvanceBaseResult.stdout.trim()
       ? preAdvanceBaseResult.stdout.trim()
       : undefined;
+  const replaySeed = conflictOutcome.kind === 'conflict_halt'
+    ? conflictOutcome.replaySeed
+    : undefined;
+  const attachResolvedReplay = async (outcome: RebaseOutcome): Promise<RebaseOutcome> => {
+    if (outcome.kind !== 'changed' && outcome.kind !== 'noop') return outcome;
+    // Recovery never reconstructs P/B/O from mutable ORIG_HEAD or rebase
+    // state. If the driver did not capture a seed before replay, no completed
+    // replay authority may escape this continuation.
+    if (!replaySeed) return outcome;
+    const replay = await captureReplayIdentity(
+      git,
+      replaySeed.preRebaseHead,
+      replaySeed.mergeBase,
+      replaySeed.target,
+    );
+    return replay === undefined ? outcome : { ...outcome, replay };
+  };
 
   // Feature commit subjects that must survive: all commits in <onto>..ORIG_HEAD.
   // ORIG_HEAD is the pre-rebase feature tip (set by git before it starts replaying).
@@ -1516,9 +1585,25 @@ async function resolveRebaseConflictsInner(
     }
     const documentInputs = await resolveReviewInputs(projectRoot, allChangedPaths ?? []);
     const documentsChanged = allChangedPaths?.some((path) => documentInputs.includes(path)) ?? false;
-    return changedCodePaths.length > 0 || documentsChanged
+    const resolvedOutcome: RebaseOutcome = changedCodePaths.length > 0 || documentsChanged
       ? { documentInputs, ...(changedCodePaths.length === 0 ? { featureSurface: [] } : {}), kind: 'changed', changedCodePaths, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) }
       : { kind: 'noop', ...(allChangedPaths === undefined ? {} : { allChangedPaths }) };
+    // Resolver completion rewrites the same feature commits as the clean
+    // `performRebase` path. The seed was captured before the initial rebase
+    // moved HEAD; never reconstruct its original head from mutable ORIG_HEAD.
+    // Guard failures return above, so no rewrite map is persisted for a
+    // rejected or unresolved continuation.
+    if (replaySeed && opts?.translateAfterRebase) {
+      const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+      await opts.translateAfterRebase(
+        git,
+        projectRoot,
+        onto,
+        replaySeed.preRebaseHead,
+        head,
+      );
+    }
+    return attachResolvedReplay(resolvedOutcome);
   }
 
   // All cap attempts consumed without the rebase completing.
@@ -1540,6 +1625,7 @@ export async function resolveRebaseConflicts(
   conflictOutcome: RebaseOutcome,
   resolver: RebaseResolver,
   cap: number,
+  opts?: Pick<PerformRebaseOpts, 'translateAfterRebase'>,
 ): Promise<RebaseOutcome> {
   const resolved = await resolveRebaseConflictsInner(
     git,
@@ -1547,6 +1633,7 @@ export async function resolveRebaseConflicts(
     conflictOutcome,
     resolver,
     cap,
+    opts,
   );
   return conflictOutcome.quarantine === undefined
     ? resolved
@@ -1578,12 +1665,14 @@ export async function runGatedRebaseResolution(opts: {
   outcome: RebaseOutcome;
   cap: number;
   resolve?: RebaseResolver;
+  /** Carries the caller's evidence-translation seam across resolver completion. */
+  translateAfterRebase?: PerformRebaseOpts['translateAfterRebase'];
   /** Fired before each resolver dispatch with the 1-based attempt index + cap. */
   onAttempt?: (index: number, cap: number) => void | Promise<void>;
   /** Fired once after the loop settles: `succeeded` (rebase completed) or `exhausted`. */
   onSettled?: (kind: 'succeeded' | 'exhausted') => void | Promise<void>;
 }): Promise<RebaseOutcome> {
-  const { git, projectRoot, outcome, cap, resolve, onAttempt, onSettled } = opts;
+  const { git, projectRoot, outcome, cap, resolve, translateAfterRebase, onAttempt, onSettled } = opts;
   if (outcome.kind !== 'conflict_halt') return outcome;
   if (cap <= 0 || !resolve) return outcome;
 
@@ -1604,7 +1693,7 @@ export async function runGatedRebaseResolution(opts: {
     }
   };
 
-  const resolved = await resolveRebaseConflicts(git, projectRoot, outcome, countingResolver, cap);
+  const resolved = await resolveRebaseConflicts(git, projectRoot, outcome, countingResolver, cap, { translateAfterRebase });
   if (onSettled) {
     try {
       await onSettled(resolved.kind === 'changed' || resolved.kind === 'noop' ? 'succeeded' : 'exhausted');
@@ -1616,6 +1705,26 @@ export async function runGatedRebaseResolution(opts: {
 }
 
 // ── Verdict + event wiring (consumed by the conductor) ───────────────────────
+
+/**
+ * A classifier can say that a gate's inputs were untouched, but that is not
+ * evidence that the gate ever passed.  Preserve only a durable, non-skip PASS
+ * with a verifiable original judge identity.
+ *
+ */
+async function applicableOriginalPass(
+  projectRoot: string,
+  gate: StepName,
+  preRebaseHead: string,
+  git: GitRunner | undefined,
+): Promise<GateVerdict | undefined> {
+  const verdict = await readVerdict(projectRoot, gate);
+  if (!isApplicableOriginalPass(verdict)) return undefined;
+  const identity = await currentPreservedJudgeIdentity(projectRoot, gate);
+  if (!git || !identity ||
+    await gateVerdictStillValid({ projectRoot, git }, gate, identity.codeStamp, preRebaseHead) !== 'preserve') return undefined;
+  return verdict!;
+}
 
 /**
  * Write the gate verdicts implied by a rebase outcome and return whether the
@@ -1636,11 +1745,17 @@ export async function applyRebaseVerdicts(
     reason?: string;
     preservationBasis?: 'test_suite_drift_budget';
   }>,
+  git?: GitRunner,
 ): Promise<{
   satisfied: boolean;
   kickedBack: StepName[];
   reverified: StepName[];
   preserved?: Array<{ gate: StepName; basis: 'test_suite_drift_budget' }>;
+  /** The replay-aware decision actually applied to gate records. */
+  preservedGates?: StepName[];
+  /** Immutable original PASS candidates consumed by the transition service. */
+  preservedCandidates?: RebasePreservedCandidate[];
+  replay?: ReplayEvidence;
 }> {
   if (outcome.kind === 'conflict_halt' || outcome.kind === 'setup_stop') {
     // A setup-only resolver exhaustion leaves the rebase paused exactly like an
@@ -1654,6 +1769,30 @@ export async function applyRebaseVerdicts(
     });
     return { satisfied: false, kickedBack: [], reverified: [] };
   }
+
+  // A completed file-changing rebase is a cross-file operation.  Publish its
+  // `applying` fence before pre-verification or any downstream gate record is
+  // touched, so an interruption cannot expose a mixture of old PASS evidence
+  // and new rebase effects as eligible for finish.  The shared transition
+  // replaces this provisional descriptor with the exact decision and marks it
+  // applied only after its state batch and gate records agree.
+  const provisionalReplay: ReplayEvidence | undefined = outcome.kind === 'changed'
+    ? {
+        preRebaseHead: outcome.replay?.preRebaseHead ?? '',
+        mergeBase: outcome.replay?.mergeBase ?? '',
+        target: outcome.replay?.target ?? '',
+        completedHead: outcome.replay?.completedHead ?? '',
+        expectedTree: '',
+      }
+    : undefined;
+  const provisionalOperation = provisionalReplay === undefined
+    ? undefined
+    : {
+        id: `preparing-${createHash('sha256').update(JSON.stringify(provisionalReplay)).digest('hex')}`,
+        status: 'applying' as const,
+        transition: { preserved: [], invalidated: [], reverified: [] },
+        replay: provisionalReplay,
+      };
 
   // rebase gate is satisfied (branch now current with base).
   const satisfiedVerdict: GateVerdict = {
@@ -1670,6 +1809,7 @@ export async function applyRebaseVerdicts(
           ? 'rebased onto base (code changed — feature surface F uncomputable, fail-closed to legacy invalidate-all)'
           : 'rebased onto base (code changed — downstream re-verify)',
     checkedAt: Date.now(),
+    ...(provisionalOperation === undefined ? {} : { rebaseOperation: provisionalOperation }),
   };
   await writeVerdict(projectRoot, 'rebase', satisfiedVerdict);
 
@@ -1736,20 +1876,112 @@ export async function applyRebaseVerdicts(
   // — or a gate whose surface can't be proven to miss the delta would be
   // silently left un-re-verified (prd_audit/architecture_review_as_built
   // included).
-  const partition = outcome.featureSurface !== undefined
-    ? classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
+  // Path overlap alone cannot distinguish an upstream edit in the same file
+  // from a changed replay. Use the exact reconstructed merge tree whenever
+  // the completed replay supplied immutable identities; an unavailable proof
+  // remains conservative through the replay classifier.
+  const replayComparison = git && outcome.replay
+    ? await compareReplayTree(git, outcome.replay)
     : undefined;
+  const replayPartition = outcome.featureSurface !== undefined && replayComparison
+    ? classifyReplayGateInvalidation(delta, outcome.featureSurface, ranManualTest, replayComparison, outcome.documentInputs)
+    : undefined;
+  const partition = outcome.featureSurface !== undefined
+    ? replayPartition ?? classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
+    : undefined;
+  // A current original PASS is enough to retain a classifier-preserved gate.
+  // Capturing replay identity is stricter: it grants the PASS durable bounded
+  // replay authority for later readers.  A gate is never named preserved
+  // unless it has that authority: the transition descriptor and the durable
+  // preservation records are one matched pair.
+  const applicableOriginalPasses = new Set<StepName>();
+  const preservedCandidates: RebasePreservedCandidate[] = [];
+  const fullReviewInputs = replayPartition === undefined
+    ? []
+    : await resolveReviewInputs(projectRoot, [], true);
+  // Only the replay classifier has immutable candidate provenance. The legacy
+  // path retains its existing gate-selection behavior but cannot mint bounded
+  // replay authority from a path-only preservation.
+  const replayCandidates = replayPartition?.candidates ?? [];
+  if (partition !== undefined) {
+    for (const gate of partition.preserved as StepName[]) {
+      const original = await applicableOriginalPass(projectRoot, gate, outcome.replay?.preRebaseHead ?? '', git);
+      const classified = replayCandidates.find((candidate) => candidate.gate === gate);
+      if (original) {
+        applicableOriginalPasses.add(gate);
+      }
+      if (original && classified) {
+        const identity = await currentPreservedJudgeIdentity(projectRoot, gate);
+        if (identity) {
+          preservedCandidates.push({
+            gate,
+            original: identity,
+            originalVerdictDigest: createHash('sha256').update(JSON.stringify(original)).digest('hex'),
+            // `activeInputs` is only the changed slice.  Bound every resolved
+            // review document instead, so a later story/plan/coherence/ADR
+            // edit cannot silently retain this replay authority.
+            relevantInputIdentities: fullReviewInputs.map(
+              (path) => `${path}@${replayComparison?.identity.completedHead ?? ''}`,
+            ),
+          });
+        }
+      }
+    }
+  }
+  // A classifier candidate is not an applied preservation effect.  Every
+  // candidate must either carry the bounded original-judge identity consumed
+  // by the transition or be explicitly re-opened.  In particular this keeps
+  // coverage/build/test-suite passes that lack stampable provenance out of
+  // the gap between the classifier and the applied decision.
+  const boundPreservations = new Set(preservedCandidates.map(({ gate }) => gate));
+  const unprovedPreservations = partition === undefined
+    ? []
+    : (partition.preserved as StepName[]).filter((gate) => !boundPreservations.has(gate));
   const targets: StepName[] = partition !== undefined
-    ? ([...(documentOnly ? [] : ['build']), ...partition.invalidated] as StepName[])
+    // A completed BUILD is attested before this decision is applied. Replay
+    // equivalence changes which reviews need another judgement, not whether
+    // the already-established authoring/BUILD work is selected again by tail
+    // position. Current combined-tree verification remains in test_suite.
+    ? ([...partition.invalidated, ...unprovedPreservations] as StepName[])
     : ([
         'build',
         ...Object.keys(GATE_SURFACE).filter((gate) => ranManualTest || gate !== 'manual_test'),
       ] as StepName[]);
-  for (const target of targets) {
+  // Applying the classifier's invalidated and unproved-preservation buckets
+  // directly makes observable verdict/event order depend on why a gate
+  // reopened. Keep effects in lifecycle order, with changed requirement
+  // inputs refreshing their audit immediately after coverage.
+  const activePrdInputChanged = reviewDelta(outcome).some((path) =>
+    path.startsWith('.docs/stories/') || path.startsWith('.docs/specs/'),
+  );
+  const gateOrder = new Map<StepName, number>([
+    ['coverage_binding', 0],
+    ['prd_audit', activePrdInputChanged ? 1 : 4],
+    ['build_review', 1 + Number(activePrdInputChanged)],
+    ['test_suite', 2 + Number(activePrdInputChanged)],
+    ['manual_test', 3 + Number(activePrdInputChanged)],
+    ['architecture_review_as_built', 5],
+  ]);
+  const orderedTargets = [...new Set(targets)].sort(
+    (left, right) => (gateOrder.get(left) ?? -1) - (gateOrder.get(right) ?? -1),
+  );
+  for (const target of orderedTargets) {
+    const before = await readVerdict(projectRoot, target);
+    if (isSkipVerdict(before)) continue;
     // A successful tree-attesting pre-verify has already written this gate's
     // fresh satisfied verdict, so it is not kicked back.
     if (reverifiedGates.has(target)) {
       continue;
+    }
+    // An ordinary failure/kickback is newer authority than this rebase's
+    // failed preservation candidate.  It already keeps the gate open; do not
+    // replace its evidence with a generic rebase invalidation.
+    if (unprovedPreservations.includes(target)) {
+      const current = await readVerdict(projectRoot, target);
+      if (current && (!current.satisfied || current.kickback || isSkipVerdict(current))) {
+        kickedBack.push(target);
+        continue;
+      }
     }
     await writeVerdict(projectRoot, target, {
       satisfied: false,
@@ -1759,11 +1991,33 @@ export async function applyRebaseVerdicts(
     });
     kickedBack.push(target);
   }
+  // A completed changed rebase without P/B/O is still a first-class,
+  // conservative transition. The current HEAD supplies only an operation
+  // identity; `unproved` prohibits every preservation.
+  const missingReplayHead = !replayComparison && git
+    ? (await git(['rev-parse', 'HEAD'])).stdout.trim()
+    : '';
+  const transitionReplay = replayComparison
+    ? {
+        preRebaseHead: replayComparison.identity.preRebaseHead,
+        mergeBase: replayComparison.identity.mergeBase,
+        target: replayComparison.identity.target,
+        completedHead: replayComparison.identity.completedHead,
+        ...(replayComparison.kind === 'unproved'
+          ? { kind: 'unproved' as const }
+          : { kind: 'proved' as const, expectedTree: replayComparison.expectedTree }),
+      }
+    : missingReplayHead
+      ? { preRebaseHead: missingReplayHead, mergeBase: missingReplayHead, target: missingReplayHead, completedHead: missingReplayHead, kind: 'unproved' as const }
+      : undefined;
   return {
     satisfied: true,
     kickedBack,
     reverified,
+    ...(preservedCandidates.length === 0 ? {} : { preservedGates: preservedCandidates.map(({ gate }) => gate) }),
+    ...(preservedCandidates.length === 0 ? {} : { preservedCandidates }),
     ...(preserved.length === 0 ? {} : { preserved }),
+    ...(transitionReplay ? { replay: transitionReplay } : {}),
   };
 }
 
@@ -1833,13 +2087,52 @@ export async function recordRebaseStepCompletion(
  * Omitting it left a real preservation invisible on the spine — neither
  * invalidated nor preserved.
  */
+type RebaseGatePreservation = {
+  gate: StepName;
+  basis: 'test_suite_drift_budget';
+};
+
+type AppliedRebaseGateDecision = {
+  kickedBack: readonly StepName[];
+  reverified: readonly StepName[];
+  /** Replay-aware candidate gates that survived original-PASS validation. */
+  preservedGates?: readonly StepName[];
+  preserved?: readonly RebaseGatePreservation[];
+  convergenceCredit?: { gate: 'build_review' };
+};
+
+function isAppliedRebaseGateDecision(
+  applied: AppliedRebaseGateDecision | readonly RebaseGatePreservation[] | undefined,
+): applied is AppliedRebaseGateDecision {
+  // `Array.isArray` does not narrow a readonly-array union sufficiently for
+  // the declarations build.  The decision has required object-only fields,
+  // so use that contract as the discriminator for the legacy list overload.
+  return applied !== undefined && !Array.isArray(applied);
+}
+
+function isRebaseGatePreservationList(
+  applied: AppliedRebaseGateDecision | readonly RebaseGatePreservation[] | undefined,
+): applied is readonly RebaseGatePreservation[] {
+  return Array.isArray(applied);
+}
+
 export async function emitGateInvalidationEvents(
   events: ConductorEventEmitter,
   outcome: RebaseOutcome,
   ranManualTest: boolean,
-  preverifiedPreserved: ReadonlyArray<{ gate: StepName; basis: 'test_suite_drift_budget' }> = [],
+  applied?: AppliedRebaseGateDecision | readonly RebaseGatePreservation[],
 ): Promise<void> {
   if (outcome.kind !== 'changed') return;
+
+  // A candidate preservation without valid prior evidence is a kickback after
+  // application. Report that actual effect, never the pre-application guess.
+  // Array.isArray's built-in predicate only narrows mutable arrays. This
+  // explicit guard preserves the readonly list alternative, so both call
+  // shapes remain type-safe: the applied decision or its preservation list.
+  const application = isAppliedRebaseGateDecision(applied) ? applied : undefined;
+  const preverifiedPreserved: readonly RebaseGatePreservation[] = application
+    ? application.preserved ?? []
+    : isRebaseGatePreservationList(applied) ? applied : [];
 
   if (outcome.featureSurface === undefined) {
     // F is uncomputable: no declared surface and no delta partition exist, so
@@ -1854,20 +2147,59 @@ export async function emitGateInvalidationEvents(
         basis,
       });
     }
+    // The applied fail-closed invalidation is known even when its ordinary
+    // surface projection is not.  Reuse the preservation placeholder rather
+    // than creating a parallel observability channel.
+    for (const gate of (application?.kickedBack ?? []).filter((gate) => GATE_SURFACE[gate] !== undefined)) {
+      if (!preverifiedPreserved.some((preserved) => preserved.gate === gate)) {
+        await events.emit({
+          type: 'kickback',
+          from: 'rebase',
+          to: gate as StepName,
+          count: 1,
+          ...(application?.convergenceCredit?.gate === gate ? { convergenceCredit: application.convergenceCredit } : {}),
+        });
+        await events.emit({
+          type: 'rebase_gate_invalidated',
+          gate,
+          matchedPaths: ['<feature surface uncomputable>'],
+        });
+      }
+    }
     return;
   }
 
-  const { invalidated, preserved } = classifyGateInvalidation(
-    reviewDelta(outcome),
-    outcome.featureSurface,
-    ranManualTest,
-    outcome.documentInputs,
-  );
   const projections = projectGateSurfaces(reviewDelta(outcome), outcome.featureSurface, outcome.documentInputs);
   const preservationBases = new Map(preverifiedPreserved.map(({ gate, basis }) => [gate, basis]));
+  // The state transition and events must describe the same applied decision.
+  // Only the legacy optional call shape computes a path-only fallback.
+  const legacy = application === undefined
+    ? classifyGateInvalidation(reviewDelta(outcome), outcome.featureSurface, ranManualTest, outcome.documentInputs)
+    : undefined;
+  const invalidated = application ? application.kickedBack : legacy!.invalidated;
+  const preserved = application
+    ? (application.preservedGates ?? []).filter((gate) => !invalidated.includes(gate))
+    : legacy!.preserved;
 
-  for (const gate of invalidated) {
+  // `applyRebaseVerdicts` also reports the mechanical BUILD gate in its
+  // applied kickbacks. BUILD deliberately has no declared review surface and
+  // therefore no rebase_gate_invalidated event shape. Emit only surface-map
+  // gates here; attempting to project BUILD used an undefined key and turned
+  // an otherwise successful rebase into a HALT.
+  for (const gate of invalidated.filter((gate) => GATE_SURFACE[gate] !== undefined)) {
     if (preservationBases.has(gate as StepName)) continue;
+    // The generic kickback is the lifecycle occurrence consumed by existing
+    // kickback observers; emit it from this shared applied-result path so
+    // foreground and daemon re-kick each see precisely the same decision.
+    if (application) {
+      await events.emit({
+        type: 'kickback',
+        from: 'rebase',
+        to: gate as StepName,
+        count: 1,
+        ...(application.convergenceCredit?.gate === gate ? { convergenceCredit: application.convergenceCredit } : {}),
+      });
+    }
     await events.emit({
       type: 'rebase_gate_invalidated',
       gate: gate as StepName,
@@ -1876,6 +2208,7 @@ export async function emitGateInvalidationEvents(
   }
 
   for (const gate of new Set([...preserved, ...preservationBases.keys()])) {
+    if (GATE_SURFACE[gate] === undefined) continue;
     await events.emit({
       type: 'rebase_gate_preserved',
       gate: gate as StepName,

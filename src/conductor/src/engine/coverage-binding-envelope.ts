@@ -218,6 +218,25 @@ export async function writeCoverageBindingEnvelope(
   await fs.rename(`${path}.tmp`, path);
 }
 
+/**
+ * Sidecar naming the HEAD a coverage run judged. The envelope's exact-key
+ * contract stays closed, so the stamp lives beside it (the same shape the
+ * prd_audit / as-built sidecars use) and is bound to the envelope by runId.
+ */
+export const COVERAGE_BINDING_CODE_STAMP = `${ENVELOPE_DIRECTORY}/coverage-binding-code-stamp.json`;
+
+/** Written by the production runner together with every envelope it writes. */
+export async function writeCoverageBindingCodeStamp(
+  projectRoot: string,
+  stamp: { runId: string; codeStamp: string },
+  fs: CoverageBindingEnvelopeFilesystem,
+): Promise<void> {
+  const path = join(projectRoot, COVERAGE_BINDING_CODE_STAMP);
+  await fs.mkdir(join(projectRoot, ENVELOPE_DIRECTORY));
+  await fs.writeFile(`${path}.tmp`, JSON.stringify(stamp));
+  await fs.rename(`${path}.tmp`, path);
+}
+
 /** Missing, torn, and foreign envelopes must never become cache evidence. */
 export async function readCoverageBindingEnvelope(
   projectRoot: string,

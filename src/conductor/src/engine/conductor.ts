@@ -371,6 +371,7 @@ import {
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
+import { rebaseOperationPublicationBlocker } from './gate-code-validity.js';
 import {
   computeAndWriteVerdict,
   readAllVerdicts,
@@ -418,6 +419,7 @@ import {
   type CiFailureAttempt,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
+import { applyRebaseTransition, clampRebaseContinuation, isRebaseCoverageRefresh } from './rebase-transition.js';
 import { classifyGateInvalidation } from './gate-invalidation.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
@@ -2992,7 +2994,7 @@ export class Conductor {
     for (const member of membership.members) {
       if (member.outcome.kind === 'skipped') continue;
       const name = member.name as StepName;
-      const verdict = await computeAndWriteVerdict(this.projectRoot, name, ctx);
+      const verdict = await computeAndWriteVerdict(this.projectRoot, name, ctx, { retainReplayPreservation: true });
       const manualTestFailed =
         name === 'manual_test' && (await readManualTestFailRows(this.projectRoot)).length > 0;
       if (getStepStatus(state, name) !== 'done' || !verdict.satisfied || manualTestFailed) {
@@ -6748,6 +6750,14 @@ export class Conductor {
     if (this.fromStep) {
       startIndex = indexOf(this.fromStep);
     } else if (this.resume) {
+      // A restarted process has no `lastRebaseOutcome`, so the durable
+      // operation descriptor is the only authority that can prevent it from
+      // selecting finish across an interrupted/inconsistent rebase write.
+      const rebaseBlocker = await rebaseOperationPublicationBlocker(this.projectRoot);
+      if (rebaseBlocker) {
+        await this.writeHaltMarker(`${rebaseBlocker}\n`, 'needs-human');
+        return;
+      }
       startIndex = this.findResumeIndex(state, steps);
       const stateDerivedIndex = startIndex;
 
@@ -8237,7 +8247,7 @@ export class Conductor {
                   memberName,
                   handshake
                     ? { satisfied: false, reason: handshake.reason, checkedAt: Date.now() }
-                    : await computeAndWriteVerdict(this.projectRoot, memberName, dispatchCtx),
+                    : await computeAndWriteVerdict(this.projectRoot, memberName, dispatchCtx, { retainReplayPreservation: false }),
                 );
               }
             }
@@ -13748,6 +13758,13 @@ export class Conductor {
 
     const topo = deriveGateTopology(steps);
 
+    // Read before this pass recomputes the verdict: a rebase-origin kickback on
+    // coverage_binding is the durable mark, written by both rebase tails (the
+    // foreground step and the mandatory re-kick), that the dispatch which just
+    // finished was an in-place post-rebase refresh and not lifecycle authoring.
+    const coverageRefreshedAfterRebase = step.name === 'coverage_binding' &&
+      await isRebaseCoverageRefresh(this.projectRoot);
+
     // The `rebase` step is engine-native: its gate verdict (and any FR-5
     // downstream kickbacks) were already written authoritatively by
     // runRebaseStep from git state, not from a file artifact. Recomputing it
@@ -13765,43 +13782,16 @@ export class Conductor {
         await this.emitLoopHalt(reason);
         return 'halt';
       }
-      // FR-5: a file-changing rebase invalidated build (+test_suite,
-      // +build_review, +manual_test) via kickback-shaped verdicts. Those
-      // gates aren't `kickbackTarget` steps, so emit the kickback event(s)
-      // here; the selector below routes back to them. test_suite re-verifies
-      // before build_review judges the refreshed build.
-      if (this.lastRebaseOutcome?.kind === 'changed') {
+      // A durable completed replay already applied its explicitly named state
+      // mutation through applyRebaseTransition. Older/recovery rebase verdicts
+      // have no such operation, so consume the rebase-origin kickbacks
+      // runRebaseStep already persisted. Only the gates those verdicts name are
+      // reopened, by direct state mutation: no decision is recomputed here and
+      // no positional downstream sweep runs (which would stale preserved reviews).
+      const appliedRebase = await readVerdict(this.projectRoot, 'rebase');
+      if (this.lastRebaseOutcome?.kind === 'changed' && appliedRebase?.rebaseOperation?.status !== 'applied') {
         const verdicts = await readAllVerdicts(this.projectRoot);
-        // Task 7 (ADR-2026-07-20): a judged gate that classifyGateInvalidation
-        // decided to PRESERVE (delta misses its declared surface) must not be
-        // swept `stale` by markDownstreamStale's blanket cascade just because
-        // an upstream gate (e.g. manual_test) was re-opened. Recompute the
-        // same preserved set the verdict-writing side (applyRebaseVerdicts,
-        // Task 6) used, and exclude it from every navigateBack call in this
-        // rebase-origin loop. Strictly scoped to kind === 'changed' (this
-        // branch only runs there) — never affects non-rebase kickbacks.
-        const outcome = this.lastRebaseOutcome;
-        const ranManualTest = getStepStatus(state, 'manual_test') !== 'skipped';
-        const preserved: StepName[] =
-          outcome.featureSurface !== undefined
-            ? (classifyGateInvalidation(
-                outcome.changedCodePaths,
-                outcome.featureSurface,
-                ranManualTest,
-              ).preserved as StepName[])
-            : [];
-        // Task 14 (#655 amendment): the candidate target list must cover
-        // every gate classifyGateInvalidation can invalidate — not just the
-        // legacy fixed four. `applyRebaseVerdicts` already writes a
-        // kickback-shaped verdict to `prd_audit`/`architecture_review_as_built`
-        // when their feature-runtime surface is hit (classifyGateInvalidation's
-        // `invalidated` list), but without also driving `navigateBack` for
-        // them here, their step STATE never flips back to `pending` — the
-        // verdict alone re-opens the gate's own predicate, but the selector
-        // still sees `done` and never re-dispatches. Order matches the
-        // ALL_STEPS tail (test_suite → build_review →
-        // manual_test → prd_audit →
-        // architecture_review_as_built).
+        const reopened: Record<string, StepStatus> = {};
         for (const target of [
           'coverage_binding',
           'build',
@@ -13811,38 +13801,35 @@ export class Conductor {
           'prd_audit',
           'architecture_review_as_built',
         ] as StepName[]) {
-          const v = verdicts[target];
-          if (v && v.satisfied === false && v.kickback?.from === 'rebase') {
-            let convergenceCredit: { gate: 'build_review' } | undefined;
-            if (target === 'build_review') {
-              const credited = await updateKickbackLedger(this.projectRoot, (ledger) => {
-                const entry = ledger.gates.build_review;
-                if (!entry) return { result: false };
-                return {
-                  ledger: {
-                    ...ledger,
-                    gates: { ...ledger.gates, build_review: creditKickbackGateLaps(entry) },
-                  },
-                  result: true,
-                };
-              }, 'build_review');
-              if (credited) {
-                convergenceCredit = { gate: target };
-              }
-            }
-            await this.events.emit({
-              type: 'kickback',
-              from: 'rebase',
-              to: target,
-              evidence: v.kickback.evidence,
-              count: 1,
-              ...(convergenceCredit === undefined ? {} : { convergenceCredit }),
-            });
-            // Re-open the staled gate so the selector re-runs it, without
-            // sweeping any preserved judged gate stale in the process.
-            await this.navigateStateBack(state, target, steps, preserved);
+          const verdict = verdicts[target];
+          if (!verdict || verdict.satisfied || verdict.kickback?.from !== 'rebase') continue;
+
+          let convergenceCredit: { gate: 'build_review' } | undefined;
+          if (target === 'build_review') {
+            const credited = await updateKickbackLedger(this.projectRoot, (ledger) => {
+              const entry = ledger.gates.build_review;
+              if (!entry) return { result: false };
+              return {
+                ledger: {
+                  ...ledger,
+                  gates: { ...ledger.gates, build_review: creditKickbackGateLaps(entry) },
+                },
+                result: true,
+              };
+            }, 'build_review');
+            if (credited) convergenceCredit = { gate: target };
           }
+          await this.events.emit({
+            type: 'kickback',
+            from: 'rebase',
+            to: target,
+            evidence: verdict.kickback.evidence,
+            count: 1,
+            ...(convergenceCredit === undefined ? {} : { convergenceCredit }),
+          });
+          if (getStepStatus(state, target) !== 'skipped') reopened[target] = 'pending';
         }
+        await this.commitStateChanges(state, 'reopen persisted rebase kickbacks', reopened);
       }
     } else if (topo.verdictSteps.has(step.name)) {
       // Record the objective verdict for any gate we just ran — including in the
@@ -13863,6 +13850,7 @@ export class Conductor {
               this.projectRoot,
               step.name,
               await this.completionCtx(state),
+              { retainReplayPreservation: false },
             );
       if (step.name === 'finish' || (step.name === 'build' && buildRoutedForward)) {
         await writeVerdict(this.projectRoot, step.name, verdict);
@@ -13949,7 +13937,13 @@ export class Conductor {
         { navigate: false },
       );
       if (frontKickback === 'halt') return 'halt';
-      return null; // front half stays linear (before the first loop gate)
+      // adr-2026-09-11-selective-post-rebase-verification D4: coverage refreshed
+      // after a rebase continues from the verification tail. Linear i++ here
+      // would walk acceptance authoring and a completed BUILD again.
+      const refreshed = coverageRefreshedAfterRebase
+        ? (await readVerdict(this.projectRoot, 'coverage_binding'))?.satisfied === true
+        : false;
+      if (!refreshed) return null; // front half stays linear (before the first loop gate)
     }
 
     // Mark tier/mode-skipped steps in the looped region as 'skipped' so the
@@ -14053,10 +14047,11 @@ export class Conductor {
     // Apply the same backward-only, bounded reconciliation as resume entry so
     // the tail never selects a step whose own gate immediately rejects an
     // earlier prerequisite.
-    const selectedIndex = clampToRunnablePrerequisite(
+    const selectedIndex = clampRebaseContinuation(
       steps,
       state,
-      indexOf(decision.step),
+      clampToRunnablePrerequisite(steps, state, indexOf(decision.step)),
+      coverageRefreshedAfterRebase,
     );
     const selectedStep = steps[selectedIndex];
     if (!selectedStep) return indexOf(decision.step);
@@ -14491,6 +14486,7 @@ export class Conductor {
         resolve: this.stepRunner.resolveRebaseConflict
           ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
           : undefined,
+        translateAfterRebase,
         onAttempt: (index, cap) =>
           this.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
         onSettled: (kind) =>
@@ -14529,12 +14525,71 @@ export class Conductor {
       return checkStepCompletion(this.projectRoot, 'build', ctx);
     };
 
+    // A completed BUILD is not an ordinary rebase invalidation candidate.
+    // Its evidence is the only authority that says the task list can remain
+    // closed.  If that evidence cannot be read or derived after the rebase,
+    // stop for recovery rather than silently dispatching BUILD as though the
+    // completed work had merely become stale.  A prior ordinary repair has
+    // already moved BUILD out of `done`, and keeps its existing owner.
+    // Rebase-start refusals and completed-rebase acceptance rejections own
+    // their specific recovery notes. Completed BUILD evidence is relevant
+    // only after a successful, file-changing rebase reaches continuation.
+    if (outcome.kind === 'changed' && getStepStatus(state, 'build') === 'done') {
+      const buildEvidence = await preVerify('build');
+      if (!buildEvidence.done) {
+        const completionReason = 'reason' in buildEvidence ? buildEvidence.reason : undefined;
+        const reason = `completed BUILD evidence is unavailable after rebase: ${completionReason ?? 'completion predicate did not confirm the recorded BUILD'}`;
+        await this.writeHaltMarker(`${reason}\nRecover .pipeline task evidence before resuming; do not redispatch completed BUILD blindly.\n`, 'needs-human');
+        return { success: false, output: reason };
+      }
+    }
+
     const verdict = await applyRebaseVerdicts(
       this.projectRoot,
       outcome,
       ranManualTest,
       preVerify,
+      git,
     );
+
+    // The replay decision has already written the authoritative gate verdicts.
+    // Apply exactly that set through the state-store port so the tail selector
+    // sees pending gates without a positional rewind through completed BUILD
+    // or acceptance authoring. Unproved replay intentionally has no replay
+    // authority and follows the conservative verdict path below.
+    // Missing replay identity is an explicit unproved transition, never a
+    // reason to resume the old positional rebase rewind.
+    const transitionReplay = verdict.replay;
+    let appliedGateDecision = verdict;
+    if (transitionReplay) {
+      const transition = await applyRebaseTransition({
+        projectRoot: this.projectRoot,
+        stateFilePath: this.stateFilePath,
+        stateStore: this.stateStore,
+        replay: transitionReplay,
+        invalidated: verdict.kickedBack,
+        preserved: verdict.preservedGates ?? [],
+        preservedCandidates: verdict.preservedCandidates ?? [],
+        reverified: verdict.reverified,
+      });
+      if (transition.stateResult === 'refused') {
+        await this.writeHaltMarker('rebase continuation state transition was refused; inspect concurrent state updates before resuming\n', 'needs-human');
+        return { success: false, output: 'rebase continuation state transition refused' };
+      }
+      for (const gate of transition.invalidated) {
+        if (state[gate] !== 'skipped') state[gate] = 'pending';
+      }
+      // Events describe the durable operation, not the pre-application
+      // classification.  The transition is the only authority that knows
+      // which effects actually became the completed rebase operation.
+      appliedGateDecision = {
+        ...verdict,
+        kickedBack: [...transition.operation.transition.invalidated],
+        reverified: [...transition.operation.transition.reverified],
+        preservedGates: [...transition.operation.transition.preserved],
+        ...(transition.convergenceCredit ? { convergenceCredit: transition.convergenceCredit } : {}),
+      };
+    }
 
     // Emit rebase_gate_reverified event for each step that was re-verified
     // (dispatch skipped because gate is mechanically confirmed).
@@ -14550,7 +14605,7 @@ export class Conductor {
     // Task 8: emit rebase_gate_invalidated for each judged gate that
     // classifyGateInvalidation decided to invalidate, with the specific
     // matched delta paths that justified invalidating THAT gate.
-    await emitGateInvalidationEvents(this.events, outcome, ranManualTest, verdict.preserved ?? []);
+    await emitGateInvalidationEvents(this.events, outcome, ranManualTest, appliedGateDecision);
 
     if (sealRejectionReason) {
       await writeSealHalt(this.projectRoot, sealRejectionReason, this.events);

@@ -13,6 +13,10 @@ import {
   type CoverageBindingEnvelopeFilesystem,
 } from '../../src/engine/coverage-binding-envelope.js';
 import { CoverageBindingPayloadError, DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { currentPreservedJudgeIdentity } from '../../src/engine/gate-code-validity.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { readFile } from 'node:fs/promises';
 
 const FRESH_SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -101,6 +105,27 @@ async function runBatches(count: number, batchSize: number, options: {
 }
 
 describe('coverage-binding runner batches', () => {
+  it('stamps the judged HEAD so the production envelope yields a preserved judge identity', async () => {
+    const { projectDir, runner } = await runBatches(2, 8);
+    try {
+      const git = (...args: string[]) => promisify(execFile)('git', ['-C', projectDir, ...args]);
+      await git('init', '-q', '-b', 'main');
+      await git('-c', 'user.email=t@example.com', '-c', 'user.name=T', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'judged');
+      const head = (await git('rev-parse', 'HEAD')).stdout.trim();
+
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+
+      // The envelope keeps its exact five-key contract; the stamp is a sidecar.
+      const envelope = parseCoverageBindingEnvelope(JSON.parse(await readFile(coverageBindingEnvelopePath(projectDir), 'utf8')));
+      expect(envelope?.status).toBe('done');
+      await expect(currentPreservedJudgeIdentity(projectDir, 'coverage_binding')).resolves.toMatchObject({
+        runId: envelope!.runId, attemptId: envelope!.runId, codeStamp: head,
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('dispatches digest-stamped claim batches through fresh sessions', async () => {
     const { projectDir, provider, runner } = await runBatches(20, 8);
     try {

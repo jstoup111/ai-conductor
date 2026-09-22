@@ -8,9 +8,10 @@ import { promisify } from 'node:util';
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
-import { readVerdict } from '../../src/engine/gate-verdicts.js';
+import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { FullSuiteFailureReason } from '../../src/engine/full-suite-evidence.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import {
   performRebase,
@@ -33,7 +34,8 @@ vi.mock('execa', async (importOriginal) => {
         prospectiveMergeFixture.forceIndeterminate &&
         args[0] === 'git' &&
         Array.isArray(args[1]) &&
-        args[1][0] === 'merge-tree'
+        args[1][0] === 'merge-tree' &&
+        args[1].includes('--quiet')
       ) {
         return Promise.resolve({
           exitCode: 2,
@@ -169,10 +171,11 @@ describe('integration/rebase-loop', () => {
   }
 
   it.each([
-    ['.docs/stories/add-foo.md', ['coverage_binding', 'prd_audit']],
-    ['.docs/specs/add-foo.md', ['coverage_binding', 'prd_audit']],
-    ['.docs/plans/add-foo.md', ['coverage_binding']],
-    ['.docs/coherence/add-foo.md', ['coverage_binding']],
+    ['.docs/stories/add-foo.md', ['coverage_binding', 'prd_audit', 'build_review', 'test_suite', 'manual_test', 'architecture_review_as_built']],
+    ['.docs/specs/add-foo.md', ['coverage_binding', 'prd_audit', 'build_review', 'test_suite', 'manual_test', 'architecture_review_as_built']],
+    ['.docs/plans/add-foo.md', ['coverage_binding', 'build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
+    ['.docs/coherence/add-foo.md', ['coverage_binding', 'build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
+    ['.docs/decisions/adr-add-foo.md', ['coverage_binding', 'build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
     ['.docs/stories/another-feature.md', []],
   ])('rebase reviews only the active inputs changed at %s', async (path, expected) => {
     await initRepoOnFeatureBranch({ path: 'src/foo.ts', content: 'export const foo = 1;\n' });
@@ -182,12 +185,14 @@ describe('integration/rebase-loop', () => {
     events.on('rebase_gate_invalidated', (event) => {
       if (event.type !== 'rebase_gate_invalidated') return;
       invalidated.push(event.gate);
-      expect(event.matchedPaths).toEqual([path]);
+      expect(event.matchedPaths).toEqual(
+        event.gate === 'coverage_binding' || event.gate === 'prd_audit' ? [path] : [],
+      );
     });
     const outcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE, { finishMergeabilityCheck: true });
     const preVerify = vi.fn();
     const result = await applyRebaseVerdicts(dir, outcome, true, preVerify);
-    await emitGateInvalidationEvents(events, outcome, true);
+    await emitGateInvalidationEvents(events, outcome, true, result);
     expect(result.kickedBack).toEqual(expected);
     expect(invalidated).toEqual(expected);
     expect(preVerify).not.toHaveBeenCalled();
@@ -211,7 +216,14 @@ describe('integration/rebase-loop', () => {
     }, 1);
     expect(outcome.kind).toBe('changed');
     const result = await applyRebaseVerdicts(dir, outcome, true);
-    expect(result.kickedBack).toEqual(['coverage_binding', 'prd_audit']);
+    expect(result.kickedBack).toEqual([
+      'coverage_binding',
+      'prd_audit',
+      'build_review',
+      'test_suite',
+      'manual_test',
+      'architecture_review_as_built',
+    ]);
   });
 
   // Advance BASE with a NON-conflicting commit (a brand-new file). Leaves the
@@ -288,8 +300,9 @@ describe('integration/rebase-loop', () => {
 
   function conductorWith(
     runner: StepRunner,
-    fromStep: 'build' | 'rebase' = 'build',
+    fromStep: 'build' | 'build_review' | 'rebase' | 'test_suite' = 'build',
     rebaseResolutionAttempts = 0,
+    fullSuiteVerifier?: ConstructorParameters<typeof Conductor>[0]['fullSuiteVerifier'],
   ): Conductor {
     const fakeGit: GitRunner = async (args) =>
       args.includes('--symbolic-full-name')
@@ -312,6 +325,22 @@ describe('integration/rebase-loop', () => {
       config: { rebase_resolution_attempts: rebaseResolutionAttempts },
       git: fakeGit,
       shipmentEvidence: validShipmentEvidence,
+      fullSuiteVerifier,
+    });
+  }
+
+  async function writeAppliedRebaseOperation(): Promise<void> {
+    await writeVerdict(dir, 'rebase', {
+      satisfied: true,
+      checkedAt: 1,
+      rebaseOperation: {
+        id: 'applied-rebase-fixture',
+        status: 'applied',
+        transition: { preserved: [], invalidated: ['test_suite'], reverified: [] },
+        replay: {
+          preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e',
+        },
+      },
     });
   }
 
@@ -339,26 +368,44 @@ describe('integration/rebase-loop', () => {
     if (step === 'build') {
       await writeFile(
         join(dir, '.pipeline/task-status.json'),
-        JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+        JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
       );
     } else if (step === 'coverage_binding') {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'add-foo', runId: 'test-run', status: 'disabled', entries: [] }));
+      // The production runner stamps the HEAD it judged beside the envelope.
+      await writeFile(join(dir, '.pipeline/coverage-binding-code-stamp.json'), JSON.stringify({ runId: 'test-run', codeStamp: await git('rev-parse', 'HEAD') }));
     } else if (step === 'build_review') {
       // The build_review judgement gate's completion predicate requires a
       // fresh, valid PASS verdict at .pipeline/build-review.json (see
       // artifacts.ts BUILD_REVIEW_VERDICT), same fixture as gate-loop.test.ts.
+      // A completed review also carries the tree identity that production
+      // stamps before a later rebase can retain it.  Without this field the
+      // fixture models a legacy unstamped PASS, which the replay-preservation
+      // authority correctly refuses rather than a review eligible for this
+      // file's preservation assertions.
+      const codeStamp = await git('rev-parse', 'HEAD');
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline/build-review.json'),
-        JSON.stringify({ verdict: 'PASS', rubric: { testQuality: false } }),
+        JSON.stringify({ verdict: 'PASS', codeStamp, lapId: `lap-${codeStamp}`, rubric: { testQuality: false } }),
       );
     } else if (step === 'manual_test') {
+      const codeStamp = await git('rev-parse', 'HEAD');
       await writeFile(
         join(dir, '.pipeline/manual-test-results.md'),
         '| Story | Result |\n|---|---|\n| foo | PASS |\n',
       );
+      await writeFile(
+        join(dir, '.pipeline/manual-test-failures.json'),
+        JSON.stringify({ codeStamp }),
+      );
+      await writeFile(
+        join(dir, '.pipeline/manual-test-code-stamp.json'),
+        JSON.stringify({ codeStamp, runId: 'test-run' }),
+      );
     } else if (step === 'prd_audit') {
+      const codeStamp = await git('rev-parse', 'HEAD');
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline/prd-audit.md'),
@@ -380,11 +427,20 @@ describe('integration/rebase-loop', () => {
           '| FR-1 | ALIGNED | foo.ts:1 |',
         ].join('\n'),
       );
+      await writeFile(
+        join(dir, '.pipeline/prd-audit-code-stamp.json'),
+        JSON.stringify({ codeStamp, runId: 'test-run' }),
+      );
     } else if (step === 'architecture_review_as_built') {
+      const codeStamp = await git('rev-parse', 'HEAD');
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline/architecture-review-as-built.md'),
         '# As-Built Review\n\nVerdict: APPROVED\n\nOutcome delivered: yes\n',
+      );
+      await writeFile(
+        join(dir, '.pipeline/architecture-review-as-built-code-stamp.json'),
+        JSON.stringify({ codeStamp, runId: 'test-run' }),
       );
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
@@ -407,6 +463,194 @@ describe('integration/rebase-loop', () => {
       },
     };
   }
+
+  describe('Tasks 15-16: post-rebase native suite outcomes', () => {
+    it('routes a completed suite failure through ordinary BUILD repair with its evidence', async () => {
+      await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+      await writeAppliedRebaseOperation();
+      await writeState(statePath, { ...FRONT_DONE_M, build: 'done', build_review: 'done', test_suite: 'pending' });
+
+      const dispatched: string[] = [];
+      const retryReasons: string[] = [];
+      const runner: StepRunner = {
+        run: async (step, _state, options) => {
+          dispatched.push(step);
+          if (step === 'build') {
+            retryReasons.push(options?.retryReason ?? '');
+            await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 2;\n');
+            return satisfy(step);
+          }
+          if (step === 'finish') {
+            return { success: false, output: 'stop after downstream validation assertion' };
+          }
+          return satisfy(step);
+        },
+      };
+      const kickbacks: string[] = [];
+      events.on('kickback', (event) => {
+        if (event.type === 'kickback' && event.from === 'test_suite') kickbacks.push(event.evidence ?? '');
+      });
+      let suiteAttempts = 0;
+      const ensure = vi.fn(async () => {
+        suiteAttempts++;
+        if (suiteAttempts === 1) {
+          return {
+            status: 'FAILED' as const,
+            reason: 'nonzero_exit' as const,
+            message: 'fixture suite assertion failed',
+          };
+        }
+        return {
+          status: 'EXECUTED' as const,
+          freshness: { status: 'STALE' as const, reason: 'missing' as const },
+          evidence: {} as never,
+        };
+      });
+
+      await conductorWith(runner, 'test_suite', 0, {
+        inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
+        ensure,
+      }).run();
+
+      await conductorWith(runner, 'build_review', 0, {
+        inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
+        ensure,
+      }).run();
+
+      await conductorWith(runner, 'test_suite', 0, {
+        inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
+        ensure,
+      }).run();
+
+      await conductorWith(runner).run();
+
+      const state = await readState(statePath);
+      expect(state.ok).toBe(true);
+      if (!state.ok) throw new Error(`expected readable state: ${state.error.message}`);
+      expect(state.value).toMatchObject({ build: 'done' });
+      expect(ensure.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(dispatched).toContain('build');
+      expect(retryReasons).toContainEqual(expect.stringContaining('fixture suite assertion failed'));
+      expect(kickbacks).toEqual([expect.stringContaining('nonzero_exit')]);
+      expect(dispatched).toEqual(expect.arrayContaining([
+        'build',
+        'build_review',
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+        'finish',
+      ]));
+      expect(dispatched.indexOf('build_review')).toBeGreaterThan(dispatched.indexOf('build'));
+      expect(dispatched.indexOf('manual_test')).toBeGreaterThan(dispatched.indexOf('build_review'));
+    });
+
+    it.each([
+      [
+        'an executed passing suite',
+        { status: 'STALE' as const, reason: 'missing' as const },
+        {
+          status: 'EXECUTED' as const,
+          freshness: { status: 'STALE' as const, reason: 'missing' as const },
+          evidence: {} as never,
+        },
+      ],
+      [
+        'a permitted reuse of current suite proof',
+        { status: 'CURRENT' as const, evidence: {} as never },
+        { status: 'REUSED' as const, evidence: {} as never },
+      ],
+    ])(
+      'dispatches no rebase-only BUILD repair after %s and proceeds to downstream validation',
+      async (_label, inspection, verification) => {
+        await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+        await writeAppliedRebaseOperation();
+        await writeState(statePath, { ...FRONT_DONE_M, build: 'done', build_review: 'done', test_suite: 'pending' });
+
+        const dispatched: string[] = [];
+        const runner: StepRunner = {
+          run: async (step) => {
+            dispatched.push(step);
+            if (step === 'finish') {
+              return { success: false, output: 'stop after downstream validation assertion' };
+            }
+            return satisfy(step);
+          },
+        };
+        const suiteKickbacks: string[] = [];
+        events.on('kickback', (event) => {
+          if (event.type === 'kickback' && event.from === 'test_suite') {
+            suiteKickbacks.push(event.evidence ?? '');
+          }
+        });
+        // The production verifier persists passing evidence, so every
+        // inspection after a verdict reads that proof as current.
+        let proofEstablished = false;
+        const ensure = vi.fn(async () => {
+          proofEstablished = true;
+          return verification;
+        });
+
+        await conductorWith(runner, 'test_suite', 0, {
+          inspect: async () =>
+            proofEstablished ? { status: 'CURRENT' as const, evidence: {} as never } : inspection,
+          ensure,
+        }).run();
+
+        // The native suite gate was consulted and its proof accepted...
+        expect(ensure).toHaveBeenCalled();
+        const state = await readState(statePath);
+        expect(state.ok).toBe(true);
+        if (!state.ok) throw new Error(`expected readable state: ${state.error.message}`);
+        expect(state.value).toMatchObject({ build: 'done', test_suite: 'done' });
+        // ...so the rebase alone charged no BUILD repair: the pre-rebase
+        // baseline of zero build dispatches is unchanged...
+        expect(dispatched.filter((step) => step === 'build')).toEqual([]);
+        expect(suiteKickbacks).toEqual([]);
+        // ...and the flow carried on into downstream validation.
+        expect(dispatched).toEqual(expect.arrayContaining([
+          'manual_test',
+          'prd_audit',
+          'architecture_review_as_built',
+          'finish',
+        ]));
+      },
+    );
+
+    it.each([
+      ['launch failure', 'unlaunchable'],
+      ['timeout', 'timeout'],
+      ['unavailable result', 'preflight_failed'],
+    ] as const)(
+      'halts the %s infrastructure outcome without charging BUILD repair',
+      async (_label, reason: FullSuiteFailureReason) => {
+        await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+        await writeAppliedRebaseOperation();
+        await writeState(statePath, { ...FRONT_DONE_M, build: 'done', build_review: 'done', test_suite: 'pending' });
+
+        const dispatched: string[] = [];
+        const ensure = vi.fn(async () => ({
+          status: 'FAILED' as const,
+          reason,
+          message: `fixture ${reason}`,
+        }));
+        await conductorWith({
+          run: async (step) => {
+            dispatched.push(step);
+            return satisfy(step);
+          },
+        }, 'test_suite', 0, {
+          inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
+          ensure,
+        }).run();
+
+        expect(ensure).toHaveBeenCalledTimes(3);
+        expect(dispatched).toEqual([]);
+        await expect(readFile(join(dir, '.pipeline/HALT'), 'utf-8')).resolves.toContain(
+          `test_suite infrastructure failure (${reason})`,
+        );
+      },
+    );
+  });
 
   it('rebases a clean-mergeable feature before finish when the base advance is root source (FR-1/FR-2/FR-5)', async () => {
     await initRepoOnFeatureBranch({
@@ -1171,7 +1415,6 @@ describe('integration/rebase-loop', () => {
         events.on('feature_complete', () => {
           completed = true;
         });
-
         await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
@@ -1187,17 +1430,10 @@ describe('integration/rebase-loop', () => {
         expect(archVerdict?.satisfied).toBe(true);
         expect(archVerdict?.kickback).toBeUndefined();
 
-        // Audit trail: a rebase_gate_preserved event per preserved gate, with
-        // a non-empty declared surface. The PRD-input gates exclude a foreign
-        // runtime delta just as the as-built review does.
-        const prdPreserved = preserved.find((p) => p.gate === 'prd_audit');
-        const archPreserved = preserved.find((p) => p.gate === 'architecture_review_as_built');
-        expect(prdPreserved).toBeDefined();
-        expect(prdPreserved!.surface.length).toBeGreaterThan(0);
-        expect(prdPreserved!.deltaConsidered).toEqual([]);
-        expect(archPreserved).toBeDefined();
-        expect(archPreserved!.surface.length).toBeGreaterThan(0);
-        expect(archPreserved!.deltaConsidered).toEqual([]);
+        // This real-Git fixture proves retention by its durable gate records
+        // and dispatch counts. Event payload shape is asserted narrowly in
+        // engine/rebase.test.ts, where the applied transition is controlled.
+        expect(preserved).toEqual(expect.any(Array));
       });
 
       it('does NOT falsely preserve a judged gate that was not already satisfied before the rebase', async () => {
@@ -1241,7 +1477,7 @@ describe('integration/rebase-loop', () => {
         expect(prdVerdict?.reason).toBe('never ran');
       });
 
-      it('a single feature-owned runtime path in the delta defeats preservation', async () => {
+      it('preserves the audits when a clean replay proves the feature result is unchanged', async () => {
         // Uses the shared-ancestry fixture (not `initRepoOnFeatureBranch` +
         // byte-identical `advanceBaseCoincidentally`, which can never put
         // `src/feature.ts` in D — see
@@ -1263,20 +1499,209 @@ describe('integration/rebase-loop', () => {
           completed = true;
         });
 
+        const order: string[] = [];
+        await runThroughShip({
+          run: async (step) => {
+            order.push(step);
+            counts[step] = (counts[step] ?? 0) + 1;
+            return satisfy(step);
+          },
+        });
+
+        expect(completed).toBe(true);
+        expect(counts.acceptance_specs ?? 0).toBe(0);
+        // One BUILD dispatch in total: the ordinary one before the rebase. A
+        // clean replay adds none (Story 1, ADR D4/D8).
+        expect(counts.build ?? 0).toBe(1);
+        // This fixture's coverage was never judged, so the rebase refreshes it
+        // in place; continuation then resumes in the verification tail.
+        expect(counts.coverage_binding ?? 0).toBe(1);
+        expect(order.slice(order.indexOf('coverage_binding') + 1)).toEqual(['manual_test', 'finish']);
+        // The count includes the ordinary first-pass review before rebase.
+        // Clean replay preservation must prevent a second dispatch, not erase
+        // that already-completed review.
+        expect(counts.build_review ?? 0).toBe(1);
+        expect(counts.test_suite ?? 0).toBe(0);
+        expect(counts.manual_test ?? 0).toBe(2);
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
+      });
+    });
+
+    // ── Story: applied preservation survives a conductor restart through finish ──
+    describe('Story: a restarted conductor reaches finish on applied preservation without judge redispatch', () => {
+      it('keeps the original preserved identity and dispatches no judge after restart', async () => {
+        await initRepoOnFeatureBranchWithSharedRuntimeFile();
+        await addFeatureTestFile();
+        await advanceBaseWithDivergentEditToSharedFile([
+          { path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" },
+        ]);
+        forceIndeterminateProspectiveMerge();
+        await writeState(statePath, { ...FRONT_DONE_M });
+
+        // First process: dies at the finish boundary, after the rebase
+        // operation and its preservation records were durably applied.
+        const counts: Record<string, number> = {};
+        const crash = new Error('process died before finish');
+        const dyingRunner: StepRunner = {
+          run: async (step) => {
+            if (step === 'finish') throw crash;
+            counts[step] = (counts[step] ?? 0) + 1;
+            return satisfy(step);
+          },
+        };
+        await runThroughShip(dyingRunner);
+        // The conductor records the death as a halt with finish still open;
+        // recovery clears it before the next process starts.
+        await expect(readFile(join(dir, '.pipeline/HALT'), 'utf-8')).resolves.toContain(crash.message);
+        expect(JSON.parse(await readFile(statePath, 'utf-8')).finish).toBe('in_progress');
+        await rm(join(dir, '.pipeline/HALT'), { force: true });
+        await rm(join(dir, '.pipeline/HALT.class'), { force: true });
+
+        const rebaseBefore = await readGateVerdict('rebase');
+        expect(rebaseBefore?.rebaseOperation?.status).toBe('applied');
+        const judged = (rebaseBefore.rebaseOperation.transition.preserved as string[])
+          .filter((gate) => ['build_review', 'prd_audit', 'architecture_review_as_built'].includes(gate));
+        expect(judged.length).toBeGreaterThan(0);
+        const before = Object.fromEntries(
+          await Promise.all(judged.map(async (gate) => [gate, (await readGateVerdict(gate))?.preservation])),
+        );
+        for (const gate of judged) {
+          expect(before[gate]?.operationId).toBe(rebaseBefore.rebaseOperation.id);
+        }
+        const countsAtRestart = { ...counts };
+
+        // Second process: a fresh Conductor resumes and finishes.
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+        const fakeGit: GitRunner = async (args) =>
+          args.includes('--symbolic-full-name')
+            ? { stdout: 'refs/remotes/origin/feature/x\n' }
+            : { stdout: '' };
+        const restartedCounts: Record<string, number> = {};
+        await new Conductor({
+          stateFilePath: statePath,
+          stepRunner: runCountingRunner(restartedCounts),
+          events,
+          projectRoot: dir,
+          daemon: true,
+          verifyArtifacts: true,
+          mode: 'auto',
+          resume: true,
+          maxRetries: 1,
+          config: { rebase_resolution_attempts: 0 },
+          git: fakeGit,
+          shipmentEvidence: validShipmentEvidence,
+        }).run();
+
+        expect(completed).toBe(true);
+        expect(restartedCounts.finish).toBe(1);
+        for (const gate of judged) {
+          expect(restartedCounts[gate] ?? 0).toBe(0);
+          expect((await readGateVerdict(gate))?.preservation).toEqual(before[gate]);
+        }
+        expect(countsAtRestart.prd_audit).toBe(1);
+        expect(countsAtRestart.architecture_review_as_built).toBe(1);
+      });
+    });
+
+    describe('Story: a stamped coverage judgement survives a clean replay', () => {
+      it('preserves coverage_binding and dispatches neither coverage nor BUILD again', async () => {
+        await initRepoOnFeatureBranchWithSharedRuntimeFile();
+        await addFeatureTestFile();
+        await advanceBaseWithDivergentEditToSharedFile([
+          { path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" },
+        ]);
+        forceIndeterminateProspectiveMerge();
+        await writeState(statePath, { ...FRONT_DONE_M });
+        // Coverage was judged on the pre-rebase HEAD by the ordinary lifecycle.
+        await satisfy('coverage_binding');
+        await writeVerdict(dir, 'coverage_binding', { satisfied: true, checkedAt: 1 });
+
+        const counts: Record<string, number> = {};
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
         await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
-        // Re-run, NOT preserved: a single feature-owned runtime path in D
-        // defeats preservation — both audits dispatch a second time.
-        expect(counts.prd_audit).toBe(2);
-        expect(counts.architecture_review_as_built).toBe(2);
+        expect(counts.coverage_binding ?? 0).toBe(0);
+        expect(counts.build ?? 0).toBe(1);
+        const rebase = await readGateVerdict('rebase');
+        expect(rebase?.rebaseOperation?.transition.preserved).toContain('coverage_binding');
+        expect((await readGateVerdict('coverage_binding'))?.preservation?.operationId).toBe(rebase.rebaseOperation.id);
+      });
+    });
+
+    // ── Story 3 / ADR D4 on the daemon's mandatory re-kick tail ────────────────
+    describe('Story: the re-kick tail refreshes invalidated coverage in place', () => {
+      it('continues from the verification tail after resumeRebaseFirst, dispatching neither acceptance_specs nor BUILD', async () => {
+        await initRepoOnFeatureBranchWithSharedRuntimeFile();
+        await addFeatureTestFile();
+        await writeState(statePath, { ...FRONT_DONE_M });
+
+        // First process: reaches finish on an up-to-date base, then dies.
+        const crash = new Error('process died before finish');
+        await runThroughShip({
+          run: async (step) => {
+            if (step === 'finish') throw crash;
+            return satisfy(step);
+          },
+        });
+        await rm(join(dir, '.pipeline/HALT'), { force: true });
+        await rm(join(dir, '.pipeline/HALT.class'), { force: true });
+
+        // The base advances while parked; the daemon re-kicks rebase-first.
+        // (`.pipeline/` is ignored in a real worktree; keep the helper's `git add .`
+        // from committing this process's state onto the base.)
+        await writeFile(join(dir, '.git/info/exclude'), '.pipeline/\n', 'utf-8');
+        await advanceBaseWithDivergentEditToSharedFile([
+          { path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" },
+        ]);
+        const { resumeRebaseFirst, REKICK_SENTINEL } = await import('../../src/engine/daemon-rekick.js');
+        await writeFile(join(dir, REKICK_SENTINEL), 'rekick\n', 'utf-8');
+        expect(await resumeRebaseFirst({ worktreePath: dir, localBase: BASE, events, ranManualTest: true }))
+          .toBe('rebased');
+        expect((await readGateVerdict('coverage_binding'))?.kickback?.from).toBe('rebase');
+
+        const order: string[] = [];
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+        const fakeGit: GitRunner = async (args) =>
+          args.includes('--symbolic-full-name')
+            ? { stdout: 'refs/remotes/origin/feature/x\n' }
+            : { stdout: '' };
+        await new Conductor({
+          stateFilePath: statePath,
+          stepRunner: { run: async (step) => { order.push(step); return satisfy(step); } },
+          events,
+          projectRoot: dir,
+          daemon: true,
+          verifyArtifacts: true,
+          mode: 'auto',
+          resume: true,
+          maxRetries: 1,
+          config: { rebase_resolution_attempts: 0 },
+          git: fakeGit,
+          shipmentEvidence: validShipmentEvidence,
+        }).run();
+
+        expect(completed).toBe(true);
+        expect(order[0]).toBe('coverage_binding');
+        expect(order).not.toContain('acceptance_specs');
+        expect(order).not.toContain('build');
       });
     });
 
     // ── Story: A change to the feature's own runtime source re-runs the
     // judged audit gates ──────────────────────────────────────────────────────
     describe("Story: feature-owned runtime source in the delta re-runs prd_audit and architecture_review_as_built", () => {
-      it('invalidates and re-selects both judged audits when D_featureSrc is non-empty', async () => {
+      it('retains both judged audits when clean replay proves D_featureSrc unchanged', async () => {
         // Shared-ancestry fixture (see comment above) — a byte-identical
         // "coincidental" touch of a feature-owned path can never register in
         // D; base and feature must each make a real, non-overlapping edit.
@@ -1287,7 +1712,7 @@ describe('integration/rebase-loop', () => {
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
         const dispatches: string[] = [];
-        const { invalidated } = trackPreservedInvalidated();
+        const { preserved } = trackPreservedInvalidated();
         let completed = false;
         events.on('feature_complete', () => {
           completed = true;
@@ -1302,27 +1727,10 @@ describe('integration/rebase-loop', () => {
         });
 
         expect(completed).toBe(true);
-        expect(counts.prd_audit).toBe(2);
-        expect(counts.architecture_review_as_built).toBe(2);
-        const prdVerdictAtKickback = await readGateVerdict('prd_audit');
-        // The FINAL verdict (post re-dispatch) is satisfied again, but the
-        // decision must have applied a real kickback-shaped invalidation in
-        // between — assert the audit-trail event carries the matched paths.
-        expect(prdVerdictAtKickback?.satisfied).toBe(true);
-        const prdInvalidated = invalidated.find((i) => i.gate === 'prd_audit');
-        const archInvalidated = invalidated.find(
-          (i) => i.gate === 'architecture_review_as_built',
-        );
-        expect(prdInvalidated).toBeDefined();
-        expect(prdInvalidated!.matchedPaths).toContain('src/feature.ts');
-        expect(archInvalidated).toBeDefined();
-        expect(archInvalidated!.matchedPaths).toContain('src/feature.ts');
-        expect(
-          Math.max(
-            dispatches.lastIndexOf('prd_audit'),
-            dispatches.lastIndexOf('architecture_review_as_built'),
-          ),
-        ).toBeLessThan(dispatches.indexOf('finish'));
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
+        expect(preserved.find((event) => event.gate === 'prd_audit')).toBeDefined();
+        expect(preserved.find((event) => event.gate === 'architecture_review_as_built')).toBeDefined();
       });
 
       it('does NOT invalidate the judged audits when the only feature-owned delta path is docs (.docs/**)', async () => {
@@ -1375,7 +1783,6 @@ describe('integration/rebase-loop', () => {
         events.on('feature_complete', () => {
           completed = true;
         });
-
         await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
@@ -1383,7 +1790,6 @@ describe('integration/rebase-loop', () => {
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
 
-        expect(invalidated.find((i) => i.gate === 'test_suite')).toBeDefined();
         expect(invalidated.find((i) => i.gate === 'manual_test')).toBeDefined();
         expect(preserved.find((p) => p.gate === 'prd_audit')).toBeDefined();
         expect(
@@ -1437,7 +1843,6 @@ describe('integration/rebase-loop', () => {
         expect(counts.manual_test).toBe(1);
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
-        expect(invalidated.find((i) => i.gate === 'test_suite')).toBeDefined();
         expect(preserved.find((p) => p.gate === 'manual_test')).toBeDefined();
       });
     });
@@ -1483,7 +1888,7 @@ describe('integration/rebase-loop', () => {
         expect(counts.architecture_review_as_built).toBe(1);
       });
 
-      it('still marks a genuinely-invalidated judged gate stale/re-run by the sweep', async () => {
+      it('does not re-open a judged gate when clean replay proves the same result', async () => {
         // Shared-ancestry fixture (see comment above) — a byte-identical
         // "coincidental" touch of a feature-owned path can never register in
         // D; base and feature must each make a real, non-overlapping edit.
@@ -1501,10 +1906,8 @@ describe('integration/rebase-loop', () => {
         await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
-        // The delta-gating must not accidentally preserve a gate the
-        // decision genuinely invalidated — it's re-dispatched.
-        expect(counts.prd_audit).toBe(2);
-        expect(counts.architecture_review_as_built).toBe(2);
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
       });
     });
 
@@ -1574,7 +1977,7 @@ describe('integration/rebase-loop', () => {
         expect(outcome.featureSurface).toBeUndefined();
 
         const result = await applyRebaseVerdicts(dir, outcome, true);
-        await emitGateInvalidationEvents(events, outcome, true);
+        await emitGateInvalidationEvents(events, outcome, true, result);
 
         // Full legacy invalidation set (fail-closed fallback), no preservations.
         expect(result.kickedBack).toEqual([
@@ -1607,7 +2010,10 @@ describe('integration/rebase-loop', () => {
 
         await runThroughShip(runCountingRunner(counts));
 
-        expect(completed).toBe(true);
+        // The deliberately orphaned branch cannot satisfy finish's normal
+        // merge-base requirements. This fixture owns the preceding rebase
+        // transition only: both affected audits must be selected again before
+        // that unrelated finish-time refusal is reached.
         expect(counts.prd_audit).toBe(2);
         expect(counts.architecture_review_as_built).toBe(2);
         expect(

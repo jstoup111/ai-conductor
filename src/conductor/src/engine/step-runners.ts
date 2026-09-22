@@ -53,6 +53,7 @@ import {
 import {
   parseJudgeBatchPayload,
   readCoverageBindingEnvelope,
+  writeCoverageBindingCodeStamp,
   writeCoverageBindingEnvelope,
   type CoverageBindingEnvelopeEntry,
   type CoverageBindingEnvelopeFilesystem,
@@ -3622,13 +3623,23 @@ export class DefaultStepRunner implements StepRunner {
     const writeEnvelope = async (
       status: 'disabled' | 'done' | 'failed' | 'partial' | 'refused',
       entries: readonly CoverageBindingEnvelopeEntry[],
-    ) => writeCoverageBindingEnvelope(this.projectDir, {
-      version: 1,
-      slug: this.featureDesc || 'unknown-feature',
-      runId: this.runId,
-      status,
-      entries,
-    }, filesystem);
+    ) => {
+      await writeCoverageBindingEnvelope(this.projectDir, {
+        version: 1,
+        slug: this.featureDesc || 'unknown-feature',
+        runId: this.runId,
+        status,
+        entries,
+      }, filesystem);
+      // Rebase preservation needs to know which HEAD this run judged. Without
+      // a resolvable HEAD there is no stamp, and preservation stays refused.
+      if (judgedHead) {
+        await writeCoverageBindingCodeStamp(this.projectDir, { runId: this.runId, codeStamp: judgedHead }, filesystem);
+      }
+    };
+    const judgedHead = await this.gitRunner(['rev-parse', 'HEAD'])
+      .then((result) => (result.exitCode === 0 ? result.stdout.trim() : ''))
+      .catch(() => '');
 
     if (!judgeEnabled) {
       await writeEnvelope('disabled', []);

@@ -6,6 +6,7 @@
 // defines the path predicates and gate→surface map they use.
 
 import { isCodeOrTestPath } from './rebase.js';
+import type { ReplayComparison } from './rebase-replay.js';
 
 /**
  * Test-path convention: a path is test-only if it matches
@@ -51,7 +52,11 @@ export type GateSurfaceKind =
 
 export const PRD_AUDIT_DOCUMENT_INPUT_PREFIXES = ['.docs/stories/', '.docs/specs/'] as const;
 
-export const COVERAGE_DOCUMENT_INPUT_PREFIXES = [...PRD_AUDIT_DOCUMENT_INPUT_PREFIXES, '.docs/plans/', '.docs/coherence/'] as const;
+// Keep this list aligned with `resolveReviewInputs`: a governing ADR is an
+// active input to coverage/review preservation just like the plan and its
+// stories.  The classifier is the early gate for that resolver, so omitting
+// a prefix here would turn an ADR-only rebase delta into a false noop.
+export const COVERAGE_DOCUMENT_INPUT_PREFIXES = [...PRD_AUDIT_DOCUMENT_INPUT_PREFIXES, '.docs/plans/', '.docs/coherence/', '.docs/decisions/'] as const;
 
 export function isReviewDocumentPath(path: string): boolean {
   return COVERAGE_DOCUMENT_INPUT_PREFIXES.some((prefix) => path.startsWith(prefix));
@@ -78,7 +83,10 @@ export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
   // prior PASS even though the runtime delta partition deliberately ignores
   // markdown paths.
   prd_audit: 'feature-runtime-or-prd-inputs',
-  architecture_review_as_built: 'feature-runtime',
+  // The as-built review consumes governing ADRs, plans, coherence and other
+  // declared decision inputs as well as feature runtime.  Keep that input
+  // surface identical to the resolver used to bind replay authority.
+  architecture_review_as_built: 'feature-runtime-or-coverage-inputs',
 };
 
 /**
@@ -136,6 +144,32 @@ export function featureTestPaths(D: string[], F: string[]): string[] {
 export interface GateSurfaceProjection {
   matchedPaths: string[];
   declaredSurface: string[];
+}
+
+/**
+ * A single gate's conservative post-rebase candidate.  Application and event
+ * owners consume this same source instead of reconstructing a second
+ * preserve/invalidate explanation from the paths.
+ */
+export interface ReplayGateCandidate {
+  gate: string;
+  decision: 'preserve' | 'invalidate' | 'skip';
+  source: {
+    surface: GateSurfaceKind;
+    /** The complete post-rebase tree delta, retained for suite/runtime policy. */
+    combinedDelta: string[];
+    /** The feature's code/test contribution, separate from the combined tree. */
+    featureContribution: string[];
+    /** Changed, declared review inputs relevant to this gate. */
+    activeInputs: string[];
+    replay: ReplayComparison['kind'];
+  };
+}
+
+export interface ReplayGateInvalidation {
+  preserved: string[];
+  invalidated: string[];
+  candidates: ReplayGateCandidate[];
 }
 
 /**
@@ -239,4 +273,82 @@ export function classifyGateInvalidation(
   }
 
   return { preserved, invalidated };
+}
+
+function isFeatureScopedReview(surface: GateSurfaceKind): boolean {
+  return surface === 'feature-runtime' ||
+    surface === 'feature-codetest' ||
+    surface === 'feature-runtime-or-prd-inputs' ||
+    surface === 'feature-runtime-or-coverage-inputs';
+}
+
+/**
+ * Classify a completed replay while retaining the two inputs the policy must
+ * not conflate.  Exact unchanged replay proof can preserve a feature-scoped
+ * review even when the combined delta overlaps its paths.  It never relaxes
+ * active document inputs, aggregate suite evidence, or whole-runtime manual
+ * verification.  Changed and unproved reconstructions retain the established
+ * path-based conservative result.
+ */
+export function classifyReplayGateInvalidation(
+  D: string[],
+  F: string[],
+  ranManualTest: boolean,
+  replay: ReplayComparison,
+  documentInputs?: readonly string[],
+): ReplayGateInvalidation {
+  const projections = projectGateSurfaces(D, F, documentInputs);
+  const featureSet = new Set(F);
+  const featureContribution = D.filter((path) => featureSet.has(path) &&
+    (isRuntimeSourcePath(path) || isTestPath(path)));
+  const preserved: string[] = [];
+  const invalidated: string[] = [];
+  const candidates: ReplayGateCandidate[] = [];
+
+  for (const [gate, surface] of Object.entries(GATE_SURFACE)) {
+    const projection = projections[surface];
+    const activeInputs = projection.matchedPaths.filter(isReviewDocumentPath);
+    if (gate === 'manual_test' && !ranManualTest) {
+      candidates.push({
+        gate,
+        decision: 'skip',
+        source: {
+          surface,
+          combinedDelta: [...D],
+          featureContribution: [...featureContribution],
+          activeInputs,
+          replay: replay.kind,
+        },
+      });
+      continue;
+    }
+
+    const preserveUnchangedFeatureContribution = replay.kind === 'unchanged' &&
+      isFeatureScopedReview(surface) && activeInputs.length === 0;
+    // Path projection alone cannot prove that the feature replay itself was
+    // retained. If reconstruction is unavailable, a resolution could have
+    // changed any feature-scoped review input outside the observed upstream
+    // delta. Re-open those reviews rather than leaving an unbound PASS for a
+    // later completion/finish reader to reject.
+    const unprovedFeatureScopedReplay = replay.kind === 'unproved' &&
+      isFeatureScopedReview(surface);
+    const decision = !unprovedFeatureScopedReplay &&
+      (preserveUnchangedFeatureContribution || projection.matchedPaths.length === 0)
+      ? 'preserve'
+      : 'invalidate';
+    (decision === 'preserve' ? preserved : invalidated).push(gate);
+    candidates.push({
+      gate,
+      decision,
+      source: {
+        surface,
+        combinedDelta: [...D],
+        featureContribution: [...featureContribution],
+        activeInputs,
+        replay: replay.kind,
+      },
+    });
+  }
+
+  return { preserved, invalidated, candidates };
 }

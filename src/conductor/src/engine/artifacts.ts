@@ -18,7 +18,11 @@ import {
 import { seedTaskStatus } from './task-seed.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
-import { gateVerdictStillValid, verdictProducedByRun } from './gate-code-validity.js';
+import {
+  gateVerdictStillValid,
+  rebaseOperationPublicationBlocker,
+  verdictProducedByRun,
+} from './gate-code-validity.js';
 import type { VerdictRunIdentity } from './gate-code-validity.js';
 import {
   overScopeRelations,
@@ -3773,6 +3777,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // dropped because pr_url from a prior feature in the same worktree could
   // satisfy the gate spuriously.
   finish: async (dir, ctx): Promise<CompletionResult> => {
+    // The rebase transition is cross-file by design.  Do not let a manually
+    // present finish marker publish while its durable operation says applying
+    // (or its explicitly affected gates remain unresolved), including after a
+    // fresh process has restarted and no in-memory rebase outcome remains.
+    const rebaseBlocker = await rebaseOperationPublicationBlocker(dir);
+    if (rebaseBlocker) {
+      return { done: false, reason: rebaseBlocker, missing: 'other' };
+    }
     const choicePath = join(dir, FINISH_CHOICE_MARKER);
     let choice: string;
     try {
