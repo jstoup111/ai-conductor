@@ -484,7 +484,7 @@ export async function runAcceptanceGuards(
   git: GitRunner,
   baseRef: string,
   subjectsBefore: string[],
-  declaredSuperseded: string[] = [],
+  declaredSuperseded?: string[],
 ): Promise<AcceptanceGuardResult> {
   // Determine the project root from the git runner by asking git where it is.
   // This allows the function to work with git runners bound to any directory.

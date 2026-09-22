@@ -1230,7 +1230,8 @@ export interface FeatureCommitPreservationFailure {
   cause: Extract<SupersessionVerdict, { kind: 'rejected' }>['cause']
     | 'could not resolve pre-rebase commit'
     | 'could not inspect declared superseded commit'
-    | 'declared superseded commit touches a non-test path';
+    | 'declared superseded commit touches a non-test path'
+    | 'undeclared superseded commit';
   path: string | null;
 }
 
@@ -1373,7 +1374,7 @@ export async function featureCommitsPreserved(
   git: GitRunner,
   baseRef: string,
   subjectsBefore: string[],
-  declaredSuperseded: string[] = [],
+  declaredSuperseded?: string[],
 ): Promise<FeatureCommitPreservationVerdict & { excused?: Array<{ sha: string; subject: string }> }> {
   if (subjectsBefore.length === 0) return { kind: 'preserved' };
   const r = await git(['log', '--format=%s', `${baseRef}..HEAD`]);
@@ -1409,7 +1410,14 @@ export async function featureCommitsPreserved(
       rejected.push({ subject, cause: 'could not resolve pre-rebase commit', path: null });
       continue;
     }
-    if (declaredSuperseded.includes(sha)) {
+    if (declaredSuperseded !== undefined) {
+      if (!declaredSuperseded.includes(sha)) {
+        // An array, even an empty one, selects judgement mode. Its declared
+        // drops are the sole authority; do not let the legacy heuristic turn
+        // an undeclared omission into an accepted resolution.
+        rejected.push({ subject, sha, cause: 'undeclared superseded commit', path: null });
+        continue;
+      }
       const paths = await git(['show', '--format=', '--name-only', sha]);
       const changed = paths.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
       const testOnly = paths.exitCode === 0 && changed.length > 0 && changed.every(isTestPath);
@@ -1429,6 +1437,8 @@ export async function featureCommitsPreserved(
       });
       continue;
     }
+    // Omitted declarations preserve legacy strict callers: their existing
+    // supersededByBase evidence remains the only permitted exception.
     const supersession = await supersededByBase(git, sha);
     if (supersession.kind === 'rejected') {
       rejected.push({ subject, sha, cause: supersession.cause, path: supersession.path });
@@ -1587,7 +1597,10 @@ async function resolveRebaseConflictsInner(
     }
 
     // FR-9: every pre-rebase feature commit subject must still be present.
-    const preserved = await featureCommitsPreserved(git, onto, subjectsBefore, [...declaredSuperseded]);
+    const preservationDeclarations = opts?.supersessionJudgement === true
+      ? [...declaredSuperseded]
+      : undefined;
+    const preserved = await featureCommitsPreserved(git, onto, subjectsBefore, preservationDeclarations);
     if (preserved.kind === 'rejected') {
       return {
         kind: 'conflict_halt',
