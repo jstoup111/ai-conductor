@@ -209,13 +209,14 @@ Lets the mergeable sweep settle a rebase conflict confined to test code without 
 **Steps:**
 1. Write failing test: after a successful resolution with one excused commit, the event stub receives one `rebase_citation_residue` event whose residue entry carries that sha and reason `declared-superseded`.
 2. Verify test fails (RED)
-3. Implement: in `resolveConflictingPr`, after the guards pass with a non-empty `excused` list, emit the existing `rebase_citation_residue` event through the injected emitter, one entry per excused sha with an empty citing task list. Extend the event spine only; add no file or second channel. Add an optional `events` dependency to the resolution deps and pass the daemon emitter from the sweep binding.
+3. Implement: in `resolveConflictingPr`, after the guards pass with a non-empty `excused` list, emit the existing `rebase_citation_residue` event through the injected emitter, one entry per excused sha with an empty citing task list. Extend the event spine only; add no file or second channel. Add an optional `events` dependency to the resolution deps and pass a feature-scoped persisted emitter from the sweep binding (started with `startFeatureEventPersistence(<feature worktree>, events, slug)`, so the event lands in the feature's `.pipeline/events.jsonl`, not the daemon ledger).
 4. Verify test passes (GREEN)
 5. Commit
 
 **Done when:**
 - `resolveConflictingPr` emits one `rebase_citation_residue` event containing each excused sha with reason `declared-superseded`, asserted by the residue test on the injected emitter stub.
 - The sweep binding in the daemon command module passes its event emitter into the resolution deps, asserted by the daemon wiring test that the deps object carries the emitter.
+- The sweep binding starts a feature-scoped persisted bus with `startFeatureEventPersistence` for the resolved feature's worktree, so each excused commit's residue event is appended to that worktree's `.pipeline/events.jsonl`, asserted by a test that reads the persisted line after resolution.
 
 **Files:** `src/conductor/src/engine/autoresolve.ts`; `src/conductor/src/daemon-cli.ts`; `src/conductor/test/engine/autoresolve-supersession.test.ts`
 
@@ -256,6 +257,7 @@ Lets the mergeable sweep settle a rebase conflict confined to test code without 
 **Done when:**
 - `resolveConflictingPr` emits exactly one `rebase_supersession_verdict` event carrying the choice, rationale, superseded shas, and the verification command with exit code after a judged publication, asserted by the emitter stub test.
 - The event sink registry declares `rebase_supersession_verdict` with persistence on, asserted by the registry exhaustiveness typecheck and the sink declaration test.
+- The verdict event is appended to the feature's `.pipeline/events.jsonl` through that same feature-scoped persisted emitter, never the daemon ledger, asserted by a test that reads the persisted line after a judged publication.
 
 **Files:** `src/conductor/src/types/events.ts`; `src/conductor/src/engine/event-sinks.ts`; `src/conductor/src/engine/autoresolve.ts`; `src/conductor/test/engine/autoresolve-audit.test.ts`
 
