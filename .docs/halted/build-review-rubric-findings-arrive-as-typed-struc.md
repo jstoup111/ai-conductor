@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-22T22:22:17.913Z
 Slug: build-review-rubric-findings-arrive-as-typed-struc
 Class: needs-human
 Halting step: unknown
