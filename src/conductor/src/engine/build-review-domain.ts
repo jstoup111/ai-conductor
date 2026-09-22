@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
+import type { RubricOutputJsonSchema } from './build-review-contract.js';
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import type {
   BuildReviewPolicyIncompatibility,
@@ -149,6 +150,105 @@ export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
 });
 export const COUNTERFACTUAL_SENSITIVITY_VOCABULARY = Object.freeze(['supports', 'indeterminate', 'not-applicable'] as const);
 export type CounterfactualSensitivity = typeof COUNTERFACTUAL_SENSITIVITY_VOCABULARY[number];
+const BUILD_REVIEW_CONFIDENCE_VALUES = Object.freeze(Array.from({ length: 101 }, (_, value) => value));
+
+export interface BuildReviewJudgedV3Schema extends RubricOutputJsonSchema {
+  readonly type: 'object';
+  readonly additionalProperties: false;
+  readonly required: readonly string[];
+  readonly properties: Readonly<Record<string, unknown>>;
+}
+
+function freezeSchema<Value>(value: Value): Value {
+  if (value !== null && typeof value === 'object') {
+    for (const child of Object.values(value)) freezeSchema(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function buildReviewJudgedV3Schema(rubric: BuildReviewRubricId): BuildReviewJudgedV3Schema {
+  return freezeSchema({
+    type: 'object',
+    additionalProperties: false,
+    required: ['findings'],
+    properties: {
+      findings: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['concernKind', 'summary', 'evidenceLocations', 'anchor'],
+          properties: {
+            concernKind: { type: 'string', enum: BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds },
+            summary: { type: 'string' },
+            evidenceLocations: { type: 'array', items: { type: 'string' } },
+            confidence: { type: 'integer', enum: BUILD_REVIEW_CONFIDENCE_VALUES },
+            anchor: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['rubric', 'locus'],
+              properties: {
+                rubric: { type: 'string', enum: [rubric] },
+                locus: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['path', 'contentHash', 'display'],
+                  properties: {
+                    path: { type: 'string' },
+                    contentHash: { type: 'string' },
+                    display: { type: 'string' },
+                    occurrence: { type: 'integer' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      relocationAudit: { type: 'array', items: { type: 'object', additionalProperties: false, required: [], properties: {} } },
+      counterfactualSensitivity: { type: 'string', enum: COUNTERFACTUAL_SENSITIVITY_VOCABULARY },
+      scopeResolutions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['candidateId', 'status'],
+          properties: {
+            candidateId: { type: 'string' },
+            status: { type: 'string', enum: ['resolved', 'out-of-scope', 'indeterminate'] },
+            sourceRegion: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['path', 'startLine', 'endLine', 'contentHash', 'display'],
+              properties: {
+                path: { type: 'string' },
+                startLine: { type: 'integer' },
+                endLine: { type: 'integer' },
+                contentHash: { type: 'string' },
+                display: { type: 'string' },
+              },
+            },
+            obligationReferences: { type: 'array', items: { type: 'string' } },
+            associationReason: { type: 'string' },
+            exclusionReason: { type: 'string' },
+            missingEvidenceReason: { type: 'string' },
+          },
+        },
+      },
+    },
+  }) as BuildReviewJudgedV3Schema;
+}
+
+/** The test-quality judged-v3 schema; every built-in branch uses a rubric-bound variant below. */
+export const BUILD_REVIEW_JUDGED_V3_SCHEMA = buildReviewJudgedV3Schema('testQuality');
+
+/** Closed per-rubric variants keep concern-kind vocabulary in the engine-owned schema. */
+export const BUILD_REVIEW_JUDGED_V3_SCHEMAS = Object.freeze({
+  testQuality: BUILD_REVIEW_JUDGED_V3_SCHEMA,
+  security: buildReviewJudgedV3Schema('security'),
+});
+
 export function normalizeBuildReviewFindingVocabularyMember(value: string): string { return value.toLowerCase().replaceAll('_', '-'); }
 export function parseBuildReviewFindingConcernKind(value: unknown, rubric: BuildReviewRubricId): string | undefined {
   const normalized = typeof value === 'string' ? normalizeBuildReviewFindingVocabularyMember(value) : '';

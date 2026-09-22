@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 
 import {
+  BUILD_REVIEW_JUDGED_V3_SCHEMAS,
   CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
   parseBuildReviewJudgedResult,
 } from './build-review-domain.js';
 import {
-  BUILD_REVIEW_JUDGED_V3_SCHEMA_PLACEHOLDER,
   type RubricContractDescriptor,
 } from './build-review-contract.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
@@ -57,7 +57,7 @@ export const BUILD_REVIEW_RUBRIC_REGISTRY: Readonly<
       }),
       output: Object.freeze({
         version: 'v3',
-        jsonSchema: BUILD_REVIEW_JUDGED_V3_SCHEMA_PLACEHOLDER,
+        jsonSchema: BUILD_REVIEW_JUDGED_V3_SCHEMAS.testQuality,
         parse: parseBuildReviewJudgedResult,
       }),
       identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),
@@ -76,7 +76,7 @@ export const BUILD_REVIEW_RUBRIC_REGISTRY: Readonly<
       }),
       output: Object.freeze({
         version: 'v3',
-        jsonSchema: BUILD_REVIEW_JUDGED_V3_SCHEMA_PLACEHOLDER,
+        jsonSchema: BUILD_REVIEW_JUDGED_V3_SCHEMAS.security,
         parse: parseBuildReviewJudgedResult,
       }),
       identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),

@@ -30,14 +30,6 @@ export interface BuildReviewContractCatalogMember<Source = unknown, Projection =
   readonly contract: RubricContractDescriptor<Source, Projection, Output, Identity>;
 }
 
-/**
- * Task 2 replaces this frozen placeholder with the closed judged-v3 schema.
- * Keeping it here makes the temporary seam local to the contract boundary.
- */
-export const BUILD_REVIEW_JUDGED_V3_SCHEMA_PLACEHOLDER: RubricOutputJsonSchema = Object.freeze({
-  type: 'object',
-});
-
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -81,4 +73,30 @@ export function resolveBuildReviewContractCatalog<
     if (missing) throw new Error(`Build-review rubric ${member.id} is missing ${missing}`);
   }
   return Object.freeze([...members]);
+}
+
+function recordTokens(value: unknown, tokens: Set<string>, seen: WeakSet<object>): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) recordTokens(entry, tokens, seen);
+    return;
+  }
+  if (value === null || typeof value !== 'object') return;
+  if (seen.has(value)) return;
+  seen.add(value);
+  const source = value as Record<string, unknown>;
+  if (Array.isArray(source.enum)) {
+    for (const member of source.enum) {
+      if (typeof member === 'string' || typeof member === 'number') tokens.add(String(member));
+    }
+  }
+  for (const child of Object.values(source)) recordTokens(child, tokens, seen);
+}
+
+/** Render the provider-visible field and enum vocabulary from the descriptor's own schema. */
+export function renderRubricContractShape(descriptor: Pick<RubricContractDescriptor, 'output'>): string {
+  const properties = record(descriptor.output.jsonSchema.properties);
+  const fields = properties ? Object.keys(properties) : [];
+  const tokens = new Set(fields);
+  recordTokens(descriptor.output.jsonSchema, tokens, new WeakSet());
+  return [...tokens].sort().map((token) => `\`${token}\``).join(', ');
 }
