@@ -68,6 +68,14 @@ const readOnlyReviewProfile: BuildReviewPolicyCapabilityProfile = {
 };
 
 describe('engine/build-review-policy-contract', () => {
+  it('requires a selected descriptor at the rendering boundary', () => {
+    expect(() => renderBuildReviewPolicyContract({
+      bundle: bundle(),
+      question: 'Are boundary changes safe?',
+      scope: 'Review frozen sources.',
+    } as unknown as Parameters<typeof renderBuildReviewPolicyContract>[0])).toThrow(/descriptor is required/i);
+  });
+
   it('adapts an ordinary selected skill unchanged into the versioned read-only review role', () => {
     const selectedBundle = bundle();
     const definition = selectedBundle.manifest.find((entry) => entry.relativePath.endsWith('/SKILL.md'))!;
@@ -76,6 +84,7 @@ describe('engine/build-review-policy-contract', () => {
       bundle: selectedBundle,
       question: 'Do changed public boundaries retain compatibility evidence?',
       scope: 'Review the frozen implementation diff only.',
+      contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
     });
 
     expect(rendered).toContain(`Build-review policy contract: ${BUILD_REVIEW_POLICY_CONTRACT_VERSION}`);
@@ -101,6 +110,7 @@ describe('engine/build-review-policy-contract', () => {
       bundle: bundle(standalonePresentation),
       question: 'Are boundary changes safe?',
       scope: 'Review frozen sources.',
+      contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
     });
 
     expect(rendered).toContain(standalonePresentation);
@@ -109,11 +119,22 @@ describe('engine/build-review-policy-contract', () => {
     expect(rendered).toContain("{ kind: 'custom-findings', version: 'v1', findings: [...] }");
   });
 
-  it('renders the custom alternatives directly from the shared descriptor schema', () => {
+  it('renders only the selected descriptor schema', () => {
+    const selectedContract = Object.freeze({
+      ...BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+      output: Object.freeze({
+        ...BUILD_REVIEW_CUSTOM_V1_CONTRACT.output,
+        jsonSchema: Object.freeze({
+          type: 'object', additionalProperties: false, required: ['selected'],
+          properties: { selected: { type: 'string', enum: ['selected-schema'] } },
+        }),
+      }),
+    });
     const rendered = renderBuildReviewPolicyContract({
       bundle: bundle(),
       question: 'Are boundary changes safe?',
       scope: 'Review frozen sources.',
+      contract: selectedContract,
     });
     const empty = { kind: 'custom-findings', version: 'v1', findings: [] };
     const finding = {
@@ -129,9 +150,9 @@ describe('engine/build-review-policy-contract', () => {
     const unsupported = { kind: 'unsupported-policy', requirement: 'requires deployment credentials' };
     const descriptor = { kind: 'custom', rubric: 'boundaryPolicy', parser: 'custom-findings-v1' } as const;
 
-    expect(rendered).toContain("{ kind: 'custom-findings', version: 'v1', findings: [...] }");
-    expect(rendered).toContain("{ kind: 'unsupported-policy', requirement: string }");
-    expect(rendered).toContain(BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.version);
+    expect(rendered).toContain('`selected`');
+    expect(rendered).toContain('`selected-schema`');
+    expect(rendered).not.toContain("{ kind: 'custom-findings', version: 'v1', findings: [...] }");
     expect(parseBuildReviewReviewerPayload(empty, descriptor)).toEqual(empty);
     expect(parseBuildReviewReviewerPayload({ ...empty, findings: [finding, withConfidence] }, descriptor)).toEqual({
       ...empty,

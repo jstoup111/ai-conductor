@@ -2,7 +2,6 @@ import { relative } from 'node:path';
 
 import type { CapturedReviewPolicyBundle } from './build-review-policy-bundle.js';
 import { renderRubricContractShape, type RubricContractDescriptor } from './build-review-contract.js';
-import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from './build-review-policy-resolver.js';
 import { BUILD_REVIEW_CUSTOM_SOURCE_REGION_HASH_RULE } from './build-review-source-region-admission.js';
 
 /** The first engine-owned contract for an installed read-only review policy. */
@@ -12,7 +11,7 @@ export interface RenderBuildReviewPolicyContractOptions {
   readonly bundle: CapturedReviewPolicyBundle;
   readonly question: string;
   readonly scope: string;
-  readonly contract?: Pick<RubricContractDescriptor, 'output'>;
+  readonly contract: Pick<RubricContractDescriptor, 'output'>;
 }
 
 /** Actions that an installed policy may declare, independent of its prose. */
@@ -190,6 +189,7 @@ export function renderBuildReviewPolicyContract(
   options: RenderBuildReviewPolicyContractOptions,
 ): string {
   const { bundle, question, scope } = options;
+  if (!options.contract) throw new Error('Build-review policy contract descriptor is required');
   const materialEntries = bundle.manifest
     .map((entry) => `- ${entry.relativePath}`)
     .join('\n');
@@ -210,7 +210,7 @@ export function renderBuildReviewPolicyContract(
     materialEntries,
     '',
     'Return only an engine-defined custom reviewer payload; do not use another output contract or a standalone presentation format.',
-    `Shared findings payload schema: ${renderRubricContractShape(options.contract ?? BUILD_REVIEW_CUSTOM_V1_CONTRACT)}`,
+    `Shared findings payload schema: ${renderRubricContractShape(options.contract)}`,
     `Source region rule: ${BUILD_REVIEW_CUSTOM_SOURCE_REGION_HASH_RULE}`,
     'The engine stamps policy, provider, lap, verdict, and all aggregate metadata after validating the payload.',
     '',
