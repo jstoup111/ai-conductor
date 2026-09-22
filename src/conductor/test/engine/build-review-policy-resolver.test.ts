@@ -53,6 +53,28 @@ describe('engine/build-review-policy-resolver', () => {
       .toEqual({ kind: 'resolved', policy: plugin });
   });
 
+  it('lets one enabled global installation supply the policy with no local copy and leaves another project\'s selection unchanged', () => {
+    const global = installedSkill({
+      source: 'global',
+      installationOrigin: '/candidate/global/skills/review-policy',
+      canonicalSkillPath: '/candidate/global/skills/review-policy/SKILL.md',
+      packageRoot: '/candidate/global/skills/review-policy',
+    });
+    const otherProjectLocal = installedSkill({
+      installationOrigin: '/other-project/skills/review-policy',
+      canonicalSkillPath: '/other-project/skills/review-policy/SKILL.md',
+      packageRoot: '/other-project/skills/review-policy',
+    });
+    const otherProjectCatalog = [otherProjectLocal, global] as const;
+    const otherProjectBefore = resolveInstalledReviewPolicy(declaration({ source: 'project' }), otherProjectCatalog);
+
+    expect(resolveInstalledReviewPolicy(declaration(), [global])).toEqual({ kind: 'resolved', policy: global });
+
+    expect(otherProjectBefore).toEqual({ kind: 'resolved', policy: otherProjectLocal });
+    expect(resolveInstalledReviewPolicy(declaration({ source: 'project' }), otherProjectCatalog)).toEqual(otherProjectBefore);
+    expect(otherProjectCatalog).toEqual([otherProjectLocal, global]);
+  });
+
   it('collapses aliases of one canonical installation without rewriting original descriptors', () => {
     const canonical = installedSkill();
     const alias = installedSkill({
@@ -110,10 +132,10 @@ describe('engine/build-review-policy-resolver', () => {
       packageRoot: '/candidate/global/skills/review-policy',
     }));
 
-    expect(resolveInstalledReviewPolicy(declaration({ source: selectedSource }), [
-      installedSkill(),
-      ...selectedCatalog,
-    ])).toEqual({
+    const offered = [installedSkill(), ...selectedCatalog];
+    const offeredBefore = structuredClone(offered);
+
+    expect(resolveInstalledReviewPolicy(declaration({ source: selectedSource }), offered)).toEqual({
       kind: 'failure',
       failure: {
         code,
@@ -121,5 +143,9 @@ describe('engine/build-review-policy-resolver', () => {
         source: selectedSource,
       },
     });
+    // Reporting is the whole effect: the unavailable descriptor is never
+    // flipped to available (no enablement or download), and the available
+    // alternative copy is left offered but unselected.
+    expect(offered).toEqual(offeredBefore);
   });
 });
