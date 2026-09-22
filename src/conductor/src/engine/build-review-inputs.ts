@@ -188,9 +188,17 @@ export interface BuildReviewPinnedScopeEvidence {
   readonly id: string;
   readonly source: { readonly fileName: string; readonly side: 'base' | 'head' };
   readonly region: TestDeclarationSpan;
+  /**
+   * The same region as UTF-8 byte offsets into the file at its pinned ref.
+   * `region` is the analyzer's UTF-16 code-unit span and stays the identity
+   * key; a reviewer hashing `git show` output needs byte offsets, and the two
+   * diverge as soon as the file holds a non-ASCII character (#2612).
+   */
+  readonly byteRegion?: TestDeclarationSpan;
   /** One-based source lines for the exact pinned character region. */
   readonly startLine?: number;
   readonly endLine?: number;
+  /** sha256 of the region's UTF-8 bytes: the bytes at `byteRegion` of the file at its pinned ref. */
   readonly contentHash: string;
 }
 
@@ -584,10 +592,12 @@ async function pinScopeEvidence(
     const sourceText = sourceRead.value;
     const region = reference.region ?? { start: 0, end: sourceText.length };
     const content = sourceText.slice(region.start, region.end);
+    const byteStart = Buffer.byteLength(sourceText.slice(0, region.start));
     return Object.freeze({
       id: `source:${reference.source.side}:${reference.source.fileName}:${region.start}:${region.end}`,
       source: Object.freeze({ ...reference.source }),
       region: Object.freeze({ ...region }),
+      byteRegion: Object.freeze({ start: byteStart, end: byteStart + Buffer.byteLength(content) }),
       startLine: sourceText.slice(0, region.start).split('\n').length,
       endLine: sourceText.slice(0, Math.max(region.start, region.end - 1)).split('\n').length,
       contentHash: `sha256:${createHash('sha256').update(content).digest('hex')}`,
