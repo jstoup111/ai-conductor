@@ -73,6 +73,16 @@ describe('build_review testQuality evidence re-read prompt', () => {
     expect(evidenceInstruction).toBeDefined();
   });
 
+  it('names contentHash as the normalized-title hash and never asks the provider to hash region bytes', async () => {
+    // The engine derives contentHash from the declared title (adr-2026-08-18);
+    // a provider told to hash the bytes reports every candidate indeterminate.
+    const prompt = await captureRubricPrompt();
+
+    expect(prompt).toMatch(/contentHash.*whitespace-normalized title/);
+    expect(prompt).toMatch(/do not hash the bytes/);
+    expect(prompt).not.toMatch(/verify the bytes/i);
+  });
+
   it('contains no provider-specific paths, environment variables, or model names', async () => {
     const prompt = await captureRubricPrompt();
 
