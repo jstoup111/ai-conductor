@@ -30,6 +30,7 @@ export const EVENT_SINKS = {
   config_deprecated_key: { render: false, persist: true, audit: false, otel: false },
   contained_live_checkout_drift: { render: true, persist: true, audit: false, otel: false },
   self_host_containment_verdict: { render: true, persist: true, audit: false, otel: false },
+  self_host_boundary_fingerprint: { render: true, persist: true, audit: false, otel: false },
   self_host_dispatch_admission: { render: true, persist: true, audit: false, otel: false },
   build_review_rubric_started: { render: true, persist: true, audit: false, otel: false },
   build_review_policy_resolved: { render: true, persist: true, audit: true, otel: false },

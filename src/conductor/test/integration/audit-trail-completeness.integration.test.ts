@@ -70,6 +70,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   contained_live_checkout_drift: 'not-audited-by-design',
   self_host_dispatch_admission: 'not-audited-by-design',
   self_host_containment_verdict: 'not-audited-by-design',
+  self_host_boundary_fingerprint: 'not-audited-by-design',
   build_review_rubric_started: 'not-audited-by-design',
   build_review_policy_resolved: 'friction-mapped',
   build_review_policy_failed: 'friction-mapped',
@@ -272,6 +273,10 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     type: 'self_host_containment_verdict',
     contained: true,
     evidence: 'live root read-only; worktree writable',
+  },
+  self_host_boundary_fingerprint: {
+    type: 'self_host_boundary_fingerprint',
+    surfaces: [{ label: 'live checkout', elapsedMs: 1, fileCount: 1 }],
   },
   containment_check_unresolved: {
     type: 'containment_check_unresolved',
