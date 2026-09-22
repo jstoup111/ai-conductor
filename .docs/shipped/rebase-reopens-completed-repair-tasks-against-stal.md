@@ -4,6 +4,13 @@ spec_hash: 5060489d6c75af0e466f10a7d727b32df519da9870a11794060ae13d9deb18b9
 pr: https://github.com/jstoup111/ai-conductor/pull/2652
 shipped: 2026-09-22
 engine_version: 20260922T220754Z-95f2b12d2932
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-07-12-rebase-evidence-stamp-translation D8"
+    outcome: remediated
+    summary: "`rebase_citation_residue` omits `citingObligationIds` from the authoritative `ConductorEvent` schema."
 ---
 
 ## Cost
