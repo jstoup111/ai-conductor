@@ -153,17 +153,34 @@ describe('matched-pair derivation links', () => {
     ))).not.toThrow();
   });
 
-  it('rejects a missing import edge', () => {
-    const declaration = {
-      derivingModule: 'src/conductor/src/engine/deriving.ts',
-      sourceModule: 'src/conductor/src/engine/config.ts',
-      importedExport: 'RETIRED_IDS',
-    };
-
-    expect(() => assertDerivationLink('fixture-missing-import', declaration, sourceFile(
+  it.each([
+    {
+      id: 'user-input-halt-marker',
+      derivingModule: 'src/conductor/src/engine/artifacts.ts',
+      sourceModule: 'src/conductor/src/engine/task-progress.ts',
+      importedExport: 'HALT_MARKER_RELATIVE',
+      presentSource: "import { HALT_MARKER_RELATIVE as HALT_MARKER } from './task-progress.js';\nconst path = HALT_MARKER;",
+      absentSource: "const HALT_MARKER = '.pipeline/halt-user-input-required';",
+    },
+    {
+      id: 'task-status-file-type',
+      derivingModule: 'src/conductor/src/engine/rebase-translate.ts',
+      sourceModule: 'src/conductor/src/engine/task-seed.ts',
+      importedExport: 'TaskStatusFile',
+      presentSource: "import type { TaskStatusFile } from './task-seed.js';\nconst status = {} as TaskStatusFile;",
+      absentSource: 'interface TaskStatusFile { tasks?: unknown[]; }\nconst status = {} as TaskStatusFile;',
+    },
+  ])('proves $id cannot re-fork its declaration', (declaration) => {
+    expect(() => assertDerivationLink(declaration.id, declaration, sourceFile(
       declaration.derivingModule,
-      'const filter = RETIRED_IDS.join(\'|\');',
-    ))).toThrow(/fixture-missing-import: missing import edge.*deriving\.ts.*config\.ts/);
+      declaration.presentSource,
+    ))).not.toThrow();
+    expect(() => assertDerivationLink(declaration.id, declaration, sourceFile(
+      declaration.derivingModule,
+      declaration.absentSource,
+    ))).toThrow(new RegExp(
+      `${declaration.id}: missing import edge.*${declaration.derivingModule.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*${declaration.sourceModule.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*${declaration.importedExport}`,
+    ));
   });
 
   it('rejects an import that is never referenced', () => {

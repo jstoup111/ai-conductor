@@ -32,12 +32,14 @@ function assertDeclarationIsWellFormed(
 }
 
 describe('matched-pair registry', () => {
-  it('declares all three seed pairs', () => {
-    expect(Object.keys(MATCHED_PAIR_REGISTRY)).toHaveLength(3);
+  it('declares all five registered pairs', () => {
+    expect(Object.keys(MATCHED_PAIR_REGISTRY)).toHaveLength(5);
     expect(Object.keys(MATCHED_PAIR_REGISTRY).sort()).toEqual([
       'build-review-retired-ids-configuration-doc',
       'build-review-retired-ids-dispositions',
       'build-review-retired-reason-prefix',
+      'task-status-file-type',
+      'user-input-halt-marker',
     ]);
   });
 
