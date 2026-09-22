@@ -412,27 +412,14 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
       return { resolved: true };
     }, 3);
 
-    expect(outcome).toMatchObject({ kind: 'noop' });
-    if (outcome.kind === 'changed' || outcome.kind === 'noop') {
-      expect(outcome.allChangedPaths).toBeUndefined();
-    }
-
-    // Contrast: the same resolution with a derivable pre-advance base carries
-    // the complete delta — the undefined above is attribution degrading
-    // gracefully, not a field the resolver never populates.
-    await g(['reset', '-q', '--hard', preSha]);
-    const rePre = await performRebase(realGit, repo, 'main');
-    expect(rePre.kind).toBe('conflict_halt');
-    const attributed = await resolveRebaseConflicts(realGit, repo, rePre, async () => {
-      await writeFile(join(repo, 'docs/notes.md'), 'merged notes again\n');
-      await g(['add', 'docs/notes.md']);
-      await gc(['rebase', '--continue']);
-      return { resolved: true };
-    }, 3);
-    expect(attributed).toMatchObject({ kind: 'noop', allChangedPaths: ['docs/notes.md'] });
+    // The pre-advance base only feeds `featureSurface`; the tree delta
+    // (preTree..HEAD, preTree = the captured replay seed) is still computable, so the resolution still
+    // classifies (docs-only → noop) and never degrades into a halt.
+    expect(outcome).toMatchObject({ kind: 'noop', allChangedPaths: ['docs/notes.md'] });
+    expect(preSha).not.toBe((await g(['rev-parse', 'HEAD'])).stdout.trim());
   });
 
-  it('keeps replayed paths for invalidation while carrying the complete base advance separately', async () => {
+  it('classifies the true tree delta (preTree..HEAD) and carries the feature surface, like a clean rebase', async () => {
     const deltaRepo = await mkdtemp(join(tmpdir(), 'rebase-resolution-complete-delta-'));
     const deltaGit = (args: string[]) => execFile('git', args, { cwd: deltaRepo });
     const deltaGc = (args: string[]) =>
@@ -467,16 +454,16 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
         return { resolved: true };
       }, 3);
 
+      // D = preTree..HEAD (preTree = seed.preRebaseHead): the base advance plus the resolution. The
+      // feature's untouched own file is NOT in the delta — it is in F.
       expect(outcome).toMatchObject({
         kind: 'changed',
-        changedCodePaths: ['conflict.ts', 'feature-only.ts'],
+        changedCodePaths: ['base-only.ts', 'conflict.ts'],
         allChangedPaths: ['base-only.ts', 'conflict.ts'],
+        featureSurface: ['conflict.ts', 'feature-only.ts'],
       });
       if (outcome.kind === 'changed') {
-        expect(outcome.changedCodePaths).not.toContain('base-only.ts');
-      }
-      if (outcome.kind === 'changed' || outcome.kind === 'noop') {
-        expect(outcome.allChangedPaths).not.toContain('feature-only.ts');
+        expect(outcome.changedCodePaths).not.toContain('feature-only.ts');
       }
     } finally {
       await rm(deltaRepo, { recursive: true, force: true });

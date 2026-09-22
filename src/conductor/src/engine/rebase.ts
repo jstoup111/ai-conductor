@@ -1449,9 +1449,9 @@ async function resolveRebaseConflictsInner(
   }
 
   // The rebase state retains ORIG_HEAD while paused: it is the feature tip
-  // before replay began. Its merge-base with `onto` is the base before the
-  // advance. That range is supplementary attribution only: gate
-  // invalidation retains its established `onto..HEAD` replayed-path contract.
+  // before replay began (the clean path's `preTree`). Its merge-base with
+  // `onto` is the base before the advance (the clean path's `mergeBase`), so
+  // the feature's own surface is preAdvanceBase..<pre-rebase tip>.
   const preAdvanceBaseResult = await git(['merge-base', 'ORIG_HEAD', onto]);
   const preAdvanceBase =
     preAdvanceBaseResult.exitCode === 0 && preAdvanceBaseResult.stdout.trim()
@@ -1546,48 +1546,21 @@ async function resolveRebaseConflictsInner(
       };
     }
 
-    // Both guards pass. `onto..HEAD` is the established invalidation set for
-    // a resolved rebase. Preserve it even when complete base-advance
-    // attribution is unavailable.
-    let changedCodePaths: string[];
-    try {
-      const replayed = await git(['diff', '--name-only', onto, 'HEAD']);
-      if (replayed.exitCode !== 0) {
-        return { kind: 'changed', changedCodePaths: [] };
-      }
-      changedCodePaths = filterCodeOrTestPaths(
-        replayed.stdout
-          .split('\n')
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0),
-      );
-    } catch {
-      return { kind: 'changed', changedCodePaths: [] };
-    }
-
-    // The complete pre-advance-base..onto delta is optional metadata. It
-    // describes all base changes for readers that need attribution, but must
-    // never alter the established changedCodePaths invalidation contract or
-    // turn a successfully resolved rebase into a conflict halt.
-    let allChangedPaths: string[] | undefined;
-    if (preAdvanceBase !== undefined) {
-      try {
-        const delta = await git(['diff', '--name-only', preAdvanceBase, onto]);
-        if (delta.exitCode === 0) {
-          allChangedPaths = delta.stdout
-            .split('\n')
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0);
-        }
-      } catch {
-        // Complete-delta attribution is optional after resolution succeeds.
-      }
-    }
-    const documentInputs = await resolveReviewInputs(projectRoot, allChangedPaths ?? []);
-    const documentsChanged = allChangedPaths?.some((path) => documentInputs.includes(path)) ?? false;
-    const resolvedOutcome: RebaseOutcome = changedCodePaths.length > 0 || documentsChanged
-      ? { documentInputs, ...(changedCodePaths.length === 0 ? { featureSurface: [] } : {}), kind: 'changed', changedCodePaths, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) }
-      : { kind: 'noop', ...(allChangedPaths === undefined ? {} : { allChangedPaths }) };
+    // Both guards pass. Classify exactly as a clean rebase would
+    // (adr-2026-07-20-post-rebase-delta-aware-invalidation): the delta is the
+    // true tree change preTree..HEAD (pre-rebase tip → post-rebase tip), NOT
+    // `onto..HEAD` — that is the whole feature diff against main and
+    // reporting it re-opened every gate for a one-file base advance
+    // (projects-cannot-add, 2026-09-21: 110 paths reported, 9 real). The
+    // feature surface is preAdvanceBase..preTree so gate invalidation can be
+    // delta-aware; an unavailable merge-base leaves it undefined and
+    // `applyRebaseVerdicts` falls back to the fixed invalidation set.
+    // preTree is the seed's `preRebaseHead`, captured by the driver before the
+    // initial rebase moved HEAD — never mutable ORIG_HEAD, which the resolver
+    // may have clobbered.
+    const resolvedOutcome: RebaseOutcome = replaySeed
+      ? await classifyClean(git, replaySeed.preRebaseHead, preAdvanceBase, projectRoot)
+      : await classifyResolvedWithoutSeed(git, onto, preAdvanceBase, projectRoot);
     // Resolver completion rewrites the same feature commits as the clean
     // `performRebase` path. The seed was captured before the initial rebase
     // moved HEAD; never reconstruct its original head from mutable ORIG_HEAD.
@@ -1612,6 +1585,57 @@ async function resolveRebaseConflictsInner(
     conflicts,
     reason: `rebase resolution failed after ${cap} attempt(s)`,
   };
+}
+
+/**
+ * Fallback classification for a resolved rebase whose driver captured no
+ * replay seed: the pre-rebase tip is unknowable, so the true delta cannot be
+ * computed. Fail closed on the established `onto..HEAD` replayed-path set
+ * with no featureSurface (→ fixed invalidation set); the pre-advance-base..onto
+ * delta is optional attribution metadata only and never turns a successfully
+ * resolved rebase into a conflict halt.
+ */
+async function classifyResolvedWithoutSeed(
+  git: GitRunner,
+  onto: string,
+  preAdvanceBase: string | undefined,
+  projectRoot: string,
+): Promise<RebaseOutcome> {
+  let changedCodePaths: string[];
+  try {
+    const replayed = await git(['diff', '--name-only', onto, 'HEAD']);
+    if (replayed.exitCode !== 0) {
+      return { kind: 'changed', changedCodePaths: [] };
+    }
+    changedCodePaths = filterCodeOrTestPaths(
+      replayed.stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0),
+    );
+  } catch {
+    return { kind: 'changed', changedCodePaths: [] };
+  }
+
+  let allChangedPaths: string[] | undefined;
+  if (preAdvanceBase !== undefined) {
+    try {
+      const delta = await git(['diff', '--name-only', preAdvanceBase, onto]);
+      if (delta.exitCode === 0) {
+        allChangedPaths = delta.stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0);
+      }
+    } catch {
+      // Complete-delta attribution is optional after resolution succeeds.
+    }
+  }
+  const documentInputs = await resolveReviewInputs(projectRoot, allChangedPaths ?? []);
+  const documentsChanged = allChangedPaths?.some((path) => documentInputs.includes(path)) ?? false;
+  return changedCodePaths.length > 0 || documentsChanged
+    ? { documentInputs, ...(changedCodePaths.length === 0 ? { featureSurface: [] } : {}), kind: 'changed', changedCodePaths, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) }
+    : { kind: 'noop', ...(allChangedPaths === undefined ? {} : { allChangedPaths }) };
 }
 
 /**

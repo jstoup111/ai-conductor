@@ -2524,3 +2524,110 @@ describe('performRebase protected-artifact self-amendment (#1379, real git)', ()
     }
   }, 20000);
 });
+
+// ── Resolved rebase classifies by its true tree delta (preTree..HEAD) ────────
+//
+// Observed on projects-cannot-add (2026-09-21): main had advanced by one
+// unrelated template file, yet the conflict-resolved path reported the whole
+// `onto..HEAD` feature diff (110 paths) as the rebase delta and re-opened
+// every gate. The clean path (`classifyClean`) already classifies the true
+// delta `preTree..HEAD` and carries `featureSurface` so invalidation can be
+// delta-aware; the resolved path must produce the same outcome shape.
+describe('resolveRebaseConflicts — delta classification matches the clean path', () => {
+  let repo: string;
+  const g = (args: string[]) => execa('git', args, { cwd: repo });
+  const gc = (args: string[]) => execa('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-resolved-delta-'));
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await writeFile(join(repo, 'shared.ts'), 'base\n');
+    await mkdir(join(repo, 'docs'));
+    await writeFile(join(repo, 'docs', 'template.md'), 'template v1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    // A feature with MANY commits touching many code files, one of which
+    // (shared.ts) will conflict with main.
+    await g(['checkout', '-q', '-b', 'feat']);
+    for (let i = 0; i < 6; i++) {
+      await writeFile(join(repo, `feature-${i}.ts`), `export const f${i} = ${i};\n`);
+      await g(['add', '.']);
+      await g(['commit', '-q', '-m', `feat: add feature-${i}`]);
+    }
+    await writeFile(join(repo, 'shared.ts'), 'feature\n');
+    await g(['commit', '-q', '-am', 'feat: change shared']);
+
+    // main advances by ONE unrelated file plus the conflicting edit.
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'docs', 'template.md'), 'template v2\n');
+    await g(['commit', '-q', '-am', 'main: bump template']);
+    await writeFile(join(repo, 'shared.ts'), 'mainchange\n');
+    await g(['commit', '-q', '-am', 'main: change shared']);
+
+    await g(['checkout', '-q', 'feat']);
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  async function intoConflict(): Promise<{ git: GitRunner; conflict: RebaseOutcome }> {
+    const git = makeGitRunner(repo);
+    const conflict = await performRebase(git, repo, 'main');
+    expect(conflict.kind).toBe('conflict_halt');
+    return { git, conflict };
+  }
+
+  it('reports only the true preTree..HEAD delta and sets featureSurface, not the whole feature', async () => {
+    const { resolveRebaseConflicts } = await import('../../src/engine/rebase.js');
+    const { git, conflict } = await intoConflict();
+    const resolver = async () => {
+      // Resolve the one conflict; no other feature file is touched.
+      await writeFile(join(repo, 'shared.ts'), 'merged\n');
+      await g(['add', 'shared.ts']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true as const };
+    };
+
+    const outcome = await resolveRebaseConflicts(git, repo, conflict, resolver, 1);
+
+    expect(outcome.kind).toBe('changed');
+    if (outcome.kind !== 'changed') return;
+    // The tree delta from the pre-rebase feature tip: main's template bump
+    // and the resolved shared.ts. NOT feature-0..5.
+    expect(outcome.allChangedPaths).toEqual(['docs/template.md', 'shared.ts']);
+    expect(outcome.changedCodePaths).toEqual(['shared.ts']);
+    expect(outcome.changedCodePaths).not.toContain('feature-0.ts');
+    // The feature's own claimed surface (mergeBase..preTree) must be carried
+    // so gate invalidation can be delta-aware instead of invalidate-all.
+    expect(outcome.featureSurface).toBeDefined();
+    expect(outcome.featureSurface).toEqual(
+      expect.arrayContaining(['feature-0.ts', 'feature-5.ts', 'shared.ts']),
+    );
+    expect(outcome.featureSurface).not.toContain('docs/template.md');
+  });
+
+  it('includes a feature file that the resolution itself changed in the delta', async () => {
+    const { resolveRebaseConflicts } = await import('../../src/engine/rebase.js');
+    const { git, conflict } = await intoConflict();
+    const resolver = async () => {
+      // The resolution rewrites shared.ts AND touches an unrelated feature file.
+      await writeFile(join(repo, 'shared.ts'), 'merged\n');
+      await writeFile(join(repo, 'feature-3.ts'), 'export const f3 = 33;\n');
+      await g(['add', 'shared.ts', 'feature-3.ts']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true as const };
+    };
+
+    const outcome = await resolveRebaseConflicts(git, repo, conflict, resolver, 1);
+
+    expect(outcome.kind).toBe('changed');
+    if (outcome.kind !== 'changed') return;
+    expect(outcome.changedCodePaths).toEqual(['feature-3.ts', 'shared.ts']);
+    expect(outcome.allChangedPaths).toEqual(['docs/template.md', 'feature-3.ts', 'shared.ts']);
+    expect(outcome.featureSurface).toBeDefined();
+  });
+});
