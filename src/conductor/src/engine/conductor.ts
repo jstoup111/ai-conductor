@@ -362,6 +362,7 @@ import { parseReleaseDisposition } from './release-metadata.js';
 import {
   clearPersistedReleaseMetadataSnapshot,
   readPersistedReleaseMetadataSnapshot,
+  resolveReleaseMetadataFlow,
   restoreReleaseMetadata,
   snapshotReleaseMetadata,
 } from './self-host/release-metadata-flow.js';
@@ -2955,7 +2956,7 @@ export class Conductor {
       gh: this.gh,
       buildReviewEffectiveResolver: this.buildReviewEffectiveResolver,
       repairFinishPr,
-      releaseMetadataPreservationRequired: this.releaseDispositionFlowActive(),
+      releaseMetadataPreservationRequired: this.releaseMetadataFlow() === 'active',
       fullSuiteInspect: async () => {
         const retained = this.retainedFullSuiteInspection;
         this.retainedFullSuiteInspection = undefined;
@@ -6515,11 +6516,18 @@ export class Conductor {
     }
 
     if (sh.releaseArtifactGate) {
+      const releaseMetadataFlow = this.releaseMetadataFlow();
+      if (releaseMetadataFlow === 'step-missing') {
+        const reason =
+          "Self-host release gate HALT: required 'release-disposition' step is missing from the configured flow.";
+        await writeSelfHostHalt(this.projectRoot, reason, this.events);
+        return { ok: false, reason };
+      }
       // Release-disposition metadata is authoritative only for this
       // repository's explicitly configured flow. Other self-host callers
       // retain the established release-gate contract, whose metadata input is
       // optional, and therefore must not require a retained draft PR.
-      const releaseMetadata = this.releaseDispositionFlowActive()
+      const releaseMetadata = releaseMetadataFlow === 'active'
         ? await this.readShipDraftReleaseMetadata(branch)
         : { ok: true as const, value: undefined };
       if (!releaseMetadata.ok) return releaseMetadata;
@@ -6538,10 +6546,12 @@ export class Conductor {
   }
 
   /** This repository-local mechanism is unavailable to consumer configurations. */
-  private releaseDispositionFlowActive(): boolean {
-    return this.isSelfBuild() &&
-      this.config.steps?.['release-disposition']?.skill ===
-        '.agents/skills/release-disposition/SKILL.md';
+  private releaseMetadataFlow() {
+    return resolveReleaseMetadataFlow({
+      isSelfBuild: this.isSelfBuild(),
+      releaseArtifactGateEnabled: resolveSelfHostConfig(this.config).releaseArtifactGate,
+      steps: this.config.steps,
+    });
   }
 
   /**
@@ -6704,7 +6714,7 @@ export class Conductor {
 
   /** Capture only a valid, re-readable release block before finish can replace the body. */
   private async snapshotFinishReleaseMetadata(branch?: string): Promise<void> {
-    if (!this.releaseDispositionFlowActive()) {
+    if (this.releaseMetadataFlow() !== 'active') {
       this.releaseMetadataSnapshot = undefined;
       return;
     }
@@ -6734,7 +6744,7 @@ export class Conductor {
   /** Restore the snapshot only after a verified remote read/write cycle. */
   private async restoreFinishReleaseMetadata(prUrl: string): Promise<void> {
     const snapshot = this.releaseMetadataSnapshot;
-    if (!this.releaseDispositionFlowActive()) return;
+    if (this.releaseMetadataFlow() !== 'active') return;
     if (!snapshot || snapshot.prUrl !== prUrl) {
       throw new Error('pre-finish snapshot unavailable for the retained draft PR');
     }
