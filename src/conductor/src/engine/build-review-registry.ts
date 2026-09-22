@@ -2,7 +2,18 @@ import { createHash } from 'node:crypto';
 
 import {
   CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+  parseBuildReviewJudgedResult,
 } from './build-review-domain.js';
+import {
+  BUILD_REVIEW_JUDGED_V3_SCHEMA_PLACEHOLDER,
+  type RubricContractDescriptor,
+} from './build-review-contract.js';
+import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
+import {
+  deriveBuildReviewRubricProjections,
+  type BuildReviewProjectionSource,
+  type BuildReviewRubricProjection,
+} from './build-review-projections.js';
 import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
 
 export type BuildReviewRubricCachePolicy = 'content-addressed';
@@ -14,6 +25,10 @@ export interface BuildReviewRubricDescriptor {
   readonly projectionVersion: 'v3';
   readonly cachePolicy: BuildReviewRubricCachePolicy;
   readonly prerequisite: BuildReviewRubricPrerequisite;
+  readonly contract: RubricContractDescriptor<
+    BuildReviewProjectionSource,
+    BuildReviewRubricProjection
+  >;
 }
 
 export const BUILD_REVIEW_RUBRIC_IDS = ['testQuality', 'security'] as const;
@@ -35,6 +50,18 @@ export const BUILD_REVIEW_RUBRIC_REGISTRY: Readonly<
     projectionVersion: 'v3',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
+    contract: Object.freeze({
+      projection: Object.freeze({
+        version: 'v3',
+        build: (source: BuildReviewProjectionSource) => deriveBuildReviewRubricProjections(source).testQuality,
+      }),
+      output: Object.freeze({
+        version: 'v3',
+        jsonSchema: BUILD_REVIEW_JUDGED_V3_SCHEMA_PLACEHOLDER,
+        parse: parseBuildReviewJudgedResult,
+      }),
+      identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),
+    }),
   }),
   security: Object.freeze({
     skillName: 'build-review-security',
@@ -42,6 +69,18 @@ export const BUILD_REVIEW_RUBRIC_REGISTRY: Readonly<
     projectionVersion: 'v3',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
+    contract: Object.freeze({
+      projection: Object.freeze({
+        version: 'v3',
+        build: (source: BuildReviewProjectionSource) => deriveBuildReviewRubricProjections(source).security,
+      }),
+      output: Object.freeze({
+        version: 'v3',
+        jsonSchema: BUILD_REVIEW_JUDGED_V3_SCHEMA_PLACEHOLDER,
+        parse: parseBuildReviewJudgedResult,
+      }),
+      identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),
+    }),
   }),
 });
 

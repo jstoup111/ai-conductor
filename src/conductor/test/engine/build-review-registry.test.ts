@@ -1,4 +1,5 @@
-// Covers: task:1, task:10
+// Covers: task:1
+// Covers: task:10
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -16,7 +17,7 @@ import type { HarnessConfig } from '../../src/types/config.js';
 describe('engine/build-review-registry', () => {
   it('registers the test-quality and security rubrics with their versioned execution descriptors', () => {
     expect(BUILD_REVIEW_RUBRIC_IDS).toEqual(['testQuality', 'security']);
-    expect(BUILD_REVIEW_RUBRIC_REGISTRY).toEqual({
+    expect(BUILD_REVIEW_RUBRIC_REGISTRY).toMatchObject({
       testQuality: {
         skillName: 'build-review-test-quality',
         contractVersion: 'v3',
