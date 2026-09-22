@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, stat } from 'fs/promises';
 import { join } from 'path';
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
+import { makeProductionGh, runTrackerUrlRead } from './tracker-client.js';
 
 const execFile = promisify(execFileCb);
 
@@ -215,6 +216,5 @@ export async function checkPrMerged(
 }
 
 async function defaultGhRunner(prUrl: string): Promise<string> {
-  const { stdout } = await execFile('gh', ['pr', 'view', prUrl, '--json', 'state']);
-  return stdout;
+  return runTrackerUrlRead(makeProductionGh(), process.cwd(), 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'state']);
 }

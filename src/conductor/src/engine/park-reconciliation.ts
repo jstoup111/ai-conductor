@@ -880,9 +880,9 @@ export async function reconcileMergedPark(
     let prUrl: string | undefined;
     for (const head of evidence.branches) {
       try {
-        const { stdout } = await (opts.runGh ?? makeProductionGh())(
+        const stdout = await runTrackerAmbientRead(
+          opts.runGh ?? makeProductionGh(), opts.projectRoot, 'ambient.pull-request.read',
           ['pr', 'list', '--state', 'merged', '--head', head, '--json', 'url', '--limit', '1'],
-          { cwd: opts.projectRoot },
         );
         const prs = JSON.parse(stdout) as Array<{ url?: unknown }>;
         const url = prs[0]?.url;

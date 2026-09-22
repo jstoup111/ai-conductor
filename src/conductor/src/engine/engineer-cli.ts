@@ -67,7 +67,7 @@ import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
-import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh } from './tracker-client.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead } from './tracker-client.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import {
   GH_VERSION_FLOOR,
@@ -1766,7 +1766,7 @@ export async function dispatchEngineer(
       const cwd = process.cwd();
       let nameWithOwner: string;
       try {
-        const { stdout } = await gh(['repo', 'view', '--json', 'nameWithOwner'], { cwd });
+        const stdout = await runTrackerAmbientRead(gh, cwd, 'ambient.repository.read', ['repo', 'view', '--json', 'nameWithOwner']);
         nameWithOwner = String((JSON.parse(stdout || '{}') as { nameWithOwner?: unknown }).nameWithOwner ?? '');
       } catch (err: unknown) {
         printErr(`engineer migrate-issue-deps: could not resolve repo (${err instanceof Error ? err.message : String(err)})`);
@@ -1779,9 +1779,10 @@ export async function dispatchEngineer(
 
       let issues: Array<{ number: number; body: string }>;
       try {
-        const { stdout } = await gh(['issue', 'list', '--state', 'open', '--json', 'number,body', '--limit', '500'], {
-          cwd,
-        });
+        const stdout = await runTrackerRepositoryRead(
+          gh, cwd, 'repository.read', nameWithOwner, { kind: 'repository' },
+          ['issue', 'list', '--state', 'open', '--json', 'number,body', '--limit', '500', '-R', nameWithOwner],
+        );
         issues = JSON.parse(stdout || '[]') as Array<{ number: number; body: string }>;
       } catch (err: unknown) {
         printErr(`engineer migrate-issue-deps: could not list issues (${err instanceof Error ? err.message : String(err)})`);

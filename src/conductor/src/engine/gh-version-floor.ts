@@ -1,8 +1,4 @@
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
-import { assertRealExecAllowed } from './tracker-client.js';
-
-const execFile = promisify(execFileCb);
+import { makeProductionGh, runTrackerAmbientRead } from './tracker-client.js';
 
 export const GH_VERSION_FLOOR = { major: 2, minor: 73, patch: 0 } as const;
 export const GH_VERSION_PROBE_TIMEOUT_MS = 5_000;
@@ -55,9 +51,8 @@ export function checkGhVersionFloor(output: string): GhVersionFloorVerdict {
 }
 
 const productionRunner: GhVersionRunner = async () => {
-  assertRealExecAllowed('gh');
-  const result = await execFile('gh', ['--version']);
-  return { stdout: String(result.stdout) };
+  const stdout = await runTrackerAmbientRead(makeProductionGh(), process.cwd(), 'ambient.cli.read', ['--version']);
+  return { stdout };
 };
 
 /** Obtains and classifies the machine's gh version without treating failures as a pass. */

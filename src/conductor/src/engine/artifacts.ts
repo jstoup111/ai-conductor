@@ -10,6 +10,7 @@ import { slugify } from './worktree.js';
 import { parseWorkRef, formatWorkRef } from './engineer/source-ref.js';
 import type { GhRunner } from './pr-labels.js';
 import { makeProductionGh } from './pr-labels.js';
+import { runTrackerUrlRead } from './tracker-client.js';
 import {
   readFlooredBody,
   readStaleHaltBanner,
@@ -3980,7 +3981,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // completing. Fail-open on any gh error: network unavailability never blocks
       // a ship.
       try {
-        const { stdout } = await ghRunner(['pr', 'view', prUrl, '--json', 'isDraft'], { cwd: dir });
+        const stdout = await runTrackerUrlRead(ghRunner, dir, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'isDraft']);
         const parsed = JSON.parse(stdout || '{}') as { isDraft?: unknown };
         const isDraft = Boolean(parsed.isDraft);
         if (isDraft) {

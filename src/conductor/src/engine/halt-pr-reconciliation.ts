@@ -19,6 +19,7 @@ import {
   cleanupHaltPresentation,
   upsertComment,
 } from './pr-labels.js';
+import { runTrackerAmbientRead } from './tracker-client.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -116,19 +117,16 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, ru
     // ── Step 1: enumerate open PRs ─────────────────────────────────────────
     let prList: HaltPrReconciliationTarget[] = [];
     try {
-      const { stdout } = await gh(
-        [
-          'pr',
-          'list',
-          '--json',
-          'number,url,body,isDraft,labels,headRefName',
-          '--state',
-          'open',
-          '--limit',
-          '100',
-        ],
-        { cwd: projectRoot },
-      );
+      const stdout = await runTrackerAmbientRead(gh, projectRoot, 'ambient.pull-request.read', [
+        'pr',
+        'list',
+        '--json',
+        'number,url,body,isDraft,labels,headRefName',
+        '--state',
+        'open',
+        '--limit',
+        '100',
+      ]);
       prList = JSON.parse(stdout || '[]') as HaltPrReconciliationTarget[];
     } catch (err) {
       log?.(`[halt-pr-reconciliation] failed to enumerate PRs: ${err}`);

@@ -25,6 +25,7 @@ describe('typed ambient reads', () => {
     ['ambient.identity.read', ['auth', 'status']],
     ['ambient.pull-request.read', ['pr', 'list', '--head', 'b', '--json', 'url']],
     ['ambient.pull-request.read', ['pr', 'view', 'branch', '--json', 'url,state']],
+    ['ambient.cli.read', ['--version']],
   ] as const)('admits %s %j', async (operation, args) => {
     const gh = fakeGh();
     await runTrackerAmbientRead(gh, '/w', operation, [...args]);
@@ -38,6 +39,8 @@ describe('typed ambient reads', () => {
     ['an api field write', 'ambient.identity.read', ['api', 'user', '-f', 'name=x']],
     ['a repository api path', 'ambient.identity.read', ['api', 'repos/o/r/issues/1']],
     ['a repository-bound flag', 'ambient.pull-request.read', ['pr', 'view', '1', '-R', 'o/r']],
+    ['a cli probe that is not the version banner', 'ambient.cli.read', ['--help']],
+    ['a cli probe with a trailing subcommand', 'ambient.cli.read', ['version', 'pr', 'view', '1']],
     ['an unregistered operation', 'ambient.anything.read', ['repo', 'view']],
   ])('refuses %s before the runner is reached', async (_label, operation, args) => {
     const gh = fakeGh();

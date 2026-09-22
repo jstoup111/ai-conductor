@@ -107,7 +107,7 @@ import { makeIsProcessed, resolveEngineVersion } from './engine/shipped-record.j
 import { resolveHarnessVersion } from './engine/version-report.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
-import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh } from './engine/tracker-client.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerUrlRead } from './engine/tracker-client.js';
 import { createGithubIntakeAuthorization } from './engine/engineer/intake/github-issues.js';
 import { resolveFeatureRemoteMutation } from './engine/remote-git-operations.js';
 import { createDaemonHaltPrOperations } from './engine/daemon-halt-pr-operations.js';
@@ -2355,12 +2355,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
 
               try {
                 // Fetch the branch name from the PR
-                const prViewResult = await execFile('sh', [
-                  '-c',
-                  `gh pr view "${entry.prUrl}" --json headRefName --jq '.headRefName'`,
-                ], { cwd: entry.repoCwd });
+                const prViewStdout = await runTrackerUrlRead(
+                  makeProductionGh(), entry.repoCwd, 'pull-request', entry.prUrl,
+                  ['pr', 'view', entry.prUrl, '--json', 'headRefName', '--jq', '.headRefName'],
+                );
 
-                const branch = (prViewResult.stdout || '').toString().trim();
+                const branch = (prViewStdout || '').toString().trim();
                 if (!branch) {
                   log(`[autoresolve] empty branch name for ${entry.prUrl}`);
                   return { kind: 'escalated' };
