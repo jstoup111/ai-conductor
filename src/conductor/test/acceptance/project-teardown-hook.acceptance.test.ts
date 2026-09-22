@@ -323,7 +323,7 @@ describe('project teardown hook — real removal entry points', () => {
     // fallback fixture clean and inspectable: it remains unregistered by the
     // parent repo, so `git worktree remove` still takes the directory-removal
     // fallback that this test covers.
-    await execFile('git', ['init', '-q'], { cwd: worktree });
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: worktree });
     await writeFile(join(worktree, 'witness.txt'), 'still-readable\n', 'utf8');
     await installTeardown(
       worktree,
@@ -365,7 +365,7 @@ describe('project teardown hook — real removal entry points', () => {
     const record = join(root, 'reconcile-timeout-record.txt');
     const logs: string[] = [];
     await mkdir(worktree, { recursive: true });
-    await execFile('git', ['init', '-q'], { cwd: worktree });
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: worktree });
     await installTeardown(
       worktree,
       `sleep 0.25\nprintf 'completed-after-timeout\\n' >> ${JSON.stringify(record)}`,

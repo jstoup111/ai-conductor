@@ -221,9 +221,14 @@ function fakeGh(handler: (args: string[]) => string | Promise<string>): GhRunner
 
 /** `gh` fake that reports one merged implementation PR for `feature/<slug>`. */
 function ghWithMergedPr(slug: string, prUrl: string): GhRunner {
-  return fakeGh((args) => {
+  return fakeGh(async (args) => {
     if (args[0] === 'pr' && args[1] === 'list') {
-      return JSON.stringify([{ number: 1060, url: prUrl, headRefName: `feature/${slug}` }]);
+      return JSON.stringify([{
+        number: 1060,
+        url: prUrl,
+        headRefName: `feature/${slug}`,
+        headRefOid: await git(['rev-parse', `feature/${slug}`]),
+      }]);
     }
     return '[]';
   });
@@ -247,6 +252,7 @@ async function initRepo(): Promise<void> {
   await git(['config', 'gc.auto', '0']);
   await git(['remote', 'add', 'origin', originDir]);
   await writeFile(join(projectRoot, 'README.md'), 'init\n');
+  await writeFile(join(projectRoot, '.gitignore'), '.pipeline/\n');
   await git(['add', '-A']);
   await git(['commit', '-q', '-m', 'init']);
   await git(['push', '-q', '-u', 'origin', 'main']);
@@ -434,7 +440,12 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     // "is not a working tree" rather than a missing-path error.
     await git(['worktree', 'remove', '--force', worktree]);
     await mkdir(worktree, { recursive: true });
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: worktree });
+    await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: worktree });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: worktree });
     await writeFile(join(worktree, 'leftover.txt'), 'stale contents\n');
+    await execFile('git', ['add', '-A'], { cwd: worktree });
+    await execFile('git', ['commit', '-q', '-m', 'fixture'], { cwd: worktree });
     expect(await worktreeExists(slug)).toBe(true);
 
     const result = await sweep({
@@ -498,7 +509,7 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(await exists(join(projectRoot, '.docs', 'shipped', `${slug}.md`))).toBe(false);
   });
 
-  it('S2: ancestry proof alone reclaims a registered non-daemon branch when no merged PR is resolvable', async () => {
+  it('S2: an ancestry-proven registered non-daemon branch without a merged PR is retained', async () => {
     const slug = 'merged-no-pr-found';
     await seedParkedFeature(slug, { merged: true, record: false });
 
@@ -511,11 +522,13 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     });
 
     expect(requestRecordRepair).not.toHaveBeenCalled();
-    expect(await worktreeExists(slug)).toBe(false);
-    expect(await branchExists(slug)).toBe(false);
-    expect(await isOperatorParked(projectRoot, slug)).toBe(false);
+    expect(await worktreeExists(slug)).toBe(true);
+    expect(await branchExists(slug)).toBe(true);
+    expect(await isOperatorParked(projectRoot, slug)).toBe(true);
     expect(await exists(join(projectRoot, '.docs', 'shipped', `${slug}.md`))).toBe(false);
-    expect(result.counts.reconciled).toBe(1);
+    expect(result.counts.reconciled).toBe(0);
+    expect(result.counts.refused).toBe(1);
+    expect(result.refusedByReason).toEqual({ 'no-merge-proof': 1 });
   });
 
   it('S2 (d): a merged, record-backed park is reconciled even when its .pipeline state still reads in-flight', async () => {
@@ -866,6 +879,8 @@ describe('parked-feature reconciliation acceptance (S5/S4): the operator verb is
   it('S5/S4 negative (§3d re-verification): a branch that gained a commit AFTER classification is refused at the point of deletion — no force path', async () => {
     const slug = 'raced-branch';
     await seedParkedFeature(slug, { merged: true, record: true });
+    const mergedHead = await branchSha(slug);
+    if (!mergedHead) throw new Error('expected merged branch');
 
     // The adversarial input the real call site actually sees: the slug looked
     // merged a moment ago, and then real work landed on the branch.
@@ -880,7 +895,7 @@ describe('parked-feature reconciliation acceptance (S5/S4): the operator verb is
         cwd: projectRoot,
         out: (l) => out.push(l),
         runGit: realGit,
-        runGh: ghWithMergedPr(slug, 'https://example.test/pr/1'),
+        runGh: fakeGh(() => JSON.stringify([{ headRefOid: mergedHead }])),
       },
     );
 
@@ -889,7 +904,7 @@ describe('parked-feature reconciliation acceptance (S5/S4): the operator verb is
     expect(await branchExists(slug)).toBe(true);
     expect(await branchSha(slug)).toBe(shaAfterRace);
     expect(await isOperatorParked(projectRoot, slug)).toBe(true);
-    expect(out.join('\n')).toContain('ancestry-check-failed');
+    expect(out.join('\n')).toContain('unmerged-commits');
     expect(out.join('\n')).not.toMatch(/--force|force path/i);
   });
 
@@ -1195,7 +1210,7 @@ describe('park-reconciliation refusal observability acceptance (#1114)', () => {
     expect(printed).not.toMatch(/--force|force path/i);
   });
 
-  it('S3/S4: parked candidates preserve the empty refusal tally until the enumerated path changes it', async () => {
+  it('S3/S4: parked candidates report the new proof refusals until the enumerated path changes them', async () => {
     const noProofSlug = 'refused-no-proof';
     const aheadSlug = 'refused-ahead';
     const behindSlug = 'refused-behind';
@@ -1241,27 +1256,35 @@ describe('park-reconciliation refusal observability acceptance (#1114)', () => {
     });
 
     const first = await runSweep();
-    expect(first.counts.refused).toBe(0);
-    expect(first.refusedByReason).toEqual({});
+    expect(first.counts.refused).toBe(3);
+    expect(first.refusedByReason).toEqual({ 'no-merge-proof': 2, 'unmerged-commits': 1 });
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toContain('refused=0');
-    expect(logs[0]).not.toContain('refusals:');
+    expect(logs[0]).toContain('refused=3');
+    expect(logs[0]).toContain('refusals:');
 
     reportBehindPr = true;
     const second = await runSweep();
-    expect(second.counts.refused).toBe(0);
-    expect(second.refusedByReason).toEqual({});
-    expect(logs).toHaveLength(1);
+    expect(second.counts.refused).toBe(3);
+    expect(second.refusedByReason).toEqual({
+      'branch-behind-merged-head': 1,
+      'no-merge-proof': 1,
+      'unmerged-commits': 1,
+    });
+    expect(logs).toHaveLength(2);
 
     await runSweep();
-    expect(logs).toHaveLength(1);
+    expect(logs).toHaveLength(2);
 
     await rm(join(projectRoot, '.daemon', 'parked', behindSlug));
     const enumerated = await runSweep();
-    expect(enumerated.counts.refused).toBe(1);
-    expect(enumerated.refusedByReason).toEqual({ 'branch-behind-merged-head': 1 });
-    expect(logs).toHaveLength(2);
-    expect(logs[1]).toMatch(/branch-behind-merged-head\D+1/);
+    expect(enumerated.counts.refused).toBe(3);
+    expect(enumerated.refusedByReason).toEqual({
+      'branch-behind-merged-head': 1,
+      'no-merge-proof': 1,
+      'unmerged-commits': 1,
+    });
+    expect(logs).toHaveLength(3);
+    expect(logs[2]).toMatch(/branch-behind-merged-head\D+1/);
     expect(cache.has(behindSlug)).toBe(false);
   });
 });
