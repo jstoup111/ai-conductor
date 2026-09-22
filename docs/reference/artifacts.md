@@ -702,12 +702,12 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` defines **109 variants** across **108** event types (`self_host_containment_verdict`
+`ConductorEvent` defines **110 variants** across **109** event types (`self_host_containment_verdict`
 declares two variants — `contained: true`/`contained: false` — under one type). `EventPersister`
-subscribes to the **96** event types marked `persist: true` in `event-sinks.ts` and writes only
+subscribes to the **97** event types marked `persist: true` in `event-sinks.ts` and writes only
 those:
 
-`land_gate_rejected`, `contained_live_checkout_drift`, `self_host_containment_verdict`, `containment_check_unresolved`,
+`land_gate_rejected`, `contained_live_checkout_drift`, `self_host_containment_verdict`, `self_host_boundary_fingerprint`, `containment_check_unresolved`,
 `operator_rewind`,
 `setup_repair`, `project_setup`,
 `build_review_rubric_started`, `build_review_rubric_prompt`, `build_review_rubric_result`, `build_review_rubric_skipped`,
@@ -743,6 +743,11 @@ change once a dispatch is proven contained, and the verdict event records whethe
 succeeded for each completed self-host dispatch. Both render to the terminal and daemon log and
 persist to this file; see [`live_containment`](configuration.md#harness_self_host) and the
 [live-boundary runbook](../runbooks/stalled-or-stuck-feature.md#live-boundary-violation-self-host-only).
+
+`self_host_boundary_fingerprint` records the live-boundary fingerprint cost before each self-host
+provider candidate starts: one `elapsedMs` and `fileCount` measurement for `live checkout` and one
+for `provider state`. It renders those measurements to the terminal and daemon log and persists to
+this file; it does not change the boundary's exclusions or enforcement behavior.
 
 `land_gate_rejected` records a failed `engineer land` attempt with its closed gate identifier,
 bounded reason, project, worktree path, and optional source reference. The command writes it to the
