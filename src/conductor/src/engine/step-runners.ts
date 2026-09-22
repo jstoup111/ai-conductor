@@ -3209,7 +3209,7 @@ export class DefaultStepRunner implements StepRunner {
         `Return only the provider payload shape below: ${payloadInstruction[branch.rubric]} The engine stamps the judged envelope identity afterward. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
         ...(branch.rubric === 'testQuality'
           ? [
-              'For each testScope.evidence record, re-read its region at the pinned ref instead of the mutable working tree: use `git show <mergeBase>:<path>` for a base-side region or `git show <headSha>:<path>` for a head-side region, select `startLine` through `endLine`, and verify the bytes against `contentHash`. A hash-mismatched or unreadable region is not judged; return its fallback candidate as `indeterminate` with a non-empty `missingEvidenceReason`.',
+              'For each testScope.evidence record, re-read its region at the pinned ref instead of the mutable working tree: use `git show <mergeBase>:<path>` for a base-side region or `git show <headSha>:<path>` for a head-side region, select `startLine` through `endLine`, and confirm the declared test there carries the title the record\'s `display` names. `contentHash` is sha256 of that whitespace-normalized title, never of the region bytes; do not hash the bytes. A hash-mismatched (title-mismatched) or unreadable region is not judged; return its fallback candidate as `indeterminate` with a non-empty `missingEvidenceReason`.',
               `Candidate-resolution authority (use only these ids, regions, and obligations):\n${JSON.stringify(buildReviewCandidateScopeResolutionContext(projection))}`,
             ]
           : []),

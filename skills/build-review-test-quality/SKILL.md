@@ -41,8 +41,10 @@ and its referenced content.
 
 For every `testScope.evidence` region you inspect, re-read its exact `startLine` through `endLine`
 at the pinned ref for its `source` side: `mergeBase` for base regions and `headSha` for head regions.
-Verify the bytes hash to `contentHash` before judging. A hash-mismatched or unreadable region is not
-judged: return its fallback candidate as `indeterminate` with a non-empty `missingEvidenceReason`.
+`contentHash` is sha256 of the whitespace-normalized declared test title (the record's `display`),
+never of the region bytes: confirm the declared test at those lines carries that title, and do not
+hash the bytes. A hash-mismatched (title-mismatched) or unreadable region is not judged: return its
+fallback candidate as `indeterminate` with a non-empty `missingEvidenceReason`.
 Your own read never becomes authoritative. The engine rejects a finding anchored to a `contentHash`
 that is absent from the projected evidence and candidates.
 
