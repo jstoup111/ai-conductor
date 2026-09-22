@@ -1659,7 +1659,9 @@ async function advanceFinishPublicationUnreconciled(
   if (preflight.kind === 'blocked') {
     await emitPublicationEvent(input.emit, {
       type: 'finish_publication_blocked',
-      condition: preflight.condition.code,
+      condition: 'steps' in preflight.condition && preflight.condition.steps !== undefined
+        ? { code: preflight.condition.code, steps: preflight.condition.steps }
+        : preflight.condition.code,
     });
     if (preflight.condition.code === 'implementation_evidence_invalid') {
       return {
