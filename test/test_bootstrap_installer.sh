@@ -72,7 +72,16 @@ done
 
 FRESH_INSTALL_PATH="$TMP_ROOT/prerequisites-fresh-install"
 mkdir -p "$FRESH_INSTALL_PATH"
-ln -s "$(command -v git)" "$FRESH_INSTALL_PATH/git"
+# The git stand-in snapshots the case's stdout the moment `git clone` starts so a
+# case can prove what was announced before acquisition began (no timestamps).
+cat > "$FRESH_INSTALL_PATH/git" <<EOF
+#!/bin/sh
+if [ "\$1" = clone ] && [ -n "\${CLONE_START_STDOUT-}" ]; then
+  /bin/cat "\$CASE_STDOUT_PATH" > "\$CLONE_START_STDOUT"
+fi
+exec '$(command -v git)' "\$@"
+EOF
+chmod +x "$FRESH_INSTALL_PATH/git"
 for tool in mkdir mv rm rmdir; do
   ln -s "$(command -v "$tool")" "$FRESH_INSTALL_PATH/$tool"
 done
@@ -150,8 +159,10 @@ run_case() {
   local case_home=${CASE_HOME_OVERRIDE:-"$TMP_ROOT/home-$name"}
   local case_stdout="$TMP_ROOT/$name.stdout"
   local case_stderr="$TMP_ROOT/$name.stderr"
+  local clone_start_stdout="$TMP_ROOT/$name.clone-start-stdout"
   mkdir -p "$case_home"
   : > "$RECORD"
+  rm -f "$clone_start_stdout"
 
   set +e
   local channel_env=()
@@ -159,13 +170,16 @@ run_case() {
     channel_env=("AI_CONDUCTOR_CHANNEL=$CASE_CHANNEL")
   fi
   env -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_CREDENTIAL_HELPER -u AI_CONDUCTOR_CHANNEL \
-    "${channel_env[@]}" HOME="$case_home" PATH="${CASE_PATH-$PATH}" REAL_GIT="$(command -v git)" AI_CONDUCTOR_REPO_URL="${CASE_REPO_URL-$SOURCE_REPO}" INSTALLER_RECORD="$RECORD" INSTALLER_EXIT_CODE="${INSTALLER_EXIT_CODE-0}" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
+    "${channel_env[@]}" HOME="$case_home" PATH="${CASE_PATH-$PATH}" REAL_GIT="$(command -v git)" AI_CONDUCTOR_REPO_URL="${CASE_REPO_URL-$SOURCE_REPO}" INSTALLER_RECORD="$RECORD" INSTALLER_EXIT_CODE="${INSTALLER_EXIT_CODE-0}" CASE_STDOUT_PATH="$case_stdout" CLONE_START_STDOUT="$clone_start_stdout" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
   CASE_STATUS=$?
   set -e
   CASE_STDOUT=$(< "$case_stdout")
   CASE_STDERR=$(< "$case_stderr")
   CASE_OUTPUT="$CASE_STDOUT$CASE_STDERR"
   CASE_HOME=$case_home
+  # Stdout as it stood when the first `git clone` began (fresh-install PATH only).
+  CASE_CLONE_START_STDOUT=''
+  [ ! -e "$clone_start_stdout" ] || CASE_CLONE_START_STDOUT=$(< "$clone_start_stdout")
 }
 
 assert_untouched() {
@@ -328,12 +342,13 @@ CASE_PATH="$FRESH_INSTALL_PATH" run_case fresh-install
 FRESH_TARGET="$CASE_HOME/.ai-conductor/harness"
 if [ "$CASE_STATUS" -eq 0 ] \
   && [ -d "$FRESH_TARGET/.git" ] \
-  && grep -Fq "Installing ai-conductor in $FRESH_TARGET" <<< "$CASE_STDOUT" \
-  && grep -Fq 'channel stable' <<< "$CASE_STDOUT" \
+  && grep -Fq "Installing ai-conductor in $FRESH_TARGET" <<< "$CASE_CLONE_START_STDOUT" \
+  && grep -Fq 'channel stable' <<< "$CASE_CLONE_START_STDOUT" \
+  && [ "$(head -n 1 <<< "$CASE_STDOUT")" = "$(head -n 1 <<< "$CASE_CLONE_START_STDOUT")" ] \
   && grep -Fq "$FRESH_TARGET|./bin/install||" "$RECORD"; then
-  echo 'PASS fresh bootstrap clones locally and runs the installer from the harness'
+  echo 'PASS fresh bootstrap announces before the first clone and runs the installer from the harness'
 else
-  failures+="fresh install did not clone, announce, and hand off: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
+  failures+="fresh install did not announce before cloning and hand off: $CASE_OUTPUT\\nstdout at clone start: $CASE_CLONE_START_STDOUT\\nrecord: $(< "$RECORD")\\n"
 fi
 
 INSTALLER_EXIT_CODE=23 CASE_PATH="$FRESH_INSTALL_PATH" run_case installer-status
