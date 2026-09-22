@@ -34,10 +34,13 @@ import {
   type PrProseAuthoringRequest,
   type PrProseJudgmentRequest,
   type PrProseJudgmentResult,
+  type ReleaseReadinessObservation,
 } from './finish-publication.js';
 import { createShipDraftPublicationDependencies } from './ship-draft-pr.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import { executeRemoteGit } from './remote-git-operations.js';
+import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisites.js';
+import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
 import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
 import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
@@ -87,7 +90,7 @@ export interface ProductionFinishPublicationDeps {
   /** Release readiness is owned by the release gate; this is observation only. */
   observeReleaseReadiness?: (
     state: ConductState,
-  ) => Promise<'present' | 'missing' | 'stale' | 'malformed' | 'unavailable'>;
+  ) => Promise<ReleaseReadinessObservation>;
   /** Interactive intent comes from the host conversation, never finish-record output. */
   acquireInteractiveIntent?: () => Promise<unknown>;
   /**
@@ -199,24 +202,24 @@ function upsertReducedCoverageEvidence(body: string, section: string | undefined
  */
 export function createProductionReleaseReadinessObserver(
   input: ProductionReleaseReadinessObserverInput,
-): (state: ConductState) => Promise<'present' | 'missing' | 'stale' | 'malformed' | 'unavailable'> {
-  const releaseStep = input.config?.steps?.['release-disposition'];
-  if (releaseStep === undefined) return async () => 'present';
-
-  const completionArtifact = releaseStep.completion_artifact;
-  if (completionArtifact === undefined) return async () => 'malformed';
-  const artifactPath = join(input.projectRoot, completionArtifact);
+): (state: ConductState) => Promise<ReleaseReadinessObservation> {
+  const config = input.config ?? {};
+  const steps = selectFinishPrerequisiteSteps(config, buildStepRegistry(config));
+  if (steps.length === 0) return async () => ({ observation: 'present', steps: [] });
 
   return async (state) => {
-    if ((state as Record<string, unknown>)['release-disposition'] !== 'done') return 'missing';
-    if (!Number.isFinite(state.run_started_at)) return 'unavailable';
-    try {
-      const artifact = await lstat(artifactPath);
-      if (!artifact.isFile()) return 'malformed';
-      return artifact.mtimeMs < state.run_started_at! ? 'stale' : 'present';
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unavailable';
+    for (const step of steps) {
+      if ((state as Record<string, unknown>)[step] !== 'done') return { observation: 'missing', steps: [] };
+      if (!Number.isFinite(state.run_started_at)) return { observation: 'unavailable', steps: [] };
+      try {
+        const artifact = await lstat(join(input.projectRoot, config.steps![step]!.completion_artifact!));
+        if (!artifact.isFile()) return { observation: 'malformed', steps: [] };
+        if (artifact.mtimeMs < state.run_started_at!) return { observation: 'stale', steps: [] };
+      } catch (error) {
+        return { observation: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unavailable', steps: [] };
+      }
     }
+    return { observation: 'present', steps: [] };
   };
 }
 
