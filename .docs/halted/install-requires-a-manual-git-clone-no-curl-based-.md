@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-22T00:47:00.286Z
+Status: halted
 Slug: install-requires-a-manual-git-clone-no-curl-based-
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-install-requires-a-manual-git-clone-no-curl-based-
-Head SHA: 32db5023a8d500f21876c8c3b9c3ff8b3a256237
-Halted at: 2026-09-22T00:44:51.779Z
+Head SHA: 96e8dee5c59528bb96dce597294ba4f72c936b9d
+Halted at: 2026-09-22T01:05:51.518Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: semantic remediation case regression f120f704-d1fa-4250-b07d-f45d9d6fabea
+build_review adjudication halted: remediate judgement failed
 ```
