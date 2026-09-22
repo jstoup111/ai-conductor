@@ -7,6 +7,7 @@ import {
   createRepairObligationStore,
   type RepairAdmission,
 } from '../../src/engine/repair-obligations.js';
+import type { EngineState, EngineStateStore } from '../../src/engine/engine-state-store.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -150,5 +151,109 @@ describe('repair obligations', () => {
       expect(Object.keys(state.repairObligations.records)).toEqual(['round-1', 'round-2', 'round-other-plan']);
       return true;
     });
+  });
+
+  it('rewrites only named baseline heads and preserves every other engine-state byte', async () => {
+    const { projectRoot, statePath } = await createStatePath();
+    const repairs = createRepairObligationStore(projectRoot, statePath);
+    const first = await repairs.admitOrReplay('key-round-1', admission({
+      baseline: { head: 'old-head', tree: 'tree-1', resolvedTaskIds: ['1'], resolvedCount: 1 },
+    }));
+    const second = await repairs.admitOrReplay('key-round-2', admission({
+      id: 'round-2',
+      taskIds: ['4'],
+      baseline: { head: 'other-head', tree: 'tree-2', resolvedTaskIds: ['2'], resolvedCount: 1 },
+    }));
+    if (!first.ok || !second.ok) throw new Error('expected seeded obligations');
+    await repairs.close({
+      planPath: '.docs/plans/current.md',
+      taskId: '4',
+      obligationId: second.obligation.id,
+      evidence: { kind: 'task-done', value: 'evidence-2' },
+    });
+
+    const beforeText = await readFile(statePath, 'utf8');
+    const before = JSON.parse(beforeText);
+    await expect(repairs.rewriteBaselines(new Map([['round-1', 'new-head']]))).resolves.toEqual({
+      ok: true,
+      value: { rewritten: ['round-1'] },
+    });
+    const afterText = await readFile(statePath, 'utf8');
+    const after = JSON.parse(afterText);
+
+    expect(after).toEqual({
+      ...before,
+      repairObligations: {
+        ...before.repairObligations,
+        records: {
+          ...before.repairObligations.records,
+          'round-1': {
+            ...before.repairObligations.records['round-1'],
+            baseline: { ...before.repairObligations.records['round-1'].baseline, head: 'new-head' },
+          },
+        },
+      },
+    });
+    expect(after.repairObligations.records['round-1'].baseline).toEqual({
+      ...before.repairObligations.records['round-1'].baseline,
+      head: 'new-head',
+    });
+    expect(after.repairObligations.records['round-1'].settlement).toEqual(before.repairObligations.records['round-1'].settlement);
+    expect(after.repairObligations.records['round-1'].tasks).toEqual(before.repairObligations.records['round-1'].tasks);
+    expect(after.repairObligations.records['round-2']).toEqual(before.repairObligations.records['round-2']);
+    expect(afterText).toBe(beforeText.replace('"old-head"', '"new-head"'));
+  });
+
+  it('uses the injected engine-state store update seam exactly once', async () => {
+    const current: EngineState = {
+      activePlanPath: '.docs/plans/current.md',
+      repairObligations: {
+        version: 1,
+        records: {
+          'round-1': {
+            id: 'round-1', planIdentity: '.docs/plans/current.md', taskIds: ['2'],
+            source: { findingId: 'finding-1', authority: 'build_review', instruction: 'Repair.' },
+            baseline: { head: 'old-head', tree: 'tree-1', resolvedTaskIds: [] },
+            settlement: 'unsettled', tasks: { '2': { status: 'open' } },
+          },
+        },
+        currentByPlan: { '.docs/plans/current.md': { '2': 'round-1' } },
+        admissionsByPlan: {},
+      },
+    };
+    let updates = 0;
+    const store: EngineStateStore = {
+      read: async () => ({ ok: true, value: structuredClone(current) }),
+      update: async (mutator) => {
+        updates += 1;
+        Object.assign(current, await mutator(current));
+        return { ok: true };
+      },
+    };
+    const repairs = createRepairObligationStore('/project', '/project/.pipeline/engine-state.json', store);
+
+    await expect(repairs.rewriteBaselines(new Map())).resolves.toEqual({
+      ok: true,
+      value: { rewritten: [] },
+    });
+    expect(updates).toBe(0);
+    await expect(repairs.rewriteBaselines(new Map([['round-1', 'new-head']]))).resolves.toEqual({
+      ok: true,
+      value: { rewritten: ['round-1'] },
+    });
+    expect(updates).toBe(1);
+    expect((current.repairObligations as { records: Record<string, { baseline: { head: string } }> })
+      .records['round-1'].baseline.head).toBe('new-head');
+  });
+
+  it('does not create missing engine state for baseline translations', async () => {
+    const { projectRoot, statePath } = await createStatePath();
+    const repairs = createRepairObligationStore(projectRoot, statePath);
+
+    await expect(repairs.rewriteBaselines(new Map([['round-1', 'new-head']]))).resolves.toEqual({
+      ok: true,
+      value: { rewritten: [] },
+    });
+    await expect(readFile(statePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
