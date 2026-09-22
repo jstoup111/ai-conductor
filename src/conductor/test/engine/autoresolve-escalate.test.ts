@@ -50,7 +50,7 @@ function fakeGh(
           args = ['api', '--method', 'POST', `repos/${repo}/issues/${number}/labels`, '-f', `labels[]=${request.payload!.label}`];
           break;
         case 'pull-request.comment.create':
-          if (request.target.kind !== 'pull-request' || !request.payload || !('body' in request.payload)) throw new Error('invalid comment creation request');
+          if (request.target.kind !== 'pull-request' || !request.payload || !('body' in request.payload) || typeof request.payload.body !== 'string') throw new Error('invalid comment creation request');
           args = ['pr', 'comment', String(request.target.number), '--repo', repo, '--body', request.payload!.body];
           break;
         case 'pull-request.comment.update':

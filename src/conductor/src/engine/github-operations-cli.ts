@@ -224,7 +224,12 @@ export async function dispatchGithubOperationCommand(
   const runner = input.runner ?? createGuardedGithubOperationRunner(gh, {
     cwd: input.cwd,
     ...(featureMutation.kind === 'resolved' ? { mutation: featureMutation.mutation } : {}),
-    intake: createGithubIntakeAuthorization({ gh, cwd: input.cwd, confirmation: input.confirmation }),
+    intake: createGithubIntakeAuthorization({
+      gh,
+      cwd: input.cwd,
+      confirmation: input.confirmation,
+      ...(input.resolveMachineOwner === undefined ? {} : { resolveActor: input.resolveMachineOwner }),
+    }),
     events: input.events,
   });
   const result = await executeGithubOperation(

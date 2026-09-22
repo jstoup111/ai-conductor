@@ -104,7 +104,7 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
           if (request.target.kind !== 'pull-request' || !request.payload || !('label' in request.payload)) throw new Error('invalid label addition request');
           labelCalls.push(['api', '--method', 'POST', `repos/${request.target.repository}/issues/${request.target.number}/labels`, '-f', `labels[]=${request.payload!.label}`]);
         } else if (request.operation === 'pull-request.comment.create') {
-          if (!request.payload || !('body' in request.payload)) throw new Error('invalid comment creation request');
+          if (!request.payload || !('body' in request.payload) || typeof request.payload.body !== 'string') throw new Error('invalid comment creation request');
           commentBodies.push(request.payload!.body);
         }
         return {};
