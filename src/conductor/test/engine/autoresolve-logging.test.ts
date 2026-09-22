@@ -63,7 +63,7 @@ const baseEntry: WatchEntry = {
 
 const permittedRemoteGit: typeof executeRemoteGit = async (args, dependencies) => {
   try {
-    await dependencies.runRemoteGit([...args]);
+    await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd });
     return { kind: 'executed', targets: [] };
   } catch (error) {
     return { kind: 'failed', error: error instanceof Error ? error.message : String(error), targets: [] };

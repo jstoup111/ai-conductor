@@ -260,10 +260,11 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
               pullRequest = { ...pullRequest, isDraft: false };
             }
             if (request.operation === 'pull-request.edit' && request.payload) {
+              const payload = request.payload;
               pullRequest = {
                 ...pullRequest,
-                ...(typeof request.payload.title === 'string' ? { title: request.payload.title } : {}),
-                ...(typeof request.payload.body === 'string' ? { body: request.payload.body } : {}),
+                ...('title' in payload && typeof payload.title === 'string' ? { title: payload.title } : {}),
+                ...('body' in payload && typeof payload.body === 'string' ? { body: payload.body } : {}),
               };
             }
             return {};

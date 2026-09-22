@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Writable } from 'node:stream';
 
 import { EventPersister } from '../../../src/engine/event-persister.js';
-import { executeGithubOperation } from '../../../src/engine/github-operations.js';
+import { executeGithubOperation, type GithubOperationTarget } from '../../../src/engine/github-operations.js';
 import { executeRemoteGit } from '../../../src/engine/remote-git-operations.js';
 import { createGuardedGithubOperationRunner, type GhRunner } from '../../../src/engine/tracker-client.js';
 import { createLiveRegion } from '../../../src/ui/live-region.js';
@@ -27,7 +27,7 @@ class CaptureStream extends Writable {
   }
 }
 
-function foreignOwnerContext(target = { repository: 'acme/owned', kind: 'issue' as const, number: 17 }) {
+function foreignOwnerContext(target: GithubOperationTarget = { repository: 'acme/owned', kind: 'issue', number: 17 }) {
   return {
     provenance: {
       repository: 'acme/owned',

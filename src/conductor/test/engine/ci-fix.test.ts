@@ -28,7 +28,7 @@ import { join } from 'node:path';
 import type { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 
 const permittedRemoteGit: typeof executeRemoteGit = async (args, dependencies) => {
-  await dependencies.runRemoteGit([...args]);
+  await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd });
   return { kind: 'executed', targets: [] };
 };
 

@@ -48,7 +48,7 @@ const ATTEMPT_CAP = 3;
 // remotes use a fixture-owned permitted transport.
 const permittedRemoteGit: typeof executeRemoteGit = async (args, dependencies) => {
   try {
-    await dependencies.runRemoteGit([...args]);
+    await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd });
     return { kind: 'executed', targets: [] };
   } catch (error) {
     return { kind: 'failed', error: error instanceof Error ? error.message : String(error), targets: [] };
@@ -98,10 +98,13 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     return Object.assign(gh, {
       run: async (request: GithubOperationRequest) => {
         if (request.operation === 'pull-request.label.remove') {
+          if (request.target.kind !== 'pull-request' || !request.payload || !('label' in request.payload)) throw new Error('invalid label removal request');
           labelCalls.push(['api', '--method', 'DELETE', `repos/${request.target.repository}/issues/${request.target.number}/labels/${request.payload!.label}`]);
         } else if (request.operation === 'pull-request.label.add') {
+          if (request.target.kind !== 'pull-request' || !request.payload || !('label' in request.payload)) throw new Error('invalid label addition request');
           labelCalls.push(['api', '--method', 'POST', `repos/${request.target.repository}/issues/${request.target.number}/labels`, '-f', `labels[]=${request.payload!.label}`]);
         } else if (request.operation === 'pull-request.comment.create') {
+          if (!request.payload || !('body' in request.payload)) throw new Error('invalid comment creation request');
           commentBodies.push(request.payload!.body);
         }
         return {};

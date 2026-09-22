@@ -42,15 +42,19 @@ function fakeGh(
       let args: string[];
       switch (request.operation) {
         case 'pull-request.label.remove':
+          if (request.target.kind !== 'pull-request' || !request.payload || !('label' in request.payload)) throw new Error('invalid label removal request');
           args = ['api', '--method', 'DELETE', `repos/${repo}/issues/${number}/labels/${request.payload!.label}`];
           break;
         case 'pull-request.label.add':
+          if (request.target.kind !== 'pull-request' || !request.payload || !('label' in request.payload)) throw new Error('invalid label addition request');
           args = ['api', '--method', 'POST', `repos/${repo}/issues/${number}/labels`, '-f', `labels[]=${request.payload!.label}`];
           break;
         case 'pull-request.comment.create':
+          if (request.target.kind !== 'pull-request' || !request.payload || !('body' in request.payload)) throw new Error('invalid comment creation request');
           args = ['pr', 'comment', String(request.target.number), '--repo', repo, '--body', request.payload!.body];
           break;
         case 'pull-request.comment.update':
+          if (!request.payload || !('commentId' in request.payload) || !('body' in request.payload)) throw new Error('invalid comment update request');
           args = ['api', '--method', 'PATCH', `repos/${repo}/issues/comments/${request.payload!.commentId}`, '-f', `body=${request.payload!.body}`];
           break;
         default:
@@ -60,7 +64,7 @@ function fakeGh(
         await gh(args, { cwd: '/repo' });
         return {};
       } catch (error) {
-        return { kind: 'failed', error: error instanceof Error ? error.message : String(error) };
+        throw error;
       }
     },
   };
