@@ -1173,6 +1173,16 @@ export async function resolveConflictingPr(
     // A comment or subscriber failure is observability-only and cannot undo a
     // successfully lease-protected publication.
     if (resolutionVerdict) {
+      // Persist the durable verdict before attempting the best-effort PR
+      // comment. A GitHub comment failure must not hide the published
+      // resolution from event-spine consumers.
+      await deps.events?.emit({
+        type: 'rebase_supersession_verdict',
+        choice: resolutionVerdict.choice,
+        rationale: resolutionVerdict.rationale,
+        superseded: resolutionVerdict.superseded,
+        verification: { command: config.suiteCommand, exitCode: 0 },
+      });
       try {
         await postSupersessionAudit(guardedPrRunner(deps.runGh, operations), repoCwd, prUrl, {
           ...resolutionVerdict,
@@ -1181,13 +1191,6 @@ export async function resolveConflictingPr(
       } catch (err) {
         log(`${prUrl}: supersession audit comment failed: ${err instanceof Error ? err.message : String(err)}`);
       }
-      await deps.events?.emit({
-        type: 'rebase_supersession_verdict',
-        choice: resolutionVerdict.choice,
-        rationale: resolutionVerdict.rationale,
-        superseded: resolutionVerdict.superseded,
-        verification: { command: config.suiteCommand, exitCode: 0 },
-      });
     }
 
     // Success
