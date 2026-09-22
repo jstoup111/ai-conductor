@@ -33,5 +33,5 @@ jobs:
       - uses: actions/github-script@v9
         with:
           script: |
-            const { runReleaseMetadataCheckAction } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/index.js`);
+            const { runReleaseMetadataCheckAction } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/engine/self-host/release-actions.js`);
             await runReleaseMetadataCheckAction({ github, context, core });
