@@ -2774,6 +2774,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         ? `self-host containment verified: ${event.evidence}`
         : `self-host containment unavailable: ${event.reason}`)}`);
       break;
+    case 'self_host_boundary_fingerprint':
+      log(`${dot} ${chalk.dim(`self-host boundary fingerprint: ${event.surfaces.map((surface) => `${surface.label} ${surface.elapsedMs}ms/${surface.fileCount} files`).join('; ')}`)}`);
+      break;
     case 'self_host_dispatch_admission':
       log(`${dot} ${event.step} self-host dispatch ${event.state}${event.state === 'queued' ? ' — waiting for root-mutation admission' : ''}`);
       break;
