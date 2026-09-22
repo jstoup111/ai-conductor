@@ -43,6 +43,19 @@ describe('github-boundary-audit command', () => {
     expect(errors.join('\n')).toContain('direct injected GitHub read outside guarded adapter');
   });
 
+  it('refuses a literal gh read through a promisified child-process alias', async () => {
+    const root = await fixtureRoot([
+      "import { execFile as execFileCb } from 'child_process';",
+      "import { promisify } from 'util';",
+      'const execFile = promisify(execFileCb);',
+      "export const merged = (url: string) => execFile('gh', ['pr', 'view', url, '--json', 'state']);",
+    ].join('\n'));
+    const errors: string[] = [];
+    expect(dispatchGithubBoundaryAudit({ root }, { stdout: () => {}, stderr: (line) => errors.push(line) })).toBe(1);
+    expect(errors.join('\n')).toContain('engine/site.ts:4:');
+    expect(errors.join('\n')).toContain('direct GitHub read outside guarded adapter');
+  });
+
   it('exits zero and reports the audited file count for a clean runtime', async () => {
     const root = await fixtureRoot('export const value = 1;\n');
     const lines: string[] = [];
