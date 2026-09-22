@@ -214,6 +214,57 @@ describe('remediation case reconciler', () => {
     }] } });
   });
 
+  describe('deferral after an applied action', () => {
+    const DEFER_AFTER_ACT = {
+      caseRef: 'defer-case-1', existingCaseId: 'case-1', disposition: 'defer', priority: 'medium',
+      rationale: 'The repair was applied and the finding is back; the remaining fix contradicts the approved plan.',
+      confidence: 'medium',
+      effect: { kind: 'deferral', title: 'Follow up outside this plan', body: 'The real fix exceeds the Done-when.', exclusionRationale: 'The approved task prescribes the flagged design.' },
+    } as const;
+    const deferGraph = graph(DEFER_AFTER_ACT, [{ sourceId: 'testQuality:finding-1', outcome: 'deferred', caseRef: 'defer-case-1' }]);
+
+    it.each([
+      ['an open applied action', durableAction()],
+      ['a resolved applied action whose finding regressed', durableAction({ resolution: 'resolved' })],
+    ])('admits %s as a reserved deferral on the same case', async (_label, existing) => {
+      const projectRoot = await createProjectRoot();
+      const store = new RemediationCaseStore(projectRoot, FEATURE);
+      await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [existing] } }));
+
+      const result = await reconcileRemediationCases(store, {
+        graph: deferGraph,
+        recordedAt: '2026-08-30T13:00:00.000Z',
+        generateId: generatedIds('deferral-effect-1'),
+        attemptedCaseIds: [],
+      });
+
+      expect(result).toMatchObject({ ok: true, state: { cases: [{
+        id: 'case-1', disposition: 'defer', resolution: 'open', priority: 'medium', confidence: 'medium',
+        effect: { id: 'deferral-effect-1', kind: 'deferral', status: 'reserved' },
+        sources: [{ sourceId: 'testQuality:finding-1', outcome: 'deferred', recordedAt: '2026-08-30T13:00:00.000Z' }],
+      }] } });
+      expect(result.ok && result.state.cases[0]).not.toHaveProperty('refutation');
+      expect(result.ok && classifyRemediationCaseReuse(result.state.cases[0]!, new Set(['case-1']))).toBe('reuse');
+    });
+
+    it('still refuses a deferral when the action was never applied', async () => {
+      const projectRoot = await createProjectRoot();
+      const store = new RemediationCaseStore(projectRoot, FEATURE);
+      await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [
+        durableAction({ effect: { id: 'effect-1', kind: 'action', status: 'reserved' } }),
+      ] } }));
+
+      const result = await reconcileRemediationCases(store, {
+        graph: deferGraph,
+        recordedAt: '2026-08-30T13:00:00.000Z',
+        generateId: () => 'must-not-be-used',
+        attemptedCaseIds: [],
+      });
+
+      expect(result).toEqual({ ok: false, reason: 'illegal-disposition-transition' });
+    });
+  });
+
   it('rewrites an attempted action source in place when its exact id is refuted', async () => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);

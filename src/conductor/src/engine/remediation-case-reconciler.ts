@@ -200,8 +200,17 @@ function reconcileState(
       && attemptedIds.has(existing.id)
       && existing.effect.kind === 'action'
       && existing.effect.status === 'applied';
+    // An applied action whose finding comes back may be conclusively deferred:
+    // the repair was tried, and the judge has found the remaining fix outside
+    // the approved plan. Without this lane the only transitions off an applied
+    // action are refutation or another action, and a legitimate follow-up
+    // halted the feature as an illegal transition.
+    const admitsDeferral = caseRow.disposition === 'defer'
+      && existing.disposition === 'act'
+      && existing.effect.kind === 'action'
+      && existing.effect.status === 'applied';
     if (caseRow.disposition === 'refute' && existing.refutation) return { ok: false, reason: 'refutation-repeat' };
-    if (existing.disposition !== caseRow.disposition && !admitsRefutation) return { ok: false, reason: 'illegal-disposition-transition' };
+    if (existing.disposition !== caseRow.disposition && !admitsRefutation && !admitsDeferral) return { ok: false, reason: 'illegal-disposition-transition' };
     referencedExisting.add(existingCaseId);
     claimed.add(existingCaseId);
     caseIdsByRef.set(caseRow.caseRef, existingCaseId);
@@ -214,9 +223,10 @@ function reconcileState(
         // lap. Preserve the source identity while changing its durable
         // outcome; adding a second link would violate the store's unique
         // source-id invariant.
-        if (admitsRefutation && historical.outcome === 'acted' && source.outcome === 'refuted') {
+        if ((admitsRefutation && historical.outcome === 'acted' && source.outcome === 'refuted')
+          || (admitsDeferral && historical.outcome === 'acted' && source.outcome === 'deferred')) {
           appendedSources = appendedSources.map((link) => link.sourceId === source.sourceId
-            ? { ...link, outcome: 'refuted', recordedAt: input.recordedAt }
+            ? { ...link, outcome: source.outcome, recordedAt: input.recordedAt }
             : link);
           continue;
         }
@@ -238,6 +248,22 @@ function reconcileState(
         sources: appendedSources,
         effect: caseRow.effect.kind === 'none' ? { kind: 'none' } : { id: effectId!, kind: 'deferral', status: 'reserved' },
         refutation: caseRow.refutation!,
+      });
+    } else if (admitsDeferral) {
+      const effectId = takeId(input.generateId, usedIds);
+      if (effectId === 'id-generation-failed' || effectId === 'id-collision') return { ok: false, reason: effectId };
+      // The deferral effect is reserved like a fresh deferral's: the effect
+      // stage files the follow-up and settles the case, so the row reopens
+      // until that lands instead of claiming a filed issue it does not have.
+      replacements.set(existingCaseId, {
+        ...existing,
+        disposition: 'defer',
+        priority: caseRow.priority,
+        rationale: caseRow.rationale,
+        confidence: caseRow.confidence,
+        resolution: 'open',
+        sources: appendedSources,
+        effect: { id: effectId, kind: 'deferral', status: 'reserved' },
       });
     } else if (appendedSources.length !== existing.sources.length) {
       replacements.set(existingCaseId, { ...existing, sources: appendedSources });
