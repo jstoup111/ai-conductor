@@ -1002,6 +1002,8 @@ export async function resolveConflictingPr(
     remoteGit?: typeof executeRemoteGit;
     /** Existing event spine for remote-Git refusal and supersession telemetry. */
     events?: ConductorEventEmitter;
+    /** Injectable preservation guard boundary for resolution-flow tests. */
+    runAcceptanceGuards?: typeof runAcceptanceGuards;
   },
 ): Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' }> {
   const { prUrl, slug, repoCwd } = entry;
@@ -1173,9 +1175,10 @@ export async function resolveConflictingPr(
     }
 
     // Work-preservation guards: verify the rebase succeeded correctly.
+    const acceptanceGuards = deps.runAcceptanceGuards ?? runAcceptanceGuards;
     const guardsResult = resolutionVerdict === undefined
-      ? await runAcceptanceGuards(git, baseRef, subjectsBefore)
-      : await runAcceptanceGuards(git, baseRef, subjectsBefore, [...declaredSuperseded]);
+      ? await acceptanceGuards(git, baseRef, subjectsBefore)
+      : await acceptanceGuards(git, baseRef, subjectsBefore, [...declaredSuperseded]);
     if (!guardsResult.ok) {
       const reason = `${guardsResult.guard}: ${guardsResult.reason}`;
       log(`${prUrl}: acceptance guard failed: ${reason}`);

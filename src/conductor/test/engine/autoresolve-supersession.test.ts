@@ -5,7 +5,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 
-import { emitExcusedRebaseCitationResidue, resolveConflictingPr } from '../../src/engine/autoresolve.js';
+import {
+  emitExcusedRebaseCitationResidue,
+  resolveConflictingPr,
+  runAcceptanceGuards,
+} from '../../src/engine/autoresolve.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import type { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -88,9 +92,16 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
   });
 
   it.each([
-    { choice: 'superseded' as const, rationale: 'upstream already contains the resolved content' },
-    { choice: 'merged' as const, rationale: 'the strict resolver merged both edits' },
-  ])('ignores a schema-valid $choice verdict on a strict-path resolution', async ({ choice, rationale }) => {
+    { mode: 'strict', choice: 'superseded' as const, rationale: 'upstream already contains the resolved content', path: 'app.ts', guardArgumentCount: 3 },
+    { mode: 'strict', choice: 'merged' as const, rationale: 'the strict resolver merged both edits', path: 'app.ts', guardArgumentCount: 3 },
+    { mode: 'judgement', choice: 'source' as const, rationale: 'the test-only resolver retained the source edit', path: 'app.test.ts', guardArgumentCount: 4 },
+  ])('$mode resolution handles a schema-valid $choice verdict with the correct guard mode', async ({
+    mode,
+    choice,
+    rationale,
+    path,
+    guardArgumentCount,
+  }) => {
     const repo = await mkdtemp(join(tmpdir(), 'autoresolve-strict-verdict-'));
     const git = (args: string[]) => execFile('git', args, { cwd: repo });
     const prUrl = 'https://github.com/example/repo/pull/43';
@@ -102,17 +113,17 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
       await git(['config', 'user.email', 't@example.test']);
       await git(['config', 'user.name', 'Test']);
       await git(['remote', 'add', 'origin', remote]);
-      await writeFile(join(repo, 'app.ts'), 'initial\n');
+      await writeFile(join(repo, path), 'initial\n');
       await git(['add', '.']);
       await git(['commit', '-q', '-m', 'init']);
 
       await git(['checkout', '-q', '-b', 'feature']);
-      await writeFile(join(repo, 'app.ts'), 'feature change\n');
-      await git(['commit', '-q', '-am', 'feat: feature change']);
+      await writeFile(join(repo, path), 'feature change\n');
+      await git(['commit', '-q', '-am', `feat: feature ${mode} change`]);
 
       await git(['checkout', '-q', 'main']);
-      await writeFile(join(repo, 'app.ts'), 'main change\n');
-      await git(['commit', '-q', '-am', 'main: conflicting change']);
+      await writeFile(join(repo, path), 'main change\n');
+      await git(['commit', '-q', '-am', `main: conflicting ${mode} change`]);
       await git(['push', '-q', 'origin', 'main', 'feature']);
 
       const ghCalls: string[][] = [];
@@ -126,6 +137,7 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
       };
       const emitted: unknown[] = [];
       const logs: string[] = [];
+      const guardCalls: Parameters<typeof runAcceptanceGuards>[] = [];
       const outcome = await resolveConflictingPr(
         { prUrl, slug: `feature-${choice}`, repoCwd: repo },
         'feature',
@@ -134,22 +146,34 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
           runGh: gh,
           runSuite: async () => ({ exitCode: 0, durationMs: 0, configured: true }),
           resolver: async ({ projectRoot }) => {
-            await writeFile(join(projectRoot, 'app.ts'), 'resolved strict path\n');
-            await execFile('git', ['add', 'app.ts'], { cwd: projectRoot });
+            await writeFile(join(projectRoot, path), `resolved ${mode} path\n`);
+            await execFile('git', ['add', path], { cwd: projectRoot });
             await execFile('git', ['-c', 'core.editor=true', 'rebase', '--continue'], { cwd: projectRoot });
             return { resolved: true, verdict: { choice, rationale, superseded: [] } };
           },
           log: (message) => logs.push(message),
           events: { emit: async (event: Parameters<ConductorEventEmitter['emit']>[0]) => { emitted.push(event); } } as never,
+          runAcceptanceGuards: async (...args) => {
+            guardCalls.push(args);
+            return runAcceptanceGuards(...args);
+          },
         },
       );
 
       expect(outcome).toEqual({ kind: 'refreshed' });
       const reflog = await execFile('git', ['reflog', 'show', '--format=%H', 'refs/heads/feature'], { cwd: remote });
       expect(reflog.stdout.trim().split('\n')).toHaveLength(2);
-      expect(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'comment')).toBe(false);
-      expect(emitted).toEqual([]);
-      expect(logs.filter((message) => message.includes(prUrl) && message.includes('ignored'))).toHaveLength(1);
+      expect(guardCalls).toHaveLength(1);
+      expect(guardCalls[0]).toHaveLength(guardArgumentCount);
+      if (mode === 'strict') {
+        expect(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'comment')).toBe(false);
+        expect(emitted).toEqual([]);
+        expect(logs.filter((message) => message.includes(prUrl) && message.includes('ignored'))).toHaveLength(1);
+      } else {
+        // Task 18: every test-only sweep resolution enters judgement mode,
+        // even when the accepted verdict declares no superseded commits.
+        expect(guardCalls[0][3]).toEqual([]);
+      }
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
