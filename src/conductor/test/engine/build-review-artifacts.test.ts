@@ -275,7 +275,15 @@ describe('build-review current-lap branch artifacts', () => {
 
     expect(parseBuildReviewBranchArtifact(artifact)).toEqual(artifact);
     await writeBuildReviewBranchArtifact('/feature', artifact as never, fs);
-    await expect(readBuildReviewBranchArtifact('/feature', 'security' as never, 'lap-current' as never, 'sha256:snapshot', fs)).resolves.toEqual(artifact);
+    const published = await readBuildReviewBranchArtifact('/feature', 'security' as never, 'lap-current' as never, 'sha256:snapshot', fs);
+    expect(published).toEqual(artifact);
+    // Published evidence names the semantic skill and the declaration it was
+    // judged under, and evidence that drops either is not self-describing.
+    expect(published).toMatchObject({ descriptor: { semanticSkill: 'security-review', declaration: customDescriptor.declaration } });
+    const { semanticSkill: _skill, ...withoutSemanticSkill } = customDescriptor;
+    const { declaration: _declaration, ...withoutDeclaration } = customDescriptor;
+    expect(parseBuildReviewBranchArtifact({ ...artifact, descriptor: withoutSemanticSkill })).toBeUndefined();
+    expect(parseBuildReviewBranchArtifact({ ...artifact, descriptor: withoutDeclaration })).toBeUndefined();
   });
 
   it('retains a validated declaration on a custom loading failure without inventing judged provenance', () => {

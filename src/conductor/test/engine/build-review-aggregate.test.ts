@@ -10,7 +10,7 @@ import {
   parseBuildReviewAggregate,
   projectBuildReviewAggregateSources,
 } from '../../src/engine/build-review-aggregate.js';
-import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 
 // Surviving coverage in test/engine/build-review-verdict.test.ts (gate wiring,
 // mechanical-fault lane, incomplete `results`) and test/build-review-compat.test.ts
@@ -176,6 +176,38 @@ describe('build-review raw aggregate', () => {
 
     expect(active.verdict).toBe('FAIL');
     expect(disabled).toMatchObject({ verdict: 'PASS', customResults: { security: failedCustom }, currentCustomRubrics: [] });
+  });
+
+  it('keeps a disabled rubric\'s cached findings inspectable while supplying no current blocker or repair source', () => {
+    const declaration = { version: 'v1', rubricId: 'portablePolicy', semanticSkill: 'portable-policy', question: 'Does this preserve the portable policy contract?', source: 'project', resources: [] } as const;
+    const stamp = {
+      rubric: 'portablePolicy', lapId: 'lap-current', declaration,
+      policy: { version: 'v1', bundleDigest: CUSTOM_DIGEST }, candidate: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' },
+      reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST },
+    } as const;
+    const judgedWithFinding = stampBuildReviewCustomJudgedResult({ kind: 'custom-findings', version: 'v1', findings: [{
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', evidenceLocations: ['src/widget.ts:8'],
+      sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }],
+    }] }, stamp, { sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }] })!;
+    const member = {
+      descriptor: { version: 'v1', semanticSkill: 'portable-policy', declaration, installation: { source: 'project' }, effectivePolicy: stamp.policy, reviewedInput: stamp.reviewedInput, producer: stamp.candidate },
+      result: judgedWithFinding,
+    };
+    const enabled = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest, results: { testQuality: judged() }, customResults: { portablePolicy: member }, currentCustomRubrics: ['portablePolicy'],
+    } as never);
+    const disabledLater = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest, results: { testQuality: judged() }, customResults: { portablePolicy: member }, currentCustomRubrics: [],
+    } as never);
+
+    expect(enabled.verdict).toBe('FAIL');
+    expect(projectBuildReviewAggregateSources(enabled)).toEqual([expect.objectContaining({ rubric: 'portablePolicy', concernKind: 'portable-policy-gap' })]);
+    // Disabled: the historical judged evidence is still readable in full, yet
+    // it is neither a current blocker nor a source that could seed repair work.
+    expect(disabledLater.verdict).toBe('PASS');
+    expect(disabledLater.customResults?.portablePolicy).toEqual(member);
+    expect(parseBuildReviewAggregate(disabledLater)?.customResults?.portablePolicy.result).toMatchObject({ kind: 'judged', findings: [expect.objectContaining({ concernId: 'portable-policy-gap' })] });
+    expect(projectBuildReviewAggregateSources(disabledLater)).toEqual([]);
   });
 
   it('retains judged findings while deriving a blocking scope-incomplete fault from validated indeterminacy', () => {
