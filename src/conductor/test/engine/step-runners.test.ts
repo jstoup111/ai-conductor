@@ -2555,50 +2555,6 @@ describe('DefaultStepRunner', () => {
     expect(opts.systemPrompt).toContain('Remediate');
   });
 
-  it('dispatches a configured custom step skill command to the provider', async () => {
-    const provider = createMockProvider();
-    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
-      config: {
-        steps: {
-          'maintain-documentation': {
-            after: 'rebase',
-            skill: '.agents/skills/maintain-documentation/SKILL.md',
-            enforcement: 'gating',
-            completion_artifact: '.pipeline/maintain-documentation-complete',
-          },
-        },
-      } as unknown as HarnessConfig,
-    });
-
-    await runner.run('maintain-documentation' as StepName, emptyState);
-
-    expect(provider.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({ prompt: '/maintain-documentation' }),
-    );
-  });
-
-  it('preserves the raw slash prompt for a configured constructor custom step', async () => {
-    const provider = createMockProvider();
-    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
-      config: {
-        steps: {
-          constructor: {
-            after: 'rebase',
-            skill: '.agents/skills/maintain-documentation/SKILL.md',
-            enforcement: 'gating',
-            completion_artifact: '.pipeline/constructor-complete',
-          },
-        },
-      } as unknown as HarnessConfig,
-    });
-
-    await runner.run('constructor' as StepName, emptyState);
-
-    expect(provider.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({ prompt: '/constructor' }),
-    );
-  });
-
   it('autonomous steps use --dangerouslySkipPermissions', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');

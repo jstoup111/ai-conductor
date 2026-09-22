@@ -1876,6 +1876,7 @@ export class DefaultStepRunner implements StepRunner {
         '',
         true,
         true,
+        undefined,
         'free-form',
       );
       return;
