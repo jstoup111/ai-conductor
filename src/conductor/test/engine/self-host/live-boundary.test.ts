@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -9,6 +10,35 @@ import { fingerprintLiveBoundary, verifyLiveBoundary } from '../../../src/engine
 const execFileAsync = promisify(execFile);
 
 describe('live self-host boundary', () => {
+  it('reports per-surface fingerprint measurements without counting excluded files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-measurements-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([
+      mkdir(join(live, 'nested'), { recursive: true }),
+      mkdir(join(live, 'node_modules'), { recursive: true }),
+      mkdir(join(live, '.git'), { recursive: true }),
+      mkdir(provider),
+    ]);
+    await Promise.all([
+      writeFile(join(live, 'first.txt'), 'first'),
+      writeFile(join(live, 'nested', 'second.txt'), 'second'),
+      writeFile(join(live, 'node_modules', 'ignored.txt'), 'ignored'),
+      writeFile(join(live, '.git', 'ignored.txt'), 'ignored'),
+      writeFile(join(provider, 'state.json'), 'state'),
+    ]);
+    try {
+      const snapshot = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+      expect(snapshot.measurements).toEqual([
+        expect.objectContaining({ label: 'live checkout', fileCount: 2 }),
+        expect.objectContaining({ label: 'provider state', fileCount: 1 }),
+      ]);
+      for (const measurement of snapshot.measurements) {
+        expect(measurement.elapsedMs).toSatisfy(Number.isInteger);
+        expect(measurement.elapsedMs).toBeGreaterThanOrEqual(0);
+      }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('accepts a non-contained verdict when the live boundary has not changed', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-non-contained-clean-'));
     const live = join(root, 'live'); const provider = join(root, 'provider');
