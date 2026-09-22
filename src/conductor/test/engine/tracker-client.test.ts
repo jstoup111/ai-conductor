@@ -129,7 +129,7 @@ describe('createGithubTrackerClient.readPullRequestMergeState', () => {
 
     expect(calls).toEqual([[
       'pr', 'view', 'https://github.com/acme/widget/pull/7',
-      '--json', 'state,mergeable,statusCheckRollup,labels,isDraft',
+      '--json', 'state,mergeable,statusCheckRollup,labels,isDraft,body',
     ]]);
     expect(state).toMatchObject({ state: 'UNKNOWN', readFailure: { kind: 'runner' } });
   });

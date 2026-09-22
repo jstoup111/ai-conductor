@@ -81,7 +81,7 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
 
     const autoresolve = await import('../../src/engine/autoresolve.js');
     const result = await autoresolve.runAcceptanceGuards(git, 'main', ['feat: change a']);
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, excused: [] });
   });
 
   it('rejects a resolution that --skip-dropped the feature commit, naming featureCommitsPreserved (FR-9 negative)', async () => {
