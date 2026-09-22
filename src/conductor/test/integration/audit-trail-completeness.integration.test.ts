@@ -187,6 +187,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   rebase_gate_invalidated: 'not-audited-by-design',
   rebase_conflict_halt: 'not-audited-by-design',
   rebase_untracked_quarantined: 'not-audited-by-design',
+  repair_boundary_translated: 'not-audited-by-design',
   rebase_citation_residue: 'not-audited-by-design',
   rebase_resolution_attempt: 'not-audited-by-design',
   rebase_resolution_succeeded: 'not-audited-by-design',
@@ -648,6 +649,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     type: 'rebase_untracked_quarantined',
     paths: ['generated.txt'],
     directory: '.pipeline/rebase-untracked-quarantine',
+  },
+  repair_boundary_translated: {
+    type: 'repair_boundary_translated',
+    obligationId: 'repair-1',
+    from: 'pre-rebase-sha',
+    to: 'post-rebase-sha',
+    rule: 'direct',
+    projectRoot: '/workspace/project',
   },
   rebase_citation_residue: {
     type: 'rebase_citation_residue',
