@@ -18,6 +18,7 @@ import {
   classifyGateInvalidation,
   classifyReplayGateInvalidation,
   GATE_SURFACE,
+  isTestPath,
   isReviewDocumentPath,
   projectGateSurfaces,
 } from './gate-invalidation.js';
@@ -1227,7 +1228,9 @@ export interface FeatureCommitPreservationFailure {
   subject: string;
   sha?: string;
   cause: Extract<SupersessionVerdict, { kind: 'rejected' }>['cause']
-    | 'could not resolve pre-rebase commit';
+    | 'could not resolve pre-rebase commit'
+    | 'could not inspect declared superseded commit'
+    | 'declared superseded commit touches a non-test path';
   path: string | null;
 }
 
@@ -1409,13 +1412,22 @@ export async function featureCommitsPreserved(
     if (declaredSuperseded.includes(sha)) {
       const paths = await git(['show', '--format=', '--name-only', sha]);
       const changed = paths.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
-      const testOnly = paths.exitCode === 0 && changed.length > 0 && changed.every(
-        (path) => /(^|\/)(test|tests)\/|\.(test|spec)\.[^/]+$/.test(path),
-      );
+      const testOnly = paths.exitCode === 0 && changed.length > 0 && changed.every(isTestPath);
       if (testOnly) {
         excused.push({ sha, subject });
         continue;
       }
+      // A declaration is a test-only exception. Never let an invalid
+      // declaration fall through to the generic supersession heuristic.
+      rejected.push({
+        subject,
+        sha,
+        cause: paths.exitCode !== 0
+          ? 'could not inspect declared superseded commit'
+          : 'declared superseded commit touches a non-test path',
+        path: changed.find((path) => !isTestPath(path)) ?? null,
+      });
+      continue;
     }
     const supersession = await supersededByBase(git, sha);
     if (supersession.kind === 'rejected') {
@@ -1514,6 +1526,9 @@ async function resolveRebaseConflictsInner(
     conflictOutcome.kind === 'conflict_halt'
       ? conflictOutcome.conflicts
       : await conflictedFiles(git);
+  // A rebase can need several resolver calls. Keep every declaration made by
+  // a successful call so the terminal FR-9 check sees the whole judgement.
+  const declaredSuperseded = new Set<string>();
 
   for (let attempt = 1; attempt <= cap; attempt++) {
     // Refresh the conflicted-file list each attempt: a multi-patch rebase can
@@ -1522,6 +1537,7 @@ async function resolveRebaseConflictsInner(
     const attemptConflicts = await conflictedFiles(git);
     const ctxConflicts = attemptConflicts.length > 0 ? attemptConflicts : conflicts;
     const result = await resolver({ conflicts: ctxConflicts, projectRoot, baseRef: onto, supersessionJudgement: opts?.supersessionJudgement === true });
+    for (const sha of result.verdict?.superseded ?? []) declaredSuperseded.add(sha);
 
     if (!result.resolved) {
       if (result.providerSetupExhaustion) {
@@ -1561,7 +1577,7 @@ async function resolveRebaseConflictsInner(
     }
 
     // FR-9: every pre-rebase feature commit subject must still be present.
-    const preserved = await featureCommitsPreserved(git, onto, subjectsBefore);
+    const preserved = await featureCommitsPreserved(git, onto, subjectsBefore, [...declaredSuperseded]);
     if (preserved.kind === 'rejected') {
       return {
         kind: 'conflict_halt',

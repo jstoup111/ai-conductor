@@ -17,8 +17,10 @@ import {
   removeLabel,
   addLabel,
   upsertComment,
+  postSupersessionAudit,
   NEEDS_REMEDIATION_MARKER,
 } from './pr-labels.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 import {
   resolveRebaseConflicts,
   type RebaseOutcome,
@@ -970,8 +972,8 @@ export async function resolveConflictingPr(
     operations?: GithubOperationRunner;
     /** Test seam for local-Git lease behavior; production uses the guarded adapter. */
     remoteGit?: typeof executeRemoteGit;
-    /** Existing event spine for remote-Git refusal telemetry. */
-    events?: GithubOperationEventEmitter;
+    /** Existing event spine for remote-Git refusal and supersession telemetry. */
+    events?: ConductorEventEmitter;
   },
 ): Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' }> {
   const { prUrl, slug, repoCwd } = entry;
@@ -1082,7 +1084,9 @@ export async function resolveConflictingPr(
 
     }
 
-    if (conflictScope === 'test-only') {
+    // A resolver verdict is a closed-schema claim regardless of scope. Mixed
+    // conflicts may only carry a valid empty-supersession verdict.
+    if (resolutionVerdict !== undefined) {
       const checked = validateResolutionVerdict(resolutionVerdict, { scope: conflictScope, replayedShas });
       if (!checked.ok) {
         await escalate(prUrl, 'tier2-verdict', checked.reason, {
@@ -1112,6 +1116,17 @@ export async function resolveConflictingPr(
       });
       logOutcome(log, prUrl, 'acceptance-guards', 'escalated');
       return { kind: 'escalated' };
+    }
+
+    if (guardsResult.excused.length > 0) {
+      await deps.events?.emit({
+        type: 'rebase_citation_residue',
+        residue: guardsResult.excused.map(({ sha }) => ({
+          sha,
+          citingTaskIds: [],
+          reason: 'declared-superseded',
+        })),
+      });
     }
 
     // Suite gate: full test suite must pass
@@ -1153,6 +1168,26 @@ export async function resolveConflictingPr(
     if (!publishResult.published) {
       // Lease push failed — already escalated by publishResolution
       return { kind: 'escalated' };
+    }
+
+    // A comment or subscriber failure is observability-only and cannot undo a
+    // successfully lease-protected publication.
+    if (resolutionVerdict) {
+      try {
+        await postSupersessionAudit(guardedPrRunner(deps.runGh, operations), repoCwd, prUrl, {
+          ...resolutionVerdict,
+          suiteCommand: config.suiteCommand,
+        }, log);
+      } catch (err) {
+        log(`${prUrl}: supersession audit comment failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      await deps.events?.emit({
+        type: 'rebase_supersession_verdict',
+        choice: resolutionVerdict.choice,
+        rationale: resolutionVerdict.rationale,
+        superseded: resolutionVerdict.superseded,
+        verification: { command: config.suiteCommand, exitCode: 0 },
+      });
     }
 
     // Success

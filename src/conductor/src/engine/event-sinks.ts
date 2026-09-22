@@ -153,6 +153,7 @@ export const EVENT_SINKS = {
   rebase_untracked_quarantined: { render: false, persist: true, audit: false, otel: false },
   repair_boundary_translated: { render: false, persist: true, audit: false, otel: false },
   rebase_citation_residue: { render: false, persist: false, audit: false, otel: false },
+  rebase_supersession_verdict: { render: false, persist: true, audit: false, otel: false },
   rebase_resolution_attempt: { render: false, persist: false, audit: false, otel: false },
   rebase_resolution_succeeded: { render: false, persist: false, audit: false, otel: false },
   rebase_resolution_failed: { render: false, persist: false, audit: false, otel: false },

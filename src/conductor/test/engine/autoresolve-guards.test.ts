@@ -111,6 +111,21 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
     if (!result.ok) expect(result.reason).not.toContain('feat: retained sibling');
   });
 
+  it('refuses a declared runtime-path drop instead of falling through to supersession-by-base', async () => {
+    const git: GitRunner = makeGitRunner(repo);
+    const sha = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await g(['rebase', 'main']).catch(() => undefined);
+    await gc(['rebase', '--skip']);
+
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    const result = await autoresolve.runAcceptanceGuards(git, 'main', ['feat: change a'], [sha]);
+    expect(result).toMatchObject({
+      ok: false,
+      guard: 'featureCommitsPreserved',
+      reason: expect.stringContaining('declared superseded commit touches a non-test path'),
+    });
+  });
+
   it('rejects when the base advanced again mid-resolution, naming isBranchCurrent (FR-8 negative)', async () => {
     const git: GitRunner = makeGitRunner(repo);
     await g(['rebase', 'main']).catch(() => undefined);

@@ -858,6 +858,27 @@ export async function upsertComment(
   return await comment(runGh, cwd, prUrl, taggedBody, log);
 }
 
+/** Marker for the single, updatable successful supersession audit comment. */
+export const SUPERSESSION_AUDIT_MARKER = '<!-- ai-conductor:supersession-audit -->';
+
+/** Best-effort publication record; an audit failure never undoes a push. */
+export async function postSupersessionAudit(
+  runGh: PrRunner,
+  cwd: string,
+  prUrl: string,
+  audit: { choice: string; rationale: string; superseded: string[]; suiteCommand: string },
+  log?: (msg: string) => void,
+): Promise<void> {
+  await upsertComment(runGh, cwd, prUrl, SUPERSESSION_AUDIT_MARKER, [
+    '## Supersession audit',
+    '',
+    `**Choice:** ${audit.choice}`,
+    `**Rationale:** ${audit.rationale}`,
+    `**Superseded commits:** ${audit.superseded.length ? audit.superseded.join(', ') : '(none)'}`,
+    `**Verification:** \`${audit.suiteCommand}\` (exit 0)`,
+  ].join('\n'), log);
+}
+
 /**
  * Post a comment on an issue (as opposed to a PR — see {@link comment}).
  * `issueUrl` must be a `github.com/.../issues/N` URL. Swallows all errors.
