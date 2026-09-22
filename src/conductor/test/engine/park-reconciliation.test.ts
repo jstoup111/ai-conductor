@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, expect, it, vi } from 'vitest';
 import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -56,6 +57,8 @@ interface GitWorld {
   registeredWorktrees?: readonly string[];
   /** `git worktree list --porcelain` itself fails. */
   worktreeListUnavailable?: boolean;
+  /** Output of `git status --porcelain` for the candidate worktree. */
+  statusPorcelain?: string;
   /** Assertion seam for ordering a real project teardown before git removal. */
   onWorktreeRemove?: () => void | Promise<void>;
 }
@@ -116,6 +119,7 @@ function makeGit(world: GitWorld = {}): {
       if (merged.includes(ref)) return { stdout: '' };
       throw gitFailure(1, 'not an ancestor');
     }
+    if (verb === 'status') return { stdout: world.statusPorcelain ?? '' };
     if (verb === 'branch') {
       events.push('branch-deleted');
       deleteArgv.push([...args]);
@@ -263,6 +267,51 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       });
     },
   );
+
+  it.each([
+    { name: 'a modified tracked path', porcelain: ' M tracked.ts\n', file: 'tracked.ts', dirty: true },
+    { name: 'an untracked path', porcelain: '?? untracked.txt\n', file: 'untracked.txt', dirty: true },
+    { name: 'an empty porcelain result for a worktree clean apart from ignored output', porcelain: '', file: 'ignored.log', dirty: false },
+  ])('checks porcelain before reclaiming $name', async ({ porcelain, file, dirty }) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'porcelain-guard';
+    const branch = `hotfix/${slug}`;
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run, deleted } = makeGit({
+      branches: [branch],
+      merged: [branch],
+      statusPorcelain: porcelain,
+    });
+    try {
+      await mkdir(worktree, { recursive: true });
+      await writeFile(join(worktree, file), 'retained content\n');
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run });
+      const destructiveCalls = run.mock.calls
+        .map(([args]) => args)
+        .filter((args) => (args[0] === 'worktree' && args[1] === 'remove') || (args[0] === 'branch' && args[1] === '-D'));
+
+      expect({
+        outcome,
+        statusCalls: run.mock.calls.filter(([args]) => args[0] === 'status'),
+        destructiveCalls,
+        worktreeRemains: await access(worktree).then(() => true, () => false),
+        fileRemains: await readFile(join(worktree, file), 'utf-8').then(() => true, () => false),
+        branchRemains: !deleted.includes(branch),
+      }).toEqual({
+        outcome: dirty
+          ? { slug, steps: [], refusal: 'dirty-worktree' }
+          : { slug, steps: ['worktree-removed', 'branch-deleted'] },
+        statusCalls: [[['status', '--porcelain'], { cwd: worktree }]],
+        destructiveCalls: dirty ? [] : [['worktree', 'remove', '--force', worktree], ['branch', '-D', branch]],
+        worktreeRemains: true,
+        fileRemains: true,
+        branchRemains: dirty,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
 
   it('refuses an injected in-flight feature before any reconciliation action', async () => {
     const slug = 'active-feature';

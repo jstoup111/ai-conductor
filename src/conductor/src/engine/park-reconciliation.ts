@@ -78,6 +78,7 @@ export type RefusalReason =
   | 'unmerged-commits'
   | 'branch-behind-merged-head'
   | 'record-missing'
+  | 'dirty-worktree'
   | 'worktree-remove-failed'
   | 'branch-delete-failed'
   | 'unpark-failed';
@@ -536,6 +537,7 @@ export async function reconcileParkedFeatures(
     'unmerged-commits': 0,
     'branch-behind-merged-head': 0,
     'record-missing': 0,
+    'dirty-worktree': 0,
     'worktree-remove-failed': 0,
     'branch-delete-failed': 0,
     'unpark-failed': 0,
@@ -915,7 +917,6 @@ export async function reconcileMergedPark(
 
   const steps: string[] = [];
   const worktreePath = join(opts.projectRoot, '.worktrees', opts.slug);
-  opts.disposeHaltWatcher?.(opts.slug);
 
   let worktreeOnDisk = true;
   try {
@@ -926,6 +927,15 @@ export async function reconcileMergedPark(
     }
     worktreeOnDisk = false;
   }
+
+  if (worktreeOnDisk) {
+    const { stdout } = await runGit(['status', '--porcelain'], { cwd: worktreePath });
+    if (stdout.length > 0) {
+      return { slug: opts.slug, steps, refusal: 'dirty-worktree' };
+    }
+  }
+
+  opts.disposeHaltWatcher?.(opts.slug);
 
   if (worktreeOnDisk) {
     const configResult = await loadConfig(opts.projectRoot);
