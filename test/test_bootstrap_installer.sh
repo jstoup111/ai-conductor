@@ -300,7 +300,7 @@ assert_untouched missing-pyyaml
 MISSING_SOURCE="$TMP_ROOT/missing-source"
 CASE_REPO_URL="$MISSING_SOURCE" CASE_PATH="$FRESH_INSTALL_PATH" run_case missing-source
 if [ "$CASE_STATUS" -ne 0 ] \
-  && grep -Fq "could not acquire ai-conductor from $MISSING_SOURCE" <<< "$CASE_STDERR"; then
+  && grep -Fqx "error: could not acquire ai-conductor from $MISSING_SOURCE" <<< "$CASE_STDERR"; then
   echo 'PASS unreachable source fails by name'
 else
   failures+="unreachable source did not fail naming its URL: $CASE_OUTPUT\\n"
@@ -309,7 +309,7 @@ assert_acquisition_clean missing-source
 
 CASE_PATH="$INTERRUPTED_CLONE_PATH" run_case interrupted-clone
 if [ "$CASE_STATUS" -ne 0 ] \
-  && grep -Fq "could not acquire ai-conductor from $SOURCE_REPO" <<< "$CASE_STDERR"; then
+  && grep -Fqx "error: could not acquire ai-conductor from $SOURCE_REPO" <<< "$CASE_STDERR"; then
   echo 'PASS interrupted clone exits non-zero naming its URL'
 else
   failures+="interrupted clone did not fail naming its URL: $CASE_OUTPUT\\n"
@@ -408,7 +408,7 @@ fi
 
 CASE_REPO_URL="$NO_SEMVER_REPO" CASE_PATH="$FRESH_INSTALL_PATH" run_case tagged-without-semver --channel tagged
 if [ "$CASE_STATUS" -ne 0 ] \
-  && grep -Fq "no vX.Y.Z release tag found at $NO_SEMVER_REPO" <<< "$CASE_STDERR"; then
+  && grep -Fqx "error: no vX.Y.Z release tag found at $NO_SEMVER_REPO" <<< "$CASE_STDERR"; then
   echo 'PASS tagged channel without a semver release tag refuses before acquisition'
 else
   failures+="tagged channel without a semver release tag did not fail cleanly: $CASE_OUTPUT\\n"
@@ -492,7 +492,7 @@ printf 'keep one\n' > "$PLAIN_TARGET/one"
 printf 'keep two\n' > "$PLAIN_TARGET/two"
 plain_before=$(find "$PLAIN_TARGET" -type f -exec cksum {} + | sort)
 CASE_HOME_OVERRIDE="$PLAIN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case plain-target
-if [ "$CASE_STATUS" -ne 0 ] && grep -Fq "$PLAIN_TARGET" <<< "$CASE_STDERR" \
+if [ "$CASE_STATUS" -ne 0 ] && grep -Fqx "error: refusing to replace existing directory $PLAIN_TARGET" <<< "$CASE_STDERR" \
   && [ "$(find "$PLAIN_TARGET" -type f -exec cksum {} + | sort)" = "$plain_before" ]; then
   echo 'PASS plain target directory is refused untouched'
 else
@@ -507,8 +507,7 @@ git -C "$FOREIGN_TARGET" remote set-url origin https://example.invalid/not-ai-co
 foreign_head=$(git -C "$FOREIGN_TARGET" rev-parse HEAD)
 foreign_before=$(find "$FOREIGN_TARGET" -type f -exec cksum {} + | sort)
 CASE_HOME_OVERRIDE="$FOREIGN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case foreign-target
-if [ "$CASE_STATUS" -ne 0 ] && grep -Fq "$FOREIGN_TARGET" <<< "$CASE_STDERR" \
-  && grep -Fq 'https://example.invalid/not-ai-conductor.git' <<< "$CASE_STDERR" \
+if [ "$CASE_STATUS" -ne 0 ] && grep -Fqx "error: refusing to use $FOREIGN_TARGET with unexpected origin https://example.invalid/not-ai-conductor.git" <<< "$CASE_STDERR" \
   && [ "$(git -C "$FOREIGN_TARGET" rev-parse HEAD)" = "$foreign_head" ] \
   && [ "$(find "$FOREIGN_TARGET" -type f -exec cksum {} + | sort)" = "$foreign_before" ]; then
   echo 'PASS foreign checkout is refused untouched'
@@ -545,7 +544,7 @@ fi
 LOCK_HOME="$TMP_ROOT/home-held-lock"
 mkdir -p "$LOCK_HOME/.ai-conductor/harness.lock"
 CASE_HOME_OVERRIDE="$LOCK_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case held-lock
-if [ "$CASE_STATUS" -ne 0 ] && grep -Fq "$LOCK_HOME/.ai-conductor/harness.lock" <<< "$CASE_STDERR" \
+if [ "$CASE_STATUS" -ne 0 ] && grep -Fqx "error: another install is in progress at $LOCK_HOME/.ai-conductor/harness.lock" <<< "$CASE_STDERR" \
   && [ -d "$LOCK_HOME/.ai-conductor/harness.lock" ] && [ ! -e "$LOCK_HOME/.ai-conductor/harness" ]; then
   echo 'PASS a foreign acquisition lock is never removed'
 else
