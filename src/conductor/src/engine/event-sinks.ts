@@ -32,10 +32,12 @@ export const EVENT_SINKS = {
   self_host_containment_verdict: { render: true, persist: true, audit: false, otel: false },
   self_host_dispatch_admission: { render: true, persist: true, audit: false, otel: false },
   build_review_rubric_started: { render: true, persist: true, audit: false, otel: false },
+  build_review_policy_resolved: { render: true, persist: true, audit: true, otel: false },
+  build_review_policy_failed: { render: true, persist: true, audit: true, otel: false },
   build_review_rubric_prompt: { render: false, persist: true, audit: false, otel: false },
   build_review_rubric_result: { render: true, persist: true, audit: false, otel: false },
   build_review_rubric_skipped: { render: true, persist: true, audit: false, otel: false },
-  build_review_cache_hit: { render: true, persist: true, audit: false, otel: false },
+  build_review_cache_hit: { render: true, persist: true, audit: true, otel: false },
   build_review_scope_summary: { render: false, persist: true, audit: false, otel: false },
   // adr-2026-08-21 D5: discards are attributable in the daemon log, the
   // ledger, and the audit trail by rubric and cause.

@@ -1025,6 +1025,34 @@ describe('Task 9: execution-correlated spans', () => {
     const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'build')!;
     expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(2_000);
   });
+
+  it('treats small injected event-clock values as epoch timestamps', async () => {
+    let now = 1_000;
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      pipelineDir,
+    );
+    const vis = new OtelVisualizer(resolved, {
+      runId: 'small-event-clock', feature: 'test-feature', project: 'test-project',
+      spanExporter, now: () => now,
+    });
+    const execution = {
+      executionId: 'small-event-clock',
+      subject: { kind: 'lifecycle-step' as const, step: 'build' as StepName },
+    };
+
+    vis.start(emitter);
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+    now = 1_025;
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: execution });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'build')!;
+    expect(span.startTime[0] * 1_000 + Math.floor(span.startTime[1] / 1_000_000)).toBe(1_000);
+    expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(1_025);
+    expect(span.duration[0] * 1_000 + Math.floor(span.duration[1] / 1_000_000)).toBe(25);
+  });
 });
 
 describe('Task 10: truthful refusal span closure', () => {

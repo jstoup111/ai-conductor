@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:17
+// Covers: task:1, task:3, task:12, task:17
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
@@ -42,6 +42,7 @@ import { projectBuildReviewAggregateSources } from '../../src/engine/build-revie
 import { scopedRunFailure } from '../../src/engine/build-review-test-quality-preflight.js';
 import type { BuildReviewScopedLauncher } from '../../src/engine/build-review-scoped-run.js';
 import { renderBuildReviewUnresolvedSkillRemedy } from '../../src/engine/build-review-domain.js';
+import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -101,6 +102,118 @@ function coverageBindingBatchOutput(options: InvokeOptions, verdict: 'asserts' |
 }
 
 describe('DefaultStepRunner', () => {
+  it('settles every shared source member after a custom-only early exit', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-materialization-settlement-'));
+    const settle = vi.fn(async (_memberId: string) => {});
+    const source = {
+      identity: {
+        snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
+        mergeBase: 'a'.repeat(40), headSha: 'b'.repeat(40),
+      },
+      baselinePath: join(projectDir, 'baseline'),
+      headPath: join(projectDir, 'head'),
+    };
+    const runner = new DefaultStepRunner(createMockProvider(), 'materialization-settlement', projectDir, {
+      buildReviewEffectiveResolver: async () => ({
+        ok: true,
+        feature: { version: 'v1', repository: projectDir, feature: 'materialization-settlement' },
+        effective: {
+          rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+          skippedRubrics: ['testQuality'], infrastructureFailureRubrics: ['portable'],
+          uncoveredInfrastructureFailureRubrics: ['portable'], uncoveredScopeIncompleteRubrics: [],
+        },
+      }) as never,
+    });
+    const config = resolveBuildReviewConfig({
+      llm_provider: 'claude',
+      build_review: {
+        enabled: true,
+        rubrics: { testQuality: { enabled: false } },
+        custom_rubrics: {
+          portable: { enabled: true, skill: 'portable-policy', question: 'Check the frozen input.', llm_provider: 'claude' },
+          portableTwo: { enabled: true, skill: 'portable-two-policy', question: 'Check the frozen input again.', llm_provider: 'claude' },
+        },
+      },
+    } as HarnessConfig, CLAUDE_POLICY);
+    expect(config.catalog).toHaveLength(2);
+    const inputs = {
+      sourceSnapshot: {
+        digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main',
+        mergeBase: 'a'.repeat(40), headSha: 'b'.repeat(40), diff: '', planBody: '', repairContext: [],
+        removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [],
+      },
+      sourceMaterialization: {
+        source,
+        contextFor: (memberId: string) => ({ memberId, source }),
+        settle,
+      },
+    } as never;
+
+    try {
+      await (runner as unknown as {
+        runRubricBuildReview(value: unknown, resolved: typeof config, tier: ConductState['complexity_tier']): Promise<unknown>;
+      }).runRubricBuildReview(inputs, config, 'S');
+
+      expect(settle.mock.calls.map(([memberId]) => memberId).sort()).toEqual(
+        ['portable', 'portableTwo'],
+      );
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('withholds the custom-only aggregate, resolution, and verdict until the mechanical allowance is exhausted', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-only-allowance-'));
+    const resolver = vi.fn(async () => ({
+      ok: true,
+      feature: { version: 'v1', repository: projectDir, feature: 'custom-only-allowance' },
+      effective: {
+        rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+        skippedRubrics: ['testQuality'], infrastructureFailureRubrics: ['portable'],
+        uncoveredInfrastructureFailureRubrics: ['portable'], uncoveredScopeIncompleteRubrics: [],
+      },
+    }));
+    const runner = new DefaultStepRunner(createMockProvider(), 'custom-only-allowance', projectDir, {
+      buildReviewEffectiveResolver: resolver as never,
+    });
+    const declaration = {
+      version: 'v1' as const, rubricId: 'portable', semanticSkill: 'portable-policy',
+      question: 'Check the frozen input.', resources: [],
+    };
+    const publish = (lap: number) => (runner as unknown as {
+      publishCustomOnlyBuildReview(input: unknown): Promise<{ success: boolean; output: string; currentLapMechanicalFault?: boolean }>;
+    }).publishCustomOnlyBuildReview({
+      lapId: `lap-${lap}`,
+      inputs: { sourceSnapshot: { digest: 'sha256:snapshot' } },
+      customResults: {
+        portable: {
+          declaration,
+          result: { kind: 'infrastructure-failure', rubric: 'portable', reason: 'policy-load-failed', detail: 'catalog unavailable' },
+        },
+      },
+      currentCustomRubrics: ['portable'],
+      config: resolveBuildReviewConfig({ llm_provider: 'claude', build_review: { enabled: true } } as HarnessConfig, CLAUDE_POLICY),
+    });
+    const aggregatePath = join(projectDir, '.pipeline', 'build-review.json');
+
+    try {
+      for (const lap of [1, 2]) {
+        const belowCap = await publish(lap);
+        expect(belowCap).toMatchObject({ success: false, currentLapMechanicalFault: true });
+        expect(belowCap.output).toContain('catalog unavailable');
+        await expect(access(aggregatePath)).rejects.toThrow();
+        expect(resolver).not.toHaveBeenCalled();
+      }
+
+      const exhausted = await publish(3);
+      expect(exhausted.currentLapMechanicalFault).toBe(true);
+      expect(JSON.parse(await readFile(aggregatePath, 'utf-8'))).toMatchObject({ lapId: 'lap-3' });
+      expect(resolver).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('writes disabled coverage-binding completion evidence without invoking a provider', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-disabled-'));
     const provider = createMockProvider();
@@ -3989,6 +4102,17 @@ TIER: M`,
         } } as HarnessConfig,
         providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(providerKey, invoke)]),
         sessionStore: new ProviderSessionStore(), configuredProviders: [providerKey],
+        buildReviewPolicyCatalog: async () => [{
+          semanticName: 'build-review-security', source: 'project', installationOrigin: '/fixture/project',
+          canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
+          declaredDependencies: [], availability: 'available',
+        }],
+        buildReviewPolicyCapture: async (policy) => ({
+          policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+          manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Build review security\n') }],
+          metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+          digest: `sha256-v1:${'a'.repeat(64)}`,
+        }),
         providerAttempt: async (step, attempt) => {
           const event: ProviderAttemptEvent = { type: 'provider_attempt', step, ...attempt };
           attempts.push(event);

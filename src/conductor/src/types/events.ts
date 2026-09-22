@@ -331,6 +331,36 @@ export type ConductorEvent =
     }
   | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
   | { type: 'self_host_dispatch_admission'; step: StepName; state: 'queued' | 'admitted' | 'cancelled' }
+  /** Candidate-local installed custom policy selected for a frozen review lap. */
+  | {
+      type: 'build_review_policy_resolved';
+      rubric: string;
+      lapId: string;
+      provider: string;
+      source: 'project' | 'global' | 'plugin';
+      pluginId?: string;
+      bundleDigest: string;
+      /** Bounded identity only; captured policy bytes never enter telemetry. */
+      provenance?: {
+        readonly inputDigest: string;
+        readonly candidate: { readonly provider: string; readonly model: string; readonly effort: string };
+        readonly plugin?: { readonly id: string; readonly version?: string };
+      };
+    }
+  /** Policy discovery, compatibility, containment, or runtime refusal. */
+  | {
+      type: 'build_review_policy_failed';
+      rubric: string;
+      lapId: string;
+      provider: string;
+      stage: 'catalog' | 'capture' | 'preflight' | 'containment' | 'runtime';
+      reason: string;
+      /** The candidate/input are known even when policy content never loaded. */
+      provenance?: {
+        readonly inputDigest: string;
+        readonly candidate: { readonly provider: string; readonly model: string; readonly effort: string };
+      };
+    }
   | {
       /** The self-host dispatch was proven contained, so this concurrent drift is not a dispatch leak. */
       type: 'contained_live_checkout_drift';
@@ -354,7 +384,21 @@ export type ConductorEvent =
   | { type: 'build_review_rubric_prompt'; rubric: string; lapId: string; promptBytes: number }
   | { type: 'build_review_rubric_result'; rubric: string; lapId: string; verdict: 'PASS' | 'FAIL' }
   | { type: 'build_review_rubric_skipped'; rubric: string; lapId: string; reason: string }
-  | { type: 'build_review_cache_hit'; rubric: string; lapId: string }
+  | {
+      type: 'build_review_cache_hit';
+      rubric: string;
+      lapId: string;
+      /** Present only for a custom policy reused from prior judged evidence. */
+      customReuse?: {
+        readonly source: 'project' | 'global' | 'plugin';
+        readonly plugin?: { readonly id: string; readonly version?: string };
+        readonly bundleDigest: string;
+        readonly inputDigest: string;
+        readonly candidate: { readonly provider: string; readonly model: string; readonly effort: string };
+        readonly originalLapId: string;
+        readonly originalSnapshotDigest: string;
+      };
+    }
   /** Frozen scope assessment for one rubric lap; routine detail stays in the shared ledger. */
   | {
       type: 'build_review_scope_summary';
@@ -434,6 +478,8 @@ export type ConductorEvent =
       lapId: string;
       caseIds: readonly string[];
       effectIds: readonly string[];
+      /** Durable stop evidence, including blocked consistency verdicts. */
+      decisionStops?: readonly { readonly caseId: string; readonly owner?: 'product' | 'plan' | 'architecture'; readonly sourceIds: readonly string[]; readonly rationale: string }[];
     }
   | {
       /** A remediation judgement could not be completed and remains fail-closed. */

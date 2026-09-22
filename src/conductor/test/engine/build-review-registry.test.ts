@@ -8,7 +8,10 @@ import {
   getBuildReviewRubricDescriptor,
   isRegisteredRubric,
 } from '../../src/engine/build-review-registry.js';
+import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
+import { validateConfig } from '../../src/engine/config.js';
 import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-config.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 
 describe('engine/build-review-registry', () => {
   it('registers the test-quality and security rubrics with their versioned execution descriptors', () => {
@@ -33,9 +36,26 @@ describe('engine/build-review-registry', () => {
     expect(Object.values(BUILD_REVIEW_RUBRIC_REGISTRY).every(Object.isFrozen)).toBe(true);
   });
 
-  it('recognizes registered rubrics and resolves their descriptors', () => {
+  it('recognizes only built-in rubrics; custom policy ids stay out of the registry', () => {
+    const config = resolveBuildReviewConfig({
+      build_review: {
+        custom_rubrics: {
+          kotlinPolicy: {
+            skill: 'kotlin-review',
+            question: 'Does this change preserve Kotlin API compatibility?',
+            enabled: true,
+          },
+        },
+      },
+    } as HarnessConfig);
+
     expect(isRegisteredRubric('testQuality')).toBe(true);
     expect(isRegisteredRubric('security')).toBe(true);
+    expect(isRegisteredRubric('kotlinPolicy')).toBe(false);
+    expect(config.catalog).toContainEqual(expect.objectContaining({
+      id: 'kotlinPolicy',
+      kind: 'custom',
+    }));
     expect(getBuildReviewRubricDescriptor('testQuality')).toBe(
       BUILD_REVIEW_RUBRIC_REGISTRY.testQuality,
     );
@@ -43,6 +63,18 @@ describe('engine/build-review-registry', () => {
       BUILD_REVIEW_RUBRIC_REGISTRY.security,
     );
   });
+
+  it.each(BUILD_REVIEW_RUBRIC_IDS)(
+    'reserves shipped built-in %s from custom rubric declarations',
+    (id) => {
+      expect(validateConfig({ build_review: { custom_rubrics: {
+        [id]: { skill: 'project-review', question: 'Review the change.' },
+      } } })).toMatchObject({
+        ok: false,
+        error: { message: expect.stringMatching(/reserved built-in rubric/i) },
+      });
+    },
+  );
 
   it('fingerprints resolved execution policy canonically while preserving ordered fallback semantics', () => {
     const policy: ResolvedBuildReviewRubricPolicy = {

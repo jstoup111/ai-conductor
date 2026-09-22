@@ -10,6 +10,7 @@ import {
 import type {
   RemediationCaseConfidence,
   RemediationCaseDisposition,
+  RemediationCaseEscalationOwner,
   RemediationCasePriority,
   RemediationCaseRefutation,
   RemediationCaseSourceOutcome,
@@ -60,6 +61,10 @@ export interface RemediationCaseRecord {
   readonly effect: RemediationCaseEffect;
   /** Present only for a persisted `refute` disposition; parseState enforces the pairing. */
   readonly refutation?: RemediationCaseRefutation;
+  /** Present only for a persisted decision-owner stop; it carries no external effect. */
+  readonly escalation?: { readonly owner: RemediationCaseEscalationOwner };
+  /** A blocked v2 consistency verdict, retained as the authoritative halt evidence. */
+  readonly consistencyStop?: { readonly sourceIds: readonly string[]; readonly rationale: string };
 }
 
 /** Immutable evidence captured for the finding that opened a PRD case. */
@@ -236,13 +241,13 @@ function sameFeature(left: RemediationCaseFeatureIdentity, right: RemediationCas
 function parseSourceLink(value: unknown): RemediationCaseSourceLink | undefined {
   if (!isRecord(value) || !exactKeys(value, ['sourceId', 'outcome', 'recordedAt']) ||
     !boundedString(value.sourceId, MAX_REFERENCE_LENGTH) || !validTimestamp(value.recordedAt) ||
-    !oneOf(value.outcome, ['acted', 'deferred', 'rejected', 'refuted', 'merged'] as const)) return undefined;
+    !oneOf(value.outcome, ['acted', 'deferred', 'rejected', 'refuted', 'merged', 'escalate'] as const)) return undefined;
   return { sourceId: value.sourceId, outcome: value.outcome, recordedAt: value.recordedAt };
 }
 
 function parseEffect(value: unknown, disposition: RemediationCaseDisposition): RemediationCaseEffect | undefined {
   if (!isRecord(value)) return undefined;
-  if (disposition === 'reject' || disposition === 'refute' && exactKeys(value, ['kind']) && value.kind === 'none') {
+  if (disposition === 'reject' || disposition === 'escalate' || disposition === 'refute' && exactKeys(value, ['kind']) && value.kind === 'none') {
     return exactKeys(value, ['kind']) && value.kind === 'none' ? { kind: 'none' } : undefined;
   }
   const expectedKind = disposition === 'act' ? 'action' : 'deferral';
@@ -293,11 +298,15 @@ function parseCase(value: unknown):
   if (!isRecord(value)) return { ok: false, reason: 'malformed-state' };
   const expectedKeys = value.disposition === 'refute'
     ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'refutation']
+    : value.disposition === 'escalate'
+      ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect',
+        ...(Object.hasOwn(value, 'escalation') ? ['escalation'] : []),
+        ...(Object.hasOwn(value, 'consistencyStop') ? ['consistencyStop'] : [])]
     : ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect'];
   if (!exactKeys(value, expectedKeys)) return { ok: false, reason: 'malformed-state' };
   if (value.domain !== 'build_review') return { ok: false, reason: 'foreign-domain' };
   if (!boundedString(value.id, MAX_REFERENCE_LENGTH) ||
-    !oneOf(value.disposition, ['act', 'defer', 'reject', 'refute'] as const) ||
+    !oneOf(value.disposition, ['act', 'defer', 'reject', 'refute', 'escalate'] as const) ||
     !oneOf(value.priority, ['critical', 'high', 'medium', 'low'] as const) ||
     !boundedString(value.rationale) || !oneOf(value.confidence, ['high', 'medium', 'low'] as const) ||
     !oneOf(value.resolution, ['open', 'resolved'] as const) || !Array.isArray(value.sources) ||
@@ -305,7 +314,20 @@ function parseCase(value: unknown):
   const sources = value.sources.map(parseSourceLink);
   const effect = parseEffect(value.effect, value.disposition);
   const refutation = value.disposition === 'refute' ? parseRefutation(value.refutation) : undefined;
-  if (sources.some((source) => source === undefined) || effect === undefined || value.disposition === 'refute' && refutation === undefined) return { ok: false, reason: 'malformed-state' };
+  const escalation = value.disposition === 'escalate' && isRecord(value.escalation) &&
+    exactKeys(value.escalation, ['owner']) && oneOf(value.escalation.owner, ['product', 'plan', 'architecture'] as const)
+    ? { owner: value.escalation.owner }
+    : undefined;
+  const consistencyStop = value.disposition === 'escalate' && isRecord(value.consistencyStop) &&
+    exactKeys(value.consistencyStop, ['sourceIds', 'rationale']) && Array.isArray(value.consistencyStop.sourceIds) &&
+    value.consistencyStop.sourceIds.length > 0 && value.consistencyStop.sourceIds.length <= MAX_SOURCES_PER_CASE &&
+    value.consistencyStop.sourceIds.every((sourceId) => boundedString(sourceId, MAX_REFERENCE_LENGTH)) &&
+    boundedString(value.consistencyStop.rationale)
+    ? { sourceIds: value.consistencyStop.sourceIds, rationale: value.consistencyStop.rationale }
+    : undefined;
+  if (sources.some((source) => source === undefined) || effect === undefined ||
+    value.disposition === 'refute' && refutation === undefined ||
+    value.disposition === 'escalate' && escalation === undefined && consistencyStop === undefined) return { ok: false, reason: 'malformed-state' };
   return { ok: true, record: {
     id: value.id,
     domain: 'build_review',
@@ -317,6 +339,8 @@ function parseCase(value: unknown):
     sources: sources as RemediationCaseSourceLink[],
     effect,
     ...(refutation === undefined ? {} : { refutation }),
+    ...(escalation === undefined ? {} : { escalation }),
+    ...(consistencyStop === undefined ? {} : { consistencyStop }),
   } };
 }
 

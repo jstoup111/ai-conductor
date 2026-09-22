@@ -1,10 +1,11 @@
-// Covers: task:2
+// Covers: task:2, task:30
 import { describe, expect, it } from 'vitest';
 
 import {
   validateRemediationCaseGraph,
   type RemediationCaseJudgement,
 } from '../../src/engine/remediation-case-validator.js';
+import * as buildReviewAdjudication from '../../src/engine/build-review-adjudication.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import {
   assembleBuildReviewAdjudicationContext,
@@ -80,6 +81,78 @@ const VALID_REFUTE_JUDGEMENT = {
       caseRef: 'case-refuted', existingCaseId: 'existing-case-1', disposition: 'refute', priority: 'medium',
       rationale: 'The earlier action did not address the asserted defect.', confidence: 'high', effect: { kind: 'none' },
       refutation: VALID_REFUTATION,
+    },
+  ],
+} as const satisfies RemediationCaseJudgement;
+
+const CASE_V2_ADMISSION = {
+  existingCaseIds: ['existing-case-1'],
+  admittedTaskIds: ['30'],
+} as const;
+
+function authorizedActionCaseRefs(
+  judgement: RemediationCaseJudgement,
+  validation: ReturnType<typeof validateRemediationCaseGraph>,
+): readonly string[] | undefined {
+  const authorize = (buildReviewAdjudication as unknown as {
+    authorizeBuildReviewRemediationActionEffects?: (input: {
+      readonly judgement: RemediationCaseJudgement;
+      readonly validation: ReturnType<typeof validateRemediationCaseGraph>;
+    }) => readonly string[];
+  }).authorizeBuildReviewRemediationActionEffects;
+  return authorize?.({ judgement, validation });
+}
+
+const VALID_CASE_V2_JUDGEMENT = {
+  mode: 'case-v2',
+  domain: 'build_review',
+  sourceOutcomes: [
+    { sourceId: 'testQuality:finding-1', outcome: 'acted', caseRef: 'case-a' },
+    { sourceId: 'testQuality:finding-2', outcome: 'merged', caseRef: 'case-a' },
+    { sourceId: 'testQuality:finding-3', outcome: 'rejected', caseRef: 'case-b' },
+    { sourceId: 'testQuality:finding-4', outcome: 'rejected', caseRef: 'case-c' },
+  ],
+  cases: [
+    {
+      caseRef: 'case-a', disposition: 'act', priority: 'high',
+      rationale: 'The two source rows are one consistent in-scope repair.', confidence: 'high',
+      effect: {
+        kind: 'action', route: 'build', tasks: [{
+          title: 'test/widget.test.ts — cover the changed branch',
+          admittedTaskIds: ['30'],
+          admissionRationale: 'Task 30 owns validation of the remediation case graph.',
+        }],
+      },
+    },
+    {
+      caseRef: 'case-b', disposition: 'reject', priority: 'medium',
+      rationale: 'The finding does not violate the governing rubric.', confidence: 'high', effect: { kind: 'none' },
+    },
+    {
+      caseRef: 'case-c', existingCaseId: 'existing-case-1', disposition: 'reject', priority: 'low',
+      rationale: 'This exact prior case remains correctly rejected.', confidence: 'high', effect: { kind: 'none' },
+    },
+  ],
+  consistency: {
+    verdict: 'consistent',
+    sourceIds: CURRENT_SOURCE_IDS,
+    caseRefs: ['case-a', 'case-b', 'case-c'],
+    rationale: 'Every current source has one canonical case row and the merge preserves its source.',
+  },
+} as const satisfies RemediationCaseJudgement;
+
+const VALID_CASE_V2_REFUTATION = {
+  ...VALID_CASE_V2_JUDGEMENT,
+  sourceOutcomes: [
+    ...VALID_CASE_V2_JUDGEMENT.sourceOutcomes.slice(0, 3),
+    { sourceId: 'testQuality:finding-4', outcome: 'refuted', caseRef: 'case-c' },
+  ],
+  cases: [
+    ...VALID_CASE_V2_JUDGEMENT.cases.slice(0, 2),
+    {
+      caseRef: 'case-c', existingCaseId: 'existing-case-1', disposition: 'refute', priority: 'low',
+      rationale: 'The attempted action is refuted by the inherited evidence contract.', confidence: 'high',
+      effect: { kind: 'none' }, refutation: VALID_REFUTATION,
     },
   ],
 } as const satisfies RemediationCaseJudgement;
@@ -261,5 +334,121 @@ describe('remediation case graph validator', () => {
     } as RemediationCaseJudgement;
 
     expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement).ok).toBe(expected);
+  });
+
+  describe('case-v2 graph and effect admission', () => {
+    it('accepts complete canonical merge and active-task admission evidence without judging the rationale text', () => {
+      const result = validateRemediationCaseGraph(CURRENT_SOURCE_IDS, VALID_CASE_V2_JUDGEMENT, CASE_V2_ADMISSION);
+
+      expect(result).toMatchObject({ ok: true });
+      expect(authorizedActionCaseRefs(VALID_CASE_V2_JUDGEMENT, result)).toEqual(['case-a']);
+    });
+
+    it.each([
+      ['an omitted consistency source', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        consistency: { ...VALID_CASE_V2_JUDGEMENT.consistency, sourceIds: VALID_CASE_V2_JUDGEMENT.consistency.sourceIds.slice(0, 3) },
+      }, 'missing-consistency-source'],
+      ['a duplicate consistency source', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        consistency: { ...VALID_CASE_V2_JUDGEMENT.consistency, sourceIds: [...VALID_CASE_V2_JUDGEMENT.consistency.sourceIds, CURRENT_SOURCE_IDS[0]] },
+      }, 'duplicate-consistency-source'],
+      ['an invented consistency source', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        consistency: { ...VALID_CASE_V2_JUDGEMENT.consistency, sourceIds: [...VALID_CASE_V2_JUDGEMENT.consistency.sourceIds.slice(0, 3), 'testQuality:invented'] },
+      }, 'unknown-consistency-source'],
+      ['an unresolved merge target', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        sourceOutcomes: [{ ...VALID_CASE_V2_JUDGEMENT.sourceOutcomes[1], caseRef: 'case-missing' }, ...VALID_CASE_V2_JUDGEMENT.sourceOutcomes.slice(1)],
+      }, 'unknown-case-reference'],
+      ['an invented consistency case reference', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        consistency: { ...VALID_CASE_V2_JUDGEMENT.consistency, caseRefs: ['case-a', 'case-b', 'case-missing'] },
+      }, 'unknown-consistency-case-reference'],
+      ['an omitted consistency case reference', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        consistency: { ...VALID_CASE_V2_JUDGEMENT.consistency, caseRefs: ['case-a', 'case-b'] },
+      }, 'missing-consistency-case-reference'],
+      ['a duplicate consistency case reference', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        consistency: { ...VALID_CASE_V2_JUDGEMENT.consistency, caseRefs: ['case-a', 'case-b', 'case-b'] },
+      }, 'duplicate-consistency-case-reference'],
+      ['a missing consistency rationale', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        consistency: { ...VALID_CASE_V2_JUDGEMENT.consistency, rationale: '' },
+      }, 'missing-consistency-rationale'],
+      ['an unknown existing case binding', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        cases: [...VALID_CASE_V2_JUDGEMENT.cases.slice(0, 2), { ...VALID_CASE_V2_JUDGEMENT.cases[2], existingCaseId: 'missing-case' }],
+      }, 'unknown-existing-case'],
+      ['a task admission outside the active plan', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        cases: [{
+          ...VALID_CASE_V2_JUDGEMENT.cases[0],
+          effect: { ...VALID_CASE_V2_JUDGEMENT.cases[0].effect, tasks: [{ ...VALID_CASE_V2_JUDGEMENT.cases[0].effect.tasks[0], admittedTaskIds: ['99'] }] },
+        }, ...VALID_CASE_V2_JUDGEMENT.cases.slice(1)],
+      }, 'unknown-admission-task'],
+      ['a task action with no admission task', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        cases: [{
+          ...VALID_CASE_V2_JUDGEMENT.cases[0],
+          effect: { ...VALID_CASE_V2_JUDGEMENT.cases[0].effect, tasks: [{ ...VALID_CASE_V2_JUDGEMENT.cases[0].effect.tasks[0], admittedTaskIds: [] }] },
+        }, ...VALID_CASE_V2_JUDGEMENT.cases.slice(1)],
+      }, 'missing-admission-task'],
+      ['a task action with no admission rationale', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        cases: [{
+          ...VALID_CASE_V2_JUDGEMENT.cases[0],
+          effect: { ...VALID_CASE_V2_JUDGEMENT.cases[0].effect, tasks: [{ ...VALID_CASE_V2_JUDGEMENT.cases[0].effect.tasks[0], admissionRationale: '' }] },
+        }, ...VALID_CASE_V2_JUDGEMENT.cases.slice(1)],
+      }, 'missing-admission-rationale'],
+    ] as const)('rejects %s before any action is authorized', (_name, judgement, reason) => {
+      const result = validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement as RemediationCaseJudgement, CASE_V2_ADMISSION);
+
+      expect(result).toEqual({ ok: false, reason });
+      expect(authorizedActionCaseRefs(judgement as RemediationCaseJudgement, result)).toEqual([]);
+    });
+
+    it.each([
+      ['blocked consistency', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        consistency: { ...VALID_CASE_V2_JUDGEMENT.consistency, verdict: 'blocked', rationale: 'The two proposed repairs contradict each other.' },
+      }],
+      ['an escalation sibling', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        sourceOutcomes: [...VALID_CASE_V2_JUDGEMENT.sourceOutcomes.slice(0, 3), { ...VALID_CASE_V2_JUDGEMENT.sourceOutcomes[3], outcome: 'escalate', caseRef: 'case-c' }],
+        cases: [...VALID_CASE_V2_JUDGEMENT.cases.slice(0, 2), {
+          ...VALID_CASE_V2_JUDGEMENT.cases[2], disposition: 'escalate', escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+        }],
+      }],
+    ] as const)('authorizes zero sibling action effects for %s', (_name, judgement) => {
+      const result = validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement as RemediationCaseJudgement, CASE_V2_ADMISSION);
+
+      expect(result).toMatchObject({ ok: true });
+      expect(authorizedActionCaseRefs(judgement as RemediationCaseJudgement, result)).toEqual([]);
+    });
+
+    it.each([
+      ['without a known existing case', {
+        ...VALID_CASE_V2_REFUTATION,
+        cases: [...VALID_CASE_V2_REFUTATION.cases.slice(0, 2), { ...VALID_CASE_V2_REFUTATION.cases[2], existingCaseId: 'missing-case' }],
+      }, 'unknown-existing-case'],
+      ['without high confidence', {
+        ...VALID_CASE_V2_REFUTATION,
+        cases: [...VALID_CASE_V2_REFUTATION.cases.slice(0, 2), { ...VALID_CASE_V2_REFUTATION.cases[2], confidence: 'medium' }],
+      }, 'refutation-confidence-not-high'],
+    ] as const)('retains the inherited refutation validator for case-v2 %s', (_name, judgement, reason) => {
+      const result = validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement as RemediationCaseJudgement, CASE_V2_ADMISSION);
+
+      expect(result).toEqual({ ok: false, reason });
+      expect(authorizedActionCaseRefs(judgement as RemediationCaseJudgement, result)).toEqual([]);
+    });
+
+    it('does not text-judge a valid case-v2 refutation before the inherited evidence resolver applies it', () => {
+      const result = validateRemediationCaseGraph(CURRENT_SOURCE_IDS, VALID_CASE_V2_REFUTATION, CASE_V2_ADMISSION);
+
+      expect(result).toMatchObject({ ok: true });
+      expect(authorizedActionCaseRefs(VALID_CASE_V2_REFUTATION, result)).toEqual(['case-a']);
+    });
   });
 });

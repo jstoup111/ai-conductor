@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import type {
+  BuildReviewEffectiveResultDescriptor,
   BuildReviewInfrastructureFailure,
   BuildReviewLapId,
   BuildReviewScopeIncompleteFault,
@@ -9,6 +10,7 @@ import type {
 import type { BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot, BuildReviewUnresolvedMarker } from './build-review-inputs.js';
 import { getBuildReviewRubricDescriptor } from './build-review-registry.js';
+import type { ResolvedBuildReviewCatalogEntry } from './resolved-config.js';
 import type {
   RevertedProductionFileReference,
   TestQualityPreflightEvidence,
@@ -128,10 +130,34 @@ export type BuildReviewRubricProjections = {
   readonly security: SecurityProjection;
 };
 
+/**
+ * Bind parser choice to one already-resolved effective catalog member.  This
+ * intentionally does not consult the built-in registry or an enabled map:
+ * custom policy ids are dynamic while built-ins retain their bespoke parser.
+ */
+export function buildReviewEffectiveResultDescriptor(
+  entry: ResolvedBuildReviewCatalogEntry,
+): BuildReviewEffectiveResultDescriptor {
+  if (entry.kind !== 'builtin') return Object.freeze({ kind: 'custom', rubric: entry.id, parser: 'custom-findings-v1' });
+  // Each built-in carries its own catalog id and parser tag; never relabel one as another.
+  return entry.id === 'security'
+    ? Object.freeze({ kind: 'builtin', rubric: 'security', parser: 'security-v3' })
+    : Object.freeze({ kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' });
+}
+
+/** Parse a reviewer response using the parser bound by the effective member. */
+export { parseBuildReviewReviewerPayload } from './build-review-domain.js';
+/** Custom result stamping stays adjacent to effective parser selection. */
+export {
+  stampBuildReviewCustomJudgedResult,
+  type BuildReviewCustomJudgedResult,
+  type BuildReviewCustomResultStamp,
+} from './build-review-finding-identity.js';
+
 /** One current-lap reduced-coverage stamp, shared by every reader-facing surface. */
 export interface BuildReviewReducedCoverageEntry {
-  readonly rubric: BuildReviewRubricId;
-  readonly cause: BuildReviewInfrastructureFailure['reason'] | BuildReviewScopeIncompleteFault['reason'];
+  readonly rubric: string;
+  readonly cause: BuildReviewInfrastructureFailure['reason'] | BuildReviewScopeIncompleteFault['reason'] | import('./build-review-artifacts.js').BuildReviewCustomInfrastructureFailureReason;
   readonly diagnostic: string;
   readonly operator: string;
   readonly rationale: string;
@@ -143,7 +169,12 @@ export type BuildReviewReducedCoverageEvidenceInput =
   | {
       readonly state: 'known';
       readonly records: readonly BuildReviewReducedCoverageDispositionRecord[];
-      readonly currentFailures: readonly (BuildReviewInfrastructureFailure | BuildReviewScopeIncompleteFault)[];
+      readonly currentFailures: readonly (BuildReviewInfrastructureFailure | BuildReviewScopeIncompleteFault | {
+        readonly rubric: string;
+        readonly reason: import('./build-review-artifacts.js').BuildReviewCustomInfrastructureFailureReason;
+        readonly detail: string;
+        readonly declaration: import('./build-review-artifacts.js').BuildReviewCustomDeclaration;
+      })[];
     };
 
 export type BuildReviewReducedCoverageEvidenceRenderResult =
@@ -176,7 +207,10 @@ export function renderBuildReviewReducedCoverageEvidence(
   const entries: BuildReviewReducedCoverageEntry[] = [];
   for (const failure of input.currentFailures) {
     const decision = input.records.find((record) =>
-      record.identity.rubric === failure.rubric && record.identity.reason === failure.reason,
+      record.identity.reason === failure.reason &&
+      ('declaration' in failure
+        ? JSON.stringify(record.identity.declaration) === JSON.stringify(failure.declaration)
+        : record.identity.rubric === failure.rubric),
     );
     if (!decision) continue;
     if (failure.detail.trim().length === 0) {

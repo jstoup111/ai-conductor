@@ -1,4 +1,4 @@
-// Covers: task:3, task:4
+// Covers: task:3, task:4, task:28
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -7,11 +7,13 @@ import {
 } from '../../src/engine/build-review-adjudication-context.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
+import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
 const snapshotDigest = 'sha256:snapshot';
 const HASH = `sha256:${'a'.repeat(64)}`;
+const POLICY_DIGEST = `sha256:${'c'.repeat(64)}`;
 
 function finding(name: string): BuildReviewFinding {
   return {
@@ -58,6 +60,49 @@ function securityAggregate() {
   });
 }
 
+function customAggregate(criteria?: readonly string[]) {
+  const declaration = {
+    version: 'v1' as const, rubricId: 'security', semanticSkill: 'security-review',
+    question: 'Does the changed code preserve the security boundary?',
+    source: 'plugin' as const, resources: ['references/security-criteria.md'],
+  };
+  const descriptor = {
+    version: 'v1' as const, semanticSkill: 'security-review', declaration,
+    installation: { source: 'plugin' as const, plugin: { id: 'security-suite', version: '2.1.0' } },
+    effectivePolicy: { version: 'v1' as const, bundleDigest: POLICY_DIGEST },
+    reviewedInput: { version: 'v1' as const, contentDigest: POLICY_DIGEST },
+    producer: { provider: 'codex', model: 'gpt-5.6', effort: 'high' },
+    ...(criteria === undefined ? {} : { criteria: Object.freeze([...criteria]) }),
+  };
+  const sourceRegion = { path: 'src/handler.ts', startLine: 12, endLine: 16, contentHash: HASH, display: 'changed handler' };
+  const result = stampBuildReviewCustomJudgedResult({
+    kind: 'custom-findings', version: 'v1',
+    findings: [{
+      concernId: 'authorization-bypass', summary: 'The changed handler bypasses authorization.',
+      evidenceLocations: ['src/handler.ts:12'], confidence: 92, sourceRegions: [sourceRegion],
+    }],
+  }, {
+    rubric: 'security', lapId, declaration, policy: descriptor.effectivePolicy,
+    candidate: descriptor.producer, reviewedInput: descriptor.reviewedInput,
+  }, { sourceRegions: [sourceRegion] })!;
+  return joinBuildReviewRubricOutcomes({
+    lapId, snapshotDigest,
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, contractVersion: 'v3',
+        findings: [], verdict: 'PASS',
+      },
+    },
+    customResults: {
+      security: {
+        descriptor,
+        result,
+      },
+    },
+    currentCustomRubrics: ['security'],
+  } as never);
+}
+
 function priorCase(id: string): RemediationCaseRecord {
   return {
     id,
@@ -91,7 +136,80 @@ function priorRefutedCase(id: string): RemediationCaseRecord {
   };
 }
 
+function priorDecisionStop(id: string): RemediationCaseRecord {
+  return {
+    ...priorCase(id),
+    disposition: 'escalate',
+    rationale: `Case ${id} needs an architecture decision before any repair.`,
+    sources: [{ sourceId: `security:${id}`, outcome: 'escalate', recordedAt: '2026-08-30T12:00:00.000Z' }],
+    effect: { kind: 'none' },
+    escalation: { owner: 'architecture' },
+    consistencyStop: { sourceIds: [`security:${id}`], rationale: 'The proposed cases contradict the approved baseline.' },
+  };
+}
+
 describe('build-review adjudication context', () => {
+  it('projects a persisted decision stop with its owner and consistency evidence intact', () => {
+    const stop = priorDecisionStop('stop-a');
+    const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [stop] });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.context.priorCases).toEqual([{
+      id: 'stop-a', disposition: 'escalate', priority: 'high', rationale: stop.rationale, confidence: 'high',
+      resolution: 'open', sources: stop.sources, effect: { kind: 'none' },
+      escalation: { owner: 'architecture' }, consistencyStop: stop.consistencyStop,
+    }]);
+    expect(result.context.effectPointers).toEqual([]);
+    expect(Object.isFrozen(result.context.priorCases[0]!.consistencyStop!.sourceIds)).toBe(true);
+    expect(JSON.parse(JSON.stringify(result.context)).priorCases[0]).toMatchObject({
+      escalation: { owner: 'architecture' }, consistencyStop: stop.consistencyStop,
+    });
+  });
+
+  it('projects an owner-only and a consistency-only decision stop without inventing the absent evidence', () => {
+    const { consistencyStop: _c, ...ownerOnly } = priorDecisionStop('stop-owner');
+    const { escalation: _e, ...consistencyOnly } = priorDecisionStop('stop-consistency');
+    const result = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [ownerOnly, consistencyOnly] });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.context.priorCases.map((record) => Object.keys(record).filter((key) => key === 'escalation' || key === 'consistencyStop')))
+      .toEqual([['consistencyStop'], ['escalation']]);
+  });
+
+  it.each([
+    ['an escalate case with no stop evidence', (stop: RemediationCaseRecord) => { const { escalation: _e, consistencyStop: _c, ...bare } = stop; return bare; }, 'decision-stop'],
+    ['an owner outside the store vocabulary', (stop: RemediationCaseRecord) => ({ ...stop, escalation: { owner: 'operator' as never } }), 'escalation.owner'],
+    ['an escalate case carrying an effect', (stop: RemediationCaseRecord) => ({ ...stop, effect: { id: 'effect-x', kind: 'deferral' as const, status: 'reserved' as const } }), 'effect'],
+    ['an empty consistency source set', (stop: RemediationCaseRecord) => ({ ...stop, consistencyStop: { ...stop.consistencyStop!, sourceIds: [] } }), 'consistencyStop.sourceIds'],
+    ['an empty consistency rationale', (stop: RemediationCaseRecord) => ({ ...stop, consistencyStop: { ...stop.consistencyStop!, rationale: '' } }), 'consistencyStop.rationale'],
+    ['stop evidence on an ordinary case', () => ({ ...priorCase('stop-a'), escalation: { owner: 'plan' as const } }), 'decision-stop'],
+  ])('stops as unrepresentable on %s', (_name, malform, field) => {
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('alpha')), priorCases: [malform(priorDecisionStop('stop-a'))],
+    });
+
+    expect(result).toEqual({ ok: false, stop: { code: 'unrepresentable-prior-case', caseId: 'stop-a', field } });
+  });
+
+  it('stops on oversized decision-stop evidence rather than truncating it', () => {
+    const limits = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS;
+    const stop = priorDecisionStop('stop-a');
+    const assemble = (consistencyStop: NonNullable<RemediationCaseRecord['consistencyStop']>) =>
+      assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('alpha')), priorCases: [{ ...stop, consistencyStop }] });
+
+    expect(assemble({ ...stop.consistencyStop!, rationale: 'r'.repeat(limits.maxTextBytes + 1) })).toEqual({
+      ok: false, stop: { code: 'field-overflow', subject: 'prior-case', field: 'consistencyStop.rationale', limit: limits.maxTextBytes, actual: limits.maxTextBytes + 1, caseId: 'stop-a' },
+    });
+    expect(assemble({ ...stop.consistencyStop!, sourceIds: ['s'.repeat(limits.maxReferenceBytes + 1)] })).toEqual({
+      ok: false, stop: { code: 'field-overflow', subject: 'prior-case', field: 'consistencyStop.sourceIds[]', limit: limits.maxReferenceBytes, actual: limits.maxReferenceBytes + 1, caseId: 'stop-a' },
+    });
+    expect(assemble({ ...stop.consistencyStop!, sourceIds: Array.from({ length: limits.maxSourcesPerCase + 1 }, (_, index) => `s-${index}`) })).toEqual({
+      ok: false, stop: { code: 'field-overflow', subject: 'prior-case', field: 'consistencyStop.sourceIds', limit: limits.maxSourcesPerCase, actual: limits.maxSourcesPerCase + 1, caseId: 'stop-a' },
+    });
+  });
+
   it('projects every current unresolved source and every prior case deterministically', () => {
     const current = aggregate(finding('alpha'), finding('beta'));
     const result = assembleBuildReviewAdjudicationContext({
@@ -274,8 +392,8 @@ describe('build-review adjudication context', () => {
     // names exactly these input fields. A context missing any of them routes a
     // real dispatch into the legacy gap-plan branch.
     expect(Object.keys(result.context).sort()).toEqual([
-      'currentFindings', 'domain', 'effectPointers', 'lapId', 'mode', 'planContract',
-      'priorCases', 'snapshotDigest', 'suppressionHistory', 'taskStatus', 'version',
+      'currentFindings', 'domain', 'effectPointers', 'lapId', 'lifecycleOwners', 'mode',
+      'planContract', 'policyContext', 'priorCases', 'snapshotDigest', 'suppressionHistory', 'taskStatus', 'version',
     ]);
     expect(result.context).toMatchObject({
       mode: 'case-v1',
@@ -300,5 +418,98 @@ describe('build-review adjudication context', () => {
       taskStatus: { path: null, tasks: [] },
       effectPointers: [],
     } });
+  });
+
+  it('delivers every custom policy boundary, reserved owner, and full admitted task contract', () => {
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: customAggregate(),
+      priorCases: [priorCase('case-security')],
+      planContract: {
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{
+          id: '28',
+          contract: '**Steps:**\n1. Preserve the authorization boundary.\n\n**Done when:**\n- The authorized route is covered.',
+        }],
+      },
+      taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '28', status: 'in_progress' }] },
+    });
+
+    expect(result).toMatchObject({ ok: true, context: {
+      mode: 'case-v2',
+      currentFindings: [expect.objectContaining({ rubric: 'security', concernKind: 'authorization-bypass' })],
+      policyContext: [{
+        rubric: 'security',
+        question: 'Does the changed code preserve the security boundary?',
+        effectivePolicyIdentity: POLICY_DIGEST,
+        criteria: ['references/security-criteria.md'],
+      }],
+      lifecycleOwners: expect.objectContaining({
+        productCompletion: 'prd_audit', architectureChoice: 'architecture_review', planGrowth: 'prd_audit',
+      }),
+      planContract: expect.objectContaining({
+        admittedTaskContracts: [{ id: '28', contract: expect.stringContaining('authorization boundary') }],
+      }),
+      priorCases: [expect.objectContaining({ id: 'case-security' })],
+    } });
+  });
+
+  it('delivers captured policy bytes to the case dispatcher instead of their resource paths', () => {
+    const capturedCriteria = [
+      '# Authorization policy\n\nEvery changed handler must enforce authorization.',
+      '## Evidence\n\nA focused regression must cover the authorized route.',
+    ];
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: customAggregate(capturedCriteria),
+      priorCases: [],
+      planContract: {
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{ id: '28', contract: 'Preserve the authorization boundary.' }],
+      },
+      taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '28', status: 'in_progress' }] },
+    });
+
+    expect(result).toMatchObject({ ok: true, context: {
+      policyContext: [{
+        rubric: 'security',
+        effectivePolicyIdentity: POLICY_DIGEST,
+        criteria: capturedCriteria,
+      }],
+    } });
+    if (!result.ok) return;
+    expect(result.context.policyContext[0]!.criteria).not.toContain('references/security-criteria.md');
+  });
+
+  it('delivers a realistic captured policy body whole and stops on one that exceeds the text bound', () => {
+    const skillBody = `# Authorization policy\n\n${'Every changed handler must enforce authorization. '.repeat(40)}`;
+    const atBound = 'é'.repeat(4_000);
+    const evidence = {
+      priorCases: [],
+      planContract: {
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{ id: '28', contract: 'Preserve the authorization boundary.' }],
+      },
+      taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '28', status: 'in_progress' }] },
+    };
+
+    const complete = assembleBuildReviewAdjudicationContext({ aggregate: customAggregate([skillBody, atBound]), ...evidence });
+    expect(complete.ok, JSON.stringify(complete)).toBe(true);
+    if (!complete.ok) return;
+    expect(complete.context.policyContext[0]!.criteria).toEqual([skillBody, atBound]);
+
+    expect(assembleBuildReviewAdjudicationContext({ aggregate: customAggregate([skillBody, `${atBound}x`]), ...evidence })).toEqual({
+      ok: false,
+      stop: { code: 'field-overflow', subject: 'policy-context', field: 'criteria[]', limit: 8_000, actual: 8_001 },
+    });
+  });
+
+  it('stops rather than dispatching a custom policy without complete scope evidence', () => {
+    expect(assembleBuildReviewAdjudicationContext({
+      aggregate: customAggregate(), priorCases: [],
+      planContract: { path: '.docs/plans/example.md', pointers: [] },
+      taskStatus: { path: null, tasks: [] },
+    })).toEqual({
+      ok: false,
+      stop: { code: 'missing-scope-evidence', subject: 'admitted-task-contracts' },
+    });
   });
 });

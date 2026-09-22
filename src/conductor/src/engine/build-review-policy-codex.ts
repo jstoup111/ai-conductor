@@ -1,0 +1,290 @@
+import type { InstalledReviewSkill } from './build-review-policy.js';
+import { dirname } from 'node:path';
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import {
+  ReviewPolicyCatalogError,
+  type ReviewPolicyCatalogFailureCode,
+} from './build-review-policy-resolver.js';
+
+export interface CodexPreparedCatalogEnvironment {
+  readonly cwd: string;
+  readonly home: string;
+  /** Exact environment prepared for this candidate; never merge the parent. */
+  readonly env: NodeJS.ProcessEnv;
+  /** Candidate-private executable when self-host preparation resolved one. */
+  readonly executable?: string;
+  /** Leading arguments of the prepared invocation (a containment wrap) placed before `app-server`. */
+  readonly executableArgs?: readonly string[];
+  /** The owning candidate cancels discovery and its app-server session. */
+  readonly signal?: AbortSignal;
+}
+
+export interface CodexSkillMetadata {
+  readonly name: string;
+  readonly path: string;
+  readonly scope: 'user' | 'repo' | 'system' | 'admin';
+  readonly enabled: boolean;
+  readonly pluginId: string | null;
+  readonly dependencies?: { readonly tools: readonly { readonly value: string }[] };
+}
+
+export interface CodexSkillsListResponse {
+  readonly version?: 1;
+  readonly data: readonly {
+    readonly cwd: string;
+    readonly skills: readonly CodexSkillMetadata[];
+    readonly errors: readonly unknown[];
+    readonly complete?: boolean;
+  }[];
+}
+
+export interface CodexPluginDescriptor {
+  readonly id: string;
+  readonly installed: boolean;
+  readonly enabled: boolean;
+  readonly availability: 'AVAILABLE' | 'DISABLED_BY_ADMIN';
+  readonly localVersion: string | null;
+  readonly source: { readonly type: 'local'; readonly path: string } | { readonly type: 'remote' };
+}
+
+export interface CodexPluginReadResponse {
+  readonly plugin: { readonly summary: CodexPluginDescriptor };
+}
+
+export interface CodexAppServerSession {
+  /** The app server is an untrusted JSON boundary; validation happens below. */
+  request(method: string, params: object): Promise<unknown>;
+  close(): Promise<void>;
+}
+
+/** Injected process boundary for the local, metadata-only Codex app server. */
+export interface CodexAppServerTransport {
+  open(environment: CodexPreparedCatalogEnvironment): Promise<CodexAppServerSession>;
+}
+
+/**
+ * Production metadata transport for the locally installed Codex app server.
+ * The catalog adapter remains the owner of validation; this transport only
+ * provides request/response framing and closes the child with its candidate.
+ */
+export function createCodexAppServerTransport(executable = 'codex', launch: typeof spawn = spawn): CodexAppServerTransport {
+  return {
+    async open(environment) {
+      const child = launch(environment.executable ?? executable, [...(environment.executableArgs ?? []), 'app-server'], {
+        cwd: environment.cwd,
+        env: environment.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      if (!child.stdin || !child.stdout) throw new Error('Codex app server did not provide stdio');
+      const pending = new Map<string, { resolve(value: unknown): void; reject(reason: unknown): void }>();
+      let buffered = '';
+      const rejectAll = (reason: unknown) => {
+        for (const request of pending.values()) request.reject(reason);
+        pending.clear();
+      };
+      child.stdout.on('data', (chunk: Buffer | string) => {
+        buffered += String(chunk);
+        let newline: number;
+        while ((newline = buffered.indexOf('\n')) >= 0) {
+          const line = buffered.slice(0, newline).trim();
+          buffered = buffered.slice(newline + 1);
+          if (!line) continue;
+          try {
+            const message = JSON.parse(line) as { id?: unknown; result?: unknown; error?: unknown };
+            const id = typeof message.id === 'string' ? message.id : undefined;
+            if (!id) continue;
+            const request = pending.get(id);
+            if (!request) continue;
+            pending.delete(id);
+            if (message.error !== undefined) request.reject(new Error(`Codex app server request failed: ${JSON.stringify(message.error)}`));
+            else request.resolve(message.result);
+          } catch {
+            // The next well-formed response remains independently usable.
+          }
+        }
+      });
+      child.once('error', rejectAll);
+      child.once('exit', (code) => rejectAll(new Error(`Codex app server exited${code === null ? '' : ` ${code}`}`)));
+      const abort = () => child.kill();
+      environment.signal?.addEventListener('abort', abort, { once: true });
+      return {
+        request(method, params) {
+          return new Promise((resolve, reject) => {
+            const id = randomUUID();
+            pending.set(id, { resolve, reject });
+            child.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`, (error) => {
+              if (!error) return;
+              pending.delete(id);
+              reject(error);
+            });
+          });
+        },
+        async close() {
+          environment.signal?.removeEventListener('abort', abort);
+          rejectAll(new Error('Codex app server closed'));
+          child.kill();
+        },
+      };
+    },
+  };
+}
+
+function catalogError(
+  code: ReviewPolicyCatalogFailureCode,
+  message: string,
+): ReviewPolicyCatalogError {
+  return new ReviewPolicyCatalogError('codex', code, message);
+}
+
+function abortIfNeeded(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw catalogError('cancelled', 'Codex policy catalog discovery was cancelled');
+}
+
+function failureCode(error: unknown, signal: AbortSignal | undefined): ReviewPolicyCatalogFailureCode {
+  if (error instanceof ReviewPolicyCatalogError) return error.code;
+  if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) return 'cancelled';
+  if (error instanceof Error && /timeout/i.test(error.name)) return 'timeout';
+  if (typeof error === 'object' && error !== null && typeof (error as { exitCode?: unknown }).exitCode === 'number') {
+    return 'error';
+  }
+  return 'unreadable';
+}
+
+function asCatalogError(error: unknown, signal: AbortSignal | undefined): ReviewPolicyCatalogError {
+  if (error instanceof ReviewPolicyCatalogError) return error;
+  return catalogError(failureCode(error, signal), `Unable to load Codex policy catalog: ${String(error)}`);
+}
+
+function requireCodexCatalogResponse(
+  response: CodexSkillsListResponse,
+  cwd: string,
+): CodexSkillsListResponse['data'][number] {
+  if (!response || typeof response !== 'object' || !Array.isArray(response.data)) {
+    throw catalogError('malformed', 'Malformed Codex skills/list response');
+  }
+  if (response.version !== undefined && response.version !== 1) {
+    throw catalogError('unsupported', `Unsupported Codex skills/list response version ${String(response.version)}`);
+  }
+  const entry = response.data.find((candidate) => candidate?.cwd === cwd);
+  if (!entry) throw catalogError('partial', `Codex skills/list response omitted requested cwd ${cwd}`);
+  if (!Array.isArray(entry.skills) || !Array.isArray(entry.errors)) {
+    throw catalogError('malformed', 'Malformed Codex skills/list catalog entry');
+  }
+  if (entry.complete === false) throw catalogError('partial', 'Codex skills/list response was partial');
+  if (entry.errors.length > 0) throw catalogError('error', 'Codex skills/list response reported catalog errors');
+  return entry;
+}
+
+function requireCodexSkill(skill: CodexSkillMetadata): void {
+  if (!skill || typeof skill.name !== 'string' || typeof skill.path !== 'string'
+    || !['user', 'repo', 'system', 'admin'].includes(skill.scope)
+    || typeof skill.enabled !== 'boolean'
+    || (skill.pluginId !== null && typeof skill.pluginId !== 'string')
+    || (skill.dependencies !== undefined && (!skill.dependencies
+      || !Array.isArray(skill.dependencies.tools)
+      || skill.dependencies.tools.some((tool) => !tool || typeof tool.value !== 'string')))) {
+    throw catalogError('malformed', 'Malformed Codex skill metadata');
+  }
+}
+
+function requireCodexPlugin(
+  plugin: CodexPluginReadResponse,
+  pluginId: string,
+): CodexPluginDescriptor {
+  const summary = plugin?.plugin?.summary;
+  if (!summary || typeof summary.id !== 'string' || typeof summary.installed !== 'boolean'
+    || typeof summary.enabled !== 'boolean'
+    || !['AVAILABLE', 'DISABLED_BY_ADMIN'].includes(summary.availability)
+    || (summary.localVersion !== null && typeof summary.localVersion !== 'string')
+    || !summary.source || typeof summary.source !== 'object'
+    || !['local', 'remote'].includes(summary.source.type)
+    || (summary.source.type === 'local' && typeof summary.source.path !== 'string')) {
+    throw catalogError('malformed', `Malformed Codex plugin/read response for ${pluginId}`);
+  }
+  return summary;
+}
+
+/**
+ * Read only the skills already visible to Codex in one prepared candidate.
+ * Incomplete metadata is a policy-loading failure, never confirmed absence.
+ */
+export async function listCodexInstalledReviewSkills(
+  transport: CodexAppServerTransport,
+  environment: CodexPreparedCatalogEnvironment,
+): Promise<readonly InstalledReviewSkill[]> {
+  abortIfNeeded(environment.signal);
+  let session: CodexAppServerSession | undefined;
+  let terminalError: ReviewPolicyCatalogError | undefined;
+  try {
+    session = await transport.open(environment);
+    abortIfNeeded(environment.signal);
+    const response = await session.request('skills/list', {
+      cwds: [environment.cwd],
+      forceReload: true,
+    });
+    abortIfNeeded(environment.signal);
+    const entry = requireCodexCatalogResponse(response as CodexSkillsListResponse, environment.cwd);
+    entry.skills.forEach(requireCodexSkill);
+
+    const pluginIds = [...new Set(entry.skills
+      .map((skill) => skill.pluginId)
+      .filter((pluginId): pluginId is string => pluginId !== null))]
+      .sort((left, right) => left.localeCompare(right));
+    const plugins = new Map<string, CodexPluginDescriptor>();
+    for (const pluginId of pluginIds) {
+      const plugin = await session.request('plugin/read', { pluginName: pluginId });
+      abortIfNeeded(environment.signal);
+      plugins.set(pluginId, requireCodexPlugin(plugin as CodexPluginReadResponse, pluginId));
+    }
+
+    return entry.skills.flatMap((skill): InstalledReviewSkill[] => {
+      const plugin = skill.pluginId === null ? undefined : plugins.get(skill.pluginId);
+      const source = plugin === undefined ? sourceForScope(skill.scope) : 'plugin';
+      if (source === undefined) return [];
+      const availability = availabilityFor(skill, plugin);
+      return [{
+        semanticName: skill.name,
+        source,
+        ...(plugin === undefined
+          ? {}
+          : { plugin: { id: plugin.id, ...(plugin.localVersion === null ? {} : { version: plugin.localVersion }) } }),
+        installationOrigin: skill.path,
+        canonicalSkillPath: skill.path,
+        packageRoot: plugin?.source.type === 'local' ? plugin.source.path : dirname(skill.path),
+        ...(skill.dependencies?.tools === undefined ? {} : { requiredTools: skill.dependencies.tools.map((dependency) => dependency.value) }),
+        declaredDependencies: [],
+        availability,
+      }];
+    });
+  } catch (error) {
+    terminalError = asCatalogError(error, environment.signal);
+    throw terminalError;
+  } finally {
+    if (session) {
+      try {
+        await session.close();
+      } catch (error) {
+        if (!terminalError) throw asCatalogError(error, environment.signal);
+      }
+    }
+  }
+}
+
+function sourceForScope(scope: CodexSkillMetadata['scope']): InstalledReviewSkill['source'] | undefined {
+  if (scope === 'repo') return 'project';
+  if (scope === 'user') return 'global';
+  return undefined;
+}
+
+function availabilityFor(
+  skill: CodexSkillMetadata,
+  plugin: CodexPluginDescriptor | undefined,
+): InstalledReviewSkill['availability'] {
+  if (!skill.enabled) return 'disabled';
+  if (skill.pluginId === null) return 'available';
+  if (plugin === undefined) return 'incomplete';
+  if (!plugin.installed || plugin.source.type !== 'local') return 'marketplace-only';
+  if (!plugin.enabled || plugin.availability !== 'AVAILABLE') return 'disabled';
+  return 'available';
+}

@@ -228,7 +228,15 @@ export async function dispatchShippedRecord(
           records: reducedCoverage.records,
           currentFailures: aggregate === undefined
             ? []
-            : Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
+            : [
+                ...Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
+                ...(aggregate.currentCustomRubrics ?? []).flatMap((rubric) => {
+                  const member = aggregate.customResults?.[rubric];
+                  return member?.result.kind === 'infrastructure-failure' && member.declaration !== undefined
+                    ? [{ rubric, reason: member.result.reason, detail: member.result.detail, declaration: member.declaration }]
+                    : [];
+                }),
+              ],
         });
         if (!rendered.ok) throw new Error(rendered.message);
         recordBody = appendBuildReviewReducedCoverageEvidence(recordBody, rendered.section);

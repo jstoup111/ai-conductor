@@ -1138,6 +1138,7 @@ block is normalized in place; the resolved value is written back (`config.ts:111
 | `build_review.scopeContainmentEnforced` | boolean | `false` | Works |
 | `build_review.maxParallel` | integer | `4` | Must be between 1 and 4 |
 | `build_review.rubrics` | object | `testQuality`, `security` off | Closed canonical map: `testQuality` and `security`. Every other id ever accepted — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring` — is retired: it warns and is silently ignored rather than rejecting the config |
+| `build_review.custom_rubrics` | object | disabled | Opt-in installed custom review policies (maximum 32 declarations) |
 
 Normalization contract:
 
@@ -1174,12 +1175,37 @@ rename with neither an established target nor a concrete candidate is a valid em
 dispatches neither the test-quality reviewer nor counterfactual execution. Enabled security review still
 runs and participates in the joined verdict. Missing markers, absent plan test paths, and
 an abstract possibility of an unknown dependency do not turn that empty scope into a coverage failure.
-Any unknown or retired rubric
-id under `build_review.rubrics` — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`,
-`wiring` — is accepted as a no-op with a one-time notice naming the retired setting; it never fails
-configuration loading or halts a run. `security` judges the whole frozen feature diff for concrete,
+Under `build_review.rubrics`: Every other id ever accepted is retired: `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring`.
+Any unknown rubric id is rejected as a configuration error. Each retired id above is accepted as a
+no-op with a one-time notice naming the retired setting; it never fails configuration loading or halts a run. `security` judges the whole frozen feature diff for concrete,
 changed-hunk-anchored security defects and has no test scope or counterfactual preflight.
 Both behaviors follow `adr-2026-08-22-build-review-opt-in-rubric-container`.
+
+### `build_review.custom_rubrics`
+
+Each key is a stable custom rubric id: 1-64 ASCII characters, beginning with an ASCII letter (upper- or
+lowercase), followed by letters, digits, `_`, or `-`. A build may declare at most 32 custom rubrics. A declaration requires `skill` and `question`;
+it may set `source` (`project`, `global`, or `plugin`), `resources`, and the normal provider/model/retry
+fields. Custom policies are disabled unless their declaration sets `enabled: true`, and they require
+`build_review.adjudication.enabled` so their findings pass through the shared decision and repair path.
+
+The selected skill must be installed for the actual provider candidate. Omitting `source` is accepted
+only when discovery finds one unambiguous installation; otherwise select the project, global, or
+plugin source explicitly. `resources` name policy-package material captured with the selected skill;
+they cannot grant checkout, credential, sibling-review, or network access.
+
+Selecting a custom rubric adopts its skill as a read-only review policy: its criteria and captured
+resources inform findings for the declared question, but its standalone workflow and output format do
+not replace the engine's bounded review contract or aggregate verdict.
+
+Custom review is available on Linux only after bubblewrap proves the read-only profile: the frozen
+source and policy material are readable, while the original checkout, engine evidence, and sibling
+review evidence remain protected. If that profile, an admitted declared requirement, or a runtime
+policy requirement is unavailable, the member records an unsupported-policy coverage failure before
+judging; install/enable bubblewrap or adapt the policy to the read-only role, then rerun. Reuse keys
+include the selected declaration and captured policy digest, frozen input, engine version, and actual
+provider/model/effort, so a fallback provider never borrows a preferred-provider result. Exact
+operator dispositions remain decision stops and are re-read before an effect is applied.
 
 An ambiguous changed marker association or identified changed setup/helper that affects an opted-in test
 is a concrete candidate, not an automatically in-scope test. The existing test-quality reviewer resolves

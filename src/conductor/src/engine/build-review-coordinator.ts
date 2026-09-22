@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { BuildReviewRubricId } from "../types/config.js";
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import {
@@ -27,6 +29,8 @@ import {
   type BuildReviewCacheEntry,
   type BuildReviewCacheEntryCandidate,
   type BuildReviewEngineIdentity,
+  type BuildReviewCacheLookupResolution,
+  type BuildReviewCacheSemanticIdentity,
 } from "./build-review-cache.js";
 import {
   parseBuildReviewBranchArtifact,
@@ -139,10 +143,17 @@ export interface BuildReviewCoordinationInput {
   readonly preflight: () => Promise<TautologyPreflightResult>;
   /** Resolved once per dispatch by the caller; never read from the environment here (D6). */
   readonly engineIdentity: BuildReviewCoordinationEngineIdentity;
+  /**
+   * Production candidate dispatch resolves its cache identity only after a
+   * provider has prepared.  Keep the coordinator cache seam for callers that
+   * do not have that lifecycle boundary (and for its focused contract tests).
+   */
+  readonly useCandidateCache?: boolean;
   readonly readCache: (
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
     policyFingerprint: string,
+    semanticIdentity: BuildReviewCacheSemanticIdentity,
   ) => Promise<BuildReviewCacheEntryCandidate | undefined>;
   readonly dispatchModel: (
     branch: BuildReviewDispatchableRubric,
@@ -165,6 +176,22 @@ export interface BuildReviewCoordinationInput {
     | "build_review_scope_summary"
     | "build_review_scope_incomplete"
     | "build_review_outer_verdict" }>) => Promise<void>;
+}
+
+/** Publish only the identity mismatches governed by ADR D5, from every cache path. */
+export async function emitBuildReviewCacheDiscard(
+  emit: BuildReviewCoordinationInput['emit'] | undefined,
+  cache: BuildReviewCacheLookupResolution,
+  rubric: BuildReviewRubricId | string,
+  lapId: BuildReviewLapId,
+  currentEngineStamp: string,
+): Promise<void> {
+  if (cache.kind !== 'miss' || (cache.reason !== 'engine-version-mismatch' && cache.reason !== 'skill-digest-mismatch')) return;
+  await emit?.({
+    type: 'build_review_cache_discarded', rubric, lapId, reason: cache.reason,
+    ...(cache.cachedEngineStamp === undefined ? {} : { cachedEngineStamp: cache.cachedEngineStamp }),
+    currentEngineStamp,
+  });
 }
 
 async function emitScopeIncomplete(
@@ -230,6 +257,33 @@ export function preflightProjection(preflight: TautologyPreflightResult): BuildR
 
 function infrastructure(rubric: BuildReviewRubricId, reason: BuildReviewCoordinatorFailureReason, detail?: string, setupExhaustion?: ProviderSetupExhaustion): BuildReviewCoordinatedBranch {
   return { kind: "infrastructure-failure", rubric, reason, ...(detail === undefined ? {} : { detail }), ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}) };
+}
+
+/** Complete built-in candidate identity for the v2 cache envelope. */
+function builtinCacheIdentity(
+  branch: BuildReviewDispatchableRubric,
+  projection: BuildReviewRubricProjection,
+  engineIdentity: BuildReviewCoordinationEngineIdentity,
+  skillDigest: string,
+): BuildReviewCacheSemanticIdentity {
+  const executionPolicyFingerprint = fingerprintBuildReviewRubricPolicy(branch.policy);
+  const declarationFingerprint = `sha256:${createHash('sha256').update(JSON.stringify({
+    rubric: branch.rubric,
+    contractVersion: projection.contractVersion,
+    projectionVersion: projection.projectionVersion,
+  })).digest('hex')}`;
+  return {
+    declarationFingerprint,
+    effectiveBundleDigest: skillDigest,
+    contractVersion: projection.contractVersion,
+    projectionVersion: projection.projectionVersion,
+    semanticInputDigest: projection.digest,
+    executionPolicyFingerprint,
+    engineStamp: engineIdentity.engineStamp,
+    provider: Array.isArray(branch.policy.llm_provider) ? branch.policy.llm_provider[0]! : branch.policy.llm_provider,
+    model: branch.policy.model,
+    effort: branch.policy.effort,
+  };
 }
 
 /**
@@ -602,6 +656,14 @@ export async function coordinateBuildReviewRubrics(
       });
       continue;
     }
+    // Candidate cache identity is loaded inside the actual prepared provider
+    // candidate. The harness-root digests below are legacy cache evidence;
+    // engineStamp is retained as the per-run stamp on both paths.
+    if (input.useCandidateCache) {
+      await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
+      misses.push(branch);
+      continue;
+    }
     const skillDigest = input.engineIdentity.skillDigests[branch.rubric];
     if (skillDigest === undefined || skillDigest.kind === "unavailable") {
       // adr-2026-08-21 D3 (amended): an unreadable rubric SKILL.md is an
@@ -611,14 +673,18 @@ export async function coordinateBuildReviewRubrics(
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "cache-read-failed", excerpt: detail });
       continue;
     }
+    // Cache identity includes the resolved provider/model. The legacy
+    // coordinator seam remains a complete cache boundary for callers without
+    // candidate lifecycle context.
     const engineIdentity: BuildReviewEngineIdentity = {
       engineStamp: input.engineIdentity.engineStamp,
       skillDigest: skillDigest.digest,
     };
     const policyFingerprint = fingerprintBuildReviewRubricPolicy(branch.policy);
+    const semanticIdentity = builtinCacheIdentity(branch, projection, input.engineIdentity, skillDigest.digest);
     let candidate: BuildReviewCacheEntryCandidate | undefined;
     try {
-      candidate = await input.readCache(branch, projection, policyFingerprint);
+      candidate = await input.readCache(branch, projection, policyFingerprint, semanticIdentity);
     } catch {
       resolved.set(branch.rubric, infrastructure(branch.rubric, "cache-read-failed"));
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "cache-read-failed" });
@@ -631,27 +697,11 @@ export async function coordinateBuildReviewRubrics(
       projectionDigest: projection.digest,
       policyFingerprint,
       engineIdentity,
+      semanticIdentity,
       lapId: input.lapId,
       snapshotDigest: projection.snapshotDigest,
     });
-    if (cache.kind === "miss" && (cache.reason === "engine-version-mismatch" || cache.reason === "skill-digest-mismatch")) {
-      // adr-2026-08-21 D5: only the two engine-identity reasons emit a
-      // discard on the spine; ordinary projection/policy misses stay silent.
-      await input.emit?.({
-        type: "build_review_cache_discarded",
-        rubric: branch.rubric,
-        lapId: input.lapId,
-        reason: cache.reason,
-        ...(cache.cachedEngineStamp === undefined ? {} : { cachedEngineStamp: cache.cachedEngineStamp }),
-        currentEngineStamp: input.engineIdentity.engineStamp,
-      });
-    }
-    // A semantic cache identity proves only that the frozen input projection
-    // matches.  Re-run the same source-bound result predicate used for a
-    // fresh provider response before reusing the cached judgement: persisted
-    // candidate resolutions and finding anchors are evidence, never cache
-    // authority.  An invalid cached result is an ordinary miss so a fresh
-    // judgement can settle the current frozen scope.
+    await emitBuildReviewCacheDiscard(input.emit, cache, branch.rubric, input.lapId, input.engineIdentity.engineStamp);
     const cachedResult = cache.kind === "hit"
       ? validateBuildReviewDispatchedResult(cache.hit.result, branch.rubric, projection)
       : undefined;
@@ -695,15 +745,28 @@ export async function coordinateBuildReviewRubrics(
         const result = validateBuildReviewDispatchedResult(candidate, rubric, projection);
         if (!result) {
           const failure = parseBuildReviewDispatchFailure(dispatched);
+          const cacheWriteFailure = typeof dispatched === 'object' && dispatched !== null
+            && !Array.isArray(dispatched) && (dispatched as { kind?: unknown }).kind === 'cache-write-failed';
+          const cacheWriteDetail = cacheWriteFailure && typeof (dispatched as { detail?: unknown }).detail === 'string'
+            ? (dispatched as { detail: string }).detail
+            : undefined;
           // No pre-formed dispatch failure: the engine derives the failed
           // requirement itself from the stamped candidate, so the diagnosis
           // is produced by the same validation surface that rejected it.
-          const detail = failure?.detail ?? (dispatched === undefined ? undefined : (
+          const detail = cacheWriteDetail ?? failure?.detail ?? (dispatched === undefined ? undefined : (
             typeof dispatched !== "object" || dispatched === null || Array.isArray(dispatched)
               ? "no parseable JSON object was found in the response"
               : describeBuildReviewDispatchedResultRejection(candidate, rubric, projection)
           ));
-          return { rubric, branch: infrastructure(rubric, "invalid-provider-result", detail, failure?.providerSetupExhaustion) };
+          return {
+            rubric,
+            branch: infrastructure(
+              rubric,
+              cacheWriteFailure ? 'cache-write-failed' : 'invalid-provider-result',
+              detail,
+              failure?.providerSetupExhaustion,
+            ),
+          };
         }
         let written: BuildReviewJudgedResult | undefined;
         try {
@@ -718,25 +781,24 @@ export async function coordinateBuildReviewRubrics(
           return { rubric, branch: infrastructure(rubric, "artifact-write-failed") };
         }
         if (!written) return { rubric, branch: infrastructure(rubric, "artifact-write-failed") };
-        const skillDigest = input.engineIdentity.skillDigests[rubric];
-        if (skillDigest === undefined || skillDigest.kind === "unavailable") {
-          // Unreachable for dispatched branches (unavailable digests fail
-          // before dispatch), kept fail-closed: never write without identity.
-          return { rubric, branch: infrastructure(rubric, "cache-write-failed") };
-        }
-        try {
-          await input.writeCache({
-            version: 1,
-            rubric,
-            contractVersion: projection.contractVersion,
-            projectionVersion: projection.projectionVersion,
-            projectionDigest: projection.digest,
-            policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
-            engineIdentity: { engineStamp: input.engineIdentity.engineStamp, skillDigest: skillDigest.digest },
-            result: written,
-          });
-        } catch {
-          return { rubric, branch: infrastructure(rubric, "cache-write-failed") };
+        if (!input.useCandidateCache) {
+          const skillDigest = input.engineIdentity.skillDigests[rubric];
+          if (skillDigest?.kind !== "resolved") return { rubric, branch: infrastructure(rubric, "cache-write-failed") };
+          try {
+            await input.writeCache({
+              version: 2,
+              rubric,
+              contractVersion: projection.contractVersion,
+              projectionVersion: projection.projectionVersion,
+              projectionDigest: projection.digest,
+              policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
+              engineIdentity: { engineStamp: input.engineIdentity.engineStamp, skillDigest: skillDigest.digest },
+              semanticIdentity: builtinCacheIdentity(branch, projection, input.engineIdentity, skillDigest.digest),
+              result: written,
+            });
+          } catch {
+            return { rubric, branch: infrastructure(rubric, "cache-write-failed") };
+          }
         }
         return { rubric, branch: { kind: "dispatched", rubric, result: written } as BuildReviewCoordinatedBranch };
       } catch {

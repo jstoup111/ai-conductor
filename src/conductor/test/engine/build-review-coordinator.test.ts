@@ -492,9 +492,10 @@ describe("build-review coordinator: security envelope", () => {
       config: config(false, true),
       inputs: frozenInputs,
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved", digest: "sha256:security-skill" } } },
-      readCache: vi.fn(async (_branch, currentProjection, policyFingerprint) => ({
-        version: 1, rubric: "security", contractVersion: "v3", projectionVersion: "v3",
-        projectionDigest: currentProjection.digest, policyFingerprint,
+      // Candidate-partitioned (v2) entry: a hit requires the lookup's semantic identity.
+      readCache: vi.fn(async (_branch, currentProjection, policyFingerprint, semanticIdentity) => ({
+        version: 2, rubric: "security", contractVersion: "v3", projectionVersion: "v3",
+        projectionDigest: currentProjection.digest, policyFingerprint, semanticIdentity,
         engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:security-skill" },
         result: { kind: "judged", rubric: "security", contractVersion: "v3", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
       }) as never),
@@ -519,8 +520,8 @@ describe("build-review coordinator: security envelope", () => {
     const input = coordinationInput(false, {
       config: currentConfig,
       engineIdentity,
-      readCache: vi.fn(async (_branch, projection, policyFingerprint) => ({
-        version: 1, rubric: "security", contractVersion: "v3", projectionVersion: "v3", projectionDigest: projection.digest,
+      readCache: vi.fn(async (_branch, projection, policyFingerprint, semanticIdentity) => ({
+        version: 2, rubric: "security", contractVersion: "v3", projectionVersion: "v3", projectionDigest: projection.digest, semanticIdentity,
         policyFingerprint: cachedPolicyFingerprint ?? policyFingerprint,
         engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:security-skill" },
         result: { kind: "judged", rubric: "security", contractVersion: "v3", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
@@ -548,6 +549,21 @@ describe("build-review coordinator: security envelope", () => {
     expect(input.readCache).not.toHaveBeenCalled();
     expect(dispatchModel).not.toHaveBeenCalled();
     expect(input.writeCache).not.toHaveBeenCalled();
+  });
+
+  it("defers an unavailable harness-root digest to candidate-local production resolution", async () => {
+    const dispatchModel = vi.fn(async () => ({ kind: "judged", rubric: "security", lapId: "lap-current", snapshotDigest: "sha256:snapshot", contractVersion: "v3", findings: [], verdict: "PASS" }));
+    const input = coordinationInput(false, {
+      config: config(false, true), useCandidateCache: true,
+      engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "unavailable", path: "skills/build-review-security/SKILL.md" } } },
+      dispatchModel,
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(dispatchModel).toHaveBeenCalledOnce();
+    expect(securityBranch(result)).toMatchObject({ kind: "dispatched", rubric: "security" });
+    expect(input.readCache).not.toHaveBeenCalled();
   });
 
   it("stamps a security finding with the projection-owned envelope and derived failure verdict", async () => {
@@ -773,8 +789,12 @@ describe("build-review coordinator: frozen fan-out", () => {
     });
     expect(input.writeCache).toHaveBeenCalledTimes(1);
     expect(input.writeCache).toHaveBeenCalledWith(expect.objectContaining({
-      version: 1, rubric: "testQuality", contractVersion: "v3", projectionVersion: expect.any(String),
+      version: 2, rubric: "testQuality", contractVersion: "v3", projectionVersion: expect.any(String),
       projectionDigest: expect.stringMatching(/^sha256:/), policyFingerprint: expect.any(String),
+      semanticIdentity: expect.objectContaining({
+        semanticInputDigest: expect.stringMatching(/^sha256:/),
+        effectiveBundleDigest: "sha256:skill-a",
+      }),
       result: expect.objectContaining({ kind: "judged", rubric: "testQuality", lapId: "lap-current", verdict: "PASS" }),
     }));
     expect(testQualityBranch(result)).toMatchObject({ kind: "dispatched", rubric: "testQuality", result: { kind: "judged", verdict: "PASS" } });

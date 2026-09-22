@@ -8,22 +8,25 @@ import {
   writeBuildReviewCacheEntry,
   type BuildReviewCacheEntry,
   type BuildReviewCacheFilesystem,
+  type BuildReviewCacheSemanticIdentity,
 } from "../../src/engine/build-review-cache.js";
 import { engineContentStamp } from "../../src/engine/engine-version-id.js";
 import { coordinateBuildReviewRubrics } from "../../src/engine/build-review-coordinator.js";
 import { parseBuildReviewLapId } from "../../src/engine/build-review-domain.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
+import { fingerprintBuildReviewPolicyDeclaration } from "../../src/engine/build-review-policy.js";
 
 function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
   return {
-    version: 1,
+    version: 2,
     rubric: "testQuality",
     contractVersion: "v3",
     projectionVersion: "v3",
     projectionDigest: "sha256:projection-a",
     policyFingerprint: "sha256:policy-a",
     engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" },
+    semanticIdentity: candidateIdentity(),
     result: {
       kind: "judged",
       rubric: "testQuality",
@@ -53,6 +56,22 @@ function securityEntry(overrides: Partial<BuildReviewCacheEntry> = {}): BuildRev
   } as BuildReviewCacheEntry;
 }
 
+function candidateIdentity(overrides: Partial<BuildReviewCacheSemanticIdentity> = {}): BuildReviewCacheSemanticIdentity {
+  return {
+    declarationFingerprint: "sha256:declaration-a",
+    effectiveBundleDigest: "sha256:bundle-a",
+    contractVersion: "v3",
+    projectionVersion: "v3",
+    semanticInputDigest: "sha256:input-a",
+    executionPolicyFingerprint: "sha256:execution-a",
+    engineStamp: "8e7daae72ad7",
+    provider: "claude",
+    model: "sonnet",
+    effort: "medium",
+    ...overrides,
+  };
+}
+
 function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheFilesystem & {
   files: Record<string, string>;
   writeCalls: Array<[string, string]>;
@@ -66,6 +85,10 @@ function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheF
       if (!(path in files)) throw Object.assign(new Error("missing"), { code: "ENOENT" });
       return files[path]!;
     }),
+    readdir: vi.fn(async (directory: string) => Object.keys(files)
+      .filter((path) => path.startsWith(`${directory}/`))
+      .map((path) => path.slice(directory.length + 1))
+      .filter((name) => !name.includes('/'))),
     mkdir: vi.fn(async () => undefined),
     writeFile: vi.fn(async (path: string, contents: string) => {
       writeCalls.push([path, contents]);
@@ -82,6 +105,78 @@ function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheF
 }
 
 describe("build-review semantic cache", () => {
+  it("uses every semantic policy component while keeping producing provenance incidental", () => {
+    const declaration = {
+      rubric: "kotlin-review",
+      skill: "acme:kotlin-review",
+      question: "Does this change preserve Kotlin nullability?",
+      source: "plugin" as const,
+      resources: ["references/nullability.md", "references/style.md"],
+    };
+    const semanticIdentity = {
+      declarationFingerprint: fingerprintBuildReviewPolicyDeclaration(declaration),
+      effectiveBundleDigest: "sha256:bundle-a",
+      contractVersion: "v3" as const,
+      projectionVersion: "v3" as const,
+      semanticInputDigest: "sha256:input-a",
+      executionPolicyFingerprint: "sha256:execution-a",
+      engineStamp: "8e7daae72ad7",
+      provider: "codex",
+      model: "gpt-5.6",
+      effort: "high",
+    };
+    const cached = { ...entry(), semanticIdentity };
+    const lookup = {
+      rubric: "testQuality" as const,
+      contractVersion: "v3" as const,
+      projectionVersion: "v3" as const,
+      projectionDigest: "sha256:projection-a",
+      policyFingerprint: "sha256:policy-a",
+      engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" },
+      semanticIdentity,
+      // These are current-use fields, never semantic eligibility fields.
+      lapId: "lap-current-after-rebase" as never,
+      snapshotDigest: "snapshot-current-after-rebase",
+    };
+
+    const changedDeclaration = {
+      ...semanticIdentity,
+      declarationFingerprint: fingerprintBuildReviewPolicyDeclaration({
+        ...declaration,
+        resources: ["references/nullability.md", "references/concurrency.md"],
+      }),
+    };
+    const mutations = [
+      ["rubric", { ...semanticIdentity, declarationFingerprint: fingerprintBuildReviewPolicyDeclaration({ ...declaration, rubric: "java-review" }) }, "declaration-fingerprint-mismatch"],
+      ["skill", { ...semanticIdentity, declarationFingerprint: fingerprintBuildReviewPolicyDeclaration({ ...declaration, skill: "acme:java-review" }) }, "declaration-fingerprint-mismatch"],
+      ["question", { ...semanticIdentity, declarationFingerprint: fingerprintBuildReviewPolicyDeclaration({ ...declaration, question: "Does this change preserve Kotlin concurrency?" }) }, "declaration-fingerprint-mismatch"],
+      ["source", { ...semanticIdentity, declarationFingerprint: fingerprintBuildReviewPolicyDeclaration({ ...declaration, source: "global" }) }, "declaration-fingerprint-mismatch"],
+      ["resources", changedDeclaration, "declaration-fingerprint-mismatch"],
+      ["definition bytes", { ...semanticIdentity, effectiveBundleDigest: "sha256:bundle-definition-edited" }, "effective-bundle-digest-mismatch"],
+      ["support bytes", { ...semanticIdentity, effectiveBundleDigest: "sha256:bundle-support-edited" }, "effective-bundle-digest-mismatch"],
+      ["contract", { ...semanticIdentity, contractVersion: "v2" }, "contract-version-mismatch"],
+      ["projection", { ...semanticIdentity, projectionVersion: "v2" }, "projection-version-mismatch"],
+      ["input", { ...semanticIdentity, semanticInputDigest: "sha256:input-b" }, "semantic-input-digest-mismatch"],
+      ["execution", { ...semanticIdentity, executionPolicyFingerprint: "sha256:execution-b" }, "execution-policy-fingerprint-mismatch"],
+      ["engine", { ...semanticIdentity, engineStamp: "aaaaaaaaaaaa" }, "engine-content-stamp-mismatch"],
+      ["provider", { ...semanticIdentity, provider: "claude" }, "provider-mismatch"],
+      ["model", { ...semanticIdentity, model: "gpt-5.7" }, "model-mismatch"],
+      ["effort", { ...semanticIdentity, effort: "medium" }, "effort-mismatch"],
+    ] as const;
+
+    expect(classifyBuildReviewCacheLookup(cached, lookup)).toMatchObject({
+      kind: "hit",
+      hit: {
+        result: { lapId: "lap-current-after-rebase", snapshotDigest: "snapshot-current-after-rebase" },
+        provenance: { cachedLapId: "lap-a", cachedSnapshotDigest: "snapshot-a" },
+      },
+    });
+    expect(mutations.map(([, semanticIdentity, reason]) => [
+      reason,
+      classifyBuildReviewCacheLookup(cached, { ...lookup, semanticIdentity }),
+    ])).toEqual(mutations.map(([, , reason]) => [reason, { kind: "miss", reason }]));
+  });
+
   it("rejects v2 entries at the current public parse boundary", () => {
     expect(parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v2" })).toBeUndefined();
   });
@@ -157,33 +252,79 @@ describe("build-review semantic cache", () => {
   it("stores one versioned semantic judgement per feature-scoped rubric with atomic replacement", async () => {
     const fs = memoryFilesystem();
     const root = "/feature";
-    const path = cacheEntryPath(root, "testQuality");
+    const initial = entry();
+    const replacement = entry("snapshot-b");
+    const path = cacheEntryPath(root, "testQuality", initial.semanticIdentity);
 
-    await writeBuildReviewCacheEntry(root, entry(), fs);
-    await writeBuildReviewCacheEntry(root, entry("snapshot-b"), fs);
+    await writeBuildReviewCacheEntry(root, initial, fs);
+    await writeBuildReviewCacheEntry(root, replacement, fs);
 
     expect({
       path,
-      entry: await readBuildReviewCacheEntry(root, "testQuality", fs),
+      entry: await readBuildReviewCacheEntry(root, "testQuality", fs, initial.semanticIdentity),
       renameCalls: fs.renameCalls,
       files: Object.keys(fs.files),
     }).toEqual({
-      path: "/feature/.pipeline/build-review/cache/testQuality.json",
-      entry: entry("snapshot-b"),
+      path,
+      entry: replacement,
       renameCalls: [
-        ["/feature/.pipeline/build-review/cache/testQuality.json.tmp", "/feature/.pipeline/build-review/cache/testQuality.json"],
-        ["/feature/.pipeline/build-review/cache/testQuality.json.tmp", "/feature/.pipeline/build-review/cache/testQuality.json"],
+        [`${path}.tmp`, path],
+        [`${path}.tmp`, path],
       ],
       files: [path],
     });
   });
 
+  it("partitions complete preferred and fallback candidates without publishing incomplete writes", async () => {
+    const root = "/feature";
+    const preferredIdentity = candidateIdentity();
+    const fallbackIdentity = candidateIdentity({
+      effectiveBundleDigest: "sha256:bundle-fallback",
+      provider: "codex",
+      model: "gpt-5.6",
+      effort: "high",
+    });
+    const preferred = { ...entry("snapshot-preferred"), semanticIdentity: preferredIdentity };
+    const fallback = { ...entry("snapshot-fallback"), semanticIdentity: fallbackIdentity };
+    const fs = memoryFilesystem();
+    await writeBuildReviewCacheEntry(root, preferred, fs);
+    await writeBuildReviewCacheEntry(root, fallback, fs);
+
+    expect(cacheEntryPath(root, "testQuality", preferredIdentity)).not.toEqual(
+      cacheEntryPath(root, "testQuality", fallbackIdentity),
+    );
+    await expect(readBuildReviewCacheEntry(root, "testQuality", fs, preferredIdentity)).resolves.toEqual(preferred);
+    await expect(readBuildReviewCacheEntry(root, "testQuality", fs, fallbackIdentity)).resolves.toEqual(fallback);
+
+    const interruptedFs = memoryFilesystem({ ...fs.files });
+    interruptedFs.writeFile = vi.fn(async () => { throw new Error("interrupted"); });
+    await expect(writeBuildReviewCacheEntry(root, {
+      ...fallback,
+      result: { ...fallback.result, snapshotDigest: "snapshot-fallback-retry" },
+    }, interruptedFs)).rejects.toThrow("interrupted");
+    await expect(readBuildReviewCacheEntry(root, "testQuality", interruptedFs, preferredIdentity)).resolves.toEqual(preferred);
+    await expect(readBuildReviewCacheEntry(root, "testQuality", interruptedFs, fallbackIdentity)).resolves.toEqual(fallback);
+
+    const incompleteFs = memoryFilesystem();
+    const { semanticIdentity: _missingIdentity, ...incomplete } = entry();
+    await expect(writeBuildReviewCacheEntry(root, incomplete, incompleteFs)).rejects.toThrow(
+      "effective candidate identity",
+    );
+    expect(incompleteFs.writeCalls).toEqual([]);
+    expect(incompleteFs.renameCalls).toEqual([]);
+  });
+
   it("isolates a foreign feature entry by content digest before atomically replacing it", async () => {
     const featureBRoot = "/features/b";
-    const path = cacheEntryPath(featureBRoot, "testQuality");
     const foreignEntry = { ...entry("snapshot-feature-a"), projectionDigest: "sha256:feature-a-content" };
     const freshEntry = { ...entry("snapshot-feature-b"), projectionDigest: "sha256:feature-b-content" };
-    const fs = memoryFilesystem({ [path]: JSON.stringify(foreignEntry) });
+    // `BuildReviewCacheEntry` can also carry a custom artifact member, whose
+    // reviewed-input identity is nested. This fixture deliberately exercises
+    // the built-in cache contract, where the snapshot belongs to the result.
+    if ('result' in freshEntry.result) throw new Error('expected a built-in cache result');
+    const legacyPath = cacheEntryPath(featureBRoot, "testQuality");
+    const path = cacheEntryPath(featureBRoot, "testQuality", freshEntry.semanticIdentity);
+    const fs = memoryFilesystem({ [legacyPath]: JSON.stringify(foreignEntry) });
 
     const foreignCandidate = await readBuildReviewCacheEntry(featureBRoot, "testQuality", fs);
     await writeBuildReviewCacheEntry(featureBRoot, freshEntry, fs);
@@ -200,25 +341,53 @@ describe("build-review semantic cache", () => {
         lapId: "lap-feature-b",
         snapshotDigest: freshEntry.result.snapshotDigest,
       } as never),
-      storedEntry: await readBuildReviewCacheEntry(featureBRoot, "testQuality", fs),
+      storedEntry: await readBuildReviewCacheEntry(featureBRoot, "testQuality", fs, freshEntry.semanticIdentity),
       renameCalls: fs.renameCalls,
     }).toEqual({
-      path: "/features/b/.pipeline/build-review/cache/testQuality.json",
+      path,
       lookup: { kind: "miss", reason: "projection-digest-mismatch" },
       storedEntry: freshEntry,
       renameCalls: [[`${path}.tmp`, path]],
     });
   });
 
-  it("treats a missing, malformed, or unsupported entry as a non-mutating cache miss", async () => {
+  it("treats a missing entry as a non-mutating miss and preserves malformed evidence as invalid", async () => {
     const root = "/feature";
     const path = cacheEntryPath(root, "testQuality");
     const fs = memoryFilesystem({ [path]: JSON.stringify({ version: 2, result: entry().result }) });
 
-    await expect(readBuildReviewCacheEntry(root, "testQuality", fs)).resolves.toBeUndefined();
+    expect(classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "testQuality", fs), {
+      rubric: "testQuality", contractVersion: "v3", projectionVersion: "v3", projectionDigest: "sha256:projection-a",
+      policyFingerprint: "sha256:policy-a", engineIdentity: entry().engineIdentity, lapId: "lap-current" as never, snapshotDigest: "snapshot-current",
+    })).toEqual({ kind: "miss", reason: "invalid-entry" });
     expect(fs.writeCalls).toEqual([]);
     expect(fs.renameCalls).toEqual([]);
-    await expect(readBuildReviewCacheEntry(root, "testQuality", fs)).resolves.toBeUndefined();
+    await expect(readBuildReviewCacheEntry(root, "security", fs)).resolves.toBeUndefined();
+  });
+
+  it("reads a prior candidate partition so engine and bundle changes remain classifiable", async () => {
+    const root = "/feature";
+    const currentIdentity = candidateIdentity({ engineStamp: "bbbbbbbbbbbb", effectiveBundleDigest: "sha256:bundle-current" });
+    const priorIdentity = candidateIdentity({ engineStamp: "aaaaaaaaaaaa", effectiveBundleDigest: "sha256:bundle-prior" });
+    const prior = {
+      ...entry(),
+      engineIdentity: { engineStamp: "aaaaaaaaaaaa", skillDigest: "sha256:bundle-prior" },
+      semanticIdentity: priorIdentity,
+    };
+    const fs = memoryFilesystem({ [cacheEntryPath(root, "testQuality", priorIdentity)]: JSON.stringify(prior) });
+    const lookup = {
+      rubric: "testQuality" as const, contractVersion: "v3" as const, projectionVersion: "v3" as const,
+      projectionDigest: prior.projectionDigest, policyFingerprint: prior.policyFingerprint,
+      engineIdentity: { engineStamp: "bbbbbbbbbbbb", skillDigest: "sha256:bundle-current" },
+      semanticIdentity: currentIdentity, lapId: "lap-current" as never, snapshotDigest: "snapshot-current",
+    };
+
+    expect(classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "testQuality", fs, currentIdentity), lookup))
+      .toEqual({ kind: "miss", reason: "engine-version-mismatch", cachedEngineStamp: "aaaaaaaaaaaa" });
+
+    const sameEngine = { ...lookup, engineIdentity: { engineStamp: "aaaaaaaaaaaa", skillDigest: "sha256:bundle-current" }, semanticIdentity: { ...currentIdentity, engineStamp: "aaaaaaaaaaaa" } };
+    expect(classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "testQuality", fs, sameEngine.semanticIdentity), sameEngine))
+      .toEqual({ kind: "miss", reason: "skill-digest-mismatch", cachedEngineStamp: "aaaaaaaaaaaa" });
   });
 
   it("refuses to persist skips and infrastructure failures as reusable cache state", async () => {
@@ -313,7 +482,13 @@ describe("build-review semantic cache", () => {
     const coordination = await coordinateBuildReviewRubrics({
       config, inputs: frozenInputs, lapId: currentLap, preflight: async () => ({ classification: "approved-exception" as const, exception: "empty-test-set" as const, cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [], revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" } }),
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { testQuality: { kind: "resolved" as const, digest: "sha256:skill-a" } } },
-      readCache: async (_branch, projection, policyFingerprint) => ({ ...entry(), projectionDigest: projection.digest, policyFingerprint, result: { ...entry().result, lapId: oldLap, snapshotDigest: oldProjection.snapshotDigest } }),
+      readCache: async (_branch, projection, policyFingerprint, semanticIdentity) => ({
+        ...entry(),
+        projectionDigest: projection.digest,
+        policyFingerprint,
+        semanticIdentity,
+        result: { ...entry().result, lapId: oldLap, snapshotDigest: oldProjection.snapshotDigest },
+      }),
       dispatchModel, writeArtifact: async (artifact) => ({ version: 1 as const, ...artifact }), writeCache: async () => undefined,
     });
 
@@ -404,6 +579,32 @@ describe("build-review semantic cache", () => {
       { kind: "miss", reason: "invalid-entry" },
     ]);
   });
+
+  it("keeps legacy engine evidence and newer incomplete policy evidence as distinct lazy misses", () => {
+    const current = entry();
+    const lookup = {
+      rubric: "testQuality" as const,
+      contractVersion: "v3" as const,
+      projectionVersion: "v3" as const,
+      projectionDigest: current.projectionDigest,
+      policyFingerprint: current.policyFingerprint,
+      engineIdentity: current.engineIdentity,
+      semanticIdentity: current.semanticIdentity,
+      lapId: "lap-current" as never,
+      snapshotDigest: "snapshot-current",
+    };
+    const { semanticIdentity: _missingIdentity, ...incompleteEvidence } = current;
+    const { engineIdentity: _missingEngine, ...legacyWithoutEngine } = current;
+    const legacyEvidence = { ...legacyWithoutEngine, version: 1 };
+
+    expect([
+      classifyBuildReviewCacheLookup(legacyEvidence, lookup),
+      classifyBuildReviewCacheLookup(incompleteEvidence, lookup),
+    ]).toEqual([
+      { kind: "miss", reason: "engine-version-mismatch" },
+      { kind: "miss", reason: "semantic-identity-missing" },
+    ]);
+  });
 });
 
 describe("engine identity in the cache key (adr-2026-08-21)", () => {
@@ -411,7 +612,7 @@ describe("engine identity in the cache key (adr-2026-08-21)", () => {
   const identified = (): BuildReviewCacheEntry => ({ ...entry(), engineIdentity });
   const legacy = (): Record<string, unknown> => {
     const { engineIdentity: _dropped, ...rest } = entry();
-    return rest;
+    return { ...rest, version: 1 };
   };
   const request = {
     rubric: "testQuality" as const,
@@ -479,7 +680,7 @@ describe("engine identity in the cache key (adr-2026-08-21)", () => {
     const fs = memoryFilesystem();
     await expect(writeBuildReviewCacheEntry("/feature", legacy() as never, fs)).rejects.toThrow();
     await writeBuildReviewCacheEntry("/feature", identified(), fs);
-    expect(await readBuildReviewCacheEntry("/feature", "testQuality", fs)).toEqual(identified());
+    expect(await readBuildReviewCacheEntry("/feature", "testQuality", fs, identified().semanticIdentity)).toEqual(identified());
   });
 });
 

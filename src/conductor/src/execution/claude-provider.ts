@@ -1,4 +1,5 @@
 import { execa, type Options as ExecaOptions, type ResultPromise } from 'execa';
+import { join } from 'node:path';
 import type {
   LLMProvider,
   InvokeOptions,
@@ -7,6 +8,7 @@ import type {
   SelfHostAuthPreparation,
   TokenUsage,
 } from './llm-provider.js';
+import { reviewAccessRefusal } from './llm-provider.js';
 import {
   epochAnchoredMonotonicClock,
   observeInterval,
@@ -20,7 +22,8 @@ import {
   ProviderStreamAssembler,
 } from './provider-stream.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
-import { scrubTmuxEnvironment } from './child-environment.js';
+import { buildReviewChildEnvironment, filterReviewChildEnvironment, scrubTmuxEnvironment } from './child-environment.js';
+import { composeReviewLaunchMounts } from '../engine/build-review-containment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import {
   inferRateLimitWaitSeconds,
@@ -28,6 +31,7 @@ import {
   scaleRateLimitDurationSeconds,
 } from './rate-limit-duration.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
+import { wrapForContainment } from '../engine/self-host/live-containment.js';
 
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
 // Patterns: "rate limit", "429", "overloaded"
@@ -556,15 +560,23 @@ export class ClaudeProvider implements LLMProvider {
 
   private async runClaude(
     args: string[],
-    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onProviderStream' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
+    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onProviderStream' | 'onSpawn' | 'selfHost' | 'spawnPermit' | 'reviewAccess'>,
   ) {
-    const { diagnosticLog, onActivity, onProviderStream, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
+    const { diagnosticLog, onActivity, onProviderStream, onSpawn, selfHost, spawnPermit, reviewAccess, ...execaOptions } = options;
     const permit = validateSpawnPermit(spawnPermit);
     if (!permit.permitted) {
       throw new Error(`Claude process spawn denied: ${permit.reason}`);
     }
-    const subprocess = this.subprocessFactory(selfHost?.executable ?? 'claude', args, {
+    const command = { executable: selfHost?.executable ?? 'claude', args, env: execaOptions.env };
+    const launch = reviewAccess?.kind === 'ready'
+      ? wrapForContainment(command, composeReviewLaunchMounts(reviewAccess.profile, command))
+      : command;
+    const subprocess = this.subprocessFactory(launch.executable, launch.args as string[], {
       ...execaOptions,
+      env: launch.env,
+      // D5: the review env is a complete allowlist; execa must not re-merge
+      // the ambient process environment underneath it.
+      ...(reviewAccess?.kind === 'ready' ? { extendEnv: false } : {}),
       // A daemon feature must retain the diagnostic in its scoped/persisted
       // log. Other callers preserve the existing live inherited stdio path.
       stdout: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
@@ -648,6 +660,8 @@ export class ClaudeProvider implements LLMProvider {
         nativeSchemaUnsupported: true,
       };
     }
+    const accessRefusal = reviewAccessRefusal('claude', options.reviewAccess);
+    if (accessRefusal) return accessRefusal;
     const hasMachineEnvelope = !options.interactive;
     const args = this.buildArgs(options);
 
@@ -677,6 +691,7 @@ export class ClaudeProvider implements LLMProvider {
         onSpawn: options.onSpawn,
         selfHost: options.selfHost,
         spawnPermit: options.spawnPermit,
+        reviewAccess: options.reviewAccess,
       }),
     );
 
@@ -885,6 +900,25 @@ export class ClaudeProvider implements LLMProvider {
    * enforceFreshSessionOptions — no config off-switch.
    */
   private buildEnv(options: InvokeOptions): NodeJS.ProcessEnv {
+    const scratch = options.reviewAccess?.kind === 'ready'
+      ? options.reviewAccess.profile.scratch
+      : undefined;
+    if (scratch !== undefined) {
+      // D5: a contained reviewer gets an allowlisted environment, never the
+      // ambient one — tracker/service credentials and host state are withheld.
+      return buildReviewChildEnvironment('claude', {
+        ...process.env,
+        ...filterReviewChildEnvironment('claude', options.selfHost?.env ?? {}),
+      }, withDaemonSessionMarker({
+        HOME: join(scratch, 'home'),
+        CLAUDE_CONFIG_DIR: join(scratch, 'claude-config'),
+        TMPDIR: join(scratch, 'tmp'),
+        XDG_CONFIG_HOME: join(scratch, 'xdg-config'),
+        XDG_CACHE_HOME: join(scratch, 'xdg-cache'),
+        XDG_DATA_HOME: join(scratch, 'xdg-data'),
+        ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
+      }));
+    }
     // tmux target variables are scrubbed last so neither the inherited env
     // nor a self-host overlay can hand the child the daemon's own pane.
     return scrubTmuxEnvironment(withDaemonSessionMarker({

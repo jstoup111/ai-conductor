@@ -118,7 +118,7 @@ describe('operator park boundary contract', () => {
           },
         });`;
     const buildReviewAdjudicationDispatch = `const dispatched = await this.stepRunner.run('remediate', state, {
-                        retryReason: \`Adjudicate this complete build-review context only; write case-v1 remediation output.\\n\${JSON.stringify(context)}\`,
+                        retryReason: \`Adjudicate this complete build-review context only; write \${requestedMode} remediation output.\\n\${JSON.stringify(context)}\`,
                       });`;
     // A string entry matches the exact statement text; a RegExp entry matches
     // the executionContext-reshaped helper dispatches whose option objects span

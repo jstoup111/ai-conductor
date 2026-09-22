@@ -14,6 +14,8 @@ export interface ResolveScratchHomeOptions {
   readonly runId: string;
   readonly attempt: number;
   readonly provider: SelfHostProviderId;
+  /** A review member prevents sibling rubric candidates sharing scratch. */
+  readonly memberId?: string;
 }
 
 /**
@@ -541,4 +543,125 @@ export function resolveScratchHome(options: ResolveScratchHomeOptions): string {
   }
 
   return join(normalize(worktreeRoot), '.daemon', 'scratch', runId, `${attempt}-${provider}`);
+}
+
+/**
+ * Candidate-private bookkeeping for a read-only build review lives under
+ * tmpdir(), never in the candidate checkout; the containing provider lease
+ * remains the owner and cleanup boundary.
+ *
+ * Every path component below tmpdir(). The top level is per-user so another
+ * local account cannot squat it; each level is verified top-down on acquire.
+ */
+function reviewScratchComponents(options: ResolveScratchHomeOptions): string[] {
+  // Review containment protects the worktree, including its normal provider
+  // lease. Keep mutable reviewer state outside every protected root.
+  const member = options.memberId === undefined ? 'review' : `review-${options.memberId}`;
+  const uid = process.getuid?.();
+  return [
+    `ai-conductor-build-review-${uid === undefined ? 'nouid' : uid}`,
+    String(options.runId), `${options.attempt}-${options.provider}`, member,
+  ];
+}
+
+/** A candidate-owned review scratch lease; unlike provider homes it is external to the worktree. */
+export interface ReviewScratchLease {
+  readonly home: string;
+  release(): Promise<void>;
+}
+
+/** Filesystem boundary for externally located review scratch credentials. */
+export interface ReviewScratchFs {
+  mkdir(path: string, options: { recursive: false; mode: number }): Promise<void>;
+  lstat(path: string): Promise<{
+    readonly uid: number;
+    readonly mode: number;
+    isSymbolicLink(): boolean;
+    isDirectory(): boolean;
+  }>;
+  mkdtemp(prefix: string): Promise<string>;
+  chmod(path: string, mode: number): Promise<void>;
+  rm(path: string, options: { recursive: true; force: true }): Promise<void>;
+}
+
+type ReviewScratchEntry = Awaited<ReturnType<ReviewScratchFs['lstat']>>;
+
+const realReviewScratchFs: ReviewScratchFs = {
+  mkdir: (path, options) => fsp.mkdir(path, options).then(() => {}),
+  lstat: (path) => fsp.lstat(path),
+  mkdtemp: (prefix) => fsp.mkdtemp(prefix),
+  chmod: (path, mode) => fsp.chmod(path, mode),
+  rm: (path, options) => fsp.rm(path, options),
+};
+
+function verifyReviewScratchRoot(root: string, entry: ReviewScratchEntry): void {
+  const uid = process.getuid?.();
+  if (uid === undefined) throw new Error('cannot verify review scratch root ownership: current uid is unavailable');
+  if (entry.isSymbolicLink()) throw new Error(`review scratch root is a symlink: ${root}`);
+  if (!entry.isDirectory()) throw new Error(`review scratch root is not a directory: ${root}`);
+  if (entry.uid !== uid) throw new Error(`review scratch root is not owned by the current uid: ${root}`);
+  if ((entry.mode & 0o077) !== 0) throw new Error(`review scratch root is group/world-accessible: ${root}`);
+}
+
+function isExistingPath(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'EEXIST';
+}
+
+/**
+ * Create-or-verify every component below tmpdir(), top-down and never
+ * recursively. Once a level is proven ours with mode 0700 no other account can
+ * traverse, rename, or replace anything beneath it, so verifying parents before
+ * children leaves no window for an ancestor swap.
+ */
+async function ensureVerifiedReviewScratchRoot(components: readonly string[], fs: ReviewScratchFs): Promise<string> {
+  let current = tmpdir();
+  for (const component of components) {
+    if (component === '' || component === '.' || component === '..' || /[\\/\0]/.test(component)) {
+      throw new Error(`unsafe review scratch path component: ${JSON.stringify(component)}`);
+    }
+    current = join(current, component);
+    try {
+      await fs.mkdir(current, { recursive: false, mode: 0o700 });
+    } catch (error) {
+      if (!isExistingPath(error)) {
+        throw new Error(`cannot create review scratch root ${current}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    let entry: ReviewScratchEntry;
+    try {
+      entry = await fs.lstat(current);
+    } catch (error) {
+      throw new Error(`cannot verify review scratch root ${current}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    verifyReviewScratchRoot(current, entry);
+  }
+  return current;
+}
+
+export async function acquireReviewScratchHome(
+  options: ResolveScratchHomeOptions & {
+    readonly fs?: ReviewScratchFs;
+    /** Seed provider-private read-only credentials before review containment starts. */
+    readonly seed?: (home: string) => Promise<void>;
+  },
+): Promise<ReviewScratchLease> {
+  const fs = options.fs ?? realReviewScratchFs;
+  const root = await ensureVerifiedReviewScratchRoot(reviewScratchComponents(options), fs);
+  const home = await fs.mkdtemp(join(root, 'review-'));
+  await fs.chmod(home, 0o700);
+  try {
+    await options.seed?.(home);
+  } catch (error) {
+    await fs.rm(home, { recursive: true, force: true });
+    throw error;
+  }
+  let released = false;
+  return {
+    home,
+    async release() {
+      if (released) return;
+      released = true;
+      await fs.rm(home, { recursive: true, force: true });
+    },
+  };
 }

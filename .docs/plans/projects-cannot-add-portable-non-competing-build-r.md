@@ -88,6 +88,8 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - The installed-policy resolver selects the project, global, and plugin-qualified fixtures with exact canonical source/plugin identity; aliases of one installation collapse and original files remain unchanged.
 - The resolver refuses distinct-origin ambiguity even for byte-equal copies, selects the explicitly qualified source, and names absent, unreadable, disabled, marketplace-only, or incomplete installations without substituting another copy.
+- The resolver unit test 'lets one enabled global installation supply the policy with no local copy and leaves another project's selection unchanged' proves that selecting the global installation requires no local installation and that another project's own project-source selection resolves identically before and after, with its catalog descriptors untouched.
+- The resolver unit test 'names a %s selected installation failure without substituting another copy' proves a disabled, marketplace-only, incomplete, unreadable, or absent installation is only reported: the offered catalog is byte-equal before and after resolution, so nothing is downloaded, no plugin is enabled, and no cached or alternative copy is chosen.
 
 **Files:** `src/conductor/src/engine/build-review-policy.ts`; `src/conductor/src/engine/build-review-policy-resolver.ts`; `src/conductor/test/engine/build-review-policy-resolver.test.ts`
 
@@ -189,6 +191,7 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - The bundle loader rejects missing/unreadable resources, broken local references, escaping/cyclic links, and special-file fixtures with the offending resource named and no eligible bundle.
 - Boundary fixtures accept 4096 files and 64 MiB but refuse either exceeded limit without a partial manifest, judging call, or cache lookup.
+- Every named resource defect above rejects before any eligible bundle exists, and the runner integration test 'publishes a first-use custom loading failure with its declaration and no invented content' proves that after such a loading failure the candidate requests no judgment from the provider and makes no cache lookup for that policy on any lap.
 
 **Files:** `src/conductor/src/engine/build-review-policy-bundle.ts`; `src/conductor/test/engine/build-review-policy-bundle.test.ts`
 
@@ -288,6 +291,8 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - The production containment adapter reaches its fake process boundary and admits scratch writes while refusing protected source/installation/engine-state writes and sibling-evidence reads under the generated mount profile.
 - Missing bubblewrap, a successful protected write, failed scratch write, or unsupported nested sandbox yields a named unsupported-capability failure and zero reviewer launches with no writable fallback.
+- Given a reviewer attempts to modify protected input or read a sibling's private review evidence, when that access is attempted, then it cannot alter protected state or obtain the sibling evidence, and no later rubric observes a changed input caused by that reviewer because the frozen source, frozen baseline, policy material, original checkout, installation, and engine evidence every rubric reads are bound read-only while the sibling evidence root is masked, asserted by the containment unit test 'proves read-only review access through the production process boundary'.
+- The containment unit test 'refuses review preparation when containment has %s' proves that missing bubblewrap, a successful protected write, a failed scratch write, or an unsupported nested sandbox yields an unsupported result naming the provider, the missing linux-read-only-review-boundary capability, and the install-bubblewrap-and-enable-nested-sandboxing recovery action before any reviewer launches.
 
 **Files:** `src/conductor/src/engine/build-review-containment.ts`; `src/conductor/src/engine/self-host/provider-scratch.ts`; `src/conductor/test/engine/build-review-containment.test.ts`
 
@@ -328,6 +333,7 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - Auxiliary lifecycle tests observe prepare before the candidate operation and exactly one cleanup after hit, invoke success, authentication failure, malformed result, timeout, or cancellation.
 - Existing unavailability classification, session policy, attempt accounting, and non-review callers retain their behavior; cancellation/preparation failure cannot emit a claimed judgment or cache hit.
+- The auxiliary lifecycle tests 'classifies a cancelled prepared candidate without claiming a judgment or cache hit' and 'classifies a timed-out prepared candidate without invoking its operation' prove that preparation ending before policy resolution leaves the candidate unsuccessful with no invocation, no operation call, no claimed cache hit, and no judged artifact, so it supplies no successful coverage.
 
 **Files:** `src/conductor/src/engine/provider-execution.ts`; `src/conductor/test/engine/provider-execution.test.ts`
 
@@ -349,6 +355,7 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - The public build-review runner delivers unchanged installed project/global/plugin criteria through both real provider adapters and publishes engine-stamped judged results from the actual candidate.
 - Runner integration observes zero affected judgments for ambiguity, missing/disabled installations, invalid resources, and declared incompatibility; runtime unsupported, auth, cancellation, and malformed output preserve their distinct failures and cleanup.
+- The runner integration test 'refuses an ambiguous installed selection without invoking a provider' proves the ambiguity report names the conflicting installed sources and requests disambiguation with the literal 'choose one source explicitly' guidance, invoking neither policy.
 
 **Files:** `src/conductor/src/engine/step-runners.ts`; `src/conductor/src/engine/build-review-coordinator.ts`; `src/conductor/test/integration/build-review-custom-policy.integration.test.ts`
 
@@ -388,6 +395,7 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - Temporary-cache integration preserves separate warm preferred/fallback entries and only reads an entry whose full effective candidate identity and validated result match.
 - Legacy missing-evidence entries miss with their staged cause, malformed entries miss as invalid, and interrupted/failed writes cannot publish an eligible partial result or destroy the other candidate entry.
+- Given a legacy entry lacks effective-policy evidence or a stored entry is malformed, when review encounters it, then it misses without fabricating provenance (the lookup performs zero writes and zero renames, so no provenance is invented or rewritten) and only a newly valid result can replace it (only a validated judged write, never a skip or infrastructure failure, atomically replaces the entry), asserted by the cache unit tests 'treats a missing entry as a non-mutating miss and preserves malformed evidence as invalid', 'stores one versioned semantic judgement per feature-scoped rubric with atomic replacement', and 'refuses to persist skips and infrastructure failures as reusable cache state'.
 
 **Files:** `src/conductor/src/engine/build-review-cache.ts`; `src/conductor/test/engine/build-review-cache.test.ts`
 
@@ -409,6 +417,8 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - Runner integration observes prepare → resolve/capture → lookup → optional judge/validated write → cleanup for each actual candidate; a load failure never reaches lookup/write and cannot buy a fallback.
 - Alternating early/late-unavailable candidates reuse only their own warm results without overwrite, borrowed preferred policy, another judging call, or duplicate token accounting; incompatible, legacy, or malformed entries re-judge.
+- The candidate-cache integration test 'resolves the prepared provider candidate before its model ladder judges' proves the fallback candidate that actually judged reports its own producing identity in the published branch artifact's producer and result candidate, and reviewed under the same declaration as the preferred candidate would have.
+- The candidate-cache integration test 'reports failed policy coverage when the fallback provider %s instead of borrowing the preferred policy' proves that a fallback provider lacking the selected policy or resolving it ambiguously resolves the policy for itself, records a policy-load-failed infrastructure failure with no judged descriptor, and never judges under the preferred provider's policy or a silently substituted installation.
 
 **Files:** `src/conductor/src/engine/step-runners.ts`; `src/conductor/src/engine/build-review-coordinator.ts`; `src/conductor/src/engine/provider-execution.ts`; `src/conductor/test/integration/build-review-candidate-cache.integration.test.ts`
 
@@ -496,6 +506,8 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - Artifact round-trip integration preserves original policy/source/plugin/version/content/input/provider/model attribution and a separate current-lap reuse reference with no invented execution or charge.
 - Reading removed/disabled/changed custom configurations preserves historic descriptors while excluding those old results from current membership; loading/invocation failures never claim unknown criteria were judged.
+- The aggregate unit test 'keeps a disabled rubric's cached findings inspectable while supplying no current blocker or repair source' proves a formerly enabled rubric's judged findings remain fully readable from the aggregate after it is disabled, while the verdict passes and the adjudication source projection contains none of them, so no new repair work can arise from them.
+- The artifact unit test 'round-trips versioned self-describing custom judgement provenance and a separate current-lap reuse link' proves published evidence identifies the semantic skill identity and the declaration it was judged under, and that evidence dropping either is rejected as not self-describing.
 
 **Files:** `src/conductor/src/engine/build-review-artifacts.ts`; `src/conductor/src/engine/build-review-aggregate.ts`; `src/conductor/test/engine/build-review-artifacts.test.ts`; `src/conductor/test/engine/build-review-aggregate.test.ts`
 
@@ -560,6 +572,12 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 
 **Files:** `src/conductor/src/engine/build-review-dispositions.ts`; `src/conductor/src/engine/build-review-effective.ts`; `src/conductor/test/engine/build-review-dispositions.test.ts`; `src/conductor/test/engine/build-review-effective.test.ts`
 
+> **Amended 2026-09-12 by operator authorization on #2523:** The operator approved repairing the prerequisite artifact/producer path as part of Task 26. This is a bounded file-scope correction for the existing Story 17 outcomes, not new feature scope. Task 23's current failure envelope rejects declaration metadata, and the custom dispatch path returns before assembling durable failure evidence. Preserve the validated declaration (id, semantic skill, question, source, explicit resources) on exhausted custom infrastructure failures and through artifact/aggregate round trips so the existing declaration-and-closed-reason waiver can be matched. Do not fabricate content digests or judged results, weaken the minimum-judged-coverage rule, or broaden operator waivers. Task 26 owns this prerequisite repair and its integration proof; previously completed tasks retain their status.
+
+**Files:** `src/conductor/src/engine/build-review-artifacts.ts`; `src/conductor/src/engine/step-runners.ts`; `src/conductor/src/engine/build-review-aggregate.ts`; `src/conductor/test/engine/build-review-artifacts.test.ts`; `src/conductor/test/engine/build-review-aggregate.test.ts`; `src/conductor/test/integration/build-review-custom-policy.integration.test.ts`; `src/conductor/test/engine/step-runners.test.ts`
+
+The additional Files declaration extends the original list above. Change aggregate code only where required to preserve and consume this failure evidence. Verify through the custom-policy dispatch boundary that an exhausted first-load failure retains the declaration without claiming content was loaded, and that exact current operator coverage can apply with a healthy judged sibling while changed declarations/reasons and wholly unjudged laps remain blocked. Run only the affected checks through the scoped runner; the existing aggregate gate owns the full-suite run.
+
 **Dependencies:** Task 1, Task 23
 
 ### Task 27: Expose custom operator decisions through existing CLI and late-state checks
@@ -579,6 +597,7 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 - Existing operator CLI operations record exact custom risk or digestless declaration/reason coverage only with current identity, rationale, terminal, feature, and exhaustion checks; non-operator and invalid-declaration requests cannot write.
 - A disposition recorded after judging begins is honored at application without stale overwrite or unrelated-finding clearance, and every applicable failure stays visibly unjudged.
 - Through build-review accept and build-review record-reduced-coverage, CLI integration requires the existing --feature, --lap, --rationale and the appropriate --finding or --rubric selector, derives the closed reason from current engine state, and refuses stale laps or duplicate decisions without modifying the store.
+- Given an exact current operator accepted-risk decision covers a custom finding, when review evaluates it, then that finding remains visible as operator-resolved (it is listed in acceptedFindingIds and acceptedDispositions with its operator and rationale) and does not create autonomous repair work (unresolvedFindingIds is empty and the verdict is PASS), asserted by the CLI unit test 'renders the operator disposition of an accepted custom finding' and the dispositions unit test 'persists and matches accepted custom risk only for the exact judged declaration and content'.
 
 **Files:** `src/conductor/src/engine/build-review-cli.ts`; `src/conductor/src/engine/build-review-disposition.ts`; `src/conductor/src/engine/build-review-dispositions.ts`; `src/conductor/test/engine/build-review-cli.test.ts`; `src/conductor/src/cli.ts`
 
@@ -646,7 +665,9 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - The case validator accepts exhaustive duplicate/consistent graphs but rejects omitted, duplicate, invented, unresolved-merge, nonexistent-reference, missing-consistency, contradictory-outcome, and missing-admission fixtures.
 - Validation/application integration authorizes zero action effects for any invalid graph, blocked consistency, or escalation, including otherwise valid sibling actions.
+- Given the conflict remains unresolved, when the aggregate reports blocked consistency, then no action from that adjudication reaches the worker (the authorized action case set is empty, so no work order is dispatched) and the stop identifies the implicated findings and rationale (the persisted consistency stop carries the implicated source ids and its rationale, and the derived halt reason names them), asserted by the case validator unit test 'authorizes zero sibling action effects for blocked consistency' and the adjudication unit test 'persists a blocked consistency stop and derives its halt from the durable evidence'.
 - Case-v2 validation delegates refutations to the inherited one-time attempted-act refutation validator: invalid binding, missing high-confidence assertion evidence, unresolvable current-tree path/excerpt, or repeated refutation rejects the whole judgment with no action effects.
+- The case validator unit test 'rejects %s before any action is authorized' proves that a decision omitting consistency, carrying contradictory outcomes, or referencing nonexistent findings or cases is rejected with a typed reason reporting that specific defect while zero action effects are authorized.
 
 **Files:** `src/conductor/src/engine/remediation-case-validator.ts`; `src/conductor/src/engine/build-review-adjudication.ts`; `src/conductor/test/engine/remediation-case-validator.test.ts`
 
@@ -752,6 +773,8 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - Work-order application publishes one durable prioritized repair set containing only admitted act outcomes, with real task ids, rationale, and complete custom/merged source links.
 - Blocked/escalated/invalid/stale-lap results and all non-action dispositions publish no repair work; late exact operator decisions are respected without dropping unrelated unresolved sources.
+- The effects unit test 'publishes only current admitted acts with their custom source links and admission rationale' proves the published repair cites the admitting task id and carries the admission rationale explaining how the repair fits that approved task scope, and the validator rejects a task action with no admission rationale.
+- The effects unit test 'publishes only current admitted acts with their custom source links and admission rationale' proves exactly one repair route is charged, for the one admitted act's effect within the remaining allowance, while sibling escalated and deferred cases charge nothing.
 
 **Files:** `src/conductor/src/engine/build-review-work-order.ts`; `src/conductor/src/engine/remediation-case-effects.ts`; `src/conductor/test/engine/build-review-work-order.test.ts`; `src/conductor/test/engine/remediation-case-effects.test.ts`
 
@@ -1052,3 +1075,84 @@ All 43 citable decisions extracted by the repository parser from the seven chang
 - The 40-task size is at the normal supported ceiling. At five minutes per focused task the nominal task work is about 3 hours 20 minutes, excluding queued gates, review, and environment setup; this is a sizing aid rather than a delivery-time guarantee. Consider splitting if that implementation batch is too large; the current artifact preserves the already approved full feature scope.
 - Load-bearing design choices are operator-approved. Module entry points and existing lifecycle/store/parser seams were verified against the local baseline. The two host metadata formats were inspected during DECIDE; adapter failure tests cover unsupported formats. Live provider behavior and the private Kotlin package remain outside the claimed verification.
 - Protected-target, overlap, diagram rendering, and repository integrity results are recorded with this plan's review; none is represented as implemented runtime proof.
+
+### Task rem-as-built-rem-ab9-1: docs/reference/configuration.md build_review section (~:1081-1169) — add a build_review.custom_rubrics reference: skill/question/source/resources fields, default-disabled, 32-declaration cap, id grammar, adjudication requirement, source selection and ambiguity, supporting resources, Linux bubblewrap containment readiness, unsupported-policy errors, cache identity, and decision stops; keep the existing testQuality rows and reword :1094 so it no longer implies testQuality is the only reviewable rubric
+**Gate:** as-built
+**Rationale:** ADR D12 requires consumer guidance (selection, ambiguity, resources, containment readiness, unsupported-policy errors, cache identity, decision stops) and none exists: docs/reference/configuration.md:1094 still says build_review.rubrics is 'testQuality only' with no custom_rubrics entry, and docs/explanation/gates.md:130 and :427 say the container ships only testQuality. This is documentation drift that preserves the approved architecture, and no plan task Files list names these docs (FR-17 was reclassified as delivery documentation), so it is appended build work; existing testQuality docs content is kept, not removed.
+**Governing clause:** adr-2026-09-10-portable-build-review-policy D12
+**Done when:**
+- adr-2026-09-10-portable-build-review-policy D12 is satisfied by this task.
+
+### Task rem-as-built-rem-ab9-2: docs/explanation/gates.md:130 and :427 — replace 'currently only testQuality' / 'ships only testQuality' with the built-in testQuality plus opt-in installed custom rubrics, linking the configuration reference section added by rem-ab9-1
+**Gate:** as-built
+**Rationale:** ADR D12 requires consumer guidance (selection, ambiguity, resources, containment readiness, unsupported-policy errors, cache identity, decision stops) and none exists: docs/reference/configuration.md:1094 still says build_review.rubrics is 'testQuality only' with no custom_rubrics entry, and docs/explanation/gates.md:130 and :427 say the container ships only testQuality. This is documentation drift that preserves the approved architecture, and no plan task Files list names these docs (FR-17 was reclassified as delivery documentation), so it is appended build work; existing testQuality docs content is kept, not removed.
+**Governing clause:** adr-2026-09-10-portable-build-review-policy D12
+**Done when:**
+- adr-2026-09-10-portable-build-review-policy D12 is satisfied by this task.
+
+### Task rem-as-built-rem-ab1-1: src/conductor/src/engine/build-review-coordinator.ts:624-641 — evaluate the input.useCandidateCache branch BEFORE the engineIdentity.skillDigests availability gate so an unavailable harness-root digest can no longer pre-empt actual-candidate resolution; keep that digest gate (its cache-read-failed resolution and build_review_rubric_infrastructure_failure emit) reachable and unchanged on the legacy useCandidateCache:false path, and in the same change scope the counterpart producer src/conductor/src/engine/step-runners.ts:2176-2197 resolveBuildReviewEngineIdentity so the harness-root skillDigests map is documented and consumed as legacy-path-only evidence while engineStamp remains the per-run engine content stamp both paths use
+**Gate:** as-built
+**Rationale:** Verified at 95% from current source: build-review-coordinator.ts:624-632 rejects an unavailable harness-root skill digest before the useCandidateCache branch at :637-641, so the candidate-local built-in policy load at step-runners.ts:3154-3173 never runs in that state, violating APPROVED adr-2026-09-10-portable-build-review-policy D6; the approved architecture already covers the fix, so this is conforming implementation drift, not an architecture question. The fix preserves Task 20's delivered behavior ('refuses warm harness-root evidence when the actual candidate cannot load its policy') by keeping the candidate-local fail-closed load and the per-run engine content stamp, and preserves the legacy non-candidate coordinator seam's cache-read-failed refusal. Sweep: the harness-root digest map produced by resolveBuildReviewEngineIdentity (step-runners.ts:2176-2197) and the coordinator gate that consumes it are the matched pair and are changed together; the ancillary docs/explanation/gates.md:528-532 prose that still describes cache identity as an installed SKILL.md digest was found and is deliberately excluded because the as-built review classes it non-blocking and no active plan task admits that documentation edit.
+**Governing clause:** adr-2026-09-10-portable-build-review-policy D6
+**Done when:**
+- adr-2026-09-10-portable-build-review-policy D6 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab1-1 is complete.
+
+### Task rem-as-built-rem-ab1-2: src/conductor/test/integration/build-review-builtin-candidate.integration.test.ts and src/conductor/test/engine/build-review-coordinator.test.ts — add RED-first coverage: with the harness-root skills/<rubric>/SKILL.md unreadable, the candidate path at step-runners.ts:3154-3173 still resolves the actual installed policy, captures its bundle and judges/caches; and assert the retained legacy behavior that a useCandidateCache:false coordinator call with an unavailable digest still resolves cache-read-failed and emits build_review_rubric_infrastructure_failure, plus the retained Task 20 refusal when the actual candidate itself cannot load its policy
+**Gate:** as-built
+**Rationale:** Verified at 95% from current source: build-review-coordinator.ts:624-632 rejects an unavailable harness-root skill digest before the useCandidateCache branch at :637-641, so the candidate-local built-in policy load at step-runners.ts:3154-3173 never runs in that state, violating APPROVED adr-2026-09-10-portable-build-review-policy D6; the approved architecture already covers the fix, so this is conforming implementation drift, not an architecture question. The fix preserves Task 20's delivered behavior ('refuses warm harness-root evidence when the actual candidate cannot load its policy') by keeping the candidate-local fail-closed load and the per-run engine content stamp, and preserves the legacy non-candidate coordinator seam's cache-read-failed refusal. Sweep: the harness-root digest map produced by resolveBuildReviewEngineIdentity (step-runners.ts:2176-2197) and the coordinator gate that consumes it are the matched pair and are changed together; the ancillary docs/explanation/gates.md:528-532 prose that still describes cache identity as an installed SKILL.md digest was found and is deliberately excluded because the as-built review classes it non-blocking and no active plan task admits that documentation edit.
+**Governing clause:** adr-2026-09-10-portable-build-review-policy D6
+**Done when:**
+- adr-2026-09-10-portable-build-review-policy D6 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab1-2 is complete.
+
+### Task rem-as-built-rem-ab2-1: src/conductor/src/engine/build-review-cache.ts:300-321 — when the exact candidate-identity path misses, additionally scan the rubric's candidate-partitioned directory (cacheEntryPath's join(directory, rubric)) for a prior entry so an entry stored under a different engineStamp or effectiveBundleDigest reaches classifyBuildReviewCacheLookup and classifies as engine-version-mismatch / skill-digest-mismatch instead of being invisible; keep the existing legacy flat-path fallback and its semantic-identity-missing miss, keep malformed entries an invalid miss, and change no write path so Task 18's partitioned preferred/fallback coexistence and no-partial-write guarantees survive
+**Gate:** as-built
+**Rationale:** Verified at 95% from current source: production sets useCandidateCache:true (step-runners.ts:2288-2294) and exits the coordinator before its sole build_review_cache_discarded emitter (build-review-coordinator.ts:668-676), while the candidate-local lookups at step-runners.ts:2793-2808 and :3208-3224 emit build_review_cache_hit only and readBuildReviewCacheEntry (build-review-cache.ts:300-321) reads only the exact candidate-identity path plus the legacy flat path, so an entry judged under a prior engine stamp or bundle digest is invisible and the APPROVED adr-2026-08-21 D5 discard event cannot be emitted. Task 40's Done-when already requires 'cache discard publication retains existing engine/skill mismatch events' and that ordinary projection/policy misses gain no discard event, so this is implementation drift under approved architecture. No existing assertion is removed: Task 18's staged legacy/malformed miss reasons and the write path are untouched, and the discard reason set is derived from one shared helper rather than duplicated at the new emission site.
+**Governing clause:** adr-2026-08-21-engine-identity-in-build-review-cache-key D5
+**Done when:**
+- adr-2026-08-21-engine-identity-in-build-review-cache-key D5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-1 is complete.
+
+### Task rem-as-built-rem-ab2-2: src/conductor/src/engine/step-runners.ts:2793-2808 and :3208-3224 — emit the existing build_review_cache_discarded event from the candidate-local cache classification for exactly the governed reasons engine-version-mismatch and skill-digest-mismatch, carrying cachedEngineStamp when present and the current engineIdentity.engineStamp; extract the single emit helper (reason set + payload shape) now inlined at src/conductor/src/engine/build-review-coordinator.ts:668-676 and call it from both sites so the reason enumeration exists in one place and cannot drift, adding no new event type
+**Gate:** as-built
+**Rationale:** Verified at 95% from current source: production sets useCandidateCache:true (step-runners.ts:2288-2294) and exits the coordinator before its sole build_review_cache_discarded emitter (build-review-coordinator.ts:668-676), while the candidate-local lookups at step-runners.ts:2793-2808 and :3208-3224 emit build_review_cache_hit only and readBuildReviewCacheEntry (build-review-cache.ts:300-321) reads only the exact candidate-identity path plus the legacy flat path, so an entry judged under a prior engine stamp or bundle digest is invisible and the APPROVED adr-2026-08-21 D5 discard event cannot be emitted. Task 40's Done-when already requires 'cache discard publication retains existing engine/skill mismatch events' and that ordinary projection/policy misses gain no discard event, so this is implementation drift under approved architecture. No existing assertion is removed: Task 18's staged legacy/malformed miss reasons and the write path are untouched, and the discard reason set is derived from one shared helper rather than duplicated at the new emission site.
+**Governing clause:** adr-2026-08-21-engine-identity-in-build-review-cache-key D5
+**Done when:**
+- adr-2026-08-21-engine-identity-in-build-review-cache-key D5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-2 is complete.
+
+### Task rem-as-built-rem-ab2-3: src/conductor/test/engine/build-review-cache.test.ts and src/conductor/test/integration/build-review-candidate-cache.integration.test.ts — add RED-first coverage that a warm entry written under a prior engine stamp or prior effective bundle digest now classifies as engine-version-mismatch / skill-digest-mismatch on the production candidate path and publishes build_review_cache_discarded once, while asserting the retained Task 40 negative that an ordinary projection or policy miss emits no discard event and the retained Task 18 assertions for legacy, malformed, and cross-candidate entries
+**Gate:** as-built
+**Rationale:** Verified at 95% from current source: production sets useCandidateCache:true (step-runners.ts:2288-2294) and exits the coordinator before its sole build_review_cache_discarded emitter (build-review-coordinator.ts:668-676), while the candidate-local lookups at step-runners.ts:2793-2808 and :3208-3224 emit build_review_cache_hit only and readBuildReviewCacheEntry (build-review-cache.ts:300-321) reads only the exact candidate-identity path plus the legacy flat path, so an entry judged under a prior engine stamp or bundle digest is invisible and the APPROVED adr-2026-08-21 D5 discard event cannot be emitted. Task 40's Done-when already requires 'cache discard publication retains existing engine/skill mismatch events' and that ordinary projection/policy misses gain no discard event, so this is implementation drift under approved architecture. No existing assertion is removed: Task 18's staged legacy/malformed miss reasons and the write path are untouched, and the discard reason set is derived from one shared helper rather than duplicated at the new emission site.
+**Governing clause:** adr-2026-08-21-engine-identity-in-build-review-cache-key D5
+**Done when:**
+- adr-2026-08-21-engine-identity-in-build-review-cache-key D5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-3 is complete.
+
+### Task rem-as-built-rem-ab3-1: src/conductor/src/engine/step-runners.ts:2569-2586 (dispatchInstalledBuildReviewPolicy) — construct a per-dispatch AbortController and an absolute deadlineAt derived from the member's already-resolved execution policy timeout (mirroring the controller+timer pattern at :3384-3386) and pass abortSignal and deadlineAt into executeAuxiliaryProviderCandidates so provider-execution.ts:867-886 and :1115 arm the existing discovery listener/timer at :2610-2648; clear the timer and abort the controller in the existing finally/teardown path so no timer or listener outlives the dispatch
+**Gate:** as-built
+**Rationale:** Verified at 96% from the complete production caller chain: the custom-policy auxiliary dispatch at step-runners.ts:2578-2586 passes neither abortSignal nor deadlineAt, and provider-execution.ts:867-886,1115 only forwards those optional inputs, so the discovery abort listener and deadline timer at step-runners.ts:2610-2648 are never armed and a hung metadata host can outlive its intended bound, failing Task 6's requirement that no detached discovery survives cleanup; the machinery already exists and only the authority wiring is missing, so this is implementation drift under approved architecture. Sweep: the built-in candidate dispatch at step-runners.ts:3118-3145 is the same shape — it also supplies no abortSignal/deadlineAt while its prepared-candidate operation calls buildReviewPolicyCatalog at :3160-3165 with no signal or deadline — and is included in the same task rather than left to reappear as the next lap's finding. No existing assertion or timeout behavior is removed; the deadline derives from the already-resolved execution policy rather than a new literal.
+**Parent task:** 6
+**Governing clause:** Task 6
+**Done when:**
+- Task 6 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab3-1 is complete.
+
+### Task rem-as-built-rem-ab3-2: src/conductor/src/engine/step-runners.ts:3118-3145 — give the built-in candidate dispatch the same cancellation/deadline authority (the sibling site of the same shape) and forward context.abortSignal and context.deadlineAt into the buildReviewPolicyCatalog call at :3160-3165, so built-in installed-policy discovery is bounded identically to the custom path and neither call can hang past candidate teardown
+**Gate:** as-built
+**Rationale:** Verified at 96% from the complete production caller chain: the custom-policy auxiliary dispatch at step-runners.ts:2578-2586 passes neither abortSignal nor deadlineAt, and provider-execution.ts:867-886,1115 only forwards those optional inputs, so the discovery abort listener and deadline timer at step-runners.ts:2610-2648 are never armed and a hung metadata host can outlive its intended bound, failing Task 6's requirement that no detached discovery survives cleanup; the machinery already exists and only the authority wiring is missing, so this is implementation drift under approved architecture. Sweep: the built-in candidate dispatch at step-runners.ts:3118-3145 is the same shape — it also supplies no abortSignal/deadlineAt while its prepared-candidate operation calls buildReviewPolicyCatalog at :3160-3165 with no signal or deadline — and is included in the same task rather than left to reappear as the next lap's finding. No existing assertion or timeout behavior is removed; the deadline derives from the already-resolved execution policy rather than a new literal.
+**Parent task:** 6
+**Governing clause:** Task 6
+**Done when:**
+- Task 6 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab3-2 is complete.
+
+### Task rem-as-built-rem-ab3-3: src/conductor/test/engine/build-review-policy-catalog-failures.test.ts and src/conductor/test/integration/build-review-custom-policy.integration.test.ts — add RED-first coverage that from the real production dispatch entry point a metadata transport that never resolves is cancelled by candidate abort and terminated at the deadline, classifying as the named cancelled/timeout policy-load failures with zero judge or cache calls and no surviving timer, listener, or child; cover both the custom and the built-in candidate dispatch, using the injected fake transport and a fixture-owned private boundary, never a real host CLI
+**Gate:** as-built
+**Rationale:** Verified at 96% from the complete production caller chain: the custom-policy auxiliary dispatch at step-runners.ts:2578-2586 passes neither abortSignal nor deadlineAt, and provider-execution.ts:867-886,1115 only forwards those optional inputs, so the discovery abort listener and deadline timer at step-runners.ts:2610-2648 are never armed and a hung metadata host can outlive its intended bound, failing Task 6's requirement that no detached discovery survives cleanup; the machinery already exists and only the authority wiring is missing, so this is implementation drift under approved architecture. Sweep: the built-in candidate dispatch at step-runners.ts:3118-3145 is the same shape — it also supplies no abortSignal/deadlineAt while its prepared-candidate operation calls buildReviewPolicyCatalog at :3160-3165 with no signal or deadline — and is included in the same task rather than left to reappear as the next lap's finding. No existing assertion or timeout behavior is removed; the deadline derives from the already-resolved execution policy rather than a new literal.
+**Parent task:** 6
+**Governing clause:** Task 6
+**Done when:**
+- Task 6 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab3-3 is complete.

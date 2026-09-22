@@ -8,6 +8,7 @@ import {
   parseBuildReviewInfrastructureFailure,
   type BuildReviewInfrastructureFailureReason,
 } from './build-review-domain.js';
+import { isBuildReviewCustomInfrastructureFailureReason } from './build-review-artifacts.js';
 import { boundedHeadTailExcerpt } from './build-review-test-quality-preflight.js';
 import { createConductStateLease } from './conduct-state-lease.js';
 import type { ConductStateLeaseFailureKind } from './conduct-state-lease.js';
@@ -293,7 +294,11 @@ function isLastMechanicalFault(value: unknown): value is KickbackLastMechanicalF
     reason: fault.reason,
     detail: fault.detail,
   });
-  return infrastructureFailure !== undefined &&
+  // A project-defined rubric charges the same allowance under its own failure
+  // vocabulary; rejecting it would make the gate unreadable after one fault.
+  const customInfrastructureFailure = isNonEmptyString(fault.rubric) &&
+    isBuildReviewCustomInfrastructureFailureReason(fault.reason) && isNonEmptyString(fault.detail);
+  return (infrastructureFailure !== undefined || customInfrastructureFailure) &&
     typeof fault.lapId === 'string' && fault.lapId.trim().length > 0;
 }
 

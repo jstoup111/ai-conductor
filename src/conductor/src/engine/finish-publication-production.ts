@@ -317,7 +317,15 @@ export function createProductionFinishPublicationCoordinator(
       records: reducedCoverage.records,
       currentFailures: aggregate === undefined
         ? []
-        : Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
+        : [
+            ...Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
+            ...(aggregate.currentCustomRubrics ?? []).flatMap((rubric) => {
+              const member = aggregate.customResults?.[rubric];
+              return member?.result.kind === 'infrastructure-failure' && member.declaration !== undefined
+                ? [{ rubric, reason: member.result.reason, detail: member.result.detail, declaration: member.declaration }]
+                : [];
+            }),
+          ],
     });
     if (!renderedReducedCoverage.ok) throw new Error(`accepted-risk projection: ${renderedReducedCoverage.message}`);
     const { stdout } = await deps.gh(['pr', 'view', prUrl, '--json', 'body'], { cwd: deps.projectRoot });

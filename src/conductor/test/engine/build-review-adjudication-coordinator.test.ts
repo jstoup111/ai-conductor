@@ -1,4 +1,4 @@
-// Covers: task:6, task:12, task:14, task:16, task:rem-as-built-rem-ab1-4
+// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review
 import { persistBuildReviewSuppressions } from '../../src/engine/build-review-suppression-history.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
+import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
@@ -61,6 +62,60 @@ const rawSource = projectBuildReviewAggregateSources(aggregate)![0]!;
 const sourceId = buildReviewAdjudicationSourceId(rawSource);
 const findingId = rawSource.findingId;
 const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
+const CUSTOM_DIGEST = `sha256:${'c'.repeat(64)}`;
+
+function customMixedAggregate(criteria?: readonly string[], regionHash = `sha256:${'a'.repeat(64)}`) {
+  const declaration = {
+    version: 'v1' as const, rubricId: 'security', semanticSkill: 'security-review',
+    question: 'Does the changed code preserve the security boundary?',
+    source: 'project' as const, resources: ['criteria/security.md'],
+  };
+  const descriptor = {
+    version: 'v1' as const, semanticSkill: 'security-review', declaration,
+    installation: { source: 'project' as const },
+    effectivePolicy: { version: 'v1' as const, bundleDigest: CUSTOM_DIGEST },
+    ...(criteria === undefined ? {} : { criteria }),
+    reviewedInput: { version: 'v1' as const, contentDigest: CUSTOM_DIGEST },
+    producer: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' },
+  };
+  const sourceRegion = {
+    path: 'src/handler.ts', startLine: 12, endLine: 16,
+    contentHash: regionHash, display: 'authorization handler',
+  };
+  const judged = stampBuildReviewCustomJudgedResult({
+    kind: 'custom-findings', version: 'v1', findings: [{
+      concernId: 'authorization-bypass', summary: 'The changed handler bypasses authorization.',
+      evidenceLocations: ['src/handler.ts:12'], confidence: 92, sourceRegions: [sourceRegion],
+    }],
+  }, {
+    rubric: 'security', lapId: 'lap-custom-mixed', declaration,
+    policy: descriptor.effectivePolicy, candidate: descriptor.producer,
+    reviewedInput: descriptor.reviewedInput,
+  }, { sourceRegions: [sourceRegion] })!;
+  return joinBuildReviewRubricOutcomes({
+    lapId: 'lap-custom-mixed' as never, snapshotDigest: 'snapshot-custom-mixed',
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId: 'lap-custom-mixed' as never,
+        snapshotDigest: 'snapshot-custom-mixed', contractVersion: 'v3', findings: [], verdict: 'PASS',
+      },
+    },
+    customResults: {
+      security: { descriptor, result: judged },
+      availability: {
+        declaration: {
+          version: 'v1', rubricId: 'availability', semanticSkill: 'availability-review',
+          question: 'Is the installed policy available?', source: 'project', resources: ['criteria/availability.md'],
+        },
+        result: {
+          kind: 'infrastructure-failure', rubric: 'availability', reason: 'policy-load-failed',
+          detail: 'custom policy metadata is unavailable',
+        },
+      },
+    },
+    currentCustomRubrics: ['security', 'availability'],
+  } as never);
+}
 
 const securityAggregate = joinBuildReviewRubricOutcomes({
   lapId: 'lap-security' as never,
@@ -342,6 +397,189 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
   });
 
+  it('adjudicates one eligible custom source in a mixed lap while retaining its sibling coverage blocker', async () => {
+    const root = await projectRoot();
+    const mixed = customMixedAggregate();
+    const customSource = projectBuildReviewAggregateSources(mixed)!.find((source) => source.rubric === 'security')!;
+    const sourceId = buildReviewAdjudicationSourceId(customSource);
+    const judge = vi.fn(async (context: unknown): Promise<RemediationCaseJudgement> => {
+      expect(context).toMatchObject({
+        mode: 'case-v2',
+        currentFindings: [expect.objectContaining({ sourceId, rubric: 'security' })],
+      });
+      return {
+        mode: 'case-v2', domain: 'build_review',
+        sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'case-security' }],
+        cases: [{
+          caseRef: 'case-security', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The admitted task owns the authorization repair.',
+          effect: {
+            kind: 'action', route: 'build', tasks: [{
+              title: 'Repair the authorization boundary.', admittedTaskIds: ['34'],
+              admissionRationale: 'Task 34 owns the mixed-lap coordinator integration.',
+            }],
+          },
+        }],
+        consistency: {
+          verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['case-security'],
+          rationale: 'One admitted repair covers the sole eligible source.',
+        },
+      };
+    });
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: mixed, mechanical: 'retry', chargeEffect: charge,
+      generateId: sequentialIds('custom-mixed'),
+      readPlanContract: async () => ({
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{ id: '34', contract: 'Mixed-lap coordinator integration.' }],
+      }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build', remainingMechanical: true });
+    expect(judge).toHaveBeenCalledTimes(1);
+    expect(charge).toHaveBeenCalledTimes(1);
+    expect(mixed.customResults?.availability).toMatchObject({
+      result: { kind: 'infrastructure-failure', reason: 'policy-load-failed' },
+    });
+  });
+
+  it('hands a decision stop persisted before a restart to the judge once the approved baseline changes', async () => {
+    const root = await projectRoot();
+    const customSourceId = (mixed: ReturnType<typeof customMixedAggregate>) =>
+      buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(mixed)!.find((source) => source.rubric === 'security')!);
+    const scope = {
+      mechanical: 'retry' as const,
+      readPlanContract: async () => ({
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{ id: '34', contract: 'Mixed-lap coordinator integration.' }],
+      }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+    };
+    const escalate = (sourceId: string, existingCaseId?: string): RemediationCaseJudgement => ({
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'architecture-stop' }],
+      cases: [{
+        caseRef: 'architecture-stop', ...(existingCaseId === undefined ? {} : { existingCaseId }),
+        disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'No admitted task owns this boundary; architecture must decide.',
+        effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: {
+        verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['architecture-stop'],
+        rationale: 'The repair contradicts the approved baseline.',
+      },
+    });
+
+    const lapOne = customMixedAggregate();
+    const lapOneSourceId = customSourceId(lapOne);
+    const stopped = await coordinateBuildReviewAdjudication({
+      ...input(root, vi.fn(async () => escalate(lapOneSourceId))), ...scope, aggregate: lapOne,
+      generateId: sequentialIds('stop'),
+    });
+    expect(stopped).toMatchObject({ route: 'halt' });
+    const persisted = await new RemediationCaseStore(root, feature).read();
+    if (!persisted.ok) throw new Error(persisted.reason);
+    const stop = persisted.state.cases[0]!;
+    expect(stop).toMatchObject({
+      disposition: 'escalate', resolution: 'open', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      consistencyStop: { sourceIds: [lapOneSourceId], rationale: 'The repair contradicts the approved baseline.' },
+    });
+
+    // Restart: nothing survives but the store file. The approved-baseline
+    // change re-anchors the finding, so the lap raises a new exact source.
+    const lapTwo = customMixedAggregate(undefined, `sha256:${'b'.repeat(64)}`);
+    const lapTwoSourceId = customSourceId(lapTwo);
+    expect(lapTwoSourceId).not.toBe(lapOneSourceId);
+    const seen: unknown[] = [];
+    const rejudge = vi.fn(async (context: unknown) => {
+      seen.push(context);
+      return escalate(lapTwoSourceId, stop.id);
+    });
+    const reevaluated = await coordinateBuildReviewAdjudication({
+      ...input(root, rejudge), ...scope, aggregate: lapTwo, generateId: sequentialIds('restart'),
+    });
+
+    expect(rejudge).toHaveBeenCalledTimes(1);
+    expect(seen[0]).toMatchObject({
+      currentFindings: [expect.objectContaining({ sourceId: lapTwoSourceId })],
+      priorCases: [{
+        id: stop.id, disposition: 'escalate', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+        sources: [{ sourceId: lapOneSourceId, outcome: 'escalate' }],
+        consistencyStop: { sourceIds: [lapOneSourceId], rationale: 'The repair contradicts the approved baseline.' },
+      }],
+    });
+    expect(JSON.stringify(reevaluated)).not.toContain('unrepresentable-prior-case');
+  });
+
+  it('refuses a case-v1 answer to a custom lap that required the case-v2 consistency and admission evidence', async () => {
+    const root = await projectRoot();
+    const mixed = customMixedAggregate();
+    const customSource = projectBuildReviewAggregateSources(mixed)!.find((source) => source.rubric === 'security')!;
+    const sourceId = buildReviewAdjudicationSourceId(customSource);
+    const judge = vi.fn(async (): Promise<RemediationCaseJudgement> => ({
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'case-security' }],
+      cases: [{
+        caseRef: 'case-security', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'A downgraded answer carries no admission evidence.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the authorization boundary.' }] },
+      }],
+    } as never));
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: mixed, mechanical: 'retry', chargeEffect: charge,
+      generateId: sequentialIds('custom-downgrade'),
+      readPlanContract: async () => ({
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{ id: '34', contract: 'Mixed-lap coordinator integration.' }],
+      }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+    });
+
+    expect(judge).toHaveBeenCalledTimes(1);
+    expect(charge).not.toHaveBeenCalled();
+    expect(result).not.toMatchObject({ route: 'build' });
+    expect(JSON.stringify(result)).toContain('mode mismatch');
+  });
+
+  it('does not judge or charge infrastructure-only, exact-settled, or confidence-suppressed custom laps', async () => {
+    const root = await projectRoot();
+    const mixed = customMixedAggregate();
+    const customSource = projectBuildReviewAggregateSources(mixed)!.find((source) => source.rubric === 'security')!;
+    const judge = vi.fn(async (): Promise<RemediationCaseJudgement> => {
+      throw new Error('no live custom source may reach the judge');
+    });
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+    const infrastructureOnly = joinBuildReviewRubricOutcomes({
+      ...mixed,
+      customResults: { availability: mixed.customResults!.availability! },
+      currentCustomRubrics: ['availability'],
+    } as never);
+
+    const infrastructure = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: infrastructureOnly, mechanical: 'retry', chargeEffect: charge,
+      generateId: sequentialIds('infrastructure-only'),
+    });
+    const settled = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: mixed, mechanical: 'retry', chargeEffect: charge,
+      operatorResolvedFindingIds: new Set([customSource.findingId]), generateId: sequentialIds('exact-settled'),
+    });
+    const suppressed = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: mixed, mechanical: 'retry', chargeEffect: charge,
+      suppressedFindingIds: new Set([customSource.findingId]), generateId: sequentialIds('confidence-suppressed'),
+    });
+
+    expect(infrastructure).toMatchObject({ ok: true, route: 'mechanical-retry' });
+    expect(settled).toMatchObject({ ok: true, route: 'mechanical-retry' });
+    expect(suppressed).toMatchObject({ ok: true, route: 'mechanical-retry' });
+    expect(judge).not.toHaveBeenCalled();
+    expect(charge).not.toHaveBeenCalled();
+  });
+
   it('dispatches one complete current-source/history judgement and returns its closed action route', async () => {
     const root = await projectRoot();
     const judge = vi.fn(async (context: unknown) => {
@@ -565,6 +803,39 @@ describe('coordinateBuildReviewAdjudication', () => {
     await expect(store.read()).resolves.toMatchObject({
       ok: true, state: { cases: [{ id: 'case-stranded', resolution: 'open' }] },
     });
+  });
+
+  it.each([
+    ['one byte over the text bound', 8_001, false],
+    ['exactly at the text bound', 8_000, true],
+  ])('dispatches captured custom policy criteria only when complete: %s', async (_label, bytes, dispatched) => {
+    const root = await projectRoot();
+    const criterion = 'c'.repeat(bytes);
+    const events: string[] = [];
+    const seen: unknown[] = [];
+    const judge = vi.fn(async (context: unknown): Promise<RemediationCaseJudgement> => {
+      seen.push(context);
+      throw new Error('sentinel: stop after the dispatch observation');
+    });
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: customMixedAggregate([criterion]), mechanical: 'retry',
+      emit: async (event) => { events.push(event.type); },
+      readPlanContract: async () => ({
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{ id: '34', contract: 'Mixed-lap coordinator integration.' }],
+      }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+    });
+
+    if (dispatched) {
+      expect(judge).toHaveBeenCalledTimes(1);
+      expect(seen[0]).toMatchObject({ policyContext: [{ rubric: 'security', criteria: [criterion] }] });
+      return;
+    }
+    expect(judge).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, detail: 'adjudication context field-overflow' });
+    expect(events).toEqual(['remediation_adjudication_failed']);
   });
 
   it('emits a typed failure and never returns a partial route when the one judgement throws', async () => {
@@ -1709,7 +1980,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const driftedAggregate = joinBuildReviewRubricOutcomes({
       ...aggregate, lapId: 'lap-drifted' as never,
       results: { security: aggregate.results.security, testQuality: { ...judgedResult, lapId: 'lap-drifted' as never, findings: [{
-        ...rawSource, anchor: { ...rawSource.anchor, locus: { ...rawSource.anchor.locus, contentHash: 'sha256:drifted' } },
+        ...judgedResult.findings[0]!, anchor: { ...judgedResult.findings[0]!.anchor, locus: { ...judgedResult.findings[0]!.anchor.locus, contentHash: 'sha256:drifted' } },
       }] } },
     });
     const driftedSourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(driftedAggregate)![0]!);
@@ -1832,7 +2103,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const driftedAggregate = joinBuildReviewRubricOutcomes({
       ...aggregate, lapId: 'lap-drifted' as never,
       results: { security: aggregate.results.security, testQuality: { ...judgedResult, lapId: 'lap-drifted' as never, findings: [{
-        ...rawSource, anchor: { ...rawSource.anchor, locus: { ...rawSource.anchor.locus, contentHash: 'sha256:drifted' } },
+        ...judgedResult.findings[0]!, anchor: { ...judgedResult.findings[0]!.anchor, locus: { ...judgedResult.findings[0]!.anchor.locus, contentHash: 'sha256:drifted' } },
       }] } },
     });
     const driftedJudge = vi.fn(async () => ({ mode: 'case-v1' as const, domain: 'build_review' as const, sourceOutcomes: [], cases: [] }));

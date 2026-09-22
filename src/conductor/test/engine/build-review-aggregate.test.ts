@@ -1,4 +1,4 @@
-// Covers: S3.2, task:3, task:15
+// Covers: S3.2, task:3, task:15, task:26
 import { describe, expect, it } from 'vitest';
 
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
@@ -10,7 +10,7 @@ import {
   parseBuildReviewAggregate,
   projectBuildReviewAggregateSources,
 } from '../../src/engine/build-review-aggregate.js';
-import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 
 // Surviving coverage in test/engine/build-review-verdict.test.ts (gate wiring,
 // mechanical-fault lane, incomplete `results`) and test/build-review-compat.test.ts
@@ -19,6 +19,25 @@ import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-r
 const lapId = parseBuildReviewLapId('lap-current')!;
 const snapshotDigest = 'sha256:snapshot';
 const HASH = `sha256:${'a'.repeat(64)}`;
+const CUSTOM_DIGEST = `sha256:${'c'.repeat(64)}`;
+
+const customAggregateMember = {
+  descriptor: {
+    version: 'v1', semanticSkill: 'security-review',
+    declaration: { version: 'v1', rubricId: 'security', semanticSkill: 'security-review', question: 'Find security regressions.', source: 'plugin', resources: ['references/security.md'] },
+    installation: { source: 'plugin', plugin: { id: 'security-suite', version: '2.1.0' } },
+    effectivePolicy: { version: 'v1', bundleDigest: CUSTOM_DIGEST },
+    reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST },
+    producer: { provider: 'codex', model: 'gpt-5.6', effort: 'high' },
+  },
+  result: {
+    kind: 'judged', contractVersion: 'custom-v1', rubric: 'security', lapId: 'lap-current',
+    declaration: { version: 'v1', rubricId: 'security', semanticSkill: 'security-review', question: 'Find security regressions.', source: 'plugin', resources: ['references/security.md'] },
+    policy: { version: 'v1', bundleDigest: CUSTOM_DIGEST }, candidate: { provider: 'codex', model: 'gpt-5.6', effort: 'high' },
+    reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST }, findings: [], verdict: 'PASS',
+    identity: { id: CUSTOM_DIGEST, canonicalPayload: {}, canonicalJson: '{}' },
+  },
+} as const;
 
 function judged(findings: readonly BuildReviewFinding[] = []): BuildReviewJudgedResult {
   return {
@@ -109,6 +128,86 @@ describe('build-review raw aggregate', () => {
     expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({
       verdict: 'FAIL', infrastructureFailureRubrics: ['security'], uncoveredInfrastructureFailureRubrics: ['security'],
     });
+  });
+
+  it('retains historic custom descriptors while the lap catalog alone selects current custom membership', () => {
+    const current = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest, results: { testQuality: judged() },
+      customResults: { security: customAggregateMember }, currentCustomRubrics: ['security'],
+    } as never);
+    const disabledLater = { ...current, currentCustomRubrics: [] };
+
+    expect(parseBuildReviewAggregate(current)).toMatchObject({
+      customResults: { security: { descriptor: customAggregateMember.descriptor, result: { kind: 'judged', rubric: 'security' } } },
+      currentCustomRubrics: ['security'],
+    });
+    expect(parseBuildReviewAggregate(disabledLater)).toMatchObject({
+      customResults: { security: { descriptor: customAggregateMember.descriptor } }, currentCustomRubrics: [],
+    });
+  });
+
+  it('rejects a custom failure that tries to carry a judged descriptor', () => {
+    const aggregate = {
+      ...currentAggregate(), aggregateVersion: 'v2',
+      customResults: {
+        security: {
+          ...customAggregateMember,
+          result: { kind: 'infrastructure-failure', rubric: 'security', reason: 'policy-load-failed', detail: 'plugin unavailable' },
+        },
+      },
+      currentCustomRubrics: ['security'],
+    };
+
+    expect(parseBuildReviewAggregate(aggregate)).toBeUndefined();
+  });
+
+  it('counts only catalog-selected custom evidence as a current blocker', () => {
+    const failedCustom = {
+      result: { kind: 'infrastructure-failure', rubric: 'security', reason: 'policy-load-failed', detail: 'plugin unavailable' },
+    } as const;
+    const active = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest, results: { testQuality: judged() },
+      customResults: { security: failedCustom }, currentCustomRubrics: ['security'],
+    } as never);
+    const disabled = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest, results: { testQuality: judged() },
+      customResults: { security: failedCustom }, currentCustomRubrics: [],
+    } as never);
+
+    expect(active.verdict).toBe('FAIL');
+    expect(disabled).toMatchObject({ verdict: 'PASS', customResults: { security: failedCustom }, currentCustomRubrics: [] });
+  });
+
+  it('keeps a disabled rubric\'s cached findings inspectable while supplying no current blocker or repair source', () => {
+    const declaration = { version: 'v1', rubricId: 'portablePolicy', semanticSkill: 'portable-policy', question: 'Does this preserve the portable policy contract?', source: 'project', resources: [] } as const;
+    const stamp = {
+      rubric: 'portablePolicy', lapId: 'lap-current', declaration,
+      policy: { version: 'v1', bundleDigest: CUSTOM_DIGEST }, candidate: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' },
+      reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST },
+    } as const;
+    const judgedWithFinding = stampBuildReviewCustomJudgedResult({ kind: 'custom-findings', version: 'v1', findings: [{
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', evidenceLocations: ['src/widget.ts:8'],
+      sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }],
+    }] }, stamp, { sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }] })!;
+    const member = {
+      descriptor: { version: 'v1', semanticSkill: 'portable-policy', declaration, installation: { source: 'project' }, effectivePolicy: stamp.policy, reviewedInput: stamp.reviewedInput, producer: stamp.candidate },
+      result: judgedWithFinding,
+    };
+    const enabled = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest, results: { testQuality: judged() }, customResults: { portablePolicy: member }, currentCustomRubrics: ['portablePolicy'],
+    } as never);
+    const disabledLater = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest, results: { testQuality: judged() }, customResults: { portablePolicy: member }, currentCustomRubrics: [],
+    } as never);
+
+    expect(enabled.verdict).toBe('FAIL');
+    expect(projectBuildReviewAggregateSources(enabled)).toEqual([expect.objectContaining({ rubric: 'portablePolicy', concernKind: 'portable-policy-gap' })]);
+    // Disabled: the historical judged evidence is still readable in full, yet
+    // it is neither a current blocker nor a source that could seed repair work.
+    expect(disabledLater.verdict).toBe('PASS');
+    expect(disabledLater.customResults?.portablePolicy).toEqual(member);
+    expect(parseBuildReviewAggregate(disabledLater)?.customResults?.portablePolicy.result).toMatchObject({ kind: 'judged', findings: [expect.objectContaining({ concernId: 'portable-policy-gap' })] });
+    expect(projectBuildReviewAggregateSources(disabledLater)).toEqual([]);
   });
 
   it('retains judged findings while deriving a blocking scope-incomplete fault from validated indeterminacy', () => {
