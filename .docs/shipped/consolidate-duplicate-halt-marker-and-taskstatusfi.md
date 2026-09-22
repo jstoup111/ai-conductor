@@ -4,6 +4,12 @@ spec_hash: b80cb2a5413f1e3377a786f4621cc5769227f43e06c58911acd19e4238dce094
 pr: https://github.com/jstoup111/ai-conductor/pull/2650
 shipped: 2026-09-22
 engine_version: 20260922T121502Z-831f81942f9f
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/engine/full-suite-verifier.ts:399-431 (commit 061e73189) changes the full-suite lock owner identity token from /proc directory ctime to the /proc/<pid>/stat start-time field; no plan task, story, or Scope: trailer covers it"
+    accepted: true
 ---
 
 ## Cost
