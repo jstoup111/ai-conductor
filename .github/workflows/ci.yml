@@ -154,6 +154,13 @@ jobs:
     # default execution budget on a contended hosted runner. Keep a finite,
     # explicit ceiling rather than losing the test summary to that timeout.
     timeout-minutes: 15
+    # Split the suite across runners by file. ci-gate reads needs.conductor.result,
+    # which is failure when any shard fails. Workers per shard stay at the config's 2:
+    # vitest.config.ts records 3 forks exceeding 28 GiB, and a hosted runner has 16 GB.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
         with:
@@ -167,7 +174,7 @@ jobs:
         working-directory: src/conductor
       - run: npm run build
         working-directory: src/conductor
-      - run: npm test
+      - run: npm test -- --shard=${{ matrix.shard }}/4
         working-directory: src/conductor
 
   # DELIBERATELY UNGATED — no `if: docs_only != 'true'`.
