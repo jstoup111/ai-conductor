@@ -208,17 +208,41 @@ export function createProductionReleaseReadinessObserver(
   if (steps.length === 0) return async () => ({ observation: 'present', steps: [] });
 
   return async (state) => {
+    const unsatisfied: string[] = [];
+    let missing = false;
+    let malformed = false;
+    let stale = false;
+    let unavailable = false;
+
     for (const step of steps) {
-      if ((state as Record<string, unknown>)[step] !== 'done') return { observation: 'missing', steps: [] };
-      if (!Number.isFinite(state.run_started_at)) return { observation: 'unavailable', steps: [] };
+      if ((state as Record<string, unknown>)[step] !== 'done') {
+        unsatisfied.push(step);
+        missing = true;
+        continue;
+      }
       try {
         const artifact = await lstat(join(input.projectRoot, config.steps![step]!.completion_artifact!));
-        if (!artifact.isFile()) return { observation: 'malformed', steps: [] };
-        if (artifact.mtimeMs < state.run_started_at!) return { observation: 'stale', steps: [] };
+        if (!artifact.isFile()) {
+          unsatisfied.push(step);
+          malformed = true;
+        } else if (!Number.isFinite(state.run_started_at)) {
+          unsatisfied.push(step);
+          unavailable = true;
+        } else if (artifact.mtimeMs < state.run_started_at!) {
+          unsatisfied.push(step);
+          stale = true;
+        }
       } catch (error) {
-        return { observation: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unavailable', steps: [] };
+        unsatisfied.push(step);
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') missing = true;
+        else unavailable = true;
       }
     }
+    if (unsatisfied.length === 0) return { observation: 'present', steps: [] };
+    if (missing) return { observation: 'missing', steps: unsatisfied };
+    if (malformed) return { observation: 'malformed', steps: unsatisfied };
+    if (stale) return { observation: 'stale', steps: unsatisfied };
+    if (unavailable) return { observation: 'unavailable', steps: unsatisfied };
     return { observation: 'present', steps: [] };
   };
 }

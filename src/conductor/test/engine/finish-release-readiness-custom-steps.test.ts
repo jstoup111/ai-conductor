@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:4
 import { mkdtemp, mkdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -94,6 +94,31 @@ describe('production FINISH custom-step release readiness', () => {
     }
   });
 
+  it.each(['pending', 'in_progress', 'failed'] as const)(
+    'observes a %s gating custom step as missing',
+    async (status) => {
+      const observe = createProductionReleaseReadinessObserver({
+        projectRoot: '.', config: customConfig(['compliance-gate']),
+      });
+
+      await expect(observe({
+        ...({ 'compliance-gate': status } as Record<string, unknown>),
+        run_started_at: runStartedAt,
+      } as ConductState)).resolves.toEqual({ observation: 'missing', steps: ['compliance-gate'] });
+    },
+  );
+
+  it('observes a skipped gating custom step as missing', async () => {
+    const observe = createProductionReleaseReadinessObserver({
+      projectRoot: '.', config: customConfig(['compliance-gate']),
+    });
+
+    await expect(observe({
+      ...({ 'compliance-gate': 'skipped' } as Record<string, unknown>),
+      run_started_at: runStartedAt,
+    } as ConductState)).resolves.toEqual({ observation: 'missing', steps: ['compliance-gate'] });
+  });
+
   it('observes two fresh done gating custom steps as present', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
     try {
@@ -103,6 +128,54 @@ describe('production FINISH custom-step release readiness', () => {
       await expect(createProductionReleaseReadinessObserver({
         projectRoot: root, config: customConfig(['compliance-gate', 'notes-gate']),
       })(doneState(['compliance-gate', 'notes-gate']))).resolves.toEqual({ observation: 'present', steps: [] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('observes every selected custom gate whose release evidence is missing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      await expect(createProductionReleaseReadinessObserver({
+        projectRoot: root, config: customConfig(['compliance-gate', 'notes-gate']),
+      })({
+        ...({ 'compliance-gate': 'pending', 'notes-gate': 'done' } as Record<string, unknown>),
+        run_started_at: runStartedAt,
+      } as ConductState)).resolves.toEqual({ observation: 'missing', steps: ['compliance-gate', 'notes-gate'] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('observes a done custom gate without its marker as missing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      await freshMarker(root, 'compliance-gate');
+
+      await expect(createProductionReleaseReadinessObserver({
+        projectRoot: root, config: customConfig(['compliance-gate', 'notes-gate']),
+      })(doneState(['compliance-gate', 'notes-gate'])))
+        .resolves.toEqual({ observation: 'missing', steps: ['notes-gate'] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('prioritizes malformed evidence over stale evidence across selected done gates', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      const staleMarker = join(root, '.pipeline', 'compliance-gate-pass');
+      await writeFile(staleMarker, 'PASS\n');
+      await utimes(staleMarker, new Date(runStartedAt - 1), new Date(runStartedAt - 1));
+      await mkdir(join(root, '.pipeline', 'notes-gate-pass'));
+
+      await expect(createProductionReleaseReadinessObserver({
+        projectRoot: root, config: customConfig(['compliance-gate', 'notes-gate']),
+      })(doneState(['compliance-gate', 'notes-gate'])))
+        .resolves.toEqual({ observation: 'malformed', steps: ['compliance-gate', 'notes-gate'] });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -168,4 +241,58 @@ describe('production FINISH custom-step release readiness', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each(['pending', 'in_progress', 'failed'] as const)(
+    'blocks publication before provider or publication boundaries for a %s compliance gate',
+    async (status) => {
+      const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+      const git = vi.fn(async () => ({ stdout: '' }));
+      const gh = vi.fn(async () => ({ stdout: '' }));
+      const dispatchJudgment = vi.fn(async () => ({ success: true }));
+      try {
+        await mkdir(join(root, '.pipeline'));
+        const observer = createProductionReleaseReadinessObserver({
+          projectRoot: root,
+          config: customConfig(['compliance-gate']),
+        });
+        const coordinator = createProductionFinishPublicationCoordinator({
+          projectRoot: root,
+          stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+          baseBranch: 'main',
+          git,
+          gh,
+          acquireInteractiveIntent: async () => 'pr',
+          observeReleaseReadiness: async (state) => observer(state),
+        });
+
+        const result = await coordinator.advance({
+          state: {
+            ...doneState([]),
+            feature_desc: 'feature',
+            worktree_branch: 'feat/feature',
+            build_review: 'done',
+            test_suite: 'done',
+            manual_test: 'done',
+            architecture_review_as_built: 'done',
+            'compliance-gate': status,
+          } as ConductState,
+          mode: 'interactive',
+          daemon: false,
+          dispatchJudgment,
+          emit: async () => {},
+        });
+
+        expect(result).toMatchObject({
+          kind: 'publication_retry',
+          condition: {
+            code: 'release_readiness_missing',
+            steps: ['compliance-gate'],
+          },
+        });
+        expect(dispatchJudgment).not.toHaveBeenCalled();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });
