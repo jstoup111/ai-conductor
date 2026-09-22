@@ -2656,6 +2656,7 @@ export class DefaultStepRunner implements StepRunner {
     const options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'> = {
       prompt: `Build-review custom policy ${entry.id}: the candidate will supply the selected immutable policy contract before judgment. Return only the custom findings payload.`,
       cwd: source?.headPath ?? this.projectDir,
+      nativeSchema: entry.contract.output.jsonSchema,
     };
     let failure: { reason: import('./build-review-artifacts.js').BuildReviewCustomInfrastructureFailureReason; detail: string } = {
       reason: 'provider-error', detail: `custom policy ${entry.id} did not produce a judgment`,
@@ -3347,9 +3348,13 @@ export class DefaultStepRunner implements StepRunner {
             warn: this.providerWarn,
             abortSignal: controller.signal,
             deadlineAt,
-            options,
+            options: {
+              ...options,
+              nativeSchema: getBuildReviewRubricDescriptor(branch.rubric).contract.output.jsonSchema,
+            },
             optionsForCandidate: (providerKey) => ({
               ...options,
+              nativeSchema: getBuildReviewRubricDescriptor(branch.rubric).contract.output.jsonSchema,
               prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${prompt}`,
             }),
             preparedCandidateOperation: async (context) => {

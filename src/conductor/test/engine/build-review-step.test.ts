@@ -343,7 +343,7 @@ describe('build_review structured rubric dispatch', () => {
     expect(proseScrape).not.toHaveBeenCalled();
   });
 
-  it('uses the rubric dispatcher for a runtime-provider dispatch without frozen inputs', async () => {
+  it('refuses an incapable runtime provider before invoking a no-input rubric dispatch', async () => {
     const invoke = vi.fn(async (_options: InvokeOptions) => ({
       success: true, output: 'ignored prose', exitCode: 0, finalStructuredResult: { findings: [] },
     }));
@@ -364,8 +364,8 @@ describe('build_review structured rubric dispatch', () => {
       dispatchBuildReviewRubric: (value: typeof branch, reviewProjection: typeof projection) => Promise<unknown>;
     }).dispatchBuildReviewRubric(branch, projection);
 
-    expect(invoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output.jsonSchema);
-    expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
+    expect(invoke).not.toHaveBeenCalled();
+    expect(result).toBeUndefined();
   });
 
   it('carries custom-v1 through the same dispatcher with its policy bundle before skill invocation', async () => {
@@ -391,6 +391,7 @@ describe('build_review structured rubric dispatch', () => {
     }));
     const runtimeProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
       invoke,
     };
     const entry: ResolvedBuildReviewCustomCatalogEntry = {
