@@ -40,6 +40,8 @@ import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
+import { translateAfterRebase } from '../../src/engine/rebase-translate.js';
+import { resolveTaskIdsWithDiagnostics } from '../../src/engine/task-progress.js';
 import { resumeRebaseFirst, REKICK_SENTINEL } from '../../src/engine/daemon-rekick.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 
@@ -247,6 +249,51 @@ describe('rebase-translate acceptance (#535) — real call sites, real scratch g
     if (repo) await rm(repo, { recursive: true, force: true });
     repo = undefined;
   });
+
+  it(
+    'Story 3: a malformed repair-obligations section is a no-op while evidence, status, and seal translation continue',
+    async () => {
+      const scratch = await buildTranslationRepo();
+      repo = scratch.repo;
+      const { g, c1Sha, c2Sha } = scratch;
+      await seedStores(repo, c1Sha, c2Sha);
+      await mkdir(join(repo, '.pipeline'), { recursive: true });
+      const engineStatePath = join(repo, '.pipeline', 'engine-state.json');
+      const malformedEngineState = JSON.stringify({ repairObligations: 'garbage' }, null, 2);
+      await writeFile(engineStatePath, malformedEngineState);
+
+      const originalHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: originalHead });
+      await g(['rebase', '-q', 'main']);
+      const head = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+      const rebaselines: unknown[] = [];
+
+      await translateAfterRebase(
+        makeGitRunner(repo),
+        repo,
+        'main',
+        originalHead,
+        head,
+        undefined,
+        async (event) => { rebaselines.push(event); },
+      );
+
+      expect(await readFile(engineStatePath, 'utf8')).toBe(malformedEngineState);
+      const newC1Sha = await shaForSubject(g, 'feat', 'feat: a1');
+      const newC2Sha = await shaForSubject(g, 'feat', 'feat: work');
+      const evidenceAfter = await readJson(join(repo, '.pipeline', 'task-evidence.json'));
+      const statusAfter = await readJson(join(repo, '.pipeline', 'task-status.json'));
+      expect(evidenceAfter.evidenceStamps.T1.sha).toBe(newC2Sha);
+      expect(statusAfter.tasks.find((task: { id: string }) => task.id === 'T2').commit).toBe(newC1Sha.slice(0, 7));
+      expect(rebaselines).toHaveLength(1);
+
+      const progress = await resolveTaskIdsWithDiagnostics(repo, ['T1']);
+      expect(progress.unavailableReasons.get('T1')).toContain(
+        'repair state is unavailable: Engine state repairObligations section is incompatible',
+      );
+    },
+    20000,
+  );
 
   it(
     'Stories 1-3: finish-time site (runRebaseStep via Conductor.run) persists rebase-rewrites.json and repoints the sidecar + task-status (full and short forms)',
