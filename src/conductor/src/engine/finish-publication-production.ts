@@ -17,7 +17,7 @@ import { executeGithubOperation, type GithubOperationRunner } from './github-ope
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { hasHaltSignal, isEngineFlooredBody } from './halt-pr-rehabilitation.js';
-import { replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
+import { readState, replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
 import { readAllVerdicts } from './gate-verdicts.js';
 import { gateSatisfied } from './selector.js';
 import {
@@ -208,6 +208,12 @@ export function createProductionReleaseReadinessObserver(
   if (steps.length === 0) return async () => ({ observation: 'present', steps: [] });
 
   return async (state) => {
+    const persisted = await readState(join(input.projectRoot, '.pipeline', 'conduct-state.json'));
+    const persistedRunStartedAt = persisted.ok ? persisted.value.run_started_at : undefined;
+    const runStartedAt = typeof persistedRunStartedAt === 'number' && Number.isFinite(persistedRunStartedAt)
+      ? persistedRunStartedAt
+      : undefined;
+
     const unsatisfied: string[] = [];
     let missing = false;
     let malformed = false;
@@ -225,10 +231,10 @@ export function createProductionReleaseReadinessObserver(
         if (!artifact.isFile()) {
           unsatisfied.push(step);
           malformed = true;
-        } else if (!Number.isFinite(state.run_started_at)) {
+        } else if (runStartedAt === undefined) {
           unsatisfied.push(step);
           unavailable = true;
-        } else if (artifact.mtimeMs < state.run_started_at!) {
+        } else if (artifact.mtimeMs <= runStartedAt) {
           unsatisfied.push(step);
           stale = true;
         }
