@@ -6,7 +6,9 @@
 export type MatchedPairId =
   | 'build-review-retired-ids-dispositions'
   | 'build-review-retired-reason-prefix'
-  | 'build-review-retired-ids-configuration-doc';
+  | 'build-review-retired-ids-configuration-doc'
+  | 'user-input-halt-marker'
+  | 'task-status-file-type';
 
 interface MatchedPairSide {
   readonly name: string;
@@ -64,5 +66,21 @@ export const MATCHED_PAIR_REGISTRY = {
       enumeration: 'retired build-review rubric ids',
       markdownAnchor: 'Every other id ever accepted',
     },
+  },
+  'user-input-halt-marker': {
+    mode: 'satisfied-by-derivation',
+    derivingModule: 'src/conductor/src/engine/artifacts.ts',
+    sourceModule: 'src/conductor/src/engine/task-progress.ts',
+    importedExport: 'HALT_MARKER_RELATIVE',
+    reason: 'The completion check derives its marker path from task-progress.',
+    ref: 'jstoup111/ai-conductor#1016',
+  },
+  'task-status-file-type': {
+    mode: 'satisfied-by-derivation',
+    derivingModule: 'src/conductor/src/engine/rebase-translate.ts',
+    sourceModule: 'src/conductor/src/engine/task-seed.ts',
+    importedExport: 'TaskStatusFile',
+    reason: 'The rebase translator derives the task-status file type from its writer.',
+    ref: 'jstoup111/ai-conductor#1016',
   },
 } satisfies Record<MatchedPairId, MatchedPairDeclaration>;

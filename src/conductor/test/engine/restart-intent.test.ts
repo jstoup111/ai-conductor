@@ -1,3 +1,4 @@
+// Covers: task:4
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -14,9 +15,11 @@ import {
   isSuppressed,
   clearSuppression,
   RESTART_MARKER_PATH,
+  SUPPRESSION_PATH,
   type RestartMarker,
   type RestartMarkerStatus,
 } from '../../src/engine/restart-intent.js';
+import { RESTART_MARKER as QUEUED_RESTART_MARKER } from '../../src/engine/restart-marker.js';
 
 describe('engine/restart-intent — marker schema round-trip', () => {
   let dir: string;
@@ -27,6 +30,35 @@ describe('engine/restart-intent — marker schema round-trip', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  describe('stale-engine marker paths', () => {
+    it('derives the suppression path without changing its persisted location', async () => {
+      const preChangeSuppressionPath = '.daemon/RESTART_PENDING.suppression';
+      const persisted: { suppressedTarget: string | null; at: number } = {
+        suppressedTarget: 'engine-before-derivation',
+        at: 1_725_000_000_000,
+      };
+
+      expect(SUPPRESSION_PATH).toBe(`${RESTART_MARKER_PATH}.suppression`);
+      expect(SUPPRESSION_PATH).toBe(preChangeSuppressionPath);
+      const moduleSource = await readFile(
+        new URL('../../src/engine/restart-intent.ts', import.meta.url),
+        'utf-8',
+      );
+      expect(moduleSource).toContain(
+        'export const SUPPRESSION_PATH = `${RESTART_MARKER_PATH}.suppression`;',
+      );
+      expect(QUEUED_RESTART_MARKER).toBe('.daemon/RESTART-PENDING');
+      expect(QUEUED_RESTART_MARKER).not.toBe(RESTART_MARKER_PATH);
+      expect(QUEUED_RESTART_MARKER).not.toBe(SUPPRESSION_PATH);
+
+      const persistedPath = join(dir, preChangeSuppressionPath);
+      await mkdir(dirname(persistedPath), { recursive: true });
+      await writeFile(persistedPath, JSON.stringify(persisted), 'utf-8');
+
+      expect(await getSuppression(dir)).toEqual(persisted);
+    });
   });
 
   describe('writeRestartMarker + readRestartMarker', () => {

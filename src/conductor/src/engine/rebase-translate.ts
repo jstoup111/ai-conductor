@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { GitRunner } from './rebase.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { rekeyMemoAfterRebase } from './attribution-lane.js';
+import type { TaskStatusFile, TaskStatusRecord } from './task-seed.js';
 import {
   createProtectedArtifactSeal,
   PROTECTED_ARTIFACT_DIRECTORIES,
@@ -135,17 +136,6 @@ interface SerializedEvidenceDataLike {
   [key: string]: unknown;
 }
 
-interface TaskStatusTaskLike {
-  id: string;
-  commit?: string;
-  [key: string]: unknown;
-}
-
-interface TaskStatusFileLike {
-  tasks: TaskStatusTaskLike[];
-  [key: string]: unknown;
-}
-
 async function atomicWriteJson(
   dir: string,
   filePath: string,
@@ -215,10 +205,10 @@ export async function applyMapToStores(
   // task-status.json
   try {
     const raw = await readFile(statusPath, 'utf-8');
-    const parsed = JSON.parse(raw) as TaskStatusFileLike;
+    const parsed = JSON.parse(raw) as TaskStatusFile;
 
     if (parsed && typeof parsed === 'object' && Array.isArray(parsed.tasks)) {
-      for (const task of parsed.tasks) {
+      for (const task of parsed.tasks as TaskStatusRecord[]) {
         if (task && typeof task.commit === 'string') {
           const resolved = resolveThroughMap(task.commit, map);
           task.commit = resolved.slice(0, task.commit.length);
@@ -384,11 +374,11 @@ async function citingTaskIdsFor(
  * a graceful no-op (a cache miss, identical to pre-translation behavior),
  * never a hard failure.
  */
-async function derivePendingTaskIds(projectRoot: string): Promise<string[]> {
+export async function derivePendingTaskIds(projectRoot: string): Promise<string[]> {
   const statusPath = join(projectRoot, '.pipeline', 'task-status.json');
   try {
     const raw = await readFile(statusPath, 'utf-8');
-    const parsed = JSON.parse(raw) as TaskStatusFileLike;
+    const parsed = JSON.parse(raw) as TaskStatusFile;
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.tasks)) return [];
     return parsed.tasks
       .filter((t) => t && t.status !== 'completed' && t.status !== 'skipped')

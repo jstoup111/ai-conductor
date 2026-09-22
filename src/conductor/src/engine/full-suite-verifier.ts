@@ -396,16 +396,36 @@ type ProcessStartIdentityProbe =
   | { status: 'MISSING' }
   | { status: 'UNKNOWN' };
 
+/**
+ * Linux exposes process start time as field 22 of `/proc/<pid>/stat`. The
+ * command name is parenthesized and may itself contain spaces or parentheses,
+ * so split only after its final closing parenthesis.
+ */
+export function parseLinuxProcessStartToken(processStat: string): string | null {
+  const closingParenthesis = processStat.lastIndexOf(')');
+  if (closingParenthesis < 0) return null;
+  const fields = processStat.slice(closingParenthesis + 1).trim().split(/\s+/);
+  const startTime = fields[19];
+  return startTime !== undefined && /^\d+$/.test(startTime) ? startTime : null;
+}
+
 async function processStartIdentity(pid: number): Promise<ProcessStartIdentityProbe> {
   try {
     // `/proc` is deliberately an optional strengthening probe. Platforms
     // without it retain signal-0's conservative occupied result.
-    const processStat = await stat(`/proc/${pid}`, { bigint: true });
+    const startToken = parseLinuxProcessStartToken(
+      await readFile(`/proc/${pid}/stat`, 'utf8'),
+    );
+    if (startToken === null) return { status: 'UNKNOWN' };
+    const processDirectory = await stat(`/proc/${pid}`, { bigint: true });
     return {
       status: 'FOUND',
       identity: {
-        startedAt: Number(processStat.ctimeNs / 1_000_000n),
-        token: processStat.ctimeNs.toString(),
+        // The token is authoritative when persisted. Legacy records carry an
+        // epoch acquisition time, so retain the compatible epoch-shaped
+        // comparison value for their PID-reuse check.
+        startedAt: Number(processDirectory.ctimeNs / 1_000_000n),
+        token: startToken,
       },
     };
   } catch (error) {

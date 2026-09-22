@@ -17,6 +17,7 @@ import {
   inspectFullSuiteRecoveryClaim,
   deriveFullSuiteScopedSelection,
   FullSuiteVerifier,
+  parseLinuxProcessStartToken,
 } from '../../src/engine/full-suite-verifier.js';
 
 const scratches: string[] = [];
@@ -136,6 +137,18 @@ afterEach(async () => {
 });
 
 describe('FullSuiteVerifier', () => {
+  it('uses Linux stat start-time field rather than mutable proc-directory metadata for lock identity', () => {
+    const prefix = '123 (worker name) R 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18';
+
+    expect({
+      parsed: parseLinuxProcessStartToken(`${prefix} 987654 20 21`),
+      malformed: parseLinuxProcessStartToken('123 worker R 1 2 3'),
+    }).toEqual({
+      parsed: '987654',
+      malformed: null,
+    });
+  });
+
   it('classifies existing recovery claims by liveness and bounded age', async () => {
     const projectRoot = await makeConfiguredProject('full-suite-recovery-claim-classification-');
     const lockPath = join(projectRoot, '.pipeline/test-suite.lock');

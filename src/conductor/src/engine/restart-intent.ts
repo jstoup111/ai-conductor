@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path';
 export const RESTART_MARKER_PATH = '.daemon/RESTART_PENDING';
 
 /** Relative path (under the project root) of the restart suppression record. */
-export const SUPPRESSION_PATH = '.daemon/RESTART_PENDING.suppression';
+export const SUPPRESSION_PATH = `${RESTART_MARKER_PATH}.suppression`;
 
 /**
  * RestartMarker captures the structured metadata for a pending engine restart.

@@ -2618,7 +2618,11 @@ export class DefaultStepRunner implements StepRunner {
     let coverageFailure = false;
     const controller = new AbortController();
     const deadlineAt = Date.now() + (this.config?.test_suite?.timeout_seconds ?? 300) * 1_000;
-    const timeout = setTimeout(() => controller.abort(), Math.max(0, deadlineAt - Date.now()));
+    // The outer deadline timer is registered before discovery's own timer.
+    // Preserve its cause so that an in-flight catalog operation reports a
+    // deadline rather than a generic cancellation when this timer fires first.
+    const deadlineAbortReason = 'build-review-candidate-deadline';
+    const timeout = setTimeout(() => controller.abort(deadlineAbortReason), Math.max(0, deadlineAt - Date.now()));
     let result: ProviderExecutionResult;
     try {
       result = await executeAuxiliaryProviderCandidates({
@@ -2660,7 +2664,10 @@ export class DefaultStepRunner implements StepRunner {
           // timer for its deadline, so an in-flight request cannot outlive it.
           const discovery = new AbortController();
           let deadlineElapsed = false;
-          const cancelDiscovery = () => discovery.abort();
+          const cancelDiscovery = () => {
+            deadlineElapsed ||= context.abortSignal?.reason === deadlineAbortReason;
+            discovery.abort();
+          };
           context.abortSignal?.addEventListener('abort', cancelDiscovery, { once: true });
           const deadlineTimer = context.deadlineAt === undefined ? undefined : setTimeout(() => {
             deadlineElapsed = true;
