@@ -1015,8 +1015,13 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
   it('defers a proven feat/daemon branch without a shipped record and requests repair', async () => {
     const slug = 'daemon-record-missing';
     const branch = `feat/daemon-${slug}`;
-    const { run } = makeGit({ branches: [branch], merged: [branch] });
-    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: '[{"url":"https://example.test/pr/3"}]' });
+    const tip = '1111111111111111111111111111111111111111';
+    const { run } = makeGit({ branches: [branch], merged: [branch], tips: { [branch]: tip } });
+    const runGh = vi.fn<GhRunner>(async (args) => ({
+      stdout: args.includes('headRefOid')
+        ? `[{"headRefOid":"${tip}"}]`
+        : '[{"url":"https://example.test/pr/3"}]',
+    }));
     const requestRecordRepair = vi.fn(async () => {});
 
     const outcome = await reconcileMergedPark({
@@ -1087,7 +1092,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
   });
 
   it('treats an origin/main without a .docs/shipped tree as no records rather than unavailable', async () => {
-    const { run } = makeGit({ shipped: 'no-tree', branches: ['feat/no-tree'], merged: ['feat/no-tree'] });
+    const { run, deleteArgv, events } = makeGit({ shipped: 'no-tree', branches: ['feat/no-tree'], merged: ['feat/no-tree'] });
     const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: '[]' });
     const log = vi.fn<(message: string) => void>();
 
@@ -1099,17 +1104,23 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       log,
     });
 
-    expect({ outcome, logs: log.mock.calls }).toEqual({
-      outcome: { slug: 'no-tree', steps: [], refusal: 'record-missing', deferred: true },
-      logs: [['[parked-reconciliation] no-tree not reconcilable until the record lands']],
+    expect({ outcome, logs: log.mock.calls, deleteArgv, events }).toEqual({
+      outcome: { slug: 'no-tree', steps: [], refusal: 'no-merge-proof' },
+      logs: [],
+      deleteArgv: [],
+      events: [],
     });
   });
 
   it('defers a missing record to the ST-916 repair seam via the resolved branch name', async () => {
-    const { run } = makeGit({ branches: ['spec/missing-record'], merged: ['spec/missing-record'] });
-    const runGh = vi.fn<GhRunner>().mockResolvedValue({
-      stdout: '[{"url":"https://example.test/pr/1060"}]',
-    });
+    const branch = 'spec/missing-record';
+    const tip = '2222222222222222222222222222222222222222';
+    const { run } = makeGit({ branches: [branch], merged: [branch], tips: { [branch]: tip } });
+    const runGh = vi.fn<GhRunner>(async (args) => ({
+      stdout: args.includes('headRefOid')
+        ? `[{"headRefOid":"${tip}"}]`
+        : '[{"url":"https://example.test/pr/1060"}]',
+    }));
     const requestRecordRepair = vi.fn(async () => {});
     const log = vi.fn<(message: string) => void>();
 
@@ -1126,7 +1137,11 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       outcome: { slug: 'missing-record', steps: [], refusal: 'record-missing', deferred: true },
       ghCalls: [
         [
-          ['pr', 'list', '--state', 'merged', '--head', 'spec/missing-record', '--json', 'url', '--limit', '1'],
+          ['pr', 'list', '--head', branch, '--state', 'merged', '--json', 'headRefOid', '--limit', '1'],
+          { cwd: '/project' },
+        ],
+        [
+          ['pr', 'list', '--state', 'merged', '--head', branch, '--json', 'url', '--limit', '1'],
           { cwd: '/project' },
         ],
       ],
@@ -1135,8 +1150,8 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     });
   });
 
-  it('defers without repair when a missing record has no merged PR', async () => {
-    const { run } = makeGit({ branches: ['feat/no-merged-pr'], merged: ['feat/no-merged-pr'] });
+  it('refuses without repair when ancestry has neither a shipped record nor merged PR', async () => {
+    const { run, deleteArgv, events } = makeGit({ branches: ['feat/no-merged-pr'], merged: ['feat/no-merged-pr'] });
     const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: '[]' });
     const requestRecordRepair = vi.fn(async () => {});
     const log = vi.fn<(message: string) => void>();
@@ -1150,10 +1165,12 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       log,
     });
 
-    expect({ outcome, repairs: requestRecordRepair.mock.calls, logs: log.mock.calls }).toEqual({
-      outcome: { slug: 'no-merged-pr', steps: [], refusal: 'record-missing', deferred: true },
+    expect({ outcome, repairs: requestRecordRepair.mock.calls, logs: log.mock.calls, deleteArgv, events }).toEqual({
+      outcome: { slug: 'no-merged-pr', steps: [], refusal: 'no-merge-proof' },
       repairs: [],
-      logs: [['[parked-reconciliation] no-merged-pr not reconcilable until the record lands']],
+      logs: [],
+      deleteArgv: [],
+      events: [],
     });
   });
 
@@ -2096,7 +2113,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     }
   });
 
-  it('keeps a record-missing outcome deferred rather than refused', async () => {
+  it('counts ancestry without a shipped record or merged PR as refused', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'sweep-record-missing';
     const { run } = makeGit({ branches: [`feat/${slug}`], merged: [`feat/${slug}`] });
@@ -2109,13 +2126,13 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       expect({ counts: result.counts, refusedByReason: result.refusedByReason }).toEqual({
         counts: {
           reconciled: 0,
-          deferred: 1,
+          deferred: 0,
           orphaned: 0,
           parked: 1,
-          refused: 0,
+          refused: 1,
           skipped: 0,
         },
-        refusedByReason: {},
+        refusedByReason: { 'no-merge-proof': 1 },
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -2144,8 +2161,8 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
         deleted,
       }).toEqual({
         entries: [{ slug, classification: 'merged', annotation: undefined }],
-        counts: { reconciled: 0, deferred: 1, orphaned: 0, parked: 1, refused: 0, skipped: 0 },
-        refusedByReason: {},
+        counts: { reconciled: 0, deferred: 0, orphaned: 0, parked: 1, refused: 1, skipped: 0 },
+        refusedByReason: { 'no-merge-proof': 1 },
         markerRemains: true,
         worktreeRemains: true,
         deleted: [],

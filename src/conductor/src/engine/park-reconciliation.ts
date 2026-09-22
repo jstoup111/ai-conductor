@@ -845,11 +845,7 @@ export async function reconcileMergedPark(
   // merely happens to be an ancestor can still carry an unreconciled checkout.
   const branchesRequiringPrProof = evidence.shippedRecordOnMain
     ? evidence.branches.filter((ref) => !evidence.mergedBranches.includes(ref))
-    // Daemon branches retain their record-repair path. Non-daemon ancestry
-    // needs PR-head corroboration when no record exists.
-    : requiresShippedRecord(opts.branch)
-      ? evidence.branches.filter((ref) => !evidence.mergedBranches.includes(ref))
-      : evidence.branches;
+    : evidence.branches;
   if (branchesRequiringPrProof.length > 0) {
     const runGh = opts.runGh ?? makeProductionGh();
     for (const ref of branchesRequiringPrProof) {
