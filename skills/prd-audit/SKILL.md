@@ -70,7 +70,7 @@ and keep the auditor's window for grading:
 - Bound every read the subagents and the auditor make: read each artifact once; per-file
   `git diff <base>...HEAD -- <path>` with default context, never `--unified=80` or wider;
   `git log --oneline -n 30`; filter `rg` output by path before listing. Do not re-read
-  `HARNESS.md`, `CLAUDE.md`, or this skill; they are already in context.
+  the harness rules, `CLAUDE.md`, or this skill; they are already in context.
 
 ## Validator discipline (MUST — copy verbatim into every subagent brief)
 
