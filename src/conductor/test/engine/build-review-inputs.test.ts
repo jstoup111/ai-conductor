@@ -296,6 +296,59 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(evidence).toMatchObject({ startLine: 2, endLine: 2 });
     });
 
+    it('carries a byte-offset region whose bytes hash to contentHash when non-ASCII text precedes the region', async () => {
+      // The analyzer span is in UTF-16 code units; an em dash (3 UTF-8 bytes)
+      // before the region shifts its byte offsets by two. A reviewer hashing
+      // `git show` output needs the byte span, not the character span (#2612).
+      const declaration = `it('${'x'.repeat(317)}', () => { expect(true).toBe(true); });`;
+      const prefix = '// —\n';
+      const headSource = `${prefix}${declaration}`;
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
+          'diff --git a/test/dash.test.ts b/test/dash.test.ts',
+          '--- a/test/dash.test.ts', '+++ b/test/dash.test.ts',
+          '@@ -1 +1,2 @@', `+${prefix.trimEnd()}`, `+${declaration}`,
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: Typed frozen scope\n' } },
+        { match: ['show', 'base123:test/dash.test.ts'], result: { stdout: declaration } },
+        { match: ['show', 'head123:test/dash.test.ts'], result: { stdout: headSource } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath, {
+        analyzeTestScope: () => ({
+          changedDeclarations: [],
+          targets: [],
+          candidates: [],
+          notes: [{
+            kind: 'declaration-uncertainty',
+            diagnostic: {
+              reason: 'syntax-diagnostic',
+              message: 'fixed fixture region',
+              span: { start: prefix.length, end: prefix.length + declaration.length },
+            },
+          }],
+          affectedGroups: [],
+          sharedSources: [],
+        }),
+      });
+      const evidence = inputs.sourceSnapshot.testScopeEvidence?.find((entry) =>
+        entry.source.fileName === 'test/dash.test.ts' && entry.source.side === 'head' && entry.region.start === prefix.length,
+      );
+
+      const headBytes = Buffer.from(headSource, 'utf8');
+      const byteShift = Buffer.byteLength(prefix) - prefix.length;
+      expect(byteShift).toBe(2);
+      expect(evidence?.byteRegion).toEqual({ start: prefix.length + byteShift, end: prefix.length + byteShift + declaration.length });
+      expect(evidence?.contentHash).toBe(
+        `sha256:${createHash('sha256').update(headBytes.subarray(evidence!.byteRegion!.start, evidence!.byteRegion!.end)).digest('hex')}`,
+      );
+      // The character offsets read as bytes select the wrong span.
+      expect(createHash('sha256').update(headBytes.subarray(evidence!.region.start, evidence!.region.end)).digest('hex'))
+        .not.toBe(evidence!.contentHash.slice('sha256:'.length));
+    });
+
     it('pins each source region by identity and hash, never its bytes', async () => {
       const declaration = `it('${'x'.repeat(317)}', () => { expect(true).toBe(true); });`;
       expect(declaration).toHaveLength(360);
@@ -334,7 +387,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       );
 
       expect(evidence).toBeDefined();
-      expect(Object.keys(evidence ?? {})).toEqual(['id', 'source', 'region', 'startLine', 'endLine', 'contentHash']);
+      expect(Object.keys(evidence ?? {})).toEqual(['id', 'source', 'region', 'byteRegion', 'startLine', 'endLine', 'contentHash']);
       expect(evidence?.contentHash).toBe('sha256:551d000b3463d87eba283a50b63a3cde45460465eda3c4c10f2f2d1f6ea0652f');
 
       const invalidEvidence: BuildReviewPinnedScopeEvidence = {

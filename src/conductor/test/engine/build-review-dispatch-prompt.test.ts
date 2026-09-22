@@ -73,14 +73,15 @@ describe('build_review testQuality evidence re-read prompt', () => {
     expect(evidenceInstruction).toBeDefined();
   });
 
-  it('names contentHash as the normalized-title hash and never asks the provider to hash region bytes', async () => {
-    // The engine derives contentHash from the declared title (adr-2026-08-18);
-    // a provider told to hash the bytes reports every candidate indeterminate.
+  it('directs the provider to hash the byteRegion bytes and never to treat character offsets as bytes', async () => {
+    // Pinned evidence hashes the UTF-16 slice's UTF-8 bytes; a provider that
+    // hashes the byte span at the character offsets fails on any non-ASCII
+    // file and reports every candidate indeterminate (#2612).
     const prompt = await captureRubricPrompt();
 
-    expect(prompt).toMatch(/contentHash.*whitespace-normalized title/);
-    expect(prompt).toMatch(/do not hash the bytes/);
-    expect(prompt).not.toMatch(/verify the bytes/i);
+    expect(prompt).toMatch(/sha256 of the raw bytes from `byteRegion\.start`/);
+    expect(prompt).toMatch(/must not be used as byte offsets/);
+    expect(prompt).not.toMatch(/whitespace-normalized title/);
   });
 
   it('contains no provider-specific paths, environment variables, or model names', async () => {
