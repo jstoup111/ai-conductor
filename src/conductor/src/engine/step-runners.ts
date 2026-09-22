@@ -147,7 +147,7 @@ import {
   renderBuildReviewProviderPayloadShape,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
-import type { BuildReviewRubricProjection } from './build-review-projections.js';
+import { buildReviewRubricPromptView, type BuildReviewRubricProjection } from './build-review-projections.js';
 import { boundedHeadTailExcerpt, classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-test-quality-preflight.js';
 import {
   defaultBuildReviewScopedLauncher,
@@ -3210,7 +3210,7 @@ export class DefaultStepRunner implements StepRunner {
             ]
           : []),
         `Your final message MUST end with a JSON object of exactly this shape (an empty findings array means no concern; anchor values follow the schema below exactly — content-region fields (\`changedTest\`, \`locus\`) are structured \`{path, contentHash, display, occurrence?}\` objects; \`occurrence\` is the 0-based ordinal among equal-content regions in one path and is omitted for a unique or first region; every other anchor value is a plain string, all nested under \`anchor\` — never flattened to the finding's top level and never renamed):\n${contractShape}`,
-        JSON.stringify(projection),
+        JSON.stringify(buildReviewRubricPromptView(projection)),
       ].join('\n\n');
     // Regression visibility for prompt bloat (#projection-size): record the
     // serialized rubric-prompt byte size on the event spine, per dispatch.

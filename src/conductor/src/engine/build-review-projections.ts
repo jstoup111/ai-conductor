@@ -11,6 +11,7 @@ import type { BuildReviewReducedCoverageDispositionRecord } from './build-review
 import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot, BuildReviewUnresolvedMarker } from './build-review-inputs.js';
 import { getBuildReviewRubricDescriptor } from './build-review-registry.js';
 import type { ResolvedBuildReviewCatalogEntry } from './resolved-config.js';
+import { buildReviewScopeCandidateIdentityKey } from './build-review-scope-identity.js';
 import type {
   RevertedProductionFileReference,
   TestQualityPreflightEvidence,
@@ -123,6 +124,61 @@ export function isTestQualityProjection(
   projection: BuildReviewRubricProjection,
 ): projection is TestQualityProjection {
   return projection.rubric === 'testQuality';
+}
+
+type JsonRecord = { readonly [key: string]: BuildReviewProjectionJson };
+const asRecord = (value: unknown): JsonRecord | undefined =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : undefined;
+const asArray = (value: unknown): readonly BuildReviewProjectionJson[] => Array.isArray(value) ? value : [];
+
+function scopeIdentity(sourceValue: unknown, regionValue: unknown): string | undefined {
+  const source = asRecord(sourceValue);
+  const region = asRecord(regionValue);
+  if (typeof source?.fileName !== 'string' || (source.side !== 'base' && source.side !== 'head') || !region) return undefined;
+  return buildReviewScopeCandidateIdentityKey({
+    source: { fileName: source.fileName, side: source.side },
+    region: { start: region.start as number, end: region.end as number },
+  });
+}
+
+/**
+ * The subset of a projection serialized into the provider prompt. The full
+ * projection still owns digests, cache identity, the oversize bound, and result
+ * validation. For testQuality, the prompt keeps only what a grader can act on:
+ * scope bookkeeping for declarations that bound to no candidate (unbound notes,
+ * the declaration inventory, non-candidate evidence, and legacy title chains)
+ * cannot anchor an accepted finding, but it is re-read on every provider turn.
+ * Security keeps its full projection because its anchors bind to hunk hashes.
+ */
+export function buildReviewRubricPromptView(projection: BuildReviewRubricProjection): BuildReviewRubricProjection | JsonRecord {
+  if (!isTestQualityProjection(projection)) return projection;
+  const scope = asRecord(projection.testScope) ?? {};
+  const candidateKeys = new Set<string>();
+  for (const candidate of asArray(scope.candidates).map(asRecord)) {
+    const declaration = asRecord(candidate?.declaration) ?? asRecord(candidate?.diagnostic);
+    const key = scopeIdentity(candidate?.source, declaration?.span);
+    if (key) candidateKeys.add(key);
+  }
+  const { changedTestTitles: _titles, ...rest } = projection;
+  return {
+    ...rest,
+    changedFiles: projection.changedFiles.map((file) => ({
+      path: file.path,
+      changeKind: file.changeKind,
+      ...(file.previousPath === undefined ? {} : { previousPath: file.previousPath }),
+      hunks: file.hunks.map(({ oldStart, oldCount, newStart, newCount }) => ({ oldStart, oldCount, newStart, newCount })),
+    })),
+    testScope: {
+      ...scope,
+      changedDeclarations: [],
+      notes: asArray(scope.notes).filter((note) => asRecord(note)?.kind !== 'unbound'),
+      evidence: asArray(scope.evidence).filter((entry) => {
+        const record = asRecord(entry);
+        const key = scopeIdentity(record?.source, record?.region);
+        return key !== undefined && candidateKeys.has(key);
+      }),
+    },
+  } as unknown as JsonRecord;
 }
 
 export type BuildReviewRubricProjections = {

@@ -9,6 +9,7 @@ import {
   canonicalJson,
   deriveBuildReviewRubricProjections,
   deriveChangedFileReferences,
+  buildReviewRubricPromptView,
   isTestQualityProjection,
   projectionDigest,
   type BuildReviewProjectionSource,
@@ -447,5 +448,52 @@ describe('build-review rubric projections', () => {
       expect(deriveChangedFileReferences('')).toEqual([]);
       expect(deriveChangedFileReferences('just prose\n')).toEqual([]);
     });
+  });
+});
+
+describe('build-review rubric prompt view', () => {
+  const declaration = (start: number, end: number, title: string) => ({
+    kind: 'test', change: 'added', occurrence: 0, modifierChain: [], titleChain: [title],
+    span: { start, end }, argumentsSpan: { start, end }, bodySpan: { start, end },
+  });
+  const evidenceAt = (fileName: string, start: number, end: number) => ({
+    id: `source:head:${fileName}:${start}:${end}`, source: { fileName, side: 'head' },
+    region: { start, end }, startLine: 1, endLine: 2, contentHash: contentHash(`${fileName}:${start}`),
+  });
+  const bloatedSource = () => withSnapshot(source(), {
+    testScope: {
+      targets: [], affectedGroups: [], sharedSources: [],
+      candidates: [{ source: { fileName: 'test/kept.test.ts', side: 'head' }, declaration: declaration(0, 40, 'kept'), reasons: ['file-header-marker'], markers: [], associationChanges: [] }],
+      changedDeclarations: [declaration(0, 40, 'kept'), declaration(50, 90, 'unbound sibling')],
+      notes: [
+        { kind: 'unbound', declaration: declaration(50, 90, 'unbound sibling') },
+        { kind: 'declaration-uncertainty', declaration: declaration(0, 40, 'kept') },
+      ],
+    },
+    // Same offsets in another file must not ride along with the candidate.
+    testScopeEvidence: [evidenceAt('test/kept.test.ts', 0, 40), evidenceAt('test/other.test.ts', 0, 40), evidenceAt('test/kept.test.ts', 50, 90)],
+    changedTestTitles: [{ selector: 'test/kept.test.ts', titleText: 'kept', staticExtractionFallback: false }],
+  });
+
+  it('keeps only candidate-bound scope and hunk ranges in the testQuality prompt', () => {
+    const projection = deriveBuildReviewRubricProjections(bloatedSource()).testQuality;
+    const view = buildReviewRubricPromptView(projection) as Record<string, any>;
+
+    expect(view.testScope.evidence.map((entry: { id: string }) => entry.id)).toEqual(['source:head:test/kept.test.ts:0:40']);
+    expect(view.testScope.notes.map((note: { kind: string }) => note.kind)).toEqual(['declaration-uncertainty']);
+    expect(view.testScope.changedDeclarations).toEqual([]);
+    expect(view.testScope.candidates).toEqual(projection.testScope && (projection.testScope as Record<string, unknown>).candidates);
+    expect(view).not.toHaveProperty('changedTestTitles');
+    expect(view.changedFiles).toEqual([{ path: 'src/a.ts', changeKind: 'modified', hunks: [{ oldStart: 1, oldCount: 2, newStart: 1, newCount: 3 }] }]);
+    expect(view).toMatchObject({ lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, digest: projection.digest, mergeBase: projection.mergeBase, headSha: projection.headSha, preflight: projection.preflight });
+  });
+
+  it('leaves the projection itself, and the security prompt, untouched', () => {
+    const projections = deriveBuildReviewRubricProjections(bloatedSource());
+    const before = JSON.stringify(projections.testQuality);
+    buildReviewRubricPromptView(projections.testQuality);
+
+    expect(JSON.stringify(projections.testQuality)).toBe(before);
+    expect(buildReviewRubricPromptView(projections.security)).toBe(projections.security);
   });
 });
