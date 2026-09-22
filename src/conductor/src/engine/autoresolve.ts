@@ -476,8 +476,15 @@ export async function runTier2(
  * @param subjectsBefore  Commit subjects of the feature, captured BEFORE rebase started
  * @returns               { ok: true } if all guards pass, or { ok: false, guard, reason } on failure
  */
+export type ExcusedAcceptanceGuardCommit = {
+  sha: string;
+  subject: string;
+  reason: 'declared-superseded-test-only';
+  paths: string[];
+};
+
 export type AcceptanceGuardResult =
-  | { ok: true; excused: Array<{ sha: string; subject: string }> }
+  | { ok: true; excused: ExcusedAcceptanceGuardCommit[] }
   | { ok: false; guard: string; reason: string };
 
 export async function runAcceptanceGuards(
@@ -521,7 +528,28 @@ export async function runAcceptanceGuards(
     };
   }
 
-  return { ok: true, excused: preserved.excused ?? [] };
+  const excused = await Promise.all((preserved.excused ?? []).map(async ({ sha, subject }) => {
+    const listing = await git(['show', '--format=', '--name-only', sha]);
+    return {
+      sha,
+      subject,
+      reason: 'declared-superseded-test-only' as const,
+      paths: listing.stdout.split('\n').map((path) => path.trim()).filter(Boolean),
+    };
+  }));
+  return { ok: true, excused };
+}
+
+/** Persist the audit residue for the excusals a successful guard explicitly allowed. */
+export async function emitExcusedRebaseCitationResidue(
+  events: ConductorEventEmitter | undefined,
+  excused: ReadonlyArray<{ sha: string; reason: string }>,
+): Promise<void> {
+  if (excused.length === 0) return;
+  await events?.emit({
+    type: 'rebase_citation_residue',
+    residue: excused.map(({ sha, reason }) => ({ sha, citingTaskIds: [], reason })),
+  });
 }
 
 export function validateResolutionVerdict(
@@ -1147,16 +1175,7 @@ export async function resolveConflictingPr(
       return { kind: 'escalated' };
     }
 
-    if (guardsResult.excused.length > 0) {
-      await deps.events?.emit({
-        type: 'rebase_citation_residue',
-        residue: guardsResult.excused.map(({ sha }) => ({
-          sha,
-          citingTaskIds: [],
-          reason: 'declared-superseded',
-        })),
-      });
-    }
+    await emitExcusedRebaseCitationResidue(deps.events, guardsResult.excused);
 
     // Suite gate: full test suite must pass
     // Use the injected runSuite function which may be a real suite runner or test stub

@@ -5,12 +5,37 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 
-import { resolveConflictingPr } from '../../src/engine/autoresolve.js';
+import { emitExcusedRebaseCitationResidue, resolveConflictingPr } from '../../src/engine/autoresolve.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCb);
 
 describe('engine/autoresolve — sweep supersession preservation mode', () => {
+  it('takes citation-residue reasons from the supplied guard result', async () => {
+    const emitted: unknown[] = [];
+    const excused = [{
+      sha: 'a'.repeat(40),
+      subject: 'test: supplied guard reason',
+      reason: 'future-declared-reason',
+      paths: ['supplied.test.ts'],
+    }];
+
+    await emitExcusedRebaseCitationResidue(
+      { emit: async (event: Parameters<ConductorEventEmitter['emit']>[0]) => { emitted.push(event); } } as never,
+      excused,
+    );
+
+    expect(emitted).toEqual([{
+      type: 'rebase_citation_residue',
+      residue: [{
+        sha: 'a'.repeat(40),
+        citingTaskIds: [],
+        reason: 'future-declared-reason',
+      }],
+    }]);
+  });
+
   it('treats an empty sweep declaration as judgement mode instead of accepting an undeclared upstream-equivalent drop', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'autoresolve-supersession-'));
     const git = (args: string[]) => execFile('git', args, { cwd: repo });

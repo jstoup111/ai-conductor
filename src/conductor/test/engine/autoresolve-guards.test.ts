@@ -168,6 +168,38 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
     });
   });
 
+  it('names the declared test-only reason and touched paths for an excused drop', async () => {
+    await g(['checkout', '-q', '-b', 'declared-test-drop', 'main']);
+    await writeFile(join(repo, 'declared-drop.test.ts'), 'same upstream intent\n');
+    await g(['add', 'declared-drop.test.ts']);
+    await g(['commit', '-q', '-m', 'test: declared superseded drop']);
+    const sha = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'declared-drop.test.ts'), 'same upstream intent\n');
+    await g(['add', 'declared-drop.test.ts']);
+    await g(['commit', '-q', '-m', 'main: land declared equivalent test change']);
+    await g(['checkout', '-q', 'declared-test-drop']);
+    await g(['rebase', 'main']);
+
+    const git: GitRunner = makeGitRunner(repo);
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    await expect(autoresolve.runAcceptanceGuards(
+      git,
+      'main',
+      ['test: declared superseded drop'],
+      [sha],
+    )).resolves.toEqual({
+      ok: true,
+      excused: [{
+        sha,
+        subject: 'test: declared superseded drop',
+        reason: 'declared-superseded-test-only',
+        paths: ['declared-drop.test.ts'],
+      }],
+    });
+  });
+
   it('rejects when the base advanced again mid-resolution, naming isBranchCurrent (FR-8 negative)', async () => {
     const git: GitRunner = makeGitRunner(repo);
     await g(['rebase', 'main']).catch(() => undefined);
