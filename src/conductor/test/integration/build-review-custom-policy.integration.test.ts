@@ -14,6 +14,7 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import * as buildReviewProjections from '../../src/engine/build-review-projections.js';
+import * as buildReviewCache from '../../src/engine/build-review-cache.js';
 
 vi.mock('../../src/engine/build-review-projections.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/build-review-projections.js')>();
@@ -22,6 +23,11 @@ vi.mock('../../src/engine/build-review-projections.js', async (importOriginal) =
     buildReviewEffectiveResultDescriptor: vi.fn(actual.buildReviewEffectiveResultDescriptor),
     parseBuildReviewReviewerPayload: vi.fn(actual.parseBuildReviewReviewerPayload),
   };
+});
+
+vi.mock('../../src/engine/build-review-cache.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/build-review-cache.js')>();
+  return { ...actual, readBuildReviewCacheEntry: vi.fn(actual.readBuildReviewCacheEntry) };
 });
 
 const roots: string[] = [];
@@ -375,6 +381,7 @@ describe('custom build-review policy runner', () => {
   });
 
   it('publishes a first-use custom loading failure with its declaration and no invented content', async () => {
+    vi.mocked(buildReviewCache.readBuildReviewCacheEntry).mockClear();
     const root = await fixture();
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: '{}' }));
     const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
@@ -412,6 +419,10 @@ describe('custom build-review policy runner', () => {
       },
     });
     expect(aggregate.customResults.portable).not.toHaveProperty('descriptor');
+    // A resource defect identified while loading the policy ends the candidate
+    // there: no judgment is requested from the provider and no cache lookup
+    // is made for that policy on any of the three laps.
+    expect(buildReviewCache.readBuildReviewCacheEntry).not.toHaveBeenCalled();
   });
 });
 

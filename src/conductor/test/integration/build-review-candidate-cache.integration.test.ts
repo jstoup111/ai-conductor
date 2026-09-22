@@ -1,6 +1,6 @@
 // Covers: task:19
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,7 +8,7 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
@@ -168,6 +168,19 @@ describe('build-review candidate cache runner ordering', () => {
     expect(catalogHomes).toEqual([preparedHome]);
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke.mock.calls.map(([options]) => options.model)).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra']);
+    // The fallback candidate that actually judged reports its own producing
+    // identity, and it reviewed under the same declaration as the preferred
+    // candidate would have, not a borrowed or re-resolved one.
+    const branchArtifact = JSON.parse(await readFile(join(root, '.pipeline', 'build-review', 'lap-head', 'portable.json'), 'utf8'));
+    expect(branchArtifact).toMatchObject({
+      descriptor: {
+        semanticSkill: 'portable-policy',
+        declaration: { rubricId: 'portable', semanticSkill: 'portable-policy', question: 'Check the selected policy.' },
+        producer: { provider: 'codex', model: 'gpt-5.6-terra' },
+      },
+      result: { kind: 'judged', candidate: { provider: 'codex', model: 'gpt-5.6-terra' } },
+    });
+    expect(branchArtifact.descriptor.producer.model).not.toBe('gpt-5.6-sol');
 
     // The preferred model still proves unavailable, then the fallback rung
     // independently reuses only its own warm judgment.
@@ -177,6 +190,55 @@ describe('build-review candidate cache runner ordering', () => {
     expect(invoke.mock.calls.map(([options]) => options.model)).toEqual([
       'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-sol',
     ]);
+  });
+
+  it.each([
+    ['lacks the selected policy', [] as const, 'absent'],
+    ['resolves the selected policy ambiguously', ['project', 'global'] as const, 'ambiguous'],
+  ])('reports failed policy coverage when the fallback provider %s instead of borrowing the preferred policy', async (_label, fallbackSources, code) => {
+    const root = await fixture();
+    const codexInvoke = vi.fn(async () => ({ success: false, exitCode: 127, output: 'codex unavailable', providerUnavailable: true, providerUnavailableScope: 'run' as const, providerUnavailableReason: 'codex unavailable' }));
+    const claudeInvoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) }));
+    const codex: LLMProvider = { invoke: codexInvoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const claude: LLMProvider = { invoke: claudeInvoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const runtimes = new ProviderRuntimeSet([
+      { key: 'codex', provider: codex, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) },
+      { key: 'claude', provider: claude, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
+    ]);
+    const events = new ConductorEventEmitter();
+    const failures: Array<{ provider: string; stage: string; reason: string }> = [];
+    events.on('build_review_policy_failed', (event) => { failures.push(event); });
+    const installed = (source: 'project' | 'global') => ({
+      semanticName: 'portable-policy', source, installationOrigin: `/fixture/${source}`, canonicalSkillPath: `/fixture/${source}/SKILL.md`, packageRoot: `/fixture/${source}`, declaredDependencies: [], availability: 'available' as const,
+    });
+    const catalog = vi.fn(async ({ provider }: { provider: string }) => provider === 'codex'
+      ? [installed('project')]
+      : fallbackSources.map((source) => installed(source)));
+    const runner = new DefaultStepRunner(codex, 'candidate-fallback-coverage', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: ['codex', 'claude'], build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', llm_provider: ['codex', 'claude'] },
+      } } } as HarnessConfig,
+      providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(), events,
+      providerExecution: { configuredProviders: ['codex', 'claude'], runtimes, sessions: new ProviderSessionStore(), prepareCandidateSelfHost: async () => ({ executable: 'provider', env: {}, args: [], teardown: async () => {} }) },
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
+      buildReviewPolicyCatalog: catalog as never,
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+
+    const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
+
+    // The fallback resolves the policy for itself and reports its own failed
+    // coverage; it never judges under the preferred provider's resolution.
+    expect(new Set(catalog.mock.calls.map(([input]) => input.provider))).toEqual(new Set(['codex', 'claude']));
+    expect(result.success).toBe(false);
+    expect(result.output).toContain(`Installed build-review policy portable-policy is unavailable: ${code}`);
+    expect(failures).toEqual(expect.arrayContaining([expect.objectContaining({ provider: 'claude', stage: 'catalog', reason: expect.stringContaining(code) })]));
+    expect(claudeInvoke).not.toHaveBeenCalled();
+    const branchArtifact = JSON.parse(await readFile(join(root, '.pipeline', 'build-review', 'lap-head', 'portable.json'), 'utf8'));
+    expect(branchArtifact).toMatchObject({ rubric: 'portable', result: { kind: 'infrastructure-failure', reason: 'policy-load-failed' } });
+    expect(branchArtifact).not.toHaveProperty('descriptor');
   });
 
   it('publishes one discard when an actual candidate reloads the policy under a new bundle digest', async () => {
