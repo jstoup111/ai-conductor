@@ -213,11 +213,19 @@ three drift fixtures listed in Steps and exits non-zero" is.
 
 Each check must be verifiable against a **named mechanism** — the function, file, gate, or state
 transition whose existence or behavior it asserts. State what that mechanism does to produce the
-mapped acceptance criterion's Then-clause; paraphrasing the Then-clause alone does not establish
+mapped acceptance criterion's Then-clause; a paraphrase that names no mechanism does not establish
 delivery. For example: "the artifact admission gate returns a rejection for an unsigned artifact
 before persistence, as asserted by the unsigned-artifact test." A test name alone is insufficient:
 name the behavior it verifies. Existing mechanisms remain valid for `Verify-only:` tasks, and internal
 tasks retain the lower-layer scope allowed by §3d.
+
+**Every Then outcome must be asserted.** Split each mapped criterion's Then-clause on its
+conjunctions: every outcome it states — including absence and no-op outcomes such as "no dispatch
+is attempted", "nothing is published", or "the branch settles `absent`" — must be explicitly
+required by at least one check in a cited task, with the same precision the criterion uses
+("byte-identical" is not satisfied by "deep-equal"). The `coverage_binding` judge refuses the plan
+before BUILD when any outcome is only implied. One check may carry several outcomes; when a task's
+criteria need more than five checks to cover, split the task rather than dropping outcomes.
 
 For a preserved/default-mode behavior, make the relevant checks bound any new side effects on that
 path to their intended conditions. For a closed result/state/reason set, ensure the checks can
@@ -416,6 +424,8 @@ the recorded authorization for the oversized plan.
 After generating the plan, cross-reference:
 - For each acceptance criterion in `.docs/stories/`, find the task(s) that cover it
 - If any criterion is uncovered, add a task
+- For each row, list the criterion's Then outcomes and confirm the cited task's checks explicitly
+  require every one (§3c); widen a check or add one for any outcome that is only implied
 - Present the coverage mapping to the user
 
 Record the mapping in a `## Coverage Check` table. At every tier, use one four-cell
@@ -513,6 +523,8 @@ any code is written. The full flow from here is:
 - [ ] Each task has specific test and implementation descriptions
 - [ ] Every `Done when:` check names a mechanism and its observable assertion, rather than merely
       restating the mapped criterion; each bullet occupies one physical line
+- [ ] Every outcome in each mapped criterion's Then-clause, including absence/no-op outcomes, is
+      explicitly required by a cited task's `Done when:` check at the criterion's precision (§3c)
 - [ ] Dependencies are declared and acyclic
 - [ ] `ai-conductor plan-protected-targets .docs/plans/<feature>.md` passes with no task/path
       violations; no task targets another feature's sealed artifact
