@@ -1,10 +1,11 @@
+// Covers: task:4
 // Covers: task:9, task:10
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DefaultStepRunner, type StepRunnerOptions } from '../../src/engine/step-runners.js';
+import { DefaultStepRunner, dispatchRubricContract, type StepRunnerOptions } from '../../src/engine/step-runners.js';
 import { classifyRetryDecision } from '../../src/engine/artifacts.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
@@ -12,7 +13,15 @@ import { resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-revie
 import { BuildReviewDispositionStore, type BuildReviewReducedCoverageAppendResult } from '../../src/engine/build-review-dispositions.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
+import { BUILD_REVIEW_RUBRIC_REGISTRY } from '../../src/engine/build-review-registry.js';
+import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import type { ResolvedBuildReviewCustomCatalogEntry } from '../../src/engine/resolved-config.js';
 
 const buildReviewPublication = vi.hoisted(() => ({ count: 0 }));
 
@@ -275,4 +284,123 @@ describe('build_review oversized projection step', () => {
       return { exitCode: 1, stdout: '', stderr: '' };
     };
   }
+});
+
+describe('build_review structured rubric dispatch', () => {
+  const branch = {
+    rubric: 'testQuality' as const,
+    skillName: 'build-review-test-quality',
+    policy: {
+      enabled: true, llm_provider: 'claude' as const, model: 'opus', effort: 'high' as const,
+      model_fallback_ladder: ['opus'], max_retries: 1, escalate: false, max_projection_bytes: 1_000_000, min_confidence: 0,
+    },
+  };
+  const projection = {
+    rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v3',
+    lapId: 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', snapshotDigest: 'sha256:projection',
+    digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [],
+    removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, changedTestSelectors: [],
+    testSuiteProof: {}, revertedProductionManifest: [], preflight: {}, repairContext: [],
+  } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
+
+  const dispatchBuiltIn = async (invoke: LLMProvider['invoke']) => {
+    const runner = new DefaultStepRunner({ invoke }, 'structured-review', '/fixture');
+    const proseScrape = vi.spyOn(runner as any, 'validateRubricOutput');
+    const result = await (runner as unknown as {
+      dispatchBuildReviewRubric: (value: typeof branch, reviewProjection: import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection) => Promise<unknown>;
+    }).dispatchBuildReviewRubric(branch, projection);
+    return { result, proseScrape };
+  };
+
+  it('runs testQuality through the recording provider schema boundary and stamps structured A over prose B', async () => {
+    const invoke = vi.fn(async (_options: InvokeOptions) => ({
+      success: true,
+      output: JSON.stringify({ findings: [{ summary: 'prose B must be ignored' }] }),
+      exitCode: 0,
+      finalStructuredResult: { findings: [] },
+    }));
+    const { result, proseScrape } = await dispatchBuiltIn(invoke);
+
+    expect(invoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output.jsonSchema);
+    expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
+    expect(proseScrape).not.toHaveBeenCalled();
+  });
+
+  it('rejects a prose-only success at root without a repair or prose finding', async () => {
+    const invoke = vi.fn(async (_options: InvokeOptions) => ({
+      success: true,
+      output: JSON.stringify({ findings: [{ summary: 'prose only must not stamp' }] }),
+      exitCode: 0,
+    }));
+    const { result, proseScrape } = await dispatchBuiltIn(invoke);
+
+    expect(result).toMatchObject({ kind: 'dispatch-failure', detail: 'root: a structured result is required' });
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(proseScrape).not.toHaveBeenCalled();
+  });
+
+  it('carries custom-v1 through the same dispatcher with its policy bundle before skill invocation', async () => {
+    const customInvoke = vi.fn(async (_options: Partial<InvokeOptions>) => ({ success: true, output: 'ignored prose', exitCode: 0, finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] } }));
+    const custom = await dispatchRubricContract({
+      descriptor: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+      invoke: customInvoke,
+      options: { prompt: 'bundle text\n\n$portable-policy\n\nreview', cwd: '/fixture' },
+    });
+
+    expect(custom).toMatchObject({ kind: 'structured', parsed: { kind: 'custom-findings', findings: [] } });
+    expect(customInvoke.mock.calls[0]?.[0]?.prompt).toMatch(/^bundle text\n\n\$portable-policy/);
+    expect(customInvoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema);
+  });
+
+  it('runs a resolved custom member through the recording-provider dispatcher after its policy bundle', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-dispatch-'));
+    const invoke = vi.fn(async (_options: InvokeOptions) => ({
+      success: true,
+      output: '{"kind":"unsupported-policy","requirement":"prose B"}',
+      exitCode: 0,
+      finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] },
+    }));
+    const runtimeProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke,
+    };
+    const entry: ResolvedBuildReviewCustomCatalogEntry = {
+      id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
+      policy: branch.policy, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+    };
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'custom-review', projectDir, {
+      gitRunner: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider: runtimeProvider, lifecycleCapability: runtimeProvider.lifecycleCapability,
+        policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'],
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'custom-policy', source: 'project', installationOrigin: '/fixture/policy',
+        canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+    });
+    try {
+      const outcome = await (runner as unknown as {
+        dispatchInstalledBuildReviewPolicy: (entry: ResolvedBuildReviewCustomCatalogEntry, inputs: unknown, lapId: string) => Promise<unknown>;
+      }).dispatchInstalledBuildReviewPolicy(entry, {
+        sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot', sourceChanges: [] },
+      }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8');
+      const options = invoke.mock.calls[0]?.[0];
+
+      expect(options?.nativeSchema).toBe(BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema);
+      expect(options?.prompt.indexOf('# policy bundle')).toBeLessThan(options?.prompt.indexOf('/custom-policy') ?? -1);
+      expect(outcome).toMatchObject({ success: true, id: 'custom-policy' });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -86,6 +86,7 @@ import {
 import type { ResolvedBuildReviewCatalogEntry, ResolvedBuildReviewCustomCatalogEntry } from './resolved-config.js';
 import { fingerprintBuildReviewPolicyDeclaration, type InstalledReviewSkill } from './build-review-policy.js';
 import { resolveInstalledReviewPolicyCatalog, ReviewPolicyCatalogError } from './build-review-policy-resolver.js';
+import type { RubricContractDescriptor } from './build-review-contract.js';
 import { captureInstalledReviewPolicyBundle, resolveReviewPolicyPackageReference, type CapturedReviewPolicyBundle } from './build-review-policy-bundle.js';
 import {
   evaluateBuildReviewPolicyPreflight,
@@ -103,7 +104,6 @@ import { buildReviewFrozenInputPaths, prepareBuildReviewContainment, prepareBuil
 import { acquireReviewScratchHome } from './self-host/provider-scratch.js';
 import { copySelectedCodexLogin } from '../execution/codex-self-host-auth.js';
 import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
-import { buildReviewEffectiveResultDescriptor, parseBuildReviewReviewerPayload } from './build-review-projections.js';
 import {
   coordinateBuildReviewRubrics,
   emitBuildReviewCacheDiscard,
@@ -746,6 +746,36 @@ export function extractJudgedResultCandidate(output: string): unknown {
     try { return JSON.parse(candidate); } catch { /* try next shape */ }
   }
   return undefined;
+}
+
+export type RubricContractDispatch<Output = unknown> =
+  | { readonly kind: 'structured'; readonly invocation: InvokeResult; readonly structuredResult: Record<string, unknown>; readonly parsed: Output | undefined }
+  | { readonly kind: 'root-rejection'; readonly invocation: InvokeResult; readonly rejection: { readonly field: 'root'; readonly problem: 'a structured result is required' } }
+  | { readonly kind: 'provider-failure'; readonly invocation: InvokeResult };
+
+type RubricContractInvokeOptions = Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort' | 'nativeSchema'>;
+
+/** Native-schema invocation boundary shared by built-in and custom rubrics. */
+export async function dispatchRubricContract<Output>(input: {
+  readonly descriptor: Pick<RubricContractDescriptor<unknown, unknown, Output>, 'output'>;
+  readonly options: RubricContractInvokeOptions;
+  readonly invoke: (options: RubricContractInvokeOptions & Pick<InvokeOptions, 'nativeSchema'>) => Promise<InvokeResult>;
+  /** Built-in payloads are stamped before their descriptor parser accepts them. */
+  readonly prepareStructured?: (value: Record<string, unknown>) => unknown;
+}): Promise<RubricContractDispatch<Output>> {
+  const invocation = await input.invoke({ ...input.options, nativeSchema: input.descriptor.output.jsonSchema });
+  if (!invocation.success) return { kind: 'provider-failure', invocation };
+  const structuredResult = invocation.finalStructuredResult;
+  if (structuredResult === null || typeof structuredResult !== 'object' || Array.isArray(structuredResult)) {
+    return { kind: 'root-rejection', invocation, rejection: { field: 'root', problem: 'a structured result is required' } };
+  }
+  const raw = structuredResult as Record<string, unknown>;
+  return {
+    kind: 'structured',
+    invocation,
+    structuredResult: raw,
+    parsed: input.descriptor.output.parse(input.prepareStructured?.(raw) ?? raw),
+  };
 }
 
 export class DefaultStepRunner implements StepRunner {
@@ -2855,17 +2885,20 @@ export class DefaultStepRunner implements StepRunner {
           reviewAccess = containment;
         }
         let cacheHit = false;
-        const invoked = await context.invoke({
-          prompt: renderBuildReviewPolicyContract({
+        const dispatched = await dispatchRubricContract({
+          descriptor: entry.contract,
+          options: {
+            prompt: `${renderBuildReviewPolicyContract({
             bundle, question: entry.question,
             scope: renderBuildReviewFrozenInputScope({
               contentDigest: inputs.sourceSnapshot.contentDigest, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha,
               changes: inputs.sourceSnapshot.sourceChanges ?? [], ...(source === undefined ? {} : { view: source }),
             }),
-          }),
-          cwd: source?.headPath ?? this.projectDir,
-          ...(reviewAccess === undefined ? {} : { reviewAccess }),
-        }, async (rung, invoke) => {
+            })}\n\n${renderAuxiliarySkillInvocation(entry.skill, context.candidate.providerKey)}`,
+            cwd: source?.headPath ?? this.projectDir,
+            ...(reviewAccess === undefined ? {} : { reviewAccess }),
+          },
+          invoke: (options) => context.invoke(options, async (rung, invoke) => {
           const semanticIdentity = semanticIdentityFor(rung.model);
           const cached = await readBuildReviewCacheEntry(this.projectDir, entry.id, { readFile: async (path) => readFile(path, 'utf-8'), readdir, mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename }, semanticIdentity);
           const cache = classifyBuildReviewCacheLookup(cached, {
@@ -2883,7 +2916,9 @@ export class DefaultStepRunner implements StepRunner {
             return { success: true, exitCode: 0, output: JSON.stringify(cache.hit.result), providerInvocationSkipped: true };
           }
           return invoke();
+          }),
         });
+        const invoked = dispatched.invocation;
         if (cacheHit) return { kind: 'hit' as const, result: invoked };
         if (!invoked.success) {
           coverageFailure = true;
@@ -2904,8 +2939,14 @@ export class DefaultStepRunner implements StepRunner {
           bundleDigest: bundle.digest,
           provenance: actualPolicyProvenance,
         });
-        const raw = extractJudgedResultCandidate(invoked.output);
-        const runtimeUnsupported = parseBuildReviewPolicyRuntimeUnsupportedResponse(raw, provider);
+        if (dispatched.kind === 'root-rejection') {
+          coverageFailure = true;
+          failure = { reason: 'malformed-artifact', detail: `Installed build-review policy ${entry.skill} ${dispatched.rejection.field}: ${dispatched.rejection.problem}` };
+          await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
+          return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
+        }
+        const parsed = dispatched.kind === 'structured' ? dispatched.parsed : undefined;
+        const runtimeUnsupported = parseBuildReviewPolicyRuntimeUnsupportedResponse(parsed, provider);
         if (runtimeUnsupported) {
           coverageFailure = true;
           const classification = classifyBuildReviewPolicyIncompatibility(runtimeUnsupported);
@@ -2913,7 +2954,6 @@ export class DefaultStepRunner implements StepRunner {
           await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         }
-        const parsed = parseBuildReviewReviewerPayload(raw, buildReviewEffectiveResultDescriptor(entry));
         if (!parsed || parsed.kind === 'unsupported-policy' || parsed.kind !== 'custom-findings') {
           coverageFailure = true;
           failure = {
@@ -2947,7 +2987,7 @@ export class DefaultStepRunner implements StepRunner {
           } };
         }
         const sourceRegions = admission.sourceRegions;
-        const stamped = stampBuildReviewCustomJudgedResult(raw, {
+        const stamped = stampBuildReviewCustomJudgedResult(parsed, {
           rubric: entry.id,
           lapId,
           declaration: {
@@ -3252,6 +3292,7 @@ export class DefaultStepRunner implements StepRunner {
     const invokeOnce = async (prompt: string): Promise<{
       success: boolean;
       output?: string;
+      finalStructuredResult?: unknown;
       commandUnresolved?: boolean;
       commandUnresolvedName?: string;
       providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'];
@@ -3259,12 +3300,14 @@ export class DefaultStepRunner implements StepRunner {
       const preserveInvocationFailure = (result: {
         success: boolean;
         output?: string;
+        finalStructuredResult?: unknown;
         commandUnresolved?: boolean;
         commandUnresolvedName?: string;
         providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'];
       }) => ({
         success: result.success,
         ...(typeof result.output === 'string' ? { output: result.output } : {}),
+        ...(result.finalStructuredResult === undefined ? {} : { finalStructuredResult: result.finalStructuredResult }),
         ...(result.commandUnresolved ? {
           commandUnresolved: true,
           ...(result.commandUnresolvedName ? { commandUnresolvedName: result.commandUnresolvedName } : {}),
@@ -3372,7 +3415,10 @@ export class DefaultStepRunner implements StepRunner {
                 reviewAccess = containment;
               }
               let cacheHit = false;
-              const invoked = await context.invoke({
+              const dispatched = await dispatchRubricContract({
+                descriptor: getBuildReviewRubricDescriptor(branch.rubric).contract,
+                prepareStructured: (value) => stampBuildReviewDispatchedCandidate(value, branch.rubric, projection),
+                options: {
                 cwd: materialized?.headPath ?? this.projectDir,
                 // Built-in peers of a custom-policy lap inspect the same frozen
                 // baseline/head input the custom reviewers are bound to.
@@ -3381,7 +3427,8 @@ export class DefaultStepRunner implements StepRunner {
                   changes: inputs.sourceSnapshot.sourceChanges ?? [], view: materialized,
                 })}`}`,
                 ...(reviewAccess === undefined ? {} : { reviewAccess }),
-              }, async (rung, invoke) => {
+                },
+                invoke: (options) => context.invoke(options, async (rung, invoke) => {
                 const semanticIdentity = candidateIdentity(rung, builtinBundle.digest);
                 if (!semanticIdentity) return { success: false, exitCode: 1, output: 'build_review candidate cache identity is unavailable' };
                 const cached = await readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
@@ -3400,18 +3447,19 @@ export class DefaultStepRunner implements StepRunner {
                   return { success: true, exitCode: 0, output: JSON.stringify(cache.hit.result), providerInvocationSkipped: true };
                 }
                 return invoke();
+                }),
               });
+              const invoked = dispatched.invocation;
               if (cacheHit) {
                 await inputs?.sourceMaterialization?.settle(branch.rubric);
                 return { kind: 'hit' as const, result: invoked };
               }
-              if (!invoked.success || invoked.output === undefined) {
+              if (!invoked.success) {
                 await inputs?.sourceMaterialization?.settle(branch.rubric);
                 return { kind: 'judged' as const, result: invoked };
               }
-              const candidate = extractJudgedResultCandidate(invoked.output);
-              const stamped = candidate === undefined ? undefined : stampBuildReviewDispatchedCandidate(candidate, branch.rubric, projection);
-              const judged = stamped === undefined ? undefined : validateBuildReviewDispatchedResult(stamped, branch.rubric, projection);
+              const candidate = dispatched.kind === 'structured' ? dispatched.parsed : undefined;
+              const judged = candidate === undefined ? undefined : validateBuildReviewDispatchedResult(candidate, branch.rubric, projection);
               if (judged) {
                 const semanticIdentity = candidateIdentity({ ...context.candidate, model: context.invokedModel() ?? context.candidate.model }, builtinBundle.digest);
                 if (!semanticIdentity) return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: 'build_review candidate cache identity is unavailable' } };
@@ -3434,7 +3482,7 @@ export class DefaultStepRunner implements StepRunner {
                 }
               }
               await inputs?.sourceMaterialization?.settle(branch.rubric);
-              return { kind: 'judged' as const, result: judged ? { ...invoked, output: JSON.stringify(judged) } : invoked };
+              return { kind: 'judged' as const, result: judged ? { ...invoked, output: JSON.stringify(judged), finalStructuredResult: judged } : invoked };
             },
           }),
             undefined,
@@ -3448,17 +3496,26 @@ export class DefaultStepRunner implements StepRunner {
         this.callCount++;
         return preserveInvocationFailure(verified);
       }
-      const result = await this.provider.invoke({
-        prompt: `${renderAuxiliarySkillInvocation(branch.skillName, this.providerKey)}\n\n${prompt}`,
-        sessionId: randomUUID(),
-        resume: false,
-        dangerouslySkipPermissions: true,
-        cwd: this.projectDir,
-        model: branch.policy.model,
-        effort: branch.policy.effort,
+      const dispatched = await dispatchRubricContract({
+        descriptor: getBuildReviewRubricDescriptor(branch.rubric).contract,
+        prepareStructured: (value) => stampBuildReviewDispatchedCandidate(value, branch.rubric, projection),
+        options: {
+          prompt: `${renderAuxiliarySkillInvocation(branch.skillName, this.providerKey)}\n\n${prompt}`,
+          dangerouslySkipPermissions: true,
+          cwd: this.projectDir,
+        },
+        invoke: (options) => this.provider.invoke({
+          ...options,
+          sessionId: randomUUID(),
+          resume: false,
+          model: branch.policy.model,
+          effort: branch.policy.effort,
+        }),
       });
       this.callCount++;
-      return preserveInvocationFailure(result);
+      return preserveInvocationFailure(dispatched.kind === 'structured'
+        ? { ...dispatched.invocation, finalStructuredResult: dispatched.parsed }
+        : dispatched.invocation);
     };
 
     // Validate-and-repair loop (deterministic shape enforcement): a session
@@ -3486,14 +3543,18 @@ export class DefaultStepRunner implements StepRunner {
         initial.commandUnresolvedName ?? '',
       ));
     }
-    if (!initial.success || initial.output === undefined) return undefined;
-    const validated = this.validateRubricOutput(initial.output, branch.rubric, projection);
+    if (!initial.success) return undefined;
+    if (initial.finalStructuredResult === undefined || initial.finalStructuredResult === null || typeof initial.finalStructuredResult !== 'object' || Array.isArray(initial.finalStructuredResult)) {
+      return makeBuildReviewDispatchFailure('root: a structured result is required');
+    }
+    const initialResult = validateBuildReviewDispatchedResult(initial.finalStructuredResult, branch.rubric, projection);
+    const validated = initialResult ? { result: initialResult, rejection: '' } : { rejection: 'the structured result did not satisfy the judged contract' };
     if (validated.result) return validated.result;
     const repairPrompt = [
       `Your previous response for the Build Review ${label[branch.rubric]} rubric did not satisfy the judged-result contract: ${validated.rejection}.`,
       `Re-emit your judgement as ONLY one JSON object — no prose, no markdown fences, no other text — of exactly this shape:\n${contractShape}`,
       'Preserve the semantic content of your previous findings; change only the shape.',
-      `Your previous response (bounded excerpt):\n${boundedHeadTailExcerpt(initial.output, RUBRIC_REPAIR_PROMPT_EXCERPT_CAP_BYTES)}`,
+      `Your previous response (bounded excerpt):\n${boundedHeadTailExcerpt(initial.output ?? '', RUBRIC_REPAIR_PROMPT_EXCERPT_CAP_BYTES)}`,
     ].join('\n\n');
     const repair = await invokeOnce(repairPrompt);
     if (repair.providerSetupExhaustion) {
