@@ -367,6 +367,8 @@ describe('custom build-review policy runner', () => {
     expect(result.success).toBe(false);
     expect(result.output).toContain('ambiguous');
     expect(result.output).toContain('conflicting installed sources: /fixture/global, /fixture/project');
+    // Ambiguity is reported as a request for disambiguation, not resolved by guessing.
+    expect(result.output).toContain('choose one source explicitly');
     expect(result.output).not.toContain('disposition resolution failed');
     // Below the mechanical allowance the lap stays in the retry lane: the
     // typed diagnostic is returned, but no aggregate may be published.

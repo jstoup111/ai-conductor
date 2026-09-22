@@ -125,6 +125,7 @@ describe('remediation case effects', () => {
       },
     ] });
     const publishWorkOrder = vi.fn().mockResolvedValue({ ok: true, workOrder: {} });
+    const chargeEffect = vi.fn().mockResolvedValue({ status: 'charged', exhausted: false, cumulativeExhausted: false, entry: { count: 1, cumulative: 1 } });
 
     await expect(applyBuildReviewActionEffects({
       projectRoot: root, feature, store,
@@ -138,9 +139,13 @@ describe('remediation case effects', () => {
         ['case-deferred', [{ title: 'Never publish a deferral' }]],
       ]),
       chargeInput: { treeHash: 'tree', resolvedCount: 0, reason: 'case-custom-merged' },
-      workOrderId: () => 'order-custom-merged', publishWorkOrder,
-      chargeEffect: vi.fn().mockResolvedValue({ status: 'charged', exhausted: false, cumulativeExhausted: false, entry: { count: 1, cumulative: 1 } }),
+      workOrderId: () => 'order-custom-merged', publishWorkOrder, chargeEffect,
     })).resolves.toMatchObject({ ok: true, status: 'applied', effectId: 'effect-custom-merged' });
+
+    // Exactly one repair route is charged, for the one admitted act, within
+    // the remaining allowance; sibling non-action cases charge nothing.
+    expect(chargeEffect).toHaveBeenCalledTimes(1);
+    expect(chargeEffect).toHaveBeenCalledWith(root, 'effect-custom-merged', expect.anything());
 
     expect(publishWorkOrder).toHaveBeenCalledWith(root, expect.objectContaining({
       effectId: 'effect-custom-merged',
