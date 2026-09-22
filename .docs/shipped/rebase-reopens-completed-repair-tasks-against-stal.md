@@ -4,13 +4,6 @@ spec_hash: 5060489d6c75af0e466f10a7d727b32df519da9870a11794060ae13d9deb18b9
 pr: https://github.com/jstoup111/ai-conductor/pull/2652
 shipped: 2026-09-22
 engine_version: 20260922T220754Z-95f2b12d2932
-findings:
-  - gate: architecture_review_as_built
-    finding: AB-1
-    class: REMEDIABLE
-    governing_clause: "adr-2026-07-12-rebase-evidence-stamp-translation D8"
-    outcome: remediated
-    summary: "`rebase_citation_residue` omits `citingObligationIds` from the authoritative `ConductorEvent` schema."
 ---
 
 ## Cost
@@ -30,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","59425b67-ce90-4f48-b7a0-41fccd743f3f","lifecycle-step","finish"],step:execution\u0000["timing-rollup","persisted-ledger","7d5febb3-9e20-4e69-b8c3-5dc28c493709","lifecycle-step","prd_audit"],step:execution\u0000["timing-rollup","persisted-ledger","c524ff55-2a5b-4e37-9321-3b4ba65625d1","lifecycle-step","architecture_review_as_built"]
+reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","7d5febb3-9e20-4e69-b8c3-5dc28c493709","lifecycle-step","prd_audit"],step:execution\u0000["timing-rollup","persisted-ledger","c524ff55-2a5b-4e37-9321-3b4ba65625d1","lifecycle-step","architecture_review_as_built"]
 
 ## Build Review
 laps_to_pass: 1
