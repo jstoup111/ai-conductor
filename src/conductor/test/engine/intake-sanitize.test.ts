@@ -13,7 +13,6 @@ import {
   describeRedactions,
 } from '../../src/engine/engineer/intake/sanitize.js';
 import { fileIntakeIssue } from '../../src/engine/engineer/intake/file-issue.js';
-import type { TrackerClient } from '../../src/engine/tracker-client.js';
 
 /** Categories present in a sanitize result, for order-independent assertions. */
 const categoriesOf = (text: string): string[] =>
@@ -164,10 +163,23 @@ describe('sanitizeIntakeText — properties', () => {
 });
 
 describe('fileIntakeIssue — scrub runs before publication', () => {
-  const makeDeps = (createIssue: ReturnType<typeof vi.fn>) => ({
-    tracker: { createIssue } as unknown as TrackerClient,
-    gh: vi.fn().mockResolvedValue({ stdout: '{"id": 1}' }),
-    cwd: '.',
+  const makeDeps = (createIssue: (input: { title: string; body: string }) => Promise<unknown>) => ({
+    creation: {
+      authority: {
+        resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
+        intent: { kind: 'explicit-intake' as const, repository: 'o/r' },
+      },
+      operations: {
+        run: vi.fn(async (request) => {
+          if (request.operation === 'issue.create') {
+            const payload = request.payload as { title: string; body: string };
+            await createIssue({ title: payload.title, body: payload.body });
+            return { created: { repository: 'o/r', kind: 'issue' as const, number: 7 } };
+          }
+          return {};
+        }),
+      },
+    },
   });
 
   it('publishes the sanitized title and body, never the raw text', async () => {

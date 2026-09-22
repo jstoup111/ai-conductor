@@ -13,6 +13,7 @@ import type { PrMergeState } from './pr-labels.js';
 import {
   type GhRunner as PrLabelsGhRunner,
   makeProductionGh,
+  guardedPrRunner,
   removeLabel,
   addLabel,
   upsertComment,
@@ -39,6 +40,9 @@ import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { prepareWorktree as defaultPrepareWorktree } from './worktree-prepare.js';
+import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
+import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from './tracker-client.js';
+import type { GithubOperationEventEmitter, GithubOperationRunner } from './github-operations.js';
 
 const execFile = promisify(execFileCb);
 
@@ -657,6 +661,12 @@ export type PushRefreshedResult =
   | { pushed: true }
   | { pushed: false; reason: string };
 
+export interface PushRefreshedRemoteOptions {
+  readonly remoteGit?: typeof executeRemoteGit;
+  readonly mutation?: GithubMutationExecutionContext;
+  readonly events?: GithubOperationEventEmitter;
+}
+
 /**
  * Push the refreshed branch with lease protection.
  *
@@ -684,22 +694,35 @@ export async function pushRefreshedBranch(
   git: GitRunner,
   branch: string,
   logger?: (msg: string) => void,
+  remote: PushRefreshedRemoteOptions = {},
 ): Promise<PushRefreshedResult> {
   const log = logger ?? console.log;
 
   // Resolution runs in a detached worktree, so publish its rebased HEAD rather
   // than the stale named branch ref. The lease still prevents unseen overwrites.
-  const pushResult = await git(['push', 'origin', `HEAD:${branch}`, '--force-with-lease']);
+  const destination = branch.startsWith('refs/') ? branch : `refs/heads/${branch}`;
+  const pushResult = await (remote.remoteGit ?? executeRemoteGit)(
+    ['push', 'origin', `HEAD:${destination}`, '--force-with-lease'],
+    {
+      cwd: '.',
+      config: async (args) => ({ stdout: (await git(args)).stdout }),
+      runRemoteGit: async (args) => {
+        const result = await git(args);
+        if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout || 'push failed');
+        return { stdout: result.stdout };
+      },
+      mutation: remote.mutation,
+      events: remote.events,
+    },
+  );
 
-  // Check if the push succeeded
-  if (pushResult.exitCode === 0) {
+  if (pushResult.kind === 'executed') {
     log(`pushRefreshedBranch: refreshed (${branch} pushed with lease)`);
     return { pushed: true };
   }
 
   // Failure: lease rejected (concurrent push detected) or other error
-  const stderr = pushResult.stderr || '';
-  const stdout = pushResult.stdout || '';
+  const stderr = pushResult.kind === 'failed' ? pushResult.error : '';
   let reason = 'push failed';
 
   // Detect lease rejection (typical error message from git)
@@ -707,8 +730,6 @@ export async function pushRefreshedBranch(
     reason = `lease push rejected (stale remote ref or concurrent change): ${stderr.slice(0, 100)}`;
   } else if (stderr) {
     reason = `push error: ${stderr.slice(0, 100)}`;
-  } else if (stdout) {
-    reason = `push output: ${stdout.slice(0, 100)}`;
   }
 
   log(`pushRefreshedBranch failed: ${reason}`);
@@ -745,6 +766,10 @@ export interface PublishResolutionOptions {
    * instead of attempting the lease push.
    */
   earlierFailure?: EarlierStageFailure;
+  /** Guarded remote-write context for the lease publication. */
+  remoteGit?: typeof executeRemoteGit;
+  remoteMutation?: GithubMutationExecutionContext;
+  events?: GithubOperationEventEmitter;
 }
 
 /**
@@ -787,6 +812,7 @@ export async function publishResolution(
     opts.git,
     opts.branch,
     log,
+    { remoteGit: opts.remoteGit, mutation: opts.remoteMutation, events: opts.events },
   );
 
   if (!pushResult.pushed) {
@@ -802,7 +828,8 @@ export async function publishResolution(
   // injected `log`) and never rolls back the push or triggers escalation.
   // The next tick's normal label pass reconciles the label if this fails.
   const runGh = opts.gh.runGh ?? makeProductionGh();
-  await addLabel(runGh, opts.gh.cwd, opts.prUrl, 'mergeable', log);
+  const prRunner = opts.gh.operations ? guardedPrRunner(runGh, opts.gh.operations) : runGh;
+  await addLabel(prRunner, opts.gh.cwd, opts.prUrl, 'mergeable', log);
 
   logOutcome(log, opts.prUrl, 'lease-push', 'refreshed');
   return { published: true };
@@ -814,6 +841,8 @@ export async function publishResolution(
 export interface EscalateOpts {
   /** Injectable gh runner (defaults to the production factory). */
   runGh?: PrLabelsGhRunner;
+  /** Guarded mutation runner; raw gh remains available only for comment lookup. */
+  operations?: GithubOperationRunner;
   /** cwd for gh calls (typically the primary project root). */
   cwd: string;
   /** Optional log callback. All errors are logged here, never thrown. */
@@ -851,11 +880,12 @@ export async function escalate(
   opts: EscalateOpts,
 ): Promise<void> {
   const runGh = opts.runGh ?? makeProductionGh();
+  const prRunner = opts.operations ? guardedPrRunner(runGh, opts.operations) : runGh;
   const { cwd, log } = opts;
 
   // Step 1 + 2: labels (best-effort; removeLabel/addLabel never throw).
-  await removeLabel(runGh, cwd, prUrl, 'mergeable', log);
-  await addLabel(runGh, cwd, prUrl, 'needs-remediation', log);
+  await removeLabel(prRunner, cwd, prUrl, 'mergeable', log);
+  await addLabel(prRunner, cwd, prUrl, 'needs-remediation', log);
 
   // Step 3: marker-tagged comment (best-effort; upsertComment never throws).
   const commentBody = [
@@ -865,7 +895,7 @@ export async function escalate(
     `**Reason:** ${reason}`,
   ].join('\n');
 
-  await upsertComment(runGh, cwd, prUrl, NEEDS_REMEDIATION_MARKER, commentBody, log);
+  await upsertComment(prRunner, cwd, prUrl, NEEDS_REMEDIATION_MARKER, commentBody, log);
 }
 
 /**
@@ -909,6 +939,12 @@ export async function resolveConflictingPr(
     /** Re-check active daemon ownership at each resolution-worktree removal. */
     isFeatureInFlight?: IsFeatureInFlight;
     worktreeLifecycle?: WorktreeLifecycleQueue;
+    /** Test seam for a scoped, already-authorized PR mutation runner. */
+    operations?: GithubOperationRunner;
+    /** Test seam for local-Git lease behavior; production uses the guarded adapter. */
+    remoteGit?: typeof executeRemoteGit;
+    /** Existing event spine for remote-Git refusal telemetry. */
+    events?: GithubOperationEventEmitter;
   },
 ): Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' }> {
   const { prUrl, slug, repoCwd } = entry;
@@ -917,6 +953,24 @@ export async function resolveConflictingPr(
   return withResolveWorktree(slug, branch, repoCwd, async (worktreePath) => {
     // Initialize a git runner for the worktree
     const git = makeGitRunner(worktreePath);
+    const remoteMutation = await resolveFeatureRemoteMutation({
+      cwd: worktreePath,
+      slug,
+      branch,
+      git: async (args) => {
+        const result = await git(args);
+        if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout || 'git read failed');
+        return { stdout: result.stdout };
+      },
+      gh: deps.runGh,
+    });
+    // Reads stay on the injected gh transport; every mutation reauthorizes via
+    // the typed runner. A missing provenance context is intentionally refused.
+    const operations = deps.operations ?? createGuardedGithubOperationRunner(deps.runGh, {
+      cwd: repoCwd,
+      mutation: remoteMutation,
+      events: deps.events,
+    });
 
     // Determine the base to rebase onto
     const baseResolved = await resolveBase(git, 'main');
@@ -941,6 +995,7 @@ export async function resolveConflictingPr(
         log(`${prUrl}: rebase failed without conflicts; escalating`);
         await escalate(prUrl, 'rebase-error', rebaseAttempt.stderr.trim(), {
           runGh: deps.runGh,
+          operations,
           cwd: repoCwd,
           log,
         });
@@ -972,6 +1027,7 @@ export async function resolveConflictingPr(
           const reason = tier2Outcome.reason || 'could not resolve remaining conflicts';
           await escalate(prUrl, 'tier2-resolve', reason, {
             runGh: deps.runGh,
+            operations,
             cwd: repoCwd,
             log,
           });
@@ -993,6 +1049,7 @@ export async function resolveConflictingPr(
       log(`${prUrl}: acceptance guard failed: ${reason}`);
       await escalate(prUrl, 'acceptance-guards', reason, {
         runGh: deps.runGh,
+        operations,
         cwd: repoCwd,
         log,
       });
@@ -1011,6 +1068,7 @@ export async function resolveConflictingPr(
       log(`${prUrl}: suite gate failed: ${reason}`);
       await escalate(prUrl, 'suite-gate', reason, {
         runGh: deps.runGh,
+        operations,
         cwd: repoCwd,
         log,
       });
@@ -1025,9 +1083,13 @@ export async function resolveConflictingPr(
       prUrl,
       gh: {
         runGh: deps.runGh,
+        operations,
         cwd: repoCwd,
         log,
       },
+      remoteMutation,
+      remoteGit: deps.remoteGit,
+      events: deps.events,
       // No earlierFailure → attempt the lease push
     });
 

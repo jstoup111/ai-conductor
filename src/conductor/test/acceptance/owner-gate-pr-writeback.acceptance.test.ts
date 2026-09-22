@@ -5,8 +5,8 @@ import { resolveSpecPrUrl } from '../../src/engine/pr-labels.js';
 // ─────────────────────────────────────────────────────────────────────────────
 // Covers: FR-8, FR-10, FR-12
 //
-// RED acceptance specs for Story "Gated spec PR gets a warn-once announcement
-// and label". The module `src/engine/gate-writeback.ts` does NOT exist yet
+// Acceptance specs for the owner-gated PR write-back boundary. The module
+// `src/engine/gate-writeback.ts`
 // (plan Tasks 17-19). This drives the REAL write-back orchestrator via a
 // dynamic import (following the exact `park-marker.ts` pattern from
 // `operator-park-dashboard-precedence.acceptance.test.ts`), exercising it
@@ -83,7 +83,7 @@ const OTHER_OWNER_ENTRY: GatedSpecEntry = {
 };
 
 describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () => {
-  it('a newly gated spec with an existing PR gains the owner-gated label and one marker comment carrying reason + remedy', async () => {
+  it('a newly gated spec with an existing foreign-owner PR leaves no remote label or marker comment', async () => {
     const mod = await loadGateWriteback();
     const { gh, calls } = fakeGh([
       { stdout: '' }, // ensureLabel
@@ -95,16 +95,16 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
     await mod.announceGatedPr(OTHER_OWNER_ENTRY, PR_URL, { runGh: gh, cwd: '/repo' });
 
     const commentCall = calls.find((c) => c.includes('comment') || c.includes('POST'));
-    expect(commentCall).toBeDefined();
+    expect(commentCall).toBeUndefined();
     expect(mod.OWNER_GATED_LABEL).toBe('owner-gated');
-    expect(calls.some((c) => c.join(' ').includes(mod.OWNER_GATED_MARKER))).toBe(true);
-    expect(calls.some((c) => c.join(' ').includes('alice'))).toBe(true);
+    expect(calls.some((c) => c.join(' ').includes(mod.OWNER_GATED_MARKER))).toBe(false);
+    expect(calls.some((c) => c.join(' ').includes('alice'))).toBe(false);
   });
 
-  it('the same spec still gated on 10 subsequent passes still carries exactly ONE marker comment (upsert edits in place)', async () => {
+  it('the same foreign-owned spec stays free of marker comments across repeated passes', async () => {
     const mod = await loadGateWriteback();
 
-    // First pass creates the marker comment.
+    // First pass observes the foreign PR but does not mutate it.
     const first = fakeGh([
       { stdout: '' },
       { stdout: '' },
@@ -113,17 +113,15 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
     ]);
     await mod.announceGatedPr(OTHER_OWNER_ENTRY, PR_URL, { runGh: first.gh, cwd: '/repo' });
 
-    const markerBody = `${mod.OWNER_GATED_MARKER}\nowner-gated: other-owner (alice)`;
     let commentCreateCount = 0;
 
-    // 10 more passes: the lookup now finds the existing marked comment and
-    // PATCHes it in place — never a second `comment`/create call.
+    // 10 more passes likewise perform no comment creation.
     for (let i = 0; i < 10; i++) {
       const gh: GhRunner = async (args) => {
         if (args[0] === 'pr' && args[1] === 'view' && args.includes('comments')) {
           return {
             stdout: JSON.stringify({
-              comments: [{ body: markerBody, url: `${PR_URL}#issuecomment-9001` }],
+              comments: [{ body: `${mod.OWNER_GATED_MARKER}\nold`, url: `${PR_URL}#issuecomment-9001` }],
             }),
           };
         }
@@ -139,7 +137,7 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
     expect(commentCreateCount).toBe(0);
   });
 
-  it('a reason transition (unowned-indeterminate → other-owner) updates the single existing comment body in place', async () => {
+  it('a reason transition leaves the foreign PR untouched', async () => {
     const mod = await loadGateWriteback();
     const patchBodies: string[] = [];
     const gh: GhRunner = async (args) => {
@@ -160,11 +158,10 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
     const transitioned: GatedSpecEntry = { ...OTHER_OWNER_ENTRY, reason: 'other-owner' };
     await mod.announceGatedPr(transitioned, PR_URL, { runGh: gh, cwd: '/repo' });
 
-    expect(patchBodies.length).toBe(1);
-    expect(patchBodies[0]).toContain('alice');
+    expect(patchBodies).toEqual([]);
   });
 
-  it('the spec PR is already MERGED: label + comment still apply without error', async () => {
+  it('the spec PR is already MERGED: foreign-owner label + comment still do not apply', async () => {
     const mod = await loadGateWriteback();
     const calls: string[][] = [];
     const gh: GhRunner = async (args) => {
@@ -187,19 +184,21 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
     const labelAddCall = calls.find(
       (c) => c[0] === 'api' && c.some((a) => a.includes('/labels')) && c.includes('POST'),
     );
-    expect(labelAddCall).toBeDefined();
+    expect(labelAddCall).toBeUndefined();
 
     const commentCreateCall = calls.find((c) => c[0] === 'pr' && c[1] === 'comment');
-    expect(commentCreateCall).toBeDefined();
+    expect(commentCreateCall).toBeUndefined();
   });
 
-  it('gh exits non-zero on the comment upsert: the failure is logged once, no retry storm, and local state was already committed before this call (advisory only)', async () => {
+  it('a foreign-owner PR does not reach the comment-upsert transport, even across scans', async () => {
     const mod = await loadGateWriteback();
     const logs: string[] = [];
     let ghCallCount = 0;
+    let commentLookupAttempts = 0;
     const gh: GhRunner = async (args) => {
       ghCallCount++;
       if (args[0] === 'pr' && args[1] === 'view' && args.includes('comments')) {
+        commentLookupAttempts++;
         throw new Error('rate limited');
       }
       return { stdout: '' };
@@ -207,12 +206,14 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
 
     await mod.announceGatedPr(OTHER_OWNER_ENTRY, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
 
-    expect(logs.length).toBeGreaterThanOrEqual(1);
+    expect(logs).toEqual([]);
+    expect(commentLookupAttempts).toBe(0);
     const callsAfterFirstFailure = ghCallCount;
     // A second invocation (simulating the next scan pass) must not compound
     // into an unbounded retry storm within a single pass.
     await mod.announceGatedPr(OTHER_OWNER_ENTRY, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
-    expect(ghCallCount).toBeLessThan(callsAfterFirstFailure * 10);
+    expect(ghCallCount).toBe(callsAfterFirstFailure * 2);
+    expect(commentLookupAttempts).toBe(0);
   });
 
   it('the marker-comment lookup succeeds but the in-place PATCH fails: NO fallback create is attempted (mirrors upsertComment terminal PATCH semantics)', async () => {
@@ -262,7 +263,7 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
     expect(logs.some((l) => l.toLowerCase().includes('no pr') || l.toLowerCase().includes('skip'))).toBe(true);
   });
 
-  it('label creation races another daemon (ensureLabel conflict): the conflict is swallowed and the comment still lands', async () => {
+  it('a foreign-owner PR does not attempt label creation or a comment after a hypothetical label race', async () => {
     const mod = await loadGateWriteback();
     let commentPosted = false;
     const gh: GhRunner = async (args) => {
@@ -283,7 +284,7 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
 
     await mod.announceGatedPr(OTHER_OWNER_ENTRY, PR_URL, { runGh: gh, cwd: '/repo' });
 
-    expect(commentPosted).toBe(true);
+    expect(commentPosted).toBe(false);
   });
 
   // ── daemon-cli resolution seam (Task 5, remediation for FR-8) ────────────
@@ -292,10 +293,10 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
   // normally absent (see daemon-cli.ts `announceGated`): the PR url is
   // resolved by falling back to `resolveSpecPrUrl(ownerGh, projectRoot,
   // 'spec/<slug>', log)` against origin. These two tests pin that exact
-  // fallback seam end-to-end: (a) a resolvable PR gets labeled and announced
-  // idempotently, (b) no PR on origin never triggers draft PR creation.
+  // fallback seam end-to-end: (a) a resolvable foreign PR stays untouched,
+  // (b) no PR on origin never triggers draft PR creation.
 
-  it('a gated spec with NO worktree conduct-state resolves its PR via spec/<slug> from origin, labels it, and stays at exactly one marker comment across two scans', async () => {
+  it('a gated spec with NO worktree conduct-state resolves its PR via spec/<slug> from origin without writing its foreign PR', async () => {
     const mod = await loadGateWriteback();
     const slug = '2026-07-02-bar';
     const branch = `spec/${slug}`;
@@ -326,13 +327,12 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
     const labelAddCall = calls.find(
       (c) => c[0] === 'api' && c.some((a) => a.includes('/labels')) && c.includes('POST'),
     );
-    expect(labelAddCall).toBeDefined();
-    expect(calls.filter((c) => c[0] === 'pr' && c[1] === 'comment').length).toBe(1);
+    expect(labelAddCall).toBeUndefined();
+    expect(calls.filter((c) => c[0] === 'pr' && c[1] === 'comment').length).toBe(0);
 
-    // A second scan pass of the same gated spec must not create a second
-    // marker comment — the PRD requires exactly one after repeated scans.
+    // A second scan pass must not create any remote marker comment either.
     await mod.announceGatedPr(OTHER_OWNER_ENTRY, prUrl as string, { runGh: gh, cwd: '/repo' });
-    expect(calls.filter((c) => c[0] === 'pr' && c[1] === 'comment').length).toBe(1);
+    expect(calls.filter((c) => c[0] === 'pr' && c[1] === 'comment').length).toBe(0);
   });
 
   it('no PR exists on origin for spec/<slug> (local-commit fallback): resolveSpecPrUrl yields undefined and no draft PR is ever created', async () => {

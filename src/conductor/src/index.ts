@@ -30,11 +30,12 @@ import { dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdir, readFile } from 'node:fs/promises';
 import { realpathSync, writeSync } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
 import { execa } from 'execa';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
-import { Conductor, createFinishPresentationRepair } from './engine/conductor.js';
+import { Conductor, createProvenanceGuardedFinishPresentationRepair } from './engine/conductor.js';
 import { createProductionAcceptanceRedExec } from './engine/acceptance-red-runner.js';
 import {
   createProductionFinishPublicationCoordinator,
@@ -167,6 +168,13 @@ import {
   resolveMainRepoRoot,
 } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
+import { detectGithubOperationCommand, dispatchGithubOperationCommand } from './engine/github-operations-cli.js';
+import { detectGithubBoundaryAuditCommand, dispatchGithubBoundaryAudit } from './engine/github-invocation-audit-cli.js';
+import {
+  formatGithubOperationTarget,
+  type GithubOperationTarget,
+} from './engine/github-operations.js';
+import type { GithubOperationApprovalPrompt } from './engine/github-operation-approval.js';
 import {
   detectScopeCheckCommand,
   loadScopeCheckEnforcement,
@@ -885,6 +893,41 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
+  // `github-boundary-audit` is the production entry of the shipped invocation
+  // audit: read-only, non-interactive, exit 1 on any unguarded site.
+  const githubBoundaryAuditCmd = detectGithubBoundaryAuditCommand(process.argv);
+  if (githubBoundaryAuditCmd) {
+    process.exit(dispatchGithubBoundaryAudit(githubBoundaryAuditCmd));
+  }
+
+  const githubOperationCmd = detectGithubOperationCommand(process.argv);
+  if (githubOperationCmd) {
+    // The CLI is the interactive authority boundary. It displays the exact
+    // decoded request and grants only this one confirmation; non-TTY callers
+    // get the normal explicit-authorization refusal.
+    const confirmation = {
+      mode: 'interactive' as const,
+      confirm: async (prompt: GithubOperationApprovalPrompt): Promise<boolean> => {
+        if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+        const target: GithubOperationTarget = prompt.target;
+        const readline = createInterface({ input: process.stdin, output: process.stdout });
+        try {
+          const answer = await readline.question(
+            `Authorize ${prompt.operation} on ${formatGithubOperationTarget(target)}? [y/N] `,
+          );
+          return answer.trim().toLowerCase() === 'y' || answer.trim().toLowerCase() === 'yes';
+        } finally {
+          readline.close();
+        }
+      },
+    };
+    process.exitCode = await dispatchGithubOperationCommand(githubOperationCmd, {
+      cwd: process.cwd(),
+      confirmation,
+    });
+    return;
+  }
+
   const scopeCheckCmd = detectScopeCheckCommand(process.argv);
   if (scopeCheckCmd) {
     const projectRoot = process.env.CONDUCT_SCOPE_CHECK_PROJECT_ROOT ?? process.cwd();
@@ -1535,6 +1578,8 @@ async function main(): Promise<void> {
   const finishPublicationBaseBranch =
     (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main';
 
+  const finishPublicationGit = makeProductionGit();
+  const finishPublicationGh = makeProductionGh();
   const conductor = new Conductor({
     stateFilePath,
     stepRunner,
@@ -1555,11 +1600,13 @@ async function main(): Promise<void> {
       projectRoot,
       stateFilePath,
       baseBranch: finishPublicationBaseBranch,
-      git: makeProductionGit(),
-      gh: makeProductionGh(),
-      repairPresentation: createFinishPresentationRepair({
+      git: finishPublicationGit,
+      gh: finishPublicationGh,
+      repairPresentation: createProvenanceGuardedFinishPresentationRepair({
         projectRoot,
-        gh: makeProductionGh(),
+        git: finishPublicationGit,
+        gh: finishPublicationGh,
+        baseBranch: finishPublicationBaseBranch,
       }),
       observeReleaseReadiness: createProductionReleaseReadinessObserver({
         projectRoot,

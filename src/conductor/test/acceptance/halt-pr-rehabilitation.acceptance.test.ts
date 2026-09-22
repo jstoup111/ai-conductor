@@ -20,6 +20,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type { GithubOperationRequest, GithubOperationRunner } from '../../src/engine/github-operations.js';
 import {
   HALT_PR_BANNER_SENTINEL,
   NEEDS_REMEDIATION_BODY_MARKER,
@@ -51,7 +52,8 @@ async function loadRehabilitateHaltPr() {
     prUrl: string;
     sourceRef: string | undefined | null;
     log?: (msg: string) => void;
-  }) => Promise<'not-halt-pr' | 'rehabilitated' | 'partial' | 'gh-unavailable'>;
+    operations?: GithubOperationRunner;
+  }) => Promise<'not-halt-pr' | 'rehabilitated' | 'partial' | 'refused' | 'gh-unavailable'>;
 }
 
 /**
@@ -70,6 +72,7 @@ function makeGhFake(state: {
   getTitle: () => string;
   getLabels: () => string[];
   getIsDraft: () => boolean;
+  operations: GithubOperationRunner;
 } {
   let body = state.body ?? '';
   let title = state.title;
@@ -142,6 +145,24 @@ function makeGhFake(state: {
     }
     return { stdout: '' };
   };
+  const operations: GithubOperationRunner = {
+    async run(request: GithubOperationRequest) {
+      switch (request.operation) {
+        case 'pull-request.label.remove':
+          return await gh(['api', '--method', 'DELETE', 'repos/owner/repo/issues/249/labels/needs-remediation'], { cwd: '/repo' });
+        case 'pull-request.ready':
+          return await gh(['pr', 'ready', PR_URL], { cwd: '/repo' });
+        case 'pull-request.edit': {
+          const payload = request.payload as { body?: string; title?: string };
+          if (payload.body !== undefined) return await gh(['pr', 'edit', PR_URL, '--body', payload.body], { cwd: '/repo' });
+          if (payload.title !== undefined) return await gh(['pr', 'edit', PR_URL, '--title', payload.title], { cwd: '/repo' });
+          return {};
+        }
+        default:
+          return {};
+      }
+    },
+  };
   return {
     gh,
     calls,
@@ -149,13 +170,14 @@ function makeGhFake(state: {
     getTitle: () => title,
     getLabels: () => labels,
     getIsDraft: () => isDraft,
+    operations,
   };
 }
 
 describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
   it('halt-born draft PR: ready-flip + label clear + Closes exactly once, outcome rehabilitated', async () => {
     const rehabilitateHaltPr = await loadRehabilitateHaltPr();
-    const { gh, calls, getBody } = makeGhFake({
+    const { gh, calls, getBody, operations } = makeGhFake({
       title: HALT_TITLE,
       labels: ['needs-remediation'],
       isDraft: true,
@@ -167,6 +189,7 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
       cwd: '/repo',
       prUrl: PR_URL,
       sourceRef: SOURCE_REF,
+      operations,
     });
 
     expect(outcome).toBe('rehabilitated');
@@ -188,12 +211,12 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'mergeable-sweep-'));
     try {
       const rehabilitateHaltPr = await loadRehabilitateHaltPr();
-      const { gh } = makeGhFake({
+      const { gh, operations } = makeGhFake({
         title: HALT_TITLE,
         labels: ['needs-remediation'],
         isDraft: true,
       });
-      await rehabilitateHaltPr({ gh, cwd: projectRoot, prUrl: PR_URL, sourceRef: SOURCE_REF });
+      await rehabilitateHaltPr({ gh, cwd: projectRoot, prUrl: PR_URL, sourceRef: SOURCE_REF, operations });
 
       await enrollWatch(projectRoot, { prUrl: PR_URL, slug: 'feat-x', repoCwd: projectRoot });
 
@@ -213,8 +236,16 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
         }
         return { stdout: '' };
       };
+      const postRehabOperations: GithubOperationRunner = {
+        run: async (request) => {
+          if (request.operation === 'pull-request.label.add') {
+            await postRehabGh(['api', '--method', 'POST', 'repos/owner/repo/issues/249/labels'], { cwd: projectRoot });
+          }
+          return {};
+        },
+      };
 
-      await sweepMergeableLabels({ projectRoot, runGh: postRehabGh });
+      await sweepMergeableLabels({ projectRoot, runGh: postRehabGh, operations: postRehabOperations });
 
       expect(
         sweepCalls.some(
@@ -228,13 +259,14 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
 
   it('PR with no halt signal (clean title, no label, not draft): no-op, zero mutating calls', async () => {
     const rehabilitateHaltPr = await loadRehabilitateHaltPr();
-    const { gh, calls } = makeGhFake({ title: CLEAN_TITLE, labels: [], isDraft: false });
+    const { gh, calls, operations } = makeGhFake({ title: CLEAN_TITLE, labels: [], isDraft: false });
 
     const outcome = await rehabilitateHaltPr({
       gh,
       cwd: '/repo',
       prUrl: PR_URL,
       sourceRef: SOURCE_REF,
+      operations,
     });
 
     expect(outcome).toBe('not-halt-pr');
@@ -245,13 +277,14 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
 
   it('draft PR with no halt signal (early pr_timing: early-draft build PR, #199 case): draft alone never triggers rehab', async () => {
     const rehabilitateHaltPr = await loadRehabilitateHaltPr();
-    const { gh, calls } = makeGhFake({ title: CLEAN_TITLE, labels: [], isDraft: true });
+    const { gh, calls, operations } = makeGhFake({ title: CLEAN_TITLE, labels: [], isDraft: true });
 
     const outcome = await rehabilitateHaltPr({
       gh,
       cwd: '/repo',
       prUrl: PR_URL,
       sourceRef: SOURCE_REF,
+      operations,
     });
 
     expect(outcome).toBe('not-halt-pr');
@@ -263,7 +296,7 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
     const rehabilitateHaltPr = await loadRehabilitateHaltPr();
     // Skill hasn't rewritten the title yet, but the engine step already ran
     // once: PR is no longer draft, label already gone, Closes already present.
-    const { gh, calls, getBody } = makeGhFake({
+    const { gh, calls, getBody, operations } = makeGhFake({
       title: HALT_TITLE,
       labels: [],
       isDraft: false,
@@ -275,6 +308,7 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
       cwd: '/repo',
       prUrl: PR_URL,
       sourceRef: SOURCE_REF,
+      operations,
     });
 
     expect(outcome).toBe('rehabilitated');
@@ -288,7 +322,7 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
 
   it('human partially rehabilitated the PR by hand (title fixed, needs-remediation label still present): remaining facet fixed, hand-written title untouched', async () => {
     const rehabilitateHaltPr = await loadRehabilitateHaltPr();
-    const { gh, calls } = makeGhFake({
+    const { gh, calls, operations } = makeGhFake({
       title: CLEAN_TITLE, // a human already rewrote the title
       labels: ['needs-remediation'], // but the label was never cleared
       isDraft: true,
@@ -299,6 +333,7 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
       cwd: '/repo',
       prUrl: PR_URL,
       sourceRef: SOURCE_REF,
+      operations,
     });
 
     expect(outcome).toBe('rehabilitated');
@@ -320,14 +355,14 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
 
   it('a resume-cleared draft PR is absent from the reconciliation marked set and receives no sweep mutations', async () => {
     const { clearHaltStateForResume } = await import(REHAB_MOD);
-    const { gh, calls, getBody, getLabels, getIsDraft } = makeGhFake({
+    const { gh, calls, getBody, getLabels, getIsDraft, operations } = makeGhFake({
       title: HALT_TITLE,
       labels: ['needs-remediation'],
       isDraft: true,
       body: `Existing implementation PR.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
     });
 
-    const clearOutcome = await clearHaltStateForResume(gh, '/repo', PR_URL, () => {}, async () => {});
+    const clearOutcome = await clearHaltStateForResume(gh, '/repo', PR_URL, () => {}, async () => {}, operations);
     expect(clearOutcome).toBe('cleared');
 
     const sweepStart = calls.length;
@@ -339,6 +374,7 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
         gitCalls.push(args);
         throw new Error('unmarked PRs must not query shipped-record state');
       },
+      operations,
     });
 
     expect(calls.slice(sweepStart)).toEqual([
@@ -421,6 +457,20 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
         }
         return { stdout: '' };
       };
+      const operations: GithubOperationRunner = {
+        run: async (request) => {
+          if (request.operation === 'pull-request.label.remove') {
+            pr.labels = pr.labels.filter((name) => name !== 'needs-remediation');
+          } else if (request.operation === 'pull-request.label.add') {
+            pr.labels = [...new Set([...pr.labels, 'needs-remediation'])];
+          } else if (request.operation === 'pull-request.edit') {
+            if (rejectMarkerRemoval) throw new Error('marker body edit rejected');
+            const body = request.payload && 'body' in request.payload ? request.payload.body : undefined;
+            if (typeof body === 'string') pr.body = body;
+          }
+          return {};
+        },
+      };
 
       let dispatches = 0;
       const runner: StepRunner = {
@@ -440,6 +490,7 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
         mode: 'default',
         gh,
         git: async () => ({ stdout: '' }),
+        resolveShipDraftPublicationDependencies: async () => ({ remoteMutation: {} as never, operations }),
         maxRetries: 1,
         sleepFn: async () => {},
       });
@@ -454,6 +505,7 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
         runGit: async () => {
           throw new Error('unshipped PR must be re-healed');
         },
+        operations,
       });
       expect(pr.labels).toContain('needs-remediation');
 
@@ -486,7 +538,7 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
         }),
         'utf8',
       );
-      const { gh, getBody, getIsDraft, getLabels, getTitle } = makeGhFake({
+      const { gh, getBody, getIsDraft, getLabels, getTitle, operations } = makeGhFake({
         title: 'needs-remediation: feat/recover-retained-placeholder — manual remediation required',
         labels: ['needs-remediation'],
         isDraft: true,
@@ -512,6 +564,8 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
         gh,
         runGh: gh,
         git: async (args) => ({ stdout: args[0] === 'rev-list' ? '1\n' : '' }),
+        resolveShipDraftPublicationDependencies: async () => ({ remoteMutation: {} as never, operations }),
+        shipDraftRemoteGit: async () => ({ kind: 'executed', targets: [] }) as never,
         maxRetries: 1,
         sleepFn: async () => {},
       });
@@ -548,7 +602,7 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
         'utf8',
       );
       const handWrittenTitle = 'feat: operator-repaired wording';
-      const { gh, getBody, getLabels, getTitle } = makeGhFake({
+      const { gh, getBody, getLabels, getTitle, operations } = makeGhFake({
         title: handWrittenTitle,
         labels: ['needs-remediation'],
         isDraft: true,
@@ -570,6 +624,8 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
         gh,
         runGh: gh,
         git: async (args) => ({ stdout: args[0] === 'rev-list' ? '1\n' : '' }),
+        resolveShipDraftPublicationDependencies: async () => ({ remoteMutation: {} as never, operations }),
+        shipDraftRemoteGit: async () => ({ kind: 'executed', targets: [] }) as never,
         maxRetries: 1,
         sleepFn: async () => {},
       });

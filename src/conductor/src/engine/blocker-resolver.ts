@@ -6,6 +6,7 @@
 
 import { parseSourceRef } from './engineer/issue-ref.js';
 import type { GhRunner } from './tracker-client.js';
+import { runTrackerRepositoryRead } from './tracker-client.js';
 
 /** A reference to a single GitHub issue, as returned by `parseSourceRef`. */
 export interface IssueRef {
@@ -159,10 +160,7 @@ async function resolveUncached(sourceRef: string, deps: BlockerResolverDeps): Pr
 
   let stdout: string;
   try {
-    ({ stdout } = await deps.run(
-      ['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`],
-      { cwd: deps.cwd ?? process.cwd() },
-    ));
+    stdout = await runTrackerRepositoryRead(deps.run, deps.cwd ?? process.cwd(), 'issue.read', `${repo}`, { kind: 'issue', number: Number(number) }, ['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`]);
   } catch (err: unknown) {
     // Network/API failure — isolated to this ref; never throw into the scan loop.
     const detail = err instanceof Error ? err.message : String(err);

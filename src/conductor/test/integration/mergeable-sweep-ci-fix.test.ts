@@ -23,6 +23,11 @@ import { tmpdir } from 'os';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type {
+  GithubOperationRequest,
+  GithubOperationRunner,
+  GithubOperationRunnerResponse,
+} from '../../src/engine/github-operations.js';
 import { isEligibleForCiFix } from '../../src/engine/ci-fix.js';
 import { classifyCiContextFailure } from '../../src/engine/daemon-ci-fix.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
@@ -81,8 +86,8 @@ function makeGh(
   prStates: Record<string, { mergeable?: string; checks?: Check[]; labels?: string[] }>,
   calls: GhCall[],
   failOn?: (args: string[]) => boolean,
-): GhRunner {
-  return async (args) => {
+): GhRunner & GithubOperationRunner {
+  const gh: GhRunner = async (args) => {
     calls.push({ args: [...args] });
     if (failOn?.(args)) {
       throw new Error('simulated gh failure');
@@ -95,6 +100,32 @@ function makeGh(
     if (args[0] === 'api') return { stdout: '' };
     return { stdout: '' };
   };
+  const operations: GithubOperationRunner = {
+    async run(request: GithubOperationRequest): Promise<GithubOperationRunnerResponse> {
+      if (request.operation === 'pull-request.label.remove' || request.operation === 'pull-request.label.add') {
+        if (request.target.kind !== 'pull-request') {
+          throw new Error(`unexpected target: ${request.target.kind}`);
+        }
+        const label = request.payload && 'label' in request.payload ? request.payload.label : undefined;
+        if (typeof label !== 'string') throw new Error('missing label payload');
+        await gh(
+          request.operation === 'pull-request.label.remove'
+            ? [
+                'api', '--method', 'DELETE',
+                `repos/${request.target.repository}/issues/${request.target.number}/labels/${encodeURIComponent(label)}`,
+              ]
+            : [
+                'api', '--method', 'POST',
+                `repos/${request.target.repository}/issues/${request.target.number}/labels`,
+                '-f', `labels[]=${label}`,
+              ],
+          { cwd: '/fixture' },
+        );
+      }
+      return {};
+    },
+  };
+  return Object.assign(gh, operations);
 }
 
 async function readEntries(projectRoot: string): Promise<WatchEntry[]> {
@@ -623,6 +654,7 @@ describe('mergeable-sweep native CI state + bounded CI-fix dispatch', () => {
     await sweepMergeableLabels({
       projectRoot,
       runGh: gh,
+      operations: { run: gh.run.bind(gh) },
       ciFix: {
         enabled: true,
         isEligible: async () => ({ eligible: true }),

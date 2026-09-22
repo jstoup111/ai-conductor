@@ -1,7 +1,7 @@
 ---
 name: pr
 disable-model-invocation: true
-description: "Use when creating or updating a pull request. Analyzes the full diff against the base branch, writes a concise title and structured body, and creates or updates the PR via gh."
+description: "Use when creating or updating a pull request. Analyzes the full diff against the base branch, writes a concise title and structured body, and returns them to the guarded publication engine."
 enforcement: advisory
 phase: ship
 standalone: true
@@ -139,95 +139,30 @@ known failures — this wastes CI minutes and blocks the PR.
 
 ### 6. Create or Update the PR
 
-Check if a PR already exists for this branch:
+Publication is engine-owned. Do not invoke a remote Git write or a GitHub write from this host skill.
+The finish/publication engine resolves canonical repository and feature provenance, performs the
+guarded push and PR create/update, and reports a typed result. For an independently supported
+single GitHub operation, write its closed request JSON and invoke only:
 
 ```bash
-gh pr view --json number,url 2>&1
+ai-conductor github-operation --request-file <request.json>
 ```
 
-**If no PR exists:**
+The request accepts only the registered operation schema; it never accepts raw `gh` or `git`
+arguments. A refusal, failure, or partial result is non-success: stop and surface the result rather
+than attempting a fallback write. The host supplies no approval hook; when a registered shared
+operation needs approval, the engine binds it to that exact canonical request.
 
-```bash
-git push -u origin HEAD
-```
-
-**Handle non-fast-forward rejection:**
-
-If `git push -u origin HEAD` is rejected as non-fast-forward (output contains "rejected"
-or "failed to push some refs"), your branch has been rebased on HEAD but
-`origin/<branch>` still holds pre-rebase commits. This is a normal, intended state
-after a sanctioned rebase — not a blocker.
-
-**Before force-pushing, prove `origin/<branch>` is stale:**
-
-1. **Fast path — merge-base proof:** Run:
-   ```
-   git merge-base --is-ancestor origin/<branch> ORIG_HEAD
-   ```
-   If this exits 0 (true), `origin/<branch>` is an ancestor of your pre-rebase HEAD.
-   This proves the remote is behind and safe to overwrite.
-
-2. **Fallback — reflog proof:** If merge-base fails, check the reflog:
-   ```
-   git reflog | grep -E "rebase \(finish\)"
-   ```
-   Note: git writes this reflog entry as `rebase (finish): returning to refs/heads/<branch>`
-   — parenthesized, no colon after "rebase" — never as `"rebase: finish"`. A literal grep for
-   `"rebase: finish"` never matches real git output and silently defeats this fallback proof
-   (jstoup111/ai-conductor#587); use the pattern above.
-
-   If you see a "rebase (finish):" entry, the branch was rebased as part of completion.
-   The pre-rebase state exists in ORIG_HEAD and the reflog. This proves staleness.
-
-**Once proof is obtained, reconcile with force-with-lease:**
-
-```bash
-git push --force-with-lease -u origin HEAD
-```
-
-This is safe because `--force-with-lease` aborts if the remote has new commits you
-don't know about — you've already verified it only has pre-rebase ones.
-
-**Explicitly forbidden — never do these:**
-- `git pull` — pulls `origin/<branch>` and merges; creates conflicts or undoes the rebase
-- `git fetch && git rebase origin/<branch>` — same effect, undoing the rebase
-- `git merge origin/<branch>` — creates a merge commit that contradicts the rebase
-
-All three corrupt the rebase and prevent the PR branch from reflecting the intended state.
-
-**Failure handling:**
-- **Staleness proof failed:** If merge-base exits non-zero and no "rebase (finish):" reflog
-  entry is found, foreign commits exist on `origin/<branch>`. Stop, report the failure,
-  and do NOT push (manual resolution required).
-- **Lease failure:** If `--force-with-lease` fails with a rejection error, the remote
-  has moved past what was proven stale. Stop and report. Never use plain `--force`.
-
-**After successful push:**
-
-```bash
-gh pr create --title "<title>" --body "$(cat <<'EOF'
-<body>
-EOF
-)"
-```
-
-**If PR already exists:**
-
-```bash
-gh pr edit --title "<title>" --body "$(cat <<'EOF'
-<body>
-EOF
-)"
-```
-
-After creating/updating, output the PR URL.
+For feature-branch publication, return the authored title/body to the finish/publication engine.
+It owns the guarded remote write and PR operation; do not substitute a direct command, including a
+force or lease variant. Report the returned PR URL after an executed result.
 
 **Engine Behavior — Halt-PR Rehabilitation (automated after PR is created/updated).**
-When you create or update a PR that replaces a reused halt PR (one with title
+When the engine creates or updates a PR that replaces a reused halt PR (one with title
 prefixed `needs-remediation:` or the `needs-remediation` label), your job is to
 generate a fresh title and body as described in §3 and §4 above. You do NOT need
-to run `gh pr edit` to remove the halt signal or clear the label yourself — the
-conductor's finish step automatically rehabilitates the PR after you complete:
+to remove the halt signal or clear the label yourself — the conductor's finish
+step automatically rehabilitates the PR after you complete:
 
 - The engine removes the `needs-remediation` label (if present)
 - The engine rewrites the title to remove `needs-remediation:` prefix (if stale)
@@ -260,8 +195,6 @@ are updating, replace it wholesale with real prose.
 - [ ] No pasted planning artifacts or boilerplate
 - [ ] Testing section describes actual verification performed
 - [ ] Completion verification already passed; `/pr` launched no aggregate test command
-- [ ] If `git push -u origin HEAD` was rejected as non-fast-forward: staleness proof (merge-base or reflog) ran and passed
-- [ ] If proof passed and `--force-with-lease` was required: push succeeded and no plain `--force` was used
-- [ ] If staleness proof failed or `--force-with-lease` failed: push was not retried, failure was reported
-- [ ] PR was created/updated successfully
+- [ ] Publication engine reported an executed result and returned the PR URL
+- [ ] A refused, failed, or partial guarded result was surfaced with no fallback write
 - [ ] PR URL displayed to user

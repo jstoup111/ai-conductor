@@ -13,6 +13,7 @@ import type { ConductState, FinishPublicationEvent, RunMode } from '../types/ind
 import type { HarnessConfig } from '../types/config.js';
 import type { StepRunResult } from './conductor.js';
 import { type GhRunner, type GitRunner } from './pr-labels.js';
+import { executeGithubOperation, type GithubOperationRunner } from './github-operations.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { hasHaltSignal, isEngineFlooredBody } from './halt-pr-rehabilitation.js';
@@ -34,6 +35,9 @@ import {
   type PrProseJudgmentRequest,
   type PrProseJudgmentResult,
 } from './finish-publication.js';
+import { createShipDraftPublicationDependencies } from './ship-draft-pr.js';
+import type { GithubMutationExecutionContext } from './tracker-client.js';
+import { executeRemoteGit } from './remote-git-operations.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
 import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
 import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
@@ -50,6 +54,7 @@ import {
   upsertShipmentPlanDeclaration,
   withoutShipmentPlanDeclarations,
 } from './shipment-plan-declaration.js';
+import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
 
 export interface ProductionFinishPublicationCoordinator {
   advance(input: {
@@ -86,6 +91,17 @@ export interface ProductionFinishPublicationDeps {
   /** Interactive intent comes from the host conversation, never finish-record output. */
   acquireInteractiveIntent?: () => Promise<unknown>;
   /**
+   * Test-only injection for the canonical guarded PR mutation boundary. In
+   * production this is derived from the feature's committed provenance by
+   * `createShipDraftPublicationDependencies`; an absent boundary is a
+   * refusal, never permission to fall back to raw `gh` writes.
+   */
+  operations?: GithubOperationRunner;
+  /** Test-only remote boundary authority; production derives this from committed provenance. */
+  remoteMutation?: GithubMutationExecutionContext;
+  /** Test-only terminal remote-Git seam; production uses executeRemoteGit. */
+  remoteGit?: typeof executeRemoteGit;
+  /**
    * Production composition owns the ordered presentation repair.  Callers
    * inject the existing halt-rehabilitation/floor/ready composition so this
    * coordinator never silently reduces it to a `gh pr ready` flip.
@@ -105,14 +121,61 @@ export interface ProductionReleaseReadinessObserverInput {
 export async function publishAcceptedBuildReviewRiskToRetainedPr(input: {
   prUrl: string;
   body: string;
+  /** A prior retained-PR projection may have changed the body before risk upsert. */
+  originalBody?: string;
   records: readonly BuildReviewDispositionRecord[];
-  gh: GhRunner;
-  cwd: string;
+  operations?: GithubOperationRunner;
 }): Promise<{ readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly message: string }> {
   const upserted = upsertBuildReviewAcceptedRisk(input.body, input.records);
   if (!upserted.ok) return upserted;
-  if (upserted.changed) await input.gh(['pr', 'edit', input.prUrl, '--body', upserted.body], { cwd: input.cwd });
+  if (upserted.changed || (input.originalBody !== undefined && upserted.body !== input.originalBody)) {
+    const mutation = await mutateRetainedPullRequest({
+      operations: input.operations,
+      prUrl: input.prUrl,
+      operation: 'pull-request.edit',
+      payload: { body: upserted.body },
+    });
+    if (!mutation.ok) return mutation;
+  }
   return { ok: true, changed: upserted.changed };
+}
+
+type RetainedPullRequestMutation =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly message: string };
+
+/**
+ * The only FINISH-owned retained-PR write seam. A malformed URL, unavailable
+ * provenance-backed runner, refusal, or indeterminate runner result is a
+ * non-success outcome. Callers propagate it to the core coordinator, which
+ * re-observes rather than claiming the transition progressed.
+ */
+async function mutateRetainedPullRequest(input: {
+  operations?: GithubOperationRunner;
+  prUrl: string;
+  operation: 'pull-request.edit' | 'pull-request.ready';
+  payload?: { readonly body: string };
+}): Promise<RetainedPullRequestMutation> {
+  if (!input.operations) {
+    return { ok: false, message: `guarded ${input.operation} unavailable: missing feature operation boundary` };
+  }
+  const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/([1-9]\d*)$/.exec(input.prUrl);
+  if (!match) return { ok: false, message: `guarded ${input.operation} refused: invalid-target` };
+  const result = await executeGithubOperation({
+    operation: input.operation,
+    repository: match[1],
+    resource: { kind: 'pull-request', number: Number(match[2]) },
+    context: { actor: 'finish-publication' },
+    ...(input.payload === undefined ? {} : { payload: input.payload }),
+  }, input.operations);
+  if (result.kind === 'executed') return { ok: true };
+  if (result.kind === 'refused') {
+    return { ok: false, message: `guarded ${input.operation} refused: ${result.reason}` };
+  }
+  if (result.kind === 'partial') {
+    return { ok: false, message: `guarded ${input.operation} returned a partial result` };
+  }
+  return { ok: false, message: `guarded ${input.operation} failed: ${result.error}` };
 }
 
 function upsertReducedCoverageEvidence(body: string, section: string | undefined): { ok: true; body: string; changed: boolean } | { ok: false; message: string } {
@@ -293,7 +356,7 @@ export function createProductionFinishPublicationCoordinator(
   // build-review risk. Every retained-PR maintenance effect applies the
   // authoritative upsert, and an unrenderable or unwritable projection blocks
   // the effect instead of letting an accepted finding silently disappear.
-  const projectAcceptedRiskToRetainedPr = async (prUrl: string) => {
+  const projectAcceptedRiskToRetainedPr = async (prUrl: string, operations?: GithubOperationRunner) => {
     const feature = await (deps.resolveFeatureIdentity ?? resolveBuildReviewFeatureIdentity)(deps.projectRoot);
     // No feature identity means no feature-scoped disposition state can exist
     // (a non-worktree FINISH): there is nothing to project. Everything past
@@ -328,20 +391,27 @@ export function createProductionFinishPublicationCoordinator(
           ],
     });
     if (!renderedReducedCoverage.ok) throw new Error(`accepted-risk projection: ${renderedReducedCoverage.message}`);
-    const { stdout } = await deps.gh(['pr', 'view', prUrl, '--json', 'body'], { cwd: deps.projectRoot });
+    const stdout = await runTrackerUrlRead(deps.gh, deps.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     const body = (JSON.parse(stdout) as { body?: unknown }).body;
     const reducedCoverageBody = upsertReducedCoverageEvidence(
       typeof body === 'string' ? body : '',
       renderedReducedCoverage.section,
     );
     if (!reducedCoverageBody.ok) throw new Error(`accepted-risk projection: ${reducedCoverageBody.message}`);
-    const acceptedRiskBody = upsertBuildReviewAcceptedRisk(reducedCoverageBody.body, listed.records);
-    if (!acceptedRiskBody.ok) throw new Error(`accepted-risk projection: ${acceptedRiskBody.message}`);
-    if (acceptedRiskBody.body !== (typeof body === 'string' ? body : '')) {
-      await deps.gh(['pr', 'edit', prUrl, '--body', acceptedRiskBody.body], { cwd: deps.projectRoot });
-    }
+    const published = await publishAcceptedBuildReviewRiskToRetainedPr({
+      prUrl,
+      body: reducedCoverageBody.body,
+      originalBody: typeof body === 'string' ? body : '',
+      records: listed.records,
+      operations,
+    });
+    if (!published.ok) throw new Error(`accepted-risk projection: ${published.message}`);
   };
-  const projectShipmentPlanDeclarationToRetainedPr = async (prUrl: string, requestedSlug: string) => {
+  const projectShipmentPlanDeclarationToRetainedPr = async (
+    prUrl: string,
+    requestedSlug: string,
+    operations?: GithubOperationRunner,
+  ) => {
     const planPaths = (await readdir(join(deps.projectRoot, '.docs', 'plans')))
       .filter((name) => name.endsWith('.md'))
       .map((name) => join('.docs', 'plans', name));
@@ -352,11 +422,19 @@ export function createProductionFinishPublicationCoordinator(
         : `plan not found: ${resolution.expected}`;
       throw new Error(`shipment plan declaration: ${detail}`);
     }
-    const { stdout } = await deps.gh(['pr', 'view', prUrl, '--json', 'body'], { cwd: deps.projectRoot });
+    const stdout = await runTrackerUrlRead(deps.gh, deps.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     const body = (JSON.parse(stdout) as { body?: unknown }).body;
     if (typeof body !== 'string') throw new Error('shipment plan declaration: PR body is malformed');
     const next = upsertShipmentPlanDeclaration(body, resolution.identity.slug);
-    if (next !== body) await deps.gh(['pr', 'edit', prUrl, '--body', next], { cwd: deps.projectRoot });
+    if (next !== body) {
+      const mutation = await mutateRetainedPullRequest({
+        operations,
+        prUrl,
+        operation: 'pull-request.edit',
+        payload: { body: next },
+      });
+      if (!mutation.ok) throw new Error(`shipment plan declaration: ${mutation.message}`);
+    }
   };
 
   return {
@@ -383,7 +461,7 @@ export function createProductionFinishPublicationCoordinator(
                 // Missing/indeterminate remote is safe only for foreground keep.
               }
               try {
-                await deps.gh(['auth', 'status'], { cwd: deps.projectRoot });
+                await runTrackerAmbientRead(deps.gh, deps.projectRoot, 'ambient.identity.read', ['auth', 'status']);
                 authentication = 'authenticated';
               } catch {
                 // The policy maps unavailable auth to the safe foreground outcome.
@@ -396,6 +474,35 @@ export function createProductionFinishPublicationCoordinator(
             })();
 
       if ('kind' in intent) return intent;
+
+      // Intent is the first publication fence. Resolving provenance can read
+      // local Git and GitHub identity, but it must not happen before an
+      // attended operator has chosen a publishable outcome.
+      const publication = await createShipDraftPublicationDependencies({
+        cwd: deps.projectRoot,
+        branch: state.worktree_branch,
+        baseBranch: deps.baseBranch,
+        featureDesc: state.feature_desc,
+        git: deps.git,
+        gh: deps.gh,
+      });
+      const operations = deps.operations ?? publication?.operations;
+      // Publication starts with authority for the branch ref. Every later
+      // retained-PR write needs a new, exact PR binding instead; a branch
+      // target must never become repository-wide PR authority.
+      const retainedOperations = async (prUrl: string): Promise<GithubOperationRunner | undefined> => {
+        if (deps.operations) return deps.operations;
+        const retained = await createShipDraftPublicationDependencies({
+          cwd: deps.projectRoot,
+          branch: state.worktree_branch,
+          baseBranch: deps.baseBranch,
+          featureDesc: state.feature_desc,
+          prUrl,
+          git: deps.git,
+          gh: deps.gh,
+        });
+        return retained?.operations;
+      };
 
       const observationInput = {
         mode: intent.authority.kind === 'operator_confirmed' ? 'interactive' : intent.authority.mode,
@@ -439,10 +546,7 @@ export function createProductionFinishPublicationCoordinator(
             observePullRequest: async () => {
               if (!state.pr_url) return { state: 'missing' };
               try {
-                const { stdout } = await deps.gh(
-                  ['pr', 'view', state.pr_url, '--json', 'url,title,body,isDraft,labels'],
-                  { cwd: deps.projectRoot },
-                );
+                const stdout = await runTrackerUrlRead(deps.gh, deps.projectRoot, 'pull-request', state.pr_url, ['pr', 'view', state.pr_url, '--json', 'url,title,body,isDraft,labels']);
                 const pr = JSON.parse(stdout) as {
                   url?: unknown;
                   title?: unknown;
@@ -587,6 +691,9 @@ export function createProductionFinishPublicationCoordinator(
             branch: state.worktree_branch,
             baseBranch: deps.baseBranch,
             featureDesc: state.feature_desc,
+            remoteMutation: deps.remoteMutation ?? publication?.remoteMutation,
+            remoteGit: deps.remoteGit,
+            operations,
             // FINISH runs AFTER the finish-time `rebase` step, which rewrites
             // the feature branch's history — same work, new SHAs. The branch
             // therefore diverges from its own remote by construction, and a
@@ -622,18 +729,25 @@ export function createProductionFinishPublicationCoordinator(
           },
           repairPresentation: async () => {
             if (!state.pr_url) throw new Error('missing PR identity');
-            await projectAcceptedRiskToRetainedPr(state.pr_url);
+            const prOperations = await retainedOperations(state.pr_url);
+            await projectAcceptedRiskToRetainedPr(state.pr_url, prOperations);
             if (deps.repairPresentation) {
               await deps.repairPresentation({ prUrl: state.pr_url, state });
             } else {
-              await deps.gh(['pr', 'ready', state.pr_url], { cwd: deps.projectRoot });
+              const mutation = await mutateRetainedPullRequest({
+                operations: prOperations,
+                prUrl: state.pr_url,
+                operation: 'pull-request.ready',
+              });
+              if (!mutation.ok) throw new Error(mutation.message);
             }
             if (!state.feature_desc) throw new Error('missing shipment identity');
-            await projectShipmentPlanDeclarationToRetainedPr(state.pr_url, state.feature_desc);
+            await projectShipmentPlanDeclarationToRetainedPr(state.pr_url, state.feature_desc, prOperations);
           },
           recordOutcome: async (request) => {
             if (request.choice === 'pr') {
-              await projectAcceptedRiskToRetainedPr(request.prUrl);
+              const prOperations = await retainedOperations(request.prUrl);
+              await projectAcceptedRiskToRetainedPr(request.prUrl, prOperations);
               // AB-1: repairPresentation is NOT the only route to a completed PR
               // outcome. The selector returns record_outcome directly whenever the
               // retained PR is already non-draft (finish-publication.ts, `if
@@ -648,7 +762,7 @@ export function createProductionFinishPublicationCoordinator(
               // path re-reads here and issues no second edit. The keep rung
               // deliberately projects nothing.
               if (!state.feature_desc) throw new Error('missing shipment identity');
-              await projectShipmentPlanDeclarationToRetainedPr(request.prUrl, state.feature_desc);
+              await projectShipmentPlanDeclarationToRetainedPr(request.prUrl, state.feature_desc, prOperations);
             }
             // finish-record signals every fail-closed refusal as a non-zero exit
             // code, never a throw. Discarding it turned a refusal into a silent

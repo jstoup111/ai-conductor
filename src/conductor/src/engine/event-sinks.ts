@@ -74,6 +74,9 @@ export const EVENT_SINKS = {
   step_interrupted: { render: true, persist: true, audit: false, otel: true },
   step_refused: { render: true, persist: true, audit: true, otel: true },
   step_status_write_refused: { render: true, persist: true, audit: true, otel: false },
+  // Ownership denials remain visible and durable through the one event spine;
+  // the event excludes payloads and request bodies by construction.
+  github_operation_refused: { render: true, persist: true, audit: false, otel: false },
   provider_attempt: { render: true, persist: true, audit: false, otel: true },
   // Per-interval progress would flood .daemon/daemon.log; daemon status reads the ledger directly.
   provider_stream_progress: { render: false, persist: true, audit: false, otel: false },

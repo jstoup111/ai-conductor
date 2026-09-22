@@ -4,6 +4,7 @@ import {
   type ShipmentEvidenceDependencies,
   type ShipmentEvidenceResult,
 } from './shipment-evidence.js';
+import { runTrackerUrlRead } from './tracker-client.js';
 
 export type VerifiedMergedPrResult =
   | { kind: 'not-merged' }
@@ -40,10 +41,7 @@ export async function verifyMergedPrShipment(
 
   let data: { url?: string; state?: string; mergeCommit?: { oid?: string | null } };
   try {
-    const { stdout } = await runGh(
-      ['pr', 'view', prUrl, '--json', 'url,state,mergeCommit'],
-      { cwd },
-    );
+    const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'url,state,mergeCommit']);
     data = JSON.parse(stdout) as { url?: string; state?: string; mergeCommit?: { oid?: string | null } };
   } catch (error) {
     return { kind: 'halt', reason: `merge-state-unavailable: ${errorMessage(error)}` };

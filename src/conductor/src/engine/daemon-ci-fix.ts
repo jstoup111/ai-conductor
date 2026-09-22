@@ -10,7 +10,7 @@ import {
 } from './ci-fix.js';
 import type { WatchEntry } from './mergeable-sweep.js';
 import type { PrMergeState } from './pr-labels.js';
-import type { TrackerClient } from './tracker-client.js';
+import type { GhRunner, TrackerClient } from './tracker-client.js';
 import type { ResolveWorktreeLiveness } from './autoresolve.js';
 import type { CiRepairDiagnosticReason, CiRepairDiagnosticStage } from '../types/events.js';
 import type { ConductorEvent } from '../types/events.js';
@@ -24,6 +24,8 @@ export type CiFixDiagnostic = (input: {
 
 export interface DaemonCiFixDispatchDeps {
   tracker: TrackerClient;
+  /** Feature-scoped gh transport forwarded to runCiFix's remote-mutation guard. */
+  gh?: GhRunner;
   createDispatcher: (entry: WatchEntry) => CiFixDispatcher;
   liveness?: ResolveWorktreeLiveness;
   log?: (message: string) => void;
@@ -123,6 +125,7 @@ export function createDaemonCiFixDispatch(deps: DaemonCiFixDispatchDeps) {
     }
     const outcome = await run(entry, branch, enriched.hint, {
       fixRunner: deps.fixRunner ?? { run: (opts) => productionCiFixRunner.run({ ...opts, dispatcher: deps.createDispatcher(entry) }) },
+      ...(deps.gh ? { gh: deps.gh } : {}),
       liveness: deps.liveness,
     }, log);
     // A provider boundary can affirmatively refuse before a session starts.

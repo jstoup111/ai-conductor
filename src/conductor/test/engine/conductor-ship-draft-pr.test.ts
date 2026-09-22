@@ -9,7 +9,12 @@
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+vi.mock('../../src/engine/owner-gate/machine-identity.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/owner-gate/machine-identity.js')>();
+  return { ...actual, readMachineOwnerConfig: vi.fn(async () => ({ spec_owner: 'alice' })) };
+});
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -30,6 +35,7 @@ function fakes() {
   const gitCalls: string[][] = [];
   const gh: GhRunner = async (args) => {
     ghCalls.push([...args]);
+    if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
     if (args[1] === 'view') throw new Error('no pull requests found');
     if (args[1] === 'create') return { stdout: `${PR_URL}\n` };
     return { stdout: '' };
@@ -37,6 +43,8 @@ function fakes() {
   const git: GitRunner = async (args) => {
     gitCalls.push([...args]);
     if (args[0] === 'rev-list') return { stdout: '3\n' };
+    if (args.join(' ') === 'config --get remote.origin.url' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'https://github.com/acme/repo.git\n' };
+    if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
     return { stdout: '' };
   };
   return { gh, git, ghCalls, gitCalls };
@@ -99,7 +107,7 @@ describe('conductor opens a draft implementation PR at SHIP-phase start', () => 
 
     // Published before the SHIP step ran, and off a pushed branch.
     expect(ghCallsAtDispatch).toBeGreaterThan(0);
-    expect(gitCalls).toContainEqual(['push', '-u', 'origin', BRANCH]);
+    expect(gitCalls).toContainEqual(['push', '-u', 'origin', `HEAD:refs/heads/${BRANCH}`]);
   });
 
   it('publishes at most once per run — later SHIP steps do not re-push or re-open', async () => {
@@ -357,6 +365,7 @@ describe('the retained SHIP PR is presentable before the first SHIP consumer', (
     const ghCalls: string[][] = [];
     const gh: GhRunner = async (args) => {
       ghCalls.push([...args]);
+      if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
       if (args[0] === 'pr' && args[1] === 'view') {
         const fields = (args[args.indexOf('--json') + 1] ?? '').split(',');
         const out: Record<string, unknown> = {};
@@ -397,7 +406,10 @@ describe('the retained SHIP PR is presentable before the first SHIP consumer', (
       return { stdout: '' };
     };
     const git: GitRunner = async (args) =>
-      args[0] === 'rev-list' ? { stdout: '3\n' } : { stdout: '' };
+      args[0] === 'rev-list' ? { stdout: '3\n' }
+        : args.join(' ') === 'config --get remote.origin.url' || args.join(' ') === 'remote get-url --push origin' ? { stdout: 'https://github.com/acme/repo.git\n' }
+          : args[0] === 'show' ? { stdout: 'Owner: alice\n' }
+            : { stdout: '' };
     return { gh, git, ghCalls };
   }
 
@@ -568,6 +580,7 @@ describe('conductor clears a resumed halt PR at the dispatch boundary', () => {
     const ghCalls: string[][] = [];
     const gh: GhRunner = async (args) => {
       ghCalls.push([...args]);
+      if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
       if (args[0] === 'pr' && args[1] === 'view') {
         return {
           stdout: JSON.stringify({
@@ -610,7 +623,11 @@ describe('conductor clears a resumed halt PR at the dispatch boundary', () => {
       fromStep: 'build',
       mode: 'default',
       gh,
-      git: async () => ({ stdout: '' }),
+      baseBranch: 'main',
+      git: async (args) =>
+        args.join(' ') === 'config --get remote.origin.url' || args.join(' ') === 'remote get-url --push origin' ? { stdout: 'https://github.com/acme/repo.git\n' }
+          : args[0] === 'show' ? { stdout: 'Owner: alice\n' }
+            : { stdout: '' },
       maxRetries: 1,
     });
 
@@ -645,6 +662,7 @@ describe('conductor clears a resumed halt PR at the dispatch boundary', () => {
       let clearReadCount = 0;
       const gh: GhRunner = async (args) => {
         ghCalls.push([...args]);
+        if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
         if (args[0] !== 'pr' || args[1] !== 'view') return { stdout: '' };
         if (args.includes('state')) return { stdout: JSON.stringify({ state: 'OPEN' }) };
         clearReadCount += 1;
@@ -666,7 +684,11 @@ describe('conductor clears a resumed halt PR at the dispatch boundary', () => {
         fromStep: 'build',
         mode: 'default',
         gh,
-        git: async () => ({ stdout: '' }),
+        baseBranch: 'main',
+        git: async (args) =>
+          args.join(' ') === 'config --get remote.origin.url' || args.join(' ') === 'remote get-url --push origin' ? { stdout: 'https://github.com/acme/repo.git\n' }
+            : args[0] === 'show' ? { stdout: 'Owner: alice\n' }
+              : { stdout: '' },
         maxRetries: 1,
       });
 
@@ -698,6 +720,7 @@ describe('conductor clears a resumed halt PR at the dispatch boundary', () => {
       const ghCalls: string[][] = [];
       const gh: GhRunner = async (args) => {
         ghCalls.push([...args]);
+        if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
         if (args[0] === 'pr' && args[1] === 'view') {
           return {
             stdout: JSON.stringify({
@@ -724,7 +747,11 @@ describe('conductor clears a resumed halt PR at the dispatch boundary', () => {
         fromStep: 'build',
         mode: 'default',
         gh,
-        git: async () => ({ stdout: '' }),
+        baseBranch: 'main',
+        git: async (args) =>
+          args.join(' ') === 'config --get remote.origin.url' || args.join(' ') === 'remote get-url --push origin' ? { stdout: 'https://github.com/acme/repo.git\n' }
+            : args[0] === 'show' ? { stdout: 'Owner: alice\n' }
+              : { stdout: '' },
         maxRetries: 1,
       });
 

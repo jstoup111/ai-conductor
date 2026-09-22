@@ -16,6 +16,7 @@ import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 import { phaseMarkerPath } from './phase-marker.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
 import type { ConductorEvent, WorktreeReclaimRetainedReason } from '../types/events.js';
+import { runTrackerAmbientRead } from './tracker-client.js';
 
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
@@ -368,10 +369,7 @@ export async function proveByMergedPrHead(
   onCapabilityError?: (error: GhCapabilityError) => void,
 ): Promise<MergedPrHeadDiagnosis> {
   try {
-    const { stdout } = await runGh(
-      ['pr', 'list', '--head', ref, '--state', 'merged', '--json', 'headRefOid', '--limit', '1'],
-      { cwd: projectRoot },
-    );
+    const stdout = await runTrackerAmbientRead(runGh, projectRoot, 'ambient.pull-request.read', ['pr', 'list', '--head', ref, '--state', 'merged', '--json', 'headRefOid', '--limit', '1']);
     const prs = JSON.parse(stdout) as Array<{ headRefOid?: unknown }>;
     const headRefOid = prs[0]?.headRefOid;
     if (prs.length === 0) return { kind: 'no-pr' };
@@ -882,9 +880,9 @@ export async function reconcileMergedPark(
     let prUrl: string | undefined;
     for (const head of evidence.branches) {
       try {
-        const { stdout } = await (opts.runGh ?? makeProductionGh())(
+        const stdout = await runTrackerAmbientRead(
+          opts.runGh ?? makeProductionGh(), opts.projectRoot, 'ambient.pull-request.read',
           ['pr', 'list', '--state', 'merged', '--head', head, '--json', 'url', '--limit', '1'],
-          { cwd: opts.projectRoot },
         );
         const prs = JSON.parse(stdout) as Array<{ url?: unknown }>;
         const url = prs[0]?.url;

@@ -35,14 +35,16 @@ describe('daemon-cli post-run tail (Task 10 — no rehabilitateHaltPr call)', ()
     expect(content).not.toMatch(/await\s+rehabilitateHaltPr\s*\(/);
   });
 
-  it('the post-run tail calls closeIssueOnImplementationMerge but NOT rehabilitateHaltPr', () => {
+  it('the post-run tail gives closeIssueOnImplementationMerge a feature-scoped guarded runner', () => {
     /**
      * This test verifies that the post-run tail still contains the
      * closeIssueOnImplementationMerge call (which we keep), but does NOT contain
      * the rehabilitateHaltPr call (which we remove).
      *
-     * The closeIssueOnImplementationMerge wiring remains untouched (Task 10
-     * acceptance criteria 2).
+     * The body update is a feature PR mutation, so it must derive fresh
+     * committed ownership and pass the guarded runner. A raw gh fallback would
+     * bypass the ownership gate while still making this best-effort tail look
+     * successful.
      */
 
     const daemonCliPath = join(__dirname, '../../src/daemon-cli.ts');
@@ -50,8 +52,25 @@ describe('daemon-cli post-run tail (Task 10 — no rehabilitateHaltPr call)', ()
 
     // Should still contain closeIssueOnImplementationMerge call
     expect(content).toMatch(/await\s+closeIssueOnImplementationMerge\s*\(/);
+    expect(content).toMatch(/closeIssueMutation\s*=\s*item\.sourceRef\s*&&\s*implementationPrUrl[\s\S]*?resolveFeatureRemoteMutation\s*\(/);
+    expect(content).toMatch(
+      /operations:\s*closeIssueMutation\s*\?\s*createGuardedGithubOperationRunner\(/,
+    );
 
     // Should NOT contain rehabilitateHaltPr call
     expect(content).not.toMatch(/await\s+rehabilitateHaltPr\s*\(/);
+  });
+
+  it('gives each mergeable-sweep entry a feature-scoped guarded runner', () => {
+    const daemonCliPath = join(__dirname, '../../src/daemon-cli.ts');
+    const content = readFileSync(daemonCliPath, 'utf-8');
+    const sweepStart = content.indexOf('sweepMergeableLabels: async () =>');
+    // The nested autoresolve and CI-fix blocks appear before the per-entry
+    // operations binding. Bound the whole daemon dependency entry, not its
+    // first nested feature block.
+    const sweepEnd = content.indexOf('// Task T28: check for pending restart marker', sweepStart);
+    const sweep = content.slice(sweepStart, sweepEnd);
+
+    expect(sweep).toMatch(/operations:\s*\(entry\)\s*=>\s*{[\s\S]*?parseIssueRef\(entry\.prUrl\)[\s\S]*?haltPrOperations\(/);
   });
 });

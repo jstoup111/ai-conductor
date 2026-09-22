@@ -12,7 +12,9 @@ import {
   resolveRecordability,
   supersedeHaltRecord,
   supersedeHaltRecordText,
+  type HaltRecordRemoteOptions,
 } from '../../src/engine/halt-record.js';
+import type { RemoteGitExecutionResult } from '../../src/engine/remote-git-operations.js';
 
 const input = {
   slug: 'operator-decision',
@@ -105,11 +107,12 @@ describe('halt record supersession', () => {
 
   it('commits a resolution once when superseded repeatedly', async () => {
     const root = await makeFeatureRepository();
-    await recordHalt(root, input);
+    const remote = successfulRemote();
+    await recordHalt(root, input, remote);
     const before = await commitCount(root);
 
-    await expect(supersedeHaltRecord(root, input.slug, 'operator resume')).resolves.toEqual({ kind: 'written' });
-    await expect(supersedeHaltRecord(root, input.slug, 'rekick')).resolves.toEqual({ kind: 'noop' });
+    await expect(supersedeHaltRecord(root, input.slug, 'operator resume', remote)).resolves.toEqual({ kind: 'written' });
+    await expect(supersedeHaltRecord(root, input.slug, 'rekick', remote)).resolves.toEqual({ kind: 'noop' });
 
     expect(await commitCount(root)).toBe(before + 1);
   });
@@ -119,6 +122,7 @@ describe('halt record supersession', () => {
 
     await expect(supersedeHaltRecord(root, input.slug, 'operator resume')).resolves.toMatchObject({ kind: 'failed' });
   });
+
 });
 
 const scratchRoots: string[] = [];
@@ -185,4 +189,10 @@ async function makeFeatureRepository(): Promise<string> {
 async function commitCount(cwd: string): Promise<number> {
   const { stdout } = await execa('git', ['rev-list', '--count', 'HEAD'], { cwd });
   return Number.parseInt(stdout, 10);
+}
+
+function successfulRemote(): HaltRecordRemoteOptions {
+  return {
+    remoteGit: async (): Promise<RemoteGitExecutionResult> => ({ kind: 'executed', targets: [] }),
+  };
 }

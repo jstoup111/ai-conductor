@@ -25,6 +25,12 @@ import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
+
+const permittedRemoteGit: typeof executeRemoteGit = async (args, dependencies) => {
+  await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd });
+  return { kind: 'executed', targets: [] };
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -675,7 +681,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         },
       };
 
-      const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
+      const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0, remoteGit: permittedRemoteGit }, logger);
 
       // Verify the result
       expect(result.kind).toBe('published');
@@ -797,7 +803,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
           .toBe('feature work');
         return 0;
       });
-      const result = await runCiFix(entry, branch, hint, { fixRunner, verify }, logger);
+      const result = await runCiFix(entry, branch, hint, { fixRunner, verify, remoteGit: permittedRemoteGit }, logger);
       expect(verify).toHaveBeenCalledOnce();
 
       expect(result.kind).toBe('published');
@@ -1125,7 +1131,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         },
       };
 
-      const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
+      const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0, remoteGit: permittedRemoteGit }, logger);
       expect(result.kind).toBe('published');
 
       // Primary checkout must be fully clean — no staged/unstaged/untracked pollution.

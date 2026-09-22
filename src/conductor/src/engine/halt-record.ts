@@ -1,9 +1,13 @@
 import { execa } from 'execa';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { HaltClass } from './halt-marker.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { resolveMainRepoRoot } from './park-marker.js';
+import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
+import { makeProductionGh, makeProductionGit, type GhRunner, type GitRunner } from './pr-labels.js';
+import type { GithubMutationExecutionContext } from './tracker-client.js';
+import type { GithubOperationEventEmitter } from './github-operations.js';
 
 /** Git-tracked records that let an operator inspect a feature halt from its branch. */
 export const HALT_RECORD_DIR = '.docs/halted';
@@ -32,6 +36,14 @@ export type HaltRecordResult =
   | { kind: 'skipped' }
   | { kind: 'failed'; reason: string }
   | { kind: 'pushFailed'; reason: string };
+
+export interface HaltRecordRemoteOptions {
+  readonly remoteGit?: typeof executeRemoteGit;
+  readonly mutation?: GithubMutationExecutionContext;
+  readonly git?: GitRunner;
+  readonly gh?: GhRunner;
+  readonly events?: GithubOperationEventEmitter;
+}
 
 /** Resolve a halt record's repository-relative path. */
 export function haltRecordPath(slug: string): string {
@@ -102,7 +114,11 @@ export function supersedeHaltRecordText(text: string, resolution: HaltRecordReso
  * Every filesystem or Git failure is returned to the halt-marker seam instead
  * of escaping and disturbing the original halt flow.
  */
-export async function recordHalt(root: string, input: HaltRecordInput): Promise<HaltRecordResult> {
+export async function recordHalt(
+  root: string,
+  input: HaltRecordInput,
+  remote: HaltRecordRemoteOptions = {},
+): Promise<HaltRecordResult> {
   try {
     if (!await resolveRecordability(root, input.haltClass)) return { kind: 'skipped' };
 
@@ -114,7 +130,8 @@ export async function recordHalt(root: string, input: HaltRecordInput): Promise<
     if (commitResult.kind !== 'written') return commitResult;
 
     try {
-      await execa('git', ['push'], { cwd: root });
+      const result = await publishHaltRecord(root, input.branch, remote, input.slug);
+      if (result.kind !== 'executed') return { kind: 'pushFailed', reason: remoteFailure(result) };
     } catch (error) {
       return { kind: 'pushFailed', reason: errorMessage(error) };
     }
@@ -130,6 +147,7 @@ export async function supersedeHaltRecord(
   root: string,
   slug: string,
   cause: string,
+  remote: HaltRecordRemoteOptions = {},
 ): Promise<HaltRecordResult> {
   try {
     const relPath = haltRecordPath(slug);
@@ -143,15 +161,49 @@ export async function supersedeHaltRecord(
     if (commitResult.kind !== 'written') return commitResult;
 
     try {
-      await execa('git', ['push'], { cwd: root });
-    } catch {
-      // A resolution remains durable on the branch even when its remote is unavailable.
+      const branch = await currentBranch(root);
+      const result = await publishHaltRecord(root, branch, remote, slug);
+      if (result.kind !== 'executed') return { kind: 'pushFailed', reason: remoteFailure(result) };
+    } catch (error) {
+      return { kind: 'pushFailed', reason: errorMessage(error) };
     }
 
     return { kind: 'written' };
   } catch (error) {
     return { kind: 'failed', reason: errorMessage(error) };
   }
+}
+
+export async function publishHaltRecord(
+  root: string,
+  branch: string,
+  remote: HaltRecordRemoteOptions,
+  slug = basename(root),
+) {
+  const git = remote.git ?? makeProductionGit();
+  const mutation = remote.mutation ?? await resolveFeatureRemoteMutation({
+    cwd: root,
+    slug,
+    branch,
+    git: (args) => git(args, { cwd: root }),
+    gh: remote.gh ?? makeProductionGh(),
+  });
+  return (remote.remoteGit ?? executeRemoteGit)(
+    ['push', 'origin', `HEAD:refs/heads/${branch}`],
+    {
+      cwd: root,
+      config: (args) => git(args, { cwd: root }),
+      runRemoteGit: git,
+      mutation,
+      events: remote.events,
+    },
+  );
+}
+
+function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
+  if (result.kind === 'failed') return result.error;
+  if (result.kind === 'refused') return result.reason;
+  return 'remote Git operation did not execute';
 }
 
 async function commitHaltRecordChange(

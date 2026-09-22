@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { HALT_MARKER } from './halt-marker.js';
-import { supersedeHaltRecord } from './halt-record.js';
+import { supersedeHaltRecord, type HaltRecordRemoteOptions } from './halt-record.js';
 import type { BacklogItem } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import type { ProviderExecutionContext } from './provider-execution.js';
@@ -18,6 +18,8 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
 import { observeMemorySetup } from './memory-cli.js';
 import { makeProductionGh } from './pr-labels.js';
+import { createDaemonHaltPrOperations } from './daemon-halt-pr-operations.js';
+import { makeMachineOwnerResolver } from './owner-gate/machine-identity.js';
 import { ensureWorktree } from './worktree-shared.js';
 import { WorktreeLifecycleQueue } from './worktree.js';
 import { FINISH_CHOICE_MARKER, FINISH_CHOICE_VALUES } from './artifacts.js';
@@ -88,6 +90,8 @@ export interface RealDepsConfig {
    */
   memoryProvider?: unknown;
   log?: (msg: string) => void;
+  /** Daemon-wide event spine for guarded maintenance refusals. */
+  events?: ConductorEventEmitter;
   /**
    * Echo `bin/setup`'s full output into the log on success (`daemon_verbose`).
    * Default false: a one-line summary instead. Failure output is unaffected.
@@ -130,6 +134,14 @@ const REKICKED_SUBDIR = '.daemon/rekicked';
 /** Concrete (git/fs) implementation of the feature-runner primitives. */
 export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerDeps {
   const processedDir = join(cfg.projectRoot, PROCESSED_SUBDIR);
+  const gh = makeProductionGh();
+  const haltPrOperations = createDaemonHaltPrOperations({
+    projectRoot: cfg.projectRoot,
+    baseBranch: cfg.baseBranch,
+    gh,
+    git: makeGitRunner(cfg.projectRoot),
+    resolveMachineOwner: makeMachineOwnerResolver(gh, cfg.projectRoot),
+  });
   // The dispatcher owns this queue for its lifetime. All linked worktree
   // add/remove operations share cfg.projectRoot's `.git` bookkeeping.
   const worktreeLifecycle = cfg.worktreeLifecycle ?? new WorktreeLifecycleQueue();
@@ -151,7 +163,12 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
     // are issued from here after the worktree is torn down on ship.
     projectRoot: cfg.projectRoot,
     // FR-16: production gh runner for clear-on-success label ops.
-    runGh: makeProductionGh(),
+    runGh: gh,
+    haltPrOperations: ({ prUrl, branch }) => haltPrOperations({
+      number: Number.parseInt(prUrl.split('/').at(-1) ?? '', 10),
+      url: prUrl,
+      headRefName: branch,
+    }),
 
     createWorktree: async (slug, order?: WorkOrder) => worktreeLifecycle.run(async () => {
       const branch = `feat/daemon-${slug}`;
@@ -245,6 +262,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
         projectRoot: opts.projectRoot,
         failureReason: opts.failureReason,
         log: opts.log ?? cfg.log,
+        events: cfg.events,
       });
     },
 
@@ -463,9 +481,13 @@ async function exists(p: string): Promise<boolean> {
  * teardown race) — that must never crash the daemon process, so failures are
  * caught, logged loudly to stderr, and swallowed (never rethrown).
  */
-async function appendHaltClearedRecord(worktreePath: string, cause: 'operator' | 'rekick'): Promise<void> {
+async function appendHaltClearedRecord(
+  worktreePath: string,
+  cause: 'operator' | 'rekick',
+  recordRemote?: HaltRecordRemoteOptions,
+): Promise<void> {
   try {
-    await supersedeHaltRecord(worktreePath, basename(worktreePath), cause);
+    await supersedeHaltRecord(worktreePath, basename(worktreePath), cause, recordRemote);
   } catch {
     /* best-effort halt-record supersession */
   }
@@ -517,6 +539,8 @@ export interface WatchHaltClearedOptions {
    * HALT_CLEARED_POLL_INTERVAL_MS.
    */
   pollIntervalMs?: number;
+  /** Test seam for the guarded remote publication of the resolved record. */
+  recordRemote?: HaltRecordRemoteOptions;
 }
 
 /**
@@ -565,7 +589,7 @@ export function watchHaltCleared(
     // happens BEFORE onCleared() fires, so the record always precedes
     // any re-dispatch/dispose race (AC5).
     const cause: 'operator' | 'rekick' = existsSync(clearedPath) ? 'rekick' : 'operator';
-    await appendHaltClearedRecord(worktreePath, cause);
+    await appendHaltClearedRecord(worktreePath, cause, options?.recordRemote);
     onCleared();
   };
 

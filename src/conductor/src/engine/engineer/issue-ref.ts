@@ -14,6 +14,9 @@
 // All gh access is injected; nothing here touches the network in tests.
 
 import { parseWorkRef } from './source-ref.js';
+import { parseIssueRef } from '../pr-labels.js';
+import { executeGithubOperation, type GithubOperationRunner } from '../github-operations.js';
+import { runTrackerUrlRead } from '../tracker-client.js';
 
 /** Shell runner for the `gh` CLI. Mirrors the intake adapter's GhRunner shape. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
@@ -75,6 +78,8 @@ export function bodyReferencesIssue(
 /** Options for {@link injectIssueRef}. */
 export interface InjectIssueRefOpts {
   gh: GhRunner;
+  /** Guarded mutation boundary. Its absence refuses the edit. */
+  operations?: GithubOperationRunner;
   /** The PR URL (or number) to edit. */
   prUrl: string;
   keyword: IssueRefKeyword;
@@ -86,7 +91,8 @@ export interface InjectIssueRefOpts {
 }
 
 /**
- * Append a GitHub linking line to an existing PR body via `gh pr edit`.
+ * Append a GitHub linking line to an existing PR body through the guarded
+ * `pull-request.edit` operation.
  *
  * Contract:
  *   - Unparseable / absent sourceRef → no-op, returns false (FR-5).
@@ -108,7 +114,7 @@ export async function injectIssueRef(opts: InjectIssueRefOpts): Promise<boolean>
   const line = `${keyword} ${parsed.repo}#${parsed.number}`;
 
   try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     let body = '';
     try {
       body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
@@ -121,7 +127,22 @@ export async function injectIssueRef(opts: InjectIssueRefOpts): Promise<boolean>
     }
 
     const newBody = body.trim() === '' ? line : `${body.replace(/\s+$/, '')}\n\n${line}`;
-    await gh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+    const target = parseIssueRef(prUrl);
+    if (!opts.operations || !target) {
+      log(`injectIssueRef: guarded write-back unavailable for ${prUrl}`);
+      return false;
+    }
+    const result = await executeGithubOperation({
+        operation: 'pull-request.edit',
+        repository: target.repo,
+        resource: { kind: 'pull-request', number: Number(target.number) },
+        context: { actor: 'engineer-handoff' },
+        payload: { body: newBody },
+      }, opts.operations);
+    if (result.kind !== 'executed') {
+      log(`injectIssueRef: guarded write-back refused or failed for ${prUrl} (${line})`);
+      return false;
+    }
     return true;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -136,6 +157,8 @@ export type CloseIssueOutcome = 'no-source-ref' | 'no-pr-url' | 'attempted';
 /** Dependencies for {@link closeIssueOnImplementationMerge}. */
 export interface CloseIssueOnMergeDeps {
   gh: GhRunner;
+  /** Guarded mutation boundary for the implementation PR body edit. */
+  operations?: GithubOperationRunner;
   /** Originating issue ref carried on the backlog item; undefined for non-intake specs. */
   sourceRef: string | undefined;
   /** The implementation PR URL recorded after the daemon build (from conduct-state). */
@@ -170,6 +193,7 @@ export async function closeIssueOnImplementationMerge(
   }
   await injectIssueRef({
     gh: deps.gh,
+    operations: deps.operations,
     prUrl: deps.prUrl,
     keyword: 'Closes',
     sourceRef: deps.sourceRef,

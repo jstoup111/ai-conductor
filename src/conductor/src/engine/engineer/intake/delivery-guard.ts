@@ -15,6 +15,7 @@ import { parseSourceRef } from './source-ref.js';
 import { isStaleClaim } from './stale-claim.js';
 import { resolveStaleClaimWindowMs } from '../../resolved-config.js';
 import type { HarnessConfig } from '../../../types/index.js';
+import { runTrackerRepositoryRead, runTrackerUrlRead } from '../../tracker-client.js';
 
 /** Discriminated GitHub issue state from getIssueState probe. */
 export type IssueState = 'open' | 'closed' | 'unknown';
@@ -28,12 +29,7 @@ export type IssueState = 'open' | 'closed' | 'unknown';
  */
 export async function getIssueState(gh: GhRunner, repo: string, issue: string): Promise<IssueState> {
   try {
-    const { stdout } = await gh(
-      ['issue', 'view', issue, '--repo', repo, '--json', 'state', '-q', '.state'],
-      {
-        cwd: process.cwd(),
-      },
-    );
+    const stdout = await runTrackerRepositoryRead(gh, process.cwd(), 'issue.read', repo, { kind: 'issue', number: Number(issue) }, ['issue', 'view', issue, '--repo', repo, '--json', 'state', '-q', '.state']);
 
     const trimmed = (stdout || '').trim();
     let state: string | undefined;
@@ -76,9 +72,7 @@ export type PrState = 'open' | 'merged' | 'closed-unmerged' | 'unknown';
 export async function verifyPrState(gh: GhRunner, url: string): Promise<PrState> {
   try {
     // Shell out to gh pr view with JSON output for state and mergedAt.
-    const { stdout } = await gh(['pr', 'view', url, '--json', 'state,mergedAt'], {
-      cwd: process.cwd(),
-    });
+    const stdout = await runTrackerUrlRead(gh, process.cwd(), 'pull-request', url, ['pr', 'view', url, '--json', 'state,mergedAt']);
 
     // Parse the JSON response.
     const pr = JSON.parse(stdout || '{}') as { state?: string; mergedAt?: string | null };

@@ -5,10 +5,14 @@
  * Every scenario is best-effort/non-throwing by design.
  */
 
-import { describe, it, expect } from 'vitest';
-import { escalateBuildFailure } from '../../src/engine/build-failure-escalation.js';
+import { describe, it, expect, vi } from 'vitest';
+import {
+  escalateBuildFailure as escalateBuildFailureProduction,
+  type EscalateBuildFailureOpts,
+} from '../../src/engine/build-failure-escalation.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 import { NEEDS_REMEDIATION_MARKER } from '../../src/engine/pr-labels.js';
+import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 
 // ── Fake runner factories ─────────────────────────────────────────────────────
 
@@ -24,6 +28,11 @@ function fakeGit(responses: Array<string | Error>): {
   let idx = 0;
   const git: GitRunner = async (args, _opts) => {
     calls.push([...args]);
+    // Task 20's production path resolves the remote destination and reads the
+    // committed owner before a guarded mutation. These fixture-owned reads are
+    // not part of a scenario's scripted Git behavior.
+    if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:foo/bar.git\n' };
+    if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
     const response = responses[idx++];
     if (response === undefined) return { stdout: '' };
     if (response instanceof Error) throw response;
@@ -44,12 +53,42 @@ function fakeGh(responses: Array<{ stdout: string } | Error>): {
   let idx = 0;
   const gh: GhRunner = async (args, _opts) => {
     calls.push([...args]);
+    // The ownership guard resolves the actor through this read-only command.
+    if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
     const response = responses[idx++];
     if (response === undefined) return { stdout: '' };
     if (response instanceof Error) throw response;
     return response;
   };
   return { gh, calls };
+}
+
+function ownershipMutation(): GithubMutationExecutionContext {
+  return {
+    provenance: {
+      repository: 'foo/bar',
+      defaultBranch: 'origin/main',
+      specBranch: 'feat/branch',
+      featureMarker: '.docs/intake/repo.md',
+      publication: 'merged',
+    },
+    dependencies: {
+      resolveMachineOwner: vi.fn().mockResolvedValue({ resolved: true, id: 'alice' }),
+      provenanceDiscovery: {
+        readCommittedRecords: vi.fn().mockResolvedValue([
+          { path: '.docs/intake/repo.md', content: 'Owner: alice\n' },
+        ]),
+      },
+    },
+  };
+}
+
+/** Existing behavior fixtures supply an owned feature context explicitly. */
+function escalateBuildFailure(opts: EscalateBuildFailureOpts) {
+  return escalateBuildFailureProduction({
+    ...opts,
+    remoteMutation: opts.remoteMutation ?? ownershipMutation(),
+  });
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -98,6 +137,7 @@ function standardGhResps(prUrl = PR_URL): Array<{ stdout: string } | Error> {
     // findOrCreatePr
     new Error('no pull requests found'), // pr view (check existing)
     { stdout: `${prUrl}\n` },            // pr create
+    { stdout: JSON.stringify({ url: prUrl, state: 'OPEN' }) }, // guarded create re-observation
 
     // ensureHaltPresentation:
     // ensureBodyMarker: readHaltPresentation
@@ -304,7 +344,7 @@ describe('FR-7: push step', () => {
 
     const pushCall = gitCalls.find((args) => args[0] === 'push');
     expect(pushCall).toBeDefined();
-    expect(pushCall).toEqual(['push', '-u', 'origin', 'feat/my-feature']);
+    expect(pushCall).toEqual(['push', '-u', 'origin', 'HEAD:refs/heads/feat/my-feature']);
   });
 
   it('push fails ⇒ returns {}, no PR creation, no throw', async () => {
@@ -518,7 +558,7 @@ describe('FR-5: reuse existing OPEN PR', () => {
 
     expect(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'create')).toBe(false);
     expect(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'edit' && args.includes('--title'))).toBe(false);
-    expect(bodyEdit).toEqual(['pr', 'edit', existingUrl, '--body', markedBody]);
+    expect(bodyEdit).toEqual(['pr', 'edit', '11', '-R', 'foo/bar', '--body', markedBody]);
     expect(labelAdd).toContain('labels[]=needs-remediation');
     expect(haltComments).toHaveLength(1);
   });
@@ -561,6 +601,7 @@ describe('FR-3: comment is independent of label step (reverse independence)', ()
     const { gh, calls: ghCalls } = fakeGh([
       new Error('no PR'),               // pr view → no existing PR
       { stdout: `${PR_URL}\n` },        // pr create → success
+      { stdout: JSON.stringify({ url: PR_URL, state: 'OPEN' }) }, // guarded create re-observation
       new Error('label create failed'), // ensureLabel throws
       new Error('add-label failed'),    // addLabel (gh api POST .../labels) throws
       { stdout: JSON.stringify({ comments: [] }) }, // upsert lookup → none
@@ -576,7 +617,7 @@ describe('FR-3: comment is independent of label step (reverse independence)', ()
 
     const commentCall = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'comment');
     expect(commentCall).toBeDefined();
-    expect(commentCall).toContain(PR_URL);
+    expect(commentCall).toEqual(expect.arrayContaining(['42', '-R', 'foo/bar']));
   });
 });
 
@@ -618,7 +659,7 @@ describe('FR-3: failure-reason comment', () => {
     const commentCall = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'comment');
     expect(commentCall).toBeDefined();
     // The comment is sent to the correct PR URL
-    expect(commentCall).toContain(PR_URL);
+    expect(commentCall).toEqual(expect.arrayContaining(['42', '-R', 'foo/bar']));
   });
 });
 
@@ -635,6 +676,7 @@ describe('FR-7: comment failure is swallowed, label step already ran', () => {
     const { gh, calls: ghCalls } = fakeGh([
       new Error('no PR'),           // pr view (findOrCreatePr)
       { stdout: `${PR_URL}\n` },   // pr create
+      { stdout: JSON.stringify({ url: PR_URL, state: 'OPEN' }) }, // guarded create re-observation
       // ensureHaltPresentation
       {
         stdout: JSON.stringify({
@@ -761,6 +803,7 @@ describe('#159: repeated HALTs upsert a single comment (one create + one PATCH)'
       // ── run 1: fresh PR, no marked comment yet → create ──
       new Error('no pull requests found'),               // pr view (findOrCreatePr)
       { stdout: `${existingUrl}\n` },                    // pr create
+      { stdout: JSON.stringify({ url: existingUrl, state: 'OPEN' }) }, // guarded create re-observation
       // ensureHaltPresentation
       {
         stdout: JSON.stringify({
@@ -877,6 +920,7 @@ describe('Task 14: comment posted even when ensureHaltPresentation returns uncon
       new Error('no pull requests found'),
       // findOrCreatePr: create new PR
       { stdout: `${PR_URL}\n` },
+      { stdout: JSON.stringify({ url: PR_URL, state: 'OPEN' }) }, // guarded create re-observation
       // ensureHaltPresentation: readHaltPresentation fails (transient error)
       new Error('transient API error reading PR'),
       // Despite ensureHaltPresentation being unconfirmed, upsertComment should still run:
@@ -899,7 +943,7 @@ describe('Task 14: comment posted even when ensureHaltPresentation returns uncon
     // Comment should have been posted (this is the fallback artifact)
     const commentCall = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'comment');
     expect(commentCall).toBeDefined();
-    expect(commentCall).toContain(PR_URL);
+    expect(commentCall).toEqual(expect.arrayContaining(['42', '-R', 'foo/bar']));
 
     // Verify the failure reason is in the comment
     const bodyIdx = commentCall!.indexOf('--body');
@@ -912,6 +956,7 @@ describe('Task 14: comment posted even when ensureHaltPresentation returns uncon
     const { gh } = fakeGh([
       new Error('no PR'),                  // pr view
       { stdout: `${PR_URL}\n` },           // pr create
+      { stdout: JSON.stringify({ url: PR_URL, state: 'OPEN' }) }, // guarded create re-observation
       new Error('could not read PR state'), // ensureHaltPresentation fails
       { stdout: JSON.stringify({ comments: [] }) }, // upsertComment lookup
       { stdout: '' },                      // upsertComment create
@@ -950,6 +995,7 @@ describe('Task 13: escalateBuildFailure ensures halt presentation markers', () =
       new Error('no pull requests found'),
       // findOrCreatePr: create new PR
       { stdout: `${PR_URL}\n` },
+      { stdout: JSON.stringify({ url: PR_URL, state: 'OPEN' }) }, // guarded create re-observation
       // ensureHaltPresentation flow:
       // ensureBodyMarker → readHaltPresentation (read current state before edit)
       {
@@ -1007,7 +1053,7 @@ describe('Task 13: escalateBuildFailure ensures halt presentation markers', () =
     // Verify the comment with failure reason was posted (existing functionality preserved)
     const commentCall = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'comment');
     expect(commentCall).toBeDefined();
-    expect(commentCall).toContain(PR_URL);
+    expect(commentCall).toEqual(expect.arrayContaining(['42', '-R', 'foo/bar']));
     const bodyIdx = commentCall!.indexOf('--body');
     if (bodyIdx >= 0) {
       const bodyText = commentCall![bodyIdx + 1];
@@ -1039,6 +1085,6 @@ describe('Task 13: escalateBuildFailure ensures halt presentation markers', () =
     expect(addLabelCall).toBeDefined();
 
     // Assert all three markers are verified in final state
-    expect(ghCalls).toHaveLength(10);
+    expect(ghCalls).toHaveLength(11); // includes guarded-create re-observation
   });
 });

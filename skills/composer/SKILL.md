@@ -134,6 +134,9 @@ local-commit fallback), adds a non-closing `Refs <ref>` to the spec PR body for 
 daemon's implementation PR is what closes the issue on merge), records the ledger, applies the
 existing `engineer:handled` label, calls `ensureRunning(repoPath)` fire-and-forget, and removes the
 per-idea worktree on success. It never merges or builds; the `spec/<slug>` branch remains reachable.
+The primitive owns its guarded remote publication and GitHub operations. Do not pre-push or invoke
+raw GitHub/Git write commands from either supported host; a refusal or failure keeps the worktree
+for inspection and is not a delivered spec.
 
 ### 6. Deliver, then end the session
 
@@ -158,9 +161,8 @@ Report `✅ Spec delivered for <slug> → <PR url / branch>.` Do not ask for ano
 - [ ] Spec is discovery-build-ready: stories end `Status: Accepted` (no DRAFT) and the plan carries
       a task dependency tree (`**Dependencies:**` lines or a Task Dependency Graph). If either is
       missing, discovery warn-skips the merged spec, permanently until it is fixed on main.
-- [ ] Spec branch pushed to origin BEFORE `handoff` (`git push -u origin spec/<slug>` from the
-      worktree — `gh pr create` fails on an unpushed branch and handoff falls back to a
-      local-commit result that opens no PR).
+- [ ] `handoff` reported its guarded publication outcome; no host issued a raw remote Git or
+      GitHub write before it.
 - [ ] The spec PR (or local fallback) was delivered, and nothing built or merged.
 - [ ] The daemon received only the fire-and-forget `ensureRunning` nudge.
 - [ ] Sibling repos left byte-for-byte unchanged.

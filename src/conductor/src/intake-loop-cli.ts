@@ -26,6 +26,7 @@ import { runIntakeLoop, type IntakeLoopDeps } from './engine/engineer/intake/int
 import { createNotifier } from './engine/engineer/intake/notifier.js';
 import { reconcileClosedIssues, type GetIssueState } from './engine/engineer/intake/reconcile-closed-issues.js';
 import { buildIntake, makeProductionGh } from './engine/engineer-cli.js';
+import { runTrackerRepositoryRead } from './engine/tracker-client.js';
 import { resolveEngineerDir } from './engine/engineer-store.js';
 import { sendNotification } from './ui/notifications.js';
 
@@ -146,10 +147,11 @@ export async function dispatchIntakeLoop(
   // <repo> --json state -q .state`, modeled on halt-issues' getIssueState.
   const getIssueState: GetIssueState = async (repo, issue) => {
     try {
-      const result = await gh(['issue', 'view', issue, '--repo', repo, '--json', 'state', '-q', '.state'], {
-        cwd: engineerDir,
-      });
-      const state = result.stdout.trim().toLowerCase();
+      const stdout = await runTrackerRepositoryRead(
+        gh, engineerDir, 'issue.read', repo, { kind: 'issue', number: Number(issue) },
+        ['issue', 'view', issue, '--repo', repo, '--json', 'state', '-q', '.state'],
+      );
+      const state = stdout.trim().toLowerCase();
       return state === 'open' || state === 'closed' ? state : null;
     } catch {
       return null;

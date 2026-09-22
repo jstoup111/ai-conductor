@@ -4,6 +4,7 @@ import { execa } from 'execa';
 import type { GhRunner } from './pr-labels.js';
 import { parseShippedRecord, parseStoriesReference, specHash } from './shipped-record.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
+import { runTrackerUrlRead } from './tracker-client.js';
 
 export type ShipmentEvidenceResult =
   | {
@@ -89,10 +90,7 @@ export async function resolveImplementationPrBinding(
   cwd: string,
   implementationPr: string,
 ): Promise<ImplementationPrBinding> {
-  const { stdout } = await runGh(
-    ['pr', 'view', implementationPr, '--json', 'url,headRefOid'],
-    { cwd },
-  );
+  const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', implementationPr, ['pr', 'view', implementationPr, '--json', 'url,headRefOid']);
   const data = JSON.parse(stdout) as { url?: unknown; headRefOid?: unknown };
   return {
     url: typeof data.url === 'string' ? data.url : '',

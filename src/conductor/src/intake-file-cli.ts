@@ -14,9 +14,10 @@
 
 import { createInterface } from 'node:readline/promises';
 import { makeProductionGh } from './engine/pr-labels.js';
-import { createGithubTrackerClient } from './engine/tracker-client.js';
-import { fileIntakeIssue, type FileIntakeIssueOpts } from './engine/engineer/intake/file-issue.js';
+import { createIntakeFilingOperations, fileIntakeIssue, type FileIntakeIssueOpts } from './engine/engineer/intake/file-issue.js';
 import { describeRedactions } from './engine/engineer/intake/sanitize.js';
+import { runTrackerRead, type GhRunner } from './engine/tracker-client.js';
+import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 
 function parseArgs(argv: string[]): FileIntakeIssueOpts | null {
   const opts: Partial<FileIntakeIssueOpts> & { dependsOn: string[] } = { dependsOn: [] };
@@ -64,6 +65,33 @@ function parseArgs(argv: string[]): FileIntakeIssueOpts | null {
   return opts as FileIntakeIssueOpts;
 }
 
+function canonicalRepository(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(value)) return undefined;
+  return value.toLowerCase();
+}
+
+async function resolveFilingRepository(gh: GhRunner, requested: string | undefined, cwd: string): Promise<string> {
+  const explicit = canonicalRepository(requested);
+  if (requested !== undefined) {
+    if (!explicit) throw new Error(`invalid --repo "${requested}" (expected owner/repo)`);
+    return explicit;
+  }
+  // `gh repo view` resolves the checkout-selected repository. It still enters
+  // the closed read interface; the placeholder is only the typed discovery
+  // subject and is replaced by GitHub's canonical nameWithOwner response.
+  const stdout = await runTrackerRead(
+    gh,
+    cwd,
+    'repository.read',
+    process.env.GITHUB_REPOSITORY ?? 'github/current-repository',
+    { kind: 'repository' },
+    ['repo', 'view', '--json', 'nameWithOwner'],
+  );
+  const discovered = canonicalRepository((JSON.parse(stdout || '{}') as { nameWithOwner?: unknown }).nameWithOwner);
+  if (!discovered) throw new Error('could not resolve the filing repository; pass --repo owner/repo');
+  return discovered;
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
   if (!opts) {
@@ -78,14 +106,22 @@ async function main(): Promise<void> {
   const rl = opts.interactive ? createInterface({ input: process.stdin, output: process.stdout }) : null;
   try {
     const gh = makeProductionGh();
-    const result = await fileIntakeIssue(opts, {
-      gh,
-      tracker: createGithubTrackerClient(gh),
-      cwd: '.',
+    const cwd = '.';
+    const repository = await resolveFilingRepository(gh, opts.repo, cwd);
+    const resolveActor = makeMachineOwnerResolver(gh, cwd);
+    const result = await fileIntakeIssue({ ...opts, repo: repository }, {
       prompt: rl ? (question: string) => rl.question(`${question} `) : undefined,
+      creation: {
+        authority: { resolveActor, intent: { kind: 'explicit-intake', repository } },
+        operations: createIntakeFilingOperations(gh, cwd, {
+          resolveActor,
+          intent: { kind: 'explicit-intake', repository },
+        }),
+      },
     });
 
-    console.log(`[intake-file] filed: ${result.issueUrl}`);
+    if (result.issueUrl) console.log(`[intake-file] filed: ${result.issueUrl}`);
+    else console.error('[intake-file] filing did not return a canonical issue URL');
     console.log(`[intake-file] size=${result.size} (${result.sizeSource})`);
     console.log(`[intake-file] priority=${result.priority} (${result.prioritySource})`);
     if (result.dependsOnDecision === 'linked') {

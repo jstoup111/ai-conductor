@@ -20,6 +20,16 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
+import type { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
+
+const permittedRemoteGit: typeof executeRemoteGit = async (args, dependencies) => {
+  try {
+    await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd });
+    return { kind: 'executed', targets: [] };
+  } catch (error) {
+    return { kind: 'failed', error: error instanceof Error ? error.message : String(error), targets: [] };
+  }
+};
 
 const execFile = promisify(execFileCb);
 
@@ -91,7 +101,7 @@ describe('integration/autoresolve — lease-protected publish', () => {
       return { exitCode: r.exitCode ?? 1, stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? '') };
     };
 
-    const result = await autoresolve.pushRefreshedBranch(capturingGit, 'feat/widget');
+    const result = await autoresolve.pushRefreshedBranch(capturingGit, 'feat/widget', undefined, { remoteGit: permittedRemoteGit });
 
     expect(result).toEqual({ pushed: true });
     const pushCall = calls.find((c) => c[0] === 'push');
@@ -121,7 +131,7 @@ describe('integration/autoresolve — lease-protected publish', () => {
       return { exitCode: r.exitCode ?? 1, stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? '') };
     };
 
-    const result = await autoresolve.pushRefreshedBranch(realGit, 'feat/widget');
+    const result = await autoresolve.pushRefreshedBranch(realGit, 'feat/widget', undefined, { remoteGit: permittedRemoteGit });
 
     expect(result).toEqual({ pushed: false, reason: expect.stringMatching(/lease|stale|reject/i) });
 
@@ -183,7 +193,7 @@ describe('integration/autoresolve — lease-protected publish', () => {
       return { exitCode: r.exitCode ?? 1, stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? '') };
     };
 
-    const result = await autoresolve.pushRefreshedBranch(realGit, 'feat/widget', logger);
+    const result = await autoresolve.pushRefreshedBranch(realGit, 'feat/widget', logger, { remoteGit: permittedRemoteGit });
 
     expect(result.pushed).toBe(true);
     const logOutput = logs.join('\n').toLowerCase();

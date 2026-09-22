@@ -16,6 +16,7 @@ import {
   removeLabel,
   setReady,
   cleanupHaltPresentation,
+  guardedPrRunner,
   makeProductionGh,
   type GhRunner,
 } from './pr-labels.js';
@@ -35,6 +36,7 @@ import { deferredAutoParkHaltPresentation } from './auto-park-halt.js';
 import type { OperatorParkedTermination } from './conductor.js';
 import { computeTimingRollup } from './timing-rollup.js';
 import { readState } from './state.js';
+import type { GithubOperationRunner } from './github-operations.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -171,6 +173,14 @@ export interface FeatureRunnerDeps {
   runGh?: GhRunner;
   /** Clear halt presentation after a verified ship. Injected in tests. */
   cleanupHaltPresentation?: typeof import('./pr-labels.js').cleanupHaltPresentation;
+  /**
+   * Produces a fresh, branch-bound guarded GitHub runner for terminal PR
+   * cleanup. Reads remain on `runGh`; every cleanup mutation uses this runner.
+   */
+  haltPrOperations?: (input: {
+    readonly prUrl: string;
+    readonly branch: string;
+  }) => GithubOperationRunner | undefined;
   /**
    * FR-9: enroll a shipped PR in the mergeable watch registry.
    * Defaults to the real enrollWatch; injected in tests to assert call order and
@@ -336,6 +346,7 @@ export function makeRunFeature(
     effects: import('./feature-executor.js').FeatureTerminalEffects,
     item: BacklogItem,
     featureLog: (message: string) => void,
+    worktree: FeatureWorktree | null,
   ): Promise<import('./feature-executor.js').FeatureTerminalEffects | undefined> => {
     if (deps.deferTerminalEffects) return effects;
     if (effects.engineerSignal) {
@@ -354,7 +365,21 @@ export function makeRunFeature(
     }
     if (effects.cleanupHaltPresentation && deps.projectRoot) {
       try {
-        const result = await cleanup(gh, deps.projectRoot, effects.cleanupHaltPresentation.prUrl, featureLog);
+        const operations = worktree
+          ? deps.haltPrOperations?.({
+              prUrl: effects.cleanupHaltPresentation.prUrl,
+              branch: worktree.branch,
+            })
+          : undefined;
+        const cleanupRunner = operations === undefined
+          ? gh
+          : guardedPrRunner(gh, operations);
+        const result = await cleanup(
+          cleanupRunner,
+          deps.projectRoot,
+          effects.cleanupHaltPresentation.prUrl,
+          featureLog,
+        );
         featureLog(`[daemon-runner] cleanup result: ${result}`);
       } catch (err) {
         featureLog(`[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`);
@@ -576,7 +601,7 @@ export function makeRunFeature(
             markProcessed: { prUrl: outcome.prUrl },
             sweep: true,
             ...(engineerSignal ? { engineerSignal } : {}),
-          }, item, featureLog);
+          }, item, featureLog, worktree);
           return {
             slug: item.slug,
             status: 'done',
@@ -626,7 +651,7 @@ export function makeRunFeature(
         await deps.teardownWorktree(worktree, true);
         featureLog(`✋ ${item.slug} false-ship halted — worktree kept (${reason})`);
         await endDispatch('halted');
-        const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog);
+        const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog, worktree);
         return {
           slug: item.slug,
           status: 'halted',
@@ -640,7 +665,7 @@ export function makeRunFeature(
         await endDispatch('halted');
         await deps.teardownWorktree(worktree, true); // keep for the human
         featureLog(`✋ ${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`);
-        const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog);
+        const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog, worktree);
         return {
           slug: item.slug,
           status: 'halted',
@@ -669,7 +694,7 @@ export function makeRunFeature(
               });
       await deps.teardownWorktree(worktree, true);
       await endDispatch('terminated');
-      const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog);
+      const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog, worktree);
       return {
         slug: item.slug,
         status: 'error',

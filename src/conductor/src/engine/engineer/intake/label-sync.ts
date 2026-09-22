@@ -20,8 +20,9 @@
  * or link failure is logged and does not stop the rest of the sync.
  */
 
-import { ensureLabel, addLabel, type GhRunner } from '../../pr-labels.js';
+import { ensureLabel, guardedPrRunner, type GhRunner } from '../../pr-labels.js';
 import { createDependencyLinks, type DependencyEdge } from '../issue-dep-migration.js';
+import { executeGithubOperation, type GithubOperationRunner } from '../../github-operations.js';
 import { strictSlugGithubRef, parseWorkRef } from '../source-ref.js';
 
 export type { GhRunner } from '../../pr-labels.js';
@@ -34,6 +35,12 @@ export interface SyncIssueLabelsFields {
 
 export interface SyncIssueLabelsDeps {
   gh: GhRunner;
+  /** Required for label definition and issue-label writes. */
+  labelOperations?: GithubOperationRunner;
+  /** Required for dependency writes; label synchronization remains best-effort without it. */
+  dependencyOperations?: GithubOperationRunner;
+  /** Identity bound to each guarded dependency request. */
+  actor?: string;
   cwd: string;
   log?: (msg: string) => void;
 }
@@ -128,12 +135,22 @@ export async function syncIssueLabels(
   }
 
   try {
-    await ensureLabel(gh, cwd, priorityLabel, PRIORITY_COLORS[priority], log);
-    await ensureLabel(gh, cwd, sizeLabel, SIZE_COLORS[size], log);
-
-    const issueUrl = `https://github.com/${ref.repo}/issues/${ref.number}`;
-    await addLabel(gh, cwd, issueUrl, priorityLabel, log);
-    await addLabel(gh, cwd, issueUrl, sizeLabel, log);
+    if (!deps.labelOperations || !deps.actor) {
+      log('[label-sync] syncIssueLabels: labels refused without guarded operation authorization');
+    } else {
+      const guarded = guardedPrRunner(gh, deps.labelOperations);
+      await ensureLabel(guarded, cwd, priorityLabel, PRIORITY_COLORS[priority], log, { repository: ref.repo });
+      await ensureLabel(guarded, cwd, sizeLabel, SIZE_COLORS[size], log, { repository: ref.repo });
+      const target = { repository: ref.repo, kind: 'issue' as const, number: Number(ref.number) };
+      await executeGithubOperation({
+        operation: 'intake.issue.label.add', repository: ref.repo, resource: target,
+        context: { actor: deps.actor }, payload: { label: priorityLabel },
+      }, deps.labelOperations);
+      await executeGithubOperation({
+        operation: 'intake.issue.label.add', repository: ref.repo, resource: target,
+        context: { actor: deps.actor }, payload: { label: sizeLabel },
+      }, deps.labelOperations);
+    }
   } catch (err) {
     // ensureLabel/addLabel already swallow their own errors; this is a
     // last-resort guard so a truly unexpected throw still never escapes.
@@ -154,8 +171,19 @@ export async function syncIssueLabels(
   }
 
   if (edges.length > 0) {
+    if (!deps.dependencyOperations || !deps.actor) {
+      log('[label-sync] syncIssueLabels: dependency links refused without guarded operation authorization');
+      badRefs.push(...edges.map((edge) => edge.target));
+      return { priorityLabel, sizeLabel, priorityDefaulted, sizeDefaulted, linked, badRefs };
+    }
     try {
-      const results = await createDependencyLinks(edges, { gh, cwd, log });
+      const results = await createDependencyLinks(edges, {
+        gh,
+        operations: deps.dependencyOperations,
+        actor: deps.actor,
+        cwd,
+        log,
+      });
       for (const result of results) {
         if (result.status === 'created' || result.status === 'already-present') {
           linked.push(result.edge.target);

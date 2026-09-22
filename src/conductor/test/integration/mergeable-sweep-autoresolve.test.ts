@@ -20,6 +20,7 @@ import { tmpdir } from 'os';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { GhRunner, PrMergeState } from '../../src/engine/pr-labels.js';
+import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
 import { makeAutoresolveEligibility } from '../../src/engine/autoresolve.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
@@ -385,9 +386,22 @@ describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
         return { kind: 'setup-stop' as const };
       },
     };
+    const operations: GithubOperationRunner = {
+      async run(request) {
+        if (
+          request.operation === 'pull-request.label.add' &&
+          request.payload &&
+          'label' in request.payload &&
+          request.payload.label === 'needs-remediation'
+        ) {
+          labelled = true;
+        }
+        return {};
+      },
+    };
 
-    await sweepMergeableLabels({ projectRoot, runGh: gh, autoresolve });
-    await sweepMergeableLabels({ projectRoot, runGh: gh, autoresolve });
+    await sweepMergeableLabels({ projectRoot, runGh: gh, operations, autoresolve });
+    await sweepMergeableLabels({ projectRoot, runGh: gh, operations, autoresolve });
 
     const raw = await readFile(join(projectRoot, '.daemon/mergeable-watch.jsonl'), 'utf-8');
     expect(JSON.parse(raw.trim()).resolveAttempts).toBe(1);

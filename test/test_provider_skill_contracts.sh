@@ -326,11 +326,14 @@ require_pattern 'composer gives non-Claude hosts a normal session-end path' \
 # not just its section shape. Each assertion below pins a specific instruction
 # whose removal changes what the composer agent does; heading-presence proxies
 # cannot detect that.
-require_pattern 'composer carries the push-before-handoff command' \
-  'git push -u origin spec/' \
+require_pattern 'composer assigns guarded publication to handoff' \
+  'primitive owns its guarded remote publication and GitHub operations' \
   "$composer_skill"
-require_pattern 'composer names the unpushed-branch handoff failure mode' \
-  'gh pr create.{0,80}unpushed|unpushed.{0,80}(gh pr create|local-commit)' \
+require_pattern 'composer prohibits host-issued pre-push before handoff' \
+  'Do not pre-push or invoke' \
+  "$composer_skill"
+require_pattern 'composer prohibits host-issued raw GitHub/Git writes before handoff' \
+  'raw GitHub/Git write commands' \
   "$composer_skill"
 require_pattern 'composer states the complexity-stem MUST against the plan filename' \
   'stem.{0,40}MUST.{0,60}\.docs/plans/<stem>\.md' \

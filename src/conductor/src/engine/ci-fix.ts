@@ -25,6 +25,8 @@ import type { CiFailureAttempt } from './rebase.js';
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import { execa } from 'execa';
 import { dispatchTestSuiteCommand } from './test-suite-cli.js';
+import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
+import { makeProductionGh, type GhRunner, type GithubMutationExecutionContext } from './tracker-client.js';
 
 export const CI_FIX_HINT_MAX_BYTES = 24_576;
 export const CI_FIX_METADATA_MAX_BYTES = 12_288;
@@ -518,6 +520,10 @@ export async function runCiFix(
     fixRunner: CiFixRunner;
     verify?: (worktreePath: string) => Promise<number>;
     liveness?: ResolveWorktreeLiveness;
+    /** Production supplies its gh transport; tests may inject proven authority. */
+    gh?: GhRunner;
+    remoteMutation?: GithubMutationExecutionContext;
+    remoteGit?: typeof executeRemoteGit;
   },
   logger?: (msg: string) => void,
 ): Promise<CiFixOutcome> {
@@ -633,7 +639,21 @@ export async function runCiFix(
         return { kind: 'failed', stage: 'verification', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
       }
 
-      const pushResult = await pushRefreshedBranch(git, branch, log);
+      const remoteMutation = deps.remoteMutation ?? await resolveFeatureRemoteMutation({
+        cwd: worktreePath,
+        slug,
+        branch,
+        git: async (args) => {
+          const result = await git(args);
+          if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout || 'git read failed');
+          return { stdout: result.stdout };
+        },
+        gh: deps.gh ?? makeProductionGh(),
+      });
+      const pushResult = await pushRefreshedBranch(git, branch, log, {
+        remoteGit: deps.remoteGit,
+        mutation: remoteMutation,
+      });
       if (!pushResult.pushed) {
         log(`${prUrl}: ci-fix lease push failed: ${pushResult.reason}`);
         logOutcome(log, prUrl, 'ci-fix-lease-push', 'escalated');

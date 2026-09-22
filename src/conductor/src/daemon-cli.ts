@@ -55,7 +55,7 @@ import {
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import {
   Conductor,
-  createFinishPresentationRepair,
+  createProvenanceGuardedFinishPresentationRepair,
   type OperatorParkedTermination,
 } from './engine/conductor.js';
 import { createProductionAcceptanceRedExec } from './engine/acceptance-red-runner.js';
@@ -68,6 +68,7 @@ import { AuditTrailWriter } from './engine/audit-trail.js';
 import { forwardedFeatureOf, isForwardedFromFeature, startDaemonEventPersistence, startFeatureEventPersistence } from './engine/event-persister.js';
 import { renderedEventTypes } from './engine/event-sinks.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
+import { formatGithubOperationRefusal } from './engine/github-operations.js';
 import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
@@ -106,7 +107,10 @@ import { makeIsProcessed, resolveEngineVersion } from './engine/shipped-record.j
 import { resolveHarnessVersion } from './engine/version-report.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
-import { createGithubTrackerClient, makeProductionGh } from './engine/tracker-client.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerUrlRead } from './engine/tracker-client.js';
+import { createGithubIntakeAuthorization } from './engine/engineer/intake/github-issues.js';
+import { resolveFeatureRemoteMutation } from './engine/remote-git-operations.js';
+import { createDaemonHaltPrOperations } from './engine/daemon-halt-pr-operations.js';
 import { GH_VERSION_FLOOR, probeGhVersion } from './engine/gh-version-floor.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
@@ -121,7 +125,7 @@ import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
 import { buildWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './engine/work-order.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
-import { cleanupHaltPresentation, resolveSpecPrUrl } from './engine/pr-labels.js';
+import { cleanupHaltPresentation, parseIssueRef, resolveSpecPrUrl } from './engine/pr-labels.js';
 import { captureEngineIdentity, createStaleEngineChecker } from './engine/engine-identity.js';
 import { initStaleEngineState } from './engine/stale-engine-init.js';
 import {
@@ -1323,6 +1327,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const auditWriter = new AuditTrailWriter(wt.path);
     auditWriter.subscribe(featureEvents);
 
+    const finishPublicationGit = makeFinishPublicationGit();
+    const finishPublicationGh = makeProductionGh();
     const conductor = new Conductor({
       stateFilePath,
       stateStore,
@@ -1341,11 +1347,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         projectRoot: wt.path,
         stateFilePath,
         baseBranch,
-        git: makeFinishPublicationGit(),
-        gh: makeProductionGh(),
-        repairPresentation: createFinishPresentationRepair({
+        git: finishPublicationGit,
+        gh: finishPublicationGh,
+        repairPresentation: createProvenanceGuardedFinishPresentationRepair({
           projectRoot: wt.path,
-          gh: makeProductionGh(),
+          git: finishPublicationGit,
+          gh: finishPublicationGh,
+          baseBranch,
           log: featureLog,
         }),
         observeReleaseReadiness: createProductionReleaseReadinessObserver({
@@ -1443,11 +1451,28 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // and idempotent — a gh failure or a halted build (no pr_url) never affects
     // the feature outcome.
     const finalState = await readState(stateFilePath);
+    const implementationPrUrl = finalState.ok ? finalState.value.pr_url : undefined;
     const ghRunner = makeProductionGh();
+    const closeIssueMutation = item.sourceRef && implementationPrUrl
+      ? await resolveFeatureRemoteMutation({
+        cwd: wt.path,
+        slug: item.slug,
+        branch: wt.branch,
+        git: (args) => finishPublicationGit(args, { cwd: wt.path }),
+        gh: ghRunner,
+      })
+      : undefined;
     await closeIssueOnImplementationMerge({
       gh: ghRunner,
+      operations: closeIssueMutation
+        ? createGuardedGithubOperationRunner(ghRunner, {
+          cwd: wt.path,
+          mutation: closeIssueMutation,
+          events: featureEvents,
+        })
+        : undefined,
       sourceRef: item.sourceRef,
-      prUrl: finalState.ok ? finalState.value.pr_url : undefined,
+      prUrl: implementationPrUrl,
       cwd: wt.path,
       slug: item.slug,
       log: featureLog,
@@ -1558,6 +1583,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     providerExecution: createProviderExecution,
     beginFeatureRun,
     memoryProvider,
+    events,
     log,
     verbose: config?.daemon_verbose ?? false,
     dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(config),
@@ -1662,17 +1688,27 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // the resolver returns `{ resolved: false }` and discovery builds NOTHING.
   // ADR-1 naming: `daemonOwner`, never a bare `owner`.
   const ownerGh: GhRunner = makeProductionGh();
-  const tracker = createGithubTrackerClient(ownerGh);
+  const tracker = createGithubTrackerClient(ownerGh, { events });
   const ownerGit = makeGitRunner(projectRoot);
+  // Halt presentation is feature state, never daemon-global state.  Preserve
+  // the read-only sweep transport while deriving a fresh guarded runner from
+  // each PR's committed feature marker for every mutation attempt.
+  const haltPrOperations = createDaemonHaltPrOperations({
+    projectRoot,
+    baseBranch,
+    gh: ownerGh,
+    git: ownerGit,
+    resolveMachineOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
+    events,
+  });
+  const haltPrGit = makeFinishPublicationGit();
 
   // Task 13: Construct ONE priority resolver per daemon run (process-local state,
   // never persisted to disk). The resolver backs the REAL gh CLI runner so cross-repo
   // issue refs are fetched from GitHub (ghIssueLabelReader wraps the runner in
   // parseIssueRef → gh argv → JSON label extraction). Passed to localWorkSource for
   // post-gate ordering and to the dashboard for fallback-mode display.
-  // Wrap ownerGh (GhRunner) to match ExecRunner signature (args only, cwd implicit).
-  const execRunnerWrapper = (args: string[]) => ownerGh(args, { cwd: projectRoot });
-  const priorityResolver = createPriorityResolver(ghIssueLabelReader(execRunnerWrapper), log);
+  const priorityResolver = createPriorityResolver(ghIssueLabelReader(ownerGh, projectRoot), log);
 
   // Task 12 (adr-2026-07-03-gated-snapshot-status-read-model): the daemon
   // directory backing `.daemon/gated.json` — every discovery pass rewrites
@@ -1692,6 +1728,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // network calls to GitHub.
   const gatedWritebackDeps = {
     cwd: projectRoot,
+    operations: createGuardedGithubOperationRunner(ownerGh, {
+      cwd: projectRoot,
+      intake: createGithubIntakeAuthorization({ gh: ownerGh, cwd: projectRoot }),
+      events,
+    }),
     log,
     warnedSkips: new Set<string>(),
     verbose: config?.daemon_verbose ?? false,
@@ -2260,7 +2301,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // silently no-ops the "ultimate safety net" for halt-PR presentation
       // (daemon.ts guards with ?.()), same failure mode as sweepMergeableLabels below.
       reconcileHaltPrs: async () => {
-        await reconcileHaltPrs({ projectRoot, log, cache: haltPrSweepCache });
+        await reconcileHaltPrs({
+          projectRoot,
+          log,
+          runGh: ownerGh,
+          runGit: haltPrGit,
+          operations: haltPrOperations,
+          cache: haltPrSweepCache,
+        });
       },
       // adr-2026-07-27 Decisions 4 + 6: the sweep only converges if BOTH
       // hand-off seams are supplied here. `requestRecordRepair` is the ST-916
@@ -2307,12 +2355,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
 
               try {
                 // Fetch the branch name from the PR
-                const prViewResult = await execFile('sh', [
-                  '-c',
-                  `gh pr view "${entry.prUrl}" --json headRefName --jq '.headRefName'`,
-                ], { cwd: entry.repoCwd });
+                const prViewStdout = await runTrackerUrlRead(
+                  makeProductionGh(), entry.repoCwd, 'pull-request', entry.prUrl,
+                  ['pr', 'view', entry.prUrl, '--json', 'headRefName', '--jq', '.headRefName'],
+                );
 
-                const branch = (prViewResult.stdout || '').toString().trim();
+                const branch = (prViewStdout || '').toString().trim();
                 if (!branch) {
                   log(`[autoresolve] empty branch name for ${entry.prUrl}`);
                   return { kind: 'escalated' };
@@ -2404,7 +2452,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
                     attemptCap,
                   },
-                  { runGh: ghRunner, runSuite, resolver, log, isFeatureInFlight: isWorkClaimActive, worktreeLifecycle },
+                  {
+                    runGh: ghRunner,
+                    runSuite,
+                    resolver,
+                    log,
+                    isFeatureInFlight: isWorkClaimActive,
+                    worktreeLifecycle,
+                    events,
+                  },
                 );
 
                 log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
@@ -2432,6 +2488,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               if (!ciFixEnabled) return;
               const dispatchCiFix = createDaemonCiFixDispatch({
                 tracker: createGithubTrackerClient(makeProductionGh()),
+                // Feature-scoped transport: pin gh to the entry's repo so the remote
+                // mutation guard resolves against the feature's repository.
+                gh: (args, opts) => makeProductionGh()(args, { ...opts, cwd: entry.repoCwd }),
                 liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
                 log,
                 diagnostic: async ({ stage, reason, provider }) => {
@@ -2486,6 +2545,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               }
               return outcome;
             },
+          },
+          operations: (entry) => {
+            const target = parseIssueRef(entry.prUrl);
+            if (!target) return undefined;
+            return haltPrOperations({
+              number: Number(target.number),
+              url: entry.prUrl,
+              headRefName: `feat/daemon-${entry.slug}`,
+            });
           },
         });
       },
@@ -2759,6 +2827,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(
         `${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.field} status write refused: ${event.expected} → ${event.requested} (${event.intent})`)}`,
       );
+      break;
+    case 'github_operation_refused':
+      log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);
       break;
     case 'step_retry': {
       const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);

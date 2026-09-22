@@ -57,6 +57,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect } from 'vitest';
+import type { GithubOperationRequest } from '../../src/engine/github-operations.js';
 
 const LABEL_SYNC_MOD = '../../src/engine/engineer/intake/label-sync.js';
 
@@ -134,7 +135,28 @@ function makeFakeGh(opts: { failLabelApply?: boolean } = {}) {
     return { stdout: '{}' };
   };
 
-  return { run, calls, createdLabels, appliedLabels, blockedByLinks };
+  const operations = {
+    async run(request: GithubOperationRequest) {
+      if (request.operation === 'label-definition.create') {
+        createdLabels.add((request.payload as { name: string }).name);
+      }
+      if (request.operation === 'intake.issue.label.add') {
+        appliedLabels.push((request.payload as { label: string }).label);
+      }
+      return {};
+    },
+  };
+
+  return { run, calls, createdLabels, appliedLabels, blockedByLinks, operations };
+}
+
+function labelSyncDeps(gh: ReturnType<typeof makeFakeGh>) {
+  return {
+    gh: gh.run,
+    labelOperations: gh.operations,
+    dependencyOperations: gh.operations,
+    actor: 'intake-test-operator',
+  };
 }
 
 describe('Story 1 — intake form is born with priority + size + linking (label-sync)', () => {
@@ -146,7 +168,7 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
       const result = await syncIssueLabels(
         { priority: 'critical', size: 'L', dependsOn: ['acme/app#100'] },
         'acme/app#200',
-        { gh: gh.run, cwd: '.' },
+        { ...labelSyncDeps(gh), cwd: '.' },
       );
 
       expect(result.priorityLabel).toBe('priority: critical');
@@ -160,7 +182,7 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
       const gh = makeFakeGh();
 
       await syncIssueLabels({ priority: 'high', size: 'S', dependsOn: [] }, 'acme/app#201', {
-        gh: gh.run,
+        ...labelSyncDeps(gh),
         cwd: '.',
       });
 
@@ -175,7 +197,7 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
       const result = await syncIssueLabels(
         { priority: 'urgent!!', size: 'XL', dependsOn: [] },
         'acme/app#202',
-        { gh: gh.run, cwd: '.' },
+        { ...labelSyncDeps(gh), cwd: '.' },
       );
 
       expect(result.priorityLabel).toBe('priority: medium');
@@ -189,9 +211,9 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
       const gh = makeFakeGh();
       const fields = { priority: 'low', size: 'M', dependsOn: [] as string[] };
 
-      await syncIssueLabels(fields, 'acme/app#203', { gh: gh.run, cwd: '.' });
+      await syncIssueLabels(fields, 'acme/app#203', { ...labelSyncDeps(gh), cwd: '.' });
       const secondApplyCount = gh.appliedLabels.length;
-      await syncIssueLabels(fields, 'acme/app#203', { gh: gh.run, cwd: '.' });
+      await syncIssueLabels(fields, 'acme/app#203', { ...labelSyncDeps(gh), cwd: '.' });
 
       // Idempotent: the second run applies the SAME labels again (REST label-apply
       // is itself idempotent server-side) but must not throw and must not diverge
@@ -209,7 +231,7 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
 
       await expect(
         syncIssueLabels({ priority: 'medium', size: 'S', dependsOn: [] }, 'acme/app#204', {
-          gh: gh.run,
+          ...labelSyncDeps(gh),
           cwd: '.',
           log: () => {},
         }),
@@ -223,7 +245,7 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
       const result = await syncIssueLabels(
         { priority: 'high', size: 'L', dependsOn: ['not-a-valid-ref', 'acme/app#9999999'] },
         'acme/app#205',
-        { gh: gh.run, cwd: '.' },
+        { ...labelSyncDeps(gh), cwd: '.' },
       );
 
       expect(result.badRefs).toEqual(expect.arrayContaining(['not-a-valid-ref']));
@@ -239,7 +261,7 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
       const result = await syncIssueLabels(
         { priority: 'medium', size: 'S', dependsOn: ['PROJ-123'] },
         'acme/app#206',
-        { gh: gh.run, cwd: '.' },
+        { ...labelSyncDeps(gh), cwd: '.' },
       );
 
       expect(result.linked).not.toContain('PROJ-123');
@@ -258,7 +280,7 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
       const result = await syncIssueLabels(
         { priority: 'medium', size: 'S', dependsOn: ['a b/c#1'] },
         'acme/app#207',
-        { gh: gh.run, cwd: '.' },
+        { ...labelSyncDeps(gh), cwd: '.' },
       );
 
       expect(result.badRefs).toEqual(expect.arrayContaining(['a b/c#1']));
@@ -365,7 +387,7 @@ describe('label-sync only defaults for issue-form submissions', () => {
       const syncIssueLabels = requireSyncFn(await loadLabelSyncModule());
       const gh = makeFakeGh();
 
-      const result = await syncIssueLabels({}, 'acme/app#208', { gh: gh.run, cwd: '.' });
+      const result = await syncIssueLabels({}, 'acme/app#208', { ...labelSyncDeps(gh), cwd: '.' });
 
       expect(result.priorityLabel).toBe('priority: medium');
       expect(result.sizeLabel).toBe('size: M');

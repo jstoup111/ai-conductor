@@ -25,6 +25,7 @@ import type { GhRunner } from '../../src/engine/pr-labels.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import type { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 
 const PR_URL = 'https://github.com/foo/bar/pull/42';
 
@@ -58,6 +59,15 @@ const baseEntry: WatchEntry = {
   repoCwd: '/repo',
   resolveAttempts: 1,
   lastResolveAt: undefined,
+};
+
+const permittedRemoteGit: typeof executeRemoteGit = async (args, dependencies) => {
+  try {
+    await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd });
+    return { kind: 'executed', targets: [] };
+  } catch (error) {
+    return { kind: 'failed', error: error instanceof Error ? error.message : String(error), targets: [] };
+  }
 };
 
 describe('engine/autoresolve — logOutcome (FR-16 wire format)', () => {
@@ -152,6 +162,7 @@ describe('engine/autoresolve — outcome logging at call sites', () => {
       branch: 'feat/widget',
       prUrl: PR_URL,
       gh: { runGh: gh, cwd: '/repo', log: (msg) => logs.push(msg) },
+      remoteGit: permittedRemoteGit,
     });
 
     expect(result).toEqual({ published: true });
@@ -183,6 +194,7 @@ describe('engine/autoresolve — outcome logging at call sites', () => {
       branch: 'feat/widget',
       prUrl: PR_URL,
       gh: { runGh: gh, cwd: '/repo', log: (msg) => logs.push(msg) },
+      remoteGit: permittedRemoteGit,
     });
 
     expect(result.published).toBe(false);

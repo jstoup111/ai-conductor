@@ -36,6 +36,12 @@ function fakeGh(opts: { failOn?: Record<number, string> } = {}): { gh: GhRunner;
 
   const gh: GhRunner = async (args: string[]) => {
     calls.push(args);
+    if (args[0] === 'issue' && args[1] === 'view' && args.includes('assignees')) {
+      return { stdout: JSON.stringify({ assignees: [{ login: 'alice' }] }) };
+    }
+    if (args[0] === 'api' && args[1] === 'user') {
+      return { stdout: 'alice\n' };
+    }
     if (args[0] === 'label' && args[1] === 'create') {
       return { stdout: '' };
     }
@@ -52,6 +58,15 @@ function fakeGh(opts: { failOn?: Record<number, string> } = {}): { gh: GhRunner;
   };
 
   return { gh, calls };
+}
+
+function backfillDeps(gh: GhRunner, extras: Partial<Parameters<typeof backfillIntakeLabels>[1]> = {}) {
+  return {
+    gh,
+    cwd: '.',
+    resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
+    ...extras,
+  };
 }
 
 describe('inferSizeFromBody / inferPriorityFromBody — body-text inference', () => {
@@ -79,7 +94,7 @@ describe('backfillIntakeLabels — incomplete issues get labelled (infer vs defa
       { ref: `${REPO}#10`, body: 'size: L\npriority: high', labels: [] },
     ];
 
-    const report = await backfillIntakeLabels(issues, { gh, cwd: '.' });
+    const report = await backfillIntakeLabels(issues, backfillDeps(gh));
 
     expect(report.labelled).toHaveLength(1);
     expect(report.labelled[0].ref).toBe(`${REPO}#10`);
@@ -101,7 +116,7 @@ describe('backfillIntakeLabels — incomplete issues get labelled (infer vs defa
       { ref: `${REPO}#11`, body: 'No structured info here.', labels: [] },
     ];
 
-    const report = await backfillIntakeLabels(issues, { gh, cwd: '.' });
+    const report = await backfillIntakeLabels(issues, backfillDeps(gh));
 
     expect(report.labelled).toHaveLength(1);
     expect(report.labelled[0].applied).toEqual(
@@ -118,7 +133,7 @@ describe('backfillIntakeLabels — incomplete issues get labelled (infer vs defa
       { ref: `${REPO}#12`, body: 'priority: critical', labels: ['size: S'] },
     ];
 
-    const report = await backfillIntakeLabels(issues, { gh, cwd: '.' });
+    const report = await backfillIntakeLabels(issues, backfillDeps(gh));
 
     expect(report.labelled).toHaveLength(1);
     expect(report.labelled[0].applied).toEqual([{ label: 'priority: critical', source: 'inferred' }]);
@@ -132,7 +147,7 @@ describe('backfillIntakeLabels — idempotent re-run', () => {
       { ref: `${REPO}#20`, body: '', labels: ['size: M', 'priority: medium'] },
     ];
 
-    const report = await backfillIntakeLabels(issues, { gh, cwd: '.' });
+    const report = await backfillIntakeLabels(issues, backfillDeps(gh));
 
     expect(report.skipped).toEqual([`${REPO}#20`]);
     expect(report.labelled).toHaveLength(0);
@@ -151,10 +166,11 @@ describe('backfillIntakeLabels — isolated single-issue failure', () => {
     ];
 
     const log = vi.fn();
-    const report = await backfillIntakeLabels(issues, { gh, cwd: '.', log });
+    const report = await backfillIntakeLabels(issues, backfillDeps(gh, { log }));
 
     expect(report.failed).toHaveLength(1);
-    expect(report.failed[0]).toMatchObject({ ref: `${REPO}#30`, error: 'simulated REST failure' });
+    expect(report.failed[0]).toMatchObject({ ref: `${REPO}#30` });
+    expect(report.failed[0].error).toContain('simulated REST failure');
     // The sweep continued: issue 31 still got processed and labelled.
     expect(report.labelled).toHaveLength(1);
     expect(report.labelled[0].ref).toBe(`${REPO}#31`);
@@ -167,7 +183,7 @@ describe('backfillIntakeLabels — Jira-shaped ref', () => {
     const { gh, calls } = fakeGh();
     const issues: BacklogIssue[] = [{ ref: 'PROJ-123', body: '', labels: [] }];
 
-    const report = await backfillIntakeLabels(issues, { gh, cwd: '.' });
+    const report = await backfillIntakeLabels(issues, backfillDeps(gh));
 
     expect(report.failed).toHaveLength(1);
     expect(report.failed[0].ref).toBe('PROJ-123');
@@ -184,7 +200,7 @@ describe('backfillIntakeLabels — never HALTs, never prompts', () => {
       { ref: `${REPO}#41`, body: 'size: S\npriority: low', labels: [] },
     ];
 
-    const report = await backfillIntakeLabels(issues, { gh, cwd: '.' });
+    const report = await backfillIntakeLabels(issues, backfillDeps(gh));
 
     expect(existsSync(HALT_MARKER)).toBe(false);
     expect(report.halted).not.toBe(true);
@@ -198,7 +214,7 @@ describe('backfillIntakeLabels — never HALTs, never prompts', () => {
     // If backfillIntakeLabels ever tried to prompt (e.g. via readline/stdin),
     // it would hang or throw in this non-interactive test environment.
     // A clean resolve is proof no interactive gate was invoked.
-    await expect(backfillIntakeLabels(issues, { gh, cwd: '.' })).resolves.toBeDefined();
+    await expect(backfillIntakeLabels(issues, backfillDeps(gh))).resolves.toBeDefined();
   });
 });
 

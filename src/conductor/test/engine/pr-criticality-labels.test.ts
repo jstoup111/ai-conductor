@@ -9,6 +9,7 @@ import {
   selectCriticalityLabels,
   isCriticalityLabel,
 } from '../../src/engine/pr-criticality-labels.js';
+import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
 
 type Call = { args: string[]; cwd: string };
 
@@ -27,7 +28,22 @@ function fakeGh(labels: string[], failOn: string[] = []) {
     }
     return { stdout: '' };
   };
-  return { gh, calls };
+  const operations: GithubOperationRunner = {
+    async run(request) {
+      if (request.operation !== 'pull-request.label.add' || request.target.kind !== 'pull-request') {
+        throw new Error(`unexpected operation: ${request.operation}`);
+      }
+      const label = request.payload && 'label' in request.payload ? request.payload.label : undefined;
+      if (typeof label !== 'string') throw new Error('missing label payload');
+      await gh([
+        'api', '--method', 'POST',
+        `repos/${request.target.repository}/issues/${request.target.number}/labels`,
+        '-f', `labels[]=${label}`,
+      ], { cwd: '/repo' });
+      return {};
+    },
+  };
+  return { gh, calls, operations };
 }
 
 const PR_URL = 'https://github.com/acme/app/pull/42';
@@ -51,10 +67,11 @@ describe('criticality label selection', () => {
 
 describe('mirrorIssueCriticalityLabels', () => {
   it('applies every criticality label from the issue to the PR', async () => {
-    const { gh, calls } = fakeGh(['bug', 'priority: critical', 'size: L']);
+    const { gh, calls, operations } = fakeGh(['bug', 'priority: critical', 'size: L']);
 
     const result = await mirrorIssueCriticalityLabels({
       gh,
+      operations,
       cwd: '/repo',
       prUrl: PR_URL,
       sourceRef: 'acme/app#7',
@@ -75,10 +92,11 @@ describe('mirrorIssueCriticalityLabels', () => {
   });
 
   it('mirrors across repos — the issue and the PR may live apart', async () => {
-    const { gh, calls } = fakeGh(['priority: low']);
+    const { gh, calls, operations } = fakeGh(['priority: low']);
 
     await mirrorIssueCriticalityLabels({
       gh,
+      operations,
       cwd: '/repo',
       prUrl: 'https://github.com/other/target/pull/9',
       sourceRef: 'acme/app#7',
@@ -89,10 +107,11 @@ describe('mirrorIssueCriticalityLabels', () => {
   });
 
   it('writes nothing when the issue carries no criticality label', async () => {
-    const { gh, calls } = fakeGh(['bug', 'size: S']);
+    const { gh, calls, operations } = fakeGh(['bug', 'size: S']);
 
     const result = await mirrorIssueCriticalityLabels({
       gh,
+      operations,
       cwd: '/repo',
       prUrl: PR_URL,
       sourceRef: 'acme/app#7',
@@ -178,13 +197,14 @@ describe('mirrorIssueCriticalityLabels', () => {
   it('keeps applying the remaining labels when one write fails', async () => {
     // Two bands on one issue (rare, but the endpoint permits it): the failing
     // write must not abort the other.
-    const { gh } = fakeGh(
+    const { gh, operations } = fakeGh(
       ['priority: critical', 'priority: low'],
       ['labels[]=priority: critical'],
     );
 
     const result = await mirrorIssueCriticalityLabels({
       gh,
+      operations,
       cwd: '/repo',
       prUrl: PR_URL,
       sourceRef: 'acme/app#7',

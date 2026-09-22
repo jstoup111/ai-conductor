@@ -21,6 +21,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { sweep } from './sweep.js';
 import { createGithubTrackerClient, makeProductionGh as makeProductionGhRunner } from '../tracker-client.js';
+import { createGithubIntakeAuthorization } from '../engineer/intake/github-issues.js';
 
 export type HaltIssuesSweepCommand =
   | { kind: 'sweep'; dryRun: boolean; repoDir: string; monitorLog: string; ledger: string; ghRepo: string }
@@ -164,7 +165,11 @@ export async function dispatchHaltIssuesSweep(cmd: HaltIssuesSweepCommand, cwd: 
   }
 
   try {
-    const gh = createGithubTrackerClient(makeProductionGhRunner());
+    const runner = makeProductionGhRunner();
+    const gh = createGithubTrackerClient(runner, {
+      intake: createGithubIntakeAuthorization({ gh: runner, cwd: cmd.repoDir }),
+      repository: cmd.ghRepo,
+    });
     const fs = makeProductionFs();
 
     const result = await sweep({
