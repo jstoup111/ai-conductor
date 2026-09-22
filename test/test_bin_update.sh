@@ -1626,6 +1626,34 @@ run_update_tty "$REPO" "$HOME_DIR" v1.0.0
 assert "stable untagged HEAD: refuses as undeterminable without consulting currentVersion, moving, or migrating" \
   "$( [ "$CODE" -ne 0 ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && printf '%s\n' "$OUT" | grep -Fq 'installed release undeterminable' && ! printf '%s\n' "$OUT" | grep -Fq 'MAJOR update v0.3.0' && echo 0 || echo 1)"
 
+# adr-2026-08-09: every stable check names the installed identity and its
+# source, including the returns that used to be silent — already current,
+# fetch unavailable, and an offer that is not taken.
+PAIR=$(make_main_repo "stable-identity-current")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable v0.3.0
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+run_update "$REPO" "$HOME_DIR" --auto
+assert_update_identity_line "stable already current" "$OUT" v0.3.0 "checked-out tag"
+
+git -C "$REPO" remote set-url origin "$TMP_ROOT/stable-identity-missing-origin.git"
+run_update "$REPO" "$HOME_DIR" --auto
+assert_update_identity_line "stable fetch unavailable" "$OUT" v0.3.0 "checked-out tag"
+git -C "$REPO" remote set-url origin "$ORIGIN"
+
+WORK="$TMP_ROOT/stable-identity-offer-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+run_update "$REPO" "$HOME_DIR" --auto
+assert_update_identity_line "stable offer without a TTY" "$OUT" v0.3.0 "checked-out tag"
+
 PAIR=$(make_main_repo "stable-migrate-failure")
 REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
 git -C "$REPO" checkout -q -b stable

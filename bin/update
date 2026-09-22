@@ -263,6 +263,18 @@ restore_stable_checkout() {
 }
 
 check_harness_update_stable() {
+  # adr-2026-08-09: every check names the checkout-derived identity and its
+  # source before any return, including the no-op ones below. Printed ahead
+  # of the fetch so an offline check still reports what is installed.
+  local _identity_kind _display_identity _baseline _distance _source
+  IFS=$'\t' read -r _identity_kind _display_identity _baseline _distance _source \
+    < <(resolve_harness_identity "$HARNESS_DIR")
+  if [ "$_identity_kind" = "undeterminable" ]; then
+    echo "Update identity: unverifiable (source: none)"
+  else
+    echo "Update identity: ${_display_identity} (source: ${_source})"
+  fi
+
   timeout 5 git -C "$HARNESS_DIR" fetch --tags --quiet origin stable 2>/dev/null || return 0
 
   local branch local_head remote_head target_version detached=false
