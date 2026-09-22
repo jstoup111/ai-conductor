@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4, task:6, task:23
+// Covers: task:2, task:3, task:4, task:6, task:7, task:23
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import chalk from 'chalk';
 import { readFileSync } from 'node:fs';
@@ -294,6 +294,18 @@ describe('renderDaemonEvent', () => {
     expect(lines({
       type: 'finish_publication_disposition', disposition: 'retry_build',
     } as ConductorEvent)).toEqual(['· ↩ FINISH publication: route to BUILD']);
+  });
+
+  it('renders structured release-readiness blockers with their code and unsatisfied steps', () => {
+    expect(lines({
+      type: 'finish_publication_blocked',
+      condition: {
+        code: 'release_readiness_missing',
+        steps: ['compliance-gate', 'notes-gate'],
+      },
+    })).toEqual([
+      '· ✋ FINISH publication blocked: release_readiness_missing (steps: compliance-gate, notes-gate)',
+    ]);
   });
 
   it('renders a mergeable skip distinctly from an already-current branch', () => {

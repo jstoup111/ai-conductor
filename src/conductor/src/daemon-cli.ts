@@ -3013,9 +3013,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
           : `${dot}   ${chalk.green(`FINISH publication: ${event.transition} ✓`)}`,
       );
       break;
-    case 'finish_publication_blocked':
-      log(`${dot} ${chalk.red('✋')} ${chalk.red(`FINISH publication blocked: ${event.condition}`)}`);
+    case 'finish_publication_blocked': {
+      const condition = typeof event.condition === 'string'
+        ? event.condition
+        : `${event.condition.code} (steps: ${event.condition.steps.join(', ')})`;
+      log(`${dot} ${chalk.red('✋')} ${chalk.red(`FINISH publication blocked: ${condition}`)}`);
       break;
+    }
     case 'finish_publication_disposition': {
       const line =
         event.disposition === 'complete'
