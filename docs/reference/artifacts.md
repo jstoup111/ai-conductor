@@ -536,21 +536,16 @@ To clear a halt safely, use the procedure in
 > as evidence that anything acted on them. Tracked in
 > [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
 
-> **Known limitation.** Two constants named `HALT_MARKER` exist and point at different files —
-> `.pipeline/HALT` and `.pipeline/halt-user-input-required`. Two types named `TaskStatusFile` declare
-> incompatible shapes for `task-status.json`; the array-of-records form is the one actually written. When
-> reading code, check which module a name came from. Tracked in
-> [#1016](https://github.com/jstoup111/ai-conductor/issues/1016).
-
 ## `.daemon/`
 
-Daemon-scoped state at the main checkout root. Gitignored. Fourteen paths.
+Daemon-scoped state at the main checkout root. Gitignored. Fifteen paths.
 
 | Path | Contents | Notes |
 | --- | --- | --- |
 | `PAUSED` | `{ pausedAt, pausedBy? }` | Existence is authoritative; the body is informational only. **Fail-closed** — any read error other than "not found" is treated as paused |
 | `RESTART-PENDING` | `{ requestedAt, requestedBy?, blockingSlug? }` | Consumed once at the next daemon boot; a re-request refreshes rather than duplicating |
-| `RESTART_PENDING.suppression` | Suppression record for the above | Note the underscore, where the marker uses a hyphen |
+| `RESTART_PENDING` | `{ reason, fromIdentity, targetIdentity, at }` | Stale-engine restart marker; this is a separate restart pipeline from `RESTART-PENDING` |
+| `RESTART_PENDING.suppression` | Suppression record for the stale-engine restart marker above | Derived from `RESTART_PENDING` with the `.suppression` suffix |
 | `attribution-accuracy.jsonl` | Append-only accuracy ledger | `attribution_divergence` events are observational only — they never revoke a stamp or write a halt marker |
 | `daemon.log` | The active daemon log | Rotated at open time when it exceeds 1 MB |
 | `daemon.log.1` | The rotated log | Overwritten by each rotation |
