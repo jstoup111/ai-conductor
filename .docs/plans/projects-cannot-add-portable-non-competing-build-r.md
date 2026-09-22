@@ -88,6 +88,8 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - The installed-policy resolver selects the project, global, and plugin-qualified fixtures with exact canonical source/plugin identity; aliases of one installation collapse and original files remain unchanged.
 - The resolver refuses distinct-origin ambiguity even for byte-equal copies, selects the explicitly qualified source, and names absent, unreadable, disabled, marketplace-only, or incomplete installations without substituting another copy.
+- The resolver unit test 'lets one enabled global installation supply the policy with no local copy and leaves another project's selection unchanged' proves that selecting the global installation requires no local installation and that another project's own project-source selection resolves identically before and after, with its catalog descriptors untouched.
+- The resolver unit test 'names a %s selected installation failure without substituting another copy' proves a disabled, marketplace-only, incomplete, unreadable, or absent installation is only reported: the offered catalog is byte-equal before and after resolution, so nothing is downloaded, no plugin is enabled, and no cached or alternative copy is chosen.
 
 **Files:** `src/conductor/src/engine/build-review-policy.ts`; `src/conductor/src/engine/build-review-policy-resolver.ts`; `src/conductor/test/engine/build-review-policy-resolver.test.ts`
 
@@ -189,6 +191,7 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - The bundle loader rejects missing/unreadable resources, broken local references, escaping/cyclic links, and special-file fixtures with the offending resource named and no eligible bundle.
 - Boundary fixtures accept 4096 files and 64 MiB but refuse either exceeded limit without a partial manifest, judging call, or cache lookup.
+- Every named resource defect above rejects before any eligible bundle exists, and the runner integration test 'publishes a first-use custom loading failure with its declaration and no invented content' proves that after such a loading failure the candidate requests no judgment from the provider and makes no cache lookup for that policy on any lap.
 
 **Files:** `src/conductor/src/engine/build-review-policy-bundle.ts`; `src/conductor/test/engine/build-review-policy-bundle.test.ts`
 
@@ -288,6 +291,7 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - The production containment adapter reaches its fake process boundary and admits scratch writes while refusing protected source/installation/engine-state writes and sibling-evidence reads under the generated mount profile.
 - Missing bubblewrap, a successful protected write, failed scratch write, or unsupported nested sandbox yields a named unsupported-capability failure and zero reviewer launches with no writable fallback.
+- The containment unit test 'refuses review preparation when containment has %s' proves that missing bubblewrap, a successful protected write, a failed scratch write, or an unsupported nested sandbox yields an unsupported result naming the provider, the missing linux-read-only-review-boundary capability, and the install-bubblewrap-and-enable-nested-sandboxing recovery action before any reviewer launches.
 
 **Files:** `src/conductor/src/engine/build-review-containment.ts`; `src/conductor/src/engine/self-host/provider-scratch.ts`; `src/conductor/test/engine/build-review-containment.test.ts`
 
@@ -328,6 +332,7 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - Auxiliary lifecycle tests observe prepare before the candidate operation and exactly one cleanup after hit, invoke success, authentication failure, malformed result, timeout, or cancellation.
 - Existing unavailability classification, session policy, attempt accounting, and non-review callers retain their behavior; cancellation/preparation failure cannot emit a claimed judgment or cache hit.
+- The auxiliary lifecycle tests 'classifies a cancelled prepared candidate without claiming a judgment or cache hit' and 'classifies a timed-out prepared candidate without invoking its operation' prove that preparation ending before policy resolution leaves the candidate unsuccessful with no invocation, no operation call, no claimed cache hit, and no judged artifact, so it supplies no successful coverage.
 
 **Files:** `src/conductor/src/engine/provider-execution.ts`; `src/conductor/test/engine/provider-execution.test.ts`
 
@@ -349,6 +354,7 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - The public build-review runner delivers unchanged installed project/global/plugin criteria through both real provider adapters and publishes engine-stamped judged results from the actual candidate.
 - Runner integration observes zero affected judgments for ambiguity, missing/disabled installations, invalid resources, and declared incompatibility; runtime unsupported, auth, cancellation, and malformed output preserve their distinct failures and cleanup.
+- The runner integration test 'refuses an ambiguous installed selection without invoking a provider' proves the ambiguity report names the conflicting installed sources and requests disambiguation with the literal 'choose one source explicitly' guidance, invoking neither policy.
 
 **Files:** `src/conductor/src/engine/step-runners.ts`; `src/conductor/src/engine/build-review-coordinator.ts`; `src/conductor/test/integration/build-review-custom-policy.integration.test.ts`
 
@@ -409,6 +415,8 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - Runner integration observes prepare → resolve/capture → lookup → optional judge/validated write → cleanup for each actual candidate; a load failure never reaches lookup/write and cannot buy a fallback.
 - Alternating early/late-unavailable candidates reuse only their own warm results without overwrite, borrowed preferred policy, another judging call, or duplicate token accounting; incompatible, legacy, or malformed entries re-judge.
+- The candidate-cache integration test 'resolves the prepared provider candidate before its model ladder judges' proves the fallback candidate that actually judged reports its own producing identity in the published branch artifact's producer and result candidate, and reviewed under the same declaration as the preferred candidate would have.
+- The candidate-cache integration test 'reports failed policy coverage when the fallback provider %s instead of borrowing the preferred policy' proves that a fallback provider lacking the selected policy or resolving it ambiguously resolves the policy for itself, records a policy-load-failed infrastructure failure with no judged descriptor, and never judges under the preferred provider's policy or a silently substituted installation.
 
 **Files:** `src/conductor/src/engine/step-runners.ts`; `src/conductor/src/engine/build-review-coordinator.ts`; `src/conductor/src/engine/provider-execution.ts`; `src/conductor/test/integration/build-review-candidate-cache.integration.test.ts`
 
@@ -496,6 +504,8 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 **Done when:**
 - Artifact round-trip integration preserves original policy/source/plugin/version/content/input/provider/model attribution and a separate current-lap reuse reference with no invented execution or charge.
 - Reading removed/disabled/changed custom configurations preserves historic descriptors while excluding those old results from current membership; loading/invocation failures never claim unknown criteria were judged.
+- The aggregate unit test 'keeps a disabled rubric's cached findings inspectable while supplying no current blocker or repair source' proves a formerly enabled rubric's judged findings remain fully readable from the aggregate after it is disabled, while the verdict passes and the adjudication source projection contains none of them, so no new repair work can arise from them.
+- The artifact unit test 'round-trips versioned self-describing custom judgement provenance and a separate current-lap reuse link' proves published evidence identifies the semantic skill identity and the declaration it was judged under, and that evidence dropping either is rejected as not self-describing.
 
 **Files:** `src/conductor/src/engine/build-review-artifacts.ts`; `src/conductor/src/engine/build-review-aggregate.ts`; `src/conductor/test/engine/build-review-artifacts.test.ts`; `src/conductor/test/engine/build-review-aggregate.test.ts`
 
@@ -585,6 +595,7 @@ The additional Files declaration extends the original list above. Change aggrega
 - Existing operator CLI operations record exact custom risk or digestless declaration/reason coverage only with current identity, rationale, terminal, feature, and exhaustion checks; non-operator and invalid-declaration requests cannot write.
 - A disposition recorded after judging begins is honored at application without stale overwrite or unrelated-finding clearance, and every applicable failure stays visibly unjudged.
 - Through build-review accept and build-review record-reduced-coverage, CLI integration requires the existing --feature, --lap, --rationale and the appropriate --finding or --rubric selector, derives the closed reason from current engine state, and refuses stale laps or duplicate decisions without modifying the store.
+- The CLI unit test 'renders the operator disposition of an accepted custom finding' proves an exactly covered custom finding remains visible as operator-resolved with its operator and rationale in acceptedDispositions while it is absent from unresolvedFindingIds, so it creates no autonomous repair work.
 
 **Files:** `src/conductor/src/engine/build-review-cli.ts`; `src/conductor/src/engine/build-review-disposition.ts`; `src/conductor/src/engine/build-review-dispositions.ts`; `src/conductor/test/engine/build-review-cli.test.ts`; `src/conductor/src/cli.ts`
 
@@ -653,6 +664,7 @@ The additional Files declaration extends the original list above. Change aggrega
 - The case validator accepts exhaustive duplicate/consistent graphs but rejects omitted, duplicate, invented, unresolved-merge, nonexistent-reference, missing-consistency, contradictory-outcome, and missing-admission fixtures.
 - Validation/application integration authorizes zero action effects for any invalid graph, blocked consistency, or escalation, including otherwise valid sibling actions.
 - Case-v2 validation delegates refutations to the inherited one-time attempted-act refutation validator: invalid binding, missing high-confidence assertion evidence, unresolvable current-tree path/excerpt, or repeated refutation rejects the whole judgment with no action effects.
+- The case validator unit test 'rejects %s before any action is authorized' proves that a decision omitting consistency, carrying contradictory outcomes, or referencing nonexistent findings or cases is rejected with a typed reason reporting that specific defect while zero action effects are authorized.
 
 **Files:** `src/conductor/src/engine/remediation-case-validator.ts`; `src/conductor/src/engine/build-review-adjudication.ts`; `src/conductor/test/engine/remediation-case-validator.test.ts`
 
@@ -758,6 +770,8 @@ The additional Files declaration extends the original list above. Change aggrega
 **Done when:**
 - Work-order application publishes one durable prioritized repair set containing only admitted act outcomes, with real task ids, rationale, and complete custom/merged source links.
 - Blocked/escalated/invalid/stale-lap results and all non-action dispositions publish no repair work; late exact operator decisions are respected without dropping unrelated unresolved sources.
+- The effects unit test 'publishes only current admitted acts with their custom source links and admission rationale' proves the published repair cites the admitting task id and carries the admission rationale explaining how the repair fits that approved task scope, and the validator rejects a task action with no admission rationale.
+- The effects unit test 'publishes only current admitted acts with their custom source links and admission rationale' proves exactly one repair route is charged, for the one admitted act's effect within the remaining allowance, while sibling escalated and deferred cases charge nothing.
 
 **Files:** `src/conductor/src/engine/build-review-work-order.ts`; `src/conductor/src/engine/remediation-case-effects.ts`; `src/conductor/test/engine/build-review-work-order.test.ts`; `src/conductor/test/engine/remediation-case-effects.test.ts`
 
