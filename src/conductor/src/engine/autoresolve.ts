@@ -1061,6 +1061,20 @@ export async function resolveConflictingPr(
         return { resolved: false, reason: verdictFailure };
       }
       if (result.verdict !== undefined) {
+        // Strict callers do not have the sweep's judgement exception. An
+        // unsolicited empty verdict must not become audit or event evidence;
+        // a declared drop remains the existing mixed-scope rejection.
+        if (!ctx.supersessionJudgement) {
+          if (Array.isArray(result.verdict.superseded) && result.verdict.superseded.length > 0) {
+            const checked = validateResolutionVerdict(result.verdict, { scope, replayedShas });
+            verdictFailure ??= checked.ok
+              ? 'malformed verdict: superseded commits require test-only scope'
+              : checked.reason;
+            return { resolved: false, reason: verdictFailure };
+          }
+          log(`${prUrl}: supersession verdict ignored because the exception is not in force`);
+          return { resolved: true };
+        }
         const checked = validateResolutionVerdict(result.verdict, { scope, replayedShas });
         if (!checked.ok) {
           verdictFailure ??= checked.reason;
@@ -1159,9 +1173,9 @@ export async function resolveConflictingPr(
     }
 
     // Work-preservation guards: verify the rebase succeeded correctly.
-    const guardsResult = await runAcceptanceGuards(
-      git, baseRef, subjectsBefore, [...declaredSuperseded],
-    );
+    const guardsResult = resolutionVerdict === undefined
+      ? await runAcceptanceGuards(git, baseRef, subjectsBefore)
+      : await runAcceptanceGuards(git, baseRef, subjectsBefore, [...declaredSuperseded]);
     if (!guardsResult.ok) {
       const reason = `${guardsResult.guard}: ${guardsResult.reason}`;
       log(`${prUrl}: acceptance guard failed: ${reason}`);

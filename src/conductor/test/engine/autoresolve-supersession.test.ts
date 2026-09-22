@@ -36,7 +36,7 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
     }]);
   });
 
-  it('treats an empty sweep declaration as judgement mode instead of accepting an undeclared upstream-equivalent drop', async () => {
+  it('keeps a bare strict-path resolution on the legacy no-declarations guard call', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'autoresolve-supersession-'));
     const git = (args: string[]) => execFile('git', args, { cwd: repo });
     try {
@@ -76,11 +76,80 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
         },
       );
 
-      // A legacy (omitted) fourth guard argument would accept the equivalent
-      // change via supersededByBase and run the suite. This stage-specific
-      // escalation proves the sweep passed its empty declaration array.
+      // Strict paths now omit the fourth guard argument rather than turning an
+      // unsolicited resolver result into a declaration. The legacy guard
+      // therefore reaches suite verification before the fixture's no-remote
+      // publish failure escalates it.
       expect(outcome).toEqual({ kind: 'escalated' });
-      expect(suiteRuns).toBe(0);
+      expect(suiteRuns).toBe(1);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { choice: 'superseded' as const, rationale: 'upstream already contains the resolved content' },
+    { choice: 'merged' as const, rationale: 'the strict resolver merged both edits' },
+  ])('ignores a schema-valid $choice verdict on a strict-path resolution', async ({ choice, rationale }) => {
+    const repo = await mkdtemp(join(tmpdir(), 'autoresolve-strict-verdict-'));
+    const git = (args: string[]) => execFile('git', args, { cwd: repo });
+    const prUrl = 'https://github.com/example/repo/pull/43';
+    try {
+      await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+      const remote = join(repo, 'remote.git');
+      await execFile('git', ['init', '--bare', '-q', remote]);
+      await execFile('git', ['config', 'core.logAllRefUpdates', 'true'], { cwd: remote });
+      await git(['config', 'user.email', 't@example.test']);
+      await git(['config', 'user.name', 'Test']);
+      await git(['remote', 'add', 'origin', remote]);
+      await writeFile(join(repo, 'app.ts'), 'initial\n');
+      await git(['add', '.']);
+      await git(['commit', '-q', '-m', 'init']);
+
+      await git(['checkout', '-q', '-b', 'feature']);
+      await writeFile(join(repo, 'app.ts'), 'feature change\n');
+      await git(['commit', '-q', '-am', 'feat: feature change']);
+
+      await git(['checkout', '-q', 'main']);
+      await writeFile(join(repo, 'app.ts'), 'main change\n');
+      await git(['commit', '-q', '-am', 'main: conflicting change']);
+      await git(['push', '-q', 'origin', 'main', 'feature']);
+
+      const ghCalls: string[][] = [];
+      const gh: GhRunner = async (args) => {
+        ghCalls.push(args);
+        return {
+          stdout: args[0] === 'pr' && args[1] === 'view'
+            ? JSON.stringify({ comments: [] })
+            : '',
+        };
+      };
+      const emitted: unknown[] = [];
+      const logs: string[] = [];
+      const outcome = await resolveConflictingPr(
+        { prUrl, slug: `feature-${choice}`, repoCwd: repo },
+        'feature',
+        { enabled: true, suiteCommand: 'unused', cooldownMinutes: 0, attemptCap: 1 },
+        {
+          runGh: gh,
+          runSuite: async () => ({ exitCode: 0, durationMs: 0, configured: true }),
+          resolver: async ({ projectRoot }) => {
+            await writeFile(join(projectRoot, 'app.ts'), 'resolved strict path\n');
+            await execFile('git', ['add', 'app.ts'], { cwd: projectRoot });
+            await execFile('git', ['-c', 'core.editor=true', 'rebase', '--continue'], { cwd: projectRoot });
+            return { resolved: true, verdict: { choice, rationale, superseded: [] } };
+          },
+          log: (message) => logs.push(message),
+          events: { emit: async (event: Parameters<ConductorEventEmitter['emit']>[0]) => { emitted.push(event); } } as never,
+        },
+      );
+
+      expect(outcome).toEqual({ kind: 'refreshed' });
+      const reflog = await execFile('git', ['reflog', 'show', '--format=%H', 'refs/heads/feature'], { cwd: remote });
+      expect(reflog.stdout.trim().split('\n')).toHaveLength(2);
+      expect(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'comment')).toBe(false);
+      expect(emitted).toEqual([]);
+      expect(logs.filter((message) => message.includes(prUrl) && message.includes('ignored'))).toHaveLength(1);
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
