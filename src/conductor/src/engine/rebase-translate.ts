@@ -498,6 +498,11 @@ export async function translateAfterRebase(
     );
     const reachablePostImages = new Set(Object.values(map));
     const translations = new Map<string, string>();
+    const translationEvents = new Map<string, {
+      from: string;
+      to: string;
+      rule: 'direct' | 'successor';
+    }>();
     for (const obligation of Object.values(repairState.value.records)) {
       const translation = selectRepairBoundaryTranslation(
         obligation.baseline.head,
@@ -507,9 +512,26 @@ export async function translateAfterRebase(
       );
       if (translation.kind !== 'unchanged') {
         translations.set(obligation.id, translation.to);
+        translationEvents.set(obligation.id, {
+          from: obligation.baseline.head,
+          to: translation.to,
+          rule: translation.kind,
+        });
       }
     }
-    await repairs.rewriteBaselines(translations);
+    const rewritten = await repairs.rewriteBaselines(translations);
+    if (rewritten.ok && events) {
+      for (const obligationId of rewritten.value.rewritten) {
+        const translation = translationEvents.get(obligationId);
+        if (!translation) continue;
+        await events.emit({
+          type: 'repair_boundary_translated',
+          obligationId,
+          ...translation,
+          projectRoot,
+        });
+      }
+    }
   }
 
   // Rotate an existing immutable seal only after the rewrite map and its
