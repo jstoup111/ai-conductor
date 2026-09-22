@@ -78,6 +78,8 @@ type PublicationEvidence = {
   unsatisfiedImplementationEvidenceMembers?: UnsatisfiedImplementationEvidenceMembers;
   shipEvidence: 'valid' | 'invalid' | 'indeterminate';
   releaseReadiness: 'valid' | 'missing' | 'invalid' | 'indeterminate';
+  /** Present when the release-readiness observer identifies blocked prerequisite steps. */
+  unsatisfiedReleaseReadinessSteps?: readonly string[];
   branchPushed: 'valid' | 'missing' | 'invalid' | 'indeterminate';
   shippedRecord: 'valid' | 'missing' | 'invalid' | 'indeterminate';
   outcomeRecord: 'valid' | 'missing' | 'invalid' | 'indeterminate';
@@ -135,6 +137,11 @@ export type PushEvidenceObservation =
   | 'malformed'
   | 'unavailable';
 
+/** Release readiness may retain the prerequisite keys that prevented publication. */
+export type ReleaseReadinessObservation =
+  | PublicationEvidenceObservation
+  | { observation: PublicationEvidenceObservation; steps: readonly string[] };
+
 /** GitHub's authoritative view of the one PR eligible for this feature. */
 export type PullRequestObservation =
   | {
@@ -173,7 +180,7 @@ export interface PublicationObservationPorts {
     observeShippedRecord(): Promise<PublicationEvidenceObservation>;
   };
   releaseReadiness: {
-    observeReleaseReadiness(): Promise<PublicationEvidenceObservation>;
+    observeReleaseReadiness(): Promise<ReleaseReadinessObservation>;
   };
 }
 
@@ -221,7 +228,7 @@ export async function observePublicationSnapshot(
     intent: input.intent,
     ...implementationEvidence,
     shipEvidence,
-    releaseReadiness: readiness,
+    ...readiness,
     branchPushed,
     pr,
     shippedRecord: shipped,
@@ -280,9 +287,14 @@ function mapOptionalEvidence(
 }
 
 function mapReleaseReadiness(
-  observation: PublicationEvidenceObservation | 'unavailable',
-): PublicationEvidence['releaseReadiness'] {
-  return mapOptionalEvidence(observation);
+  result: ReleaseReadinessObservation | 'unavailable',
+): Pick<PublicationEvidence, 'releaseReadiness' | 'unsatisfiedReleaseReadinessSteps'> {
+  const observation = typeof result === 'object' ? result.observation : result;
+  const steps = typeof result === 'object' ? result.steps : undefined;
+  return {
+    releaseReadiness: mapOptionalEvidence(observation),
+    ...(steps === undefined ? {} : { unsatisfiedReleaseReadinessSteps: steps }),
+  };
 }
 
 function mapPushEvidence(
@@ -867,13 +879,40 @@ function isPublicationCondition(value: unknown): value is PublicationCondition {
   return (
     typeof condition.message === 'string' &&
     typeof condition.nextAction === 'string' &&
-    expected?.message === condition.message &&
+    expected !== undefined &&
+    isPublicationConditionMessage(condition, expected) &&
     expected.nextAction === condition.nextAction &&
     (condition.code === 'implementation_evidence_invalid'
       ? Object.keys(condition).length === 4 &&
         isUnsatisfiedImplementationEvidenceMembers(condition.unsatisfiedMembers)
-      : Object.keys(condition).length === 3)
+      : isReleaseReadinessCondition(condition.code)
+        ? (Object.keys(condition).length === 3 || Object.keys(condition).length === 4) &&
+          (condition.steps === undefined || isReleaseReadinessSteps(condition.steps))
+        : Object.keys(condition).length === 3)
   );
+}
+
+function isReleaseReadinessCondition(code: unknown): code is Extract<PublicationCondition['code'], `release_readiness_${string}`> {
+  return code === 'release_readiness_missing' || code === 'release_readiness_invalid' || code === 'release_readiness_indeterminate';
+}
+
+function isReleaseReadinessSteps(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((step) => typeof step === 'string');
+}
+
+function isPublicationConditionMessage(
+  condition: Record<string, unknown>,
+  expected: { message: string } | undefined,
+): boolean {
+  if (typeof condition.message !== 'string' || expected === undefined) return false;
+  if (!isReleaseReadinessCondition(condition.code)) return condition.message === expected.message;
+  return condition.message === releaseReadinessMessage(expected.message, condition.steps);
+}
+
+function releaseReadinessMessage(message: string, steps: unknown): string {
+  return isReleaseReadinessSteps(steps) && steps.length > 0
+    ? `${message} Unsatisfied steps: ${steps.join(', ')}.`
+    : message;
 }
 
 function isUnsatisfiedImplementationEvidenceMembers(
@@ -923,18 +962,21 @@ export type PublicationCondition =
     }
   | {
       code: 'release_readiness_missing';
-      message: 'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.';
+      message: string;
       nextAction: 'publish_release_readiness';
+      steps?: readonly string[];
     }
   | {
       code: 'release_readiness_invalid';
-      message: 'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.';
+      message: string;
       nextAction: 'restore_release_readiness';
+      steps?: readonly string[];
     }
   | {
       code: 'release_readiness_indeterminate';
-      message: 'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.';
+      message: string;
       nextAction: 'restore_release_readiness_observation';
+      steps?: readonly string[];
     };
 
 /** Exhaustive routing for every condition emitted by FINISH observation. */
@@ -1056,8 +1098,14 @@ export function preflightFinishPublication(
       kind: 'blocked',
       condition: {
         code: 'release_readiness_missing',
-        message: 'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.',
+        message: releaseReadinessMessage(
+          'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.',
+          snapshot.unsatisfiedReleaseReadinessSteps,
+        ),
         nextAction: 'publish_release_readiness',
+        ...(snapshot.unsatisfiedReleaseReadinessSteps === undefined
+          ? {}
+          : { steps: snapshot.unsatisfiedReleaseReadinessSteps }),
       },
     };
   }
@@ -1066,8 +1114,14 @@ export function preflightFinishPublication(
       kind: 'blocked',
       condition: {
         code: 'release_readiness_invalid',
-        message: 'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.',
+        message: releaseReadinessMessage(
+          'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.',
+          snapshot.unsatisfiedReleaseReadinessSteps,
+        ),
         nextAction: 'restore_release_readiness',
+        ...(snapshot.unsatisfiedReleaseReadinessSteps === undefined
+          ? {}
+          : { steps: snapshot.unsatisfiedReleaseReadinessSteps }),
       },
     };
   }
@@ -1076,8 +1130,14 @@ export function preflightFinishPublication(
       kind: 'blocked',
       condition: {
         code: 'release_readiness_indeterminate',
-        message: 'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.',
+        message: releaseReadinessMessage(
+          'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.',
+          snapshot.unsatisfiedReleaseReadinessSteps,
+        ),
         nextAction: 'restore_release_readiness_observation',
+        ...(snapshot.unsatisfiedReleaseReadinessSteps === undefined
+          ? {}
+          : { steps: snapshot.unsatisfiedReleaseReadinessSteps }),
       },
     };
   }
