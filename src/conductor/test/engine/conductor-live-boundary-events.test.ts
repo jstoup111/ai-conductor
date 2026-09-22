@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:6, task:7
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,6 +14,7 @@ import { writeState } from '../../src/engine/state.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
+import * as liveBoundary from '../../src/engine/self-host/live-boundary.js';
 
 const BUILD_ONLY: ConductState = {
   worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
@@ -54,6 +55,7 @@ describe('self-host live-boundary events', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     if (priorConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = priorConfigDir;
     if (priorPath === undefined) delete process.env.PATH; else process.env.PATH = priorPath;
     await chmod(liveCheckout, 0o755).catch(() => {});
@@ -61,14 +63,22 @@ describe('self-host live-boundary events', () => {
   });
 
   let lastPrepared: { originalCatalogHome?: string; env: NodeJS.ProcessEnv } | undefined;
-  function harness(work: () => Promise<StepRunResult>) {
+  function harness(work: () => Promise<StepRunResult>, options: { selfHost?: boolean; maxRetries?: number; candidateAttempts?: number } = {}) {
     const runtimes = new ProviderRuntimeSet([{ key: 'claude', provider: { invoke: vi.fn(), }, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }] as never);
     const providerExecution: ProviderExecutionContext = { runtimes, sessions: {} as never, configuredProviders: ['claude'] };
     const runner: StepRunner = { run: async (step: StepName) => {
-      const prepared = await providerExecution.prepareCandidateSelfHost?.({ step, providerKey: 'claude', model: 'opus', effort: 'high' } as never, runtimes.get('claude') as never, { runId: 'live-boundary-events', attempt: 1 });
-      if (!prepared) throw new Error('self-host candidate preparation was not installed');
-      lastPrepared = prepared;
-      try { return await work(); } finally { await prepared.teardown(); }
+      if (options.selfHost === false) return work();
+      const candidateAttempts = options.candidateAttempts ?? 1;
+      for (let attempt = 1; attempt <= candidateAttempts; attempt += 1) {
+        const prepared = await providerExecution.prepareCandidateSelfHost?.({ step, providerKey: 'claude', model: 'opus', effort: 'high' } as never, runtimes.get('claude') as never, { runId: 'live-boundary-events', attempt });
+        if (!prepared) throw new Error('self-host candidate preparation was not installed');
+        lastPrepared = prepared;
+        try {
+          const result = await work();
+          if (result.success || attempt === candidateAttempts) return result;
+        } finally { await prepared.teardown(); }
+      }
+      throw new Error('candidate preparation did not run');
     } };
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
@@ -78,7 +88,7 @@ describe('self-host live-boundary events', () => {
       provisionSandbox: vi.fn(async () => ({ configDir: join(projectRoot, '.pipeline', 'sandbox'), childEnv: () => ({}), teardown: vi.fn(async () => {}) })) as never,
       versionGate: vi.fn(async () => ({ ok: true as const })), releaseGate: vi.fn(async () => ({ ok: true as const })),
     };
-    return { conductor: new Conductor({ stateFilePath: join(projectRoot, 'conduct-state.json'), stepRunner: runner, events, projectRoot, fromStep: 'build', mode: 'auto', daemon: true, selfHost: true, verifyArtifacts: false, maxRetries: 1, baseBranch: 'main', selfHostGuardrails: guardrails, escalateBuildFailure: async () => ({}), providerExecution, fullSuiteVerifier: fullSuiteVerifierStub(), sleepFn: vi.fn(async () => {}), config: { harness_self_host: { build_auth: { mode: 'api-key' } } } as never }), eventEmitter: events, persister };
+    return { conductor: new Conductor({ stateFilePath: join(projectRoot, 'conduct-state.json'), stepRunner: runner, events, projectRoot, fromStep: 'build', mode: 'auto', daemon: true, selfHost: options.selfHost ?? true, verifyArtifacts: false, maxRetries: options.maxRetries ?? 1, baseBranch: 'main', selfHostGuardrails: guardrails, escalateBuildFailure: async () => ({}), providerExecution, fullSuiteVerifier: fullSuiteVerifierStub(), sleepFn: vi.fn(async () => {}), config: { harness_self_host: { build_auth: { mode: 'api-key' } } } as never }), eventEmitter: events, persister };
   }
 
   async function events() { return (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); }
@@ -132,6 +142,68 @@ describe('self-host live-boundary events', () => {
     }
     expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint'))
       .toEqual([expect.objectContaining({ type: emitted[0].type, surfaces: emitted[0].surfaces })]);
+  });
+
+  it('emits no fingerprint for a non-self-host dispatch', async () => {
+    const emitted: ConductorEvent[] = [];
+    const { conductor, eventEmitter, persister } = harness(async () => ({ success: true, output: 'done' }), { selfHost: false });
+    eventEmitter.on('self_host_boundary_fingerprint', (event) => { emitted.push(event); });
+
+    await conductor.run();
+    persister.stop();
+
+    expect(emitted).toEqual([]);
+    expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint')).toEqual([]);
+  });
+
+  it('emits no fingerprint and does not invoke the provider when fingerprinting fails', async () => {
+    const failure = new Error('fingerprint unavailable');
+    const provider = vi.fn(async (): Promise<StepRunResult> => ({ success: true, output: 'done' }));
+    const emitted: ConductorEvent[] = [];
+    const failedSteps: ConductorEvent[] = [];
+    vi.spyOn(liveBoundary, 'fingerprintLiveBoundary').mockRejectedValue(failure);
+    const { conductor, eventEmitter, persister } = harness(provider, { maxRetries: 0 });
+    eventEmitter.on('self_host_boundary_fingerprint', (event) => { emitted.push(event); });
+    eventEmitter.on('step_failed', (event) => { failedSteps.push(event); });
+
+    await conductor.run();
+    persister.stop();
+
+    expect(provider).not.toHaveBeenCalled();
+    expect(emitted).toEqual([]);
+    expect(failedSteps).toEqual([expect.objectContaining({ step: 'build', retryCount: 0, error: '' })]);
+    expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint')).toEqual([]);
+  });
+
+  it('isolates a throwing fingerprint subscriber so the provider and containment verdict continue', async () => {
+    const containment: ConductorEvent[] = [];
+    const provider = vi.fn(async (): Promise<StepRunResult> => ({ success: true, output: 'done' }));
+    const { conductor, eventEmitter, persister } = harness(provider);
+    eventEmitter.on('self_host_boundary_fingerprint', () => { throw new Error('subscriber failed'); });
+    eventEmitter.on('self_host_containment_verdict', (event) => { containment.push(event); });
+
+    await conductor.run();
+    persister.stop();
+
+    expect(provider).toHaveBeenCalledOnce();
+    expect(containment).toHaveLength(1);
+  });
+
+  it('emits one fingerprint for each completed candidate preparation across a retry', async () => {
+    const emitted: ConductorEvent[] = [];
+    let attempts = 0;
+    const { conductor, eventEmitter, persister } = harness(async () => {
+      attempts += 1;
+      return attempts === 1 ? { success: false, output: 'first candidate failed' } : { success: true, output: 'done' };
+    }, { candidateAttempts: 2 });
+    eventEmitter.on('self_host_boundary_fingerprint', (event) => { emitted.push(event); });
+
+    await conductor.run();
+    persister.stop();
+
+    expect(attempts).toBe(2);
+    expect(emitted).toHaveLength(2);
+    expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint')).toHaveLength(2);
   });
 
   it('maps the original provider catalog home onto the prepared candidate explicitly', async () => {
