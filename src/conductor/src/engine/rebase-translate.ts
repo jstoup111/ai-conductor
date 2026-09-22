@@ -349,6 +349,7 @@ export async function persistRewriteMap(
 export interface ResidueEntry {
   sha: string;
   citingTaskIds: string[];
+  citingObligationIds: string[];
   reason: string;
 }
 
@@ -489,6 +490,9 @@ export async function translateAfterRebase(
     projectRoot,
     join(projectRoot, '.pipeline', 'engine-state.json'),
   );
+  const unchangedObligationIdsByResidueSha = new Map<string, string[]>(
+    residue.map((sha) => [sha, []]),
+  );
   const repairState = await repairs.read();
   if (repairState.ok) {
     const preImageFirstParentOldestFirst = await listFirstParentPreImageOldestFirst(
@@ -517,6 +521,8 @@ export async function translateAfterRebase(
           to: translation.to,
           rule: translation.kind,
         });
+      } else {
+        unchangedObligationIdsByResidueSha.get(obligation.baseline.head)?.push(obligation.id);
       }
     }
     const rewritten = await repairs.rewriteBaselines(translations);
@@ -589,6 +595,7 @@ export async function translateAfterRebase(
     const residueEntries: ResidueEntry[] = residue.map((sha) => ({
       sha,
       citingTaskIds: citingBySha.get(sha) ?? [],
+      citingObligationIds: unchangedObligationIdsByResidueSha.get(sha) ?? [],
       reason: 'no patch-id match post-rebase (dropped or conflict-modified)',
     }));
     await writeResidue(projectRoot, events, residueEntries);

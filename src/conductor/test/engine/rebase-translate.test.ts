@@ -58,7 +58,7 @@ function makeFakeGit(opts: {
     const [cmd, ...rest] = args;
 
     if (cmd === 'rev-list') {
-      const range = rest[0];
+      const range = rest.at(-1)!;
       const shas = opts.revList[range];
       if (shas === undefined) {
         throw new Error(`unexpected rev-list range in fake git: ${range}`);
@@ -698,11 +698,13 @@ describe('writeResidue (RED — not implemented yet, Task 11)', () => {
     {
       sha: RESIDUE_SHA_A,
       citingTaskIds: ['T4', 'T7'],
+      citingObligationIds: [],
       reason: 'no patch-id match post-rebase (dropped or content changed)',
     },
     {
       sha: RESIDUE_SHA_B,
       citingTaskIds: ['T9'],
+      citingObligationIds: [],
       reason: 'no patch-id match post-rebase (dropped or content changed)',
     },
   ];
@@ -735,11 +737,13 @@ describe('writeResidue (RED — not implemented yet, Task 11)', () => {
         expect.objectContaining({
           sha: RESIDUE_SHA_A,
           citingTaskIds: ['T4', 'T7'],
+          citingObligationIds: [],
           reason: 'no patch-id match post-rebase (dropped or content changed)',
         }),
         expect.objectContaining({
           sha: RESIDUE_SHA_B,
           citingTaskIds: ['T9'],
+          citingObligationIds: [],
           reason: 'no patch-id match post-rebase (dropped or content changed)',
         }),
       ]),
@@ -760,8 +764,8 @@ describe('writeResidue (RED — not implemented yet, Task 11)', () => {
     expect(seen[0].type).toBe('rebase_citation_residue');
     expect(seen[0].residue).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ sha: RESIDUE_SHA_A, citingTaskIds: ['T4', 'T7'] }),
-        expect.objectContaining({ sha: RESIDUE_SHA_B, citingTaskIds: ['T9'] }),
+        expect.objectContaining({ sha: RESIDUE_SHA_A, citingTaskIds: ['T4', 'T7'], citingObligationIds: [] }),
+        expect.objectContaining({ sha: RESIDUE_SHA_B, citingTaskIds: ['T9'], citingObligationIds: [] }),
       ]),
     );
   });
@@ -788,6 +792,97 @@ describe('writeResidue (RED — not implemented yet, Task 11)', () => {
     expect(Object.keys(rewrites)).not.toContain(RESIDUE_SHA_B);
     expect(Object.values(rewrites)).not.toContain(RESIDUE_SHA_A);
     expect(Object.values(rewrites)).not.toContain(RESIDUE_SHA_B);
+  });
+});
+
+describe('repair-obligation residue citations (Task 7)', () => {
+  it('adds unchanged repair obligations to their residue event and persisted entry', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'rebase-repair-residue-'));
+    const residueSha = 'cccccccccccccccccccccccccccccccccccccccc';
+    const keptPreImageSha = 'dddddddddddddddddddddddddddddddddddddddd';
+    const keptPostImageSha = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+    const events = new ConductorEventEmitter();
+    const seen: Array<{ residue: Array<{ sha: string; citingObligationIds?: string[] }> }> = [];
+    events.on('rebase_citation_residue' as never, ((event: { residue: Array<{ sha: string; citingObligationIds?: string[] }> }) => {
+      seen.push(event);
+    }) as never);
+
+    try {
+      await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+      await writeFile(join(projectRoot, '.pipeline', 'engine-state.json'), JSON.stringify({
+        repairObligations: {
+          version: 1,
+          records: {
+            'unchanged-repair': {
+              id: 'unchanged-repair',
+              planIdentity: '.docs/plans/current.md',
+              taskIds: ['1'],
+              source: { findingId: 'finding-1', authority: 'build_review', instruction: 'Repair.' },
+              baseline: { head: residueSha, tree: 'tree', resolvedTaskIds: [] },
+              settlement: 'unsettled',
+              tasks: { '1': { status: 'open' } },
+            },
+          },
+          currentByPlan: {},
+          admissionsByPlan: {},
+        },
+      }));
+      const git = makeFakeGit({
+        revList: {
+          'onto..orig-head': [keptPreImageSha, residueSha],
+          'onto..new-head': [keptPostImageSha],
+        },
+        show: {
+          [keptPreImageSha]: 'kept pre-image diff',
+          [residueSha]: 'dropped diff',
+          [keptPostImageSha]: 'kept post-image diff',
+        },
+        patchId: {
+          'kept pre-image diff': 'kept-patch',
+          'dropped diff': 'dropped-patch',
+          'kept post-image diff': 'kept-patch',
+        },
+      });
+
+      await translateAfterRebase(git, projectRoot, 'onto', 'orig-head', 'new-head', events);
+
+      const persisted = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'rebase-residue.json'), 'utf8'));
+      expect(persisted.residue).toEqual(expect.arrayContaining([
+        expect.objectContaining({ sha: residueSha, citingObligationIds: ['unchanged-repair'] }),
+      ]));
+      expect(seen).toHaveLength(1);
+      expect(seen[0].residue).toEqual(expect.arrayContaining([
+        expect.objectContaining({ sha: residueSha, citingObligationIds: ['unchanged-repair'] }),
+      ]));
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps an empty obligation citation list on residue entries with no unchanged obligation', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'rebase-repair-residue-empty-'));
+    const residueSha = 'ffffffffffffffffffffffffffffffffffffffff';
+    const events = new ConductorEventEmitter();
+
+    try {
+      const git = makeFakeGit({
+        revList: {
+          'onto..orig-head': [residueSha],
+          'onto..new-head': [],
+        },
+        show: { [residueSha]: 'dropped diff' },
+        patchId: { 'dropped diff': 'dropped-patch' },
+      });
+
+      await translateAfterRebase(git, projectRoot, 'onto', 'orig-head', 'new-head', events);
+
+      const persisted = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'rebase-residue.json'), 'utf8'));
+      expect(persisted.residue).toEqual([
+        expect.objectContaining({ sha: residueSha, citingObligationIds: [] }),
+      ]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 });
 
