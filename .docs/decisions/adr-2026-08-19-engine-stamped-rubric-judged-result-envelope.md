@@ -188,6 +188,36 @@ without that prose ever stating the grammar. A drift guard already pins closed v
 the engine definition and the four rubric contracts; it is extended to cover parser-enforced
 reference grammars, so the next tightening cannot ship without its instruction.
 
+> **Amended 2026-09-22 by #2384:** D7 admitted one bounded repair turn for a provider payload that
+> failed validation, and D10 pinned every parser-enforced grammar to a stated contract in the rubric
+> SKILL.md files. Both were shaped by prose-scraped output. With the provider's native structured
+> output requested from the descriptor's JSON Schema (adr-2026-08-13-engine-managed-build-review-rubric-branches
+> D1.2), the shape the model may return is enforced by the provider before the engine sees it.
+>
+> **D7.1 — The repair turn is retired.** A terminal structured result that the descriptor's parser
+> rejects — a reference whose content hash is absent from the projection, a duplicate identity, a
+> vocabulary member the schema enum did not admit — settles the branch `absent` on first occurrence
+> and charges one mechanical-fault lap under the existing lane; there is no free-text output to ask
+> the provider to repair. The byte-identical-repair rule of D7 has no remaining input and is
+> retired with it. D6 is unchanged: the rejection names the field and the form it requires, and never
+> a cause it did not test.
+>
+> **D10.1 — The stated contract is the descriptor's JSON Schema, not SKILL.md prose.** A
+> parser-enforced grammar is stated when it is expressed in the rubric contract descriptor's JSON
+> Schema or, for a check a JSON Schema cannot express (content-hash membership in the projection,
+> identity uniqueness), in the descriptor's rejection diagnosis. `skills/build-review-*/SKILL.md` carry
+> judgement guidance only — what each concern kind means, what is and is not a finding, how to
+> re-read and verify projected evidence — and state no result shape, field list, cell format, or clause
+> grammar. The drift guard that bound parser grammar to SKILL.md text now binds the descriptor's closed
+> vocabulary to the SKILL.md judgement definitions in both directions, and the provider-contract audit
+> fails a build_review skill that re-introduces output-format prose.
+>
+> **D2.3 — The closed provider field set is unchanged.** The provider payload remains exactly
+> `findings`, `relocationAudit`, `counterfactualSensitivity`, and `scopeResolutions`; the descriptor's
+> JSON Schema for the `judged` v3 output admits those and nothing else, and every envelope field is
+> still engine-stamped from the projection. `contractVersion` stays `v3`: finding identity semantics
+> do not change under this amendment (D3).
+
 ## Consequences
 
 ### Positive

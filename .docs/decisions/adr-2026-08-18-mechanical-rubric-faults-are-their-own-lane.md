@@ -273,6 +273,22 @@ already exists and is reused; additive fields follow `adr-2026-07-26-event-sink-
 > `limitBytes` fields; `build_review_rubric_prompt` keeps reporting `promptBytes` for admitted
 > dispatches. No new event, ledger, or sidecar.
 
+> **Amended 2026-09-22 by #2384:** D2 requires a total closed mapping from branch reason to cause
+> and says an unmapped reason is a contract defect caught at authoring time. Dispatch through the
+> provider's native structured output (adr-2026-09-07-durable-prd-widening-decision-reconciliation
+> D6.1) introduces two reasons the lane must name.
+>
+> **D2.2 — Two closed causes for native-schema dispatch.** `native-schema-unsupported` is the cause
+> when no admitted provider candidate declares native structured-output capability for the lap; it
+> is deterministic for the lap's candidate set and, like `projection-oversized` (D3.1), is charged
+> once and never retried within the lap. `invalid-structured-result` is the cause when the terminal
+> structured result is absent, is not an object, or is rejected by the descriptor's parser; it is
+> retryable under D4's bound, and the rejection carried on the fault names the field and the form
+> it requires. Both settle the branch `absent`, publish no aggregate, charge no kickback, and tick no
+> convergence cap. The prose-scrape causes that named "no parseable JSON object" have no remaining
+> producer for build_review and are removed from the mapping in the same change, so the mapping stays
+> total.
+
 ## Alternatives considered
 
 - **Amend `adr-2026-08-13` so `accept` clears an exhausted mechanical fault** (the single-verb form of

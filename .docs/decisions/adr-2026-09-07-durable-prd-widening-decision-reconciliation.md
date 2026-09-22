@@ -94,6 +94,20 @@ After approval, amend the older over-scope ADR beside D3/D4/D5/D7/D8 to replace 
 
 The existing mixed-build-review ADR and #2383's suppression/recurrence behavior remain authoritative for build_review. No NC confidence floor, plan task append, cross-gate equivalence, rubric expansion, or combined-budget redesign is introduced. Architecture/plan authoring proceeds against the inspected #2383 head as authorized; BUILD waits for the dependency. Recheck a materially changed dependency diff before land and adapt affected contracts, without reopening unrelated scope.
 
+> **Amended 2026-09-22 by #2384:** D6 introduced the narrowly optional native output-schema contract
+> on `InvokeOptions` and said "No other step's parser is migrated in #2429" and "do not introduce a
+> competing second option". This amendment records the second consumer.
+>
+> **D6.1 — build_review rubric dispatch consumes the same native-schema seam.** Every build_review
+> catalog member's dispatch passes its rubric contract descriptor's JSON Schema through the existing
+> `nativeSchema` invocation option and consumes the provider's terminal structured result, exactly as
+> the PRD-widening reconciliation does. No second option, adapter flag, or scratch-home lifecycle is
+> introduced; Claude's native JSON-schema option and Codex's engine-owned schema file under the
+> invocation scratch directory are reused unchanged, and self-host write containment for the schema
+> file is preserved. Unsupported schema capability, an absent terminal structured result, malformed
+> JSON, and field violations remain named mechanical failures; for build_review they are routed
+> through the mechanical-fault lane of adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane
+> under its closed causes.
 
 ## Consequences
 

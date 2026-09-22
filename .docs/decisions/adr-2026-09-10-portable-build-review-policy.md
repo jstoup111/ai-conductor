@@ -129,6 +129,23 @@ Add typed policy-resolution/failure and effective-provenance fields/events to `C
 
 Execution bundles, validated verdicts, and case state are durable evidence under event-spine exception C. Their write occurrences remain events. Avoid credential material and full policy bodies in telemetry; provenance is identity plus source/version labels and relevant bounded diagnostics. Consumer guidance covers selection, ambiguity, supporting resources, containment readiness, expected unsupported-policy errors, cache identity, and decision stops. New invocation-profile semantics are scoped to the read-only review role, not silently applied to ordinary BUILD or general custom steps.
 
+> **Amended 2026-09-22 by #2384:** D4 said the engine supplies a generic bounded finding schema to
+> the custom reviewer and D7 introduced the generic custom-review result contract. The custom-v1
+> contract was advertised as rendered prose from a frozen key list and its payload scraped from the
+> provider's final message, on a dispatch path separate from the built-in rubrics.
+>
+> **D7.1 — custom-v1 is a rubric contract descriptor on the shared seam.** The custom-review result
+> contract is expressed as a JSON Schema object (the `custom-findings` v1 payload and the
+> `unsupported-policy` alternative) on a rubric contract descriptor, dispatched through the same
+> generic native-schema path as the built-in members
+> (adr-2026-08-13-engine-managed-build-review-rubric-branches D1.1, D1.2). The policy contract
+> renders the reviewer-facing shape from that schema rather than from a separate key list. The
+> engine still stamps rubric, lap, provider, bundle identity, verdict, case id, and effect id after
+> parsing; source-region references are still validated against the frozen changed input; the
+> `custom-v1` finding identity grammar and the case-v2 adjudication contract are unchanged. A custom
+> reviewer's unsupported-policy result is a valid structured result under the schema, not a parse
+> failure.
+
 ## Consequences
 
 ### Positive
