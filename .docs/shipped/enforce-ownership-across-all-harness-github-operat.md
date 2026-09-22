@@ -4,6 +4,24 @@ spec_hash: 6007a45db04f0922ea119d269034c5fd21c195cc8cff1d29dcaaab03e9fa8b57
 pr: https://github.com/jstoup111/ai-conductor/pull/2541
 shipped: 2026-09-22
 engine_version: 20260922T121502Z-831f81942f9f
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "`src/conductor/src/engine/github-invocation-audit-cli.ts:23-56` adds a documented `github-boundary-audit` subcommand (`docs/reference/cli.md:1160`, wired at `src/conductor/src/index.ts:896`). No plan task lists this CLI entry in its Files or Done-when"
+    accepted: true
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-11-github-operation-ownership D1"
+    outcome: remediated
+    summary: "Shipment-audit GraphQL reads invoke the raw injected GitHub runner instead of entering the typed GitHub operation interface."
+  - gate: architecture_review_as_built
+    finding: AB-2
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-11-github-operation-ownership D7"
+    outcome: remediated
+    summary: "The production-boundary audit omits the shipped scripts runtime directory."
 ---
 
 ## Cost
