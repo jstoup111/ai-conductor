@@ -40,6 +40,8 @@ Rewrite persisted repair-obligation boundaries through the engine's rebase rewri
 - The fake-store test observes exactly one `EngineStateStore.update` invocation for a non-empty map and zero filesystem writes to `engine-state.json` outside that store.
 - With no engine-state file present, `rewriteBaselines` resolves ok with an empty `rewritten` list and the file still does not exist afterwards.
 - The untouched-fields test asserts `baseline.tree`, `baseline.resolvedTaskIds`, `settlement`, and every per-task status are deep-equal before and after the rewrite.
+- The untouched-fields test also compares the serialized `engine-state.json` text before and after the rewrite and asserts every byte outside the rewritten `baseline.head` values is identical.
+- With no engine-state file present, a full translation run completes without error and `engine-state.json` still does not exist afterwards.
 
 **Files likely touched:**
 - src/conductor/src/engine/repair-obligations.ts — add `rewriteBaselines` to the store interface and implementation
@@ -62,6 +64,7 @@ Rewrite persisted repair-obligation boundaries through the engine's rebase rewri
 - The same function returns `unchanged` when every map key lies at or before the boundary, when the candidate's mapped sha is not reachable, and when the boundary is outside the pre-image list, each asserted by its own fixture.
 - A merge-commit fixture asserts the candidate list comes from `rev-list --first-parent` so a commit reachable only via a second parent is never selected.
 - A property assertion on every successor fixture shows the chosen pre-image index is strictly greater than the boundary index, so `newHead..HEAD` is a subset of `oldHead..HEAD`.
+- A residue-boundary fixture where every map key lies at or before the boundary asserts `baseline.head` is unchanged and that a following task-progress evaluation returns the existing `repair boundary <sha> is not an ancestor of HEAD` reason.
 
 **Files likely touched:**
 - src/conductor/src/engine/rebase-translate.ts — `selectRepairBoundaryTranslation` and first-parent pre-image listing helper
@@ -208,6 +211,7 @@ Rewrite persisted repair-obligation boundaries through the engine's rebase rewri
 - autoheal.test.ts asserts the residue-boundary case returns `unavailable` with the existing non-ancestor reason and the git-runner spy recorded zero `rev-list` calls.
 - autoheal.test.ts asserts `unavailable` for a non-ancestor boundary with no `rebase-rewrites.json`, and for a mapping whose target is not reachable from HEAD.
 - The existing direct-map fallback test still passes and `git diff` for this task touches no line of `listCommitsWithTrailersAfterRepairBoundary` or `translateRepairBoundary`.
+- The no-`rebase-rewrites.json` fixture asserts the `unavailable` result admits zero commits: its admitted commit list is empty.
 
 **Files likely touched:**
 - src/conductor/test/engine/autoheal.test.ts — fallback fixtures
