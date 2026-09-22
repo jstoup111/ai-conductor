@@ -4,6 +4,7 @@ import type { GitRunner } from './rebase.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { rekeyMemoAfterRebase } from './attribution-lane.js';
 import type { TaskStatusFile, TaskStatusRecord } from './task-seed.js';
+import { createRepairObligationStore } from './repair-obligations.js';
 import {
   createProtectedArtifactSeal,
   PROTECTED_ARTIFACT_DIRECTORIES,
@@ -477,6 +478,39 @@ export async function translateAfterRebase(
 
   await persistRewriteMap(projectRoot, map);
   await applyMapToStores(projectRoot, map);
+
+  // Repair obligations keep a boundary into the feature's old first-parent
+  // history. Translate it through the same rewrite map as the file-backed
+  // evidence stores, advancing a residue boundary only to its earliest
+  // surviving successor. Values emitted by buildRewriteMap are post-rebase
+  // branch commits, so membership is the reachable-from-HEAD proof required
+  // by the pure selector.
+  const repairs = createRepairObligationStore(
+    projectRoot,
+    join(projectRoot, '.pipeline', 'engine-state.json'),
+  );
+  const repairState = await repairs.read();
+  if (repairState.ok) {
+    const preImageFirstParentOldestFirst = await listFirstParentPreImageOldestFirst(
+      git,
+      onto,
+      origHead,
+    );
+    const reachablePostImages = new Set(Object.values(map));
+    const translations = new Map<string, string>();
+    for (const obligation of Object.values(repairState.value.records)) {
+      const translation = selectRepairBoundaryTranslation(
+        obligation.baseline.head,
+        preImageFirstParentOldestFirst,
+        map,
+        (sha) => reachablePostImages.has(sha),
+      );
+      if (translation.kind !== 'unchanged') {
+        translations.set(obligation.id, translation.to);
+      }
+    }
+    await repairs.rewriteBaselines(translations);
+  }
 
   // Rotate an existing immutable seal only after the rewrite map and its
   // file-backed consumers have translated successfully. Missing seals are a
