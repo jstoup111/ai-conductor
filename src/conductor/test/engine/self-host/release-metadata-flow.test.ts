@@ -36,11 +36,11 @@ describe('resolveReleaseMetadataFlow', () => {
     },
   );
 
-  it('reports a missing release-disposition step without embedding a skills-directory path', async () => {
+  it.each([undefined, {}])('reports a missing release-disposition step for %s without embedding a skills-directory path', async (steps) => {
     expect(resolveReleaseMetadataFlow({
       isSelfBuild: true,
       releaseArtifactGateEnabled: true,
-      steps: {},
+      steps,
     })).toBe('step-missing');
 
     const source = await readFile(

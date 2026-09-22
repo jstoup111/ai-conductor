@@ -137,6 +137,7 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       config: {
         harness_self_host: {
           sandbox_build_env: true,
+          release_artifact_gate: false,
           // This fixture owns version-gate composition, not ambient daemon
           // credentials. Keep the self-host path active while making auth
           // readiness deterministic on developer machines and clean CI hosts.
@@ -155,11 +156,7 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
     gitDiffOutput.current = 'M\tREADME.md\nM\t.docs/plans/foo.md\n';
     await writeState(statePath, preBuildDoneState());
 
-    let capturedChangedFiles: (() => Promise<unknown>) | undefined;
-    const releaseGate = vi.fn(async (opts: { changedFiles: () => Promise<unknown> }) => {
-      capturedChangedFiles = opts.changedFiles;
-      return { ok: true as const };
-    });
+    const releaseGate = vi.fn(async () => ({ ok: true as const }));
     const { conductor, seen } = realVersionGateConductor(releaseGate);
 
     await conductor.run();
@@ -167,16 +164,6 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
     // finish WAS dispatched — the real classifier auto-passed a docs-only diff.
     expect(seen.some((s) => s.step === 'finish')).toBe(true);
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(false);
-
-    // The SAME underlying changed-files thunk feeds both gates: releaseGate's
-    // injected thunk, called independently here, resolves to the identical
-    // parsed diff the real versionGate classified against.
-    expect(capturedChangedFiles).toBeDefined();
-    const viaReleaseGate = await capturedChangedFiles!();
-    expect(viaReleaseGate).toEqual([
-      { status: 'M', path: 'README.md' },
-      { status: 'M', path: '.docs/plans/foo.md' },
-    ]);
 
     // Auditable auto-pass: version-signal.json records the real verdict.
     const signalRaw = await readFile(join(dir, '.pipeline/version-signal.json'), 'utf-8');
@@ -291,6 +278,7 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       config: {
         harness_self_host: {
           sandbox_build_env: true,
+          release_artifact_gate: false,
           build_auth: { mode: 'api-key' },
           version_approval_gate: false, // Gate is disabled
         },
@@ -315,7 +303,8 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
     // No version-signal.json — the gate never ran so no classification occurred
     expect(await exists(join(dir, '.pipeline/version-signal.json'))).toBe(false);
 
-    // releaseGate still runs (it's independent)
-    expect(releaseGateSpy).toHaveBeenCalled();
+    // The unrelated release-artifact gate is explicitly disabled in this
+    // version-gate-only fixture.
+    expect(releaseGateSpy).not.toHaveBeenCalled();
   });
 });

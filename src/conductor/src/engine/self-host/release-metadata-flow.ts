@@ -122,7 +122,7 @@ export async function restoreReleaseMetadata(
  */
 export function resolveReleaseMetadataFlow(input: ReleaseMetadataFlowInput): ReleaseMetadataFlow {
   if (!input.isSelfBuild || !input.releaseArtifactGateEnabled) return 'inactive';
-  return Object.prototype.hasOwnProperty.call(input.steps, 'release-disposition')
+  return Object.prototype.hasOwnProperty.call(input.steps ?? {}, 'release-disposition')
     ? 'active'
     : 'step-missing';
 }

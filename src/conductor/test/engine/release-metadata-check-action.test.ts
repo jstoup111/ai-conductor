@@ -6,23 +6,23 @@ import { runReleaseMetadataCheckAction } from '../../src/engine/release-metadata
 describe('release metadata GitHub Actions adapter (Task 3)', () => {
   it('exports the injected adapter and validates reviewable PRs on every update', async () => {
     const repositoryRoot = new URL('../../../../', import.meta.url);
-    const [workflow, index] = await Promise.all([
+    const [workflow, releaseActions] = await Promise.all([
       readFile(new URL('.github/workflows/release-metadata.yml', repositoryRoot), 'utf8'),
-      readFile(new URL('src/conductor/src/index.ts', repositoryRoot), 'utf8'),
+      readFile(new URL('src/conductor/src/engine/self-host/release-actions.ts', repositoryRoot), 'utf8'),
     ]);
 
     expect({
       skipsDrafts: /if:\s*github\.event\.pull_request\.head\.ref\s*!=\s*'automation\/release-pr'\s*&&\s*!github\.event\.pull_request\.draft/.test(workflow),
       validatesWhenReviewable: /types:\s*\[opened, reopened, synchronize, edited, ready_for_review\]/.test(workflow),
       usesGithubScript: /uses:\s*actions\/github-script@v9/.test(workflow),
-      importsBuiltEngine: /import\(\s*`\$\{process\.env\.GITHUB_WORKSPACE\}\/src\/conductor\/dist\/index\.js`\s*\)/.test(workflow),
+      importsBuiltReleaseActions: /import\(\s*`\$\{process\.env\.GITHUB_WORKSPACE\}\/src\/conductor\/dist\/engine\/self-host\/release-actions\.js`\s*\)/.test(workflow),
       invokesInjectedAction: /runReleaseMetadataCheckAction\(\s*\{\s*github\s*,\s*context\s*,\s*core\s*}\s*\)/s.test(workflow),
-      reexportsAction: /export\s*\{\s*runReleaseMetadataCheckAction\s*}\s*from\s*['"]\.\/engine\/release-metadata-check-action\.js['"]/.test(index),
+      reexportsAction: /export\s*\{\s*runReleaseMetadataCheckAction\s*}\s*from\s*['"]\.\.\/release-metadata-check-action\.js['"]/.test(releaseActions),
     }).toEqual({
       skipsDrafts: true,
       validatesWhenReviewable: true,
       usesGithubScript: true,
-      importsBuiltEngine: true,
+      importsBuiltReleaseActions: true,
       invokesInjectedAction: true,
       reexportsAction: true,
     });
