@@ -25,6 +25,8 @@ import {
 } from '../../src/engine/task-cli.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
+import { makeGitRunner, performRebase } from '../../src/engine/rebase.js';
+import { translateAfterRebase } from '../../src/engine/rebase-translate.js';
 
 describe('task-progress', () => {
   let dir: string;
@@ -343,6 +345,104 @@ describe('task-progress', () => {
   });
 
   describe('current repair freshness', () => {
+    type TranslatedBoundary = 'direct' | 'successor';
+
+    /**
+     * Exercise the production rebase entrypoint: the direct commit survives
+     * by patch-id, the absorbed commit becomes residue, and its later
+     * first-parent successor survives. The translator must persist the
+     * selected boundary before task-progress reads it.
+     */
+    async function rebaseWithTranslatedBoundary(
+      taskId: string,
+      boundary: TranslatedBoundary,
+    ): Promise<void> {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'feature.md'), '# Plan\n');
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      await writeFile(join(dir, 'base.txt'), 'base\n');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'base'], { cwd: dir });
+      await execa('git', ['checkout', '-q', '-b', 'feature'], { cwd: dir });
+
+      await writeFile(join(dir, 'direct.txt'), 'direct\n');
+      await execa('git', ['add', 'direct.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', `direct boundary\n\nTask: ${taskId}`], { cwd: dir });
+      const directBoundary = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+
+      await writeFile(join(dir, 'absorbed.txt'), 'absorbed\n');
+      await execa('git', ['add', 'absorbed.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'absorbed boundary'], { cwd: dir });
+      const residueBoundary = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+
+      await writeFile(join(dir, 'successor.txt'), 'successor\n');
+      await execa('git', ['add', 'successor.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'surviving successor'], { cwd: dir });
+
+      const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+      const admitted = await repairs.admitOrReplay(`translated-${taskId}`, {
+        id: `translated-${taskId}`,
+        planPath: '.docs/plans/feature.md',
+        taskIds: [taskId],
+        source: { findingId: `finding-${taskId}`, authority: 'build_review', instruction: 'repair it' },
+        baseline: {
+          head: boundary === 'direct' ? directBoundary : residueBoundary,
+          tree: 'tree',
+          resolvedTaskIds: [],
+        },
+      });
+      if (!admitted.ok) throw new Error(admitted.message);
+
+      await execa('git', ['checkout', '-q', 'main'], { cwd: dir });
+      await writeFile(join(dir, 'absorbed.txt'), 'absorbed\n');
+      await execa('git', ['add', 'absorbed.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'upstream absorbs boundary'], { cwd: dir });
+      await writeFile(join(dir, 'upstream.txt'), 'advanced\n');
+      await execa('git', ['add', 'upstream.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'advance base'], { cwd: dir });
+      await execa('git', ['checkout', '-q', 'feature'], { cwd: dir });
+
+      const outcome = await performRebase(makeGitRunner(dir), dir, 'main', { translateAfterRebase });
+      expect(outcome.kind).toBe('changed');
+    }
+
+    it('resolves a direct-translated obligation from a post-boundary Task trailer after a real rebase', async () => {
+      await rebaseWithTranslatedBoundary('T1', 'direct');
+      await writeFile(join(dir, 'repair.txt'), 'repair\n');
+      await execa('git', ['add', 'repair.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'repair\n\nTask: T1'], { cwd: dir });
+
+      const resolution = await resolveTaskIdsWithDiagnostics(dir, ['1']);
+      expect(resolution.resolved).toEqual(new Set(['1']));
+      expect(resolution.unavailableReasons.has('1')).toBe(false);
+    }, 20_000);
+
+    it('resolves a successor-translated obligation from a post-boundary Task trailer after a real rebase', async () => {
+      await rebaseWithTranslatedBoundary('T2', 'successor');
+      await writeFile(join(dir, 'repair.txt'), 'repair\n');
+      await execa('git', ['add', 'repair.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'repair\n\nTask: T2'], { cwd: dir });
+
+      const resolution = await resolveTaskIdsWithDiagnostics(dir, ['2']);
+      expect(resolution.resolved).toEqual(new Set(['2']));
+      expect(resolution.unavailableReasons.has('2')).toBe(false);
+    }, 20_000);
+
+    it('keeps a trailer at or before a translated boundary unresolved without an unavailable reason', async () => {
+      await rebaseWithTranslatedBoundary('T3', 'direct');
+
+      const resolution = await resolveTaskIdsWithDiagnostics(dir, ['3']);
+      expect(resolution.resolved).toEqual(new Set());
+      expect(resolution.unavailableReasons.has('3')).toBe(false);
+    }, 20_000);
+
     it('keeps pre-reopen trailer and completed-row evidence unresolved at the build boundary', async () => {
       await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
