@@ -102,13 +102,13 @@ describe('custom source regions are validated against frozen source bytes', () =
 
   it('refuses a forged content hash on a changed path', async () => {
     const { artifact } = await review({ path: 'src/a.ts', startLine: 1, endLine: 1, contentHash: `sha256:${'f'.repeat(64)}` });
-    expect(artifact.result).toMatchObject({ kind: 'infrastructure-failure', reason: 'malformed-artifact' });
+    expect(artifact.result).toMatchObject({ kind: 'infrastructure-failure', reason: 'invalid-structured-result' });
     expect(artifact.result.detail).toContain('src/a.ts:1-1');
   });
 
   it('refuses a line range beyond the frozen blob', async () => {
     const { artifact } = await review({ path: 'src/a.ts', startLine: 2, endLine: 9, contentHash: sha('export const other = 2;\n') });
-    expect(artifact.result).toMatchObject({ kind: 'infrastructure-failure', reason: 'malformed-artifact' });
+    expect(artifact.result).toMatchObject({ kind: 'infrastructure-failure', reason: 'invalid-structured-result' });
   });
 
   it('admits a declared dependency written in a non-normalized form that capture already resolved', async () => {
