@@ -4,6 +4,19 @@ spec_hash: f97cb380cc0fc99f6e9c6e5d912e4cb4c16f62278b6306acd0a570ecbb6991f6
 pr: https://github.com/jstoup111/ai-conductor/pull/2653
 shipped: 2026-09-23
 engine_version: 20260922T220754Z-95f2b12d2932
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-07-25-custom-step-completion-artifacts D3"
+    outcome: remediated
+    summary: "Equality with the feature-run freshness floor is rejected even though the approved decision requires an mtime at or after the floor."
+  - gate: architecture_review_as_built
+    finding: AB-2
+    class: REMEDIABLE
+    governing_clause: "Task 12"
+    outcome: remediated
+    summary: "Generic `Conductor` dispatch still hardcodes `release-disposition` and invokes repository-specific snapshot cleanup outside the approved self-host boundary."
 ---
 
 ## Cost
