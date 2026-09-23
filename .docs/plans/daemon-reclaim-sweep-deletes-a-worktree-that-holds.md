@@ -8,14 +8,14 @@
 
 ## Summary
 
-Adds two guards to the guarded reclaim helper `reconcileMergedPark`. A worktree with any modified, staged, or untracked path is refused as `dirty-worktree`. An ancestry-proven branch is reclaimed only when a merged-PR head or shipped record corroborates it. Both refusals surface through the existing sweep event and log. The plan has 5 tasks.
+Adds two guards to the guarded reclaim helper `reconcileMergedPark`. A worktree with any modified, staged, or untracked path is refused as `dirty-worktree`. An ancestry-proven branch is reclaimed only when a merged-PR head corroborates it, or, for a `feat/daemon-*` branch, a shipped record does. Both refusals surface through the existing sweep event and log. The plan has 5 tasks.
 
 ## Technical Approach
 
 - Single production module: `src/conductor/src/engine/park-reconciliation.ts`. `RefusalReason` gains `dirty-worktree`; the per-reason refusal initialiser in `reconcileParkedFeatures` gains the key.
 - Dirty-tree guard (adr D10): inside the existing `worktreeOnDisk` branch of `reconcileMergedPark`, `git status --porcelain` runs with `cwd` set to the worktree after every merge proof and the record gate, and before halt-watcher disposal, project teardown, and `worktree remove --force`. Non-empty output or a thrown probe refuses. Gitignored files never appear in porcelain output, so clean builds with ignored output still reclaim.
-- Ancestry corroboration (adr D9): when no shipped record is on `origin/main`, `proveByMergedPrHead` runs for ancestry-proven branches too, not only unproven ones. Only a `proven` diagnosis lets an ancestry-proven branch through; every other diagnosis refuses `no-merge-proof`. A shipped record on `origin/main` is corroboration on its own. Non-ancestor (squash) handling is unchanged.
-- Observability (adr D11): no new event or channel. `worktree_reclaim_failed` already carries `refusal`, and the daemon-cli formatter already prints it.
+- Ancestry corroboration (adr D9): when no shipped record is on `origin/main`, `proveByMergedPrHead` runs for ancestry-proven branches too, not only unproven ones. Only a `proven` diagnosis lets an ancestry-proven branch through; every other diagnosis refuses `no-merge-proof`. A shipped record on `origin/main` is corroboration on its own only for a record-gated candidate (a `feat/daemon-*` branch or a branchless parked slug); a non-daemon candidate never reads the shipped-record listing (adr-2026-08-01 D8, operator decision 2026-09-22). Non-ancestor (squash) handling is unchanged.
+- Observability (adr D11; adr-2026-07-29 D9): no new event or channel. Every refusal returned by `reconcileMergedPark` is emitted as `worktree_reclaim_failed` carrying `refusal`; `worktree_reclaim_retained` is reserved for candidates never handed to the helper. The daemon-cli formatter already prints `refusal`.
 - Test pattern: follow the existing injected-`runGit`/`runGh` fixtures in `src/conductor/test/engine/park-reconciliation.test.ts` (search for `reconcileMergedPark(` and `worktree_reclaim_failed`). Assert that refused calls never reach the injected git boundary by inspecting the recorded argv list for `worktree`/`remove` and `branch`/`-D`. Never touch a real worktree.
 - Sequencing: Tasks 1 and 3 are independent (different blocks of the same function). Task 2 follows 1, Task 4 follows 3, and Task 5 needs both guards.
 
@@ -62,20 +62,21 @@ Adds two guards to the guarded reclaim helper `reconcileMergedPark`. A worktree 
 **Files:** src/conductor/src/engine/park-reconciliation.ts, src/conductor/test/engine/park-reconciliation.test.ts
 **Dependencies:** 1
 
-### Task 3: Require merged-PR head or shipped record to corroborate ancestry
+### Task 3: Require merged-PR head, or a shipped record for a daemon branch, to corroborate ancestry
 **Story:** 2
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests in `src/conductor/test/engine/park-reconciliation.test.ts` with injected `runGit`/`runGh`: a clean non-daemon candidate whose branch is an ancestor of `origin/main`, with no shipped record and `gh pr list --state merged` returning no PR, expects `refusal: 'no-merge-proof'` and no removal calls; the same candidate with a merged PR whose `headRefOid` equals the tip expects the reclaimed outcome with proof `merged-pr-head`; the same candidate with no PR but a shipped record on `origin/main` expects the reclaimed outcome.
+1. Write failing tests in `src/conductor/test/engine/park-reconciliation.test.ts` with injected `runGit`/`runGh`: a clean non-daemon candidate whose branch is an ancestor of `origin/main`, with no shipped record and `gh pr list --state merged` returning no PR, expects `refusal: 'no-merge-proof'` and no removal calls; the same candidate with a merged PR whose `headRefOid` equals the tip expects the reclaimed outcome with proof `merged-pr-head`; a `feat/daemon-*` candidate with no PR but a shipped record on `origin/main` expects the reclaimed outcome; a non-daemon candidate with a shipped record on `origin/main` and no merged PR expects `no-merge-proof` and no `ls-tree` read of the shipped-record listing.
 2. Verify RED: today the ancestry-only candidate is reclaimed with proof `ancestry`.
-3. Implement in `src/conductor/src/engine/park-reconciliation.ts`: in `reconcileMergedPark`, when no shipped record is on `origin/main`, run `proveByMergedPrHead` for every branch, including ancestry-proven ones, and map every diagnosis other than `proven` to `no-merge-proof` for an ancestry-proven branch; a shipped record on `origin/main` is corroboration on its own. Squash-merged (non-ancestor) handling stays unchanged.
+3. Implement in `src/conductor/src/engine/park-reconciliation.ts`: in `reconcileMergedPark`, when no shipped record is on `origin/main`, run `proveByMergedPrHead` for every branch, including ancestry-proven ones, and map every diagnosis other than `proven` to `no-merge-proof` for an ancestry-proven branch; a shipped record on `origin/main` is corroboration on its own only for a record-gated candidate, and a non-daemon candidate never reads the shipped-record listing. Squash-merged (non-ancestor) handling stays unchanged.
 4. Verify GREEN and commit.
 
 **Done when:**
 - The `reconcileMergedPark` test for an ancestry-proven non-daemon branch with no merged PR and no shipped record returns refusal `no-merge-proof` and records no `worktree remove` or `branch -D` git call.
 - The `reconcileMergedPark` test for an ancestry-proven branch whose merged PR `headRefOid` equals its tip returns steps `worktree-removed` and `branch-deleted`.
-- The `reconcileMergedPark` test for an ancestry-proven branch with a shipped record on `origin/main` and no merged PR returns steps `worktree-removed` and `branch-deleted`.
+- The `reconcileMergedPark` test for an ancestry-proven `feat/daemon-*` branch with a shipped record on `origin/main` and no merged PR returns steps `worktree-removed` and `branch-deleted`.
+- The `reconcileMergedPark` test for an ancestry-proven non-daemon branch with a shipped record on `origin/main` and no merged PR returns refusal `no-merge-proof`, records no `worktree remove` or `branch -D` git call, and records no `ls-tree` git call reading `origin/main:.docs/shipped`.
 
 **Files:** src/conductor/src/engine/park-reconciliation.ts, src/conductor/test/engine/park-reconciliation.test.ts
 **Dependencies:** none
@@ -98,14 +99,14 @@ Adds two guards to the guarded reclaim helper `reconcileMergedPark`. A worktree 
 **Files:** src/conductor/src/engine/park-reconciliation.ts, src/conductor/test/engine/park-reconciliation.test.ts
 **Dependencies:** 3
 
-### Task 5: Sweep reports every new refusal through worktree_reclaim_failed and the log
+### Task 5: Sweep reports every helper refusal through worktree_reclaim_failed and the log
 **Story:** 3
 **Type:** happy-path
 
 **Steps:**
-1. Write tests in `src/conductor/test/engine/park-reconciliation.test.ts` driving `reconcileParkedFeatures` (the daemon sweep entry point) over enumerated worktrees with injected git/gh: a dirty merge-proven candidate emits `worktree_reclaim_failed` with its slug, branch, and refusal `dirty-worktree`, and `counts.refused` plus `refusedByReason['dirty-worktree']` include it; an ancestry-only fresh candidate emits `worktree_reclaim_failed` with refusal `no-merge-proof`; a sweep mixing one dirty and one clean merged candidate emits `worktree_reclaim_reclaimed` only for the clean slug and only `worktree_reclaim_failed` for the dirty slug.
+1. Write tests in `src/conductor/test/engine/park-reconciliation.test.ts` driving `reconcileParkedFeatures` (the daemon sweep entry point) over enumerated worktrees with injected git/gh: a dirty merge-proven candidate emits `worktree_reclaim_failed` with its slug, branch, and refusal `dirty-worktree`, and `counts.refused` plus `refusedByReason['dirty-worktree']` include it; an ancestry-only fresh candidate emits `worktree_reclaim_failed` with refusal `no-merge-proof`; a sweep mixing one dirty and one clean merged candidate emits `worktree_reclaim_reclaimed` only for the clean slug and only `worktree_reclaim_failed` for the dirty slug; candidates whose helper refuses with `branch-behind-merged-head` or `record-missing` emit `worktree_reclaim_failed` carrying that refusal and no `worktree_reclaim_retained` event.
 2. Add a case in `src/conductor/test/engine/daemon-render.test.ts` rendering a `worktree_reclaim_failed` event with refusal `dirty-worktree` and assert the line contains the slug and `dirty-worktree`.
-3. Verify RED on the sweep tests before Tasks 1 and 3 land, then GREEN; the existing formatter already prints `event.refusal`, so no daemon-cli.ts change is expected.
+3. Verify RED on the sweep tests before Tasks 1 and 3 land, then GREEN; in `reconcileParkedFeatures`, route every helper refusal to `worktree_reclaim_failed` (adr-2026-07-29 D9). The existing formatter already prints `event.refusal`, so no daemon-cli.ts change is expected.
 4. Commit.
 
 **Done when:**
@@ -113,8 +114,9 @@ Adds two guards to the guarded reclaim helper `reconcileMergedPark`. A worktree 
 - The `reconcileParkedFeatures` test with an ancestry-only fresh candidate emits `worktree_reclaim_failed` with refusal `no-merge-proof`.
 - The `reconcileParkedFeatures` mixed-sweep test, in one sweep, emits `worktree_reclaim_reclaimed` for the clean slug, emits exactly one `worktree_reclaim_failed` for the dirty slug, and emits no `worktree_reclaim_reclaimed` event for the dirty slug and no `worktree_reclaim_failed` event for the clean slug.
 - The daemon-render test renders a `worktree_reclaim_failed` event with refusal `dirty-worktree` as a line containing the slug and the text `dirty-worktree`.
+- The `reconcileParkedFeatures` test whose helper refuses with `branch-behind-merged-head` and with `record-missing` emits `worktree_reclaim_failed` carrying each refusal and no `worktree_reclaim_retained` event for either slug.
 
-**Files:** src/conductor/test/engine/park-reconciliation.test.ts, src/conductor/test/engine/daemon-render.test.ts
+**Files:** src/conductor/src/engine/park-reconciliation.ts, src/conductor/test/engine/park-reconciliation.test.ts, src/conductor/test/engine/daemon-render.test.ts
 **Dependencies:** 1, 3
 
 ## Task Dependency Graph
@@ -143,7 +145,7 @@ Every criterion is diff-local: each is asserted against `reconcileMergedPark` or
 | Story 1 negative: Given a merge-proven parked slug whose worktree directory does not exist on disk, when `reconcileMergedPark` runs for its slug, then no status probe is attempted and the branch is deleted as before this change. | 2 | "The `reconcileMergedPark` test for a parked slug with no worktree on disk records zero `status` git calls and returns step `branch-deleted`." | diff-local |
 | Story 2 happy: Given a clean worktree whose non-daemon branch tip is an ancestor of `origin/main` and no merged pull request has that tip as its head, when `reconcileMergedPark` runs for its slug, then it returns refusal `no-merge-proof` and neither the worktree nor the branch is removed. | 3 | "The `reconcileMergedPark` test for an ancestry-proven non-daemon branch with no merged PR and no shipped record returns refusal `no-merge-proof` and records no `worktree remove` or `branch -D` git call." | diff-local |
 | Story 2 happy: Given a clean worktree whose branch tip is an ancestor of `origin/main` and a merged pull request reports that tip as its `headRefOid`, when `reconcileMergedPark` runs for its slug, then the worktree and branch are removed. | 3 | "The `reconcileMergedPark` test for an ancestry-proven branch whose merged PR `headRefOid` equals its tip returns steps `worktree-removed` and `branch-deleted`." | diff-local |
-| Story 2 happy: Given a clean worktree whose branch tip is an ancestor of `origin/main` and a shipped record for the slug is on `origin/main`, when `reconcileMergedPark` runs for its slug, then the worktree and branch are removed. | 3 | "The `reconcileMergedPark` test for an ancestry-proven branch with a shipped record on `origin/main` and no merged PR returns steps `worktree-removed` and `branch-deleted`." | diff-local |
+| Story 2 happy: Given a clean worktree whose `feat/daemon-*` branch tip is an ancestor of `origin/main` and a shipped record for the slug is on `origin/main`, when `reconcileMergedPark` runs for its slug, then the worktree and branch are removed. | 3 | "The `reconcileMergedPark` test for an ancestry-proven `feat/daemon-*` branch with a shipped record on `origin/main` and no merged PR returns steps `worktree-removed` and `branch-deleted`." | diff-local |
 | Story 2 negative: Given an ancestry-proven branch without a shipped record whose merged-PR lookup fails because gh is unavailable, when `reconcileMergedPark` runs for its slug, then it returns refusal `no-merge-proof` and nothing is removed. | 4 | "The `reconcileMergedPark` test with a rejecting injected `gh` and an ancestry-proven branch returns refusal `no-merge-proof` and records no `worktree remove` or `branch -D` git call." | diff-local |
 | Story 2 negative: Given an ancestry-proven branch without a shipped record whose only merged pull request reports a different head commit, when `reconcileMergedPark` runs for its slug, then nothing is removed and the refusal is not a success outcome. | 4 | "The `reconcileMergedPark` test whose merged PR reports a different `headRefOid` returns a result carrying a `refusal` and records no `worktree remove` or `branch -D` git call." | diff-local |
 | Story 2 negative: Given a squash-merged branch that is not an ancestor of `origin/main` and whose merged pull request head equals its tip, when `reconcileMergedPark` runs for its slug, then it is reclaimed exactly as before this change. | 4 | "The `reconcileMergedPark` test for a non-ancestor branch whose merged PR head equals its tip returns steps `worktree-removed` and `branch-deleted`." | diff-local |
