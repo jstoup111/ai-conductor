@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-23T14:16:15.788Z
 Slug: release-gate-halts-a-finished-build-for-a-waiver-m
 Class: needs-human
 Halting step: prd_audit
