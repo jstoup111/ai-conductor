@@ -1,18 +1,10 @@
 // Covers: task:1, task:2, task:2.1, task:4, task:5, task:9, task:3
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-const userConfigFixture = vi.hoisted(() => ({ path: '' }));
-
-vi.mock(import('../../src/engine/user-config.js'), async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/engine/user-config.js')>();
-  return {
-    ...actual,
-    readUserConfig: (path?: string) => actual.readUserConfig(path ?? userConfigFixture.path),
-  };
-});
+const originalHome = process.env.HOME;
 
 import {
   loadConfig,
@@ -43,7 +35,8 @@ describe('config', () => {
   });
 
   afterEach(async () => {
-    userConfigFixture.path = '';
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     await rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -1372,10 +1365,10 @@ steps:
     it('rejects scalar command and commands together after ordinary user/project merging', async () => {
       const home = await mkdtemp(join(tmpdir(), 'config-user-'));
       try {
-        userConfigFixture.path = join(home, '.ai-conductor', 'config.yml');
+        process.env.HOME = home;
         await mkdir(join(home, '.ai-conductor'), { recursive: true });
         await writeFile(
-          userConfigFixture.path,
+          join(home, '.ai-conductor', 'config.yml'),
           'test_suite:\n  commands:\n    - command: npm run test:unit\n',
         );
         await writeFile(
@@ -1400,10 +1393,10 @@ steps:
     it('replaces a user command list with the ordered project list without concatenation', async () => {
       const home = await mkdtemp(join(tmpdir(), 'config-user-'));
       try {
-        userConfigFixture.path = join(home, '.ai-conductor', 'config.yml');
+        process.env.HOME = home;
         await mkdir(join(home, '.ai-conductor'), { recursive: true });
         await writeFile(
-          userConfigFixture.path,
+          join(home, '.ai-conductor', 'config.yml'),
           'test_suite:\n  commands:\n    - command: npm run test:obsolete\n',
         );
         await writeFile(
