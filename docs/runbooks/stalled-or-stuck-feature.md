@@ -1262,7 +1262,9 @@ credential just re-parks and burns the timeout again.
 
 ### A rate-limit episode is in progress
 
-Do nothing. The wait is deliberate and does not consume the retry budget. If you must stop the
+Do nothing. The wait is deliberate and does not consume the retry budget. A Claude notice such as
+`You've hit your weekly limit · resets 9pm (America/New_York)` waits until its stated reset (up to
+one day); session and usage-limit notices retain the hourly re-probe cap. If you must stop the
 daemon during an episode, see
 [emergency stop a running feature](emergency-stop-a-running-feature.md) — and note that halts
 raised during the episode will not be auto-recovered by the replacement process.

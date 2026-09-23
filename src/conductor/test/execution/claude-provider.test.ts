@@ -2,7 +2,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
 import { PassThrough } from 'node:stream';
-import { ClaudeProvider, parseRateLimitWaitSeconds } from '../../src/execution/claude-provider.js';
+import {
+  ClaudeProvider,
+  detectsSessionLimit,
+  parseRateLimitWaitSeconds,
+} from '../../src/execution/claude-provider.js';
 import { classifyMetering } from '../../src/engine/metering.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
@@ -1229,6 +1233,7 @@ describe('ClaudeProvider', () => {
 
       const result = await provider.invoke({ ...baseOptions, interactive: true });
       expect(result).toMatchObject({ modelUnavailable: true, success: false });
+      expect(result.rateLimited).toBeUndefined();
     });
 
     it('does not flag modelUnavailable when prose quotes the monthly spend limit message', async () => {
@@ -1283,6 +1288,116 @@ describe('ClaudeProvider', () => {
       expect(result.rateLimited).toBe(true);
       expect(result.success).toBe(false);
       expect(result.waitSeconds).toBeDefined();
+    });
+
+    it('detects weekly-limit message with reset time on exit 0', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-09-22T20:00:00-04:00'));
+      mockExeca.mockResolvedValue({
+        stdout: "You've hit your weekly limit · resets 9pm (America/New_York)",
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      try {
+        const now = Date.now();
+        const result = await provider.invoke({ ...baseOptions, interactive: true });
+
+        expect(result.rateLimited).toBe(true);
+        expect(result.success).toBe(false);
+        expect(typeof result.deadline).toBe('number');
+        expect(result.deadline).toBeGreaterThan(now);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('resolves a weekly-limit deadline to the next 9pm in America/New_York', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-07-03T16:00:00Z'));
+      mockExeca.mockResolvedValue({
+        stdout: "You've hit your weekly limit · resets 9pm (America/New_York)",
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      try {
+        const result = await provider.invoke({ ...baseOptions, interactive: true });
+
+        expect(result.rateLimited).toBe(true);
+        expect(result.success).toBe(false);
+        expect(result.deadline).toBe(Date.parse('2026-07-04T01:00:00Z'));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each([
+      "You've hit your daily limit · resets 3:20pm (America/New_York)",
+      "You've hit your usage limit · resets 3:20pm (America/New_York)",
+      "You've hit your session limit · resets 3:20pm (America/New_York)",
+    ])('classifies %s as rateLimited', async (stdout) => {
+      mockExeca.mockResolvedValue({
+        stdout,
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
+
+      expect(result.rateLimited).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
+    it('classifies a weekly limit before trailing auth-failure prose', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: "You've hit your weekly limit · resets 9pm (America/New_York). Failed to authenticate. API Error: 401",
+        stderr: '',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect(result.rateLimited).toBe(true);
+      expect(result.authFailure).toBeUndefined();
+      expect(result.success).toBe(false);
+      expect(result.waitSeconds).toBeDefined();
+    });
+
+    it('keeps an ordinary ENOENT error unclassified as a rate limit', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'Error: ENOENT reading .docs/plans/x.md',
+        stderr: '',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect(result.rateLimited).toBeUndefined();
+      expect(result.success).toBe(false);
+      expect(result.waitSeconds).toBeUndefined();
+      expect(result.deadline).toBeUndefined();
+    });
+
+    it('keeps a prose mention of weekly limit successful and unclassified', async () => {
+      const stdout = 'Discussion about weekly limit policies in documentation';
+      mockExeca.mockResolvedValue({
+        stdout,
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
+
+      expect(result.rateLimited).toBeUndefined();
+      expect(result.success).toBe(true);
+      expect(detectsSessionLimit(stdout)).toBe(false);
     });
 
     it('detects usage-limit variant as rateLimited', async () => {
@@ -1417,16 +1532,19 @@ describe('ClaudeProvider', () => {
       expect(result.modelUnavailable).toBeUndefined();
     });
 
-    it('detects auth failure from "Not logged in" message', async () => {
+    it('detects auth failure from "Not logged in. Please run /login" message', async () => {
+      const stdout = 'Not logged in. Please run /login';
       mockExeca.mockResolvedValue({
-        stdout: 'Error: Not logged in',
+        stdout,
         exitCode: 1,
         failed: true,
       } as any);
 
       const result = await provider.invoke(baseOptions);
       expect(result.authFailure).toBe(true);
+      expect(result.rateLimited).toBeUndefined();
       expect(result.success).toBe(false);
+      expect(detectsSessionLimit(stdout)).toBe(false);
     });
 
     it('detects auth failure from "Please run /login" message', async () => {
@@ -2012,6 +2130,15 @@ describe('ClaudeProvider', () => {
 });
 
 describe('parseRateLimitWaitSeconds - direct unit tests for timezone parsing', () => {
+  it('rolls a weekly-limit deadline after 9pm to the following day', () => {
+    const now = new Date('2026-07-04T02:30:00Z');
+    const message = "You've hit your weekly limit · resets 9pm (America/New_York)";
+
+    const result = parseRateLimitWaitSeconds(message, { now });
+
+    expect(result.deadline).toBe(Date.parse('2026-07-05T01:00:00Z'));
+  });
+
   it('parses reset time in America/New_York timezone and returns deadline', () => {
     // Task 18: Test with injected "now" time to verify clamping
     // 2026-07-03T18:05:54Z is 13:05:54 EDT (UTC-4)

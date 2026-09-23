@@ -44,14 +44,17 @@ const RATE_LIMIT_RE = /rate limit|429|overloaded/i;
 // regardless of exit code (similar to OUT_OF_CREDITS_RE) because session-limit
 // can ride on exit=0 as a "soft notice" that the session quota is exhausted.
 // Patterns matched:
-// - "You've hit your session/usage limit" (exact CLI message)
+// - "You've hit your <one-word qualifier> limit" (exact CLI message)
 // - "session/usage limit reached" (variant)
-// - "session/usage limit · resets" (with reset time)
+// - "<one-word qualifier> limit · resets" (with reset time)
+// The qualifier is deliberately one word so "monthly spend limit" does not
+// match here; OUT_OF_CREDITS_RE owns that distinct notice.
 // Precedence: checked BEFORE AUTH_FAILURE_RE so a message like
 // "You've hit your session limit and not logged in" classifies as session-limit,
 // not auth failure. Avoids false positives by requiring context beyond bare
 // "session limit" in prose.
-const SESSION_LIMIT_RE = /you've hit your (?:session|usage) limit|session limit reached|usage limit reached|(?:session|usage) limit\s+·\s+resets/i;
+const SESSION_LIMIT_RE = /you've hit your \S+ limit|session limit reached|usage limit reached|\S+ limit\s+·\s+resets/i;
+const PERIOD_LIMIT_RE = /you've hit your (?!session\b|usage\b)\S+ limit/i;
 const STALE_SESSION_RE = /No conversation found/i;
 // A session-id lock ("already in use" / "session is in use by another
 // process"). Recovers the same way as a stale session — reset to a fresh
@@ -190,7 +193,9 @@ function getDateInTimezone(
  *    - Numbers with an absent or unrecognized unit are treated as minutes, floored at the
  *      existing 300-second default and capped at 3,600 seconds to avoid an hours-long wedge.
  * 2. Time-based with timezone: "resets 3:20pm (America/New_York)"
- *    - Task 18: Extracts timezone, calculates deadline in that timezone, clamps to cap
+ *    - Extracts timezone and calculates its deadline in that timezone.
+ *    - Period-qualified limits use an 86,400-second cap so the next reset is preserved;
+ *      session and usage limits retain the 3,600-second re-probe cap.
  *    - Returns both waitSeconds and an absolute deadline (ms since epoch)
  * 3. Time-based without timezone: "resets at 23:00", "resets 11pm", "resets 3am"
  *    - Calculates wait time as the delta from "now" to the reset time
@@ -205,8 +210,9 @@ export function parseRateLimitWaitSeconds(
   options?: { now?: Date },
 ): ParseRateLimitResult {
   const now = options?.now || new Date();
-
   try {
+    const deadlineCapSeconds = PERIOD_LIMIT_RE.test(output) ? 86400 : 3600;
+
     // Try duration-based patterns first: "retry after N seconds", "retry in N seconds", etc.
     const durationMatch = output.match(new RegExp(
       `(?:retry|try).*(after|in)\\s*([0-9]+)\\s*(${rateLimitDurationUnitAlternation})?\\b`,
@@ -248,6 +254,7 @@ export function parseRateLimitWaitSeconds(
               timeInTz,
               resetHour,
               resetMinute,
+              deadlineCapSeconds,
             );
 
             // Calculate fallback waitSeconds for comparison
@@ -272,6 +279,7 @@ export function parseRateLimitWaitSeconds(
               timeInTz,
               resetHour,
               0,
+              deadlineCapSeconds,
             );
 
             // Calculate fallback waitSeconds
@@ -312,7 +320,7 @@ export function parseRateLimitWaitSeconds(
 
 /**
  * Calculate the absolute deadline (ms since epoch) for a reset time in a specific timezone.
- * Task 18: Handles timezone-aware deadline calculation with clamping.
+ * Handles timezone-aware deadline calculation with a caller-supplied cap.
  *
  * @param now Current UTC time
  * @param timezone Timezone string (e.g., "America/New_York")
@@ -320,7 +328,8 @@ export function parseRateLimitWaitSeconds(
  * @param timeInTz Current time components in the timezone
  * @param resetHour Reset hour in 24-hour format
  * @param resetMinute Reset minute
- * @returns Absolute deadline in ms, clamped to cap (≈3600s); past/negative → default (60s)
+ * @param capSeconds Maximum wait: 86,400 seconds for period-qualified limits and 3,600 otherwise
+ * @returns Absolute deadline in ms, clamped to capSeconds; past/negative → default (60s)
  */
 function calculateDeadlineInTimezone(
   now: Date,
@@ -329,6 +338,7 @@ function calculateDeadlineInTimezone(
   timeInTz: { hours: number; minutes: number; seconds: number },
   resetHour: number,
   resetMinute: number,
+  capSeconds: number,
 ): number {
   // Calculate seconds until reset within the same day in the timezone
   const nowTotalSeconds = timeInTz.hours * 3600 + timeInTz.minutes * 60 + timeInTz.seconds;
@@ -337,19 +347,18 @@ function calculateDeadlineInTimezone(
   const diffSeconds = resetTotalSeconds - nowTotalSeconds;
 
   // Constants
-  const CAP_SECONDS = 3600; // 1 hour max
   const DEFAULT_SECONDS = 60; // 60 seconds for past/negative
 
   let finalWaitSeconds = DEFAULT_SECONDS;
 
   if (diffSeconds > 0) {
     // Reset is in the future today (in the timezone)
-    finalWaitSeconds = Math.min(diffSeconds, CAP_SECONDS);
+    finalWaitSeconds = Math.min(diffSeconds, capSeconds);
   } else if (diffSeconds <= 0) {
     // Reset is in the past today; assume it's tomorrow (midnight rollover)
     const nextDaySeconds = 86400 + diffSeconds; // Add 24 hours, subtract the past offset
     if (nextDaySeconds > 0) {
-      finalWaitSeconds = Math.min(nextDaySeconds, CAP_SECONDS);
+      finalWaitSeconds = Math.min(nextDaySeconds, capSeconds);
     } else {
       // Safeguard: extremely negative, use default
       finalWaitSeconds = DEFAULT_SECONDS;

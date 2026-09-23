@@ -8,7 +8,8 @@
 ## Summary
 
 Generalize the Claude provider's session-limit classifier so any `you've hit your <qualifier>
-limit` notice classifies as a rate limit, proven by provider-level tests. 7 tasks.
+limit` notice classifies as a rate limit, and make a period-qualified notice's `deadline` resolve to
+the actual reset time, proven by provider-level tests. 8 tasks.
 
 ## Technical Approach
 
@@ -20,6 +21,14 @@ limit` notice classifies as a rate limit, proven by provider-level tests. 7 task
 - The single-word qualifier is deliberate: the out-of-credits notice `You've hit your monthly spend
   limit.` has two words before `limit`, so it must not match. `OUT_OF_CREDITS_RE` continues to
   own it and the existing precedence in `invoke()` (out-of-credits → modelUnavailable) is untouched.
+- Deadline (amendment, PG-1): `calculateDeadlineInTimezone` caps every timezone-aware wait at
+  3600s, so a weekly notice resolves to `now + 1h`, not the next 9pm. Add
+  `PERIOD_LIMIT_RE = /you've hit your (?!session\b|usage\b)\S+ limit/i` in `claude-provider.ts`;
+  `parseRateLimitWaitSeconds` passes a cap of 86400s to `calculateDeadlineInTimezone` when the
+  output matches it, and keeps the 3600s cap otherwise. Session/usage notices keep their hourly
+  re-probe. The 86400s bound is the parser's own next-occurrence rollover ceiling, so a mis-parse
+  still cannot wedge the daemon beyond one day (`adr-2026-07-05-daemon-rate-limit-episode-coordinator`
+  Decision 6: the deadline IS the parsed reset, capped at a sane maximum).
 - No change to `conductor.ts`: once `rateLimited` is set, the existing rate-limit branch already
   waits to `deadline` and decrements `attempt` so no retry budget is consumed.
 - Test pattern: the existing session-limit family in
@@ -164,6 +173,29 @@ limit` notice classifies as a rate limit, proven by provider-level tests. 7 task
 
 **Dependencies:** Task 1
 
+### Task 8: Weekly-limit deadline resolves to the next 9pm in America/New_York
+**Story:** 1
+**Type:** happy-path
+
+**Steps:**
+1. Write failing test in `src/conductor/test/execution/claude-provider.test.ts` next to the Task 1 weekly-limit test: fix the clock with `vi.setSystemTime(new Date('2026-07-03T16:00:00Z'))` (12:00 EDT, 9h before 9pm), mock execa with stdout `You've hit your weekly limit · resets 9pm (America/New_York)`, exitCode 0, failed false; assert `result.rateLimited === true`, `result.success === false`, and `result.deadline === Date.parse('2026-07-04T01:00:00Z')`.
+2. Add a direct `parseRateLimitWaitSeconds` case in the `parseRateLimitWaitSeconds - direct unit tests for timezone parsing` block with `now = 2026-07-04T02:30:00Z` (22:30 EDT, after 9pm) asserting `deadline === Date.parse('2026-07-05T01:00:00Z')`.
+3. Verify both fail (RED): the deadline is `now + 3600000` because `calculateDeadlineInTimezone` caps at 3600s.
+4. Implement: in `src/conductor/src/execution/claude-provider.ts` add `PERIOD_LIMIT_RE = /you've hit your (?!session\b|usage\b)\S+ limit/i`, give `calculateDeadlineInTimezone` a `capSeconds` parameter replacing the `CAP_SECONDS` constant, and have `parseRateLimitWaitSeconds` pass 86400 when `PERIOD_LIMIT_RE` matches the output and 3600 otherwise; update the JSDoc to document both caps.
+5. Verify both pass (GREEN) and the existing session-limit clamp tests in that block pass unchanged.
+6. Commit with message: "fix(claude-provider): period-qualified limit deadlines resolve to the actual reset"
+
+**Done when:**
+- A provider test with the clock fixed at `2026-07-03T16:00:00Z` and exit-0 stdout `You've hit your weekly limit · resets 9pm (America/New_York)` asserts `rateLimited === true`, `success === false`, and `deadline === Date.parse('2026-07-04T01:00:00Z')` (the next 9pm in America/New_York, 9h away).
+- A `parseRateLimitWaitSeconds` test with `now = 2026-07-04T02:30:00Z` and the weekly notice asserts `deadline === Date.parse('2026-07-05T01:00:00Z')`, proving the after-9pm rollover resolves to the following day's 9pm.
+- `calculateDeadlineInTimezone` applies an 86400s cap when `PERIOD_LIMIT_RE` matches and a 3600s cap otherwise, so the existing `clamping works correctly for very far future times` session-limit test still asserts a wait of at most 3600000 ms and passes unmodified.
+
+**Files likely touched:**
+- `src/conductor/src/execution/claude-provider.ts` — `PERIOD_LIMIT_RE`, `calculateDeadlineInTimezone` cap parameter, `parseRateLimitWaitSeconds`
+- `src/conductor/test/execution/claude-provider.test.ts` — next-9pm deadline tests
+
+**Dependencies:** Task 1
+
 ## Task Dependency Graph
 
 ```
@@ -172,18 +204,20 @@ Task 1 ─┬─ Task 2
         ├─ Task 4
         ├─ Task 5
         ├─ Task 6
-        └─ Task 7
+        ├─ Task 7
+        └─ Task 8
 ```
 
 ## Integration Points
 
 - After Task 1: the daemon's retry loop receives `rateLimited: true` for a weekly-limit notice and takes the existing wait-to-deadline, no-budget-burn branch in `conductor.ts`.
+- After Task 8: that branch waits once to the actual weekly reset instead of re-probing hourly.
 
 ## Coverage Check
 
 | Criterion | Task id(s) | Done when quote | Disposition |
 | --- | --- | --- | --- |
-| Story 1 happy: Given the Claude CLI exits 0 with stdout `You've hit your weekly limit · resets 9pm (America/New_York)`, when the provider classifies the result, then `rateLimited` is `true`, `success` is `false`, and `deadline` resolves to the next 9pm in America/New_York | 1 | "`provider.invoke` returns `rateLimited === true` and `success === false` for that exit-0 stdout" | diff-local |
+| Story 1 happy: Given the Claude CLI exits 0 with stdout `You've hit your weekly limit · resets 9pm (America/New_York)`, when the provider classifies the result, then `rateLimited` is `true`, `success` is `false`, and `deadline` resolves to the next 9pm in America/New_York | 1, 8 | "asserts `rateLimited === true`, `success === false`, and `deadline === Date.parse('2026-07-04T01:00:00Z')` (the next 9pm in America/New_York, 9h away)" | diff-local |
 | Story 1 happy: Given the Claude CLI exits 0 with stdout `You've hit your daily limit · resets 3:20pm (America/New_York)` or `You've hit your usage limit · resets 3:20pm (America/New_York)`, when the provider classifies the result, then `rateLimited` is `true` for each qualifier | 2 | "asserts `rateLimited === true` and `success === false` for the `daily`, `usage`, and `session` qualifier notices" | diff-local |
 | Story 1 happy: Given the Claude CLI exits 1 with stdout `You've hit your weekly limit · resets 9pm (America/New_York). Failed to authenticate. API Error: 401`, when the provider classifies the result, then `rateLimited` is `true` and `authFailure` is `undefined` | 3 | "asserts `rateLimited === true` and `authFailure === undefined`" | diff-local |
 | Story 1 negative: Given the Claude CLI exits 1 with stdout `Error: ENOENT reading .docs/plans/x.md`, when the provider classifies the result, then `rateLimited` is `undefined` and `success` is `false` | 4 | "asserts `rateLimited === undefined` and `success === false`" | diff-local |
