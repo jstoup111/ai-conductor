@@ -67,6 +67,30 @@ const readOnlyReviewProfile: BuildReviewPolicyCapabilityProfile = {
   admittedDependencies: ['criteria/public-api.md'],
 };
 
+function descriptorAlternativeFields(schema: unknown): string[][] {
+  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
+    throw new Error('expected a JSON Schema object');
+  }
+  const source = schema as Record<string, unknown>;
+  const alternatives = Array.isArray(source.oneOf) ? source.oneOf : [source];
+  return alternatives.map((alternative) => {
+    if (alternative === null || typeof alternative !== 'object' || Array.isArray(alternative)) {
+      throw new Error('expected a JSON Schema object alternative');
+    }
+    const properties = (alternative as Record<string, unknown>).properties;
+    if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) {
+      throw new Error('expected JSON Schema properties');
+    }
+    return Object.keys(properties as Record<string, unknown>).sort();
+  });
+}
+
+function renderedAlternativeFields(shape: string): string[][] {
+  return shape.split(' Or ').map((alternative) =>
+    [...alternative.matchAll(/`([^`]+)`:/g)].map((match) => match[1]!).sort(),
+  );
+}
+
 describe('engine/build-review-policy-contract', () => {
   it('requires a selected descriptor at the rendering boundary', () => {
     expect(() => renderBuildReviewPolicyContract({
@@ -117,6 +141,25 @@ describe('engine/build-review-policy-contract', () => {
     expect(rendered).toContain('Do not choose an aggregate verdict, authorize repair work, edit code, install dependencies, or publish comments.');
     expect(rendered).toContain('The engine alone validates findings and owns aggregate verdicts and repair work orders.');
     expect(rendered).toContain('`custom-findings`');
+  });
+
+  it('renders the two custom-v1 top-level alternatives exactly from its descriptor schema', () => {
+    const rendered = renderBuildReviewPolicyContract({
+      bundle: bundle(),
+      question: 'Are boundary changes safe?',
+      scope: 'Review frozen sources.',
+      contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+    });
+    const shape = rendered.match(/^Shared findings payload schema: (.+)$/m)?.[1];
+
+    expect(shape).toBeDefined();
+    expect(renderedAlternativeFields(shape!)).toEqual(
+      descriptorAlternativeFields(BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema),
+    );
+    expect(renderedAlternativeFields(shape!)).toEqual([
+      ['findings', 'kind', 'version'],
+      ['kind', 'requirement'],
+    ]);
   });
 
   it('renders only the selected descriptor schema', () => {
