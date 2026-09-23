@@ -7461,6 +7461,12 @@ export class Conductor {
         }
 
         const boundary: SchedulingUnitRef = observedBoundary ?? lastSettledUnit ?? { kind: 'pre-first-unit' };
+        // A declined attempt leaves the owning step in_progress, but the
+        // admitted execution window still needs its truthful interruption
+        // terminal. Close it before announcing the operator boundary so the
+        // boundary is the event-stream terminal, rather than letting finally
+        // append step_interrupted after it.
+        await this.closeOpenExecutions();
         await emitTracked({
           type: 'operator_park_boundary',
           featureSlug: this.featureSlug,

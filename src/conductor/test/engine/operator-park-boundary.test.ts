@@ -376,6 +376,67 @@ describe('operator park boundary contract', () => {
     });
   });
 
+  it('keeps a declined third build attempt terminal, in progress, and free of accounting', async () => {
+    await writeState(statePath, stateWithPending('build'));
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    const evidencePath = join(projectRoot, '.pipeline', 'task-evidence.json');
+    await writeFile(evidencePath, JSON.stringify({
+      evidenceStamps: {},
+      noEvidenceAttempts: 7,
+      noEvidenceReasons: ['zero_work_product'],
+      migrationGrandfather: [],
+      lastResolvedCount: 0,
+    }));
+    const events = new ConductorEventEmitter();
+    const timeline: ConductorEvent[] = [];
+    const emit = events.emit.bind(events);
+    vi.spyOn(events, 'emit').mockImplementation(async (event) => {
+      timeline.push(event);
+      await emit(event);
+    });
+    const run = vi.fn<StepRunner['run']>(async () => ({
+      success: false,
+      output: 'build needs another attempt',
+    }));
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => run.mock.calls.length >= 2,
+      config: { build_progress: { enabled: false } } as never,
+    });
+
+    const result = await conductor.run();
+    const persisted = await readState(statePath);
+    const evidence = JSON.parse(await readFile(evidencePath, 'utf8')) as { noEvidenceAttempts: number };
+    const boundaryIndex = timeline.findIndex((event) => event.type === 'operator_park_boundary');
+
+    expect({
+      result,
+      dispatchedAttempts: run.mock.calls.map(([, , options]) => options?.attempt),
+      terminalEvents: timeline.slice(boundaryIndex).map((event) => event.type),
+      terminalMarkers: await terminalMarkerNames(projectRoot),
+      persisted: persisted.ok ? persisted.value.build : persisted,
+      noEvidenceAttempts: evidence.noEvidenceAttempts,
+    }).toEqual({
+      result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'build', attempt: 3 } },
+      // Escalation is derived only immediately before a dispatch; a third
+      // attempt would be the first model-rung escalation, but is declined.
+      dispatchedAttempts: [1, 2],
+      terminalEvents: ['operator_park_boundary'],
+      terminalMarkers: [],
+      persisted: 'in_progress',
+      noEvidenceAttempts: 7,
+    });
+  });
+
   it('fails toward parked when the ordinary-path retry check rejects', async () => {
     await writeState(statePath, stateWithPending('memory'));
     const boundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(
