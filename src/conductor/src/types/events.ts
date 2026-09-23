@@ -18,6 +18,10 @@ import type {
   GithubOperationRefusalReason,
   GithubOperationTarget,
 } from '../engine/github-operations.js';
+import type {
+  BuildReviewInfrastructureFailureReason,
+  BuildReviewJudgedResultRejection,
+} from '../engine/build-review-domain.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
@@ -450,6 +454,13 @@ export type ConductorEvent =
       rubric: string;
       lapId: string;
       reason: string;
+      /**
+       * The closed mechanical-fault cause, when the coordinator has classified
+       * this infrastructure occurrence at the result boundary.
+       */
+      cause?: BuildReviewInfrastructureFailureReason;
+      /** Field-named native structured-result contract rejection, when present. */
+      rejection?: BuildReviewJudgedResultRejection;
       excerpt?: string;
       /** Present only when the canonical rubric projection exceeded its configured byte bound. */
       measuredBytes?: number;
