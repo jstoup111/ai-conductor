@@ -1,3 +1,4 @@
+// Covers: task:12
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, writeFile, access, unlink } from 'fs/promises';
 import { join } from 'path';
@@ -64,6 +65,77 @@ async function readPidfile(): Promise<Record<string, unknown>> {
 function deadPid(): number {
   return 2_147_480_000;
 }
+
+async function writeExitEvents(...events: Record<string, unknown>[]): Promise<void> {
+  await mkdir(join(repoPath, '.daemon'), { recursive: true });
+  await writeFile(
+    join(repoPath, '.daemon', 'exit-events.jsonl'),
+    `${events.map((event) => JSON.stringify(event)).join('\n')}\n`,
+    'utf8',
+  );
+}
+
+describe('ensureRunning: reports the death before reclaiming its stale lock (Task 12)', () => {
+  const staleOwner = async (): Promise<void> => {
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    await writeFile(
+      join(repoPath, '.daemon', 'daemon.pid'),
+      JSON.stringify({ pid: deadPid(), uuid: 'dead-owner', startedAt: '2026-09-23T11:00:00.000Z' }),
+      'utf8',
+    );
+  };
+
+  it('reports a matching signal and timestamp before it respawns', async () => {
+    const ensureRunning = requireFn(await load(LOCK_MOD), 'ensureRunning');
+    const at = '2026-09-23T12:00:00.000Z';
+    const lines: string[] = [];
+    await staleOwner();
+    await writeExitEvents({ type: 'daemon_exited', pid: deadPid(), code: null, signal: 'SIGKILL', at });
+
+    await ensureRunning(repoPath, {
+      onReclaim: (line: string) => lines.push(line),
+      launch: () => lines.push('respawning daemon'),
+    });
+
+    expect(lines).toEqual([
+      `reclaiming lock from dead pid ${deadPid()} (killed by SIGKILL at ${at})`,
+      'respawning daemon',
+    ]);
+  });
+
+  it('reports an unknown cause and still respawns when no matching exit exists', async () => {
+    const ensureRunning = requireFn(await load(LOCK_MOD), 'ensureRunning');
+    const lines: string[] = [];
+    await staleOwner();
+    await writeExitEvents({ type: 'daemon_exited', pid: 7, code: 1, signal: null, at: '2026-09-23T12:00:00.000Z' });
+
+    await ensureRunning(repoPath, {
+      onReclaim: (line: string) => lines.push(line),
+      launch: () => lines.push('respawning daemon'),
+    });
+
+    expect(lines).toEqual([
+      `reclaiming lock from dead pid ${deadPid()} (exit cause unknown)`,
+      'respawning daemon',
+    ]);
+  });
+
+  it('reports an unreadable exit ledger and still respawns without throwing', async () => {
+    const ensureRunning = requireFn(await load(LOCK_MOD), 'ensureRunning');
+    const lines: string[] = [];
+    await staleOwner();
+    await mkdir(join(repoPath, '.daemon', 'exit-events.jsonl'));
+
+    await expect(ensureRunning(repoPath, {
+      onReclaim: (line: string) => lines.push(line),
+      launch: () => lines.push('respawning daemon'),
+    })).resolves.toBeUndefined();
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(new RegExp(`^reclaiming lock from dead pid ${deadPid()} \\(exit ledger unreadable: .+\\)$`));
+    expect(lines[1]).toBe('respawning daemon');
+  });
+});
 
 // ═════════════════════════════════════════════════════════════════════════════
 // FR-17 / FR-20: O_EXCL acquire is the 1-per-repo mutex.

@@ -23,6 +23,7 @@ import { unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { readLastExit, type DaemonLedgerReadResult, type DaemonExitRecord } from './daemon-ledger-readers.js';
 import { versionIdFromEngineDir } from './engine-version-id.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -623,6 +624,25 @@ export type LaunchFn = (repoPath: string) => void | Promise<void>;
  */
 export type WriteDaemonStateFn = () => Promise<void>;
 
+function reclaimSummary(
+  pid: number,
+  exit: DaemonLedgerReadResult<DaemonExitRecord>,
+): string {
+  if ('error' in exit) {
+    return `reclaiming lock from dead pid ${pid} (exit ledger unreadable: ${exit.error.message})`;
+  }
+
+  if (exit.event?.signal) {
+    return `reclaiming lock from dead pid ${pid} (killed by ${exit.event.signal} at ${exit.event.at})`;
+  }
+
+  if (exit.event?.code !== null && exit.event?.code !== undefined) {
+    return `reclaiming lock from dead pid ${pid} (exited with code ${exit.event.code} at ${exit.event.at})`;
+  }
+
+  return `reclaiming lock from dead pid ${pid} (exit cause unknown)`;
+}
+
 export interface EnsureRunningOpts {
   /**
    * Injectable launch function (default: launchDaemon). Called at most
@@ -634,10 +654,11 @@ export interface EnsureRunningOpts {
    */
   kill?: KillProbe;
   /**
-   * Callback invoked exactly once when a stale lock is reclaimed. Used by
-   * callers and tests to count reclaim events (FR-21 negative path).
+   * Callback invoked exactly once when a stale lock is reclaimed. Its message
+   * identifies the dead owner and, when available, its witnessed exit cause.
+   * Callers can write it before their launch/respawn line.
    */
-  onReclaim?: () => void;
+  onReclaim?: (message: string) => void;
   /**
    * Best-effort mirror writer. Called after a fresh spawn to record
    * `daemonState` in the registry. Failure is non-fatal (FR-23, C4).
@@ -662,7 +683,8 @@ export interface EnsureRunningOpts {
  *      b. Occupied (EEXIST) → read the existing pidfile and check liveness with
  *         the REAL process.kill (defaultKill — pidfile is authoritative):
  *         - isLive → STOP. No spawn, no signal. (zero-management contract)
- *         - dead  → reclaim the stale lock, call onReclaim(), fall through to spawn.
+ *         - dead  → read its latest exit witness, reclaim the stale lock, report it
+ *                    through onReclaim(), then fall through to spawn.
  *   2. Spawn: call opts.launch(repoPath) (default: launchDaemon) ONCE.
  *   3. Best-effort mirror: call writeDaemonState() if provided; swallow any error.
  *
@@ -747,9 +769,14 @@ export async function ensureRunning(
     } else {
       // Owner pid is dead — reclaim the stale lock (uses defaultKill internally).
       // transient (#374): our own reclaimed record is unlinked below, so mark it.
+      // Read the witness before reclaiming, while the stale pid still identifies
+      // the daemon whose prior death this launch is recovering from.
+      const exit = owner.pid > 0
+        ? await readLastExit(repoPath, owner.pid)
+        : { event: null, skipped: 0 };
       const reclaimResult = await reclaim(repoPath, defaultKill, { transient: true });
       if (reclaimResult.reclaimed) {
-        opts.onReclaim?.();
+        opts.onReclaim?.(reclaimSummary(owner.pid, exit));
         // Unlink the reclaimed pidfile so the daemon spawns fresh.
         try {
           await unlink(pidfilePath(repoPath));
