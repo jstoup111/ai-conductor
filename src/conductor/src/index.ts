@@ -127,6 +127,10 @@ import {
   detectUnknownDaemonSubcommand,
   type DaemonCommandOptions,
 } from './engine/daemon-command.js';
+import {
+  detectDaemonExitWitnessCommand,
+  dispatchDaemonExitWitness,
+} from './engine/daemon-exit-witness.js';
 import { detectRenderCommand, dispatchRender } from './engine/render-cli.js';
 import { detectRateCardCommand, dispatchRateCard } from './engine/rate-card-cli.js';
 import {
@@ -1040,6 +1044,15 @@ async function main(): Promise<void> {
     }
     const code = await dispatchDaemonPark(daemonParkCmd, { cwd: resolved.root });
     process.exit(code);
+  }
+
+  // The pane foreground invokes this short-lived writer after its daemon child
+  // exits. Handle it before the supervisor/run fallthrough so it never starts
+  // a daemon itself.
+  const daemonExitWitnessCmd = detectDaemonExitWitnessCommand(process.argv);
+  if (daemonExitWitnessCmd) {
+    const projectRoot = await resolveDaemonProjectRoot(process.cwd());
+    process.exit(dispatchDaemonExitWitness(daemonExitWitnessCmd, projectRoot));
   }
 
   // Daemon management verbs (start / stop / restart / connect / debug) route to
