@@ -19,14 +19,15 @@ that parking cannot leave the feature half-settled.
 
 #### Happy Path
 
-- Given a daemon-managed serial step is running, when the operator parks its feature, then that
-  invocation is not cancelled and reaches the same natural terminal outcome it would have reached
-  without the park.
+- Given a daemon-managed serial step's provider attempt is running, when the operator parks its
+  feature, then that attempt is not cancelled and settles with the same result it would have had
+  without the park, and the step starts no further attempt, retries included.
 
 #### Negative Paths
 
-- Given a park appears while a serial step is running, when the daemon observes any in-step event,
-  then it does not terminate the runner, synthesize a result, or start a replacement invocation.
+- Given a park appears while a serial step's attempt is running, when the daemon observes any
+  in-step event, then it does not terminate the runner or synthesize a result, and it starts no
+  replacement or retry attempt.
 
 ### Done When
 
@@ -45,8 +46,8 @@ stops the feature so that the group's joined state remains coherent.
 #### Happy Path
 
 - Given two or more group members are already running, when the feature is parked and one member
-  finishes before its siblings, then every started sibling continues to its natural terminal
-  outcome and the group completes its ordinary join.
+  finishes before its siblings, then every started sibling's running attempt settles without
+  cancellation, no member starts a further attempt, and the group completes its join.
 
 #### Negative Paths
 
@@ -72,9 +73,10 @@ the lifecycle record remains authoritative.
 
 - Given an active serial step succeeds while parked, when progression stops, then its persisted
   status is the ordinary successful status and is no longer `in_progress`.
-- Given a parked parallel group has successful, failed, and skipped member outcomes allowed by its
-  normal join rules, when the group settles, then every member and the group carry exactly the
-  statuses those rules produce before progression stops.
+- Given a parked parallel group has successful, failed, skipped, and parked member outcomes, when
+  the group settles, then every member and the group carry exactly the statuses the join rules
+  produce before progression stops, and a member whose retry was declined for the park carries the
+  parked outcome.
 
 #### Negative Paths
 
@@ -197,7 +199,8 @@ filesystem anomaly cannot burn another run.
 - Given the daemon cannot confirm park absence because the boundary read fails with a non-ENOENT
   error, when a unit is pending, then that unit does not start and the anomaly remains visible.
 - Given the marker is absent when one unit starts but appears immediately afterward, when that unit
-  is active, then it drains normally and the park is applied only at the next boundary.
+  is active, then its running attempt drains normally and the park is applied at the unit's next
+  provider attempt or the next boundary, whichever comes first.
 
 ### Done When
 
@@ -219,8 +222,8 @@ new group cannot reopen the safety gap.
   verification group is active when parked, when it settles, then each follows the same drain,
   persist, join, and stop-before-next-unit contract.
 - Given a future daemon group enters through the supported parallel scheduling path, when it settles
-  under a park, then it receives the same boundary behavior without a park-specific exception for
-  its members.
+  under a park, then it receives the same boundary and per-attempt member behavior through the
+  shared group core, without group-specific park code.
 
 #### Negative Paths
 
