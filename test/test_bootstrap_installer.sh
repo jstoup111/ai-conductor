@@ -239,6 +239,44 @@ for truncation in \
   fi
 done
 
+# Cutoffs around the final `main "$@"` call. Against an unwrapped layout a prefix ending
+# right after the `main` token is a complete command, so the shell runs the install; the
+# `{ ... }` group makes every one of these an unterminated group that parses to nothing.
+main_call_offset=$(LC_ALL=C awk 'BEGIN { off = 0 } { if (match($0, /main "\$@"/)) last = off + RSTART - 1; off += length($0) + 1 } END { print last }' "$INSTALL_SCRIPT")
+if [ -z "$main_call_offset" ] || [ "$main_call_offset" -le 0 ]; then
+  failures+="could not locate the final main \"\$@\" call in $INSTALL_SCRIPT\\n"
+fi
+for truncation in \
+  "after-main-token:$((main_call_offset + 4))" \
+  "after-main-quote:$((main_call_offset + 6))" \
+  "after-main-call:$((main_call_offset + 9))"; do
+  truncation_name=${truncation%%:*}
+  truncation_bytes=${truncation#*:}
+  run_truncated_case "$truncation_name" "$truncation_bytes"
+  if [ ! -e "$CASE_HOME/.ai-conductor/harness" ] && [ ! -s "$RECORD" ]; then
+    echo "PASS truncated $truncation_name bootstrap does not acquire or install"
+  else
+    failures+="truncated $truncation_name bootstrap touched the target or reached the stand-in installer\\n"
+  fi
+done
+
+# Every byte offset inside the last three lines, up to (length - 2).
+script_lines=$(wc -l < "$INSTALL_SCRIPT" | tr -d ' ')
+last_three_start=$(head -n "$((script_lines - 3))" "$INSTALL_SCRIPT" | wc -c | tr -d ' ')
+tail_offset=$last_three_start
+tail_failures=0
+while [ "$tail_offset" -le "$((script_length - 2))" ]; do
+  run_truncated_case "tail-byte-$tail_offset" "$tail_offset"
+  if [ -e "$CASE_HOME/.ai-conductor/harness" ] || [ -s "$RECORD" ]; then
+    failures+="truncated at byte $tail_offset (inside the last three lines) touched the target or reached the stand-in installer\\n"
+    tail_failures=$((tail_failures + 1))
+  fi
+  tail_offset=$((tail_offset + 1))
+done
+if [ "$tail_failures" -eq 0 ]; then
+  echo "PASS every cutoff inside the last three lines ($last_three_start..$((script_length - 2))) does not acquire or install"
+fi
+
 # Losing only the final newline leaves the complete script, including the whole
 # `main "$@"` line, so the shell runs it to EOF: that is the full install, not a partial one.
 run_truncated_case one-byte-short "$((script_length - 1))"

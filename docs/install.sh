@@ -1,4 +1,7 @@
 #!/bin/sh
+# The whole body is one { ... } group so a download cut off anywhere before the
+# closing brace is an unterminated group: the shell parses nothing and runs nothing.
+{
 set -eu
 
 usage() {
@@ -244,3 +247,4 @@ main() {
 }
 
 main "$@"
+}
