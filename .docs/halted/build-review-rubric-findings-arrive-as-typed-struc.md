@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-23T07:34:21.111Z
 Slug: build-review-rubric-findings-arrive-as-typed-struc
 Class: needs-human
 Halting step: prd_audit
