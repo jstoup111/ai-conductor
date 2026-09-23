@@ -193,6 +193,40 @@ describe("build-review coordinator: registered dispatch", () => {
     expect(claudeIds).toEqual(codexIds);
   });
 
+  it.each([
+    ['an unlisted content hash', () => ({
+      findings: [{
+        ...testQualityFinding(),
+        anchor: {
+          rubric: 'testQuality',
+          locus: { path: IN_SCOPE_TEST, contentHash: `sha256:${'b'.repeat(64)}`, display: IN_SCOPE_TITLE },
+        },
+      }],
+    }), 'findings[0].anchor.locus.contentHash'],
+    ['an out-of-enum concern kind', () => ({
+      findings: [{ ...testQualityFinding(), concernKind: 'invented-kind' }],
+    }), 'findings[0].concernKind'],
+    ['a duplicate finding identity', () => ({
+      findings: [testQualityFinding(), testQualityFinding('Same identity, different wording.')],
+    }), 'findings[1].identity'],
+  ])('settles a dispatched result with %s absent as an invalid structured result', async (_caseName, resultFactory, field) => {
+    const dispatchModel = vi.fn(async () => resultFactory());
+    const writeArtifact = vi.fn(async (artifact) => ({ version: 1, ...artifact }));
+    const writeCache = vi.fn(async () => undefined);
+
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: titledInputs(), dispatchModel, writeArtifact, writeCache,
+    }));
+
+    expect(dispatchModel).toHaveBeenCalledOnce();
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'invalid-structured-result',
+      rejection: { kind: 'explained', problems: [expect.objectContaining({ field })] },
+    });
+    expect(writeArtifact).not.toHaveBeenCalled();
+    expect(writeCache).not.toHaveBeenCalled();
+  });
+
   it("keeps a disabled whole gate distinct from an empty enabled container", () => {
     expect(classifyBuildReviewRubricBranches({ ...config(false), enabled: false }, [])).toEqual({
       kind: "gate-disabled",
