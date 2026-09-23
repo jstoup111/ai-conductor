@@ -459,7 +459,8 @@ fi
 CASE_PATH="$FRESH_INSTALL_PATH" run_case option-tagged --channel tagged
 if [ "$CASE_STATUS" -eq 0 ] \
   && [ "$(git -C "$CASE_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$MAIN_HEAD" ] \
-  && [ "$(< "$RECORD")" = "$CASE_HOME/.ai-conductor/harness|./bin/install|--channel tagged|" ]; then
+  && [ "$(< "$RECORD")" = "$CASE_HOME/.ai-conductor/harness|./bin/install|--channel tagged|" ] \
+  && grep -Fq "(channel tagged, ref " <<< "$CASE_OUTPUT"; then
   echo 'PASS tagged option selects the latest release tag and reaches the installer'
 else
   failures+="tagged option did not select the latest release tag: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
@@ -468,7 +469,8 @@ fi
 CASE_CHANNEL_SET=true CASE_CHANNEL=tagged CASE_PATH="$FRESH_INSTALL_PATH" run_case environment-tagged
 if [ "$CASE_STATUS" -eq 0 ] \
   && [ "$(git -C "$CASE_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$MAIN_HEAD" ] \
-  && [ "$(< "$RECORD")" = "$CASE_HOME/.ai-conductor/harness|./bin/install||tagged" ]; then
+  && [ "$(< "$RECORD")" = "$CASE_HOME/.ai-conductor/harness|./bin/install||tagged" ] \
+  && grep -Fq "(channel tagged, ref " <<< "$CASE_OUTPUT"; then
   echo 'PASS tagged environment selects the latest release tag and reaches the installer'
 else
   failures+="tagged environment did not select the latest release tag: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"

@@ -139,7 +139,11 @@ EOF
 }
 
 announce() {
-  printf '%s\n' "Installing ai-conductor in $TARGET (channel $REF) from $REPO_URL"
+  channel_label="channel $CHANNEL"
+  if [ "$REF" != "$CHANNEL" ]; then
+    channel_label="$channel_label, ref $REF"
+  fi
+  printf '%s\n' "Installing ai-conductor in $TARGET ($channel_label) from $REPO_URL"
 }
 
 acquire() {
