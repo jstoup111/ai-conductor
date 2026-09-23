@@ -129,6 +129,33 @@ Key sub-decisions:
    which drops sessions), not an idle timeout. This is an accepted behavior change from the Phase 9
    ceiling, ratified with the operator: in practice the daemon was already run `--continuous`.
 
+   > **Amended 2026-09-22 by #2079:** the foreground command's shape is preserved (one
+   > long-lived daemon, no idle self-limit, no double-fork) and gains a heap cap and an exit
+   > witness, because a 4.2 GB OOM kill left no record of why the pid vanished.
+   >
+   > **D8** Heap-capped foreground. The daemon is launched with an explicit V8 old-space cap
+   > (`--max-old-space-size`, operator-tunable via a flat `daemon_*` config key with a default
+   > below the host's practical ceiling) so runaway growth ends as a Node heap error with a stack
+   > in `.daemon/daemon.log` rather than a kernel OOM kill of an arbitrary process.
+   >
+   > **D9** Exit witness as the pane foreground. The pane's foreground becomes a thin
+   > shell wrapper that runs the launcher as its single child, waits, and on that child's exit
+   > appends one `daemon_exited` record (pid, exit code or signal, timestamp) before exiting
+   > itself. The daemon remains the one long-lived engine process; the wrapper forks nothing
+   > else and adds no IPC, so ADR-005 and adr-010 liveness are untouched — the witness records
+   > why the pid vanished, it does not decide liveness. `remain-on-exit` keeps the pane after
+   > the wrapper exits exactly as today.
+   >
+   > **D10** Witness records ride a sibling ledger, one writer per file. The wrapper is a
+   > separate OS process with no bus (event-spine exception A, precedent
+   > `adr-2026-07-10-intra-step-build-progress-events`), so per `adr-2026-08-08` D2 and
+   > `adr-2026-08-09` E2 it owns `.daemon/exit-events.jsonl` and never appends to
+   > `.daemon/events.jsonl`. `daemon_exited` is a `ConductorEvent` variant registered in the
+   > exhaustive sink registry (`adr-2026-07-26-event-sink-registry-exhaustiveness`); readers
+   > (`daemon status`, `ensureRunning`) merge the sibling ledger by timestamp. In-process
+   > memory samples and heap-dump records are ordinary daemon-origin events on
+   > `.daemon/events.jsonl`; no OpenTelemetry instrument is added (adr-014 unchanged).
+
 ## Consequences
 
 ### Positive
