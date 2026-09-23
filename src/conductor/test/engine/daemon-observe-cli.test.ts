@@ -1,3 +1,4 @@
+// Covers: task:11
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -409,6 +410,73 @@ describe('engine/daemon-observe-cli', () => {
       await writeFile(p, JSON.stringify(records), 'utf8');
       return p;
     }
+
+    it('renders a dead pane\'s matching SIGKILL exit cause on its status row', async () => {
+      const repo = join(root, 'dead-pane-exit');
+      await mkdir(join(repo, '.daemon'), { recursive: true });
+      await writePidfile(repo, { pid: 42 });
+      await writeFile(
+        join(repo, '.daemon', 'exit-events.jsonl'),
+        JSON.stringify({ type: 'daemon_exited', pid: 42, code: null, signal: 'SIGKILL', at: '2026-09-23T12:00:00.000Z' }) + '\n',
+        'utf8',
+      );
+      const out: string[] = [];
+
+      await runDaemonStatus({
+        registryPath: await registry([record('dead-pane-exit', repo)]),
+        kill: ALIVE,
+        out: (line) => out.push(line),
+        hasSessionProbe: () => true,
+        paneDeadProbe: () => true,
+      });
+
+      expect(out[0]).toMatch(/⚠ session-up\/process-dead.*killed by SIGKILL at 2026-09-23T12:00:00.000Z/);
+    });
+
+    it('renders the latest memory sample for a healthy daemon without an exit cause', async () => {
+      const repo = join(root, 'healthy-memory');
+      await mkdir(join(repo, '.daemon'), { recursive: true });
+      await writePidfile(repo, { pid: 43 });
+      await writeFile(
+        join(repo, '.daemon', 'events.jsonl'),
+        JSON.stringify({ type: 'daemon_memory_sample', rss: 128 * 1024 * 1024, ts: '2026-09-23T12:01:00.000Z' }) + '\n',
+        'utf8',
+      );
+      const out: string[] = [];
+
+      await runDaemonStatus({
+        registryPath: await registry([record('healthy-memory', repo)]),
+        kill: ALIVE,
+        out: (line) => out.push(line),
+      });
+
+      expect(out[0]).toContain('mem 128 MB at 2026-09-23T12:01:00.000Z');
+      expect(out[0]).not.toContain('exit cause');
+    });
+
+    it('renders unknown rather than another pid\'s exit cause and reports malformed lines once', async () => {
+      const repo = join(root, 'unknown-exit');
+      await mkdir(join(repo, '.daemon'), { recursive: true });
+      await writePidfile(repo, { pid: 44 });
+      await writeFile(
+        join(repo, '.daemon', 'exit-events.jsonl'),
+        'not json\n' + JSON.stringify({ type: 'daemon_exited', pid: 45, code: 3, signal: null, at: '2026-09-23T12:02:00.000Z' }) + '\n',
+        'utf8',
+      );
+      const out: string[] = [];
+
+      await runDaemonStatus({
+        registryPath: await registry([record('unknown-exit', repo)]),
+        kill: ALIVE,
+        out: (line) => out.push(line),
+        hasSessionProbe: () => true,
+        paneDeadProbe: () => true,
+      });
+
+      expect(out[0]).toContain('exit cause unknown');
+      expect(out[0]).toContain('(skipped 1 unparseable)');
+      expect(out[0].match(/skipped 1 unparseable/g)).toHaveLength(1);
+    });
 
     it('reports each repo and keeps going past a stale/missing one', async () => {
       const live = join(root, 'live');
