@@ -147,6 +147,18 @@ describe("group-core: parked join behavior", () => {
       outcome: { kind: "parked", attempt: 2 },
     }])).toEqual([]);
   });
+
+  it("leaves permission denials to the group refusal terminal", () => {
+    expect(buildParallelFailureEvents("manual_test", [{
+      name: "manual_test",
+      skill: "manual-test",
+      outcome: {
+        kind: "permission-denied",
+        provider: "codex",
+        reason: "permission review denied",
+      },
+    }])).toEqual([]);
+  });
 });
 
 describe("group-core: GroupMember and GroupResult shapes", () => {

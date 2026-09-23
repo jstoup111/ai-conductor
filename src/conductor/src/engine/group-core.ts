@@ -203,9 +203,10 @@ export function buildParallelStartedEvent(
  * `verdict:blocked` (a real, content-level validator failure) — each event
  * naming that specific member (`branch`), so a mixed-outcome join (some
  * members pass, one or more fail) attributes the failure to the RIGHT
- * validator instead of a single ambiguous group-level failure. Skipped
- * members never produce a `parallel_failure` — they were never dispatched,
- * so there is nothing to attribute a failure to.
+ * validator instead of a single ambiguous group-level failure. Skipped and
+ * parked members never produce a `parallel_failure` — they were never
+ * dispatched or intentionally stopped. A permission denial is instead
+ * recorded by the group's refusal path, which owns the terminal event.
  */
 export function buildParallelFailureEvents(
   step: StepName,
@@ -214,7 +215,11 @@ export function buildParallelFailureEvents(
   const events: ParallelFailureEvent[] = [];
   for (const member of members) {
     const { outcome } = member;
-    if (outcome.kind === "skipped" || outcome.kind === "parked") continue;
+    if (
+      outcome.kind === "skipped"
+      || outcome.kind === "parked"
+      || outcome.kind === "permission-denied"
+    ) continue;
     if (outcome.kind === "verdict" && outcome.verdict === "pass") continue;
 
     const error =
