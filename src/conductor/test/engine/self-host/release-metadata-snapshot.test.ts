@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GithubOperationRunner } from '../../../src/engine/github-operations.js';
 import { auditShippedGithubInvocationBoundary } from '../../../src/engine/github-invocation-audit.js';
 import {
@@ -41,8 +41,7 @@ describe('self-host release metadata snapshots', () => {
       if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ body }) };
       throw new Error(`unexpected GitHub arguments: ${args.join(' ')}`);
     };
-    const operations: GithubOperationRunner = {
-      run: async (request) => {
+    const run = vi.fn(async (request: Parameters<GithubOperationRunner['run']>[0]) => {
         expect(request).toMatchObject({
           operation: 'pull-request.edit',
           target: { repository: 'acme/conductor', kind: 'pull-request', number: 12 },
@@ -51,14 +50,19 @@ describe('self-host release metadata snapshots', () => {
         });
         body = (request.payload as { body: string }).body;
         return {};
-      },
-    };
+    });
+    const operations: GithubOperationRunner = { run };
 
     await snapshotReleaseMetadata({ gh, projectRoot, prUrl });
     const snapshot = await snapshotReleaseMetadata({ gh, projectRoot, prUrl });
     body = '## Summary\n\nRewritten by finish.\n';
     await restoreReleaseMetadata({ gh, projectRoot, prUrl, snapshot, operations });
 
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'pull-request.edit',
+      payload: { body: `## Summary\n\nRewritten by finish.\n\n${releaseBlock}` },
+    }));
     expect(calls).toEqual([
       ['pr', 'view', prUrl, '--json', 'body'],
       ['pr', 'view', prUrl, '--json', 'body'],
@@ -76,16 +80,18 @@ describe('self-host release metadata snapshots', () => {
     };
     const snapshot = await snapshotReleaseMetadata({ gh, projectRoot, prUrl });
     body = '## Summary\n\nRewritten by finish.\n';
-    const operations: GithubOperationRunner = {
-      run: async () => ({ kind: 'refused', reason: 'other-owner' }),
-    };
+    const run = vi.fn(async () => ({ kind: 'refused' as const, reason: 'other-owner' as const }));
+    const operations: GithubOperationRunner = { run };
 
     await expect(restoreReleaseMetadata({ gh, projectRoot, prUrl, snapshot, operations }))
       .rejects.toThrow('post-finish restore unavailable: guarded release metadata restore was refused or failed');
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ operation: 'pull-request.edit' }));
     expect(calls).toEqual([
       ['pr', 'view', prUrl, '--json', 'body'],
       ['pr', 'view', prUrl, '--json', 'body'],
     ]);
+    expect(calls.some((args) => args[0] === 'pr' && args[1] === 'edit')).toBe(false);
   });
 
   it('rejects malformed release metadata before any GitHub edit', async () => {
@@ -95,6 +101,7 @@ describe('self-host release metadata snapshots', () => {
       calls.push(args);
       return { stdout: JSON.stringify({ body: 'Release-Disposition: note\n' }) };
     };
+    const run = vi.fn();
 
     const error = await snapshotReleaseMetadata({ gh, projectRoot, prUrl }).catch(
       (cause: unknown) => cause instanceof Error ? cause.message : String(cause),
@@ -104,6 +111,8 @@ describe('self-host release metadata snapshots', () => {
       error: 'pre-finish snapshot unavailable: release metadata is malformed or non-canonical',
       calls: [['pr', 'view', prUrl, '--json', 'body']],
     });
+    expect(run).toHaveBeenCalledTimes(0);
+    expect(calls.some((args) => args[0] === 'pr' && args[1] === 'edit')).toBe(false);
   });
 
   it('keeps the moved GitHub boundary free of process-spawning imports', async () => {
