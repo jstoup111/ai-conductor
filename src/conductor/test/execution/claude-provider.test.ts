@@ -1312,6 +1312,27 @@ describe('ClaudeProvider', () => {
       }
     });
 
+    it('resolves a weekly-limit deadline to the next 9pm in America/New_York', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-07-03T16:00:00Z'));
+      mockExeca.mockResolvedValue({
+        stdout: "You've hit your weekly limit · resets 9pm (America/New_York)",
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      try {
+        const result = await provider.invoke({ ...baseOptions, interactive: true });
+
+        expect(result.rateLimited).toBe(true);
+        expect(result.success).toBe(false);
+        expect(result.deadline).toBe(Date.parse('2026-07-04T01:00:00Z'));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it.each([
       "You've hit your daily limit · resets 3:20pm (America/New_York)",
       "You've hit your usage limit · resets 3:20pm (America/New_York)",
@@ -2093,6 +2114,15 @@ describe('ClaudeProvider', () => {
 });
 
 describe('parseRateLimitWaitSeconds - direct unit tests for timezone parsing', () => {
+  it('rolls a weekly-limit deadline after 9pm to the following day', () => {
+    const now = new Date('2026-07-04T02:30:00Z');
+    const message = "You've hit your weekly limit · resets 9pm (America/New_York)";
+
+    const result = parseRateLimitWaitSeconds(message, { now });
+
+    expect(result.deadline).toBe(Date.parse('2026-07-05T01:00:00Z'));
+  });
+
   it('parses reset time in America/New_York timezone and returns deadline', () => {
     // Task 18: Test with injected "now" time to verify clamping
     // 2026-07-03T18:05:54Z is 13:05:54 EDT (UTC-4)
