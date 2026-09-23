@@ -27,6 +27,10 @@ const WORKTREE_REMOVAL_EXEMPTIONS = [
     reason: 'Does not call prepareWorktree, so it provisions nothing.',
   },
   {
+    module: 'engine/shipment-evidence-cli.ts',
+    reason: 'Removes only its own detached tmpdir repair worktree; never provisions a feature worktree.',
+  },
+  {
     module: 'engine/worktree.ts',
     reason: 'Does not call prepareWorktree, so it provisions nothing.',
   },
@@ -211,6 +215,7 @@ describe('structural: worktree-removal coverage', () => {
       'engine/daemon-park-cli.ts',
       'engine/engineer/worktree-authoring.ts',
       'engine/park-reconciliation.ts',
+      'engine/shipment-evidence-cli.ts',
       'engine/worktree-shared.ts',
       'engine/worktree.ts',
     ]);
@@ -304,6 +309,10 @@ describe('structural: worktree-removal coverage', () => {
       {
         module: 'engine/engineer/worktree-authoring.ts',
         reason: 'Does not call prepareWorktree, so it provisions nothing.',
+      },
+      {
+        module: 'engine/shipment-evidence-cli.ts',
+        reason: 'Removes only its own detached tmpdir repair worktree; never provisions a feature worktree.',
       },
       {
         module: 'engine/worktree.ts',

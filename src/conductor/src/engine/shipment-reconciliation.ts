@@ -188,6 +188,28 @@ export async function publishShipmentRepair(
   };
 }
 
+/**
+ * The frontmatter keys and markdown headings an existing record carries that a
+ * replacement would drop. A repair renders only the minimal frontmatter, so a
+ * non-empty answer means the base already holds a richer record (for example
+ * the finish-time record with `engine_version`, `## Cost`, `## Time`) and
+ * overwriting it would destroy shipped data.
+ */
+export function shippedRecordContentDroppedBy(existing: string, replacement: string): string[] {
+  const kept = new Set(shippedRecordShape(replacement));
+  return shippedRecordShape(existing).filter((item) => !kept.has(item));
+}
+
+function shippedRecordShape(record: string): string[] {
+  const lines = record.split('\n').map((line) => line.trimEnd());
+  const closing = lines[0] === '---' ? lines.indexOf('---', 1) : -1;
+  const keys = closing === -1
+    ? []
+    : lines.slice(1, closing).flatMap((line) => /^([A-Za-z0-9_-]+):/.exec(line)?.[1] ?? []);
+  const headings = lines.slice(closing + 1).filter((line) => /^#{1,6}\s+\S/.test(line));
+  return [...keys.map((key) => `${key}:`), ...headings];
+}
+
 function assertRecordOnlyRepair(writes: [ShipmentRecordWrite]): void {
   const [write] = writes;
   if (!write.path.startsWith('.docs/shipped/') || !write.path.endsWith('.md')) {

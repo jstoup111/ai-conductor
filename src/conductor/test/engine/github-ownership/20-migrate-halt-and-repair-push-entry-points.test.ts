@@ -181,6 +181,7 @@ describe('engine remote Git publication callers', () => {
       remoteMutation: mutation,
     });
 
+    await publisher.ensureRepairBranch({ branch: 'repair/feature', base: 'main' });
     await publisher.commitRecordOnly({
       branch: 'repair/feature',
       writes: [{ path: '.docs/shipped/feature.md', content: 'record\n' }],

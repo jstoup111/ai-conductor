@@ -1031,7 +1031,7 @@ describe('parked-feature reconciliation acceptance (rem-adr-006): the production
 
     const ghCalls: string[][] = [];
     let repairCreated = false;
-    const gh: GhRunner = async (args, opts) => {
+    const gh: GhRunner = async (args) => {
       ghCalls.push(args);
       const json = (value: unknown) => ({ stdout: JSON.stringify(value) });
       const has = (flag: string, value: string) => args[args.indexOf(flag) + 1] === value;
@@ -1046,7 +1046,10 @@ describe('parked-feature reconciliation acceptance (rem-adr-006): the production
         return json(repairCreated ? [{ url: repairPr }] : []);
       }
       if (args[0] === 'pr' && args[1] === 'view' && args[2] === implementationPr) {
-        if (has('--json', 'mergedAt')) return json({ mergedAt: '2026-07-27T10:11:12Z' });
+        if (has('--json', 'mergedAt,mergeCommit')) {
+          // The merge landed on main without the record (record: false).
+          return json({ mergedAt: '2026-07-27T10:11:12Z', mergeCommit: { oid: await git(['rev-parse', 'origin/main']) } });
+        }
         return json({
           url: implementationPr,
           body: `Implements \`.docs/plans/${slug}.md\``,
@@ -1055,7 +1058,7 @@ describe('parked-feature reconciliation acceptance (rem-adr-006): the production
         });
       }
       if (args[0] === 'pr' && args[1] === 'view' && args[2] === repairPr) {
-        return json({ url: repairPr, headRefOid: await git(['rev-parse', 'HEAD'], opts.cwd) });
+        return json({ url: repairPr, headRefOid: await git(['rev-parse', `refs/heads/${repairBranch}`], originDir) });
       }
       if (args[0] === 'pr' && args[1] === 'create') {
         repairCreated = true;
@@ -1085,6 +1088,9 @@ describe('parked-feature reconciliation acceptance (rem-adr-006): the production
 
     // Cleanup is correctly refused and deferred — the record still is not on main.
     expect(code).toBe(1);
+    // Publication never touched the live root checkout: still on main, clean.
+    expect(await git(['symbolic-ref', '--short', 'HEAD'])).toBe('main');
+    expect(await git(['status', '--porcelain', '--untracked-files=no'])).toBe('');
     expect(out.join('\n')).toContain(`Could not reconcile '${slug}': record-missing`);
     expect(await worktreeExists(slug)).toBe(true);
     expect(await branchExists(slug)).toBe(true);

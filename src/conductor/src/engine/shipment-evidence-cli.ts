@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   classifyShipmentAssociation,
@@ -14,6 +15,7 @@ import {
   planShipmentReconciliation,
   publishShipmentRepair,
   SHIPMENT_REPAIR_STATUS_CONTEXT,
+  shippedRecordContentDroppedBy,
   type ShipmentRepairPublicationResult,
   type ShipmentRepairPublisher,
 } from './shipment-reconciliation.js';
@@ -218,8 +220,18 @@ async function publishRecordOnlyRepair(input: {
   runGit: GitRunner;
   evaluateEvidence: NonNullable<ShipmentEvidenceRunners['evaluateEvidence']>;
   repo?: string;
+  /** Read the spec from this commit instead of the `cwd` working tree. */
+  specCommit?: string;
 }): Promise<ShipmentRepairPublicationResult> {
-  const expectedRecord = await expectedReconciledRecord(input.cwd, input.slug, input.shipped);
+  const { specCommit } = input;
+  const expectedRecord = await expectedReconciledRecord(
+    specCommit
+      ? (path) => readCommittedFile(input.runGit, input.cwd, specCommit, path)
+        .then((content) => (content === null ? null : Buffer.from(content, 'utf8')))
+      : (path) => readFile(join(input.cwd, path)).catch(() => null),
+    input.slug,
+    input.shipped,
+  );
   const evidence = await evaluateAtCandidateHead(
     input.implementationPr,
     input.cwd,
@@ -298,7 +310,15 @@ export function makeRecordRepairRequester(
         log(`[shipped-record-repair] ${slug}: implementation PR binding mismatch for ${prUrl}`);
         return;
       }
-      const planStems = await (options.listPlanStems ?? listPlanStems)(options.cwd);
+      // Judge only fetched git objects, never the root working tree: the sweep
+      // can run seconds after a merge, before the root checkout fast-forwards,
+      // and a record the merge already carries must never be "repaired".
+      await runGit(['fetch', 'origin', 'main'], { cwd: options.cwd });
+      const baseCommit = (await runGit(['rev-parse', '--verify', 'origin/main^{commit}'], { cwd: options.cwd }))
+        .stdout.trim();
+      const planStems = options.listPlanStems
+        ? await options.listPlanStems(options.cwd)
+        : await listPlanStemsAtCommit(runGit, options.cwd, baseCommit);
       const association = classifyShipmentAssociation({
         planStems,
         pr: {
@@ -314,23 +334,27 @@ export function makeRecordRepairRequester(
         log(`[shipped-record-repair] ${slug}: ${prUrl} associates with ${association.slug}; no repair requested`);
         return;
       }
-      const shipped = await readMergedDate(runGh, options.cwd, prUrl);
-      if (!shipped) {
-        log(`[shipped-record-repair] ${slug}: ${prUrl} has no merge date; no repair requested`);
+      const merge = await readMergeIdentity(runGh, options.cwd, prUrl);
+      if (!merge) {
+        log(`[shipped-record-repair] ${slug}: ${prUrl} has no merge date or merge commit; no repair requested`);
         return;
       }
-      const candidateCommit = (await runGit(['rev-parse', 'HEAD'], { cwd: options.cwd })).stdout.trim();
+      if (await shippedRecordInTree(runGit, options.cwd, merge.mergeCommit, slug)) {
+        log(`[shipped-record-repair] ${slug}: ${prUrl} merge commit already carries the record; no repair requested`);
+        return;
+      }
       const result = await publishRecordOnlyRepair({
         cwd: options.cwd,
         implementationPr: prUrl,
         slug,
-        shipped,
-        candidateCommit,
+        shipped: merge.shipped,
+        candidateCommit: baseCommit,
         association,
         runGh,
         runGit,
         evaluateEvidence,
         repo: await resolveRepairRepository(runGh, options.cwd),
+        specCommit: baseCommit,
       });
       log(
         result.kind === 'repair-published'
@@ -343,20 +367,55 @@ export function makeRecordRepairRequester(
   };
 }
 
-/** The shipped date is the PR's own merge timestamp — never today's clock. */
-async function readMergedDate(
+/**
+ * The shipped date is the PR's own merge timestamp — never today's clock — and
+ * the merge commit is the tree whose content the PR actually landed.
+ */
+async function readMergeIdentity(
   runGh: GhRunner,
   cwd: string,
   pullRequestUrl: string,
-): Promise<string | null> {
+): Promise<{ shipped: string; mergeCommit: string } | null> {
   const stdout = await runTrackerRead(
     runGh, cwd, 'pull-request.read', repositoryForPullRequest(pullRequestUrl), { kind: 'repository' },
-    ['pr', 'view', pullRequestUrl, '--json', 'mergedAt'],
+    ['pr', 'view', pullRequestUrl, '--json', 'mergedAt,mergeCommit'],
   );
-  const mergedAt = (JSON.parse(stdout) as { mergedAt?: unknown }).mergedAt;
+  const value = JSON.parse(stdout) as { mergedAt?: unknown; mergeCommit?: { oid?: unknown } | null };
+  const mergedAt = value.mergedAt;
+  const mergeCommit = value.mergeCommit?.oid;
   return typeof mergedAt === 'string' && /^\d{4}-\d{2}-\d{2}/.test(mergedAt)
-    ? mergedAt.slice(0, 'YYYY-MM-DD'.length)
+    && typeof mergeCommit === 'string' && mergeCommit
+    ? { shipped: mergedAt.slice(0, 'YYYY-MM-DD'.length), mergeCommit }
     : null;
+}
+
+/**
+ * Whether `commit`'s tree carries a shipped record for `slug`, exact or under a
+ * dated stem. A git failure propagates: no answer never authorizes a repair.
+ */
+async function shippedRecordInTree(
+  runGit: GitRunner,
+  cwd: string,
+  commit: string,
+  slug: string,
+): Promise<boolean> {
+  const { stdout } = await runGit(['ls-tree', '--name-only', commit, '--', '.docs/shipped/'], { cwd });
+  return stdout
+    .split('\n')
+    .map((entry) => entry.trim().replace(/^\.docs\/shipped\//, ''))
+    .some((entry) => entry === `${slug}.md` || entry.replace(/^\d{4}-\d{2}-\d{2}-(?=.)/, '') === `${slug}.md`);
+}
+
+/** A file's content at a commit, `null` when that tree does not carry it. */
+async function readCommittedFile(
+  runGit: GitRunner,
+  cwd: string,
+  commit: string,
+  path: string,
+): Promise<string | null> {
+  const listed = (await runGit(['ls-tree', '--name-only', commit, '--', path], { cwd })).stdout.trim();
+  if (!listed) return null;
+  return (await runGit(['show', `${commit}:${path}`], { cwd })).stdout;
 }
 
 /**
@@ -377,21 +436,20 @@ async function resolveRepairRepository(
 }
 
 async function expectedReconciledRecord(
-  cwd: string,
+  readSpec: (path: string) => Promise<Buffer | null>,
   slug: string,
   shipped: string,
 ): Promise<{ specHash: string; shipped: string }> {
-  const plan = await readFile(join(cwd, '.docs', 'plans', `${slug}.md`));
+  const planPath = `.docs/plans/${slug}.md`;
+  const plan = await readSpec(planPath);
+  if (plan === null) throw new Error(`plan ${planPath} is unavailable`);
   const planContent = plan.toString('utf8');
   const reference = planContent.match(/^\s*\*\*Stories:\*\*\s*`?([^\s`]+)`?/im)?.[1];
   let stories: Buffer | null = null;
   for (const path of [reference, `.docs/stories/${slug}.md`].filter((value): value is string => Boolean(value))) {
-    try {
-      stories = await readFile(join(cwd, path));
-      break;
-    } catch {
-      // The shared canonical-hash convention permits a plan without stories.
-    }
+    // The shared canonical-hash convention permits a plan without stories.
+    stories = await readSpec(path);
+    if (stories !== null) break;
   }
   return { specHash: specHash(plan, stories).digest, shipped };
 }
@@ -444,6 +502,10 @@ export function makeProductionRepairPublisher(input: {
     mutation: mutationForRepositoryOperations(input.remoteMutation),
   });
 
+  // The fetched start point `ensureRepairBranch` resolved. The repair commit is
+  // built from it in a throwaway worktree: `cwd` is the daemon's LIVE root
+  // checkout, whose branch and files this publisher must never touch.
+  let startPoint: string | undefined;
   return {
     ensureRepairBranch: async ({ branch, base }) => {
       const remoteBranch = `refs/heads/${branch}`;
@@ -452,34 +514,46 @@ export function makeProductionRepairPublisher(input: {
         ['api', `repos/${repo}/git/ref/heads/${branch}`],
       ).then(() => true, () => false);
       await input.runGit(['fetch', 'origin', exists ? remoteBranch : base], { cwd: input.cwd });
-      const startPoint = exists ? `origin/${branch}` : `origin/${base}`;
-      await input.runGit(['switch', '--force-create', branch, startPoint], { cwd: input.cwd });
+      startPoint = exists ? `origin/${branch}` : `origin/${base}`;
     },
     commitRecordOnly: async ({ branch, writes }) => {
       const [write] = writes;
-      await mkdir(join(input.cwd, '.docs', 'shipped'), { recursive: true });
-      await writeFile(join(input.cwd, write.path), write.content);
-      await input.runGit(['add', '--', write.path], { cwd: input.cwd });
-      const changed = (await input.runGit(['diff', '--cached', '--name-only'], { cwd: input.cwd })).stdout
-        .split('\n')
-        .filter(Boolean);
-      if (changed.length > 0 && (changed.length !== 1 || changed[0] !== write.path)) {
-        throw new Error(`repair commit is not record-only: ${changed.join(', ')}`);
+      if (!startPoint) throw new Error(`repair branch ${branch} was not prepared`);
+      const existing = await readCommittedFile(input.runGit, input.cwd, startPoint, write.path);
+      const dropped = existing === null ? [] : shippedRecordContentDroppedBy(existing, write.content);
+      if (dropped.length > 0) {
+        throw new Error(`repair would drop ${dropped.join(', ')} from the existing ${write.path}; refusing`);
       }
-      if (changed.length > 0) {
-        await input.runGit(['commit', '-m', `docs: repair shipped record for ${branch}`], { cwd: input.cwd });
-        const pushed = await (input.remoteGit ?? executeRemoteGit)(
-          ['push', 'origin', `HEAD:refs/heads/${branch}`],
-          {
-            cwd: input.cwd,
-            config: (args) => input.runGit(args, { cwd: input.cwd }),
-            runRemoteGit: input.runGit,
-            mutation: input.remoteMutation,
-          },
-        );
-        if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
+      const worktree = await mkdtemp(join(tmpdir(), 'shipment-repair-'));
+      try {
+        await input.runGit(['worktree', 'add', '--detach', worktree, startPoint], { cwd: input.cwd });
+        await mkdir(join(worktree, '.docs', 'shipped'), { recursive: true });
+        await writeFile(join(worktree, write.path), write.content);
+        await input.runGit(['add', '--', write.path], { cwd: worktree });
+        const changed = (await input.runGit(['diff', '--cached', '--name-only'], { cwd: worktree })).stdout
+          .split('\n')
+          .filter(Boolean);
+        if (changed.length > 0 && (changed.length !== 1 || changed[0] !== write.path)) {
+          throw new Error(`repair commit is not record-only: ${changed.join(', ')}`);
+        }
+        if (changed.length > 0) {
+          await input.runGit(['commit', '-m', `docs: repair shipped record for ${branch}`], { cwd: worktree });
+          const pushed = await (input.remoteGit ?? executeRemoteGit)(
+            ['push', 'origin', `HEAD:refs/heads/${branch}`],
+            {
+              cwd: worktree,
+              config: (args) => input.runGit(args, { cwd: worktree }),
+              runRemoteGit: input.runGit,
+              mutation: input.remoteMutation,
+            },
+          );
+          if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
+        }
+        return { headSha: (await input.runGit(['rev-parse', 'HEAD'], { cwd: worktree })).stdout.trim() };
+      } finally {
+        await input.runGit(['worktree', 'remove', '--force', worktree], { cwd: input.cwd }).catch(() => {});
+        await rm(worktree, { recursive: true, force: true });
       }
-      return { headSha: (await input.runGit(['rev-parse', 'HEAD'], { cwd: input.cwd })).stdout.trim() };
     },
     findOrCreateRepairPullRequest: async ({ branch, base, identity }) => {
       const existing = await runTrackerRead(
@@ -679,6 +753,15 @@ function exitCode(error: unknown): number | undefined {
     typeof (error as { code?: unknown }).code === 'number'
     ? (error as { code: number }).code
     : undefined;
+}
+
+async function listPlanStemsAtCommit(runGit: GitRunner, cwd: string, commit: string): Promise<string[]> {
+  const { stdout } = await runGit(['ls-tree', '--name-only', commit, '--', '.docs/plans/'], { cwd });
+  return stdout
+    .split('\n')
+    .map((entry) => entry.trim().replace(/^\.docs\/plans\//, ''))
+    .filter((entry) => entry.endsWith('.md'))
+    .map((entry) => entry.slice(0, -'.md'.length));
 }
 
 async function listPlanStems(cwd: string): Promise<string[]> {
