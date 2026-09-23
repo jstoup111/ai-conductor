@@ -1173,13 +1173,20 @@ export async function resolveConflictingPr(
         // If tier2 failed (unresolved conflicts), escalate immediately
         if (tier2Outcome.kind === 'conflict_halt') {
           const reason = tier2Outcome.reason || 'could not resolve remaining conflicts';
-          await escalate(prUrl, 'tier2-resolve', reason, {
+          // A completed-rebase halt means the resolver finished the rebase and
+          // the shared loop's post-completion guards (branch currency, commit
+          // preservation) rejected it. Those are the acceptance guards, so the
+          // escalation names that stage rather than a resolution failure.
+          const stage = tier2Outcome.resumeShape === 'completed-rebase'
+            ? 'acceptance-guards'
+            : 'tier2-resolve';
+          await escalate(prUrl, stage, reason, {
             runGh: deps.runGh,
             operations,
             cwd: repoCwd,
             log,
           });
-          logOutcome(log, prUrl, 'tier2-resolve', 'escalated');
+          logOutcome(log, prUrl, stage, 'escalated');
           return { kind: 'escalated' };
         }
         if (tier2Outcome.kind === 'setup_stop') {

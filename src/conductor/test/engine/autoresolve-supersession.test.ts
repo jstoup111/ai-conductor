@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -11,7 +11,15 @@ import {
   runAcceptanceGuards,
 } from '../../src/engine/autoresolve.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
-import type { ConductorEventEmitter } from '../../src/ui/events.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';
+import {
+  PASSING_SUITE,
+  buildPrFixture,
+  settleAndContinue,
+  skipReplay,
+  type PrFixture,
+} from './autoresolve-pr-fixture.js';
 
 const execFile = promisify(execFileCb);
 
@@ -269,5 +277,145 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
+  });
+});
+
+// Covers: task:6, task:7, task:8, task:10
+describe('engine/autoresolve — resolveConflictingPr sweep judgement flow (real git, stubbed gh)', () => {
+  const testOnly = () => buildPrFixture({
+    initial: { 'rewrite.test.ts': 'base\n' },
+    feature: [{ subject: 'test: rewrite assertion', files: { 'rewrite.test.ts': 'feature\n' } }],
+    main: { 'rewrite.test.ts': 'upstream\n' },
+  });
+  const config = { enabled: true, suiteCommand: 'npm test', cooldownMinutes: 0, attemptCap: 2 };
+  const run = (fx: PrFixture, resolver: Parameters<typeof resolveConflictingPr>[3]['resolver'], extra: Partial<Parameters<typeof resolveConflictingPr>[3]> = {}) =>
+    resolveConflictingPr(
+      { prUrl: fx.prUrl, slug: 'feature', repoCwd: fx.repo },
+      'feature',
+      config,
+      { runGh: fx.gh, runSuite: PASSING_SUITE, resolver, log: fx.log, events: fx.events, ...extra },
+    );
+
+  it('S1.1: publishes a declared test-only supersession with one lease push and a non-halt tier-2 outcome', async () => {
+    const fx = await testOnly();
+    try {
+      const guardResults: Awaited<ReturnType<typeof runAcceptanceGuards>>[] = [];
+      const outcome = await run(fx, async ({ projectRoot }) => {
+        await skipReplay(projectRoot);
+        return { resolved: true, verdict: { choice: 'superseded', rationale: 'upstream rewrote the assertion', superseded: [fx.shas[0]] } };
+      }, {
+        runAcceptanceGuards: async (...args) => {
+          const result = await runAcceptanceGuards(...args);
+          guardResults.push(result);
+          return result;
+        },
+      });
+
+      expect(outcome).toEqual({ kind: 'refreshed' });
+      expect(await fx.pushes()).toBe(1);
+      const tier2 = fx.logs.filter((line) => line.includes('tier2 outcome:'));
+      expect(tier2).toHaveLength(1);
+      expect(tier2[0]).not.toContain('conflict_halt');
+      expect(guardResults).toEqual([expect.objectContaining({ ok: true, excused: [expect.objectContaining({ sha: fx.shas[0] })] })]);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  it('S1.2: publishes a merged test-only resolution with no excused commit and no residue', async () => {
+    const fx = await testOnly();
+    try {
+      const guardResults: Awaited<ReturnType<typeof runAcceptanceGuards>>[] = [];
+      const outcome = await run(fx, async ({ projectRoot }) => {
+        await settleAndContinue(projectRoot, { 'rewrite.test.ts': 'upstream\nfeature\n' });
+        return { resolved: true, verdict: { choice: 'merged', rationale: 'kept both assertions', superseded: [] } };
+      }, {
+        runAcceptanceGuards: async (...args) => {
+          const result = await runAcceptanceGuards(...args);
+          guardResults.push(result);
+          return result;
+        },
+      });
+
+      expect(outcome).toEqual({ kind: 'refreshed' });
+      expect(await fx.pushes()).toBe(1);
+      expect(guardResults).toEqual([{ ok: true, excused: [] }]);
+      expect(fx.emitted.filter((event) => event.type === 'rebase_citation_residue')).toEqual([]);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  it('S1.4: forwards an unresolved intent conflict verbatim into the escalation comment without pushing', async () => {
+    const fx = await testOnly();
+    try {
+      const items = [
+        `replay commit ${'1'.repeat(7)} "test: rewrite assertion"`,
+        'file rewrite.test.ts lines 1-1',
+        'ours expects the upstream value',
+        'theirs expects the feature value',
+        'missing decision: which value the product now returns',
+      ];
+      const outcome = await run(fx, async () => ({ resolved: false, reason: items.join('; ') }));
+
+      expect(outcome).toEqual({ kind: 'escalated' });
+      expect(await fx.pushes()).toBe(0);
+      const body = fx.commentBodies().join('\n');
+      expect(body).toContain('**Stage:** tier2-resolve');
+      for (const item of items) expect(body).toContain(item);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  it('S3.3: escalates an undeclared drop at the acceptance-guards stage naming the subject, without pushing', async () => {
+    const fx = await testOnly();
+    try {
+      const outcome = await run(fx, async ({ projectRoot }) => {
+        await skipReplay(projectRoot);
+        return { resolved: true, verdict: { choice: 'merged', rationale: 'claims nothing was dropped', superseded: [] } };
+      });
+
+      expect(outcome).toEqual({ kind: 'escalated' });
+      expect(await fx.pushes()).toBe(0);
+      const body = fx.commentBodies().join('\n');
+      expect(body).toContain('**Stage:** acceptance-guards');
+      expect(body).toContain('test: rewrite assertion');
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  it('S3.2: records each excused commit as rebase residue and persists it to the feature event log', async () => {
+    const fx = await testOnly();
+    const featureWorktree = join(fx.repo, '.feature-worktree');
+    const bus = new ConductorEventEmitter();
+    const scope = startFeatureEventPersistence(featureWorktree, bus, 'feature');
+    try {
+      const outcome = await run(fx, async ({ projectRoot }) => {
+        await skipReplay(projectRoot);
+        return { resolved: true, verdict: { choice: 'superseded', rationale: 'upstream rewrote the assertion', superseded: [fx.shas[0]] } };
+      }, { events: scope.events });
+      scope.stop();
+
+      expect(outcome).toEqual({ kind: 'refreshed' });
+      const lines = (await readFile(join(featureWorktree, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line) as { type: string; residue?: Array<{ sha: string; reason: string }> });
+      const residue = lines.filter((line) => line.type === 'rebase_citation_residue');
+      expect(residue).toHaveLength(1);
+      expect(residue[0].residue).toEqual([expect.objectContaining({ sha: fx.shas[0], reason: 'declared-superseded-test-only' })]);
+    } finally {
+      scope.stop();
+      await fx.cleanup();
+    }
+  });
+
+  it('S3.2: the daemon sweep binding hands resolution a feature-scoped persisted bus', async () => {
+    const source = await readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8');
+    const scopeAt = source.indexOf('const featureScope = startFeatureEventPersistence(');
+    const callAt = source.indexOf('await resolveConflictingPr(', scopeAt);
+    expect(scopeAt).toBeGreaterThan(-1);
+    expect(callAt).toBeGreaterThan(scopeAt);
+    expect(source.slice(callAt, source.indexOf(');', callAt))).toContain('events: featureScope.events');
   });
 });
