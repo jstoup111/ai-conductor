@@ -473,14 +473,17 @@ async function gatherMergeEvidence(
   prefetched?: { shippedStems: string[] | null; branchesBySlug: Map<string, string[]> | null },
   branch?: string,
 ): Promise<MergeEvidence | null> {
-  // A record is mandatory only for daemon branches, but it is corroborating
-  // evidence for every branch.  In particular, ancestry by itself no longer
-  // authorizes reclaiming a non-daemon worktree: a record can corroborate it
-  // without a GitHub lookup.
-  const shippedStems = prefetched === undefined
+  // A record is mandatory only for record-gated candidates (daemon branches and
+  // branchless parked slugs). For any other branch a readable record may
+  // corroborate ancestry, but that branch never DEPENDS on the listing
+  // (adr-2026-07-29 D9, adr-2026-08-01 D8): an unreadable listing reads as "no
+  // record" for it, so its merge proofs — including merged-PR head identity —
+  // are still evaluated. Only record-gated candidates fail closed on it.
+  const listedStems = prefetched === undefined
     ? await listShippedStemsOnMain(runGit, projectRoot)
     : prefetched.shippedStems;
-  if (shippedStems === null) return null;
+  if (listedStems === null && requiresShippedRecord(branch)) return null;
+  const shippedStems = listedStems ?? [];
   const branchesBySlug =
     prefetched?.branchesBySlug ?? (await listBranchesBySlug(runGit, projectRoot));
   if (branchesBySlug === null) return null;
@@ -562,8 +565,8 @@ export async function reconcileParkedFeatures(
     .filter((candidate) => !candidate.parked).length;
 
   const prefetched = {
-    // Records corroborate ancestry for every reclaimable branch, not only
-    // daemon branches whose cleanup is record-gated.
+    // Records corroborate ancestry for every reclaimable branch; an unreadable
+    // listing retains only record-gated candidates (see gatherMergeEvidence).
     shippedStems: await listShippedStemsOnMain(runGit, opts.projectRoot),
     branchesBySlug: await listBranchesBySlug(runGit, opts.projectRoot),
   };

@@ -1063,10 +1063,17 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     expect(outcome).toEqual({ slug, steps: [], refusal: 'ancestry-check-failed' });
   });
 
-  it('fails closed when ancestry corroboration cannot read the shipped-record listing', async () => {
+  it('reclaims a squash-merged non-daemon branch by merged-PR head when the shipped-record listing is unreadable', async () => {
     const slug = 'hotfix-unreadable-records';
     const branch = `hotfix/${slug}`;
-    const { run, deleted } = makeGit({ shipped: 'unavailable', branches: [branch], merged: [branch] });
+    const head = '2222222222222222222222222222222222222222';
+    const { run, deleted } = makeGit({
+      shipped: 'unavailable',
+      branches: [branch],
+      tips: { [branch]: head },
+      mergedPrHeads: [head],
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: `[{"headRefOid":"${head}"}]` });
     const requestRecordRepair = vi.fn(async () => {});
 
     const outcome = await reconcileMergedPark({
@@ -1074,21 +1081,15 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       slug,
       branch,
       runGit: run,
+      runGh,
       requestRecordRepair,
     });
 
-    expect({
-      outcome,
-      deleted,
-      repairs: requestRecordRepair.mock.calls,
-      recordReads: run.mock.calls.filter(([args]) => args[0] === 'ls-tree' || args[0] === 'rev-parse'),
-    }).toEqual({
-      outcome: { slug, steps: [], refusal: 'ancestry-check-failed' },
-      deleted: [],
+    expect({ outcome, deleted, repairs: requestRecordRepair.mock.calls }).toEqual({
+      outcome: { slug, steps: ['worktree-removed', 'branch-deleted'] },
+      deleted: [branch],
       repairs: [],
-      recordReads: expect.any(Array),
     });
-    expect(run.mock.calls.filter(([args]) => args[0] === 'ls-tree' || args[0] === 'rev-parse')).toHaveLength(2);
   });
 
   it('treats an origin/main without a .docs/shipped tree as no records rather than unavailable', async () => {
@@ -2529,30 +2530,37 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     }
   });
 
-  it('retains a non-daemon enumerated candidate when ancestry corroboration records are unavailable', async () => {
+  it('reclaims a non-daemon squash candidate and retains only the record-gated candidate when records are unreadable', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'sweep-hotfix-unreadable-records';
     const branch = `hotfix/${slug}`;
-    const { run, deleted } = makeGit({ shipped: 'unavailable', branches: [branch], merged: [branch] });
+    const daemonSlug = 'sweep-daemon-unreadable-records';
+    const daemonBranch = `feat/daemon-${daemonSlug}`;
+    const head = '3333333333333333333333333333333333333333';
+    const { run, deleted } = makeGit({
+      shipped: 'unavailable',
+      branches: [branch, daemonBranch],
+      merged: [daemonBranch],
+      tips: { [branch]: head },
+      mergedPrHeads: [head],
+    });
     const events: unknown[] = [];
     try {
       await reconcileParkedFeatures({
         projectRoot,
         runGit: run,
-        worktreeListing: async () => [{ slug, branch }],
+        runGh: async () => ({ stdout: `[{"headRefOid":"${head}"}]` }),
+        worktreeListing: async () => [{ slug, branch }, { slug: daemonSlug, branch: daemonBranch }],
         onEvent: (event) => events.push(event),
       });
 
-      expect({
-        deleted,
-        events,
-        recordReads: run.mock.calls.filter(([args]) => args[0] === 'ls-tree' || args[0] === 'rev-parse'),
-      }).toEqual({
-        deleted: [],
-        events: [{ type: 'worktree_reclaim_retained', slug, branch, reason: 'evidence-unavailable' }],
-        recordReads: expect.any(Array),
+      expect({ deleted, events }).toEqual({
+        deleted: [branch],
+        events: [
+          { type: 'worktree_reclaim_reclaimed', slug, branch, proof: 'merged-pr-head' },
+          { type: 'worktree_reclaim_retained', slug: daemonSlug, branch: daemonBranch, reason: 'evidence-unavailable' },
+        ],
       });
-      expect(run.mock.calls.filter(([args]) => args[0] === 'ls-tree' || args[0] === 'rev-parse')).toHaveLength(2);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
