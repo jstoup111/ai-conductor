@@ -321,6 +321,52 @@ describe('gateVerdictStillValid', () => {
     await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBeNull();
   });
 
+  it.each([200, 150])('blocks an unstamped satisfied verdict checked at %i or before appliedAt', async (checkedAt) => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 250,
+      rebaseOperation: {
+        id: `unstamped-${checkedAt}`,
+        status: 'applied',
+        appliedAt: 200,
+        transition: { preserved: ['prd_audit'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await writeVerdict(s.repo, 'prd_audit', { satisfied: true, checkedAt });
+
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBe(
+      'rebase transition preserved prd_audit without its replay-bound authority',
+    );
+  });
+
+  it('blocks a newer unstamped satisfied verdict carrying a kickback', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 150,
+      rebaseOperation: {
+        id: 'kicked-back-prd-audit',
+        status: 'applied',
+        appliedAt: 100,
+        transition: { preserved: ['prd_audit'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await writeVerdict(s.repo, 'prd_audit', {
+      satisfied: true,
+      checkedAt: 200,
+      kickback: { from: 'rebase', evidence: 'x' },
+    });
+
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBe(
+      'rebase transition preserved prd_audit without its replay-bound authority',
+    );
+  });
+
   it('accepts a fresh re-judgement beside a correctly bound preserved verdict', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);
