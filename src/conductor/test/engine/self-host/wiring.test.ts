@@ -54,6 +54,7 @@ import type { SelfHostGuardrails } from '../../../src/engine/self-host/wiring.js
 import type { SandboxBuildEnv } from '../../../src/engine/self-host/sandbox-build-env.js';
 import {
   runReleaseArtifactGate,
+  type ReleaseGateOptions,
 } from '../../../src/engine/self-host/release-gate.js';
 import type { GhRunner, GitRunner } from '../../../src/engine/pr-labels.js';
 import { Conductor } from '../../test-conductor.js';
@@ -352,6 +353,48 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(false);
   });
 
+  it('a step-committed hook waiver passes the real release gate and dispatches finish', async () => {
+    await writeState(statePath, preBuildDoneState());
+    const releaseGate = vi.fn(async (opts: ReleaseGateOptions) =>
+      runReleaseArtifactGate({
+        ...opts,
+        readText: async () => 'Waives: hook wiring\n\nRationale: The hook edit is internal-only.\n',
+        changedFiles: async () => [
+          { status: 'M', path: 'hooks/claude/rtk-rewrite.sh' },
+          { status: 'A', path: '.docs/release-waivers/internal-hook.md' },
+        ],
+      }),
+    );
+    const { guardrails } = makeGuardrails({ releaseGate });
+    const { runner, seen } = releaseDispositionRunner(dir);
+
+    await selfBuildConductor(guardrails, runner, { config: releaseDispositionConfig() }).run();
+
+    expect(releaseGate).toHaveBeenCalledTimes(1);
+    expect(seen.find((entry) => entry.step === 'finish')).toBeDefined();
+    expect(await exists(join(dir, '.pipeline', 'HALT'))).toBe(false);
+  });
+
+  it('an unclassifiable hook edit halts at the real release gate before finish', async () => {
+    await writeState(statePath, preBuildDoneState());
+    const releaseGate = vi.fn(async (opts: ReleaseGateOptions) =>
+      runReleaseArtifactGate({
+        ...opts,
+        readText: async () => null,
+        changedFiles: async () => [{ status: 'M', path: 'hooks/claude/rtk-rewrite.sh' }],
+      }),
+    );
+    const { guardrails } = makeGuardrails({ releaseGate });
+    const { runner, seen } = releaseDispositionRunner(dir);
+
+    await selfBuildConductor(guardrails, runner, { config: releaseDispositionConfig() }).run();
+
+    expect(releaseGate).toHaveBeenCalledTimes(1);
+    expect(seen.find((entry) => entry.step === 'finish')).toBeUndefined();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/Migration block required.*hook wiring/i);
+    await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
   it('passes runnable migration metadata from the retained draft PR to releaseGate', async () => {
     await writeState(statePath, preBuildDoneState());
     const { guardrails } = makeGuardrails();
@@ -412,6 +455,20 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     ['malformed disposition', async (args: string[]) => args[1] === 'list'
       ? { stdout: JSON.stringify([{ url: 'https://github.com/acme/harness/pull/42', state: 'OPEN' }]) }
       : { stdout: JSON.stringify({ body: 'Release-Disposition: note' }) }, /Category/],
+    ['non-runnable migration fence', async (args: string[]) => args[1] === 'list'
+      ? { stdout: JSON.stringify([{ url: 'https://github.com/acme/harness/pull/42', state: 'OPEN' }]) }
+      : { stdout: JSON.stringify({ body: [
+        'Release-Disposition: note',
+        'Release-Category: Changed',
+        'Release-Semver: major',
+        'Release-Note: Preserve the migration contract.',
+        '',
+        '## Migration',
+        '',
+        '```bash',
+        './bin/install --update',
+        '```',
+      ].join('\n') }) }, /Invalid release disposition: Migration/],
   ] as const)('HALTs before finish when release metadata has %s', async (_caseName, runGh, reason) => {
     await writeState(statePath, preBuildDoneState());
     const { guardrails } = makeGuardrails();

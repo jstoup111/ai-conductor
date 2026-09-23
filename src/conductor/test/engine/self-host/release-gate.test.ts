@@ -218,6 +218,36 @@ describe('runReleaseArtifactGate — composed migration gate (TR-10)', () => {
     expect(v).toEqual({ ok: true });
   });
 
+  it('accepts a fresh step-committed waiver for hook wiring without a HALT', async () => {
+    const v = await runReleaseArtifactGate({
+      projectRoot,
+      harnessRoot,
+      readText: async () => 'Waives: hook wiring\n\nRationale: The hook edit is internal-only.\n',
+      changedFiles: async () => [
+        { status: 'M', path: 'hooks/claude/rtk-rewrite.sh' },
+        { status: 'A', path: '.docs/release-waivers/internal-hook.md' },
+      ],
+    });
+
+    expect(v).toEqual({ ok: true });
+    expect(existsSync(join(projectRoot, '.pipeline', 'HALT'))).toBe(false);
+  });
+
+  it('accepts one fresh waiver covering hook wiring and bin/conduct CLI', async () => {
+    const v = await runReleaseArtifactGate({
+      projectRoot,
+      harnessRoot,
+      readText: async () => 'Waives: hook wiring, bin/conduct CLI\n\nRationale: Both flagged edits are internal-only.\n',
+      changedFiles: async () => [
+        { status: 'M', path: 'hooks/claude/rtk-rewrite.sh' },
+        { status: 'M', path: 'bin/conduct' },
+        { status: 'A', path: '.docs/release-waivers/internal-hook-and-cli.md' },
+      ],
+    });
+
+    expect(v).toEqual({ ok: true });
+  });
+
   it('rejects a valid waiver that was not committed in the current change set', async () => {
     const v = await runReleaseArtifactGate({
       projectRoot,
@@ -262,6 +292,38 @@ describe('runReleaseArtifactGate — composed migration gate (TR-10)', () => {
     expect(v.ok).toBe(false);
     if (v.ok) return;
     expect(v.reason).toMatch(/does not cover: hook wiring/i);
+  });
+
+  it('rejects a hook waiver that leaves settings.json schema uncovered', async () => {
+    const v = await runReleaseArtifactGate({
+      projectRoot,
+      harnessRoot,
+      readText: async () => 'Waives: hook wiring\n\nRationale: The hook edit is internal-only.\n',
+      changedFiles: async () => [
+        { status: 'M', path: 'hooks/claude/rtk-rewrite.sh' },
+        { status: 'M', path: 'settings.json' },
+        { status: 'A', path: '.docs/release-waivers/internal-hook.md' },
+      ],
+    });
+
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toMatch(/settings\.json schema/i);
+  });
+
+  it('halts for an unclassifiable hook edit without migration or waiver', async () => {
+    const v = await runReleaseArtifactGate({
+      projectRoot,
+      harnessRoot,
+      readText: async () => null,
+      changedFiles: async () => [{ status: 'M', path: 'hooks/claude/rtk-rewrite.sh' }],
+    });
+
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toMatch(/Migration block required[\s\S]*hook wiring/i);
+    expect(v.reason).toMatch(/waiver/i);
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(v.reason);
   });
 
   it('rejects an uncertain change set without reading a waiver', async () => {
