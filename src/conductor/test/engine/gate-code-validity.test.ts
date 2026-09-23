@@ -259,6 +259,74 @@ describe('gateVerdictStillValid', () => {
     await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBeNull();
   });
 
+  it('accepts a fresh satisfied re-judgement for a preserved gate', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 150,
+      rebaseOperation: {
+        id: 'fresh-prd-audit',
+        status: 'applied',
+        appliedAt: 100,
+        transition: { preserved: ['prd_audit'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await writeVerdict(s.repo, 'prd_audit', { satisfied: true, checkedAt: 200 });
+
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBeNull();
+  });
+
+  it('accepts a fresh re-judgement beside a correctly bound preserved verdict', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const operationId = 'mixed-preserved-gates';
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 150,
+      rebaseOperation: {
+        id: operationId,
+        status: 'applied',
+        appliedAt: 100,
+        transition: { preserved: ['build_review', 'prd_audit'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await writeVerdict(s.repo, 'build_review', {
+      satisfied: true,
+      checkedAt: 50,
+      preservation: { gate: 'build_review', operationId } as ReplayPreservationRecord,
+    });
+    await writeVerdict(s.repo, 'prd_audit', { satisfied: true, checkedAt: 200 });
+
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBeNull();
+  });
+
+  it('keeps correctly bound replay preservation authority for a preserved gate', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const operationId = 'bound-build-review';
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 250,
+      rebaseOperation: {
+        id: operationId,
+        status: 'applied',
+        appliedAt: 200,
+        transition: { preserved: ['build_review'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await writeVerdict(s.repo, 'build_review', {
+      satisfied: true,
+      checkedAt: 100,
+      preservation: { gate: 'build_review', operationId } as ReplayPreservationRecord,
+    });
+
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBeNull();
+  });
+
   it('keeps an interrupted rebase operation non-publishable when a later rebase verdict is rewritten', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);

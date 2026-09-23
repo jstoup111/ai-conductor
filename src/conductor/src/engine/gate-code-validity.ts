@@ -103,13 +103,16 @@ export async function rebaseOperationPublicationBlocker(projectRoot: string): Pr
   // verdict file — notably `build` and disabled `coverage_binding`), and their
   // normal completion predicates remain the authority at finish.
   const named = transition.preserved;
+  const appliedAtTime = operation.appliedAt ?? rebase.checkedAt;
   for (const gate of named) {
     const verdict = await persistedVerdict(projectRoot, gate);
     if (!verdict?.satisfied) {
       return `rebase transition still has an outstanding ${gate} repair or re-verification`;
     }
-    if (transition.preserved.includes(gate) &&
-      (verdict.preservation?.gate !== gate || verdict.preservation.operationId !== operation.id)) {
+    const stamped = verdict.preservation?.gate === gate && verdict.preservation.operationId === operation.id;
+    const freshRejudgement = verdict.satisfied && !verdict.kickback && !verdict.preservation &&
+      verdict.checkedAt > appliedAtTime;
+    if (!stamped && !freshRejudgement) {
       return `rebase transition preserved ${gate} without its replay-bound authority`;
     }
   }
