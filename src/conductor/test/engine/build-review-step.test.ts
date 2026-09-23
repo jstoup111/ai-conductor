@@ -606,6 +606,27 @@ describe('build_review structured rubric dispatch', () => {
     expect(invoke.mock.calls.slice(1).some(([options]) => options.prompt.includes('repair'))).toBe(false);
   });
 
+  // D6: the rejection is diagnosed on the stamped value the parser judged, so
+  // engine-owned envelope fields are never attributed to the provider payload.
+  it('diagnoses a rejected built-in payload by its own defect and never as absent engine-stamped envelope fields', async () => {
+    const invoke = vi.fn(async (_options: InvokeOptions) => ({
+      success: true,
+      output: 'ignored prose',
+      exitCode: 0,
+      finalStructuredResult: { findings: [{ concernKind: 'test-insensitive' }] },
+    }));
+    const { result } = await dispatchBuiltIn(invoke);
+    const failure = result as { kind: string; cause?: string; detail: string; rejection?: { kind: string; problems: readonly { field: string }[] } };
+
+    expect(failure).toMatchObject({ kind: 'dispatch-failure', cause: 'invalid-structured-result', rejection: { kind: 'explained' } });
+    const fields = failure.rejection!.problems.map((problem) => problem.field);
+    expect(fields).toEqual(expect.arrayContaining(['findings[0].summary', 'findings[0].evidenceLocations', 'findings[0].anchor']));
+    for (const envelopeField of ['kind', 'rubric', 'lapId', 'contractVersion', 'snapshotDigest']) {
+      expect(fields, `envelope field ${envelopeField} attributed to the provider`).not.toContain(envelopeField);
+      expect(failure.detail).not.toMatch(new RegExp(`"${envelopeField}" must`));
+    }
+  });
+
   it('settles an incapable-only runtime candidate set as native-schema-unsupported without launching a provider', async () => {
     const invoke = vi.fn(async (_options: InvokeOptions) => ({
       success: true, output: 'ignored prose', exitCode: 0, finalStructuredResult: { findings: [] },

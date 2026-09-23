@@ -728,7 +728,8 @@ type ProviderAwareOneShotRequest =
 export const RUBRIC_FAILURE_DETAIL_CAP_BYTES = 2_048;
 
 export type RubricContractDispatch<Output = unknown> =
-  | { readonly kind: 'structured'; readonly invocation: InvokeResult; readonly parsed: Output | undefined }
+  /** `prepared` is the exact value the descriptor parser judged (stamped for built-ins), retained so a rejection is diagnosed on it and never on the raw provider payload. */
+  | { readonly kind: 'structured'; readonly invocation: InvokeResult; readonly prepared: unknown; readonly parsed: Output | undefined }
   | { readonly kind: 'root-rejection'; readonly invocation: InvokeResult; readonly rejection: { readonly field: 'root'; readonly problem: 'a structured result is required' } }
   | { readonly kind: 'provider-failure'; readonly invocation: InvokeResult };
 
@@ -752,10 +753,12 @@ export async function dispatchRubricContract<Output>(input: {
     return { kind: 'root-rejection', invocation, rejection: { field: 'root', problem: 'a structured result is required' } };
   }
   const raw = structuredResult as Record<string, unknown>;
+  const prepared = input.prepareStructured?.(raw) ?? raw;
   return {
     kind: 'structured',
     invocation,
-    parsed: input.descriptor.output.parse(input.prepareStructured?.(raw) ?? raw),
+    prepared,
+    parsed: input.descriptor.output.parse(prepared),
   };
 }
 
@@ -3580,7 +3583,16 @@ export class DefaultStepRunner implements StepRunner {
                 }
               }
               await inputs?.sourceMaterialization?.settle(branch.rubric);
-              return { kind: 'judged' as const, result: judged ? { ...invoked, output: JSON.stringify(judged), finalStructuredResult: judged } : invoked };
+              if (judged) return { kind: 'judged' as const, result: { ...invoked, output: JSON.stringify(judged), finalStructuredResult: judged } };
+              // A parser rejection is diagnosed on the same stamped value the
+              // parser judged (D6): the raw provider payload carries no
+              // engine-owned envelope fields, so diagnosing it would falsely
+              // report `kind`, `rubric`, `lapId`, `contractVersion`, and
+              // `snapshotDigest` as absent.
+              return {
+                kind: 'judged' as const,
+                result: dispatched.kind === 'structured' ? { ...invoked, finalStructuredResult: dispatched.prepared } : invoked,
+              };
             },
           }),
             undefined,
@@ -3612,8 +3624,10 @@ export class DefaultStepRunner implements StepRunner {
         }),
       });
       this.callCount++;
+      // On rejection the stamped `prepared` value is carried forward so the
+      // outer diagnosis names the payload defect, not absent envelope fields (D6).
       return preserveInvocationFailure(dispatched.kind === 'structured'
-        ? { ...dispatched.invocation, finalStructuredResult: dispatched.parsed }
+        ? { ...dispatched.invocation, finalStructuredResult: dispatched.parsed ?? dispatched.prepared }
         : dispatched.invocation);
     };
 
