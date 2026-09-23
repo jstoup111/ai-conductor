@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { resolveCanonicalLauncher, shellQuote } from './canonical-launcher.js';
 import { DEFAULT_DAEMON_HEAP_LIMIT_MB } from './config.js';
-import type { Config } from '../types/config.js';
+import type { HarnessConfig } from '../types/config.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants — only place that encodes the session prefix and foreground command.
@@ -28,7 +28,7 @@ export const SESSION_PREFIX = 'cc-daemon-';
 
 /** Builds the continuous-daemon pane command with its V8 old-space cap. */
 export function buildDaemonForegroundCommand(
-  config: Pick<Config, 'daemon_heap_limit_mb'> = {},
+  config: Partial<Pick<HarnessConfig, 'daemon_heap_limit_mb'>> = {},
 ): string {
   const heapLimitMb = config.daemon_heap_limit_mb ?? DEFAULT_DAEMON_HEAP_LIMIT_MB;
   return `NODE_OPTIONS=--max-old-space-size=${heapLimitMb} ${shellQuote(resolveCanonicalLauncher())} daemon --continuous`;
