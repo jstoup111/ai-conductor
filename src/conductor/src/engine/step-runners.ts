@@ -748,7 +748,7 @@ export function extractJudgedResultCandidate(output: string): unknown {
 }
 
 export type RubricContractDispatch<Output = unknown> =
-  | { readonly kind: 'structured'; readonly invocation: InvokeResult; readonly structuredResult: Record<string, unknown>; readonly parsed: Output | undefined }
+  | { readonly kind: 'structured'; readonly invocation: InvokeResult; readonly parsed: Output | undefined }
   | { readonly kind: 'root-rejection'; readonly invocation: InvokeResult; readonly rejection: { readonly field: 'root'; readonly problem: 'a structured result is required' } }
   | { readonly kind: 'provider-failure'; readonly invocation: InvokeResult };
 
@@ -772,7 +772,6 @@ export async function dispatchRubricContract<Output>(input: {
   return {
     kind: 'structured',
     invocation,
-    structuredResult: raw,
     parsed: input.descriptor.output.parse(input.prepareStructured?.(raw) ?? raw),
   };
 }
