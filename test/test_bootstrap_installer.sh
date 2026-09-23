@@ -176,7 +176,7 @@ run_case() {
     channel_env=("AI_CONDUCTOR_CHANNEL=$CASE_CHANNEL")
   fi
   env -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GIT_ASKPASS -u GIT_CREDENTIAL_HELPER -u AI_CONDUCTOR_CHANNEL \
-    "${channel_env[@]}" HOME="$case_home" PATH="${CASE_PATH-$PATH}" REAL_GIT="$(command -v git)" AI_CONDUCTOR_REPO_URL="${CASE_REPO_URL-$SOURCE_REPO}" INSTALLER_RECORD="$RECORD" INSTALLER_EXIT_CODE="${INSTALLER_EXIT_CODE-0}" CASE_STDOUT_PATH="$case_stdout" CLONE_START_STDOUT="$clone_start_stdout" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
+    "${channel_env[@]}" HOME="$case_home" PATH="${CASE_PATH-$PATH}" REAL_GIT="$(command -v git)" AI_CONDUCTOR_REPO_URL="${CASE_REPO_URL-$SOURCE_REPO}" INSTALLER_RECORD="${CASE_INSTALLER_RECORD-$RECORD}" UPDATE_RECORD="${CASE_UPDATE_RECORD-$RECORD}" INSTALLER_EXIT_CODE="${INSTALLER_EXIT_CODE-0}" CASE_STDOUT_PATH="$case_stdout" CLONE_START_STDOUT="$clone_start_stdout" /bin/sh -s -- "$@" < "$INSTALL_SCRIPT" > "$case_stdout" 2> "$case_stderr"
   CASE_STATUS=$?
   set -e
   CASE_STDOUT=$(< "$case_stdout")
@@ -546,37 +546,45 @@ else
 fi
 
 RERUN_HOME="$TMP_ROOT/home-rerun"
-CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case rerun-first
+RERUN_INSTALLER_RECORD="$TMP_ROOT/rerun-installer-record"
+RERUN_UPDATE_RECORD="$TMP_ROOT/rerun-updater-record"
+: > "$RERUN_INSTALLER_RECORD"
+: > "$RERUN_UPDATE_RECORD"
+CASE_INSTALLER_RECORD="$RERUN_INSTALLER_RECORD" CASE_UPDATE_RECORD="$RERUN_UPDATE_RECORD" CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case rerun-first
 rerun_head=$(git -C "$RERUN_HOME/.ai-conductor/harness" rev-parse HEAD)
-: > "$RECORD"
 RERUN_GIT_RECORD="$TMP_ROOT/rerun-git-subcommands"
 : > "$RERUN_GIT_RECORD"
-GIT_SUBCOMMAND_RECORD="$RERUN_GIT_RECORD" CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case rerun-second
+GIT_SUBCOMMAND_RECORD="$RERUN_GIT_RECORD" CASE_INSTALLER_RECORD="$RERUN_INSTALLER_RECORD" CASE_UPDATE_RECORD="$RERUN_UPDATE_RECORD" CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case rerun-second
 if [ "$CASE_STATUS" -eq 0 ] && grep -Fq 'installation is current' <<< "$CASE_STDOUT" \
-  && [ "$(< "$RECORD")" = "$RERUN_HOME/.ai-conductor/harness||" ] \
+  && [ "$(wc -l < "$RERUN_INSTALLER_RECORD")" -eq 1 ] \
+  && grep -Fqx "$RERUN_HOME/.ai-conductor/harness|./bin/install||" "$RERUN_INSTALLER_RECORD" \
+  && [ "$(wc -l < "$RERUN_UPDATE_RECORD")" -eq 1 ] \
+  && grep -Fqx "$RERUN_HOME/.ai-conductor/harness||" "$RERUN_UPDATE_RECORD" \
   && ! grep -Fxq clone "$RERUN_GIT_RECORD" \
   && [ "$(git -C "$RERUN_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$rerun_head" ]; then
   echo 'PASS second run delegates to the current checkout updater'
 else
-  failures+="second run did not delegate to updater: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\ngit subcommands: $(< "$RERUN_GIT_RECORD")\\n"
+  failures+="second run did not delegate to updater: $CASE_OUTPUT\\ninstaller records: $(< "$RERUN_INSTALLER_RECORD")\\nupdater records: $(< "$RERUN_UPDATE_RECORD")\\ngit subcommands: $(< "$RERUN_GIT_RECORD")\\n"
 fi
 
 printf 'advanced stable channel\n' > "$SOURCE_REPO/ADVANCED"
 git -C "$SOURCE_REPO" add ADVANCED
 git -C "$SOURCE_REPO" commit -qm 'advance stable fixture'
 advanced_stable_head=$(git -C "$SOURCE_REPO" rev-parse stable)
-: > "$RECORD"
 BEHIND_GIT_RECORD="$TMP_ROOT/behind-git-subcommands"
 : > "$BEHIND_GIT_RECORD"
-GIT_SUBCOMMAND_RECORD="$BEHIND_GIT_RECORD" CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case behind-stable
+GIT_SUBCOMMAND_RECORD="$BEHIND_GIT_RECORD" CASE_INSTALLER_RECORD="$RERUN_INSTALLER_RECORD" CASE_UPDATE_RECORD="$RERUN_UPDATE_RECORD" CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case behind-stable
 if [ "$CASE_STATUS" -eq 0 ] && grep -Fq 'installation is current' <<< "$CASE_STDOUT" \
   && [ "$advanced_stable_head" != "$rerun_head" ] \
-  && [ "$(< "$RECORD")" = "$RERUN_HOME/.ai-conductor/harness||" ] \
+  && [ "$(wc -l < "$RERUN_INSTALLER_RECORD")" -eq 1 ] \
+  && grep -Fqx "$RERUN_HOME/.ai-conductor/harness|./bin/install||" "$RERUN_INSTALLER_RECORD" \
+  && [ "$(wc -l < "$RERUN_UPDATE_RECORD")" -eq 2 ] \
+  && [ "$(grep -Fxc "$RERUN_HOME/.ai-conductor/harness||" "$RERUN_UPDATE_RECORD")" -eq 2 ] \
   && ! grep -Fxq clone "$BEHIND_GIT_RECORD" \
   && [ "$(git -C "$RERUN_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$rerun_head" ]; then
   echo 'PASS behind stable checkout delegates to updater without acquisition'
 else
-  failures+="behind stable checkout did not delegate to updater without acquisition: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\ngit subcommands: $(< "$BEHIND_GIT_RECORD")\\n"
+  failures+="behind stable checkout did not delegate to updater without acquisition: $CASE_OUTPUT\\ninstaller records: $(< "$RERUN_INSTALLER_RECORD")\\nupdater records: $(< "$RERUN_UPDATE_RECORD")\\ngit subcommands: $(< "$BEHIND_GIT_RECORD")\\n"
 fi
 
 UPDATE_FAIL_HOME="$TMP_ROOT/home-updater-failure"
@@ -591,9 +599,13 @@ update_failure_status=$?
 set -e
 update_after_head=$(git -C "$UPDATE_FAIL_HOME/.ai-conductor/harness" rev-parse HEAD)
 update_after_status=$(git -C "$UPDATE_FAIL_HOME/.ai-conductor/harness" status --porcelain)
-update_recorded_head=$(sed -n '1p' "$UPDATE_STATE_RECORD")
-update_recorded_status=$(sed -n '2p' "$UPDATE_STATE_RECORD")
-if [ "$update_failure_status" -eq 7 ] && [ -f "$UPDATE_MARKER" ] && grep -Fq 'updater failed with 7' "$TMP_ROOT/updater-failure.stderr" \
+update_recorded_head=''
+update_recorded_status=''
+if [ -f "$UPDATE_STATE_RECORD" ]; then
+  update_recorded_head=$(sed -n '1p' "$UPDATE_STATE_RECORD")
+  update_recorded_status=$(sed -n '2p' "$UPDATE_STATE_RECORD")
+fi
+if [ "$update_failure_status" -eq 7 ] && [ -f "$UPDATE_MARKER" ] && [ -f "$UPDATE_STATE_RECORD" ] && grep -Fq 'updater failed with 7' "$TMP_ROOT/updater-failure.stderr" \
   && [ "$update_before_head" = "$update_after_head" ] && [ "$update_before_status" = "$update_after_status" ] \
   && [ "$update_recorded_head" = "$update_after_head" ] && [ "$update_recorded_status" = "$update_after_status" ]; then
   echo 'PASS updater failure and its state are propagated unchanged'
