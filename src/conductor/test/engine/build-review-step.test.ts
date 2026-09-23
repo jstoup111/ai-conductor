@@ -24,6 +24,7 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import type { ResolvedBuildReviewCustomCatalogEntry } from '../../src/engine/resolved-config.js';
+import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 
 const buildReviewPublication = vi.hoisted(() => ({ count: 0 }));
 const buildReviewRegistryOverride = vi.hoisted(() => ({ descriptor: undefined as unknown }));
@@ -396,11 +397,15 @@ describe('build_review structured rubric dispatch', () => {
     testSuiteProof: {}, revertedProductionManifest: [], preflight: {}, repairContext: [],
   } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
 
-  const dispatchBuiltIn = async (invoke: LLMProvider['invoke']) => {
-    const runner = new DefaultStepRunner({ invoke }, 'structured-review', '/fixture');
+  const dispatchBuiltIn = async (
+    invoke: LLMProvider['invoke'],
+    mode?: 'interactive',
+    rubricBranch: typeof branch | { readonly rubric: 'security'; readonly skillName: string; readonly policy: typeof branch.policy } = branch,
+  ) => {
+    const runner = new DefaultStepRunner({ invoke }, 'structured-review', '/fixture', mode ? { mode } : {});
     const result = await (runner as unknown as {
-      dispatchBuildReviewRubric: (value: typeof branch, reviewProjection: import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection) => Promise<unknown>;
-    }).dispatchBuildReviewRubric(branch, projection);
+      dispatchBuildReviewRubric: (value: typeof rubricBranch, reviewProjection: import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection) => Promise<unknown>;
+    }).dispatchBuildReviewRubric(rubricBranch, projection);
     return { result };
   };
 
@@ -418,6 +423,40 @@ describe('build_review structured rubric dispatch', () => {
       renderRubricContractShape(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract),
     );
     expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
+  });
+
+  it.each([
+    branch,
+    { ...branch, rubric: 'security' as const, skillName: 'build-review-security' },
+  ])('pins $rubric to a non-interactive schema invocation while the conductor is interactive', async (rubricBranch) => {
+    const invoke = vi.fn(async (_options: InvokeOptions) => ({
+      success: true, output: 'ignored prose', exitCode: 0, finalStructuredResult: { findings: [] },
+    }));
+
+    const { result } = await dispatchBuiltIn(invoke, 'interactive', rubricBranch);
+
+    expect(invoke).toHaveBeenCalledOnce();
+    for (const [options] of invoke.mock.calls) {
+      expect(options).toMatchObject({
+        interactive: false,
+        nativeSchema: BUILD_REVIEW_RUBRIC_REGISTRY[rubricBranch.rubric].contract.output.jsonSchema,
+      });
+    }
+    expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS' });
+  });
+
+  it('makes a forced interactive Claude rubric schema refusal observable to the coordinator lane', async () => {
+    const provider = new ClaudeProvider();
+    const dispatched = await dispatchRubricContract({
+      descriptor: BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract,
+      options: { prompt: 'judge', cwd: '/fixture', interactive: true },
+      invoke: (options) => provider.invoke({ ...options, sessionId: 'forced-interactive', resume: false }),
+    });
+
+    expect(dispatched).toMatchObject({
+      kind: 'provider-failure',
+      invocation: { nativeSchemaUnsupported: true },
+    });
   });
 
   it('derives the live nested result guidance from the selected built-in schema fixture', async () => {

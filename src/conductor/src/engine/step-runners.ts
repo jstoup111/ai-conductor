@@ -2637,6 +2637,9 @@ export class DefaultStepRunner implements StepRunner {
     const options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'> = {
       prompt: `Build-review custom policy ${entry.id}: the candidate will supply the selected immutable policy contract before judgment. Return only the custom findings payload.`,
       cwd: source?.headPath ?? this.projectDir,
+      // Rubric judgments must always use a machine envelope, even while the
+      // enclosing conductor is serving an interactive operator session.
+      interactive: false,
       nativeSchema: entry.contract.output.jsonSchema,
     };
     let failure: { reason: import('./build-review-artifacts.js').BuildReviewCustomInfrastructureFailureReason; detail: string } = {
@@ -3353,6 +3356,10 @@ export class DefaultStepRunner implements StepRunner {
             deadlineAt,
             options: {
               ...options,
+              // A rubric result is a provider-native structured payload, never
+              // an operator REPL response. Keep this explicit rather than
+              // inheriting the enclosing conductor mode.
+              interactive: false,
               nativeSchema: getBuildReviewRubricDescriptor(branch.rubric).contract.output.jsonSchema,
             },
             optionsForCandidate: (providerKey) => ({
@@ -3372,6 +3379,7 @@ export class DefaultStepRunner implements StepRunner {
                     prompt: `${renderAuxiliarySkillInvocation(branch.skillName, context.candidate.providerKey)}\n\n${prompt}`,
                     cwd: materialized?.headPath ?? this.projectDir,
                     dangerouslySkipPermissions: true,
+                    interactive: false,
                   },
                   invoke: (options) => context.invoke(options),
                 });
@@ -3449,6 +3457,7 @@ export class DefaultStepRunner implements StepRunner {
                   changes: inputs.sourceSnapshot.sourceChanges ?? [], view: materialized,
                 })}`}`,
                 ...(reviewAccess === undefined ? {} : { reviewAccess }),
+                interactive: false,
                 },
                 invoke: (options) => context.invoke(options, async (rung, invoke) => {
                 const semanticIdentity = candidateIdentity(rung, builtinBundle.digest);
@@ -3525,6 +3534,7 @@ export class DefaultStepRunner implements StepRunner {
           prompt: `${renderAuxiliarySkillInvocation(branch.skillName, this.providerKey)}\n\n${prompt}`,
           dangerouslySkipPermissions: true,
           cwd: this.projectDir,
+          interactive: false,
         },
         invoke: (options) => this.provider.invoke({
           ...options,

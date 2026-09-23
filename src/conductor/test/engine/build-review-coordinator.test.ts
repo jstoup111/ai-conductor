@@ -24,6 +24,7 @@ import {
 } from "../../src/engine/build-review-domain.js";
 import { fingerprintBuildReviewRubricPolicy } from "../../src/engine/build-review-registry.js";
 import { canonicalJson, deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
+import { canonicalizeBuildReviewFindingSet } from '../../src/engine/build-review-finding-identity.js';
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import type {
   ResolvedBuildReviewConfig,
@@ -165,6 +166,31 @@ describe("build-review coordinator: registered dispatch", () => {
       reason: 'native-schema-unsupported',
       detail: expect.stringContaining('candidate set [claude]'),
     });
+  });
+
+  it('stamps Claude and Codex structured fixtures into byte-identical envelopes and finding identities', () => {
+    const frozenInputs = titledInputs();
+    const projection = deriveBuildReviewRubricProjections({
+      lapId: parseBuildReviewLapId('lap-current')!,
+      inputs: frozenInputs,
+      testQuality: { changedTestSelectors: [IN_SCOPE_TEST], unresolvedMarkers: [], revertedProductionManifest: [], preflight: { classification: 'not-requested', excerpt: '' } },
+    }).testQuality;
+    const finding = testQualityFinding();
+    const claudeTerminalEnvelope = { structuredOutput: { findings: [finding] } };
+    const codexTerminalItem = { findings: [{ anchor: finding.anchor, evidenceLocations: finding.evidenceLocations, summary: finding.summary, concernKind: finding.concernKind }] };
+    const claudeStamped = stampBuildReviewDispatchedCandidate(claudeTerminalEnvelope.structuredOutput, 'testQuality', projection);
+    const codexStamped = stampBuildReviewDispatchedCandidate(codexTerminalItem, 'testQuality', projection);
+    const claudeResult = validateBuildReviewDispatchedResult(claudeStamped, 'testQuality', projection)!;
+    const codexResult = validateBuildReviewDispatchedResult(codexStamped, 'testQuality', projection)!;
+
+    expect(canonicalJson(claudeStamped)).toBe(canonicalJson(codexStamped));
+    const claudeIds = canonicalizeBuildReviewFindingSet(claudeResult.findings.map((entry) => ({
+      rubric: claudeResult.rubric, contractVersion: claudeResult.contractVersion, ...entry,
+    })))?.map(({ id }) => id);
+    const codexIds = canonicalizeBuildReviewFindingSet(codexResult.findings.map((entry) => ({
+      rubric: codexResult.rubric, contractVersion: codexResult.contractVersion, ...entry,
+    })))?.map(({ id }) => id);
+    expect(claudeIds).toEqual(codexIds);
   });
 
   it("keeps a disabled whole gate distinct from an empty enabled container", () => {
