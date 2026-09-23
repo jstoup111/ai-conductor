@@ -278,6 +278,49 @@ describe('gateVerdictStillValid', () => {
     await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBeNull();
   });
 
+  it('anchors a fresh re-judgement to appliedAt after a later rebase verdict rewrite', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 150,
+      rebaseOperation: {
+        id: 'rewritten-rebase-verdict',
+        status: 'applied',
+        appliedAt: 100,
+        transition: { preserved: ['prd_audit'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await writeVerdict(s.repo, 'prd_audit', { satisfied: true, checkedAt: 200 });
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 300,
+      reason: 'branch already current with base',
+    });
+
+    expect((await readVerdict(s.repo, 'rebase'))?.rebaseOperation?.appliedAt).toBe(100);
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBeNull();
+  });
+
+  it('falls back to the rebase verdict timestamp for legacy operations without appliedAt', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 100,
+      rebaseOperation: {
+        id: 'legacy-rebase-operation',
+        status: 'applied',
+        transition: { preserved: ['prd_audit'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await writeVerdict(s.repo, 'prd_audit', { satisfied: true, checkedAt: 200 });
+
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBeNull();
+  });
+
   it('accepts a fresh re-judgement beside a correctly bound preserved verdict', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);
