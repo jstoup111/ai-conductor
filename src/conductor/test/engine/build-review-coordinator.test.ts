@@ -145,11 +145,11 @@ describe("build-review coordinator: registered dispatch", () => {
       kind: 'ready',
       branches: [{
         kind: 'infrastructure-failure',
-        reason: 'invalid-provider-result',
+        reason: 'invalid-structured-result',
         providerSetupExhaustion: { candidates: [{ provider: 'codex' }] },
       }, disabledSecurityBranch],
     });
-    expect(JSON.stringify(result)).not.toContain('findings');
+    expect(testQualityBranch(result)).not.toHaveProperty('findings');
   });
 
   it('maps a native-schema-unsupported dispatch refusal to its closed infrastructure cause', async () => {
@@ -351,7 +351,7 @@ describe("build-review coordinator: registered dispatch", () => {
     );
     expect(result).toMatchObject({
       kind: "ready",
-      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result" }, disabledSecurityBranch],
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-structured-result" }, disabledSecurityBranch],
     });
   });
 
@@ -656,7 +656,7 @@ describe("build-review coordinator: security envelope", () => {
       engineIdentity: { engineStamp: "engine", skillDigests: { security: { kind: "resolved", digest: "security" } } },
       dispatchModel: vi.fn(async () => ({ findings: [], [field]: field === 'counterfactualSensitivity' ? 'supports' : [] })),
     }));
-    expect(securityBranch(result)).toMatchObject({ kind: 'infrastructure-failure', reason: 'invalid-provider-result', detail: expect.stringContaining(field) });
+    expect(securityBranch(result)).toMatchObject({ kind: 'infrastructure-failure', reason: 'invalid-structured-result', detail: expect.stringContaining(field) });
   });
 
   it("continues security review when enabled test quality has no targets", async () => {
@@ -681,7 +681,7 @@ describe("build-review coordinator: security envelope", () => {
       dispatchModel: vi.fn(async () => "I cannot perform a security review."),
     }));
 
-    expect(securityBranch(result)).toMatchObject({ kind: "infrastructure-failure", rubric: "security", reason: "invalid-provider-result" });
+    expect(securityBranch(result)).toMatchObject({ kind: "infrastructure-failure", rubric: "security", reason: "invalid-structured-result" });
   });
 });
 
@@ -952,7 +952,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
     }));
 
     expect(testQualityBranch(result)).toMatchObject({
-      kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result",
+      kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-structured-result",
       detail: expect.stringContaining("counterfactualSensitivity"),
     });
     expect(writeArtifact).not.toHaveBeenCalled();
@@ -961,7 +961,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
     expect(rubricFailures).toEqual({ testQuality: 3 });
   });
 
-  it("settles a dispatch-failure report as invalid-provider-result carrying its bounded detail", async () => {
+  it("settles a dispatch-failure report as invalid-structured-result carrying its bounded detail", async () => {
     const detail = "judged-result contract not satisfied after one repair turn: ... Raw output excerpt: I judged the rubric...";
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
     const input = coordinationInput(true, {
@@ -971,30 +971,34 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
 
     const result = await coordinateBuildReviewRubrics(input);
 
-    expect(testQualityBranch(result)).toEqual({ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result", detail });
+    expect(testQualityBranch(result)).toMatchObject({ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-structured-result", detail });
     expect(input.writeArtifact).not.toHaveBeenCalled();
     expect(emit).toHaveBeenCalledWith({
-      type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "invalid-provider-result",
+      type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "invalid-structured-result",
       excerpt: detail,
     });
   });
 
-  it("settles an undefined dispatch result as invalid-provider-result with no detail", async () => {
+  it("settles an undefined dispatch result as invalid-provider-result with an engine diagnosis", async () => {
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
     const result = await coordinateBuildReviewRubrics(coordinationInput(true, { emit }));
 
-    expect(testQualityBranch(result)).toEqual({ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result" });
+    expect(testQualityBranch(result)).toEqual({
+      kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result",
+      detail: '"findings" must be an array (empty when no concern was found)',
+    });
     expect(emit.mock.calls.map(([event]) => event)).toEqual([{
       type: "build_review_rubric_started", rubric: "testQuality", lapId: "lap-current",
     }, {
       type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled",
     }, {
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "invalid-provider-result",
+      excerpt: '"findings" must be an array (empty when no concern was found)',
     }]);
   });
 
   it.each([
-    ["has no JSON object", "not JSON at all", "no parseable JSON object was found in the response"],
+    ["has no JSON object", "not JSON at all", '"findings" must be an array (empty when no concern was found)'],
     ["has non-array findings", { findings: "none" }, '"findings" must be an array (empty when no concern was found)'],
     ["has one malformed finding among valid findings", {
       findings: [testQualityFinding(), { ...testQualityFinding(), anchor: { rubric: "testQuality", locus: { path: "", contentHash: IN_SCOPE_HASH, display: IN_SCOPE_TITLE } } }],
@@ -1005,7 +1009,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
       dispatchModel: vi.fn(async () => payload),
     }));
 
-    expect(testQualityBranch(result)).toEqual({ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result", detail });
+    expect(testQualityBranch(result)).toMatchObject({ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-structured-result", detail });
   });
 
   it("rejects colliding finding identities in one judged result as infrastructure, never a verdict", async () => {
@@ -1016,9 +1020,9 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
 
     const result = await coordinateBuildReviewRubrics(input);
 
-    expect(testQualityBranch(result)).toEqual({
-      kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result",
-      detail: `findings must not repeat one concern on one content region (duplicated: "${IN_SCOPE_TITLE}") — merge equivalent findings`,
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-structured-result",
+      detail: expect.stringContaining('findings must not repeat one concern on one content region (duplicated identity: sha256:'),
     });
     expect(input.writeArtifact).not.toHaveBeenCalled();
     expect(input.writeCache).not.toHaveBeenCalled();
