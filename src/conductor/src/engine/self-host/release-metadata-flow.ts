@@ -11,6 +11,9 @@ import { mergeReleaseMetadataBlock, snapshotReleaseMetadataBlock } from '../rele
 
 export type ReleaseMetadataFlow = 'inactive' | 'active' | 'step-missing';
 
+/** The repository-local step that authors release metadata. */
+export const RELEASE_DISPOSITION_STEP = 'release-disposition';
+
 /** Inputs supplied by the existing self-build detector and resolved config. */
 export interface ReleaseMetadataFlowInput {
   readonly isSelfBuild: boolean;
@@ -147,7 +150,20 @@ export async function restoreReleaseMetadata(
  */
 export function resolveReleaseMetadataFlow(input: ReleaseMetadataFlowInput): ReleaseMetadataFlow {
   if (!input.isSelfBuild || !input.releaseArtifactGateEnabled) return 'inactive';
-  return Object.prototype.hasOwnProperty.call(input.steps ?? {}, 'release-disposition')
+  return Object.prototype.hasOwnProperty.call(input.steps ?? {}, RELEASE_DISPOSITION_STEP)
     ? 'active'
     : 'step-missing';
+}
+
+/** Whether a dispatched step supersedes this flow's retained metadata capture. */
+export function isReleaseMetadataFlowStep(stepName: string): boolean {
+  return stepName === RELEASE_DISPOSITION_STEP;
+}
+
+/** Cleanup belongs only to an active self-host flow's metadata-writing step. */
+export function supersedesReleaseMetadataSnapshot(
+  flow: ReleaseMetadataFlow,
+  stepName: string,
+): boolean {
+  return flow === 'active' && isReleaseMetadataFlowStep(stepName);
 }

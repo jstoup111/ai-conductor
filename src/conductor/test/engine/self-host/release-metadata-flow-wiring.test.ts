@@ -7,7 +7,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Conductor } from '../../test-conductor.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { writeSelfHostHalt } from '../../../src/engine/self-host/gate-halt.js';
-import { resolveReleaseMetadataFlow } from '../../../src/engine/self-host/release-metadata-flow.js';
+import {
+  resolveReleaseMetadataFlow,
+  supersedesReleaseMetadataSnapshot,
+} from '../../../src/engine/self-host/release-metadata-flow.js';
 import type { GhRunner } from '../../../src/engine/tracker-client.js';
 
 const roots: string[] = [];
@@ -104,6 +107,19 @@ describe('self-host release metadata flow wiring', () => {
     await (subject as any).restoreFinishReleaseMetadata('https://github.com/acme/conductor/pull/13');
 
     expect(runGh).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['outside a self-build', false, true],
+    ['when the release gate is disabled', true, false],
+  ])('does not clear a snapshot for release-disposition %s', (_name, isSelfBuild, releaseArtifactGateEnabled) => {
+    const flow = resolveReleaseMetadataFlow({
+      isSelfBuild,
+      releaseArtifactGateEnabled,
+      steps: { 'release-disposition': { skill: '.agents/skills/renamed/SKILL.md' } },
+    });
+
+    expect(supersedesReleaseMetadataSnapshot(flow, 'release-disposition')).toBe(false);
   });
 
   it('writes the missing-step halt as needs-human through the central halt seam', async () => {

@@ -140,7 +140,7 @@ describe('production FINISH custom-step release readiness', () => {
     }
   });
 
-  it('treats a marker timestamp equal to the persisted feature run start as stale', async () => {
+  it('treats a marker timestamp equal to the persisted feature run start as present', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
     try {
       await mkdir(join(root, '.pipeline'));
@@ -151,7 +151,7 @@ describe('production FINISH custom-step release readiness', () => {
       await expect(createProductionReleaseReadinessObserver({
         projectRoot: root, config: customConfig(['compliance-gate']),
       })(doneState(['compliance-gate']))).resolves.toEqual({
-        observation: 'stale', steps: ['compliance-gate'],
+        observation: 'present', steps: [],
       });
     } finally {
       await rm(root, { recursive: true, force: true });

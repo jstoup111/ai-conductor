@@ -234,7 +234,7 @@ export function createProductionReleaseReadinessObserver(
         } else if (runStartedAt === undefined) {
           unsatisfied.push(step);
           unavailable = true;
-        } else if (artifact.mtimeMs <= runStartedAt) {
+        } else if (artifact.mtimeMs < runStartedAt) {
           unsatisfied.push(step);
           stale = true;
         }

@@ -365,6 +365,7 @@ import {
   resolveReleaseMetadataFlow,
   restoreReleaseMetadata,
   snapshotReleaseMetadata,
+  supersedesReleaseMetadataSnapshot,
 } from './self-host/release-metadata-flow.js';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
 import { LiveBoundaryCoordinator, type OpenAdmittedWindow } from './self-host/live-boundary-coordinator.js';
@@ -9957,12 +9958,7 @@ export class Conductor {
           if (step.name === 'finish') {
             await this.snapshotFinishReleaseMetadata(state.worktree_branch);
           }
-          // Whatever this dispatch writes supersedes any earlier capture — a
-          // kickback that re-runs the gate must not have its old block restored
-          // over the freshly authored one.
-          // `release-disposition` is a repository-local custom step, so it is
-          // outside the built-in `StepName` union and compared as a plain string.
-          if ((step.name as string) === 'release-disposition') {
+          if (supersedesReleaseMetadataSnapshot(this.releaseMetadataFlow(), step.name)) {
             await this.clearFinishReleaseMetadataSnapshot();
           }
 
