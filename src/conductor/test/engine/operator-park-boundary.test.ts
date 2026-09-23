@@ -748,6 +748,132 @@ describe('operator park boundary contract', () => {
     });
   });
 
+  it('resumes an unparked declined step at attempt one with a fresh retry budget', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    let parked = false;
+    const initialRun = vi.fn<StepRunner['run']>(async () => {
+      parked = true;
+      return { success: false, output: 'park after this attempt' };
+    });
+    const initial = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run: initialRun },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => parked,
+    });
+
+    await expect(initial.run()).resolves.toEqual({
+      kind: 'operator-parked',
+      boundary: { kind: 'attempt', step: 'memory', attempt: 2 },
+    });
+    const afterInitial = await readState(statePath);
+    expect(afterInitial.ok ? afterInitial.value.memory : afterInitial).toBe('in_progress');
+
+    const resumedRun = vi.fn<StepRunner['run']>(async () => ({
+      success: false,
+      output: 'park the resumed retry',
+    }));
+    const resumed = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run: resumedRun },
+      events: new ConductorEventEmitter(),
+      resume: true,
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => resumedRun.mock.calls.length > 0,
+    });
+
+    await expect(resumed.run()).resolves.toEqual({
+      kind: 'operator-parked',
+      boundary: { kind: 'attempt', step: 'memory', attempt: 2 },
+    });
+    expect(resumedRun.mock.calls.map(([step, , options]) => ({ step, attempt: options?.attempt }))).toEqual([
+      { step: 'memory', attempt: 1 },
+    ]);
+  });
+
+  it('keeps committed build tasks complete when an unparked build step resumes', async () => {
+    await writeState(statePath, stateWithPending('build'));
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    const taskStatusPath = join(projectRoot, '.pipeline', 'task-status.json');
+    const committedTasks = {
+      tasks: [
+        { id: '1', name: 'settled task one', status: 'completed' },
+        { id: '2', name: 'settled task two', status: 'completed' },
+        { id: '3', name: 'current task', status: 'in_progress' },
+      ],
+    };
+    await writeFile(taskStatusPath, JSON.stringify(committedTasks));
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: false, output: 'park after resumed build' }));
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      resume: true,
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => run.mock.calls.length > 0,
+      config: { build_progress: { enabled: false } } as never,
+    });
+
+    await expect(conductor.run()).resolves.toEqual({
+      kind: 'operator-parked',
+      boundary: { kind: 'attempt', step: 'build', attempt: 2 },
+    });
+    expect({
+      dispatchedSteps: run.mock.calls.map(([step]) => step),
+      taskStatuses: JSON.parse(await readFile(taskStatusPath, 'utf8')),
+    }).toEqual({
+      dispatchedSteps: ['build'],
+      taskStatuses: committedTasks,
+    });
+  });
+
+  it('returns at the pre-unit park gate when a resumed step remains parked', async () => {
+    const parkedState = stateWithPending('memory');
+    parkedState.memory = 'in_progress';
+    await writeState(statePath, parkedState);
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      resume: true,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => true,
+    });
+
+    const [result, persisted] = await Promise.all([conductor.run(), readState(statePath)]);
+    expect({
+      result,
+      runnerCalls: run.mock.calls.length,
+      persisted: persisted.ok ? persisted.value.memory : persisted,
+    }).toEqual({
+      result: { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } },
+      runnerCalls: 0,
+      persisted: 'in_progress',
+    });
+  });
+
   it('settles the active serial step once, persists it, then parks before the next step', async () => {
     await writeState(statePath, stateWithPending('memory', 'explore'));
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
