@@ -30,6 +30,9 @@ printf '%s\n' 'installation is current'
 if [ "${UPDATE_EXIT_CODE:-0}" -ne 0 ]; then
   printf '%s\n' "updater failed with ${UPDATE_EXIT_CODE}" >&2
 fi
+if [ -n "${UPDATE_STATE_RECORD-}" ]; then
+  printf '%s\n%s\n' "$(git rev-parse HEAD)" "$(git status --porcelain)" > "$UPDATE_STATE_RECORD"
+fi
 exit "${UPDATE_EXIT_CODE:-0}"
 EOF
 chmod +x "$SOURCE_REPO/bin/install" "$SOURCE_REPO/bin/update"
@@ -76,6 +79,9 @@ mkdir -p "$FRESH_INSTALL_PATH"
 # case can prove what was announced before acquisition began (no timestamps).
 cat > "$FRESH_INSTALL_PATH/git" <<EOF
 #!/bin/sh
+if [ -n "\${GIT_SUBCOMMAND_RECORD-}" ]; then
+  printf '%s\n' "\$1" >> "\$GIT_SUBCOMMAND_RECORD"
+fi
 if [ "\$1" = clone ] && [ -n "\${CLONE_START_STDOUT-}" ]; then
   /bin/cat "\$CASE_STDOUT_PATH" > "\$CLONE_START_STDOUT"
 fi
@@ -534,26 +540,56 @@ RERUN_HOME="$TMP_ROOT/home-rerun"
 CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case rerun-first
 rerun_head=$(git -C "$RERUN_HOME/.ai-conductor/harness" rev-parse HEAD)
 : > "$RECORD"
-CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case rerun-second
+RERUN_GIT_RECORD="$TMP_ROOT/rerun-git-subcommands"
+: > "$RERUN_GIT_RECORD"
+GIT_SUBCOMMAND_RECORD="$RERUN_GIT_RECORD" CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case rerun-second
 if [ "$CASE_STATUS" -eq 0 ] && grep -Fq 'installation is current' <<< "$CASE_STDOUT" \
   && [ "$(< "$RECORD")" = "$RERUN_HOME/.ai-conductor/harness||" ] \
+  && ! grep -Fxq clone "$RERUN_GIT_RECORD" \
   && [ "$(git -C "$RERUN_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$rerun_head" ]; then
   echo 'PASS second run delegates to the current checkout updater'
 else
-  failures+="second run did not delegate to updater: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\n"
+  failures+="second run did not delegate to updater: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\ngit subcommands: $(< "$RERUN_GIT_RECORD")\\n"
+fi
+
+printf 'advanced stable channel\n' > "$SOURCE_REPO/ADVANCED"
+git -C "$SOURCE_REPO" add ADVANCED
+git -C "$SOURCE_REPO" commit -qm 'advance stable fixture'
+advanced_stable_head=$(git -C "$SOURCE_REPO" rev-parse stable)
+: > "$RECORD"
+BEHIND_GIT_RECORD="$TMP_ROOT/behind-git-subcommands"
+: > "$BEHIND_GIT_RECORD"
+GIT_SUBCOMMAND_RECORD="$BEHIND_GIT_RECORD" CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case behind-stable
+if [ "$CASE_STATUS" -eq 0 ] && grep -Fq 'installation is current' <<< "$CASE_STDOUT" \
+  && [ "$advanced_stable_head" != "$rerun_head" ] \
+  && [ "$(< "$RECORD")" = "$RERUN_HOME/.ai-conductor/harness||" ] \
+  && ! grep -Fxq clone "$BEHIND_GIT_RECORD" \
+  && [ "$(git -C "$RERUN_HOME/.ai-conductor/harness" rev-parse HEAD)" = "$rerun_head" ]; then
+  echo 'PASS behind stable checkout delegates to updater without acquisition'
+else
+  failures+="behind stable checkout did not delegate to updater without acquisition: $CASE_OUTPUT\\nrecord: $(< "$RECORD")\\ngit subcommands: $(< "$BEHIND_GIT_RECORD")\\n"
 fi
 
 UPDATE_FAIL_HOME="$TMP_ROOT/home-updater-failure"
 git clone -q "$SOURCE_REPO" "$UPDATE_FAIL_HOME/.ai-conductor/harness"
 UPDATE_MARKER="$TMP_ROOT/updater-marker"
+UPDATE_STATE_RECORD="$TMP_ROOT/updater-state"
+update_before_head=$(git -C "$UPDATE_FAIL_HOME/.ai-conductor/harness" rev-parse HEAD)
+update_before_status=$(git -C "$UPDATE_FAIL_HOME/.ai-conductor/harness" status --porcelain)
 set +e
-env HOME="$UPDATE_FAIL_HOME" PATH="$FRESH_INSTALL_PATH" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" UPDATE_EXIT_CODE=7 UPDATE_MARKER="$UPDATE_MARKER" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/updater-failure.stdout" 2> "$TMP_ROOT/updater-failure.stderr"
+env HOME="$UPDATE_FAIL_HOME" PATH="$FRESH_INSTALL_PATH" AI_CONDUCTOR_REPO_URL="$SOURCE_REPO" INSTALLER_RECORD="$RECORD" UPDATE_EXIT_CODE=7 UPDATE_MARKER="$UPDATE_MARKER" UPDATE_STATE_RECORD="$UPDATE_STATE_RECORD" /bin/sh -s -- < "$INSTALL_SCRIPT" > "$TMP_ROOT/updater-failure.stdout" 2> "$TMP_ROOT/updater-failure.stderr"
 update_failure_status=$?
 set -e
-if [ "$update_failure_status" -eq 7 ] && [ -f "$UPDATE_MARKER" ] && grep -Fq 'updater failed with 7' "$TMP_ROOT/updater-failure.stderr"; then
+update_after_head=$(git -C "$UPDATE_FAIL_HOME/.ai-conductor/harness" rev-parse HEAD)
+update_after_status=$(git -C "$UPDATE_FAIL_HOME/.ai-conductor/harness" status --porcelain)
+update_recorded_head=$(sed -n '1p' "$UPDATE_STATE_RECORD")
+update_recorded_status=$(sed -n '2p' "$UPDATE_STATE_RECORD")
+if [ "$update_failure_status" -eq 7 ] && [ -f "$UPDATE_MARKER" ] && grep -Fq 'updater failed with 7' "$TMP_ROOT/updater-failure.stderr" \
+  && [ "$update_before_head" = "$update_after_head" ] && [ "$update_before_status" = "$update_after_status" ] \
+  && [ "$update_recorded_head" = "$update_after_head" ] && [ "$update_recorded_status" = "$update_after_status" ]; then
   echo 'PASS updater failure and its state are propagated unchanged'
 else
-  failures+="updater failure was not propagated unchanged\\n"
+  failures+="updater failure was not propagated unchanged: recorded HEAD $update_recorded_head, post-run HEAD $update_after_head; recorded status $update_recorded_status, post-run status $update_after_status\\n"
 fi
 
 LOCK_HOME="$TMP_ROOT/home-held-lock"
