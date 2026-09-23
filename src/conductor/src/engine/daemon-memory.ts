@@ -1,5 +1,5 @@
 import { forwardedFeatureOf, isForwardedFromFeature } from './event-persister.js';
-import { mkdirSync, statSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import { writeHeapSnapshot } from 'node:v8';
 import { join } from 'node:path';
 import type { ConductorEvent } from '../types/index.js';
@@ -14,6 +14,7 @@ export interface DaemonMemorySamplerOptions {
   heapDumpDir?: string;
   writeHeapSnapshot?: (path: string) => string;
   now?: () => Date;
+  heapDumpRetention?: number;
 }
 
 /**
@@ -31,6 +32,8 @@ export function startDaemonMemorySampler(
   const heapDumpDir = options.heapDumpDir ?? join(process.cwd(), '.daemon', 'heap');
   const snapshot = options.writeHeapSnapshot ?? writeHeapSnapshot;
   const now = options.now ?? (() => new Date());
+  const heapDumpRetention = options.heapDumpRetention ?? 3;
+  let dumped = false;
   let nextDispatchSeq = 0;
   const activeDispatches = new Map<string, number>();
 
@@ -62,13 +65,26 @@ export function startDaemonMemorySampler(
       pid,
       dispatchSeq,
     });
-    if (usage.rss >= heapDumpThresholdMb * 1024 * 1024) {
+    if (!dumped && usage.rss >= heapDumpThresholdMb * 1024 * 1024) {
       mkdirSync(heapDumpDir, { recursive: true });
       const path = join(heapDumpDir, `${now().toISOString()}-${pid}.heapsnapshot`);
-      snapshot(path);
-      await events.emit({
-        type: 'daemon_heap_dump_written', path, bytes: statSync(path).size, rss: usage.rss, pid,
-      });
+      const tempPath = `${path}.tmp`;
+      try {
+        snapshot(tempPath);
+        renameSync(tempPath, path);
+        const snapshots = readdirSync(heapDumpDir)
+          .filter((name) => name.endsWith('.heapsnapshot'))
+          .map((name) => ({ name, mtime: statSync(join(heapDumpDir, name)).mtimeMs }))
+          .sort((a, b) => a.mtime - b.mtime);
+        for (const old of snapshots.slice(0, Math.max(0, snapshots.length - heapDumpRetention))) {
+          unlinkSync(join(heapDumpDir, old.name));
+        }
+        dumped = true;
+        await events.emit({ type: 'daemon_heap_dump_written', path, bytes: statSync(path).size, rss: usage.rss, pid });
+      } catch (error) {
+        try { unlinkSync(tempPath); } catch { /* absent temp is fine */ }
+        try { appendFileSync(join(heapDumpDir, '..', 'daemon.log'), `[daemon] heap snapshot failed: ${String(error)}\n`); } catch { /* best effort */ }
+      }
     }
   };
 

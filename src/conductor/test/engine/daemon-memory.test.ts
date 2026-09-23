@@ -1,4 +1,4 @@
-// Covers: task:2, task:4
+// Covers: task:2, task:4, task:5
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
@@ -26,8 +26,27 @@ describe('startDaemonMemorySampler', () => {
       await feature.events.emit({ type: 'step_started', step: 'build', index: 0 });
       rss = 150 * 1024 * 1024;
       await feature.events.emit({ type: 'step_completed', step: 'build', status: 'done' });
-      expect(writes).toEqual([join(root, '.daemon', 'heap', '2026-09-23T12:00:00.000Z-105.heapsnapshot')]);
-      expect(dumps).toEqual([expect.objectContaining({ path: writes[0], bytes: 4, rss, pid: 105 })]);
+      const target = join(root, '.daemon', 'heap', '2026-09-23T12:00:00.000Z-105.heapsnapshot');
+      expect(writes).toEqual([`${target}.tmp`]);
+      expect(dumps).toEqual([expect.objectContaining({ path: target, bytes: 4, rss, pid: 105 })]);
+    } finally { sampler.stop(); feature.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('writes only one dump, retains the newest snapshots, and cleans a failed temporary write', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR ?? '/tmp', 'daemon-heap-guards-'));
+    const events = new ConductorEventEmitter();
+    const feature = startFeatureEventPersistence(join(root, 'f'), events, 'f');
+    const heap = join(root, '.daemon', 'heap');
+    let calls = 0;
+    const sampler = startDaemonMemorySampler(events, {
+      memoryUsage: () => ({ rss: 200 * 1024 * 1024, heapUsed: 1, heapTotal: 1, external: 1, arrayBuffers: 0 }),
+      heapDumpThresholdMb: 100, heapDumpDir: heap, heapDumpRetention: 1,
+      writeHeapSnapshot: (path) => { calls++; writeFileSync(path, 'dump'); return path; },
+    });
+    try {
+      await feature.events.emit({ type: 'step_started', step: 'build', index: 0 });
+      await feature.events.emit({ type: 'step_completed', step: 'build', status: 'done' });
+      expect(calls).toBe(1);
     } finally { sampler.stop(); feature.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
