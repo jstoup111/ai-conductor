@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:6, task:8, task:10, task:15, task:17, task:23
+// Covers: task:1, task:3, task:4, task:6, task:8, task:10, task:15, task:17, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -164,6 +164,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'provider_stream_progress',
   'self_host_dispatch_admission',
   'self_host_containment_verdict',
+  'self_host_boundary_fingerprint',
   'over_scope_decision',
   ...REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES,
   'remediation_case_refuted',
@@ -228,6 +229,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'contained_live_checkout_drift',
   'self_host_dispatch_admission',
   'self_host_containment_verdict',
+  'self_host_boundary_fingerprint',
   'step_started',
   'step_completed',
   'step_failed',

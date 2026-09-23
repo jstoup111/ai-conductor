@@ -6309,6 +6309,10 @@ export class Conductor {
             provider: codex ? 'codex' : 'claude',
             selectedAuthPaths: codex ? ['auth.json'] : ['.credentials.json'],
           });
+          await this.events.emit({
+            type: 'self_host_boundary_fingerprint',
+            surfaces: boundary.measurements,
+          });
           const bindSet = deriveBindSet(liveCheckout, this.projectRoot);
           const containment = sh.liveContainment
             ? await probeContainment(

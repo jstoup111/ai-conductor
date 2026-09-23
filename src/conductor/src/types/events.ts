@@ -415,6 +415,11 @@ export type ConductorEvent =
       contained: false;
       reason: string;
     }
+  | {
+      /** Per-surface cost for one completed self-host live-boundary fingerprint. */
+      type: 'self_host_boundary_fingerprint';
+      surfaces: readonly { label: string; elapsedMs: number; fileCount: number }[];
+    }
   /** Serialized rubric-prompt size at dispatch — regression visibility for projection bloat. */
   | { type: 'build_review_rubric_prompt'; rubric: string; lapId: string; promptBytes: number }
   | { type: 'build_review_rubric_result'; rubric: string; lapId: string; verdict: 'PASS' | 'FAIL' }

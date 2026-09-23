@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+// Covers: task:1, task:2, task:3
+import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -6,9 +8,112 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from '../../../src/engine/self-host/live-boundary.js';
 
+const readdirMock = vi.hoisted(() => vi.fn());
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  readdirMock.mockImplementation(actual.readdir);
+  return { ...actual, readdir: readdirMock };
+});
+
 const execFileAsync = promisify(execFile);
+const digest = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 describe('live self-host boundary', () => {
+  it('reports per-surface fingerprint measurements without counting excluded files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-measurements-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([
+      mkdir(join(live, 'nested'), { recursive: true }),
+      mkdir(join(live, 'node_modules'), { recursive: true }),
+      mkdir(join(live, '.git'), { recursive: true }),
+      mkdir(provider),
+    ]);
+    await Promise.all([
+      writeFile(join(live, 'first.txt'), 'first'),
+      writeFile(join(live, 'nested', 'second.txt'), 'second'),
+      writeFile(join(live, 'node_modules', 'ignored.txt'), 'ignored'),
+      writeFile(join(live, '.git', 'ignored.txt'), 'ignored'),
+      writeFile(join(provider, 'state.json'), 'state'),
+    ]);
+    try {
+      const snapshot = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+      expect(snapshot.measurements).toEqual([
+        expect.objectContaining({ label: 'live checkout', fileCount: 2 }),
+        expect.objectContaining({ label: 'provider state', fileCount: 1 }),
+      ]);
+      for (const measurement of snapshot.measurements) {
+        expect(measurement.elapsedMs).toSatisfy(Number.isInteger);
+        expect(measurement.elapsedMs).toBeGreaterThanOrEqual(0);
+      }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('preserves sorted manifests and exclusions while excluding volatile subtrees from measurements', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-manifest-pin-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([
+      mkdir(join(live, 'nested'), { recursive: true }),
+      mkdir(join(live, 'node_modules'), { recursive: true }),
+      mkdir(join(live, '.git'), { recursive: true }),
+      mkdir(provider),
+    ]);
+    await Promise.all([
+      writeFile(join(live, 'z.txt'), 'z'),
+      writeFile(join(live, 'nested', 'a.txt'), 'a'),
+      writeFile(join(live, 'node_modules', 'ignored.txt'), 'ignored'),
+      writeFile(join(live, '.git', 'ignored.txt'), 'ignored'),
+      writeFile(join(provider, 'preferences.json'), 'preferences'),
+    ]);
+    try {
+      const snapshot = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+      expect(snapshot.surfaces.map(({ label, exclude, excludeDirectoryBasenames, manifest }) => ({
+        label, exclude, excludeDirectoryBasenames, manifest,
+      }))).toEqual([
+        {
+          label: 'live checkout',
+          exclude: ['.git', '.daemon', '.worktrees', '.pipeline', '.claude/worktrees', 'src/conductor/dist-versions'],
+          excludeDirectoryBasenames: ['node_modules'],
+          manifest: [
+            { path: 'nested/a.txt', digest: digest('a') },
+            { path: 'z.txt', digest: digest('z') },
+          ],
+        },
+        {
+          label: 'provider state',
+          exclude: [],
+          excludeDirectoryBasenames: ['.in_use'],
+          manifest: [{ path: 'preferences.json', digest: digest('preferences') }],
+        },
+      ]);
+      expect(snapshot.measurements[0].fileCount).toBe(2);
+      expect(snapshot.surfaces[0].manifest.map(entry => entry.path)).not.toContain('node_modules/ignored.txt');
+      expect(snapshot.surfaces[0].manifest.map(entry => entry.path)).not.toContain('.git/ignored.txt');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('measures an absent provider home without counting its absent manifest placeholder', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-absent-provider-measurement-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider-does-not-exist');
+    await mkdir(live);
+    try {
+      const snapshot = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+      expect(snapshot.surfaces[1].manifest).toEqual([{ path: '<absent>', digest: '' }]);
+      expect(snapshot.measurements[1]).toMatchObject({ label: 'provider state', fileCount: 0 });
+      expect(snapshot.measurements[1].elapsedMs).toSatisfy(Number.isInteger);
+      expect(snapshot.measurements[1].elapsedMs).toBeGreaterThanOrEqual(0);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('preserves a non-ENOENT walk failure without producing a fingerprint', async () => {
+    const failure = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    readdirMock.mockRejectedValueOnce(failure);
+    await expect(fingerprintLiveBoundary({
+      liveCheckout: join(tmpdir(), 'live-boundary-eacces-live'),
+      unrelatedProviderState: join(tmpdir(), 'live-boundary-eacces-provider'),
+    })).rejects.toBe(failure);
+  });
+
   it('accepts a non-contained verdict when the live boundary has not changed', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-non-contained-clean-'));
     const live = join(root, 'live'); const provider = join(root, 'provider');
@@ -16,6 +121,23 @@ describe('live self-host boundary', () => {
     const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
     try {
       expect(await verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' })).toEqual({ ok: true });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('ignores changed elapsed measurements when verifying an unchanged boundary', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-measurement-verify-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    const withDifferentElapsedMeasurements = {
+      ...baseline,
+      measurements: baseline.measurements.map(measurement => ({ ...measurement, elapsedMs: measurement.elapsedMs + 1 })),
+    };
+    try {
+      expect(await verifyLiveBoundary(withDifferentElapsedMeasurements, {
+        contained: false,
+        reason: 'per-step verification',
+      })).toEqual({ ok: true });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
@@ -326,10 +448,12 @@ describe('live self-host boundary', () => {
     const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
     await writeFile(join(live, 'escaped.txt'), 'untracked');
     try {
-      expect(await verifyLiveBoundary(baseline)).toMatchObject({
+      const result = await verifyLiveBoundary(baseline);
+      expect(result).toMatchObject({
         ok: false,
         reason: expect.stringContaining('added escaped.txt'),
       });
+      expect(result.reason).toContain('live checkout changed during self-host execution');
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
@@ -513,8 +637,10 @@ describe('live self-host boundary', () => {
     await Promise.all([mkdir(live), mkdir(provider)]);
     await symlink('missing-worktree', join(live, 'stale-worktree'));
     try {
-      expect((await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider })).surfaces[0].manifest)
+      const snapshot = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+      expect(snapshot.surfaces[0].manifest)
         .toEqual([{ path: 'stale-worktree', digest: '3a290960b8a3c3913dfd9c042d391b18e7afa36617c19b37f134e3ea2883573b' }]);
+      expect(snapshot.measurements[0]).toMatchObject({ label: 'live checkout', fileCount: 1 });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

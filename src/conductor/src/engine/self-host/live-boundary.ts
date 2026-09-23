@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { execFile as execFileCb } from 'node:child_process';
 import { readdir, readFile, readlink } from 'node:fs/promises';
 import { join, relative } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
 import { redactSafetyText } from '../safety-diagnostics.js';
 import { type ContainmentVerdict } from './live-containment.js';
@@ -16,7 +17,11 @@ interface Surface {
   manifest: readonly Entry[];
 }
 interface Entry { path: string; digest: string; }
-export interface LiveBoundarySnapshot { readonly surfaces: readonly Surface[]; }
+interface Manifest { entries: readonly Entry[]; elapsedMs: number; fileCount: number; }
+export interface LiveBoundarySnapshot {
+  readonly surfaces: readonly Surface[];
+  readonly measurements: readonly { label: string; elapsedMs: number; fileCount: number }[];
+}
 
 /**
  * Volatile paths the harness WRITES ITSELF while a self-hosted build runs.
@@ -231,7 +236,8 @@ async function manifest(
   root: string,
   exclude: readonly string[],
   excludeDirectoryBasenames: readonly string[] = [],
-): Promise<Entry[]> {
+): Promise<Manifest> {
+  const startedAt = performance.now();
   // Filter DURING the walk: an excluded subtree is never descended into, so
   // `.git` is neither hashed nor a source of transient mid-run read errors.
   const walk = async (dir: string): Promise<string[]> => {
@@ -247,17 +253,29 @@ async function manifest(
   try {
     files = await walk(root);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [{ path: '<absent>', digest: '' }];
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return {
+        entries: [{ path: '<absent>', digest: '' }],
+        elapsedMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        fileCount: 0,
+      };
+    }
     throw error;
   }
-  return Promise.all(files.map(async file => {
+  const entries = await Promise.all(files.map(async file => {
     const path = relative(root, file);
     const bytes = await readFile(file).catch(async (error: NodeJS.ErrnoException) => {
       if (error.code === 'EISDIR' || error.code === 'ENOENT') return readlink(file);
       throw error;
     });
     return { path, digest: createHash('sha256').update(bytes).digest('hex') };
-  })).then(entries => entries.filter(entry => !exclude.includes(entry.path)).sort((a, b) => a.path.localeCompare(b.path)));
+  }));
+  const filteredEntries = entries.filter(entry => !exclude.includes(entry.path)).sort((a, b) => a.path.localeCompare(b.path));
+  return {
+    entries: filteredEntries,
+    elapsedMs: Math.max(0, Math.round(performance.now() - startedAt)),
+    fileCount: filteredEntries.length,
+  };
 }
 
 export async function fingerprintLiveBoundary(args: {
@@ -265,29 +283,34 @@ export async function fingerprintLiveBoundary(args: {
   provider?: 'claude' | 'codex'; selectedAuthPaths?: readonly string[];
 }): Promise<LiveBoundarySnapshot> {
   const excluded = [...providerStateVolatile(args.provider), ...(args.selectedAuthPaths ?? [])];
+  const liveCheckout = await manifest(
+    args.liveCheckout,
+    LIVE_CHECKOUT_VOLATILE,
+    LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES,
+  );
+  const providerState = await manifest(
+    args.unrelatedProviderState,
+    excluded,
+    PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES,
+  );
   return { surfaces: [
     {
       root: args.liveCheckout,
       label: 'live checkout',
       exclude: LIVE_CHECKOUT_VOLATILE,
       excludeDirectoryBasenames: LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES,
-      manifest: await manifest(
-        args.liveCheckout,
-        LIVE_CHECKOUT_VOLATILE,
-        LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES,
-      ),
+      manifest: liveCheckout.entries,
     },
     {
       root: args.unrelatedProviderState,
       label: 'provider state',
       exclude: excluded,
       excludeDirectoryBasenames: PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES,
-      manifest: await manifest(
-        args.unrelatedProviderState,
-        excluded,
-        PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES,
-      ),
+      manifest: providerState.entries,
     },
+  ], measurements: [
+    { label: 'live checkout', elapsedMs: liveCheckout.elapsedMs, fileCount: liveCheckout.fileCount },
+    { label: 'provider state', elapsedMs: providerState.elapsedMs, fileCount: providerState.fileCount },
   ] };
 }
 
@@ -377,11 +400,11 @@ export async function verifyLiveBoundary(
 }> {
   let containedDrift: { evidence: string; summary: string } | undefined;
   for (const surface of snapshot.surfaces) {
-    const current = await manifest(
+    const current = (await manifest(
       surface.root,
       surface.exclude,
       surface.excludeDirectoryBasenames ?? [],
-    );
+    )).entries;
     if (JSON.stringify(current) !== JSON.stringify(surface.manifest)) {
       const diff = diffManifests(surface.manifest, current);
       if (surface.label === 'live checkout') {
