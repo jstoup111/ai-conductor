@@ -431,6 +431,29 @@ describe('build_review structured rubric dispatch', () => {
     expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
   });
 
+  it('carries the testQuality descriptor from generic dispatch into Claude --json-schema argv', async () => {
+    const subprocess = vi.fn(async (_file: string, _args: string[]) => ({
+      stdout: JSON.stringify({
+        type: 'result',
+        result: 'Human-readable prose is not the judgment.',
+        structured_output: JSON.stringify({ findings: [] }),
+      }),
+      stderr: '',
+      exitCode: 0,
+    }));
+    const provider = new ClaudeProvider(undefined, subprocess as never);
+
+    const { result } = await dispatchBuiltIn(provider.invoke.bind(provider));
+
+    const [, args] = subprocess.mock.calls[0] ?? [];
+    const schemaIndex = (args as string[]).indexOf('--json-schema');
+    expect(schemaIndex).toBeGreaterThanOrEqual(0);
+    expect(JSON.parse((args as string[])[schemaIndex + 1]!)).toEqual(
+      BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output.jsonSchema,
+    );
+    expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
+  });
+
   it.each([
     branch,
     { ...branch, rubric: 'security' as const, skillName: 'build-review-security' },
