@@ -207,9 +207,9 @@ export function parseRateLimitWaitSeconds(
   options?: { now?: Date },
 ): ParseRateLimitResult {
   const now = options?.now || new Date();
-  const deadlineCapSeconds = PERIOD_LIMIT_RE.test(output) ? 86400 : 3600;
-
   try {
+    const deadlineCapSeconds = PERIOD_LIMIT_RE.test(output) ? 86400 : 3600;
+
     // Try duration-based patterns first: "retry after N seconds", "retry in N seconds", etc.
     const durationMatch = output.match(new RegExp(
       `(?:retry|try).*(after|in)\\s*([0-9]+)\\s*(${rateLimitDurationUnitAlternation})?\\b`,
