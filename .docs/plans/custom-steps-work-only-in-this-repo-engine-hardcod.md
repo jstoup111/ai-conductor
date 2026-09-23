@@ -9,7 +9,7 @@
 Removes the four places the engine binds custom-step behavior to this repository: the reserved
 step name at FINISH, the skill-path literal that activates the release-metadata flow, dispatch by
 step key instead of configured skill, and release actions on the package main entry. No
-configuration key is added. 17 tasks.
+configuration key is added. 18 tasks.
 
 ## Technical Approach
 
@@ -436,13 +436,39 @@ configuration key is added. 17 tasks.
 
 **Dependencies:** Task 14
 
+### Task 18: Route the release-metadata PR body reads and edit through the guarded GitHub boundary
+**Story:** 5
+**Type:** refactor
+
+**Steps:**
+1. Precondition: this task runs only after the feature branch is rebased onto origin/main carrying the shipped enforce-ownership feature, which provides `executeGithubOperation` and `GITHUB_OPERATION_REGISTRY` in `engine/github-operations.ts`, `runTrackerUrlRead` in `engine/tracker-client.ts`, and `auditShippedGithubInvocationBoundary` in `engine/github-invocation-audit.ts`. Do not build any of them here.
+2. Write failing tests for the snapshot and restore functions with the GitHub transport and the guarded operation executor mocked at their boundaries, plus a test that runs the shipped production-boundary audit over the conductor package.
+3. Verify the tests fail (RED).
+4. In the self-host release-metadata module, replace the two raw `pr view` runner calls with `runTrackerUrlRead` bound to the pull request URL, and replace the raw `pr edit` runner call with one `executeGithubOperation` call for the already-registered `pull-request.edit` operation, bound to the repository and number parsed from the pull request URL, actor `finish-release-metadata-restore`, and payload `{ body }`. The restore input gains the guarded operation executor; the conductor's restore delegate resolves it through its existing ship-draft publication dependencies, as origin/main's conductor already does for this same restore. A refused or failed edit rejects with the existing post-finish restore error and has no raw fallback. Register no new operation.
+5. Verify the tests pass (GREEN).
+6. Commit: "fix(self-host): route release-metadata restore through the guarded GitHub boundary".
+
+**Done when:**
+- `auditShippedGithubInvocationBoundary` over the conductor package reports no finding located in `engine/self-host/release-metadata-flow.ts` or in the conductor's release-metadata snapshot and restore delegates.
+- Given a draft body whose release block was removed by a simulated rewrite, `restoreReleaseMetadata` makes exactly one `pull-request.edit` call to the mocked guarded executor whose payload body contains the captured block byte-for-byte, and the mocked GitHub transport records no `pr edit` argv.
+- When the mocked guarded executor refuses the `pull-request.edit` operation, `restoreReleaseMetadata` rejects with the existing post-finish restore error and no further edit of any kind is attempted.
+- Both pull request body reads in `snapshotReleaseMetadata` and `restoreReleaseMetadata` are made through `runTrackerUrlRead`, and the module source contains no direct call of its injected GitHub runner.
+- `GITHUB_OPERATION_REGISTRY` and `SHIPPED_MUTATION_OPERATION_CALLER_PROOFS` are unchanged by this task's diff, because `pull-request.edit` is already registered on origin/main.
+
+**Files:**
+- src/conductor/src/engine/self-host/release-metadata-flow.ts — guarded reads and edit
+- src/conductor/src/engine/conductor.ts — pass the guarded operation executor to the restore delegate
+- src/conductor/test/engine/self-host/release-metadata-snapshot.test.ts — guarded boundary cases
+
+**Dependencies:** Task 13; requires the feature branch rebased onto origin/main containing the shipped enforce-ownership feature
+
 ## Task Dependency Graph
 
 ```text
 1 ─┐
 2 ─┴─> 3 ─> 4 ─> 5 ─> 6 ─> 7
 8 ─> 9 ─> 10
-11 ─> 12 ─> 13
+11 ─> 12 ─> 13 ─> 18
 14 ─┬─> 15
     ├─> 16
     └─> 17
@@ -453,6 +479,7 @@ configuration key is added. 17 tasks.
 - After Task 7: a custom-gate refusal is observable end to end through the production FINISH coordinator and the persisted event log. Task 7 owns this boundary.
 - After Task 10: custom-step dispatch is observable through the provider step runner's dispatch entry on both paths. Tasks 9 and 10 own this boundary.
 - After Task 13: release-flow activation and the missing-step halt are observable through the conductor's self-host finish gates. Task 13 owns this boundary.
+- After Task 18: the release-metadata restore's GitHub reads and edit pass the shipped production-boundary audit. Task 18 owns this boundary.
 - After Task 15: the release workflows resolve against the bundler entries. Task 15 owns this boundary.
 
 ## Coverage Check
@@ -512,6 +539,14 @@ configuration key is added. 17 tasks.
 | adr-2026-07-25-custom-step-completion-artifacts#D4 | no-change | none | Marker creation stays owned by the step's skill; the engine still only observes the marker and never writes it. |
 | adr-2026-07-25-custom-step-completion-artifacts#D5 | no-change | none | No built-in completion predicate or artifact glob is changed; only the custom-step FINISH prerequisite is generalized. |
 | adr-2026-07-25-custom-step-completion-artifacts#D6 | task | task-3, task-4 | With a gating custom step whose recorded status is `skipped`, the production observer returns `missing` naming that step. |
+| adr-2026-09-11-github-operation-ownership#D1 | task | task-18 | `restoreReleaseMetadata` makes exactly one `pull-request.edit` call to the mocked guarded executor whose payload body contains the captured block byte-for-byte |
+| adr-2026-09-11-github-operation-ownership#D2 | no-change | none | The restore edits only the retained draft pull request of the feature being finished; committed feature ownership is enforced inside the shipped guarded executor, unchanged here. |
+| adr-2026-09-11-github-operation-ownership#D3 | no-change | none | This feature creates no issue, pull request, or branch and changes no intake authorization. |
+| adr-2026-09-11-github-operation-ownership#D4 | no-change | none | No shared repository resource such as a label definition is mutated by this feature. |
+| adr-2026-09-11-github-operation-ownership#D5 | no-change | none | This feature adds and changes no remote Git write. |
+| adr-2026-09-11-github-operation-ownership#D6 | no-change | none | Refusal typing and its canonical events stay owned by the shipped guarded executor; a refused edit is surfaced through the existing restore error. |
+| adr-2026-09-11-github-operation-ownership#D7 | task | task-18 | `auditShippedGithubInvocationBoundary` over the conductor package reports no finding located in `engine/self-host/release-metadata-flow.ts` |
+| adr-2026-09-11-github-operation-ownership#D8 | no-change | none | This feature makes no gated-visibility announcement or foreign-resource write. |
 
 ## Verification
 
@@ -519,6 +554,6 @@ configuration key is added. 17 tasks.
 - [x] All negative path criteria covered by at least one task
 - [x] Every task has a `Done when:` block of falsifiable checks naming a mechanism
 - [x] Every story is cited by at least one task
-- [x] Each changed cross-boundary behavior has one integration-owning task (7, 9 and 10, 13, 15)
+- [x] Each changed cross-boundary behavior has one integration-owning task (7, 9 and 10, 13, 15, 18)
 - [x] No terminal catch-all validation task
 - [x] Dependencies are explicit and acyclic

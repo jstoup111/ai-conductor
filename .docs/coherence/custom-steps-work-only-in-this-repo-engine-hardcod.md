@@ -15,11 +15,12 @@
 | outcome | outcome-6 | story-6 | covered | "Negative path: a bootstrapped consumer's generated PR template still contains no" |
 | outcome | outcome-7 | story-1, story-4, story-5 | covered | "This repository's own two custom steps keep working through the change, including the" |
 | adr | adr-2026-07-25-custom-step-completion-artifacts | story-1, story-2, story-3 | covered | Decisions 3 and 6 are delivered by tasks 3 to 5; decisions 1, 2, 4 and 5 impose no change. Each obligation row was judged against its cited check. |
+| adr | adr-2026-09-11-github-operation-ownership | story-5 | covered | Decisions 1 and 7 are delivered by task 18, which routes the moved release-metadata reads and edit through the shipped guarded boundary so the production-boundary audit passes after the rebase onto main; decisions 2 to 6 and 8 impose no change here. |
 | story | story-1 | task-3, task-4, task-5 | covered | FINISH prerequisite for any gating custom step. |
 | story | story-2 | task-1, task-6 | covered | Steps that are not prerequisites. |
 | story | story-3 | task-2, task-7 | covered | Refusal names the step. |
 | story | story-4 | task-8, task-9, task-10 | covered | Dispatch by configured skill. |
-| story | story-5 | task-11, task-12, task-13 | covered | Release flow without a path literal. |
+| story | story-5 | task-11, task-12, task-13, task-18 | covered | Release flow without a path literal. |
 | story | story-6 | task-14, task-15, task-16, task-17 | covered | Package main entry and release workflows. |
 | task | task-1 | story-2 | covered | Select the custom steps that gate FINISH. |
 | task | task-2 | story-3 | covered | Carry unsatisfied step keys on the release-readiness blocker. |
@@ -34,6 +35,7 @@
 | task | task-11 | story-5 | covered | Decide release-metadata flow activation without a path literal. |
 | task | task-12 | story-5 | covered | Move the release-metadata snapshot and restore into the self-host area. |
 | task | task-13 | story-5 | covered | Wire activation and the missing-step halt into the self-host finish gates. |
+| task | task-18 | story-5 | covered | Route the release-metadata PR body reads and edit through the guarded GitHub boundary. |
 | task | task-14 | story-6 | covered | Give the release actions their own build entry and record the public exports. |
 | task | task-15 | story-6 | covered | Repoint the release workflows and prove their imports before merge. |
 | task | task-16 | story-6 | covered | Keep the release-metadata check identical through the new entry. |
