@@ -138,7 +138,9 @@ async function runFinishTimeRebase(
 
 interface Scratch {
   repo: string;
-  g: (args: string[]) => ReturnType<typeof execFile>;
+  // `execFile` defaults to text output. Keep that contract here rather than
+  // widening `stdout` through the overloaded function's generic return type.
+  g: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 }
 
 /**
