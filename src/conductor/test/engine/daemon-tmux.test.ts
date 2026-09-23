@@ -673,7 +673,7 @@ describe('makeTmuxSupervisor().restart: respawn fallback on failure (FR-20 neg)'
     expect(killCall.args).toEqual(
       expect.arrayContaining([expect.stringMatching(/^=cc-daemon-myapp-[0-9a-f]{6}$/)]),
     );
-    expect(newCall.args).toContain(buildDaemonExitWitnessCommand(buildDaemonForegroundCommand({})) as string);
+    expect(newCall.args).toContain(buildDaemonExitWitnessCommand(buildDaemonForegroundCommand({}), '/home/alice/myapp') as string);
   });
 });
 

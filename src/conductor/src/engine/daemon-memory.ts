@@ -78,24 +78,28 @@ export function startDaemonMemorySampler(
       dispatchSeq,
     });
     if (!dumped && usage.rss >= heapDumpThresholdMb * 1024 * 1024) {
-      mkdirSync(heapDumpDir, { recursive: true });
       const path = join(heapDumpDir, `${now().toISOString()}-${pid}.heapsnapshot`);
       const tempPath = `${path}.tmp`;
       try {
-        snapshot(tempPath);
-        renameSync(tempPath, path);
+        mkdirSync(heapDumpDir, { recursive: true });
         const snapshots = readdirSync(heapDumpDir)
           .filter((name) => name.endsWith('.heapsnapshot'))
           .map((name) => ({ name, mtime: statSync(join(heapDumpDir, name)).mtimeMs }))
           .sort((a, b) => a.mtime - b.mtime);
-        for (const old of snapshots.slice(0, Math.max(0, snapshots.length - heapDumpRetention))) {
+        // Make room before the atomic rename: the directory must never have
+        // more than the configured retention cap, even briefly.
+        const retainedBeforeWrite = Math.max(0, heapDumpRetention - 1);
+        for (const old of snapshots.slice(0, Math.max(0, snapshots.length - retainedBeforeWrite))) {
           unlinkSync(join(heapDumpDir, old.name));
         }
+        snapshot(tempPath);
+        renameSync(tempPath, path);
         dumped = true;
         await events.emit({ type: 'daemon_heap_dump_written', path, bytes: statSync(path).size, rss: usage.rss, pid });
       } catch (error) {
         try { unlinkSync(tempPath); } catch { /* absent temp is fine */ }
         try { appendFileSync(join(heapDumpDir, '..', 'daemon.log'), `[daemon] heap snapshot failed: ${String(error)}\n`); } catch { /* best effort */ }
+        dumped = true;
       }
     }
   };

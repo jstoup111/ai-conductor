@@ -1,7 +1,7 @@
 // Covers: task:2, task:3, task:4, task:5
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDaemonEventPersistence, startFeatureEventPersistence } from '../../src/engine/event-persister.js';
 import {
@@ -73,14 +73,19 @@ describe('startDaemonMemorySampler', () => {
     const events = new ConductorEventEmitter();
     const feature = startFeatureEventPersistence(join(root, 'f'), events, 'f');
     const heap = join(root, '.daemon', 'heap');
-    const { mkdirSync, readdirSync } = await import('node:fs');
     mkdirSync(heap, { recursive: true });
-    for (const name of ['2026-01-01T00:00:00.000Z-1.heapsnapshot', '2026-01-02T00:00:00.000Z-1.heapsnapshot']) {
+    for (const [index, name] of [
+      '2026-01-01T00:00:00.000Z-1.heapsnapshot',
+      '2026-01-02T00:00:00.000Z-1.heapsnapshot',
+      '2026-01-03T00:00:00.000Z-1.heapsnapshot',
+    ].entries()) {
       writeFileSync(join(heap, name), 'old');
+      const mtime = new Date(`2026-01-0${index + 1}T00:00:00.000Z`);
+      utimesSync(join(heap, name), mtime, mtime);
     }
     const writes: string[] = [];
     const sampler = startDaemonMemorySampler(events, {
-      ...heapDumpOptionsFromConfig({ daemon_heap_dump_threshold_mb: 120, daemon_heap_dump_retention: 2 }),
+      ...heapDumpOptionsFromConfig({ daemon_heap_dump_threshold_mb: 120, daemon_heap_dump_retention: 3 }),
       memoryUsage: () => ({ rss: 130 * 1024 * 1024, heapUsed: 1, heapTotal: 1, external: 1, arrayBuffers: 0 }),
       pid: 7, heapDumpDir: heap, now: () => new Date('2026-09-23T12:00:00.000Z'),
       writeHeapSnapshot: (path) => { writes.push(path); writeFileSync(path, 'dump'); return path; },
@@ -91,8 +96,31 @@ describe('startDaemonMemorySampler', () => {
       expect(writes).toHaveLength(1);
       expect(readdirSync(heap).filter((name) => name.endsWith('.heapsnapshot')).sort()).toEqual([
         '2026-01-02T00:00:00.000Z-1.heapsnapshot',
+        '2026-01-03T00:00:00.000Z-1.heapsnapshot',
         '2026-09-23T12:00:00.000Z-7.heapsnapshot',
       ]);
+    } finally { sampler.stop(); feature.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('contains a failed heap snapshot write and leaves later step listeners running', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR ?? '/tmp', 'daemon-heap-write-failure-'));
+    const events = new ConductorEventEmitter();
+    const feature = startFeatureEventPersistence(join(root, 'f'), events, 'f');
+    const heap = join(root, '.daemon', 'heap');
+    let completedListenerCalls = 0;
+    const sampler = startDaemonMemorySampler(events, {
+      memoryUsage: () => ({ rss: 200 * 1024 * 1024, heapUsed: 1, heapTotal: 1, external: 1, arrayBuffers: 0 }),
+      heapDumpThresholdMb: 100, heapDumpDir: heap,
+      writeHeapSnapshot: () => { throw new Error('writer failed'); },
+    });
+    events.on('step_completed', () => { completedListenerCalls += 1; });
+    try {
+      await feature.events.emit({ type: 'step_started', step: 'build', index: 0 });
+      await feature.events.emit({ type: 'step_completed', step: 'build', status: 'done' });
+
+      expect(readdirSync(heap).filter((name) => name.endsWith('.heapsnapshot') || name.endsWith('.tmp'))).toEqual([]);
+      expect((await readFile(join(root, '.daemon', 'daemon.log'), 'utf8')).match(/\[daemon\] heap snapshot failed/g)).toHaveLength(1);
+      expect(completedListenerCalls).toBe(1);
     } finally { sampler.stop(); feature.stop(); await rm(root, { recursive: true, force: true }); }
   });
   it('records root-bus step boundaries in the daemon ledger, not the feature ledger', async () => {
