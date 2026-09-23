@@ -1341,6 +1341,22 @@ describe('ClaudeProvider', () => {
       expect(result.waitSeconds).toBeDefined();
     });
 
+    it('keeps an ordinary ENOENT error unclassified as a rate limit', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'Error: ENOENT reading .docs/plans/x.md',
+        stderr: '',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect(result.rateLimited).toBeUndefined();
+      expect(result.success).toBe(false);
+      expect(result.waitSeconds).toBeUndefined();
+      expect(result.deadline).toBeUndefined();
+    });
+
     it('detects usage-limit variant as rateLimited', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'usage limit reached · resets 3:20pm (America/New_York)',
