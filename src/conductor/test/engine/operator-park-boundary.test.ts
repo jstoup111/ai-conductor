@@ -1279,8 +1279,12 @@ describe('operator park boundary contract', () => {
     let parked = false;
     const events = new ConductorEventEmitter();
     const failures: Array<Extract<ConductorEvent, { type: 'parallel_failure' }>> = [];
+    const parkBoundaries: Array<Extract<ConductorEvent, { type: 'operator_park_boundary' }>> = [];
     events.on('parallel_failure', (event) => {
       if (event.type === 'parallel_failure') failures.push(event);
+    });
+    events.on('operator_park_boundary', (event) => {
+      if (event.type === 'operator_park_boundary') parkBoundaries.push(event);
     });
     const run = vi.fn<StepRunner['run']>(async (step) => {
       if (step === ('parked-member' as StepName)) {
@@ -1310,6 +1314,7 @@ describe('operator park boundary contract', () => {
       result,
       calls: run.mock.calls.map(([step]) => step),
       failures,
+      parkBoundaries,
       state: persisted.ok ? {
         memory: persisted.value.memory,
         parked: (persisted.value as Record<string, unknown>)['memory__parked-member'],
@@ -1321,8 +1326,88 @@ describe('operator park boundary contract', () => {
         boundary: { kind: 'attempt', step: 'memory', attempt: 1, member: 'parked-member' },
       },
       calls: ['parked-member', 'passing-member'],
-      failures: [expect.not.objectContaining({ branch: 'parked-member' })],
+      failures: [],
+      parkBoundaries: [{
+        type: 'operator_park_boundary',
+        featureSlug: 'operator-park-boundary',
+        boundary: { kind: 'attempt', step: 'memory', attempt: 1, member: 'parked-member' },
+      }],
       state: { memory: 'in_progress', parked: 'in_progress', passing: 'done' },
+    });
+  });
+
+  it('keeps a genuine configured-member failure authoritative beside a parked member', async () => {
+    await writeState(statePath, stateWithPending('memory', 'explore'));
+    const releaseParkedMember = deferred();
+    const failedMemberExhausted = deferred();
+    let parked = false;
+    let failedAttempts = 0;
+    const failures: Array<Extract<ConductorEvent, { type: 'parallel_failure' }>> = [];
+    const parkBoundaries: Array<Extract<ConductorEvent, { type: 'operator_park_boundary' }>> = [];
+    const events = new ConductorEventEmitter();
+    events.on('parallel_failure', (event) => {
+      if (event.type === 'parallel_failure') failures.push(event);
+    });
+    events.on('operator_park_boundary', (event) => {
+      if (event.type === 'operator_park_boundary') parkBoundaries.push(event);
+    });
+    const run = vi.fn<StepRunner['run']>(async (step) => {
+      if (step === ('parked-member' as StepName)) {
+        await releaseParkedMember.promise;
+        return { success: false, output: 'parked retry' };
+      }
+      if (step === ('failed-member' as StepName)) {
+        failedAttempts += 1;
+        if (failedAttempts === 2) failedMemberExhausted.resolve();
+        return { success: false, output: 'original failed-member diagnostic' };
+      }
+      return { success: true };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      config: { validation_concurrency: 2, steps: { memory: {
+        max_retries: 2,
+        parallel: [{ name: 'parked-member' }, { name: 'failed-member' }],
+      } } },
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => parked,
+    });
+
+    const resultPromise = conductor.run();
+    await failedMemberExhausted.promise;
+    parked = true;
+    releaseParkedMember.resolve();
+    const result = await resultPromise;
+    const persisted = await readState(statePath);
+
+    expect({
+      result,
+      calls: run.mock.calls.map(([step]) => step),
+      failures,
+      parkBoundaries,
+      state: persisted.ok ? {
+        group: persisted.value.memory,
+        parked: (persisted.value as Record<string, unknown>)['memory__parked-member'],
+        failed: (persisted.value as Record<string, unknown>)['memory__failed-member'],
+      } : persisted,
+    }).toEqual({
+      result: undefined,
+      calls: ['parked-member', 'failed-member', 'failed-member'],
+      failures: [{
+        type: 'parallel_failure',
+        step: 'memory',
+        branch: 'failed-member',
+        error: 'original failed-member diagnostic',
+      }],
+      parkBoundaries: [],
+      state: { group: 'failed', parked: 'in_progress', failed: 'failed' },
     });
   });
 

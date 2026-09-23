@@ -8398,6 +8398,15 @@ export class Conductor {
             if (parkedIdx !== -1 && !hasGenuineFailure) {
               const member = membership.dispatchable[parkedIdx]!;
               const outcome = outcomes[parkedIdx]!;
+              // Every branch has settled, including the parked one. Close the
+              // fan-out lifecycle as a completed join before the park stop
+              // closes remaining admitted scopes, otherwise closeOpenExecutions
+              // would invent a conductor-owned parallel_failure.
+              await emitTracked({
+                type: 'parallel_completed',
+                step: step.name,
+                branches: membership.dispatchable.map((candidate) => candidate.name),
+              });
               const parked = await stopAtOperatorParkBoundary(true, {
                 kind: 'attempt', step: step.name,
                 attempt: outcome.kind === 'parked' ? outcome.attempt ?? 1 : 1,
@@ -14553,7 +14562,7 @@ export class Conductor {
       });
     }
 
-    if (!groupFailed && !parkedMember) {
+    if (!groupFailed) {
       await this.emitExecutionEvent({
         type: 'parallel_completed',
         step: groupName,
