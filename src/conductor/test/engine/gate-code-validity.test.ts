@@ -33,6 +33,7 @@ import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-agg
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import {
   checkGateCompletion,
+  computeAndWriteVerdict,
   readVerdict,
   writeVerdict,
   type ReplayPreservationRecord,
@@ -457,6 +458,64 @@ describe('gateVerdictStillValid', () => {
     await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBe(
       'rebase transition preserved build_review without its replay-bound authority',
     );
+  });
+
+  it('accepts a correctly bound preserved verdict even when its checkedAt predates appliedAt', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const operationId = 'old-bound-build-review';
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 250,
+      rebaseOperation: {
+        id: operationId,
+        status: 'applied',
+        appliedAt: 200,
+        transition: { preserved: ['build_review'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await writeVerdict(s.repo, 'build_review', {
+      satisfied: true,
+      checkedAt: 100,
+      preservation: { gate: 'build_review', operationId } as ReplayPreservationRecord,
+    });
+
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBeNull();
+  });
+
+  it('retains a correctly bound preservation stamp during a satisfied build-review recheck', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const operationId = 'retained-build-review-stamp';
+    const preservation = { gate: 'build_review', operationId } as ReplayPreservationRecord;
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 250,
+      rebaseOperation: {
+        id: operationId,
+        status: 'applied',
+        appliedAt: 200,
+        transition: { preserved: ['build_review'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await mkdir(join(s.repo, '.pipeline'), { recursive: true });
+    await writeFile(join(s.repo, BUILD_REVIEW_VERDICT), JSON.stringify({
+      verdict: 'PASS',
+      rubric: { testQuality: false, security: false },
+    }));
+    await writeVerdict(s.repo, 'build_review', {
+      satisfied: true,
+      checkedAt: 100,
+      preservation,
+    });
+
+    const rechecked = await computeAndWriteVerdict(s.repo, 'build_review', {}, { retainReplayPreservation: true });
+
+    expect(rechecked.satisfied).toBe(true);
+    expect((await readVerdict(s.repo, 'build_review'))?.preservation).toEqual(preservation);
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBeNull();
   });
 
   it('accepts a fresh re-judgement beside a correctly bound preserved verdict', async () => {
