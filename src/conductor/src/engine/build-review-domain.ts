@@ -634,13 +634,29 @@ function customFinding(value: unknown): BuildReviewCustomFinding | undefined {
     ...(confidence === undefined ? {} : { confidence: confidence as number }),
   });
 }
+
+/**
+ * These fields belong to the engine-stamped envelope, not the custom-v1
+ * reviewer payload.  Native schemas do not request them, but providers can
+ * still wrap a structured result with routing metadata.  Discard the wrapper
+ * metadata before applying the closed reviewer-payload grammar.
+ */
+const CUSTOM_REVIEWER_ENVELOPE_FIELDS = new Set(['rubric', 'lapId']);
+
+function reviewerOwnedCustomPayload(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([field]) => !CUSTOM_REVIEWER_ENVELOPE_FIELDS.has(field)),
+  );
+}
+
 /**
  * Parses only the reviewer-owned custom payload.  Rubric, policy, provider,
  * lap, verdict, case, effect, and disposition identity remain engine-owned.
  */
 export function parseBuildReviewCustomReviewerPayload(value: unknown): BuildReviewCustomReviewerPayload | undefined {
-  const source = object(value);
-  if (!source) return undefined;
+  const raw = object(value);
+  if (!raw) return undefined;
+  const source = reviewerOwnedCustomPayload(raw);
   if (source.kind === 'unsupported-policy') {
     return exactKeys(source, ['kind', 'requirement']) && text(source.requirement) && source.requirement.length <= MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH
       ? Object.freeze({ kind: 'unsupported-policy', requirement: source.requirement })
@@ -651,6 +667,65 @@ export function parseBuildReviewCustomReviewerPayload(value: unknown): BuildRevi
   return findings.some((entry) => !entry)
     ? undefined
     : Object.freeze({ kind: 'custom-findings', version: 'v1', findings: Object.freeze(findings as BuildReviewCustomFinding[]) });
+}
+
+/** Explain custom-v1 payload rejection without trusting its envelope fields. */
+export function diagnoseBuildReviewCustomReviewerPayloadRejection(
+  value: unknown,
+  references?: BuildReviewCustomFindingReferenceContext,
+): BuildReviewJudgedResultRejection {
+  const raw = object(value);
+  if (!raw) {
+    return Object.freeze({ kind: 'explained', problems: Object.freeze([
+      rejectionProblem('$', 'must be an object', 'the custom result is not a single JSON object'),
+    ]) });
+  }
+  const source = reviewerOwnedCustomPayload(raw);
+  const problems: BuildReviewJudgedResultRejectionProblem[] = [];
+  if (source.kind === 'unsupported-policy') {
+    if (!text(source.requirement) || source.requirement.length > MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH) {
+      problems.push(rejectionProblem('requirement', `must be a non-empty string no longer than ${MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH} characters`));
+    }
+  } else {
+    if (source.kind !== 'custom-findings') problems.push(rejectionProblem('kind', 'must be "custom-findings" or "unsupported-policy"'));
+    if (source.version !== 'v1') problems.push(rejectionProblem('version', 'must be "v1" for custom-findings'));
+    if (!Array.isArray(source.findings)) {
+      problems.push(rejectionProblem('findings', 'must be an array'));
+    } else {
+      source.findings.forEach((entry, findingIndex) => {
+        const findingSource = object(entry);
+        if (!findingSource) {
+          problems.push(rejectionProblem(`findings[${findingIndex}]`, 'must be an object'));
+          return;
+        }
+        const confidence = findingSource.confidence;
+        if (confidence !== undefined && (
+          typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100
+        )) {
+          problems.push(rejectionProblem(`findings[${findingIndex}].confidence`, 'must be an integer from 0 to 100'));
+        }
+        if (!Array.isArray(findingSource.sourceRegions)) {
+          problems.push(rejectionProblem(`findings[${findingIndex}].sourceRegions`, 'must be a non-empty array of source regions'));
+          return;
+        }
+        findingSource.sourceRegions.forEach((regionValue, regionIndex) => {
+          const sourceRegion = customSourceRegion(regionValue);
+          const field = `findings[${findingIndex}].sourceRegions[${regionIndex}]`;
+          if (!sourceRegion) {
+            problems.push(rejectionProblem(field, 'must be a source region with path, startLine, endLine, contentHash, and display'));
+          } else if (references && !references.sourceRegions.some((admitted) => sameCandidateScopeSourceRegion(admitted, sourceRegion))) {
+            problems.push(rejectionProblem(field, 'must exactly match an admitted frozen source region'));
+          }
+        });
+      });
+    }
+  }
+  if (problems.length === 0 && parseBuildReviewCustomReviewerPayload(value) === undefined) {
+    problems.push(rejectionProblem('$', 'must satisfy the custom-v1 reviewer payload contract'));
+  }
+  return problems.length === 0
+    ? Object.freeze({ kind: 'unexplained', problems: Object.freeze([]) })
+    : Object.freeze({ kind: 'explained', problems: Object.freeze(problems.slice(0, MAX_REJECTION_PROBLEMS)) });
 }
 /** The effective catalog chooses a parser; global enabled rubric maps never do. */
 export function parseBuildReviewReviewerPayload(

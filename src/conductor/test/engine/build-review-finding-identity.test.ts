@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
+  diagnoseBuildReviewCustomReviewerPayloadRejection,
   normalizeBuildReviewFindingVocabularyMember,
+  parseBuildReviewCustomReviewerPayload,
   type BuildReviewFindingReferenceContext,
 } from '../../src/engine/build-review-domain.js';
 import {
@@ -260,6 +262,44 @@ describe('build-review finding identity', () => {
     expect(stamped?.findings[0]?.identity.canonicalJson).not.toContain('lap-1');
     expect(stamped?.findings[0]?.identity.canonicalJson).not.toContain('summary');
     expect(Object.isFrozen(stamped?.findings ?? [])).toBe(true);
+  });
+
+  it('preserves the custom-v1 golden while ignoring provider envelope fields', () => {
+    const golden = stampBuildReviewCustomJudgedResult(customPayload(), customStamp, customReferenceContext)!;
+    const providerWrapped = customPayload({ rubric: 'provider-rubric', lapId: 'provider-lap' });
+    const stamped = stampBuildReviewCustomJudgedResult(providerWrapped, customStamp, customReferenceContext);
+
+    expect(stamped).toEqual(golden);
+    expect(stamped?.rubric).toBe(customStamp.rubric);
+    expect(stamped?.lapId).toBe(customStamp.lapId);
+    expect(stamped?.findings.map((finding) => finding.identity.id)).toEqual(
+      golden.findings.map((finding) => finding.identity.id),
+    );
+  });
+
+  it('admits unsupported-policy as a distinct custom-v1 structured result', () => {
+    expect(parseBuildReviewCustomReviewerPayload({
+      kind: 'unsupported-policy', requirement: 'network access is required', rubric: 'provider-rubric', lapId: 'provider-lap',
+    })).toEqual({ kind: 'unsupported-policy', requirement: 'network access is required' });
+  });
+
+  it('names rejected custom source regions and non-integer confidence fields', () => {
+    const region = customReferenceContext.sourceRegions[0]!;
+    const outsideFrozenRegion = customPayload({ findings: [{
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      confidence: 72, evidenceLocations: ['src/widget.ts:8'], sourceRegions: [{ ...region, startLine: 13, endLine: 13 }],
+    }] });
+    const fractionalConfidence = customPayload({ findings: [{
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      confidence: 85.5, evidenceLocations: ['src/widget.ts:8'], sourceRegions: customReferenceContext.sourceRegions,
+    }] });
+
+    expect(diagnoseBuildReviewCustomReviewerPayloadRejection(outsideFrozenRegion, customReferenceContext)).toMatchObject({
+      kind: 'explained', problems: [{ field: 'findings[0].sourceRegions[0]' }],
+    });
+    expect(diagnoseBuildReviewCustomReviewerPayloadRejection(fractionalConfidence, customReferenceContext)).toMatchObject({
+      kind: 'explained', problems: [{ field: 'findings[0].confidence', required: 'must be an integer from 0 to 100' }],
+    });
   });
 
   it('accepts the versioned digest emitted by the captured policy package', () => {
