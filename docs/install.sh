@@ -214,10 +214,20 @@ run_installer() {
 
 run_updater() {
   cd "$TARGET"
+  head_before=$(git rev-parse HEAD)
+  update_status=0
   if (: </dev/tty) 2>/dev/null; then
-    ./bin/update </dev/tty
+    ./bin/update </dev/tty || update_status=$?
   else
-    ./bin/update
+    ./bin/update || update_status=$?
+  fi
+  [ "$update_status" -eq 0 ] || exit "$update_status"
+  # The updater fetched the channel; a branch checkout still at its upstream and
+  # unmoved by the updater is current. Detached (tagged) checkouts report themselves.
+  head_after=$(git rev-parse HEAD)
+  if upstream=$(git rev-parse -q --verify '@{upstream}' 2>/dev/null) \
+    && [ "$head_after" = "$head_before" ] && [ "$head_after" = "$upstream" ]; then
+    printf '%s\n' "ai-conductor installation is current at $TARGET"
   fi
 }
 

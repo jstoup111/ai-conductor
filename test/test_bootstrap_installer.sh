@@ -25,7 +25,9 @@ EOF
 cat > "$SOURCE_REPO/bin/update" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$PWD|$*|${AI_CONDUCTOR_CHANNEL-}" >> "${UPDATE_RECORD:-$INSTALLER_RECORD}"
-printf '%s\n' 'installation is current'
+# Like the real updater: fetch the channel, print an identity line, never claim currency.
+git fetch -q origin
+printf '%s\n' 'Update identity: stub'
 [ -z "${UPDATE_MARKER-}" ] || : > "$UPDATE_MARKER"
 if [ "${UPDATE_EXIT_CODE:-0}" -ne 0 ]; then
   printf '%s\n' "updater failed with ${UPDATE_EXIT_CODE}" >&2
@@ -596,6 +598,7 @@ RERUN_GIT_RECORD="$TMP_ROOT/rerun-git-subcommands"
 : > "$RERUN_GIT_RECORD"
 GIT_SUBCOMMAND_RECORD="$RERUN_GIT_RECORD" CASE_INSTALLER_RECORD="$RERUN_INSTALLER_RECORD" CASE_UPDATE_RECORD="$RERUN_UPDATE_RECORD" CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case rerun-second
 if [ "$CASE_STATUS" -eq 0 ] && grep -Fq 'installation is current' <<< "$CASE_STDOUT" \
+  && grep -Fq 'Update identity: stub' <<< "$CASE_STDOUT" \
   && [ "$(wc -l < "$RERUN_INSTALLER_RECORD")" -eq 1 ] \
   && grep -Fqx "$RERUN_HOME/.ai-conductor/harness|./bin/install||" "$RERUN_INSTALLER_RECORD" \
   && [ "$(wc -l < "$RERUN_UPDATE_RECORD")" -eq 1 ] \
@@ -614,7 +617,8 @@ advanced_stable_head=$(git -C "$SOURCE_REPO" rev-parse stable)
 BEHIND_GIT_RECORD="$TMP_ROOT/behind-git-subcommands"
 : > "$BEHIND_GIT_RECORD"
 GIT_SUBCOMMAND_RECORD="$BEHIND_GIT_RECORD" CASE_INSTALLER_RECORD="$RERUN_INSTALLER_RECORD" CASE_UPDATE_RECORD="$RERUN_UPDATE_RECORD" CASE_HOME_OVERRIDE="$RERUN_HOME" CASE_PATH="$FRESH_INSTALL_PATH" run_case behind-stable
-if [ "$CASE_STATUS" -eq 0 ] && grep -Fq 'installation is current' <<< "$CASE_STDOUT" \
+if [ "$CASE_STATUS" -eq 0 ] && ! grep -Fq 'installation is current' <<< "$CASE_STDOUT" \
+  && grep -Fq 'Update identity: stub' <<< "$CASE_STDOUT" \
   && [ "$advanced_stable_head" != "$rerun_head" ] \
   && [ "$(wc -l < "$RERUN_INSTALLER_RECORD")" -eq 1 ] \
   && grep -Fqx "$RERUN_HOME/.ai-conductor/harness|./bin/install||" "$RERUN_INSTALLER_RECORD" \
