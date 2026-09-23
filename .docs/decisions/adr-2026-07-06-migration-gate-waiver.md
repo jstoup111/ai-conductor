@@ -52,6 +52,33 @@ names the waiver path so future builds (and the #282 remediate route, when built
 remediation. The harness repo's own `CLAUDE.md` release-gate section documents when a waiver
 is appropriate — repo-contained authoring guidance, not a harness-wide skill change.
 
+> **Amended 2026-09-22 by #2230:** the waiver contract above (conditions 1–3, W1–W4) is
+> unchanged; this amendment names who authors the satisfier for this repository's self-host SHIP
+> tail. The original text left authorship implicit, and in practice every internal-only hooks/
+> touch halted at finish for an operator to hand-write the waiver.
+>
+> **D4 — The release-disposition step judges the breaking surface.** The repository-local
+> `release-disposition` step, which already reads the real feature diff, records exactly one
+> surface verdict from the closed set `none | migration | waiver | unclassifiable` in its review
+> evidence. No other value is valid and there is no catch-all.
+>
+> **D5 — A waiver verdict commits the waiver before PASS.** On `waiver`, the step writes a
+> W2-valid `.docs/release-waivers/<plan-stem>.md` naming every classified surface and commits it to
+> the feature branch before writing its pass marker, so W1 holds by construction. A waiver already
+> committed in the feature diff (for example by a plan task) is reused, and amended if it misses a
+> surface, so the diff carries exactly one waiver. A `bin/conduct` subcommand, flag, or behavior
+> change, a hook contract change, or a `settings.json` schema change is never judged `waiver`.
+> On `migration`,
+> it writes the runnable ```` ```bash migration ```` block into the retained draft PR body as
+> today. The TR-10 gate in `release-gate.ts` stays the unchanged fail-closed validator of
+> whatever the step authored.
+>
+> **D6 — Unclassifiable authors nothing.** On `unclassifiable`, the step authors neither a waiver
+> nor a migration block, so the gate halts with exactly today's reason. Attestation of an
+> authored waiver rests on the operator's PR-merge review (ADR-005/ADR-010; the daemon never
+> merges), the same backstop the Consequences section already names for build-authored
+> waivers.
+
 **Containment:** all logic lives in `src/conductor/src/engine/self-host/release-gate.ts`
 behind the existing `selfHost === true` activation; consumer-project pipelines are
 byte-for-byte unchanged. `version-signal.ts` (`detectMajorSurfaces`, semver-MAJOR signal)
