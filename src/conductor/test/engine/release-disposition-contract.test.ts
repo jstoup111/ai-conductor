@@ -127,4 +127,18 @@ describe('repository-local release-disposition contract', () => {
       uncertainFallsBack: true,
     });
   });
+
+  it('leaves unclassifiable and invalid verdicts without authored release artifacts', async () => {
+    const skill = await readFile(join(canonicalDir, 'SKILL.md'), 'utf8');
+
+    expect({
+      unclassifiableAuthorsNothing: /unclassifiable.*neither a waiver nor a migration block/i.test(skill),
+      gateRetainsHalt: /unclassifiable[\s\S]*release gate to halt[\s\S]*exactly as it does today/i.test(skill),
+      invalidVerdictBlocked: /outside `none`, `migration`, `waiver`,[\s\S]*`unclassifiable`[\s\S]*BLOCKED[\s\S]*pass marker absent/i.test(skill),
+    }).toEqual({
+      unclassifiableAuthorsNothing: true,
+      gateRetainsHalt: true,
+      invalidVerdictBlocked: true,
+    });
+  });
 });
