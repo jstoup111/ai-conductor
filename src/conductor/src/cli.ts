@@ -824,6 +824,14 @@ export function createProgram(): Command {
   daemon
     .command('unpark <slug>')
     .description('Resume dispatch and re-kick for this feature');
+  // Pane foreground wrappers invoke this short-lived writer after their daemon
+  // child exits. index.ts dispatches it before Commander boots; declaring it
+  // here keeps the daemon help surface synchronized with that dispatcher.
+  daemon
+    .command('exit-witness')
+    .description('Record a daemon child exit status for supervisor recovery')
+    .requiredOption('--pid <pid>', 'Exited daemon process ID')
+    .requiredOption('--status <status>', 'Exited daemon process status');
   daemon
     .command('reclaim-worktree <slug>')
     .description('Remove exactly one named, quiescent retained feature worktree');
