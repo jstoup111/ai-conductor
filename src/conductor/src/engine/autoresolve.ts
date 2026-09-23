@@ -956,6 +956,30 @@ export async function escalate(
 }
 
 /**
+ * Fold every accepted attempt's verdict into the single record published on
+ * the event spine and the PR audit comment (adr-2026-07-04 D1). The superseded
+ * list is the accumulated declaration set the preservation guards consumed, so
+ * a commit excused by an earlier attempt is never omitted from the audit.
+ */
+export function combineAcceptedVerdicts(
+  verdicts: readonly import('./rebase.js').ResolutionVerdict[],
+  accumulatedSuperseded: readonly string[],
+): import('./rebase.js').ResolutionVerdict | undefined {
+  if (verdicts.length === 0) return undefined;
+  const last = verdicts[verdicts.length - 1];
+  const rationales = [...new Set(verdicts.map((v) => v.rationale.trim()).filter(Boolean))];
+  return {
+    // A single attempt keeps its own choice; across attempts any declared
+    // drop makes the combined judgement a supersession.
+    choice: verdicts.length > 1 && accumulatedSuperseded.length > 0 ? 'superseded' : last.choice,
+    rationale: rationales.length === 1
+      ? rationales[0]
+      : rationales.map((r, i) => `(${i + 1}) ${r}`).join(' '),
+    superseded: [...accumulatedSuperseded],
+  };
+}
+
+/**
  * Comprehensive orchestrator for auto-resolving open PR conflicts.
  *
  * Story: "The daemon orchestrates the full resolution pipeline" (Task 20 / FR-3-FR-16)
@@ -1045,7 +1069,10 @@ export async function resolveConflictingPr(
     const replayedShas = shaR.exitCode === 0
       ? shaR.stdout.split('\n').map((sha) => sha.trim()).filter(Boolean)
       : [];
-    let resolutionVerdict: import('./rebase.js').ResolutionVerdict | undefined;
+    // Every accepted attempt's verdict is kept: the shared loop's FR-9 check
+    // and the acceptance guards consume the accumulated declarations, so the
+    // D1 audit surfaces must name that same accumulated set.
+    const acceptedVerdicts: import('./rebase.js').ResolutionVerdict[] = [];
     const declaredSuperseded = new Set<string>();
     let verdictFailure: string | undefined;
     const capturingResolver: RebaseResolver = async (ctx) => {
@@ -1082,7 +1109,7 @@ export async function resolveConflictingPr(
           verdictFailure ??= checked.reason;
           return { resolved: false, reason: verdictFailure };
         } else {
-          resolutionVerdict = checked.verdict;
+          acceptedVerdicts.push(checked.verdict);
           for (const sha of checked.verdict.superseded) declaredSuperseded.add(sha);
         }
       }
@@ -1176,7 +1203,7 @@ export async function resolveConflictingPr(
 
     // Work-preservation guards: verify the rebase succeeded correctly.
     const acceptanceGuards = deps.runAcceptanceGuards ?? runAcceptanceGuards;
-    const guardsResult = resolutionVerdict === undefined
+    const guardsResult = acceptedVerdicts.length === 0
       ? await acceptanceGuards(git, baseRef, subjectsBefore)
       : await acceptanceGuards(git, baseRef, subjectsBefore, [...declaredSuperseded]);
     if (!guardsResult.ok) {
@@ -1237,6 +1264,7 @@ export async function resolveConflictingPr(
 
     // A comment or subscriber failure is observability-only and cannot undo a
     // successfully lease-protected publication.
+    const resolutionVerdict = combineAcceptedVerdicts(acceptedVerdicts, [...declaredSuperseded]);
     if (resolutionVerdict) {
       // Persist the durable verdict before attempting the best-effort PR
       // comment. A GitHub comment failure must not hide the published
@@ -1245,7 +1273,7 @@ export async function resolveConflictingPr(
         type: 'rebase_supersession_verdict',
         choice: resolutionVerdict.choice,
         rationale: resolutionVerdict.rationale,
-        superseded: resolutionVerdict.superseded,
+        superseded: [...resolutionVerdict.superseded],
         verification: { command: config.suiteCommand, exitCode: 0 },
       });
       try {

@@ -178,4 +178,96 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
       await rm(repo, { recursive: true, force: true });
     }
   });
+
+  it('publishes every attempt\'s declared-superseded commit when judgement spans several resolver calls', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'autoresolve-multi-attempt-'));
+    const git = (args: string[]) => execFile('git', args, { cwd: repo });
+    const prUrl = 'https://github.com/example/repo/pull/44';
+    try {
+      await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+      const remote = join(repo, 'remote.git');
+      await execFile('git', ['init', '--bare', '-q', remote]);
+      await git(['config', 'user.email', 't@example.test']);
+      await git(['config', 'user.name', 'Test']);
+      await git(['remote', 'add', 'origin', remote]);
+      await writeFile(join(repo, 'first.test.ts'), 'initial\n');
+      await writeFile(join(repo, 'second.test.ts'), 'initial\n');
+      await git(['add', 'first.test.ts', 'second.test.ts']);
+      await git(['commit', '-q', '-m', 'init']);
+
+      await git(['checkout', '-q', '-b', 'feature']);
+      await writeFile(join(repo, 'first.test.ts'), 'feature first\n');
+      await git(['commit', '-q', '-am', 'test: first superseded change']);
+      const supersededSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+      await writeFile(join(repo, 'second.test.ts'), 'feature second\n');
+      await git(['commit', '-q', '-am', 'test: second merged change']);
+
+      await git(['checkout', '-q', 'main']);
+      await writeFile(join(repo, 'first.test.ts'), 'main first\n');
+      await writeFile(join(repo, 'second.test.ts'), 'main second\n');
+      await git(['commit', '-q', '-am', 'main: conflicting test changes']);
+      await git(['push', '-q', 'origin', 'main', 'feature']);
+
+      const ghCalls: string[][] = [];
+      const gh: GhRunner = async (args) => {
+        ghCalls.push(args);
+        return {
+          stdout: args[0] === 'pr' && args[1] === 'view'
+            ? JSON.stringify({ comments: [] })
+            : '',
+        };
+      };
+      const emitted: Array<{ type: string; superseded?: string[]; choice?: string }> = [];
+      let calls = 0;
+      const outcome = await resolveConflictingPr(
+        { prUrl, slug: 'feature-multi-attempt', repoCwd: repo },
+        'feature',
+        { enabled: true, suiteCommand: 'npm test', cooldownMinutes: 0, attemptCap: 3 },
+        {
+          runGh: gh,
+          runSuite: async () => ({ exitCode: 0, durationMs: 0, configured: true }),
+          resolver: async ({ projectRoot, supersessionJudgement }) => {
+            calls += 1;
+            expect(supersessionJudgement).toBe(true);
+            if (calls === 1) {
+              // Upstream already carries the first commit's intent: drop it.
+              await execFile('git', ['checkout', '--ours', 'first.test.ts'], { cwd: projectRoot });
+              await execFile('git', ['add', 'first.test.ts'], { cwd: projectRoot });
+              await execFile('git', ['-c', 'core.editor=true', 'rebase', '--skip'], { cwd: projectRoot })
+                .catch(() => undefined);
+              return {
+                resolved: true,
+                verdict: { choice: 'superseded', rationale: 'main already covers the first test', superseded: [supersededSha] },
+              };
+            }
+            await writeFile(join(projectRoot, 'second.test.ts'), 'main second\nfeature second\n');
+            await execFile('git', ['add', 'second.test.ts'], { cwd: projectRoot });
+            await execFile('git', ['-c', 'core.editor=true', 'rebase', '--continue'], { cwd: projectRoot });
+            return {
+              resolved: true,
+              verdict: { choice: 'merged', rationale: 'kept both second-test edits', superseded: [] },
+            };
+          },
+          log: () => undefined,
+          events: {
+            emit: async (event: Parameters<ConductorEventEmitter['emit']>[0]) => { emitted.push(event as never); },
+          } as never,
+        },
+      );
+
+      expect(calls).toBe(2);
+      expect(outcome).toEqual({ kind: 'refreshed' });
+      const verdictEvents = emitted.filter((event) => event.type === 'rebase_supersession_verdict');
+      expect(verdictEvents).toHaveLength(1);
+      expect(verdictEvents[0].superseded).toEqual([supersededSha]);
+      expect(verdictEvents[0].choice).toBe('superseded');
+      const audit = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'comment');
+      const body = audit?.[audit.indexOf('--body') + 1] ?? '';
+      expect(body).toContain(supersededSha);
+      expect(body).toContain('main already covers the first test');
+      expect(body).toContain('kept both second-test edits');
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
 });
