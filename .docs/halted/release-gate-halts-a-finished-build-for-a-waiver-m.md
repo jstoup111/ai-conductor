@@ -1,25 +1,22 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-23T07:26:06.071Z
+Status: halted
 Slug: release-gate-halts-a-finished-build-for-a-waiver-m
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-release-gate-halts-a-finished-build-for-a-waiver-m
-Head SHA: 44119e49b53f3dcd3a6d80f84a407b26c9ea0626
-Halted at: 2026-09-23T02:50:29.590Z
+Head SHA: 7b2bdaeb780425739fe6b2eeff33a01054aca33e
+Halted at: 2026-09-23T08:09:06.729Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-coverage_binding refused: cited Done when checks do not assert the criterion.
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-1 (—)
 
-Criterion: Story 3 happy: Given a self-host feature diff with a classified breaking surface and no waiver committed in the feature diff, that `release-disposition` cannot confidently judge internal-only or consumer-facing, when the step runs, then it records `unclassifiable` and authors neither a waiver nor a migration block.
-Task ids: 1, 4
-Done when checks: `release-disposition-contract.test.ts` asserts the skill requires exactly one `Surface-Verdict:` line in `.pipeline/release-disposition-review.md` whose value is one of `none`, `migration`, `waiver`, `unclassifiable`, and that assertion fails against the pre-change skill text | `release-disposition-contract.test.ts` asserts the skill directs a `none` verdict, recorded when the diff has no classified breaking surface, to commit no waiver and author no migration block | the existing `release-disposition-contract.test.ts` assertions (byte-identical Claude link, gating config before finish, PR body authority, PASS-only marker) still pass unchanged | `release-disposition-contract.test.ts` asserts the skill directs an `unclassifiable` verdict to author neither a waiver nor a migration block | `release-disposition-contract.test.ts` asserts the skill directs a recorded surface verdict outside `none`, `migration`, `waiver`, `unclassifiable` to report BLOCKED with `.pipeline/release-disposition-pass` absent
-Missing assertion: No cited check requires that uncertainty about whether a classified breaking-surface change is internal-only or consumer-facing records `unclassifiable`; it only specifies what an already-selected `unclassifiable` verdict must not author.
+Blocking findings:
+AB-1 (DESIGN; —): The Codex-routed custom step emits `/release-disposition` instead of invoking `$release-disposition` and never consumes the configured skill path, so every changed production primitive is unreachable.
+AB-2 (REMEDIABLE; Task 4): The skill does not select `Surface-Verdict: unclassifiable` for the sealed uncertainty condition, leaving one Story 3 outcome undelivered.
 ```
