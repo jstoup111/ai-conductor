@@ -268,6 +268,7 @@ This plan makes an operator park decline every new provider attempt of a running
 **Done when:**
 - After writing the park marker, `daemon park` prints a report stating that an attempt is still running and naming the step and attempt when the daemon pidfile is live per `readPidRecord` and `isLive` and `classifyRunningWork` returns `running` for a running or preparing attempt, as asserted by the park CLI running tests.
 - `daemon park` prints that the feature is fully stopped when `classifyRunningWork` returns `stopped`, when no daemon pidfile is live, and when the feature has no worktree and no persisted events, and in each case the park marker is written, as asserted by the park CLI stopped tests.
+- With a live daemon pidfile and a feature whose latest persisted provider_attempt lifecycle is settled, `classifyRunningWork` returns `stopped` and `daemon park` prints that the feature is fully stopped, as asserted by the park CLI settled-attempt test.
 - `daemon park` prints that running work is unknown, and never the fully-stopped text, when the events file is unreadable, when the provider-attempt lines are all malformed, or when pidfile liveness cannot be determined, and the park marker is still written, as asserted by the park CLI unknown tests.
 - Every unknown-report park CLI test asserts exit status 0, because the park itself was written.
 - Re-parking an already-parked feature prints the existing already-parked notice together with the running-work report, as asserted by the already-parked report test.
