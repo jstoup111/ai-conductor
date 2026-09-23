@@ -239,6 +239,15 @@ for truncation in \
   fi
 done
 
+# Losing only the final newline leaves the complete script, including the whole
+# `main "$@"` line, so the shell runs it to EOF: that is the full install, not a partial one.
+run_truncated_case one-byte-short "$((script_length - 1))"
+if [ -e "$CASE_HOME/.ai-conductor/harness" ] && [ -s "$RECORD" ]; then
+  echo 'PASS one-byte-short bootstrap is the complete script and installs'
+else
+  failures+="one-byte-short bootstrap (final newline only) did not complete the install\\n"
+fi
+
 run_case help --help
 if [ "$CASE_STATUS" -eq 0 ] \
   && grep -Fq -- '--channel' <<< "$CASE_OUTPUT" \
