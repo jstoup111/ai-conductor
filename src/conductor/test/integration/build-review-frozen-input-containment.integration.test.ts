@@ -55,8 +55,12 @@ describe('custom review containment exposes the complete frozen baseline/head in
       if (executable !== 'bwrap') throw new Error(`unexpected process ${executable}`);
       return { exitCode: 0, stdout: PROVED, stderr: '' };
     });
-    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) }));
-    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
     const runner = new DefaultStepRunner(provider, 'frozen-input', project, {
       featureDesc: 'feature', planPath: join(project, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {

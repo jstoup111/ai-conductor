@@ -23,7 +23,7 @@ import {
   type BuildReviewInfrastructureFailureReason,
 } from "../../src/engine/build-review-domain.js";
 import { fingerprintBuildReviewRubricPolicy } from "../../src/engine/build-review-registry.js";
-import { canonicalJson, deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
+import { canonicalJson, deriveBuildReviewRubricProjections, type BuildReviewProjectionJson, type BuildReviewRubricProjection } from "../../src/engine/build-review-projections.js";
 import { canonicalizeBuildReviewFindingSet } from '../../src/engine/build-review-finding-identity.js';
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import type {
@@ -174,7 +174,7 @@ describe("build-review coordinator: registered dispatch", () => {
       lapId: parseBuildReviewLapId('lap-current')!,
       inputs: frozenInputs,
       testQuality: { changedTestSelectors: [IN_SCOPE_TEST], unresolvedMarkers: [], revertedProductionManifest: [], preflight: { classification: 'not-requested', excerpt: '' } },
-    }).testQuality;
+    }).testQuality as BuildReviewRubricProjection;
     const finding = testQualityFinding();
     const claudeTerminalEnvelope = { structuredOutput: { findings: [finding] } };
     const codexTerminalItem = { findings: [{ anchor: finding.anchor, evidenceLocations: finding.evidenceLocations, summary: finding.summary, concernKind: finding.concernKind }] };
@@ -183,7 +183,7 @@ describe("build-review coordinator: registered dispatch", () => {
     const claudeResult = validateBuildReviewDispatchedResult(claudeStamped, 'testQuality', projection)!;
     const codexResult = validateBuildReviewDispatchedResult(codexStamped, 'testQuality', projection)!;
 
-    expect(canonicalJson(claudeStamped)).toBe(canonicalJson(codexStamped));
+    expect(canonicalJson(claudeStamped as BuildReviewProjectionJson)).toBe(canonicalJson(codexStamped as BuildReviewProjectionJson));
     const claudeIds = canonicalizeBuildReviewFindingSet(claudeResult.findings.map((entry) => ({
       rubric: claudeResult.rubric, contractVersion: claudeResult.contractVersion, ...entry,
     })))?.map(({ id }) => id);

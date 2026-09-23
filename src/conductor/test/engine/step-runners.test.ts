@@ -60,17 +60,18 @@ function interactiveRuntime(
   const policy =
     key === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
   const lifecycleCapability = { synchronousSpawnPermit: true } as const;
+  const nativeSchemaCapability = { nativeOutputSchema: true } as const;
   return {
     key,
     provider: {
       supportsSessionResume: key === 'claude',
       lifecycleCapability,
-      nativeSchemaCapability: { nativeOutputSchema: true },
+      nativeSchemaCapability,
       invoke: async (options: InvokeOptions): Promise<InvokeResult> =>
         (await invokeResponse(options)) ?? { success: true, output: '', exitCode: 0 },
     },
     lifecycleCapability,
-    nativeSchemaCapability: { nativeOutputSchema: true },
+    nativeSchemaCapability,
     policy,
     builtIn: true,
     availability: new ModelAvailability(policy.modelFallbackLadder),
@@ -4591,7 +4592,7 @@ TIER: M`,
       expect(result).toMatchObject({
         success: false,
         currentLapMechanicalFault: true,
-        output: 'build_review mechanical fault in testQuality (malformed-artifact): invalid-provider-result: testQuality omitted the required verdict',
+        output: 'build_review mechanical fault in testQuality (invalid-structured-result): invalid-structured-result: testQuality omitted the required verdict',
       });
       expect(dispatch.mock.calls.map(([branch]) => (branch as { rubric: string }).rubric)).toEqual([
         'testQuality',
@@ -4601,8 +4602,8 @@ TIER: M`,
         mechanicalFaults: 1,
         lastMechanicalFault: {
           rubric: 'testQuality',
-          reason: 'malformed-artifact',
-          detail: 'invalid-provider-result: testQuality omitted the required verdict',
+          reason: 'invalid-structured-result',
+          detail: 'invalid-structured-result: testQuality omitted the required verdict',
           lapId: 'lap-head',
         },
       });

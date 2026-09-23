@@ -52,8 +52,11 @@ async function review(region: { path: string; startLine: number; endLine: number
     concernId: 'concern.one', summary: 'A concern.', evidenceLocations: [`${region.path}:${region.startLine}`],
     sourceRegions: [{ ...region, display: 'cited region' }],
   }] };
-  const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload) }));
-  const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+  const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
+  const provider: LLMProvider = {
+    invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+    nativeSchemaCapability: { nativeOutputSchema: true },
+  };
   const runner = new DefaultStepRunner(provider, 'custom-source-regions', root, {
     featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
     config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {

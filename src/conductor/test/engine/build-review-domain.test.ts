@@ -162,10 +162,13 @@ describe('build-review domain', () => {
     expect(withoutConfidence.findings[0]).not.toHaveProperty('confidence');
   });
 
-  it('rejects custom reviewer identity claims and invalid bounded finding values', () => {
+  it('ignores custom reviewer routing claims and rejects other identity claims and invalid bounded finding values', () => {
     const descriptor = buildReviewEffectiveResultDescriptor(customCatalogEntry);
     const valid = customPayload([customFinding()]);
-    const forged = ['rubric', 'lapId', 'policy', 'provider', 'verdict', 'caseId', 'effectId', 'disposition'];
+    for (const field of ['rubric', 'lapId']) {
+      expect(parseBuildReviewReviewerPayload({ ...valid, [field]: 'forged' }, descriptor), field).toEqual(valid);
+    }
+    const forged = ['policy', 'provider', 'verdict', 'caseId', 'effectId', 'disposition'];
 
     for (const field of forged) {
       expect(parseBuildReviewReviewerPayload({ ...valid, [field]: 'forged' }, descriptor), field).toBeUndefined();
