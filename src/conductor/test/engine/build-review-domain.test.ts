@@ -565,14 +565,15 @@ describe('build-review domain', () => {
     const closed: readonly BuildReviewInfrastructureFailureReason[] = [
       'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact',
       'identity-mismatch', 'preflight-failed', 'artifact-read-failed', 'artifact-write-failed', 'scope-incomplete',
-      'projection-oversized',
+      'projection-oversized', 'invalid-structured-result', 'native-schema-unsupported',
     ];
 
     expect(mapBuildReviewCoordinatorFailureReason).toMatchObject({
       'no-changed-tests': 'preflight-failed', 'missing-merge-base-file': 'preflight-failed', 'scoped-run-timeout': 'preflight-failed',
       'cache-read-failed': 'artifact-read-failed', 'cache-write-failed': 'artifact-write-failed', 'artifact-write-failed': 'artifact-write-failed',
       'projection-rubric-mismatch': 'malformed-artifact', 'invalid-provider-result': 'malformed-artifact',
-      'projection-oversized': 'projection-oversized',
+      'projection-oversized': 'projection-oversized', 'invalid-structured-result': 'invalid-structured-result',
+      'native-schema-unsupported': 'native-schema-unsupported',
       'provider-error': 'provider-error', 'missing-settlement': 'missing-artifact',
     });
     for (const [coordinatorReason, infrastructureReason] of Object.entries(mapBuildReviewCoordinatorFailureReason)) {

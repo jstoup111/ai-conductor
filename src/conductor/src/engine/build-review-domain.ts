@@ -19,9 +19,9 @@ export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' }
 export type BuildReviewRubricContractVersion = 'v1' | 'v2' | 'v3';
 export const CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION = 'v3' as const;
 export type BuildReviewSkipReason = 'disabled' | 'test_quality_empty_scope';
-export type BuildReviewInfrastructureFailureReason = 'provider-error' | 'retry-exhausted' | 'missing-artifact' | 'malformed-artifact' | 'stale-artifact' | 'identity-mismatch' | 'preflight-failed' | 'artifact-read-failed' | 'artifact-write-failed' | 'scope-incomplete' | 'projection-oversized' | 'invalid-structured-result';
+export type BuildReviewInfrastructureFailureReason = 'provider-error' | 'retry-exhausted' | 'missing-artifact' | 'malformed-artifact' | 'stale-artifact' | 'identity-mismatch' | 'preflight-failed' | 'artifact-read-failed' | 'artifact-write-failed' | 'scope-incomplete' | 'projection-oversized' | 'invalid-structured-result' | 'native-schema-unsupported';
 export const mapBuildReviewCoordinatorFailureReason = Object.freeze({
-  'no-changed-tests': 'preflight-failed', 'no-production-changes': 'preflight-failed', 'missing-scoped-configuration': 'preflight-failed', 'materialization-failed': 'preflight-failed', 'missing-merge-base-file': 'preflight-failed', 'scoped-run-failed': 'preflight-failed', 'scoped-run-launch-failed': 'preflight-failed', 'scoped-run-timeout': 'preflight-failed', 'scoped-run-signaled': 'preflight-failed', aborted: 'preflight-failed', 'cleanup-failed': 'preflight-failed', 'cache-read-failed': 'artifact-read-failed', 'cache-write-failed': 'artifact-write-failed', 'artifact-write-failed': 'artifact-write-failed', 'projection-rubric-mismatch': 'malformed-artifact', 'projection-oversized': 'projection-oversized', 'invalid-provider-result': 'malformed-artifact', 'invalid-structured-result': 'invalid-structured-result', 'provider-error': 'provider-error', 'missing-settlement': 'missing-artifact', 'scope-incomplete': 'scope-incomplete',
+  'no-changed-tests': 'preflight-failed', 'no-production-changes': 'preflight-failed', 'missing-scoped-configuration': 'preflight-failed', 'materialization-failed': 'preflight-failed', 'missing-merge-base-file': 'preflight-failed', 'scoped-run-failed': 'preflight-failed', 'scoped-run-launch-failed': 'preflight-failed', 'scoped-run-timeout': 'preflight-failed', 'scoped-run-signaled': 'preflight-failed', aborted: 'preflight-failed', 'cleanup-failed': 'preflight-failed', 'cache-read-failed': 'artifact-read-failed', 'cache-write-failed': 'artifact-write-failed', 'artifact-write-failed': 'artifact-write-failed', 'projection-rubric-mismatch': 'malformed-artifact', 'projection-oversized': 'projection-oversized', 'invalid-provider-result': 'malformed-artifact', 'invalid-structured-result': 'invalid-structured-result', 'native-schema-unsupported': 'native-schema-unsupported', 'provider-error': 'provider-error', 'missing-settlement': 'missing-artifact', 'scope-incomplete': 'scope-incomplete',
 } satisfies Record<string, BuildReviewInfrastructureFailureReason>);
 export type BuildReviewCoordinatorFailureReason = keyof typeof mapBuildReviewCoordinatorFailureReason;
 export function deriveBuildReviewInfrastructureFailureReason(branch: { readonly reason: BuildReviewCoordinatorFailureReason }): BuildReviewInfrastructureFailureReason { return mapBuildReviewCoordinatorFailureReason[branch.reason]; }
@@ -785,7 +785,7 @@ export interface BuildReviewDispatchFailure {
   readonly detail: string;
   readonly providerSetupExhaustion?: ProviderSetupExhaustion;
   /** A native structured payload was present but rejected by the engine contract. */
-  readonly cause?: 'invalid-structured-result';
+  readonly cause?: 'invalid-structured-result' | 'native-schema-unsupported';
   /** Kept typed so the existing fault event can carry it once its union admits the field. */
   readonly rejection?: BuildReviewJudgedResultRejection;
 }
@@ -796,11 +796,17 @@ export function renderBuildReviewUnresolvedSkillRemedy(rubricSkillName: string, 
   return `Build-review rubric skill "${rubricSkillName}" could not be dispatched.${commandDetail} No judgement was produced, and retrying cannot make the command resolvable. Relink the provider skill catalog; if this feature's base predates the skill, rebase the feature.`;
 }
 function providerSetupExhaustion(value: unknown): ProviderSetupExhaustion | undefined { const source = object(value); if (!source || !Array.isArray(source.candidates) || source.candidates.length === 0) return undefined; const candidates = source.candidates.map(object); if (candidates.some((candidate) => !candidate || !text(candidate.provider) || !text(candidate.reason) || !text(candidate.recoveryAction) || (candidate.capability !== undefined && !text(candidate.capability)))) return undefined; return { candidates: candidates.map((candidate) => ({ provider: candidate!.provider as string, reason: candidate!.reason as string, recoveryAction: candidate!.recoveryAction as string, ...(candidate!.capability === undefined ? {} : { capability: candidate!.capability as string }) })) as unknown as ProviderSetupExhaustion['candidates'] }; }
-export function makeBuildReviewDispatchFailure(detail: string, setupExhaustion?: ProviderSetupExhaustion, invalidStructuredResult?: { readonly rejection: BuildReviewJudgedResultRejection }): BuildReviewDispatchFailure {
+export function makeBuildReviewDispatchFailure(
+  detail: string,
+  setupExhaustion?: ProviderSetupExhaustion,
+  structuredFailure?: { readonly cause: 'invalid-structured-result'; readonly rejection: BuildReviewJudgedResultRejection } | { readonly cause: 'native-schema-unsupported' },
+): BuildReviewDispatchFailure {
   return {
     kind: 'dispatch-failure', detail,
     ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}),
-    ...(invalidStructuredResult ? { cause: 'invalid-structured-result' as const, rejection: invalidStructuredResult.rejection } : {}),
+    ...(structuredFailure?.cause === 'invalid-structured-result'
+      ? { cause: structuredFailure.cause, rejection: structuredFailure.rejection }
+      : structuredFailure ? { cause: structuredFailure.cause } : {}),
   };
 }
 export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDispatchFailure | undefined {
@@ -812,11 +818,13 @@ export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDisp
   const invalidStructuredResult = source?.cause === 'invalid-structured-result' && source.rejection !== undefined
     ? source.rejection as BuildReviewJudgedResultRejection
     : undefined;
+  const nativeSchemaUnsupported = source?.cause === 'native-schema-unsupported';
   return source?.kind === 'dispatch-failure' && text(source.detail) && (source.providerSetupExhaustion === undefined || setupExhaustion)
     ? {
         kind: 'dispatch-failure', detail: source.detail,
         ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}),
         ...(invalidStructuredResult ? { cause: 'invalid-structured-result' as const, rejection: invalidStructuredResult } : {}),
+        ...(nativeSchemaUnsupported ? { cause: 'native-schema-unsupported' as const } : {}),
       }
     : undefined;
 }

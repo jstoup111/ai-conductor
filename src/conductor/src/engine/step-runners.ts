@@ -2527,8 +2527,8 @@ export class DefaultStepRunner implements StepRunner {
             currentLapMechanicalFault: true,
           };
         }
-        if (infrastructureFailure.reason === 'invalid-structured-result') {
-          const reason = `build_review mechanical fault allowance exhausted for ${infrastructureFailure.rubric} (invalid-structured-result): ${infrastructureFailure.detail}`;
+        if (infrastructureFailure.reason === 'invalid-structured-result' || infrastructureFailure.reason === 'native-schema-unsupported') {
+          const reason = `build_review mechanical fault allowance exhausted for ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`;
           return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
         }
       }
@@ -3277,6 +3277,7 @@ export class DefaultStepRunner implements StepRunner {
       finalStructuredResult?: unknown;
       commandUnresolved?: boolean;
       commandUnresolvedName?: string;
+      nativeSchemaUnsupported?: true;
       providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'];
     }> => {
       const preserveInvocationFailure = (result: {
@@ -3285,6 +3286,7 @@ export class DefaultStepRunner implements StepRunner {
         finalStructuredResult?: unknown;
         commandUnresolved?: boolean;
         commandUnresolvedName?: string;
+        nativeSchemaUnsupported?: true;
         providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'];
       }) => ({
         success: result.success,
@@ -3294,11 +3296,25 @@ export class DefaultStepRunner implements StepRunner {
           commandUnresolved: true,
           ...(result.commandUnresolvedName ? { commandUnresolvedName: result.commandUnresolvedName } : {}),
         } : {}),
+        ...(result.nativeSchemaUnsupported ? { nativeSchemaUnsupported: true as const } : {}),
         ...(result.providerSetupExhaustion
           ? { providerSetupExhaustion: result.providerSetupExhaustion }
           : {}),
       });
       if (this.providerRuntimes && this.sessionStore) {
+        const configuredCandidates = Array.isArray(branch.policy.llm_provider)
+          ? branch.policy.llm_provider
+          : [branch.policy.llm_provider];
+        const schemaCapableCandidates = configuredCandidates.filter(
+          (provider) => this.providerRuntimes!.nativeSchemaCapabilityFor(provider)?.nativeOutputSchema === true,
+        );
+        if (schemaCapableCandidates.length === 0) {
+          return {
+            success: false,
+            nativeSchemaUnsupported: true,
+            output: `build_review rubric ${branch.rubric} cannot enforce its native output schema: candidate set [${configuredCandidates.join(', ')}] has no provider declaring nativeSchemaCapability.nativeOutputSchema. Recovery action: select or update one of these providers to declare nativeSchemaCapability.nativeOutputSchema and return InvokeResult.finalStructuredResult.`,
+          };
+        }
         const safety = this.candidateSafetyFor('build_review');
         const controller = new AbortController();
         const deadlineAt = Date.now() + (this.config?.test_suite?.timeout_seconds ?? 300) * 1_000;
@@ -3316,7 +3332,7 @@ export class DefaultStepRunner implements StepRunner {
             step: 'build_review',
             executionContext,
             memberId: branch.rubric,
-            policy: branch.policy,
+            policy: { ...branch.policy, llm_provider: schemaCapableCandidates },
             runtimes: this.providerRuntimes!,
             sessions: this.sessionStore!.beginBranch(`build-review:${branch.rubric}`),
             config: this.config,
@@ -3542,6 +3558,13 @@ export class DefaultStepRunner implements StepRunner {
         initial.commandUnresolvedName ?? '',
       ));
     }
+    if (initial.nativeSchemaUnsupported) {
+      return makeBuildReviewDispatchFailure(
+        initial.output ?? `build_review rubric ${branch.rubric} native output schema is unsupported`,
+        undefined,
+        { cause: 'native-schema-unsupported' },
+      );
+    }
     if (!initial.success && initial.output?.startsWith('Codex native schema scratch home failed:')) {
       return makeBuildReviewDispatchFailure(initial.output ?? 'build_review provider invocation failed without a diagnostic');
     }
@@ -3552,7 +3575,10 @@ export class DefaultStepRunner implements StepRunner {
         branch.rubric,
         { lapId: projection.lapId, snapshotDigest: projection.snapshotDigest },
       );
-      return makeBuildReviewDispatchFailure('root: a structured result is required', undefined, { rejection });
+      return makeBuildReviewDispatchFailure('root: a structured result is required', undefined, {
+        cause: 'invalid-structured-result',
+        rejection,
+      });
     }
     const initialResult = validateBuildReviewDispatchedResult(initial.finalStructuredResult, branch.rubric, projection);
     return initialResult ?? makeBuildReviewDispatchFailure('the structured result did not satisfy the judged contract');

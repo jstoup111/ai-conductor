@@ -780,12 +780,14 @@ export async function coordinateBuildReviewRubrics(
             rubric,
             branch: infrastructure(
               rubric,
-              cacheWriteFailure ? 'cache-write-failed' : structuredResultWasRejected
+              cacheWriteFailure ? 'cache-write-failed' : failure?.cause === 'native-schema-unsupported'
+                ? 'native-schema-unsupported'
+                : structuredResultWasRejected
                 ? 'invalid-structured-result'
                 : 'invalid-provider-result',
               detail,
               failure?.providerSetupExhaustion,
-              structuredResultWasRejected ? rejection : undefined,
+              failure?.cause === 'native-schema-unsupported' ? undefined : structuredResultWasRejected ? rejection : undefined,
             ),
           };
         }

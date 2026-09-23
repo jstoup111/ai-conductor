@@ -154,6 +154,30 @@ describe('build_review oversized projection step', () => {
     expect(buildReviewPublication.count).toBe(0);
   });
 
+  it('charges native-schema-unsupported once per lap and records the same candidate-set lever on a later lap', async () => {
+    const detail = 'candidate set [claude, codex] has no provider declaring nativeSchemaCapability.nativeOutputSchema. Recovery action: update the candidate set.';
+    const runner = createRunner(detail, 'native-schema-unsupported');
+    const dispatchesBefore = vi.mocked(coordinateBuildReviewRubrics).mock.calls.length;
+
+    await expect(runner.run('build_review', state)).resolves.toMatchObject({
+      success: false,
+      currentLapMechanicalFault: true,
+      output: expect.stringContaining('candidate set [claude, codex]'),
+    });
+    const firstLedger = await readKickbackLedger(projectRoot);
+    await expect(runner.run('build_review', state)).resolves.toMatchObject({
+      success: false,
+      currentLapMechanicalFault: true,
+      output: expect.stringContaining('candidate set [claude, codex]'),
+    });
+    const secondLedger = await readKickbackLedger(projectRoot);
+
+    expect(vi.mocked(coordinateBuildReviewRubrics)).toHaveBeenCalledTimes(dispatchesBefore + 2);
+    expect(firstLedger.gates.build_review).toMatchObject({ mechanicalFaults: 1, lastMechanicalFault: { reason: 'native-schema-unsupported', detail: `native-schema-unsupported: ${detail}` } });
+    expect(secondLedger.gates.build_review).toMatchObject({ mechanicalFaults: 2, lastMechanicalFault: { reason: 'native-schema-unsupported', detail: `native-schema-unsupported: ${detail}` } });
+    await expect(access(join(projectRoot, '.pipeline', 'build-review.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('publishes a clean sibling finding while retaining the rejected structured-result branch as absent coverage', async () => {
     const runner = createRunner(
       'findings[0].anchor.locus.contentHash must equal a projected hash',
@@ -258,7 +282,7 @@ describe('build_review oversized projection step', () => {
 
   function createRunner(
     detail: string,
-    reason: 'projection-oversized' | 'provider-error' | 'invalid-structured-result' = 'projection-oversized',
+    reason: 'projection-oversized' | 'provider-error' | 'invalid-structured-result' | 'native-schema-unsupported' = 'projection-oversized',
     securityResult: 'none' | 'finding' | 'pass' = 'none',
     effectiveResolver?: StepRunnerOptions['buildReviewEffectiveResolver'],
   ): DefaultStepRunner {
@@ -464,7 +488,7 @@ describe('build_review structured rubric dispatch', () => {
     expect(invoke.mock.calls.slice(1).some(([options]) => options.prompt.includes('repair'))).toBe(false);
   });
 
-  it('refuses an incapable runtime provider before invoking a no-input rubric dispatch', async () => {
+  it('settles an incapable-only runtime candidate set as native-schema-unsupported without launching a provider', async () => {
     const invoke = vi.fn(async (_options: InvokeOptions) => ({
       success: true, output: 'ignored prose', exitCode: 0, finalStructuredResult: { findings: [] },
     }));
@@ -486,7 +510,77 @@ describe('build_review structured rubric dispatch', () => {
     }).dispatchBuildReviewRubric(branch, projection);
 
     expect(invoke).not.toHaveBeenCalled();
-    expect(result).toBeUndefined();
+    expect(result).toMatchObject({
+      kind: 'dispatch-failure',
+      cause: 'native-schema-unsupported',
+      detail: expect.stringContaining('candidate set [claude]'),
+    });
+    expect((result as { detail: string }).detail).toContain('Recovery action:');
+    expect((result as { detail: string }).detail).toContain('claude');
+  });
+
+  it('skips an incapable candidate and invokes a schema-capable sibling', async () => {
+    const incapableInvoke = vi.fn(async (): Promise<never> => {
+      throw new Error('incapable candidate must not be launched');
+    });
+    const capableInvoke = vi.fn(async (options: InvokeOptions) => ({
+      success: true, output: 'structured result', exitCode: 0, finalStructuredResult: { findings: [] },
+    }));
+    const incapable: LLMProvider = { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: incapableInvoke };
+    const capable: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke: capableInvoke,
+    };
+    const runner = new DefaultStepRunner(incapable, 'runtime-review', '/fixture', {
+      config: { llm_provider: ['codex', 'claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([
+        { key: 'codex', provider: incapable, lifecycleCapability: incapable.lifecycleCapability, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) },
+        { key: 'claude', provider: capable, lifecycleCapability: capable.lifecycleCapability, nativeSchemaCapability: capable.nativeSchemaCapability, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
+      ]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['codex', 'claude'],
+    });
+    const mixedBranch = { ...branch, policy: { ...branch.policy, llm_provider: ['codex', 'claude'] } };
+
+    const result = await (runner as unknown as {
+      dispatchBuildReviewRubric: (value: typeof mixedBranch, reviewProjection: typeof projection) => Promise<unknown>;
+    }).dispatchBuildReviewRubric(mixedBranch, projection);
+
+    expect(incapableInvoke).not.toHaveBeenCalled();
+    expect(capableInvoke).toHaveBeenCalledOnce();
+    expect(capableInvoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output.jsonSchema);
+    expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
+  });
+
+  it('keeps an adapter-reported native schema refusal on the native-schema-unsupported lane', async () => {
+    const invoke = vi.fn(async (): Promise<import('../../src/execution/llm-provider.js').InvokeResult> => ({
+      success: false,
+      output: 'adapter could not apply the output schema',
+      exitCode: 1,
+      nativeSchemaUnsupported: true,
+    }));
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    };
+    const runner = new DefaultStepRunner(provider, 'runtime-review', '/fixture', {
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider, lifecycleCapability: provider.lifecycleCapability, nativeSchemaCapability: provider.nativeSchemaCapability,
+        policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'],
+    });
+
+    const result = await (runner as unknown as {
+      dispatchBuildReviewRubric: (value: typeof branch, reviewProjection: typeof projection) => Promise<unknown>;
+    }).dispatchBuildReviewRubric(branch, projection);
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ kind: 'dispatch-failure', cause: 'native-schema-unsupported', detail: 'adapter could not apply the output schema' });
   });
 
   it('gives a Codex rubric invocation an engine-owned schema scratch home and settles it', async () => {

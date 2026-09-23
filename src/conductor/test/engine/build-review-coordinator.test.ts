@@ -151,6 +151,22 @@ describe("build-review coordinator: registered dispatch", () => {
     expect(JSON.stringify(result)).not.toContain('findings');
   });
 
+  it('maps a native-schema-unsupported dispatch refusal to its closed infrastructure cause', async () => {
+    const dispatchModel = vi.fn(async () => makeBuildReviewDispatchFailure(
+      'candidate set [claude] lacks native output schema capability. Recovery action: update claude.',
+      undefined,
+      { cause: 'native-schema-unsupported' },
+    ));
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, { dispatchModel }));
+
+    expect(dispatchModel).toHaveBeenCalledOnce();
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: 'infrastructure-failure',
+      reason: 'native-schema-unsupported',
+      detail: expect.stringContaining('candidate set [claude]'),
+    });
+  });
+
   it("keeps a disabled whole gate distinct from an empty enabled container", () => {
     expect(classifyBuildReviewRubricBranches({ ...config(false), enabled: false }, [])).toEqual({
       kind: "gate-disabled",
@@ -999,6 +1015,8 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
       "artifact-write-failed": true,
       "scope-incomplete": true,
       "projection-oversized": true,
+      "invalid-structured-result": true,
+      "native-schema-unsupported": true,
     };
     // The parser admits exactly the reasons the coordinator mapping can produce;
     // the three union members outside that mapping are carried by other
