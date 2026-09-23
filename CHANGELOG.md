@@ -22,6 +22,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Adds a one-line installer that bootstraps AI Conductor from the documented stable channel. ([implementation PR #2626](https://github.com/jstoup111/ai-conductor/pull/2626)).
 - Self-hosted runs now report live-boundary fingerprint time and file counts in daemon output and event logs. ([implementation PR #2651](https://github.com/jstoup111/ai-conductor/pull/2651)).
 
+### Changed
+
+- Build reviews receive typed, schema-validated rubric findings from providers. ([implementation PR #2660](https://github.com/jstoup111/ai-conductor/pull/2660)).
+
 ### Fixed
 
 - Daemon runs now classify reachable pending gate blocks as recoverable so they re-dispatch automatically. ([implementation PR #2609](https://github.com/jstoup111/ai-conductor/pull/2609)).
