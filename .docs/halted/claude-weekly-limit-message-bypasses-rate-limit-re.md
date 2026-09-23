@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-23T01:47:46.627Z
 Slug: claude-weekly-limit-message-bypasses-rate-limit-re
 Class: plan-gap
 Halting step: prd_audit
