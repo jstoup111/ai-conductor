@@ -31,12 +31,20 @@ export function buildDaemonForegroundCommand(
   config: Pick<Config, 'daemon_heap_limit_mb'> = {},
 ): string {
   const heapLimitMb = config.daemon_heap_limit_mb ?? DEFAULT_DAEMON_HEAP_LIMIT_MB;
+  return `NODE_OPTIONS=--max-old-space-size=${heapLimitMb} ${shellQuote(resolveCanonicalLauncher())} daemon --continuous`;
+}
+
+/**
+ * Make the pane foreground a short-lived wrapper around a daemon command.
+ * Keeping buildDaemonForegroundCommand as the direct daemon argv preserves
+ * callers that inspect that command to derive the daemon entrypoint.
+ */
+export function buildDaemonExitWitnessCommand(command: string = buildDaemonForegroundCommand()): string {
   const launcher = shellQuote(resolveCanonicalLauncher());
-  const daemon = `NODE_OPTIONS=--max-old-space-size=${heapLimitMb} ${launcher} daemon --continuous`;
   // The pane shell owns one daemon child. It waits for that exact child before
   // invoking the short-lived witness from the pane's repository cwd.
   return `sh -c ${shellQuote(
-    `${daemon} & pid=$!; wait "$pid"; rc=$?; ${launcher} daemon exit-witness --pid "$pid" --status "$rc"; exit "$rc"`,
+    `${command} & pid=$!; wait "$pid"; rc=$?; ${launcher} daemon exit-witness --pid "$pid" --status "$rc"; exit "$rc"`,
   )}`;
 }
 
@@ -519,11 +527,11 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
         // rather than creating a second session or silently no-op'ing.
         if (await isPaneDead(name, run)) {
           await setRemainOnExit(name, run);
-          await respawnPane(name, run, command);
+          await respawnPane(name, run, buildDaemonExitWitnessCommand(command));
         }
         return; // already running (or just revived) — idempotent
       }
-      await newDetachedSession(name, command, repo, run);
+      await newDetachedSession(name, buildDaemonExitWitnessCommand(command), repo, run);
       await setRemainOnExit(name, run);
     },
 
@@ -544,7 +552,7 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
       const name = sessionNameForRepo(repo);
       await setRemainOnExit(name, run);
       try {
-        const { scrollbackPreserved } = await respawnPane(name, run, command);
+        const { scrollbackPreserved } = await respawnPane(name, run, buildDaemonExitWitnessCommand(command));
         return {
           degraded: false,
           message: scrollbackPreserved
@@ -558,7 +566,7 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
         // up running — but this loses the old session's scrollback/history,
         // so callers MUST be told explicitly (FR-20 neg, Task 24).
         await killSession(name, run);
-        await newDetachedSession(name, command, repo, run);
+        await newDetachedSession(name, buildDaemonExitWitnessCommand(command), repo, run);
         const reason = err instanceof Error ? err.message : String(err);
         return {
           degraded: true,

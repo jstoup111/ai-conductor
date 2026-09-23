@@ -138,21 +138,12 @@ describe('buildDaemonForegroundCommand', () => {
   it('uses the default 4096 MB old-space cap and retains the continuous daemon invocation', async () => {
     const build = requireFn(await load(), 'buildDaemonForegroundCommand');
     expect(build({})).toContain('NODE_OPTIONS=--max-old-space-size=4096');
-    expect(build({})).toContain(' daemon --continuous');
+    expect(build({})).toMatch(/ daemon --continuous$/);
   });
 
   it('uses the configured old-space cap', async () => {
     const build = requireFn(await load(), 'buildDaemonForegroundCommand');
     expect(build({ daemon_heap_limit_mb: 6144 })).toContain('NODE_OPTIONS=--max-old-space-size=6144');
-  });
-
-  it('runs one daemon child then witnesses that exact pid and status', async () => {
-    const build = requireFn(await load(), 'buildDaemonForegroundCommand');
-    const command = build({});
-
-    expect(command).toMatch(/^sh -c /);
-    expect(command).toContain(' daemon --continuous & pid=$!; wait "$pid"; rc=$?; ');
-    expect(command).toContain(' daemon exit-witness --pid "$pid" --status "$rc"');
   });
 
   it('documents the default heap limit in the configuration reference', async () => {
@@ -416,7 +407,7 @@ describe('respawnPane: argv and error handling', () => {
     expect(respawnCall.args[2]).toBe('-t');
     expect(respawnCall.args[3]).toBe('=cc-daemon-myapp-abc123:');
     const wrapped = respawnCall.args[4];
-    expect(wrapped).toMatch(/^cat .+; rm -f .+; exec sh -c /);
+    expect(wrapped).toMatch(/^cat .+; rm -f .+; exec NODE_OPTIONS=/);
     expect(wrapped).toContain(buildDaemonForegroundCommand({}) as string);
     expect(respawnCall.inherit).toBe(false);
   });
@@ -674,7 +665,7 @@ describe('makeTmuxSupervisor().restart: respawn fallback on failure (FR-20 neg)'
 
   it('the recreated session after fallback uses the same session name and foreground command', async () => {
     const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
-    const { buildDaemonForegroundCommand } = await load();
+    const { buildDaemonForegroundCommand, buildDaemonExitWitnessCommand } = await load();
     const { run, calls } = spyRunner({ '-V': { code: 0 }, 'respawn-pane': { code: 1 } });
     await makeTmuxSupervisor(run).restart('/home/alice/myapp');
     const killCall = calls.find((c) => c.args[0] === 'kill-session')!;
@@ -682,7 +673,7 @@ describe('makeTmuxSupervisor().restart: respawn fallback on failure (FR-20 neg)'
     expect(killCall.args).toEqual(
       expect.arrayContaining([expect.stringMatching(/^=cc-daemon-myapp-[0-9a-f]{6}$/)]),
     );
-    expect(newCall.args).toContain(buildDaemonForegroundCommand({}) as string);
+    expect(newCall.args).toContain(buildDaemonExitWitnessCommand(buildDaemonForegroundCommand({})) as string);
   });
 });
 
