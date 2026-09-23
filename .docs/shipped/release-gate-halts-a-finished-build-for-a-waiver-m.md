@@ -3,13 +3,7 @@ slug: release-gate-halts-a-finished-build-for-a-waiver-m
 spec_hash: a98d0fab335c2f319e2bd6c64965248b0be49692f1b23c432815f8bed8a0e3d6
 pr: https://github.com/jstoup111/ai-conductor/pull/2667
 shipped: 2026-09-23
-engine_version: 20260923T141639Z-c4581785bc4a
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "src/conductor/test/engine/daemon-cli.test.ts:1038-1042 (commit aaf4fddd9) — unplanned SIGTERM fake-timer synchronization in an unrelated daemon test"
-    accepted: true
+engine_version: 20260923T153442Z-b249f756057d
 ---
 
 ## Cost
@@ -19,7 +13,7 @@ cache_read: 16703233
 cache_creation: 237631
 cost_usd: 11.1347
 dispatches: 19
-retries: 2
+retries: 7
 halts: 2
 unmetered: count: 0, duration_ms: 0
 cost_unmetered: count: 0
@@ -29,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","3c844665-e738-49dc-9252-f327f3045b25","lifecycle-step","finish"]
+reason: provider-outside-active-union
 
 ## Build Review
 laps_to_pass: 1
