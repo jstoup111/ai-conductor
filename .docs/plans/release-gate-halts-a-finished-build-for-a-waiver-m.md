@@ -102,6 +102,7 @@ Teach the repository-local `release-disposition` SHIP step to record one closed 
 
 **Done when:**
 - `release-disposition-contract.test.ts` asserts the skill directs an `unclassifiable` verdict to author neither a waiver nor a migration block
+- `release-disposition-contract.test.ts` asserts the skill directs the step, when the feature diff has a classified breaking surface and no committed waiver and it cannot confidently judge the change internal-only or consumer-facing, to record `Surface-Verdict: unclassifiable`
 - `release-disposition-contract.test.ts` asserts the skill directs a recorded surface verdict outside `none`, `migration`, `waiver`, `unclassifiable` to report BLOCKED with `.pipeline/release-disposition-pass` absent
 
 **Files likely touched:**

@@ -71,4 +71,76 @@ describe('repository-local release-disposition contract', () => {
       blockedOmitsPass: true,
     });
   });
+
+  it('requires one closed surface verdict before authoring release artifacts', async () => {
+    const skill = await readFile(join(canonicalDir, 'SKILL.md'), 'utf8');
+
+    expect({
+      reviewRecord: /\.pipeline\/release-disposition-review\.md[\s\S]*exactly one[\s\S]*Surface-Verdict:/i.test(skill),
+      closedSet: skill.includes('`none|migration|waiver|unclassifiable`'),
+      noneAuthorsNothing: /Surface-Verdict: none[\s\S]*no waiver and no migration block/i.test(skill),
+    }).toEqual({
+      reviewRecord: true,
+      closedSet: true,
+      noneAuthorsNothing: true,
+    });
+  });
+
+  it('requires a waiver verdict to leave one fresh, committed waiver before PASS', async () => {
+    const skill = await readFile(join(canonicalDir, 'SKILL.md'), 'utf8');
+
+    expect({
+      planStemWaiver: /waiver[\s\S]*plan stem[\s\S]*\.docs\/release-waivers\//i.test(skill),
+      canonicalSurfaces: /Waives:[\s\S]*listing every[\s\S]*classified canonical surface/i.test(skill),
+      rationale: /non-empty[\s\S]*Rationale:/i.test(skill),
+      commitBeforePass: /commit[\s\S]*before[\s\S]*release-disposition-pass/i.test(skill),
+      failedCommitBlocked: /commit[\s\S]*fails[\s\S]*BLOCKED[\s\S]*pass marker absent/i.test(skill),
+      reuseComplete: /already[\s\S]*feature diff[\s\S]*every classified surface[\s\S]*no[\s\S]*second[\s\S]*nothing to commit[\s\S]*success/i.test(skill),
+      amendIncomplete: /omits a classified[\s\S]*surface[\s\S]*amend[\s\S]*same waiver[\s\S]*exactly one waiver/i.test(skill),
+      baseIsNotFresh: /base branch[\s\S]*commit[\s\S]*feature diff/i.test(skill),
+    }).toEqual({
+      planStemWaiver: true,
+      canonicalSurfaces: true,
+      rationale: true,
+      commitBeforePass: true,
+      failedCommitBlocked: true,
+      reuseComplete: true,
+      amendIncomplete: true,
+      baseIsNotFresh: true,
+    });
+  });
+
+  it('keeps consumer migrations on the migration path and off the waiver path', async () => {
+    const skill = await readFile(join(canonicalDir, 'SKILL.md'), 'utf8');
+
+    expect({
+      migrationWritesRunnableDraft: /migration[\s\S]*note.*runnable migration[\s\S]*retained draft PR body/i.test(skill),
+      migrationWritesNoteMetadata: /migration[\s\S]*Release-Disposition: note[\s\S]*retained draft PR body/i.test(skill),
+      migrationNoWaiver: /migration[\s\S]*add or modify no file under `.docs\/release-waivers\/`/i.test(skill),
+      neverWaiver: /bin\/conduct.*subcommand, flag, or behavior[\s\S]*hook contract[\s\S]*settings\.json.*schema[\s\S]*never `waiver`/i.test(skill),
+      uncertainFallsBack: /record `migration`, or `unclassifiable` when[\s\S]*cannot be determined/i.test(skill),
+    }).toEqual({
+      migrationWritesRunnableDraft: true,
+      migrationWritesNoteMetadata: true,
+      migrationNoWaiver: true,
+      neverWaiver: true,
+      uncertainFallsBack: true,
+    });
+  });
+
+  it('leaves unclassifiable and invalid verdicts without authored release artifacts', async () => {
+    const skill = await readFile(join(canonicalDir, 'SKILL.md'), 'utf8');
+
+    expect({
+      unclassifiableAuthorsNothing: /unclassifiable.*neither a waiver nor a migration block/i.test(skill),
+      gateRetainsHalt: /unclassifiable[\s\S]*release gate to halt[\s\S]*exactly as it does today/i.test(skill),
+      invalidVerdictBlocked: /outside `none`, `migration`, `waiver`,[\s\S]*`unclassifiable`[\s\S]*BLOCKED[\s\S]*pass marker absent/i.test(skill),
+      uncertainSelectsUnclassifiable: /classified\s+breaking\s+surface\s+and\s+no\s+waiver\s+committed\s+in\s+the\s+feature\s+diff[\s\S]{0,120}cannot\s+confidently\s+judge[\s\S]{0,80}internal-only\s+or\s+consumer-facing[\s\S]{0,20}record\s+`Surface-Verdict: unclassifiable`/i.test(skill),
+    }).toEqual({
+      unclassifiableAuthorsNothing: true,
+      uncertainSelectsUnclassifiable: true,
+      gateRetainsHalt: true,
+      invalidVerdictBlocked: true,
+    });
+  });
 });
