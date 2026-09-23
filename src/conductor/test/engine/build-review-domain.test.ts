@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
   buildReviewFindingReferenceContext,
+  diagnoseBuildReviewJudgedResultRejection,
   deriveBuildReviewInfrastructureFailureReason,
   makeBuildReviewDispatchFailure,
   mapBuildReviewCoordinatorFailureReason,
@@ -374,12 +375,58 @@ describe('build-review domain', () => {
     expect(describe(envelope([valid]), { changedTests: [], changedTestRegions: [{ ...locus, path: 'test/other.test.ts' }], changedContentRegions: [], changedPaths: [], planTasks: [] })).toBe(
       'findings[0].anchor.locus must reference a projected in-scope content region (path, contentHash, and occurrence must match one)',
     );
-    expect(describe(envelope([valid, { ...valid, summary: 'Reworded.' }]))).toBe(
-      'findings must not repeat one concern on one content region (duplicated: "widget renders") — merge equivalent findings',
+    expect(describe(envelope([valid, { ...valid, summary: 'Reworded.' }]))).toMatch(
+      /^findings must not repeat one concern on one content region \(duplicated identity: sha256:[a-f0-9]{64}\) — merge equivalent findings$/,
     );
     // Bounded: six named problems, then a count.
     const many = envelope(Array.from({ length: 8 }, () => ({ summary: 'x' })));
     expect(describe(many)).toMatch(/; and \d+ more problem\(s\)$/);
+  });
+
+  it('diagnoses native structured-result contract violations with only checked fields', () => {
+    const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
+    const references = {
+      changedTests: [], changedContentRegions: [], changedPaths: [], planTasks: [],
+      changedTestRegions: [locus],
+    };
+    const diagnose = (value: unknown) => diagnoseBuildReviewJudgedResultRejection(
+      value, 'testQuality', expected, references,
+    );
+
+    const unlistedHash = diagnose(judged([finding({ anchor: { rubric: 'testQuality', locus: { ...locus, contentHash: `sha256:${'b'.repeat(64)}` } } })]));
+    expect(unlistedHash).toMatchObject({
+      kind: 'explained',
+      problems: [{ field: 'findings[0].anchor.locus.contentHash', required: 'must equal a contentHash listed by the projected in-scope content regions' }],
+    });
+
+    const outOfEnum = diagnose(judged([finding({ concernKind: 'invented-kind' })]));
+    expect(outOfEnum).toMatchObject({
+      kind: 'explained',
+      problems: [{ field: 'findings[0].concernKind', required: 'must be one of "test-insensitive" (got "invented-kind")' }],
+    });
+
+    const duplicate = judged([finding(), finding({ summary: 'Same identity, different wording.' })]);
+    const duplicateRejection = diagnose(duplicate);
+    const duplicateIdentity = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus },
+    })!.id;
+    expect(parseBuildReviewJudgedResult(duplicate, references)).toBeUndefined();
+    expect(duplicateRejection).toMatchObject({
+      kind: 'explained',
+      problems: [{ field: 'findings[1].identity', required: `must not duplicate finding identity ${duplicateIdentity}` }],
+    });
+
+    expect(diagnose(JSON.stringify(judged([])))).toEqual({
+      kind: 'explained',
+      problems: [{ field: '$', required: 'must be an object', detail: 'the result is not a single JSON object' }],
+    });
+
+    const unexplained = diagnoseBuildReviewJudgedResultRejection(
+      judged([], { lapId: 'invalid lap id' }), 'testQuality',
+      { lapId: 'invalid lap id', snapshotDigest: 'sha256:abc' }, references,
+    );
+    expect(unexplained).toEqual({ kind: 'unexplained', problems: [] });
+    expect(unexplained.problems).not.toContainEqual(expect.objectContaining({ field: expect.any(String) }));
   });
 
   it('names missing, duplicate, unknown, foreign, and invalid candidate scope resolution authority', () => {
