@@ -140,6 +140,24 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
+  it('renders declined attempt and member attempt operator park boundaries', () => {
+    expect([
+      lines({
+        type: 'operator_park_boundary',
+        featureSlug: 'serial-feature',
+        boundary: { kind: 'attempt', step: 'build', attempt: 2 },
+      }),
+      lines({
+        type: 'operator_park_boundary',
+        featureSlug: 'group-feature',
+        boundary: { kind: 'attempt', step: 'build', attempt: 1, member: 'manual_test' },
+      }),
+    ]).toEqual([
+      ['· ⏸ operator park[serial-feature]: declined attempt 2 for step build'],
+      ['· ⏸ operator park[group-feature]: declined attempt 1 for group step build member manual_test'],
+    ]);
+  });
+
   it('renders step_retry with reason and progress delta', () => {
     const output = lines({
       type: 'step_retry',

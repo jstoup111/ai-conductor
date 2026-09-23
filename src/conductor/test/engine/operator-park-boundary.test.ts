@@ -10,6 +10,7 @@ import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { resolveGroupMembership } from '../../src/engine/conductor.js';
 import { isOperatorParked } from '../../src/engine/park-marker.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import type {
@@ -68,6 +69,26 @@ describe('operator park boundary contract', () => {
 
   afterEach(async () => {
     await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('persists an attempt boundary with its feature and step on the existing event spine', async () => {
+    const events = new ConductorEventEmitter();
+    const eventsPath = join(projectRoot, '.pipeline', 'events.jsonl');
+    const persister = new EventPersister(eventsPath, events);
+    persister.start();
+
+    await events.emit({
+      type: 'operator_park_boundary',
+      featureSlug: 'parked-feature',
+      boundary: { kind: 'attempt', step: 'build', attempt: 2 },
+    });
+    persister.stop();
+
+    expect(JSON.parse(await readFile(eventsPath, 'utf8'))).toMatchObject({
+      type: 'operator_park_boundary',
+      featureSlug: 'parked-feature',
+      boundary: { kind: 'attempt', step: 'build', attempt: 2 },
+    });
   });
 
   it('represents every scheduling-unit boundary and optional daemon boundary options', () => {

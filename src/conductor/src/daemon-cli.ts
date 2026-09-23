@@ -3069,6 +3069,10 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const boundary =
         event.boundary.kind === 'pre-first-unit'
           ? 'before first scheduling unit'
+          : event.boundary.kind === 'attempt'
+            ? event.boundary.member === undefined
+              ? `declined attempt ${event.boundary.attempt} for step ${event.boundary.step}`
+              : `declined attempt ${event.boundary.attempt} for group step ${event.boundary.step} member ${event.boundary.member}`
           : `settled after ${event.boundary.kind} ${event.boundary.name}`;
       log(
         `${dot} ${chalk.cyan('⏸')} ${chalk.cyan(`operator park[${event.featureSlug}]: ${boundary}`)}`,
