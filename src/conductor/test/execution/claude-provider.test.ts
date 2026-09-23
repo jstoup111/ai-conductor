@@ -1307,6 +1307,24 @@ describe('ClaudeProvider', () => {
       }
     });
 
+    it.each([
+      "You've hit your daily limit · resets 3:20pm (America/New_York)",
+      "You've hit your usage limit · resets 3:20pm (America/New_York)",
+      "You've hit your session limit · resets 3:20pm (America/New_York)",
+    ])('classifies %s as rateLimited', async (stdout) => {
+      mockExeca.mockResolvedValue({
+        stdout,
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
+
+      expect(result.rateLimited).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
     it('detects usage-limit variant as rateLimited', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'usage limit reached · resets 3:20pm (America/New_York)',
