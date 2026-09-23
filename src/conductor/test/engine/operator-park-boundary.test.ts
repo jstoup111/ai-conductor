@@ -30,12 +30,12 @@ function stateWithPending(...pending: StepName[]): ConductState {
   } as ConductState;
 }
 
-function deferred(): {
-  promise: Promise<void>;
-  resolve: () => void;
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
 } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((settle) => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
     resolve = settle;
   });
   return { promise, resolve };
@@ -534,6 +534,105 @@ describe('operator park boundary contract', () => {
     );
   });
 
+  it('lets a running successful attempt drain before parking at its next unit boundary', async () => {
+    await writeState(statePath, stateWithPending('memory', 'explore'));
+    const started = deferred();
+    const release = deferred<{ success: boolean; output: string }>();
+    let parked = false;
+    const run = vi.fn<StepRunner['run']>(async (step) => {
+      if (step === 'memory') {
+        started.resolve();
+        return release.promise;
+      }
+      throw new Error(`park should decline ${step}`);
+    });
+    const events = new ConductorEventEmitter();
+    const completed: Array<Extract<ConductorEvent, { type: 'step_completed' }>> = [];
+    events.on('step_completed', (event) => {
+      if (event.type === 'step_completed') completed.push(event);
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => parked,
+    });
+
+    const resultPromise = conductor.run();
+    await started.promise;
+    parked = true;
+    expect(run).toHaveBeenCalledTimes(1);
+    release.resolve({ success: true, output: 'drained success output' });
+    const result = await resultPromise;
+    const persisted = await readState(statePath);
+
+    expect({
+      result,
+      runnerSteps: run.mock.calls.map(([step]) => step),
+      completed,
+      persisted: persisted.ok ? { memory: persisted.value.memory, explore: persisted.value.explore } : persisted,
+    }).toEqual({
+      result: { kind: 'operator-parked', boundary: { kind: 'step', name: 'memory' } },
+      runnerSteps: ['memory'],
+      completed: [expect.objectContaining({ step: 'memory', status: 'done', tail: ['drained success output'] })],
+      persisted: { memory: 'done', explore: 'pending' },
+    });
+  });
+
+  it('records a failed running attempt before parking its retry', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    const started = deferred();
+    const release = deferred<{ success: boolean; output: string }>();
+    let parked = false;
+    const run = vi.fn<StepRunner['run']>(async () => {
+      started.resolve();
+      return release.promise;
+    });
+    const events = new ConductorEventEmitter();
+    const retries: Array<Extract<ConductorEvent, { type: 'step_retry' }>> = [];
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry') retries.push(event);
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 2,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => parked,
+    });
+
+    const resultPromise = conductor.run();
+    await started.promise;
+    parked = true;
+    expect(run).toHaveBeenCalledTimes(1);
+    release.resolve({ success: false, output: 'drained failure output' });
+    const [result, persisted] = await Promise.all([resultPromise, readState(statePath)]);
+
+    expect({
+      result,
+      runnerCalls: run.mock.calls.length,
+      retries,
+      persisted: persisted.ok ? persisted.value.memory : persisted,
+    }).toEqual({
+      result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'memory', attempt: 2 } },
+      runnerCalls: 1,
+      retries: [expect.objectContaining({ step: 'memory', attempt: 2, reason: 'drained failure output' })],
+      persisted: 'in_progress',
+    });
+  });
+
   it('settles the active serial step once, persists it, then parks before the next step', async () => {
     await writeState(statePath, stateWithPending('memory', 'explore'));
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
@@ -931,6 +1030,58 @@ describe('operator park boundary contract', () => {
       },
       laterSerialDispatches: 0,
       settledMembers: 2,
+    });
+  });
+
+  it('settles a parked configured member, preserves its successful sibling, and stops the join', async () => {
+    await writeState(statePath, stateWithPending('memory', 'explore'));
+    let parked = false;
+    const events = new ConductorEventEmitter();
+    const failures: Array<Extract<ConductorEvent, { type: 'parallel_failure' }>> = [];
+    events.on('parallel_failure', (event) => {
+      if (event.type === 'parallel_failure') failures.push(event);
+    });
+    const run = vi.fn<StepRunner['run']>(async (step) => {
+      if (step === ('parked-member' as StepName)) {
+        parked = true;
+        return { success: false, output: 'retry after park' };
+      }
+      return { success: true };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      config: { steps: { memory: { max_retries: 2, parallel: [{ name: 'parked-member' }, { name: 'passing-member' }] } } },
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => parked,
+    });
+
+    const result = await conductor.run();
+    const persisted = await readState(statePath);
+
+    expect({
+      result,
+      calls: run.mock.calls.map(([step]) => step),
+      failures,
+      state: persisted.ok ? {
+        memory: persisted.value.memory,
+        parked: (persisted.value as Record<string, unknown>)['memory__parked-member'],
+        passing: (persisted.value as Record<string, unknown>)['memory__passing-member'],
+      } : persisted,
+    }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'attempt', step: 'memory', attempt: 1, member: 'parked-member' },
+      },
+      calls: ['parked-member', 'passing-member'],
+      failures: [expect.not.objectContaining({ branch: 'parked-member' })],
+      state: { memory: 'in_progress', parked: 'in_progress', passing: 'done' },
     });
   });
 

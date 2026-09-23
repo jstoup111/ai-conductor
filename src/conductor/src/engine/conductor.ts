@@ -7840,7 +7840,13 @@ export class Conductor {
             return preDispatchPark;
           }
 
-          await this.runParallelGroupViaCore(step.name, stepCfg.parallel, state);
+          const parkedMember = await this.runParallelGroupViaCore(step.name, stepCfg.parallel, state);
+          if (parkedMember) {
+            const parked = await stopAtOperatorParkBoundary(true, {
+              kind: 'attempt', step: step.name, attempt: 1, member: parkedMember,
+            });
+            if (parked) return parked;
+          }
           // State keys are already written inside runParallelGroupViaCore.
           // The step's own status is set to 'done' or 'failed' inside runParallelGroupViaCore.
           // If it failed (gating branch), we stop here.
@@ -8199,6 +8205,9 @@ export class Conductor {
                       // dispatch (acceptance flow E) and without burning its
                       // own retry budget.
                       rateLimitEpisode: this.rateLimitEpisode,
+                      operatorParkBoundary: this.daemon && this.featureSlug !== undefined
+                        ? this.operatorParkBoundary
+                        : undefined,
                       // Record each member's completion into the pending
                       // side-channel as soon as ITS OWN branch resolves — not
                       // `state` itself, and not a disk write (that stays the
@@ -8358,6 +8367,20 @@ export class Conductor {
             const permissionDeniedIdx = outcomes.findIndex(
               (outcome) => outcome.kind === 'permission-denied',
             );
+            const parkedIdx = outcomes.findIndex((outcome) => outcome.kind === 'parked');
+            const hasGenuineFailure = outcomes.some(
+              (outcome) =>
+                outcome.kind === 'no-verdict' ||
+                outcome.kind === 'permission-denied' ||
+                (outcome.kind === 'verdict' && outcome.verdict !== 'pass'),
+            );
+            if (parkedIdx !== -1 && !hasGenuineFailure) {
+              const member = membership.dispatchable[parkedIdx]!;
+              const parked = await stopAtOperatorParkBoundary(true, {
+                kind: 'attempt', step: step.name, attempt: 1, member: member.name,
+              });
+              if (parked) return parked;
+            }
             if (permissionDeniedIdx !== -1) {
               const outcome = outcomes[permissionDeniedIdx]!;
               const member = membership.dispatchable[permissionDeniedIdx]!;
@@ -14304,7 +14327,7 @@ export class Conductor {
     groupName: StepName,
     branches: ParallelBranch[],
     state: ConductState,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const branchNames = branches.map((b) => b.name);
     await this.emitExecutionEvent({ type: 'parallel_started', step: groupName, branches: branchNames });
 
@@ -14345,6 +14368,9 @@ export class Conductor {
         return runGroupBranch(member, state, {
           stepRunner: this.stepRunner,
           executionContext,
+          operatorParkBoundary: this.daemon && this.featureSlug !== undefined
+            ? this.operatorParkBoundary
+            : undefined,
           lifecycleObserver: {
             onAdmitted: async (observation) => {
               await this.emitExecutionEvent({
@@ -14398,6 +14424,8 @@ export class Conductor {
     );
 
     let groupFailed = false;
+    const parkedMemberIndex = outcomes.findIndex((outcome) => outcome?.kind === 'parked');
+    const parkedMember = parkedMemberIndex === -1 ? undefined : members[parkedMemberIndex];
 
     // JOIN: single-writer — the core, on the loop's thread of control,
     // commits the synthetic keys and group status as one invariant once every
@@ -14408,6 +14436,11 @@ export class Conductor {
       const outcome = outcomes[i];
       const syntheticKey = `${groupName}__${branch.name}`;
       const success = outcome?.kind === 'verdict' && outcome.verdict === 'pass';
+
+      if (outcome?.kind === 'parked') {
+        changes[syntheticKey] = 'in_progress';
+        continue;
+      }
 
       if (success) {
         changes[syntheticKey] = 'done';
@@ -14429,7 +14462,7 @@ export class Conductor {
       }
     }
 
-    changes[groupName] = groupFailed ? 'failed' : 'done';
+    changes[groupName] = parkedMember && !groupFailed ? 'in_progress' : groupFailed ? 'failed' : 'done';
     await this.commitStateChanges(state, `join ${groupName} parallel group`, changes);
 
     // Group policy owns its synthetic keys and parent outcome, while every
@@ -14468,6 +14501,7 @@ export class Conductor {
         });
         continue;
       }
+      if (outcome.kind === 'parked') continue;
       await this.emitExecutionEvent({
         type: 'step_failed',
         step: groupName,
@@ -14480,13 +14514,14 @@ export class Conductor {
       });
     }
 
-    if (!groupFailed) {
+    if (!groupFailed && !parkedMember) {
       await this.emitExecutionEvent({
         type: 'parallel_completed',
         step: groupName,
         branches: branchNames,
       });
     }
+    return groupFailed ? undefined : parkedMember?.name;
   }
 
   /**
