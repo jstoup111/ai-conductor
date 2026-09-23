@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-23T16:29:44.806Z
 Slug: continuous-daemon-grows-to-4-2-gb-in-three-hours-a
 Class: needs-human
 Halting step: unknown
