@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-23T18:15:09.211Z
 Slug: mergeable-autoresolve-tier-2-escalates-every-conte
 Class: needs-human
 Halting step: rebase
