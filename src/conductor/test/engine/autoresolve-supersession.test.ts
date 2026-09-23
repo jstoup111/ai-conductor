@@ -386,6 +386,30 @@ describe('engine/autoresolve — resolveConflictingPr sweep judgement flow (real
     }
   });
 
+  // NC.1: only the judgement path escalates a completed-rebase guard failure at
+  // the acceptance-guards stage. A strict (mixed-scope) halt keeps tier2-resolve.
+  it('NC.1: a strict-path completed-rebase guard failure keeps the tier2-resolve stage', async () => {
+    const fx = await buildPrFixture({
+      initial: { 'rewrite.test.ts': 'base\n', 'impl.ts': 'base\n' },
+      feature: [{ subject: 'feat: rewrite both', files: { 'rewrite.test.ts': 'feature\n', 'impl.ts': 'feature\n' } }],
+      main: { 'rewrite.test.ts': 'upstream\n', 'impl.ts': 'upstream\n' },
+    });
+    try {
+      const outcome = await run(fx, async ({ projectRoot }) => {
+        await skipReplay(projectRoot);
+        return { resolved: true };
+      });
+
+      expect(outcome).toEqual({ kind: 'escalated' });
+      expect(await fx.pushes()).toBe(0);
+      const body = fx.commentBodies().join('\n');
+      expect(body).toContain('**Stage:** tier2-resolve');
+      expect(body).not.toContain('**Stage:** acceptance-guards');
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
   it('S3.2: records each excused commit as rebase residue and persists it to the feature event log', async () => {
     const fx = await testOnly();
     const featureWorktree = join(fx.repo, '.feature-worktree');
