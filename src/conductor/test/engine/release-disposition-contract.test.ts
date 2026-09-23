@@ -109,4 +109,22 @@ describe('repository-local release-disposition contract', () => {
       baseIsNotFresh: true,
     });
   });
+
+  it('keeps consumer migrations on the migration path and off the waiver path', async () => {
+    const skill = await readFile(join(canonicalDir, 'SKILL.md'), 'utf8');
+
+    expect({
+      migrationWritesRunnableDraft: /migration[\s\S]*note.*runnable migration[\s\S]*retained draft PR body/i.test(skill),
+      migrationWritesNoteMetadata: /migration[\s\S]*Release-Disposition: note[\s\S]*retained draft PR body/i.test(skill),
+      migrationNoWaiver: /migration[\s\S]*add or modify no file under `.docs\/release-waivers\/`/i.test(skill),
+      neverWaiver: /bin\/conduct.*subcommand, flag, or behavior[\s\S]*hook contract[\s\S]*settings\.json.*schema[\s\S]*never `waiver`/i.test(skill),
+      uncertainFallsBack: /record `migration`, or `unclassifiable` when[\s\S]*cannot be determined/i.test(skill),
+    }).toEqual({
+      migrationWritesRunnableDraft: true,
+      migrationWritesNoteMetadata: true,
+      migrationNoWaiver: true,
+      neverWaiver: true,
+      uncertainFallsBack: true,
+    });
+  });
 });
