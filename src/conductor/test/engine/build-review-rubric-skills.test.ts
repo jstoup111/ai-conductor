@@ -4,18 +4,37 @@ import { access, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
   parseBuildReviewFindingAnchor,
   parseBuildReviewFindingConcernKind,
 } from '../../src/engine/build-review-domain.js';
+import { renderRubricContractShape } from '../../src/engine/build-review-contract.js';
+import { BUILD_REVIEW_RUBRIC_REGISTRY } from '../../src/engine/build-review-registry.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
 const skill = fileURLToPath(new URL('../../../../skills/build-review-test-quality/SKILL.md', import.meta.url));
 const securitySkill = fileURLToPath(new URL('../../../../skills/build-review-security/SKILL.md', import.meta.url));
 const retired = ['build-review-scope', 'build-review-root-cause', 'build-review-completeness'];
 const hash = (text: string) => `sha256:${createHash('sha256').update(text).digest('hex')}`;
+
+function judgementSection(skillText: string): string {
+  return skillText.split('## Judgement\n')[1]?.split('\n## ')[0] ?? '';
+}
+
+function expectNoOutputShapeProse(skillText: string): void {
+  expect(skillText).not.toMatch(/^## Result contract/m);
+  expect(skillText).not.toMatch(/```json\b/i);
+  expect(skillText).not.toMatch(/```[\s\S]*?"findings"/i);
+  expect(skillText).not.toMatch(/^\*\*Closed vocabulary:\*\*/m);
+  expect(skillText).not.toMatch(/^\*\*Reference grammar:\*\*/m);
+  expect(skillText).not.toMatch(/Return exactly one provider payload/i);
+  expect(skillText).not.toMatch(/^\s*\{/m);
+  expect(skillText).not.toMatch(/^\s*-\s+(?:a |an )?(?:`[^`]+`|[A-Za-z][\w-]*)\s+field\b/im);
+}
 
 function judgedSecurityFixture(path: string, concernKind?: string, evidenceLocation = `${path}:8`) {
   const locus = { path, contentHash: hash(`${path}:${concernKind ?? 'clean'}`), display: 'introduced security-relevant hunk' };
@@ -48,19 +67,55 @@ describe('build-review rubric skill catalog', () => {
     }));
   });
 
-  it('contains the security judgement skill with the closed vocabulary and content-region grammar', async () => {
+  it('keeps vocabulary definitions in Judgement while omitting provider-output shape prose', async () => {
+    const testQualityContent = await readFile(skill, 'utf8');
     const content = await readFile(securitySkill, 'utf8');
 
     expect(content).toMatch(/^name: build-review-security$/m);
     expect(content).toMatch(/^disable-model-invocation: true$/m);
     expect(content).toMatch(/^enforcement: gating$/m);
     expect(content).toMatch(/^phase: build$/m);
-    expect(content).toMatch(/\*\*Closed vocabulary:\*\* `committed-secret`, `injection`, `broken-access-control`, `path-traversal`, `unsafe-deserialization`, `cryptographic-failure`, `security-misconfiguration`, `authentication-failure`, `integrity-failure`, `ssrf`\./);
-    expect(content).toMatch(/\*\*Reference grammar:\*\* `anchor\.locus` is a `content-region` reference:/);
-    expect(content).toContain('`{ path, contentHash, display, occurrence? }`');
-    expect(content).toContain('0-based ordinal among\nequal-content regions in one path');
-    expect(content).toContain('Omit it for a unique region or the first equal-content region');
-    expect(content).toContain('`1` for the second region');
+    expectNoOutputShapeProse(testQualityContent);
+    expectNoOutputShapeProse(content);
+    for (const [rubric, skillText] of [['testQuality', testQualityContent], ['security', content]] as const) {
+      const judgement = judgementSection(skillText);
+      expect(judgement).not.toBe('');
+      for (const concernKind of BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds) {
+        expect(judgement).toContain(`\`${concernKind}\``);
+      }
+    }
+  });
+
+  it('takes the assembled security prompt shape only from the descriptor', async () => {
+    const invoke = vi.fn(async (_options: InvokeOptions) => ({
+      success: true,
+      output: '',
+      exitCode: 0,
+      finalStructuredResult: { findings: [] },
+    }));
+    const runner = new DefaultStepRunner({ invoke }, 'skill-contract', '/fixture');
+    const branch = {
+      rubric: 'security',
+      skillName: 'build-review-security',
+      policy: {
+        enabled: true, llm_provider: 'claude', model: 'opus', effort: 'high',
+        model_fallback_ladder: ['opus'], max_retries: 1, escalate: false,
+        max_projection_bytes: 1_000_000, min_confidence: 0,
+      },
+    } as const;
+    const projection = {
+      rubric: 'security', contractVersion: 'v3', projectionVersion: 'v3',
+      lapId: 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', snapshotDigest: 'sha256:projection',
+      digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [],
+    };
+
+    await (runner as unknown as {
+      dispatchBuildReviewRubric: (value: typeof branch, reviewProjection: typeof projection) => Promise<unknown>;
+    }).dispatchBuildReviewRubric(branch, projection);
+
+    const prompt = invoke.mock.calls[0]?.[0]?.prompt ?? '';
+    const shapeBlock = prompt.match(/Your final message MUST end with one JSON object matching this schema:\n([^\n]+)/)?.[1];
+    expect(shapeBlock).toBe(renderRubricContractShape(BUILD_REVIEW_RUBRIC_REGISTRY.security.contract));
   });
 
   it('keeps representative security judgements anchored to their introducing hunks', () => {
