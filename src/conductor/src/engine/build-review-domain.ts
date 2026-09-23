@@ -157,6 +157,21 @@ export const COUNTERFACTUAL_SENSITIVITY_VOCABULARY = Object.freeze(['supports', 
 export type CounterfactualSensitivity = typeof COUNTERFACTUAL_SENSITIVITY_VOCABULARY[number];
 const BUILD_REVIEW_CONFIDENCE_VALUES = Object.freeze(Array.from({ length: 101 }, (_, value) => value));
 
+/**
+ * Parser-enforced grammar stated in the descriptor schemas, restricted to the
+ * keyword subset the native provider grammar accepts: `enum`, `pattern`, and
+ * `minItems` of 0 or 1. Claude's structured outputs reject `minLength`,
+ * `maxLength`, `minimum`, `maximum`, and `maxItems` with a 400, so length,
+ * count, and ordinal bounds stay parser-only and are named by the rejection
+ * diagnosis instead.
+ */
+const NON_BLANK_STRING_PATTERN = '\\S';
+const SHA256_CONTENT_HASH_PATTERN = '^sha256:[a-f0-9]{64}$';
+export const CUSTOM_SOURCE_REGION_CONTENT_HASH = new RegExp(SHA256_CONTENT_HASH_PATTERN);
+const NON_BLANK_STRING = Object.freeze({ type: 'string', pattern: NON_BLANK_STRING_PATTERN });
+const CONTENT_HASH_STRING = Object.freeze({ type: 'string', pattern: SHA256_CONTENT_HASH_PATTERN });
+const NON_EMPTY_NON_BLANK_STRING_ARRAY = Object.freeze({ type: 'array', minItems: 1, items: NON_BLANK_STRING });
+
 export interface BuildReviewJudgedV3Schema extends RubricOutputJsonSchema {
   readonly type: 'object';
   readonly additionalProperties: false;
@@ -186,8 +201,8 @@ function buildReviewJudgedV3Schema(rubric: BuildReviewRubricId): BuildReviewJudg
           required: ['concernKind', 'summary', 'evidenceLocations', 'anchor'],
           properties: {
             concernKind: { type: 'string', enum: BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds },
-            summary: { type: 'string' },
-            evidenceLocations: { type: 'array', items: { type: 'string' } },
+            summary: NON_BLANK_STRING,
+            evidenceLocations: NON_EMPTY_NON_BLANK_STRING_ARRAY,
             confidence: { type: 'integer', enum: BUILD_REVIEW_CONFIDENCE_VALUES },
             anchor: {
               type: 'object',
@@ -200,9 +215,12 @@ function buildReviewJudgedV3Schema(rubric: BuildReviewRubricId): BuildReviewJudg
                   additionalProperties: false,
                   required: ['path', 'contentHash', 'display'],
                   properties: {
-                    path: { type: 'string' },
-                    contentHash: { type: 'string' },
-                    display: { type: 'string' },
+                    path: NON_BLANK_STRING,
+                    // Security loci are sha256 content hashes; test-quality loci
+                    // may also carry projected title hashes, so only non-blankness
+                    // is grammar there and membership stays in the diagnosis.
+                    contentHash: rubric === 'security' ? CONTENT_HASH_STRING : NON_BLANK_STRING,
+                    display: NON_BLANK_STRING,
                     occurrence: { type: 'integer' },
                   },
                 },
@@ -220,24 +238,24 @@ function buildReviewJudgedV3Schema(rubric: BuildReviewRubricId): BuildReviewJudg
           additionalProperties: false,
           required: ['candidateId', 'status'],
           properties: {
-            candidateId: { type: 'string' },
+            candidateId: NON_BLANK_STRING,
             status: { type: 'string', enum: ['resolved', 'out-of-scope', 'indeterminate'] },
             sourceRegion: {
               type: 'object',
               additionalProperties: false,
               required: ['path', 'startLine', 'endLine', 'contentHash', 'display'],
               properties: {
-                path: { type: 'string' },
+                path: NON_BLANK_STRING,
                 startLine: { type: 'integer' },
                 endLine: { type: 'integer' },
-                contentHash: { type: 'string' },
-                display: { type: 'string' },
+                contentHash: CONTENT_HASH_STRING,
+                display: NON_BLANK_STRING,
               },
             },
-            obligationReferences: { type: 'array', items: { type: 'string' } },
-            associationReason: { type: 'string' },
-            exclusionReason: { type: 'string' },
-            missingEvidenceReason: { type: 'string' },
+            obligationReferences: NON_EMPTY_NON_BLANK_STRING_ARRAY,
+            associationReason: NON_BLANK_STRING,
+            exclusionReason: NON_BLANK_STRING,
+            missingEvidenceReason: NON_BLANK_STRING,
           },
         },
       },
@@ -276,12 +294,14 @@ export const MAX_CUSTOM_SOURCE_REGIONS = 64;
 export const MAX_CUSTOM_SUMMARY_LENGTH = 4_096;
 export const MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH = 1_024;
 export const MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH = 512;
-export const CUSTOM_SOURCE_REGION_CONTENT_HASH = /^sha256:[a-f0-9]{64}$/;
 
 /**
- * Native structural schema for the reviewer-owned custom-v1 payload. Bounds
- * remain enforced by the parser below; this schema deliberately stays in the
- * provider's object/array/string/integer/enum subset.
+ * Native structural schema for the reviewer-owned custom-v1 payload. It states
+ * every parser-enforced grammar the native provider subset can express
+ * (identifier and hash patterns, non-blank strings, non-empty arrays). The
+ * `MAX_CUSTOM_*` count and length bounds and the line-number ordering need
+ * `maxItems`/`maxLength`/`minimum`, which the Claude native grammar rejects,
+ * so they remain parser-enforced and are named by the rejection diagnosis.
  */
 export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
   oneOf: [
@@ -299,22 +319,23 @@ export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
             additionalProperties: false,
             required: ['concernId', 'summary', 'evidenceLocations', 'sourceRegions'],
             properties: {
-              concernId: { type: 'string' },
-              summary: { type: 'string' },
+              concernId: { type: 'string', pattern: CUSTOM_CONCERN_ID.source },
+              summary: NON_BLANK_STRING,
               confidence: { type: 'integer', enum: BUILD_REVIEW_CONFIDENCE_VALUES },
-              evidenceLocations: { type: 'array', items: { type: 'string' } },
+              evidenceLocations: NON_EMPTY_NON_BLANK_STRING_ARRAY,
               sourceRegions: {
                 type: 'array',
+                minItems: 1,
                 items: {
                   type: 'object',
                   additionalProperties: false,
                   required: ['path', 'startLine', 'endLine', 'contentHash', 'display'],
                   properties: {
-                    path: { type: 'string' },
+                    path: NON_BLANK_STRING,
                     startLine: { type: 'integer' },
                     endLine: { type: 'integer' },
-                    contentHash: { type: 'string' },
-                    display: { type: 'string' },
+                    contentHash: CONTENT_HASH_STRING,
+                    display: NON_BLANK_STRING,
                   },
                 },
               },
@@ -329,7 +350,7 @@ export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
       required: ['kind', 'requirement'],
       properties: {
         kind: { type: 'string', enum: ['unsupported-policy'] },
-        requirement: { type: 'string' },
+        requirement: NON_BLANK_STRING,
       },
     },
   ],
@@ -578,7 +599,7 @@ function securityRegion(value: unknown): BuildReviewContentRegionReference | und
   const allowed = source.occurrence === undefined
     ? ['path', 'contentHash', 'display']
     : ['path', 'contentHash', 'display', 'occurrence'];
-  return Object.keys(source).length === allowed.length && Object.keys(source).every((key) => allowed.includes(key)) && /^sha256:[a-f0-9]{64}$/.test(locus.contentHash)
+  return Object.keys(source).length === allowed.length && Object.keys(source).every((key) => allowed.includes(key)) && CUSTOM_SOURCE_REGION_CONTENT_HASH.test(locus.contentHash)
     ? locus
     : undefined;
 }

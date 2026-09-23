@@ -8,8 +8,12 @@ import {
   type BuildReviewContractCatalogMember,
 } from '../../src/engine/build-review-contract.js';
 import {
+  BUILD_REVIEW_CUSTOM_V1_SCHEMA,
   BUILD_REVIEW_FINDING_VOCABULARIES,
   BUILD_REVIEW_JUDGED_V3_SCHEMA,
+  BUILD_REVIEW_JUDGED_V3_SCHEMAS,
+  parseBuildReviewCustomReviewerPayload,
+  parseBuildReviewJudgedResult,
 } from '../../src/engine/build-review-domain.js';
 import {
   canonicalizeBuildReviewFindingIdentity,
@@ -84,9 +88,14 @@ function schemaAccepts(schema: unknown, value: unknown): boolean {
   const source = record(schema);
   if (Array.isArray(source.oneOf)) return source.oneOf.some((alternative) => schemaAccepts(alternative, value));
   if (Array.isArray(source.enum) && !source.enum.includes(value)) return false;
-  if (source.type === 'string') return typeof value === 'string';
+  if (source.type === 'string') {
+    return typeof value === 'string' && (typeof source.pattern !== 'string' || new RegExp(source.pattern).test(value));
+  }
   if (source.type === 'integer') return typeof value === 'number' && Number.isInteger(value);
-  if (source.type === 'array') return Array.isArray(value) && value.every((entry) => schemaAccepts(source.items, entry));
+  if (source.type === 'array') {
+    return Array.isArray(value) && value.length >= (typeof source.minItems === 'number' ? source.minItems : 0)
+      && value.every((entry) => schemaAccepts(source.items, entry));
+  }
   if (source.type !== 'object' || value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
   const schemaProperties = properties(source);
@@ -290,4 +299,91 @@ describe('engine/build-review-contract', () => {
       );
     },
   );
+
+  // D10.1: a grammar the parser enforces is stated in the descriptor's JSON
+  // Schema whenever the native provider subset can express it.
+  describe('schema/parser grammar agreement', () => {
+    const sha = `sha256:${'a'.repeat(64)}`;
+    const NATIVE_SCHEMA_KEYWORDS = new Set([
+      'type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'oneOf', 'pattern', 'minItems',
+    ]);
+
+    function schemaKeywords(schema: unknown, path = '$'): Array<{ path: string; keyword: string; value: unknown }> {
+      const source = record(schema);
+      const own = Object.entries(source)
+        .filter(([keyword]) => keyword !== 'properties' && keyword !== 'items' && keyword !== 'oneOf')
+        .map(([keyword, value]) => ({ path, keyword, value }));
+      const nested = [
+        ...Object.entries(record(source.properties ?? {})).flatMap(([key, child]) => schemaKeywords(child, `${path}.${key}`)),
+        ...(source.items === undefined ? [] : schemaKeywords(source.items, `${path}[]`)),
+        ...(Array.isArray(source.oneOf) ? source.oneOf.flatMap((alt, index) => schemaKeywords(alt, `${path}|${index}`)) : []),
+      ];
+      return [...own, ...nested];
+    }
+
+    it('keeps every descriptor schema inside the native provider keyword subset', () => {
+      for (const schema of [...Object.values(BUILD_REVIEW_JUDGED_V3_SCHEMAS), BUILD_REVIEW_CUSTOM_V1_SCHEMA]) {
+        for (const { path, keyword, value } of schemaKeywords(schema)) {
+          expect(NATIVE_SCHEMA_KEYWORDS.has(keyword), `${path} uses unsupported keyword ${keyword}`).toBe(true);
+          if (keyword === 'minItems') expect([0, 1], `${path} minItems`).toContain(value);
+        }
+      }
+    });
+
+    it.each(['testQuality', 'security'] as const)('states the %s built-in grammar the parser enforces', (rubric) => {
+      const schema = BUILD_REVIEW_JUDGED_V3_SCHEMAS[rubric];
+      const valid = {
+        concernKind: BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds[0]!,
+        summary: 'A concern.',
+        evidenceLocations: ['src/a.ts:1'],
+        anchor: { rubric, locus: { path: 'src/a.ts', contentHash: sha, display: 'a' } },
+      };
+      const parses = (finding: unknown) => parseBuildReviewJudgedResult({
+        kind: 'judged', rubric, lapId: 'lap-1', snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [finding],
+      }) !== undefined;
+      const admits = (finding: unknown) => schemaAccepts(schema, { findings: [finding] });
+
+      expect(parses(valid)).toBe(true);
+      expect(admits(valid)).toBe(true);
+
+      const defective: Record<string, unknown> = {
+        'blank summary': { ...valid, summary: '  ' },
+        'empty evidenceLocations': { ...valid, evidenceLocations: [] },
+        'blank evidence location': { ...valid, evidenceLocations: [' '] },
+        'blank locus display': { ...valid, anchor: { rubric, locus: { ...valid.anchor.locus, display: '' } } },
+        'blank locus path': { ...valid, anchor: { rubric, locus: { ...valid.anchor.locus, path: '' } } },
+        ...(rubric === 'security'
+          ? { 'non-sha256 locus contentHash': { ...valid, anchor: { rubric, locus: { ...valid.anchor.locus, contentHash: 'sha256:short' } } } }
+          : {}),
+      };
+      for (const [name, finding] of Object.entries(defective)) {
+        expect(parses(finding), `${name} parses`).toBe(false);
+        expect(admits(finding), `${name} admitted by schema`).toBe(false);
+      }
+    });
+
+    it('states the custom-v1 grammar the parser enforces', () => {
+      const region = { path: 'src/a.ts', startLine: 1, endLine: 2, contentHash: sha, display: 'a' };
+      const valid = { concernId: 'public-boundary-gap', summary: 'A concern.', evidenceLocations: ['src/a.ts:1'], sourceRegions: [region] };
+      const payload = (finding: unknown) => ({ kind: 'custom-findings', version: 'v1', findings: [finding] });
+
+      expect(parseBuildReviewCustomReviewerPayload(payload(valid))).toBeDefined();
+      expect(schemaAccepts(BUILD_REVIEW_CUSTOM_V1_SCHEMA, payload(valid))).toBe(true);
+
+      const defective: Record<string, unknown> = {
+        'non-identifier concernId': payload({ ...valid, concernId: '1 bad id' }),
+        'blank summary': payload({ ...valid, summary: ' ' }),
+        'empty evidenceLocations': payload({ ...valid, evidenceLocations: [] }),
+        'blank evidence location': payload({ ...valid, evidenceLocations: [''] }),
+        'empty sourceRegions': payload({ ...valid, sourceRegions: [] }),
+        'non-sha256 region contentHash': payload({ ...valid, sourceRegions: [{ ...region, contentHash: 'abc' }] }),
+        'blank region display': payload({ ...valid, sourceRegions: [{ ...region, display: ' ' }] }),
+        'blank unsupported-policy requirement': { kind: 'unsupported-policy', requirement: ' ' },
+      };
+      for (const [name, value] of Object.entries(defective)) {
+        expect(parseBuildReviewCustomReviewerPayload(value), `${name} parses`).toBeUndefined();
+        expect(schemaAccepts(BUILD_REVIEW_CUSTOM_V1_SCHEMA, value), `${name} admitted by schema`).toBe(false);
+      }
+    });
+  });
 });
