@@ -19,6 +19,14 @@ Markdown skills directly.
 ## Install
 
 ```bash
+curl -fsSL https://jstoup111.github.io/ai-conductor/install.sh | sh
+```
+
+This installs the `stable` channel into `~/.ai-conductor/harness` and runs `./bin/install` there. Pass options after `sh -s --`, for example `... | sh -s -- --channel main --providers claude,codex`. Re-running it updates an existing install through `bin/update`.
+
+To install from a manual clone instead:
+
+```bash
 git clone --branch stable --single-branch git@github.com:jstoup111/ai-conductor.git
 cd ai-conductor
 ./bin/install

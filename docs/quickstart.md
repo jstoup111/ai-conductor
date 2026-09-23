@@ -32,7 +32,17 @@ with `asdf install nodejs 26.7.0` or any equivalent version manager. `bin/ai-con
 Pick your host now: `claude`, `codex`, or both. See
 [multiprovider](guides/multiprovider.md) for what each one changes.
 
+## One-line install
+
+```bash
+curl -fsSL https://jstoup111.github.io/ai-conductor/install.sh | sh
+```
+
+This clones the `stable` channel into `~/.ai-conductor/harness` and runs `./bin/install` there, so you can skip the next two sections. Choose a channel or providers with `... | sh -s -- --channel tagged --providers claude`. Running it again updates the existing install.
+
 ## Clone the harness
+
+To install from a manual clone instead:
 
 ```bash
 git clone --branch stable --single-branch https://github.com/jstoup111/ai-conductor.git
