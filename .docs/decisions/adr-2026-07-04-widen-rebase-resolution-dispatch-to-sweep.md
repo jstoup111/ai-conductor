@@ -37,6 +37,8 @@ same configured cap (default 3).
 > **Amended 2026-09-20 by #2607 (operator decision):** "One resolution policy, two entry points" gains one bounded divergence. No third dispatch site is added.
 >
 > **D1** Sweep-only test-only judgement. The sweep call site alone may dispatch the resolver with the test-only supersession exception of adr-2026-08-01-rebase-full-replay-intent-validation in force, and alone applies the declared-drop excusal of adr-2026-06-29-rebase-conflict-resolution-dispatch. Cap, Tier 1, the suite gate, and the lease-protected push are unchanged and still precede publication. After a publication that used the exception, the engine records the verdict on the pull request, naming the choice, the rationale, the declared-superseded commits, and the verification command that passed, and emits it on the existing event spine. Nothing is published unless that verification is named and passed.
+>
+> **D1.1** (Amended 2026-09-23, operator decision) The pull-request record is best-effort after a successful lease-protected push. If posting it fails, the push is not reverted, the failure is logged, and the verdict event on the existing event spine is the durable record of the choice.
 
 ## Consequences
 

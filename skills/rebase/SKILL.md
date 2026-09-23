@@ -228,7 +228,9 @@ reached, still within this single invocation.
 - **NEVER run `git push --force` or any destructive branch operation** during
   rebase resolution.
 - **NEVER invoke this skill mid-build** — only the conductor's finish-time rebase
-  step or an operator `/rebase` invocation is sanctioned. Implementation agents
+  step, the engine-dispatched mergeable sweep
+  (adr-2026-07-04-widen-rebase-resolution-dispatch-to-sweep), or an operator
+  `/rebase` invocation is sanctioned. Implementation agents
   running during BUILD must not call this skill; doing so violates the
   harness "no ad-hoc rebase mid-build" rule.
 
@@ -256,7 +258,11 @@ The conductor's `DefaultStepRunner` parses the last JSON object emitted to
 stdout. This contract is **load-bearing** — the conductor decides whether to
 retry or HALT based on it.
 
-Print exactly one of these as the **final line of output**, on its own line:
+In sweep judgement mode (the dispatch prompt says the exception is in force),
+a successful resolution ends with the verdict line above, and an unresolved one
+ends with the ordinary `{"resolved": false, ...}` line below. In every other
+(strict) mode, print exactly one of these as the **final line of output**, on its
+own line:
 
 ```
 {"resolved": true}
@@ -277,7 +283,8 @@ intentions, and the missing decision. If required context is unavailable, say
 {"resolved": false, "reason": "replay commit abc1234; src/auth.ts lines 41-58; source intends session renewal; upstream intends token removal; missing decision: whether renewal remains supported"}
 ```
 
-No other output format is accepted. Do not emit JSON anywhere else in your
+No other output format is accepted; the verdict line is accepted only in sweep
+judgement mode. Do not emit JSON anywhere else in your
 output; the runner takes the **last** JSON line.
 
 ## Verification
@@ -301,6 +308,6 @@ output; the runner takes the **last** JSON line.
 - [ ] A post-continue mismatch emitted `{"resolved": false}` and never `{"resolved": true}`
 - [ ] A subsequent conflict started a fresh source-intent and staged-replay validation cycle
 - [ ] Final replay commit inspected and reconciled before reporting `{"resolved": true}`
-- [ ] `git rebase --abort` and `git rebase --skip` were NOT used
-- [ ] Final line of stdout is exactly `{"resolved": true}` or `{"resolved": false, "reason": "..."}`
+- [ ] `git rebase --abort` was NOT used; `git rebase --skip` was NOT used, except (sweep judgement mode only) for the one declared-superseded commit
+- [ ] Final line of stdout is exactly `{"resolved": true}` or `{"resolved": false, "reason": "..."}`, or in sweep judgement mode the verdict line
 - [ ] If `{"resolved": true}`: `git status` shows clean working tree on rebased branch
