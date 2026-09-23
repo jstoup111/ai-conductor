@@ -143,7 +143,7 @@ function customSourceProjection(
   rubric: string,
   result: BuildReviewCustomArtifactMember['result'],
 ): readonly BuildReviewRawSourceProjection[] | undefined {
-  if (result.kind === 'infrastructure-failure') return [];
+  if (result.kind !== 'judged') return [];
   const sources: BuildReviewRawSourceProjection[] = [];
   for (const value of result.findings) {
     const finding = record(value);
@@ -295,7 +295,7 @@ function aggregateVerdict(
   const currentCustom = custom?.current.map((rubric) => custom.results[rubric]!) ?? [];
   const judgedCount = RUBRICS.filter((name) => results[name].kind === 'judged').length + currentCustom.filter((member) => member.result.kind === 'judged').length;
   return judgedCount > 0 && !RUBRICS.some((name) => legacyFailure(results[name])) && !currentCustom.some((member) =>
-    member.result.kind === 'infrastructure-failure' || member.result.verdict === 'FAIL',
+    member.result.kind !== 'judged' || member.result.verdict === 'FAIL',
   ) ? 'PASS' : 'FAIL';
 }
 

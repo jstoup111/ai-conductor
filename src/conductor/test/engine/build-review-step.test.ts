@@ -159,6 +159,37 @@ describe('build_review oversized projection step', () => {
     expect(vi.mocked(coordinateBuildReviewRubrics)).toHaveBeenCalledTimes(dispatchesBefore + 3);
   });
 
+  it('halts a custom-only invalid structured-result after its third mechanical lap without publishing an aggregate', async () => {
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'custom-only-retry', projectRoot);
+    const publish = (runner as unknown as {
+      publishCustomOnlyBuildReview: (input: unknown) => Promise<unknown>;
+    }).publishCustomOnlyBuildReview.bind(runner);
+    const input = {
+      lapId: 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8',
+      inputs: { sourceSnapshot: { digest: 'sha256:snapshot' } },
+      customResults: {
+        'custom-policy': {
+          result: {
+            kind: 'infrastructure-failure', rubric: 'custom-policy',
+            reason: 'invalid-structured-result', detail: 'findings[0].confidence must be an integer from 0 to 100',
+          },
+        },
+      },
+      currentCustomRubrics: ['custom-policy'],
+      config: {} as ReturnType<typeof import('../../src/engine/resolved-config.js').resolveBuildReviewConfig>,
+    };
+
+    await expect(publish(input)).resolves.toMatchObject({ currentLapMechanicalFault: true });
+    await expect(publish(input)).resolves.toMatchObject({ currentLapMechanicalFault: true });
+    await expect(publish(input)).resolves.toMatchObject({
+      success: false,
+      refusal: { kind: 'needs-human' },
+      output: expect.stringContaining('invalid-structured-result'),
+    });
+    await expect(access(join(projectRoot, '.pipeline', 'build-review.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults).toBe(3);
+  });
+
   it('charges native-schema-unsupported once per lap and records the same candidate-set lever on a later lap', async () => {
     const detail = 'candidate set [claude, codex] has no provider declaring nativeSchemaCapability.nativeOutputSchema. Recovery action: update the candidate set.';
     const runner = createRunner(detail, 'native-schema-unsupported');

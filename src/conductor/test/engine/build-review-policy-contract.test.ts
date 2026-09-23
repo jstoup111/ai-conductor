@@ -254,8 +254,8 @@ describe('engine/build-review-policy-contract', () => {
     });
     expect(parseBuildReviewPolicyRuntimeUnsupportedResponse({ findings: [] }, 'claude')).toBeUndefined();
     expect(classifyBuildReviewPolicyIncompatibility(runtime!)).toEqual({
-      kind: 'infrastructure-failure',
-      reason: 'provider-error',
+      kind: 'unsupported-policy',
+      requirement: 'requires an undeclared deployment token',
       detail: runtime!.incompatibility,
     });
   });
@@ -266,7 +266,7 @@ describe('engine/build-review-policy-contract', () => {
       'unavailable-capability': 'preflight-failed',
       'unavailable-tool': 'preflight-failed',
       'unavailable-dependency': 'preflight-failed',
-      'runtime-unsupported': 'provider-error',
+      'runtime-unsupported': 'unsupported-policy',
     });
   });
 });

@@ -2832,7 +2832,7 @@ export class DefaultStepRunner implements StepRunner {
         if (preflight.kind !== 'admitted') {
           coverageFailure = true;
           const classification = classifyBuildReviewPolicyIncompatibility(preflight);
-          failure = { reason: classification.reason, detail: renderBuildReviewPolicyUnsupportedDiagnostic(preflight) };
+          failure = { reason: classification.kind === 'infrastructure-failure' ? classification.reason : 'preflight-failed', detail: renderBuildReviewPolicyUnsupportedDiagnostic(preflight) };
           await emitPolicyFailure('preflight', failure.detail);
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         }
@@ -2969,8 +2969,17 @@ export class DefaultStepRunner implements StepRunner {
         const parsed = dispatched.kind === 'structured' ? dispatched.parsed : undefined;
         const runtimeUnsupported = parseBuildReviewPolicyRuntimeUnsupportedResponse(parsed, provider);
         if (runtimeUnsupported) {
-          coverageFailure = true;
           const classification = classifyBuildReviewPolicyIncompatibility(runtimeUnsupported);
+          if (classification.kind === 'unsupported-policy') {
+            return {
+              kind: 'judged' as const,
+              result: {
+                ...invoked,
+                output: JSON.stringify({ declaration, result: { kind: 'unsupported-policy', rubric: entry.id, requirement: classification.requirement } }),
+              },
+            };
+          }
+          coverageFailure = true;
           failure = { reason: classification.reason, detail: renderBuildReviewPolicyUnsupportedDiagnostic(runtimeUnsupported) };
           await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
@@ -3153,6 +3162,14 @@ export class DefaultStepRunner implements StepRunner {
           output: `build_review mechanical fault in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
           currentLapMechanicalFault: true,
         };
+      }
+      // Native-schema refusals and rejected structured payloads never become
+      // semantic coverage merely because their bounded retry allowance is
+      // exhausted.  Match the mixed-rubric settlement: stop dispatching,
+      // publish no aggregate, and leave the operator the named recovery.
+      if (infrastructureFailure.reason === 'invalid-structured-result' || infrastructureFailure.reason === 'native-schema-unsupported') {
+        const reason = `build_review mechanical fault allowance exhausted for ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`;
+        return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
       }
     }
     const pipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');

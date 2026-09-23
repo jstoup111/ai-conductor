@@ -35,20 +35,25 @@ export const mapBuildReviewPolicyIncompatibilityToCoordinatorFailureReason = Obj
   'unavailable-capability': 'preflight-failed',
   'unavailable-tool': 'preflight-failed',
   'unavailable-dependency': 'preflight-failed',
-  'runtime-unsupported': 'provider-error',
-} satisfies Record<BuildReviewPolicyIncompatibilityKind, BuildReviewInfrastructureFailureReason>);
+  'runtime-unsupported': 'unsupported-policy',
+} satisfies Record<BuildReviewPolicyIncompatibilityKind, BuildReviewInfrastructureFailureReason | 'unsupported-policy'>);
 
-export interface BuildReviewPolicyIncompatibilityClassification {
+export type BuildReviewPolicyIncompatibilityClassification =
+  | {
   readonly kind: 'infrastructure-failure';
   readonly reason: BuildReviewInfrastructureFailureReason;
   /** Typed cause retained for coverage and later dynamic-rubric projection. */
   readonly detail: BuildReviewPolicyIncompatibility;
-}
+  }
+  | { readonly kind: 'unsupported-policy'; readonly requirement: string; readonly detail: BuildReviewPolicyIncompatibility };
 
-/** Converts policy refusal into unjudged infrastructure coverage, never PASS. */
+/** Converts policy refusal into a closed uncovered result, never PASS. */
 export function classifyBuildReviewPolicyIncompatibility(
   result: BuildReviewPolicyUnsupportedResult,
 ): BuildReviewPolicyIncompatibilityClassification {
+  if (result.incompatibility.kind === 'runtime-unsupported') {
+    return { kind: 'unsupported-policy', requirement: result.incompatibility.requirement, detail: result.incompatibility };
+  }
   return {
     kind: 'infrastructure-failure',
     reason: mapBuildReviewPolicyIncompatibilityToCoordinatorFailureReason[result.incompatibility.kind],
