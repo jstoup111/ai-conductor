@@ -189,6 +189,58 @@ describe('applyRebaseTransition', () => {
     });
   });
 
+  it('applies when an invalidated gate retains its own ordinary failure instead of a rebase kickback', async () => {
+    // Production shape: prd_audit halted FAIL on its kickback cap, then a
+    // proactive rebase listed it as invalidated while keeping that newer
+    // failure verdict (no `kickback.from: 'rebase'`).
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    const statePath = join(dir, '.pipeline/conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(statePath, JSON.stringify({ test_suite: 'done', prd_audit: 'pending' }));
+    await writeVerdict(dir, 'test_suite', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    const retainedFailure = { satisfied: false, checkedAt: 1, reason: 'prd-audit found blocking criterion grades: S2.1 (FIXABLE)' };
+    await writeVerdict(dir, 'prd_audit', retainedFailure);
+
+    const result = await applyRebaseTransition({
+      projectRoot: dir,
+      stateStore: createFilesystemConductStateStore(statePath),
+      operationId: 'retained-failure-operation',
+      replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      invalidated: ['test_suite', 'prd_audit'],
+      preserved: [],
+      preservedCandidates: [],
+    });
+
+    expect(result.stateResult).toBe('applied');
+    expect((await readVerdict(dir, 'rebase'))?.rebaseOperation).toMatchObject({ id: 'retained-failure-operation', status: 'applied' });
+    expect(await readVerdict(dir, 'prd_audit')).toEqual(retainedFailure);
+  });
+
+  it('refuses when a concurrent writer publishes a PASS for an invalidated gate', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    const statePath = join(dir, '.pipeline/conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(statePath, JSON.stringify({ test_suite: 'done' }));
+    await writeVerdict(dir, 'test_suite', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    const store = createFilesystemConductStateStore(statePath);
+    const applyBatch = store.applyBatch.bind(store);
+    store.applyBatch = async (batch) => {
+      await writeVerdict(dir, 'test_suite', { satisfied: true, checkedAt: 2, reason: 'concurrent pass' });
+      return applyBatch(batch);
+    };
+
+    const result = await applyRebaseTransition({
+      projectRoot: dir, stateStore: store, operationId: 'raced-operation',
+      replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      invalidated: ['test_suite'], preserved: [], preservedCandidates: [],
+    });
+
+    expect(result.stateResult).toBe('refused');
+    expect((await readVerdict(dir, 'rebase'))?.rebaseOperation?.status).not.toBe('applied');
+  });
+
   it('refuses a persisted same-field conflict without overwriting state or publishing an applied operation', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
     dirs.push(dir);

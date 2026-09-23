@@ -174,9 +174,14 @@ export async function applyRebaseTransition(
   // was applying.
   const settled = await readState(statePath);
   const effectiveInvalidated = options.invalidated;
+  // Agreement means every invalidated gate is held open. `applyRebaseVerdicts`
+  // deliberately retains a gate's own newer ordinary failure (e.g. a prd_audit
+  // FAIL that halted on its kickback cap) instead of overwriting it with a
+  // rebase-origin kickback; that failure keeps the gate open just as well.
+  // Only a concurrent PASS (or a vanished record) contradicts the operation.
   const verdictsAgree = await Promise.all(effectiveInvalidated.map(async (gate) => {
     const verdict = await readVerdict(options.projectRoot, gate);
-    return verdict?.satisfied === false && verdict.kickback?.from === 'rebase';
+    return verdict?.satisfied === false;
   }));
   if (!settled.ok || effectiveInvalidated.some((gate) => settled.value[gate] !== 'pending') || verdictsAgree.some((ok) => !ok)) {
     return { operation, invalidated: options.invalidated, preserved: options.preserved, stateResult: 'refused' };
