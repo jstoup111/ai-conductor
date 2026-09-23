@@ -4,6 +4,7 @@ import type { BuildReviewRubricId } from "../types/config.js";
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import {
   CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+  diagnoseBuildReviewJudgedResultRejection,
   describeBuildReviewJudgedResultRejection,
   parseBuildReviewCandidateScopeResolutions,
   parseBuildReviewDispatchFailure,
@@ -101,6 +102,8 @@ export type BuildReviewCoordinatedBranch =
       readonly detail?: string;
       /** Terminal setup-only dispatch signal, carried to the owning build-review step. */
       readonly providerSetupExhaustion?: ProviderSetupExhaustion;
+      /** Typed structured-output rejection retained for the mechanical-fault event. */
+      readonly rejection?: import('./build-review-domain.js').BuildReviewJudgedResultRejection;
     };
 
 /**
@@ -255,8 +258,19 @@ export function preflightProjection(preflight: TautologyPreflightResult): BuildR
   };
 }
 
-function infrastructure(rubric: BuildReviewRubricId, reason: BuildReviewCoordinatorFailureReason, detail?: string, setupExhaustion?: ProviderSetupExhaustion): BuildReviewCoordinatedBranch {
-  return { kind: "infrastructure-failure", rubric, reason, ...(detail === undefined ? {} : { detail }), ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}) };
+function infrastructure(
+  rubric: BuildReviewRubricId,
+  reason: BuildReviewCoordinatorFailureReason,
+  detail?: string,
+  setupExhaustion?: ProviderSetupExhaustion,
+  rejection?: import('./build-review-domain.js').BuildReviewJudgedResultRejection,
+): BuildReviewCoordinatedBranch {
+  return {
+    kind: "infrastructure-failure", rubric, reason,
+    ...(detail === undefined ? {} : { detail }),
+    ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}),
+    ...(rejection ? { rejection } : {}),
+  };
 }
 
 /** Complete built-in candidate identity for the v2 cache envelope. */
@@ -753,18 +767,25 @@ export async function coordinateBuildReviewRubrics(
           // No pre-formed dispatch failure: the engine derives the failed
           // requirement itself from the stamped candidate, so the diagnosis
           // is produced by the same validation surface that rejected it.
-          const detail = cacheWriteDetail ?? failure?.detail ?? (dispatched === undefined ? undefined : (
-            typeof dispatched !== "object" || dispatched === null || Array.isArray(dispatched)
-              ? "no parseable JSON object was found in the response"
-              : describeBuildReviewDispatchedResultRejection(candidate, rubric, projection)
-          ));
+          const rejection = failure?.rejection ?? diagnoseBuildReviewJudgedResultRejection(
+            candidate,
+            rubric,
+            { lapId: projection.lapId, snapshotDigest: projection.snapshotDigest },
+            buildReviewFindingReferenceContext(projection),
+            buildReviewCandidateScopeResolutionContext(projection),
+          );
+          const detail = cacheWriteDetail ?? failure?.detail ?? describeBuildReviewDispatchedResultRejection(candidate, rubric, projection);
+          const structuredResultWasRejected = failure?.cause === 'invalid-structured-result' || dispatched !== undefined;
           return {
             rubric,
             branch: infrastructure(
               rubric,
-              cacheWriteFailure ? 'cache-write-failed' : 'invalid-provider-result',
+              cacheWriteFailure ? 'cache-write-failed' : structuredResultWasRejected
+                ? 'invalid-structured-result'
+                : 'invalid-provider-result',
               detail,
               failure?.providerSetupExhaustion,
+              structuredResultWasRejected ? rejection : undefined,
             ),
           };
         }

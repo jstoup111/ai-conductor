@@ -19,9 +19,9 @@ export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' }
 export type BuildReviewRubricContractVersion = 'v1' | 'v2' | 'v3';
 export const CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION = 'v3' as const;
 export type BuildReviewSkipReason = 'disabled' | 'test_quality_empty_scope';
-export type BuildReviewInfrastructureFailureReason = 'provider-error' | 'retry-exhausted' | 'missing-artifact' | 'malformed-artifact' | 'stale-artifact' | 'identity-mismatch' | 'preflight-failed' | 'artifact-read-failed' | 'artifact-write-failed' | 'scope-incomplete' | 'projection-oversized';
+export type BuildReviewInfrastructureFailureReason = 'provider-error' | 'retry-exhausted' | 'missing-artifact' | 'malformed-artifact' | 'stale-artifact' | 'identity-mismatch' | 'preflight-failed' | 'artifact-read-failed' | 'artifact-write-failed' | 'scope-incomplete' | 'projection-oversized' | 'invalid-structured-result';
 export const mapBuildReviewCoordinatorFailureReason = Object.freeze({
-  'no-changed-tests': 'preflight-failed', 'no-production-changes': 'preflight-failed', 'missing-scoped-configuration': 'preflight-failed', 'materialization-failed': 'preflight-failed', 'missing-merge-base-file': 'preflight-failed', 'scoped-run-failed': 'preflight-failed', 'scoped-run-launch-failed': 'preflight-failed', 'scoped-run-timeout': 'preflight-failed', 'scoped-run-signaled': 'preflight-failed', aborted: 'preflight-failed', 'cleanup-failed': 'preflight-failed', 'cache-read-failed': 'artifact-read-failed', 'cache-write-failed': 'artifact-write-failed', 'artifact-write-failed': 'artifact-write-failed', 'projection-rubric-mismatch': 'malformed-artifact', 'projection-oversized': 'projection-oversized', 'invalid-provider-result': 'malformed-artifact', 'provider-error': 'provider-error', 'missing-settlement': 'missing-artifact', 'scope-incomplete': 'scope-incomplete',
+  'no-changed-tests': 'preflight-failed', 'no-production-changes': 'preflight-failed', 'missing-scoped-configuration': 'preflight-failed', 'materialization-failed': 'preflight-failed', 'missing-merge-base-file': 'preflight-failed', 'scoped-run-failed': 'preflight-failed', 'scoped-run-launch-failed': 'preflight-failed', 'scoped-run-timeout': 'preflight-failed', 'scoped-run-signaled': 'preflight-failed', aborted: 'preflight-failed', 'cleanup-failed': 'preflight-failed', 'cache-read-failed': 'artifact-read-failed', 'cache-write-failed': 'artifact-write-failed', 'artifact-write-failed': 'artifact-write-failed', 'projection-rubric-mismatch': 'malformed-artifact', 'projection-oversized': 'projection-oversized', 'invalid-provider-result': 'malformed-artifact', 'invalid-structured-result': 'invalid-structured-result', 'provider-error': 'provider-error', 'missing-settlement': 'missing-artifact', 'scope-incomplete': 'scope-incomplete',
 } satisfies Record<string, BuildReviewInfrastructureFailureReason>);
 export type BuildReviewCoordinatorFailureReason = keyof typeof mapBuildReviewCoordinatorFailureReason;
 export function deriveBuildReviewInfrastructureFailureReason(branch: { readonly reason: BuildReviewCoordinatorFailureReason }): BuildReviewInfrastructureFailureReason { return mapBuildReviewCoordinatorFailureReason[branch.reason]; }
@@ -118,7 +118,7 @@ export interface BuildReviewCustomUnsupportedPayload {
 }
 export type BuildReviewCustomReviewerPayload = BuildReviewCustomFindingsPayload | BuildReviewCustomUnsupportedPayload;
 export interface BuildReviewSkip { readonly kind: 'skipped'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewSkipReason; }
-export interface BuildReviewInfrastructureFailure { readonly kind: 'infrastructure-failure'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewInfrastructureFailureReason; readonly detail: string; readonly providerSetupExhaustion?: ProviderSetupExhaustion; }
+export interface BuildReviewInfrastructureFailure { readonly kind: 'infrastructure-failure'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewInfrastructureFailureReason; readonly detail: string; readonly providerSetupExhaustion?: ProviderSetupExhaustion; readonly rejection?: BuildReviewJudgedResultRejection; }
 export type BuildReviewRubricResult = BuildReviewJudgedResult | BuildReviewSkip | BuildReviewInfrastructureFailure;
 /** A non-judgment coverage fault derived only from an already-valid judged result. */
 export interface BuildReviewScopeIncompleteFault {
@@ -780,7 +780,15 @@ export function renderBuildReviewJudgedResultRejection(rejection: BuildReviewJud
 export function describeBuildReviewJudgedResultRejection(value: unknown, rubric: BuildReviewRubricId, expected: { readonly lapId: string; readonly snapshotDigest: string }, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): string {
   return renderBuildReviewJudgedResultRejection(diagnoseBuildReviewJudgedResultRejection(value, rubric, expected, references, scopeContext));
 }
-export interface BuildReviewDispatchFailure { readonly kind: 'dispatch-failure'; readonly detail: string; readonly providerSetupExhaustion?: ProviderSetupExhaustion; }
+export interface BuildReviewDispatchFailure {
+  readonly kind: 'dispatch-failure';
+  readonly detail: string;
+  readonly providerSetupExhaustion?: ProviderSetupExhaustion;
+  /** A native structured payload was present but rejected by the engine contract. */
+  readonly cause?: 'invalid-structured-result';
+  /** Kept typed so the existing fault event can carry it once its union admits the field. */
+  readonly rejection?: BuildReviewJudgedResultRejection;
+}
 export function renderBuildReviewUnresolvedSkillRemedy(rubricSkillName: string, unresolvedCommandName: string): string {
   const commandDetail = unresolvedCommandName.trim()
     ? ` The unresolved command was "${unresolvedCommandName}".`
@@ -788,5 +796,27 @@ export function renderBuildReviewUnresolvedSkillRemedy(rubricSkillName: string, 
   return `Build-review rubric skill "${rubricSkillName}" could not be dispatched.${commandDetail} No judgement was produced, and retrying cannot make the command resolvable. Relink the provider skill catalog; if this feature's base predates the skill, rebase the feature.`;
 }
 function providerSetupExhaustion(value: unknown): ProviderSetupExhaustion | undefined { const source = object(value); if (!source || !Array.isArray(source.candidates) || source.candidates.length === 0) return undefined; const candidates = source.candidates.map(object); if (candidates.some((candidate) => !candidate || !text(candidate.provider) || !text(candidate.reason) || !text(candidate.recoveryAction) || (candidate.capability !== undefined && !text(candidate.capability)))) return undefined; return { candidates: candidates.map((candidate) => ({ provider: candidate!.provider as string, reason: candidate!.reason as string, recoveryAction: candidate!.recoveryAction as string, ...(candidate!.capability === undefined ? {} : { capability: candidate!.capability as string }) })) as unknown as ProviderSetupExhaustion['candidates'] }; }
-export function makeBuildReviewDispatchFailure(detail: string, setupExhaustion?: ProviderSetupExhaustion): BuildReviewDispatchFailure { return { kind: 'dispatch-failure', detail, ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}) }; }
-export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDispatchFailure | undefined { const source = object(value); const setupExhaustion = source && (source.providerSetupExhaustion === undefined ? undefined : providerSetupExhaustion(source.providerSetupExhaustion)); return source?.kind === 'dispatch-failure' && text(source.detail) && (source.providerSetupExhaustion === undefined || setupExhaustion) ? { kind: 'dispatch-failure', detail: source.detail, ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}) } : undefined; }
+export function makeBuildReviewDispatchFailure(detail: string, setupExhaustion?: ProviderSetupExhaustion, invalidStructuredResult?: { readonly rejection: BuildReviewJudgedResultRejection }): BuildReviewDispatchFailure {
+  return {
+    kind: 'dispatch-failure', detail,
+    ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}),
+    ...(invalidStructuredResult ? { cause: 'invalid-structured-result' as const, rejection: invalidStructuredResult.rejection } : {}),
+  };
+}
+export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDispatchFailure | undefined {
+  const source = object(value);
+  const setupExhaustion = source && (source.providerSetupExhaustion === undefined ? undefined : providerSetupExhaustion(source.providerSetupExhaustion));
+  // Dispatch failures are engine-created values. Preserve the rejection only
+  // for the explicitly stamped cause; ordinary provider failures remain
+  // unstructured diagnostics.
+  const invalidStructuredResult = source?.cause === 'invalid-structured-result' && source.rejection !== undefined
+    ? source.rejection as BuildReviewJudgedResultRejection
+    : undefined;
+  return source?.kind === 'dispatch-failure' && text(source.detail) && (source.providerSetupExhaustion === undefined || setupExhaustion)
+    ? {
+        kind: 'dispatch-failure', detail: source.detail,
+        ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}),
+        ...(invalidStructuredResult ? { cause: 'invalid-structured-result' as const, rejection: invalidStructuredResult } : {}),
+      }
+    : undefined;
+}

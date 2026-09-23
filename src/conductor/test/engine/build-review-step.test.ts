@@ -118,6 +118,63 @@ describe('build_review oversized projection step', () => {
     expect(ledger.gates.build_review?.mechanicalFaults).toBe(1);
   });
 
+  it('keeps an invalid structured result out of the aggregate and semantic budgets', async () => {
+    const runner = createRunner(
+      'findings[0].concernKind must be one of "test-insensitive"',
+      'invalid-structured-result',
+    );
+
+    const result = await runner.run('build_review', state);
+
+    expect(result).toMatchObject({
+      success: false,
+      currentLapMechanicalFault: true,
+      output: expect.stringContaining('invalid-structured-result'),
+    });
+    await expect(access(join(projectRoot, '.pipeline', 'build-review.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const ledger = await readKickbackLedger(projectRoot);
+    expect(ledger.gates.build_review).toMatchObject({ mechanicalFaults: 1 });
+    expect(ledger.gates.build_review?.count ?? 0).toBe(0);
+    expect(ledger.gates.build_review?.cumulative ?? 0).toBe(0);
+    expect(buildReviewPublication.count).toBe(0);
+  });
+
+  it('halts needs-human after three invalid structured-result laps without publishing an aggregate', async () => {
+    const runner = createRunner('findings must be an array', 'invalid-structured-result');
+
+    await expect(runner.run('build_review', state)).resolves.toMatchObject({ currentLapMechanicalFault: true });
+    await expect(runner.run('build_review', state)).resolves.toMatchObject({ currentLapMechanicalFault: true });
+    await expect(runner.run('build_review', state)).resolves.toMatchObject({
+      success: false,
+      refusal: { kind: 'needs-human' },
+      output: expect.stringContaining('invalid-structured-result'),
+    });
+    expect((await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults).toBe(3);
+    await expect(access(join(projectRoot, '.pipeline', 'build-review.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(buildReviewPublication.count).toBe(0);
+  });
+
+  it('publishes a clean sibling finding while retaining the rejected structured-result branch as absent coverage', async () => {
+    const runner = createRunner(
+      'findings[0].anchor.locus.contentHash must equal a projected hash',
+      'invalid-structured-result',
+      'finding',
+    );
+
+    const result = await runner.run('build_review', state);
+
+    expect(result).toMatchObject({ success: true });
+    const aggregate = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'build-review.json'), 'utf8'));
+    expect(aggregate.results.testQuality).toMatchObject({
+      kind: 'infrastructure-failure',
+      reason: 'invalid-structured-result',
+    });
+    expect(aggregate.results.security.findings).toEqual([
+      expect.objectContaining({ summary: 'Credential committed to source.' }),
+    ]);
+    expect((await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults ?? 0).toBe(0);
+  });
+
   it('routes an oversized refusal before a second build-review dispatch', async () => {
     const runner = createRunner('projection-oversized: measured=1346093 bytes limit=1048576 bytes');
     const dispatchesBefore = vi.mocked(coordinateBuildReviewRubrics).mock.calls.length;
@@ -201,7 +258,7 @@ describe('build_review oversized projection step', () => {
 
   function createRunner(
     detail: string,
-    reason: 'projection-oversized' | 'provider-error' = 'projection-oversized',
+    reason: 'projection-oversized' | 'provider-error' | 'invalid-structured-result' = 'projection-oversized',
     securityResult: 'none' | 'finding' | 'pass' = 'none',
     effectiveResolver?: StepRunnerOptions['buildReviewEffectiveResolver'],
   ): DefaultStepRunner {

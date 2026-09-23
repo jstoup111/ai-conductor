@@ -139,6 +139,7 @@ import {
 import {
   deriveBuildReviewInfrastructureFailureReason,
   deriveBuildReviewScopeIncompleteFault,
+  diagnoseBuildReviewJudgedResultRejection,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
@@ -2443,6 +2444,7 @@ export class DefaultStepRunner implements StepRunner {
             reason: deriveBuildReviewInfrastructureFailureReason({ reason: branch.reason }),
             detail: branch.detail === undefined ? branch.reason : `${branch.reason}: ${branch.detail}`,
             ...(branch.providerSetupExhaustion ? { providerSetupExhaustion: branch.providerSetupExhaustion } : {}),
+            ...(branch.rejection ? { rejection: branch.rejection } : {}),
           }];
     }))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult | {
       readonly kind: 'malformed';
@@ -2524,6 +2526,10 @@ export class DefaultStepRunner implements StepRunner {
             output: `build_review mechanical fault in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
             currentLapMechanicalFault: true,
           };
+        }
+        if (infrastructureFailure.reason === 'invalid-structured-result') {
+          const reason = `build_review mechanical fault allowance exhausted for ${infrastructureFailure.rubric} (invalid-structured-result): ${infrastructureFailure.detail}`;
+          return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
         }
       }
     }
@@ -3541,7 +3547,12 @@ export class DefaultStepRunner implements StepRunner {
     }
     if (!initial.success) return undefined;
     if (initial.finalStructuredResult === undefined || initial.finalStructuredResult === null || typeof initial.finalStructuredResult !== 'object' || Array.isArray(initial.finalStructuredResult)) {
-      return makeBuildReviewDispatchFailure('root: a structured result is required');
+      const rejection = diagnoseBuildReviewJudgedResultRejection(
+        initial.finalStructuredResult,
+        branch.rubric,
+        { lapId: projection.lapId, snapshotDigest: projection.snapshotDigest },
+      );
+      return makeBuildReviewDispatchFailure('root: a structured result is required', undefined, { rejection });
     }
     const initialResult = validateBuildReviewDispatchedResult(initial.finalStructuredResult, branch.rubric, projection);
     return initialResult ?? makeBuildReviewDispatchFailure('the structured result did not satisfy the judged contract');
