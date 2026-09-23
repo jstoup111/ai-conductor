@@ -40,6 +40,8 @@ import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
+import { translateAfterRebase } from '../../src/engine/rebase-translate.js';
+import { resolveTaskIdsWithDiagnostics } from '../../src/engine/task-progress.js';
 import { resumeRebaseFirst, REKICK_SENTINEL } from '../../src/engine/daemon-rekick.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 
@@ -100,7 +102,10 @@ async function seedPreRebaseState(statePath: string): Promise<void> {
 /** Drives the finish-time site: a real `Conductor.run({ fromStep: 'rebase' })`. */
 async function runFinishTimeRebase(
   repo: string,
-  { forceIndeterminateProspectiveMerge = false }: { forceIndeterminateProspectiveMerge?: boolean } = {},
+  {
+    forceIndeterminateProspectiveMerge = false,
+    events = new ConductorEventEmitter(),
+  }: { forceIndeterminateProspectiveMerge?: boolean; events?: ConductorEventEmitter } = {},
 ): Promise<void> {
   const statePath = join(repo, 'conduct-state.json');
   await seedPreRebaseState(statePath);
@@ -111,7 +116,6 @@ async function runFinishTimeRebase(
   // baseline is sealed. Seed that lifecycle prerequisite before entering
   // directly at the SHIP-native rebase step.
   await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
-  const events = new ConductorEventEmitter();
   const runner: StepRunner = {
     run: async () => ({ success: true }) satisfies StepRunResult,
   };
@@ -134,7 +138,9 @@ async function runFinishTimeRebase(
 
 interface Scratch {
   repo: string;
-  g: (args: string[]) => ReturnType<typeof execFile>;
+  // `execFile` defaults to text output. Keep that contract here rather than
+  // widening `stdout` through the overloaded function's generic return type.
+  g: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 }
 
 /**
@@ -228,6 +234,25 @@ async function seedStores(repo: string, c1Sha: string, c2Sha: string): Promise<v
   );
 }
 
+async function seedRepairObligations(
+  repo: string,
+  obligations: ReadonlyArray<{ id: string; head: string }>,
+): Promise<void> {
+  await mkdir(join(repo, '.pipeline'), { recursive: true });
+  const records = Object.fromEntries(obligations.map(({ id, head }) => [id, {
+    id,
+    planIdentity: '.docs/plans/current.md',
+    taskIds: ['1'],
+    source: { findingId: id, authority: 'build_review', instruction: 'Repair.' },
+    baseline: { head, tree: `${id}-tree`, resolvedTaskIds: [] },
+    settlement: 'unsettled',
+    tasks: { '1': { status: 'open' } },
+  }]));
+  await writeFile(join(repo, '.pipeline', 'engine-state.json'), JSON.stringify({
+    repairObligations: { version: 1, records, currentByPlan: {}, admissionsByPlan: {} },
+  }, null, 2));
+}
+
 /** Resolves the post-rebase sha for a commit by its original subject line. */
 async function shaForSubject(
   g: Scratch['g'],
@@ -249,6 +274,51 @@ describe('rebase-translate acceptance (#535) — real call sites, real scratch g
   });
 
   it(
+    'Story 3: a malformed repair-obligations section is a no-op while evidence, status, and seal translation continue',
+    async () => {
+      const scratch = await buildTranslationRepo();
+      repo = scratch.repo;
+      const { g, c1Sha, c2Sha } = scratch;
+      await seedStores(repo, c1Sha, c2Sha);
+      await mkdir(join(repo, '.pipeline'), { recursive: true });
+      const engineStatePath = join(repo, '.pipeline', 'engine-state.json');
+      const malformedEngineState = JSON.stringify({ repairObligations: 'garbage' }, null, 2);
+      await writeFile(engineStatePath, malformedEngineState);
+
+      const originalHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: originalHead });
+      await g(['rebase', '-q', 'main']);
+      const head = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+      const rebaselines: unknown[] = [];
+
+      await translateAfterRebase(
+        makeGitRunner(repo),
+        repo,
+        'main',
+        originalHead,
+        head,
+        undefined,
+        async (event) => { rebaselines.push(event); },
+      );
+
+      expect(await readFile(engineStatePath, 'utf8')).toBe(malformedEngineState);
+      const newC1Sha = await shaForSubject(g, 'feat', 'feat: a1');
+      const newC2Sha = await shaForSubject(g, 'feat', 'feat: work');
+      const evidenceAfter = await readJson(join(repo, '.pipeline', 'task-evidence.json'));
+      const statusAfter = await readJson(join(repo, '.pipeline', 'task-status.json'));
+      expect(evidenceAfter.evidenceStamps.T1.sha).toBe(newC2Sha);
+      expect(statusAfter.tasks.find((task: { id: string }) => task.id === 'T2').commit).toBe(newC1Sha.slice(0, 7));
+      expect(rebaselines).toHaveLength(1);
+
+      const progress = await resolveTaskIdsWithDiagnostics(repo, ['T1']);
+      expect(progress.unavailableReasons.get('T1')).toContain(
+        'repair state is unavailable: Engine state repairObligations section is incompatible',
+      );
+    },
+    20000,
+  );
+
+  it(
     'Stories 1-3: finish-time site (runRebaseStep via Conductor.run) persists rebase-rewrites.json and repoints the sidecar + task-status (full and short forms)',
     async () => {
       const scratch = await buildTranslationRepo();
@@ -256,7 +326,11 @@ describe('rebase-translate acceptance (#535) — real call sites, real scratch g
       const { g, c1Sha, c2Sha } = scratch;
       await seedStores(repo, c1Sha, c2Sha);
 
-      await runFinishTimeRebase(repo, { forceIndeterminateProspectiveMerge: true });
+      const events = new ConductorEventEmitter();
+      const translated: unknown[] = [];
+      events.on('repair_boundary_translated', (event) => { translated.push(event); });
+
+      await runFinishTimeRebase(repo, { forceIndeterminateProspectiveMerge: true, events });
 
       const newC1Sha = await shaForSubject(g, 'feat', 'feat: a1');
       const newC2Sha = await shaForSubject(g, 'feat', 'feat: work');
@@ -282,6 +356,7 @@ describe('rebase-translate acceptance (#535) — real call sites, real scratch g
       const t2 = statusAfter.tasks.find((t: { id: string }) => t.id === 'T2');
       expect(t1.commit).toBe(newC2Sha);
       expect(t2.commit).toBe(newC1Sha.slice(0, 7));
+      expect(translated).toEqual([]);
     },
     20000,
   );
@@ -350,6 +425,7 @@ describe('rebase-translate acceptance (#535) — real call sites, real scratch g
       await writeFile(join(repo, 'keep.ts'), 'keep1\n');
       await g(['add', '.']);
       await g(['commit', '-q', '-m', 'feat: keep change']);
+      const keepSha = (await g(['rev-parse', 'HEAD'])).stdout.trim();
 
       // main applies an IDENTICAL change to dup.ts — the feature's dup.ts
       // commit becomes empty relative to the new base; git auto-drops
@@ -374,7 +450,15 @@ describe('rebase-translate acceptance (#535) — real call sites, real scratch g
         JSON.stringify(evidence, null, 2),
       );
 
-      await runFinishTimeRebase(repo, { forceIndeterminateProspectiveMerge: true });
+      await seedRepairObligations(repo, [
+        { id: 'direct-repair', head: keepSha },
+        { id: 'successor-repair', head: droppedSha },
+      ]);
+      const events = new ConductorEventEmitter();
+      const translated: unknown[] = [];
+      events.on('repair_boundary_translated', (event) => { translated.push(event); });
+
+      await runFinishTimeRebase(repo, { forceIndeterminateProspectiveMerge: true, events });
 
       // Sanity: the dup.ts commit really was dropped by git (equivalent
       // upstream) — a genuine patch-id-unmatched pre-image, not a test bug.
@@ -386,7 +470,39 @@ describe('rebase-translate acceptance (#535) — real call sites, real scratch g
       const residue = await readJson(residuePath);
       expect(JSON.stringify(residue)).toContain(droppedSha);
       expect(JSON.stringify(residue)).toContain('T3');
+
+      const newKeepSha = await shaForSubject(g, 'feat', 'feat: keep change');
+      expect(translated).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          obligationId: 'direct-repair', from: keepSha,
+          to: newKeepSha, rule: 'direct', projectRoot: repo,
+        }),
+        expect.objectContaining({
+          obligationId: 'successor-repair', from: droppedSha,
+          to: newKeepSha, rule: 'successor', projectRoot: repo,
+        }),
+      ]));
+      expect(translated).toHaveLength(2);
     },
     20000,
   );
+
+  it('rewrites repair boundaries when no event emitter is supplied', async () => {
+    const scratch = await buildTranslationRepo();
+    repo = scratch.repo;
+    const { g, c1Sha } = scratch;
+    await seedRepairObligations(repo, [{ id: 'repair-without-events', head: c1Sha }]);
+
+    const originalHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await g(['rebase', '-q', 'main']);
+    const head = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+
+    await expect(translateAfterRebase(
+      makeGitRunner(repo), repo, 'main', originalHead, head,
+    )).resolves.toBeUndefined();
+
+    const state = await readJson(join(repo, '.pipeline', 'engine-state.json'));
+    expect(state.repairObligations.records['repair-without-events'].baseline.head)
+      .toBe(await shaForSubject(g, 'feat', 'feat: a1'));
+  }, 20000);
 });

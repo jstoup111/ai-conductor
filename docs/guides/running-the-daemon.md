@@ -1041,6 +1041,15 @@ carried-over verdict.
 `completed`; the durable record of finished work is the `Task:` trailer on each commit, which is why
 losing or re-seeding that file does not by itself re-open a finished build.
 
+Repair obligations keep a commit boundary for deciding which later `Task:` trailers can settle a
+repair. During the same rebase translation, the daemon rewrites that boundary when its pre-rebase
+commit has a patch-id match. If the boundary's commit was absorbed upstream, it advances only to the
+earliest surviving later commit on the feature's first-parent history, so the eligible evidence range
+can only narrow. Each rewrite is persisted as a `repair_boundary_translated` event with its
+`direct` or `successor` rule. A boundary without a safe successor remains unchanged and is named by
+its obligation id in the `rebase_citation_residue` event and `.pipeline/rebase-residue.json`; the
+ordinary repair-resolution path then continues to refuse that stale boundary rather than guessing.
+
 ### Halt-PR presentation is cleared when the halt resolves
 
 Escalating a halt marks the feature's PR: draft status, the `needs-remediation` label, a body

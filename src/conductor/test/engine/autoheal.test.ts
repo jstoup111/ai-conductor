@@ -6,6 +6,21 @@ import { tmpdir } from 'os';
 import { execa } from 'execa';
 import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 
+const gitCommandSpy = vi.hoisted(() => vi.fn());
+
+// Keep the real local-Git fixtures while exposing the process seam needed to
+// prove the strict repair-boundary read path never tries successor discovery.
+vi.mock('execa', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('execa')>();
+  return {
+    ...actual,
+    execa: (...args: Parameters<typeof actual.execa>) => {
+      gitCommandSpy(...args);
+      return actual.execa(...args);
+    },
+  };
+});
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2085,5 +2100,92 @@ describe('listCommitsWithTrailers mid-body Task attribution', () => {
     expect(testCommit!.trailers.Task).toEqual(['7']);
 
     await rm(bareDir, { recursive: true, force: true });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 9: strict repair-boundary fallback after rebase.
+//
+// The rebase translator owns successor selection. This read path may follow an
+// exact rewrite-map entry, but a residue boundary must refuse rather than scan
+// first-parent history for a successor.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('listCommitsWithTrailersAfterRepairBoundary rebase fallback (Task 9)', () => {
+  async function commitFixtureFile(name: string, message: string): Promise<string> {
+    await writeFile(join(gitDir, name), `${message}\n`);
+    await execa('git', ['add', name], { cwd: gitDir });
+    await execa('git', ['commit', '-m', message], { cwd: gitDir });
+    return (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+  }
+
+  async function resetToInitialCommit(): Promise<void> {
+    const initial = (await execa('git', ['rev-list', '--max-parents=0', 'HEAD'], { cwd: gitDir })).stdout.trim();
+    await execa('git', ['reset', '--hard', initial], { cwd: gitDir });
+  }
+
+  async function writeRewriteMap(map: Record<string, string>): Promise<void> {
+    await mkdir(join(gitDir, '.pipeline'), { recursive: true });
+    await writeFile(join(gitDir, '.pipeline', 'rebase-rewrites.json'), JSON.stringify(map));
+  }
+
+  it('follows an exact rebase-rewrite map entry for an unrewritten boundary', async () => {
+    const mod = await loadAutoheal();
+    const oldBoundary = await commitFixtureFile('old-boundary.txt', 'old repair boundary');
+    await execa('git', ['branch', 'old-repair-boundary', oldBoundary], { cwd: gitDir });
+    await resetToInitialCommit();
+    const rewrittenBoundary = await commitFixtureFile('rewritten-boundary.txt', 'rewritten repair boundary');
+    await writeRewriteMap({ [oldBoundary]: rewrittenBoundary });
+
+    await expect(mod.listCommitsWithTrailersAfterRepairBoundary(gitDir, oldBoundary)).resolves.toEqual({
+      kind: 'available',
+      commits: [],
+    });
+  });
+
+  it('refuses a residue boundary without searching for a successor', async () => {
+    const mod = await loadAutoheal();
+    const residueBoundary = await commitFixtureFile('residue-boundary.txt', 'residue repair boundary');
+    await execa('git', ['branch', 'residue-repair-boundary', residueBoundary], { cwd: gitDir });
+    await resetToInitialCommit();
+    // A rebase map exists, but it does not explain this store's residue head.
+    await writeRewriteMap({ 'some-other-old-sha': 'some-other-new-sha' });
+
+    gitCommandSpy.mockClear();
+    await expect(mod.listCommitsWithTrailersAfterRepairBoundary(gitDir, residueBoundary)).resolves.toEqual({
+      kind: 'unavailable',
+      reason: `repair boundary ${residueBoundary} is not an ancestor of HEAD`,
+    });
+
+    const revListCalls = gitCommandSpy.mock.calls.filter(([command, args]) =>
+      command === 'git' && Array.isArray(args) && args[0] === 'rev-list');
+    expect(revListCalls).toHaveLength(0);
+  });
+
+  it('refuses a non-ancestor boundary when no rebase-rewrites file exists', async () => {
+    const mod = await loadAutoheal();
+    const oldBoundary = await commitFixtureFile('manual-rebase-boundary.txt', 'manual rebase boundary');
+    await execa('git', ['branch', 'manual-rebase-boundary', oldBoundary], { cwd: gitDir });
+    await resetToInitialCommit();
+
+    await expect(mod.listCommitsWithTrailersAfterRepairBoundary(gitDir, oldBoundary)).resolves.toEqual({
+      kind: 'unavailable',
+      reason: `repair boundary ${oldBoundary} is not an ancestor of HEAD`,
+    });
+  });
+
+  it('refuses a rewrite-map target that is not reachable from HEAD', async () => {
+    const mod = await loadAutoheal();
+    const oldBoundary = await commitFixtureFile('old-boundary.txt', 'old repair boundary');
+    await execa('git', ['branch', 'old-repair-boundary', oldBoundary], { cwd: gitDir });
+    await resetToInitialCommit();
+    const unreachableTarget = await commitFixtureFile('unreachable-target.txt', 'unreachable rewrite target');
+    await execa('git', ['branch', 'unreachable-rewrite-target', unreachableTarget], { cwd: gitDir });
+    await resetToInitialCommit();
+    await writeRewriteMap({ [oldBoundary]: unreachableTarget });
+
+    await expect(mod.listCommitsWithTrailersAfterRepairBoundary(gitDir, oldBoundary)).resolves.toEqual({
+      kind: 'unavailable',
+      reason: `repair boundary ${oldBoundary} is not an ancestor of HEAD`,
+    });
   });
 });

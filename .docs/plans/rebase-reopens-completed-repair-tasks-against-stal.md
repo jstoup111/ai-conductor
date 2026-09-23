@@ -40,6 +40,8 @@ Rewrite persisted repair-obligation boundaries through the engine's rebase rewri
 - The fake-store test observes exactly one `EngineStateStore.update` invocation for a non-empty map and zero filesystem writes to `engine-state.json` outside that store.
 - With no engine-state file present, `rewriteBaselines` resolves ok with an empty `rewritten` list and the file still does not exist afterwards.
 - The untouched-fields test asserts `baseline.tree`, `baseline.resolvedTaskIds`, `settlement`, and every per-task status are deep-equal before and after the rewrite.
+- The untouched-fields test also compares the serialized `engine-state.json` text before and after the rewrite and asserts every byte outside the rewritten `baseline.head` values is identical.
+- With no engine-state file present, a full translation run completes without error and `engine-state.json` still does not exist afterwards.
 
 **Files likely touched:**
 - src/conductor/src/engine/repair-obligations.ts — add `rewriteBaselines` to the store interface and implementation
@@ -62,6 +64,7 @@ Rewrite persisted repair-obligation boundaries through the engine's rebase rewri
 - The same function returns `unchanged` when every map key lies at or before the boundary, when the candidate's mapped sha is not reachable, and when the boundary is outside the pre-image list, each asserted by its own fixture.
 - A merge-commit fixture asserts the candidate list comes from `rev-list --first-parent` so a commit reachable only via a second parent is never selected.
 - A property assertion on every successor fixture shows the chosen pre-image index is strictly greater than the boundary index, so `newHead..HEAD` is a subset of `oldHead..HEAD`.
+- A residue-boundary fixture where every map key lies at or before the boundary asserts `baseline.head` is unchanged and that a following task-progress evaluation returns the existing `repair boundary <sha> is not an ancestor of HEAD` reason.
 
 **Files likely touched:**
 - src/conductor/src/engine/rebase-translate.ts — `selectRepairBoundaryTranslation` and first-parent pre-image listing helper
@@ -83,6 +86,7 @@ Rewrite persisted repair-obligation boundaries through the engine's rebase rewri
 - After `performRebase` with the default `translateAfterRebase`, the persisted obligation whose head had a patch-id match holds the post-image sha, asserted by reading `engine-state.json` in rebase-translate-acceptance.test.ts.
 - An obligation whose head is outside `onto..origHead` is byte-identical after translation in the same test.
 - The rewrite is issued through `RepairObligationStore.rewriteBaselines` from `translateAfterRebase`, and the acceptance test asserts task-evidence.json and task-status.json were also rewritten in the same run.
+- After `performRebase` with the default `translateAfterRebase`, an obligation whose head is a residue commit with a later first-parent pre-image commit in the rewrite map has its persisted `baseline.head` assigned the post-image of the earliest such commit, asserted by reading `engine-state.json` in rebase-translate-acceptance.test.ts.
 
 **Files likely touched:**
 - src/conductor/src/engine/rebase-translate.ts — call site in `translateAfterRebase`
@@ -208,6 +212,7 @@ Rewrite persisted repair-obligation boundaries through the engine's rebase rewri
 - autoheal.test.ts asserts the residue-boundary case returns `unavailable` with the existing non-ancestor reason and the git-runner spy recorded zero `rev-list` calls.
 - autoheal.test.ts asserts `unavailable` for a non-ancestor boundary with no `rebase-rewrites.json`, and for a mapping whose target is not reachable from HEAD.
 - The existing direct-map fallback test still passes and `git diff` for this task touches no line of `listCommitsWithTrailersAfterRepairBoundary` or `translateRepairBoundary`.
+- The no-`rebase-rewrites.json` fixture asserts the `unavailable` result admits zero commits: its admitted commit list is empty.
 
 **Files likely touched:**
 - src/conductor/test/engine/autoheal.test.ts — fallback fixtures
@@ -239,7 +244,7 @@ Task 9 (autoheal fallback tests) — independent
 | Story 1 happy: Given the same translated obligation, when task progress evaluates its open tasks, then the evidence range is `newHead..HEAD` and a `Task:` trailer in that range resolves the task without any `repair boundary ... is not an ancestor of HEAD` reason. | 8 | "task-progress.test.ts asserts a direct-translated obligation resolves from a post-boundary `Task:` trailer with no `unavailableReasons` entry after a real rebase." | diff-local |
 | Story 1 negative: Given an obligation whose `baseline.head` is not a key in the rewrite map and is not in `onto..origHead`, when translation runs, then its `baseline.head` is byte-identical to the pre-translation value. | 3 | "After `performRebase` with the default `translateAfterRebase`, the persisted obligation whose head had a patch-id match holds the post-image sha, asserted by reading `engine-state.json` in rebase-translate-acceptance.test.ts." | diff-local |
 | Story 1 negative: Given a translated obligation, when task progress evaluates a task whose only `Task:` trailer is on a commit at or before the new boundary, then the task remains unresolved with the existing no-current-trailer outcome. | 8 | "task-progress.test.ts asserts a direct-translated obligation resolves from a post-boundary `Task:` trailer with no `unavailableReasons` entry after a real rebase." | diff-local |
-| Story 2 happy: Given an open obligation whose `baseline.head` is a residue commit (no patch-id match) and at least one later pre-image commit in `onto..origHead` is a rewrite-map key, when translation runs, then `baseline.head` equals the post-image of the earliest such later commit in first-parent order. | 2 | "`selectRepairBoundaryTranslation` returns `successor` with the post-image of the earliest first-parent commit strictly after the boundary, as asserted by the squashed-boundary fixture in rebase-translate.test.ts." | diff-local |
+| Story 2 happy: Given an open obligation whose `baseline.head` is a residue commit (no patch-id match) and at least one later pre-image commit in `onto..origHead` is a rewrite-map key, when translation runs, then `baseline.head` equals the post-image of the earliest such later commit in first-parent order. | 3 | "After `performRebase` with the default `translateAfterRebase`, an obligation whose head is a residue commit with a later first-parent pre-image commit in the rewrite map has its persisted `baseline.head` assigned the post-image of the earliest such commit, asserted by reading `engine-state.json` in rebase-translate-acceptance.test.ts." | diff-local |
 | Story 2 happy: Given that successor-translated obligation, when task progress evaluates a task with a `Task:` trailer on a commit after the new boundary, then the task resolves. | 8 | "task-progress.test.ts asserts a direct-translated obligation resolves from a post-boundary `Task:` trailer with no `unavailableReasons` entry after a real rebase." | diff-local |
 | Story 2 negative: Given a residue boundary where the only surviving map keys are commits at or before the boundary in first-parent order, when translation runs, then `baseline.head` is unchanged and a later task-progress check returns the existing `repair boundary <sha> is not an ancestor of HEAD` reason. | 2 | "`selectRepairBoundaryTranslation` returns `successor` with the post-image of the earliest first-parent commit strictly after the boundary, as asserted by the squashed-boundary fixture in rebase-translate.test.ts." | diff-local |
 | Story 2 negative: Given a residue boundary whose successor candidate exists in the map but the mapped sha is not reachable from the post-rebase `HEAD`, when translation runs, then `baseline.head` is unchanged. | 2 | "`selectRepairBoundaryTranslation` returns `successor` with the post-image of the earliest first-parent commit strictly after the boundary, as asserted by the squashed-boundary fixture in rebase-translate.test.ts." | diff-local |

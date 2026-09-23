@@ -2,8 +2,10 @@ import { access, readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises
 import { join } from 'node:path';
 import type { GitRunner } from './rebase.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEvent } from '../types/events.js';
 import { rekeyMemoAfterRebase } from './attribution-lane.js';
 import type { TaskStatusFile, TaskStatusRecord } from './task-seed.js';
+import { createRepairObligationStore } from './repair-obligations.js';
 import {
   createProtectedArtifactSeal,
   PROTECTED_ARTIFACT_DIRECTORIES,
@@ -122,6 +124,62 @@ export function resolveThroughMap(sha: string, map: Record<string, string>): str
   }
 
   return current;
+}
+
+/**
+ * Lists the commits that form the pre-rebase branch spine, oldest first.
+ * Merge-side commits are deliberately excluded: a repair boundary may only
+ * advance along the first-parent history that led to the pre-rebase head.
+ */
+export async function listFirstParentPreImageOldestFirst(
+  git: GitRunner,
+  onto: string,
+  origHead: string,
+): Promise<string[]> {
+  const result = await git(['rev-list', '--first-parent', '--reverse', `${onto}..${origHead}`]);
+  return parseShaList(result.stdout);
+}
+
+export type RepairBoundaryTranslation =
+  | { kind: 'direct'; to: string }
+  | { kind: 'successor'; to: string }
+  | { kind: 'unchanged'; reason: string };
+
+/**
+ * Selects a post-rebase repair boundary without touching stores or Git.
+ *
+ * A directly mapped boundary keeps its exact correspondence. For residue,
+ * only a mapped commit strictly after the boundary on the supplied
+ * oldest-first first-parent spine can become its successor. This preserves
+ * the evidence-range subset invariant: the new boundary can never move
+ * backward into commits already included by the old range.
+ */
+export function selectRepairBoundaryTranslation(
+  boundary: string,
+  preImageFirstParentOldestFirst: string[],
+  map: Record<string, string>,
+  reachable: (sha: string) => boolean,
+): RepairBoundaryTranslation {
+  if (Object.prototype.hasOwnProperty.call(map, boundary)) {
+    return { kind: 'direct', to: resolveThroughMap(boundary, map) };
+  }
+
+  const boundaryIndex = preImageFirstParentOldestFirst.indexOf(boundary);
+  if (boundaryIndex === -1) {
+    return { kind: 'unchanged', reason: 'boundary is outside pre-image first-parent history' };
+  }
+
+  for (const successor of preImageFirstParentOldestFirst.slice(boundaryIndex + 1)) {
+    if (!Object.prototype.hasOwnProperty.call(map, successor)) continue;
+
+    const to = resolveThroughMap(successor, map);
+    if (!reachable(to)) {
+      return { kind: 'unchanged', reason: 'mapped successor is not reachable' };
+    }
+    return { kind: 'successor', to };
+  }
+
+  return { kind: 'unchanged', reason: 'no mapped successor after boundary' };
 }
 
 interface EvidenceStampLike {
@@ -289,11 +347,10 @@ export async function persistRewriteMap(
 }
 
 /** One residue entry: a pre-image sha with no patch-id match post-rebase. */
-export interface ResidueEntry {
-  sha: string;
-  citingTaskIds: string[];
-  reason: string;
-}
+export type ResidueEntry = Extract<
+  ConductorEvent,
+  { type: 'rebase_citation_residue' }
+>['residue'][number];
 
 interface SerializedResidue {
   residue: ResidueEntry[];
@@ -422,6 +479,66 @@ export async function translateAfterRebase(
   await persistRewriteMap(projectRoot, map);
   await applyMapToStores(projectRoot, map);
 
+  // Repair obligations keep a boundary into the feature's old first-parent
+  // history. Translate it through the same rewrite map as the file-backed
+  // evidence stores, advancing a residue boundary only to its earliest
+  // surviving successor. Values emitted by buildRewriteMap are post-rebase
+  // branch commits, so membership is the reachable-from-HEAD proof required
+  // by the pure selector.
+  const repairs = createRepairObligationStore(
+    projectRoot,
+    join(projectRoot, '.pipeline', 'engine-state.json'),
+  );
+  const unchangedObligationIdsByResidueSha = new Map<string, string[]>(
+    residue.map((sha) => [sha, []]),
+  );
+  const repairState = await repairs.read();
+  if (repairState.ok) {
+    const preImageFirstParentOldestFirst = await listFirstParentPreImageOldestFirst(
+      git,
+      onto,
+      origHead,
+    );
+    const reachablePostImages = new Set(Object.values(map));
+    const translations = new Map<string, string>();
+    const translationEvents = new Map<string, {
+      from: string;
+      to: string;
+      rule: 'direct' | 'successor';
+    }>();
+    for (const obligation of Object.values(repairState.value.records)) {
+      const translation = selectRepairBoundaryTranslation(
+        obligation.baseline.head,
+        preImageFirstParentOldestFirst,
+        map,
+        (sha) => reachablePostImages.has(sha),
+      );
+      if (translation.kind !== 'unchanged') {
+        translations.set(obligation.id, translation.to);
+        translationEvents.set(obligation.id, {
+          from: obligation.baseline.head,
+          to: translation.to,
+          rule: translation.kind,
+        });
+      } else {
+        unchangedObligationIdsByResidueSha.get(obligation.baseline.head)?.push(obligation.id);
+      }
+    }
+    const rewritten = await repairs.rewriteBaselines(translations);
+    if (rewritten.ok && events) {
+      for (const obligationId of rewritten.value.rewritten) {
+        const translation = translationEvents.get(obligationId);
+        if (!translation) continue;
+        await events.emit({
+          type: 'repair_boundary_translated',
+          obligationId,
+          ...translation,
+          projectRoot,
+        });
+      }
+    }
+  }
+
   // Rotate an existing immutable seal only after the rewrite map and its
   // file-backed consumers have translated successfully. Missing seals are a
   // legacy no-op; createProtectedArtifactSeal only normalizes the seal already
@@ -477,6 +594,7 @@ export async function translateAfterRebase(
     const residueEntries: ResidueEntry[] = residue.map((sha) => ({
       sha,
       citingTaskIds: citingBySha.get(sha) ?? [],
+      citingObligationIds: unchangedObligationIdsByResidueSha.get(sha) ?? [],
       reason: 'no patch-id match post-rebase (dropped or conflict-modified)',
     }));
     await writeResidue(projectRoot, events, residueEntries);

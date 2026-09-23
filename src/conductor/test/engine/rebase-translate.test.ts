@@ -28,10 +28,13 @@ import { execa } from 'execa';
 //   git(['show', sha])                                  -> diff text, per sha in both lists
 //   git(['patch-id', '--stable'], { input: diffText })  -> "<patch-id> <sha>" per sha
 import type { GitResult } from '../../src/engine/rebase.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 import {
   buildRewriteMap,
   derivePendingTaskIds,
+  listFirstParentPreImageOldestFirst,
   resolveThroughMap,
+  selectRepairBoundaryTranslation,
   translateAfterRebase,
 } from '../../src/engine/rebase-translate.js';
 import { applyMapToStores } from '../../src/engine/rebase-translate.js';
@@ -56,7 +59,7 @@ function makeFakeGit(opts: {
     const [cmd, ...rest] = args;
 
     if (cmd === 'rev-list') {
-      const range = rest[0];
+      const range = rest.at(-1)!;
       const shas = opts.revList[range];
       if (shas === undefined) {
         throw new Error(`unexpected rev-list range in fake git: ${range}`);
@@ -87,6 +90,100 @@ function makeFakeGit(opts: {
 }
 
 const ONTO = 'onto-sha';
+
+describe('selectRepairBoundaryTranslation (Task 2)', () => {
+  const reachable = (sha: string) => sha.startsWith('reachable-');
+
+  it('returns a direct translation for a map-key boundary', () => {
+    expect(selectRepairBoundaryTranslation(
+      'boundary',
+      ['boundary', 'later'],
+      { boundary: 'direct-post-image' },
+      reachable,
+    )).toEqual({ kind: 'direct', to: 'direct-post-image' });
+  });
+
+  it('selects the earliest mapped first-parent successor strictly after a squashed boundary', () => {
+    const preImageFirstParentOldestFirst = ['before', 'squashed-boundary', 'first-later', 'second-later'];
+    const result = selectRepairBoundaryTranslation(
+      'squashed-boundary',
+      preImageFirstParentOldestFirst,
+      {
+        before: 'reachable-before-post-image',
+        'first-later': 'reachable-first-later-post-image',
+        'second-later': 'reachable-second-later-post-image',
+      },
+      reachable,
+    );
+
+    expect(result).toEqual({ kind: 'successor', to: 'reachable-first-later-post-image' });
+    expect(preImageFirstParentOldestFirst.indexOf('first-later')).toBeGreaterThan(
+      preImageFirstParentOldestFirst.indexOf('squashed-boundary'),
+    );
+  });
+
+  it('leaves a residue boundary unchanged when every map key is at or before it', () => {
+    expect(selectRepairBoundaryTranslation(
+      'residue-boundary',
+      ['first-survivor', 'residue-boundary', 'later-residue'],
+      { 'first-survivor': 'reachable-first-post-image' },
+      reachable,
+    )).toEqual({ kind: 'unchanged', reason: 'no mapped successor after boundary' });
+  });
+
+  it('leaves a residue boundary unchanged when its earliest mapped successor is unreachable', () => {
+    expect(selectRepairBoundaryTranslation(
+      'residue-boundary',
+      ['residue-boundary', 'later'],
+      { later: 'unreachable-later-post-image' },
+      reachable,
+    )).toEqual({ kind: 'unchanged', reason: 'mapped successor is not reachable' });
+  });
+
+  it('leaves a boundary outside the pre-image first-parent list unchanged', () => {
+    expect(selectRepairBoundaryTranslation(
+      'outside',
+      ['before', 'later'],
+      { later: 'reachable-later-post-image' },
+      reachable,
+    )).toEqual({ kind: 'unchanged', reason: 'boundary is outside pre-image first-parent history' });
+  });
+
+  it('lists only the oldest-first first-parent pre-image chain, excluding a merge second parent', async () => {
+    const calls: string[][] = [];
+    const git: GitRunner = async (args) => {
+      calls.push(args);
+      return {
+        exitCode: 0,
+        stdout: 'boundary\nfirst-parent-successor\n',
+        stderr: '',
+      };
+    };
+
+    const preImageFirstParentOldestFirst = await listFirstParentPreImageOldestFirst(
+      git,
+      'onto',
+      'orig-head-with-merge',
+    );
+
+    expect(calls).toEqual([[
+      'rev-list', '--first-parent', '--reverse', 'onto..orig-head-with-merge',
+    ]]);
+    expect(preImageFirstParentOldestFirst).toEqual(['boundary', 'first-parent-successor']);
+    expect(preImageFirstParentOldestFirst.indexOf('first-parent-successor')).toBeGreaterThan(
+      preImageFirstParentOldestFirst.indexOf('boundary'),
+    );
+    expect(selectRepairBoundaryTranslation(
+      'boundary',
+      preImageFirstParentOldestFirst,
+      {
+        'first-parent-successor': 'reachable-first-parent-post-image',
+        'merge-second-parent-only': 'reachable-second-parent-post-image',
+      },
+      reachable,
+    )).toEqual({ kind: 'successor', to: 'reachable-first-parent-post-image' });
+  });
+});
 
 describe('buildRewriteMap (RED — module does not exist yet)', () => {
   it('maps each pre-image sha to its post-image sha by matching patch-id (1:1 unconflicted)', async () => {
@@ -589,7 +686,7 @@ async function mkdirForFixtures(dir: string): Promise<void> {
 //   writeResidue(
 //     projectRoot: string,
 //     events: ConductorEventEmitter,
-//     residueEntries: Array<{ sha: string; citingTaskIds: string[]; reason: string }>,
+//     residueEntries: Array<{ sha: string; citingTaskIds: string[]; citingObligationIds: string[]; reason: string }>,
 //   ): Promise<void>
 import { writeResidue } from '../../src/engine/rebase-translate.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -602,11 +699,13 @@ describe('writeResidue (RED — not implemented yet, Task 11)', () => {
     {
       sha: RESIDUE_SHA_A,
       citingTaskIds: ['T4', 'T7'],
+      citingObligationIds: [],
       reason: 'no patch-id match post-rebase (dropped or content changed)',
     },
     {
       sha: RESIDUE_SHA_B,
       citingTaskIds: ['T9'],
+      citingObligationIds: [],
       reason: 'no patch-id match post-rebase (dropped or content changed)',
     },
   ];
@@ -639,11 +738,13 @@ describe('writeResidue (RED — not implemented yet, Task 11)', () => {
         expect.objectContaining({
           sha: RESIDUE_SHA_A,
           citingTaskIds: ['T4', 'T7'],
+          citingObligationIds: [],
           reason: 'no patch-id match post-rebase (dropped or content changed)',
         }),
         expect.objectContaining({
           sha: RESIDUE_SHA_B,
           citingTaskIds: ['T9'],
+          citingObligationIds: [],
           reason: 'no patch-id match post-rebase (dropped or content changed)',
         }),
       ]),
@@ -652,10 +753,12 @@ describe('writeResidue (RED — not implemented yet, Task 11)', () => {
 
   it('emits a rebase_citation_residue structured event mirroring the rebase_gate_reverified pattern', async () => {
     const events = new ConductorEventEmitter();
-    const seen: Array<{ type: string; residue?: unknown }> = [];
+    const seen: Array<Extract<ConductorEvent, { type: 'rebase_citation_residue' }>> = [];
 
-    events.on('rebase_citation_residue' as never, (e: { type: string; residue?: unknown }) => {
-      seen.push({ type: e.type, residue: e.residue });
+    events.on('rebase_citation_residue', (event) => {
+      if (event.type === 'rebase_citation_residue') {
+        seen.push(event);
+      }
     });
 
     await writeResidue(projectRoot, events, RESIDUE_ENTRIES);
@@ -664,8 +767,8 @@ describe('writeResidue (RED — not implemented yet, Task 11)', () => {
     expect(seen[0].type).toBe('rebase_citation_residue');
     expect(seen[0].residue).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ sha: RESIDUE_SHA_A, citingTaskIds: ['T4', 'T7'] }),
-        expect.objectContaining({ sha: RESIDUE_SHA_B, citingTaskIds: ['T9'] }),
+        expect.objectContaining({ sha: RESIDUE_SHA_A, citingTaskIds: ['T4', 'T7'], citingObligationIds: [] }),
+        expect.objectContaining({ sha: RESIDUE_SHA_B, citingTaskIds: ['T9'], citingObligationIds: [] }),
       ]),
     );
   });
@@ -692,6 +795,99 @@ describe('writeResidue (RED — not implemented yet, Task 11)', () => {
     expect(Object.keys(rewrites)).not.toContain(RESIDUE_SHA_B);
     expect(Object.values(rewrites)).not.toContain(RESIDUE_SHA_A);
     expect(Object.values(rewrites)).not.toContain(RESIDUE_SHA_B);
+  });
+});
+
+describe('repair-obligation residue citations (Task 7)', () => {
+  it('adds unchanged repair obligations to their residue event and persisted entry', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'rebase-repair-residue-'));
+    const residueSha = 'cccccccccccccccccccccccccccccccccccccccc';
+    const keptPreImageSha = 'dddddddddddddddddddddddddddddddddddddddd';
+    const keptPostImageSha = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+    const events = new ConductorEventEmitter();
+    const seen: Array<Extract<ConductorEvent, { type: 'rebase_citation_residue' }>> = [];
+    events.on('rebase_citation_residue', (event) => {
+      if (event.type === 'rebase_citation_residue') {
+        seen.push(event);
+      }
+    });
+
+    try {
+      await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+      await writeFile(join(projectRoot, '.pipeline', 'engine-state.json'), JSON.stringify({
+        repairObligations: {
+          version: 1,
+          records: {
+            'unchanged-repair': {
+              id: 'unchanged-repair',
+              planIdentity: '.docs/plans/current.md',
+              taskIds: ['1'],
+              source: { findingId: 'finding-1', authority: 'build_review', instruction: 'Repair.' },
+              baseline: { head: residueSha, tree: 'tree', resolvedTaskIds: [] },
+              settlement: 'unsettled',
+              tasks: { '1': { status: 'open' } },
+            },
+          },
+          currentByPlan: {},
+          admissionsByPlan: {},
+        },
+      }));
+      const git = makeFakeGit({
+        revList: {
+          'onto..orig-head': [keptPreImageSha, residueSha],
+          'onto..new-head': [keptPostImageSha],
+        },
+        show: {
+          [keptPreImageSha]: 'kept pre-image diff',
+          [residueSha]: 'dropped diff',
+          [keptPostImageSha]: 'kept post-image diff',
+        },
+        patchId: {
+          'kept pre-image diff': 'kept-patch',
+          'dropped diff': 'dropped-patch',
+          'kept post-image diff': 'kept-patch',
+        },
+      });
+
+      await translateAfterRebase(git, projectRoot, 'onto', 'orig-head', 'new-head', events);
+
+      const persisted = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'rebase-residue.json'), 'utf8'));
+      expect(persisted.residue).toEqual(expect.arrayContaining([
+        expect.objectContaining({ sha: residueSha, citingObligationIds: ['unchanged-repair'] }),
+      ]));
+      expect(seen).toHaveLength(1);
+      expect(seen[0].residue).toEqual(expect.arrayContaining([
+        expect.objectContaining({ sha: residueSha, citingObligationIds: ['unchanged-repair'] }),
+      ]));
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps an empty obligation citation list on residue entries with no unchanged obligation', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'rebase-repair-residue-empty-'));
+    const residueSha = 'ffffffffffffffffffffffffffffffffffffffff';
+    const events = new ConductorEventEmitter();
+
+    try {
+      const git = makeFakeGit({
+        revList: {
+          'onto..orig-head': [residueSha],
+          'onto..new-head': [],
+        },
+        show: { [residueSha]: 'dropped diff' },
+        patchId: { 'dropped diff': 'dropped-patch' },
+      });
+
+      await translateAfterRebase(git, projectRoot, 'onto', 'orig-head', 'new-head', events);
+
+      const persisted = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'rebase-residue.json'), 'utf8'));
+      expect(persisted.residue).toEqual([
+        expect.objectContaining({ sha: residueSha, citingObligationIds: [] }),
+      ]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 });
 

@@ -66,6 +66,7 @@ export type RepairClosureResult =
 export interface RepairObligationStore {
   /** Replays only an explicit, caller-authoritative effect key within one plan. */
   admitOrReplay(admissionKey: string, admission: RepairAdmission): Promise<RepairAdmissionResult>;
+  rewriteBaselines(translations: ReadonlyMap<string, string>): Promise<RepairResult<{ rewritten: string[] }>>;
   markSettled(input: { planPath: string; obligationId: string }): Promise<RepairClosureResult>;
   close(input: {
     planPath: string;
@@ -210,6 +211,35 @@ export function createRepairObligationStore(
   return {
     read,
     admitOrReplay: (admissionKey, admission) => admit(admission, admissionKey),
+
+    async rewriteBaselines(translations): Promise<RepairResult<{ rewritten: string[] }>> {
+      if (translations.size === 0) return { ok: true, value: { rewritten: [] } };
+
+      const existing = await store.read();
+      if (!existing.ok) return persistenceFailure(existing);
+      if (existing.value.repairObligations === undefined) return { ok: true, value: { rewritten: [] } };
+
+      let result: RepairResult<{ rewritten: string[] }> | undefined;
+      const updated = await store.update((current) => {
+        const parsed = parseSection(current);
+        if (!parsed.ok) {
+          result = parsed as RepairResult<{ rewritten: string[] }>;
+          return current as EngineState;
+        }
+        const section = clone(parsed.value);
+        const rewritten: string[] = [];
+        for (const [id, head] of translations) {
+          const obligation = section.records[id];
+          if (obligation && obligation.baseline.head !== head) {
+            obligation.baseline.head = head;
+            rewritten.push(id);
+          }
+        }
+        result = { ok: true, value: { rewritten } };
+        return { ...current, repairObligations: section };
+      });
+      return updated.ok ? result! : persistenceFailure(updated);
+    },
 
     async markSettled(input): Promise<RepairClosureResult> {
       let result: RepairClosureResult | undefined;
