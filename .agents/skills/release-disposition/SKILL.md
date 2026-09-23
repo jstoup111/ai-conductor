@@ -26,9 +26,14 @@ draft PR. Claude Code invokes this skill as `/release-disposition`; Codex invoke
 2. Read the retained SHIP draft PR body and the feature diff against its base. Inspect code, tests,
    configuration, hook wiring, skill symlinks, and CLI changes as applicable. The diff is authority;
    the placeholder and prior metadata are not a disposition decision.
-3. Replace any existing `Release-Disposition`, `Release-Category`, `Release-Semver`,
+3. Record exactly one `Surface-Verdict:` line in `.pipeline/release-disposition-review.md`. Its value
+   is one of `none|migration|waiver|unclassifiable`. Classify breaking surfaces using the release
+   gate's canonical names: `bin/conduct CLI`, `skill symlink targets`, `hook wiring`, and
+   `settings.json schema`. Record `Surface-Verdict: none` when the diff has no classified breaking
+   surface; it authors no waiver and no migration block.
+4. Replace any existing `Release-Disposition`, `Release-Category`, `Release-Semver`,
    `Release-Note`, and `## Migration` metadata while preserving all unrelated PR-body content.
-4. Write one of these valid forms directly to the retained draft PR body:
+5. Write one of these valid forms directly to the retained draft PR body:
 
    ```text
    Release-Disposition: no-note
@@ -41,7 +46,7 @@ draft PR. Claude Code invokes this skill as `/release-disposition`; Codex invoke
    Release-Note: One present-tense reader-outcome sentence.
    ```
 
-5. When the feature changes `bin/conduct` CLI, hook wiring, `settings.json` schema, or skill
+6. When the feature changes `bin/conduct` CLI, hook wiring, `settings.json` schema, or skill
    symlink targets, include a runnable migration section for a `note` disposition:
 
    ````text
@@ -55,7 +60,7 @@ draft PR. Claude Code invokes this skill as `/release-disposition`; Codex invoke
    Use `no-note` only for an evidence-backed non-notable or non-implementation change; it cannot
    carry category, semver, note, or migration fields. An internal-only breaking-surface classifier
    result requires the repository's fresh release waiver instead of an invented migration.
-6. Re-read the retained PR body and verify it parses as exactly one valid disposition. Record the
+7. Re-read the retained PR body and verify it parses as exactly one valid disposition. Record the
    diff evidence, PR identity, written metadata, and verification result in the review file.
-7. Write `.pipeline/release-disposition-pass` only after the PR update and re-read both succeed.
+8. Write `.pipeline/release-disposition-pass` only after the PR update and re-read both succeed.
    For BLOCKED, keep the pass marker absent and record the blocker.

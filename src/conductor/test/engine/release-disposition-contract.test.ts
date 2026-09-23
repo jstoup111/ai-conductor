@@ -71,4 +71,18 @@ describe('repository-local release-disposition contract', () => {
       blockedOmitsPass: true,
     });
   });
+
+  it('requires one closed surface verdict before authoring release artifacts', async () => {
+    const skill = await readFile(join(canonicalDir, 'SKILL.md'), 'utf8');
+
+    expect({
+      reviewRecord: /\.pipeline\/release-disposition-review\.md[\s\S]*exactly one[\s\S]*Surface-Verdict:/i.test(skill),
+      closedSet: skill.includes('`none|migration|waiver|unclassifiable`'),
+      noneAuthorsNothing: /Surface-Verdict: none[\s\S]*no waiver and no migration block/i.test(skill),
+    }).toEqual({
+      reviewRecord: true,
+      closedSet: true,
+      noneAuthorsNothing: true,
+    });
+  });
 });
