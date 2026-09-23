@@ -83,6 +83,8 @@ export interface RebaseTransitionDescriptor {
 export interface RebaseOperationRecord {
   id: string;
   status: 'applying' | 'applied';
+  /** Epoch ms when this operation became publishable. */
+  appliedAt?: number;
   transition: RebaseTransitionDescriptor;
   replay: ReplayEvidence;
 }
@@ -91,6 +93,8 @@ export interface RebaseOperationRecord {
  * readers.  Unproved replay may continue, but cannot retain any review. */
 export function validRebaseOperationRecord(operation: RebaseOperationRecord | undefined): boolean {
   if (!operation || !operation.id || !operation.transition || !operation.replay) return false;
+  if (operation.appliedAt !== undefined &&
+    (!Number.isFinite(operation.appliedAt) || operation.appliedAt <= 0)) return false;
   const { transition, replay } = operation;
   if (![transition.preserved, transition.invalidated, transition.reverified].every(Array.isArray)) return false;
   const named = [...transition.preserved, ...transition.invalidated, ...transition.reverified];

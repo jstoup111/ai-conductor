@@ -220,7 +220,7 @@ export async function applyRebaseTransition(
   // Applied is the commit marker: every preservation effect precedes it, so a
   // restart can safely distinguish a completed operation from an interrupted
   // one without publishing a half-written pair.
-  const applied: RebaseOperationRecord = { ...operation, status: 'applied' };
+  const applied: RebaseOperationRecord = { ...operation, status: 'applied', appliedAt: Date.now() };
   const convergenceCredit = await creditBuildReviewConvergence(options.projectRoot, operation.id, options.invalidated);
   await writeVerdict(options.projectRoot, 'rebase', {
     satisfied: true,

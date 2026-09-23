@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
-import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { readVerdict, validRebaseOperationRecord, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { applyRebaseTransition, clampRebaseContinuation } from '../../src/engine/rebase-transition.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
@@ -37,6 +37,7 @@ describe('applyRebaseTransition', () => {
     await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ build_review: 'done', manual_test: 'skipped', acceptance_specs: 'done' }));
     await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
     await writeVerdict(dir, 'prd_audit', { satisfied: true, checkedAt: 2, reason: 'approved' });
+    const startedAt = Date.now();
     const result = await applyRebaseTransition({
       projectRoot: dir,
       stateStore: createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json')),
@@ -50,7 +51,10 @@ describe('applyRebaseTransition', () => {
     });
     expect(result.stateResult).toBe('applied');
     expect(JSON.parse(await (await import('node:fs/promises')).readFile(join(dir, '.pipeline/conduct-state.json'), 'utf8'))).toMatchObject({ build_review: 'pending', manual_test: 'skipped', acceptance_specs: 'done' });
-    expect((await readVerdict(dir, 'rebase'))?.rebaseOperation).toMatchObject({ id: 'operation-1', status: 'applied' });
+    const appliedOperation = (await readVerdict(dir, 'rebase'))?.rebaseOperation;
+    expect(appliedOperation).toMatchObject({ id: 'operation-1', status: 'applied' });
+    expect(appliedOperation?.appliedAt).toSatisfy((value) => Number.isFinite(value) && value >= startedAt);
+    expect(validRebaseOperationRecord(appliedOperation)).toBe(true);
     expect((await readVerdict(dir, 'prd_audit'))?.preservation).toMatchObject({
       gate: 'prd_audit',
       operationId: 'operation-1',
