@@ -367,6 +367,98 @@ describe('gateVerdictStillValid', () => {
     );
   });
 
+  it('blocks an unsatisfied preserved build review as outstanding repair work', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 150,
+      rebaseOperation: {
+        id: 'unsatisfied-build-review',
+        status: 'applied',
+        appliedAt: 100,
+        transition: { preserved: ['build_review'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await writeVerdict(s.repo, 'build_review', { satisfied: false, checkedAt: 200 });
+
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBe(
+      'rebase transition still has an outstanding build_review repair or re-verification',
+    );
+  });
+
+  it('blocks a missing preserved build review as outstanding repair work', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 150,
+      rebaseOperation: {
+        id: 'missing-build-review',
+        status: 'applied',
+        appliedAt: 100,
+        transition: { preserved: ['build_review'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBe(
+      'rebase transition still has an outstanding build_review repair or re-verification',
+    );
+  });
+
+  it('blocks a preserved build review stamped for another operation', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 150,
+      rebaseOperation: {
+        id: 'expected-operation',
+        status: 'applied',
+        appliedAt: 100,
+        transition: { preserved: ['build_review'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await writeVerdict(s.repo, 'build_review', {
+      satisfied: true,
+      checkedAt: 200,
+      preservation: { gate: 'build_review', operationId: 'other-operation' } as ReplayPreservationRecord,
+    });
+
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBe(
+      'rebase transition preserved build_review without its replay-bound authority',
+    );
+  });
+
+  it('blocks a newer preserved build review stamped for another gate', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const operationId = 'wrong-preservation-gate';
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 150,
+      rebaseOperation: {
+        id: operationId,
+        status: 'applied',
+        appliedAt: 100,
+        transition: { preserved: ['build_review'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await writeVerdict(s.repo, 'build_review', {
+      satisfied: true,
+      checkedAt: 200,
+      preservation: { gate: 'prd_audit', operationId } as ReplayPreservationRecord,
+    });
+
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBe(
+      'rebase transition preserved build_review without its replay-bound authority',
+    );
+  });
+
   it('accepts a fresh re-judgement beside a correctly bound preserved verdict', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);
