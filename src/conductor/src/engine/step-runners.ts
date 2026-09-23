@@ -2945,12 +2945,16 @@ export class DefaultStepRunner implements StepRunner {
           bundleDigest: bundle.digest,
           provenance: actualPolicyProvenance,
         });
-        const settleCustomStructuredRejection = async (value: unknown, references?: Parameters<typeof diagnoseBuildReviewCustomReviewerPayloadRejection>[1]) => {
+        const settleCustomStructuredRejection = async (
+          value: unknown,
+          references?: Parameters<typeof diagnoseBuildReviewCustomReviewerPayloadRejection>[1],
+          detail?: string,
+        ) => {
           const rejection = diagnoseBuildReviewCustomReviewerPayloadRejection(value, references);
           coverageFailure = true;
           failure = {
             reason: 'invalid-structured-result',
-            detail: renderBuildReviewJudgedResultRejection(rejection),
+            detail: [renderBuildReviewJudgedResultRejection(rejection), detail].filter(Boolean).join('; '),
           };
           await this.events?.emit({
             type: 'build_review_rubric_infrastructure_failure', rubric: entry.id, lapId,
@@ -2997,7 +3001,7 @@ export class DefaultStepRunner implements StepRunner {
           { read: (side, path) => frozenBlobs.readAtOptional(side === 'head' ? inputs.sourceSnapshot.headSha : inputs.sourceSnapshot.mergeBase, path) },
         );
         if (admission.kind === 'rejected') {
-          return settleCustomStructuredRejection(invoked.finalStructuredResult, { sourceRegions: [] });
+          return settleCustomStructuredRejection(invoked.finalStructuredResult, { sourceRegions: [] }, admission.detail);
         }
         const sourceRegions = admission.sourceRegions;
         const stamped = stampBuildReviewCustomJudgedResult(parsed, {
