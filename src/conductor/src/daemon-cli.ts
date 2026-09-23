@@ -66,6 +66,7 @@ import {
 import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-labels.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { forwardedFeatureOf, isForwardedFromFeature, startDaemonEventPersistence, startFeatureEventPersistence } from './engine/event-persister.js';
+import { startDaemonMemorySampler } from './engine/daemon-memory.js';
 import { renderedEventTypes } from './engine/event-sinks.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
 import { formatGithubOperationRefusal } from './engine/github-operations.js';
@@ -1103,6 +1104,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // Both daemon-only occurrences and forwarded feature events share one bus;
   // the sibling ledger deliberately persists only daemon-origin copies.
   const daemonEventPersistence = startDaemonEventPersistence(projectRoot, events, log);
+  const daemonMemorySampler = startDaemonMemorySampler(events);
   const daemonOtel = wireDaemonOtel(config ?? {}, {
     mainRoot: projectRoot,
     project: projectRoot,
@@ -2609,6 +2611,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
 
   await subscriber.stop();
   await daemonOtel?.stop();
+  daemonMemorySampler.stop();
   daemonEventPersistence.stop();
   // A finite daemon invocation (including test/CLI bounded runs) has no
   // remaining work for the process-level signal handler to coordinate.
