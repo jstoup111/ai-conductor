@@ -252,6 +252,7 @@ describe('build-review access profile', () => {
           CLAUDE_CONFIG_DIR: '/review/private/claude/claude-config',
           TMPDIR: '/review/private/claude/tmp',
           XDG_CONFIG_HOME: '/review/private/claude/xdg-config',
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
         }),
       }),
     );

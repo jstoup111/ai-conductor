@@ -33,6 +33,9 @@ import {
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
 import { wrapForContainment } from '../engine/self-host/live-containment.js';
 
+/** Print-mode sessions must not leave background tasks outstanding (#2599). */
+const FOREGROUND_ONLY_ENV = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } as const;
+
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
 // Patterns: "rate limit", "429", "overloaded"
 const RATE_LIMIT_RE = /rate limit|429|overloaded/i;
@@ -898,6 +901,14 @@ export class ClaudeProvider implements LLMProvider {
    * marker to refuse recursive conductor invocations from inside it (see
    * daemon-session.ts). Boundary enforcement, same pattern as
    * enforceFreshSessionOptions — no config off-switch.
+   *
+   * It also carries CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 (#2599). In print
+   * mode a step that launches background subagents and ends its turn has
+   * them terminated after the CLI's 60s wait ceiling, while the step reports
+   * success on a stale verdict. With background tasks disabled the Agent call
+   * blocks until the subagent returns (still its own context window, and
+   * parallel calls in one message still run concurrently), so nothing is
+   * outstanding when the turn ends. Engine-owned: it overrides the ambient env.
    */
   private buildEnv(options: InvokeOptions): NodeJS.ProcessEnv {
     const scratch = options.reviewAccess?.kind === 'ready'
@@ -917,6 +928,7 @@ export class ClaudeProvider implements LLMProvider {
         XDG_CACHE_HOME: join(scratch, 'xdg-cache'),
         XDG_DATA_HOME: join(scratch, 'xdg-data'),
         ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
+        ...FOREGROUND_ONLY_ENV,
       }));
     }
     // tmux target variables are scrubbed last so neither the inherited env
@@ -925,6 +937,7 @@ export class ClaudeProvider implements LLMProvider {
       ...process.env,
       ...options.selfHost?.env,
       ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
+      ...FOREGROUND_ONLY_ENV,
     }));
   }
 }

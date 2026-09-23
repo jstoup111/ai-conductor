@@ -818,6 +818,7 @@ describe('ClaudeProvider', () => {
         expect(options.env).toEqual({
           ...process.env,
           CONDUCT_DAEMON_SESSION: '1',
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
           TMUX: undefined,
           TMUX_PANE: undefined,
         });
@@ -1777,9 +1778,24 @@ describe('ClaudeProvider', () => {
       expect(opts.env).toEqual({
         ...process.env,
         CONDUCT_DAEMON_SESSION: '1',
+        CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
         TMUX: undefined,
         TMUX_PANE: undefined,
       });
+    });
+
+    it('disables background tasks so no subagent outlives the print-mode turn (#2599)', async () => {
+      mockExeca.mockResolvedValue({ stdout: '', exitCode: 0, failed: false } as any);
+      const prior = process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
+      process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '0';
+      try {
+        await provider.invoke({ ...baseOptions });
+        const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
+        expect(opts.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
+      } finally {
+        if (prior === undefined) delete process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
+        else process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = prior;
+      }
     });
 
     it('invokeInteractive also forwards the effort env var', async () => {
