@@ -144,7 +144,7 @@ describe("group-core: parked join behavior", () => {
     expect(buildParallelFailureEvents("manual_test", [{
       name: "parked-member",
       skill: "manual-test",
-      outcome: { kind: "parked" },
+      outcome: { kind: "parked", attempt: 2 },
     }])).toEqual([]);
   });
 });
@@ -816,7 +816,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
     );
 
     expect({ outcome, calls: runner.calls.length }).toEqual({
-      outcome: { kind: "parked" },
+      outcome: { kind: "parked", attempt: 2 },
       calls: 1,
     });
   });

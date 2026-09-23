@@ -425,6 +425,26 @@ describe('engine/daemon-park-cli', () => {
       expect(out.join('\n')).toMatch(/fully stopped/i);
     });
 
+    it('reports unknown, never fully stopped, when the pidfile cannot be read', async () => {
+      const slug = 'unreadable-pidfile';
+      await makeWorktree(root, slug);
+      const out: string[] = [];
+
+      const code = await dispatchDaemonPark(
+        { kind: 'park', slug },
+        {
+          cwd: root,
+          out: (line) => out.push(line),
+          readPidRecordDiagnosed: async () => ({ kind: 'unreadable' }),
+        },
+      );
+
+      expect(code).toBe(0);
+      expect(await isOperatorParked(root, slug)).toBe(true);
+      expect(out.join('\n')).toMatch(/unknown/i);
+      expect(out.join('\n')).not.toMatch(/fully stopped/i);
+    });
+
     it('reports fully stopped for a settled attempt and for a known slug without a worktree', async () => {
       const settledSlug = 'settled-build';
       await makeWorktree(root, settledSlug);

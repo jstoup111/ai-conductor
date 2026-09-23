@@ -113,6 +113,7 @@ import {
   makeSkippedOutcome,
   makeNoVerdictOutcome,
   makeVerdictOutcome,
+  buildParallelFailureEvents,
   type GroupMember,
   type BranchOutcome,
   type NoVerdictOutcome,
@@ -8368,6 +8369,11 @@ export class Conductor {
               (outcome) => outcome.kind === 'permission-denied',
             );
             const parkedIdx = outcomes.findIndex((outcome) => outcome.kind === 'parked');
+            const parallelMembers: GroupMember[] = membership.dispatchable.map((member, index) => ({
+              name: member.name,
+              skill: member.skill ?? '',
+              outcome: outcomes[index]!,
+            }));
             const hasGenuineFailure = outcomes.some(
               (outcome) =>
                 outcome.kind === 'no-verdict' ||
@@ -8376,10 +8382,16 @@ export class Conductor {
             );
             if (parkedIdx !== -1 && !hasGenuineFailure) {
               const member = membership.dispatchable[parkedIdx]!;
+              const outcome = outcomes[parkedIdx]!;
               const parked = await stopAtOperatorParkBoundary(true, {
-                kind: 'attempt', step: step.name, attempt: 1, member: member.name,
+                kind: 'attempt', step: step.name,
+                attempt: outcome.kind === 'parked' ? outcome.attempt ?? 1 : 1,
+                member: member.name,
               });
               if (parked) return parked;
+            }
+            for (const event of buildParallelFailureEvents(step.name, parallelMembers)) {
+              await emitTracked(event);
             }
             if (permissionDeniedIdx !== -1) {
               const outcome = outcomes[permissionDeniedIdx]!;
@@ -9872,6 +9884,25 @@ export class Conductor {
           // identity here, before the attempt is dispatched.
           const haltBeforeAttempt = await snapshotHaltMarker(this.projectRoot);
 
+          // An operator park declines the whole next provider attempt. Keep this
+          // admission check ahead of escalation, telemetry, and every dispatch
+          // selection (including the native suite and finish-publication paths),
+          // so a declined attempt is genuinely free and every retry re-enters
+          // through this one predicate.
+          if (
+            this.daemon &&
+            this.featureSlug !== undefined &&
+            this.operatorParkBoundary &&
+            await this.operatorParkBoundary().catch(() => true)
+          ) {
+            const queuedPark = await stopAtOperatorParkBoundary(true, {
+              kind: 'attempt',
+              step: step.name,
+              attempt,
+            });
+            if (queuedPark) return queuedPark;
+          }
+
           // Self-host live-boundary enforcement point. A violation observed
           // while an EARLIER dispatch was in flight is enforced HERE — before
           // the next dispatch spends any provider work — never retroactively
@@ -10138,14 +10169,6 @@ export class Conductor {
                               serialExecutionContext,
                             )
                           : await (async (): Promise<StepRunResult> => {
-                            if (
-                              this.daemon &&
-                              this.featureSlug !== undefined &&
-                              this.operatorParkBoundary &&
-                              await this.operatorParkBoundary().catch(() => true)
-                            ) {
-                              return { success: false, operatorParkedBeforeDispatch: true };
-                            }
                             // PRD widening preparation stays outside the
                             // runner-throw contract, matching the group
                             // branch, which prepares before its fan-out.
@@ -10179,14 +10202,6 @@ export class Conductor {
                               throw error;
                             }
                           })());
-            if (result.operatorParkedBeforeDispatch) {
-              const queuedPark = await stopAtOperatorParkBoundary(true, {
-                kind: 'attempt',
-                step: step.name,
-                attempt,
-              });
-              if (queuedPark) return queuedPark;
-            }
           } finally {
             buildWatcher?.stop();
             closeoutTail?.stop();
@@ -14448,15 +14463,17 @@ export class Conductor {
       }
 
       changes[syntheticKey] = 'failed';
-      const error =
-        outcome?.kind === 'no-verdict' ? outcome.reason : `branch ${branch.name} failed`;
-      await this.emitExecutionEvent({
-        type: 'parallel_failure',
-        step: groupName,
-        branch: branch.name,
-        error,
-        ...(branch.advisory ? { terminal: false } : {}),
-      });
+      const failure = buildParallelFailureEvents(groupName, [{
+        name: branch.name,
+        skill: branch.skill ?? '',
+        outcome: outcome ?? makeNoVerdictOutcome('not-run'),
+      }])[0];
+      if (failure) {
+        await this.emitExecutionEvent({
+          ...failure,
+          ...(branch.advisory ? { terminal: false } : {}),
+        });
+      }
       if (!branch.advisory) {
         groupFailed = true;
       }

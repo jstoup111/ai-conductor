@@ -75,6 +75,8 @@ export interface SkippedOutcome {
 /** A member stopped between attempts because its feature was operator-parked. */
 export interface ParkedOutcome {
   kind: "parked";
+  /** The retry admission that observed the park (group members park only on retry). */
+  attempt?: number;
 }
 
 /**
@@ -119,8 +121,8 @@ export function makeSkippedOutcome(): SkippedOutcome {
   return { kind: "skipped" };
 }
 
-export function makeParkedOutcome(): ParkedOutcome {
-  return { kind: "parked" };
+export function makeParkedOutcome(attempt?: number): ParkedOutcome {
+  return { kind: "parked", ...(attempt === undefined ? {} : { attempt }) };
 }
 
 /** A single member of a concurrent group: its name, dispatched skill, and outcome. */
@@ -682,7 +684,7 @@ async function runGroupBranchInner(
     // each member attempt so a member already running can drain, while a
     // retry after the park is declined without becoming a branch failure.
     if (attempt > 1 && await deps.operatorParkBoundary?.().catch(() => true)) {
-      return makeParkedOutcome();
+      return makeParkedOutcome(attempt);
     }
 
     await deps.onMemberEvent?.({

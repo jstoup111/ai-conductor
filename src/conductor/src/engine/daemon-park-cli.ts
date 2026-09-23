@@ -24,7 +24,7 @@ import { loadConfig } from './config.js';
 import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 import { detectAutoResume } from './auto-resume.js';
 import { classifyRunningWork } from './daemon-dashboard.js';
-import { isLive, readPidRecord } from './daemon-lock.js';
+import { isLive, readPidRecordDiagnosed, type PidRecord, type PidRecordRead } from './daemon-lock.js';
 import type { ReconcileMergedParkOutcome } from './park-reconciliation.js';
 import type { GitRunner, GhRunner } from './pr-labels.js';
 
@@ -125,6 +125,8 @@ export interface DaemonParkDeps {
   teardownTimeoutSeconds?: number;
   /** Read-only daemon pidfile lookup; injectable to isolate CLI tests. */
   readPidRecord?: (repoPath: string) => Promise<{ pid: number } | null>;
+  /** Lossless pidfile observation for the production park diagnostic. */
+  readPidRecordDiagnosed?: (repoPath: string) => Promise<PidRecordRead>;
   /** Read-only pid liveness probe; injectable to isolate CLI tests. */
   isLive?: (pid: number) => boolean;
 }
@@ -136,7 +138,18 @@ async function reportParkRunningWork(
   out: (line: string) => void,
 ): Promise<void> {
   try {
-    const record = await (deps.readPidRecord ?? readPidRecord)(projectRoot);
+    const diagnosed = await (deps.readPidRecordDiagnosed
+      ? deps.readPidRecordDiagnosed(projectRoot)
+      : deps.readPidRecord
+        ? deps.readPidRecord(projectRoot).then((record) => record
+          ? { kind: 'record', record: record as PidRecord } as PidRecordRead
+          : { kind: 'absent' } as PidRecordRead)
+        : readPidRecordDiagnosed(projectRoot));
+    if (diagnosed.kind === 'unreadable') {
+      out(`Running work for '${slug}' is unknown.`);
+      return;
+    }
+    const record = diagnosed.kind === 'record' ? diagnosed.record : null;
     if (!record || !(deps.isLive ?? isLive)(record.pid)) {
       out(`Work for '${slug}' is fully stopped.`);
       return;

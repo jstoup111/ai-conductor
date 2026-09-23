@@ -521,17 +521,43 @@ describe('operator park boundary contract', () => {
       ).toBeGreaterThan(branchOffset);
     }
 
-    const attemptGate = `this.daemon &&
-                              this.featureSlug !== undefined &&
-                              this.operatorParkBoundary &&
-                              await this.operatorParkBoundary().catch(() => true)`;
-    expect(serialLoop.indexOf(attemptGate)).toBeGreaterThan(-1);
+    const attemptGate = /this\.daemon\s*&&\s*this\.featureSlug !== undefined\s*&&\s*this\.operatorParkBoundary\s*&&\s*await this\.operatorParkBoundary\(\)\.catch\(\(\) => true\)/;
+    expect(attemptGate.test(serialLoop)).toBe(true);
     // The runtime cases immediately above prove a rejected gate returns the
     // typed termination before a runner call. Every listed `continue` returns
     // to this one loop entry, so no free or budgeted retry can bypass it.
-    expect(serialLoop.indexOf(attemptGate)).toBeLessThan(
-      serialLoop.indexOf('this.stepRunner.run(step.name, state, {'),
-    );
+    expect(serialLoop.search(attemptGate)).toBeLessThan(serialLoop.indexOf('this.stepRunner.run(step.name, state, {'));
+  });
+
+  it('declines a test-suite infrastructure retry before a second suite dispatch', async () => {
+    await writeState(statePath, stateWithPending('test_suite'));
+    let parked = false;
+    const boundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(async () => parked);
+    const boundaries: ConductorEvent[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('operator_park_boundary', (event) => { boundaries.push(event); });
+    const ensure = vi.fn(async () => {
+      parked = true;
+      return { status: 'FAILED', reason: 'internal_error', message: 'suite runner unavailable' } as const;
+    });
+    const conductor = new Conductor({
+      projectRoot, stateFilePath: statePath, stepRunner: { run: vi.fn() }, events: emitter,
+      fromStep: 'test_suite', mode: 'auto', daemon: true, verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary', operatorParkBoundary: boundary,
+      fullSuiteVerifier: { inspect: async () => ({ status: 'STALE', reason: 'missing' }), ensure },
+      ...noExternalIo(),
+    });
+
+    const result = await conductor.run();
+
+    expect({ result, suiteDispatches: ensure.mock.calls.length, boundaryCalls: boundary.mock.calls.length,
+      terminalMarkers: await terminalMarkerNames(projectRoot), eventTail: boundaries.at(-1) }).toEqual({
+      result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'test_suite', attempt: 1 } },
+      suiteDispatches: 1,
+      boundaryCalls: 3,
+      terminalMarkers: [],
+      eventTail: boundaries.at(-1),
+    });
   });
 
   it('lets a running successful attempt drain before parking at its next unit boundary', async () => {
@@ -1602,6 +1628,27 @@ describe('operator park boundary contract', () => {
       checkpoints: ['build'],
       operatorParkBoundaries: [],
     });
+  });
+
+  it('keeps a parked interactive run on its full retry ladder without consulting park state', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    await mkdir(join(projectRoot, '.daemon', 'parked'), { recursive: true });
+    await writeFile(join(projectRoot, '.daemon', 'parked', 'interactive-feature'), 'operator\n');
+    const boundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(async () => true);
+    const run = vi.fn<StepRunner['run']>(async (_step, _state, options) => ({
+      success: options?.attempt === 3,
+      output: 'retry interactive work',
+    }));
+    const conductor = new Conductor({
+      projectRoot, stateFilePath: statePath, stepRunner: { run }, events: new ConductorEventEmitter(),
+      fromStep: 'memory', mode: 'interactive', daemon: false, maxRetries: 3,
+      verifyArtifacts: false, featureSlug: 'interactive-feature', operatorParkBoundary: boundary,
+    });
+
+    await conductor.run();
+
+    expect({ attempts: run.mock.calls.map(([, , options]) => options?.attempt), parkReads: boundary.mock.calls.length })
+      .toEqual({ attempts: [1, 2, 3], parkReads: 0 });
   });
 
   it('logs a marker-read anomaly and fails closed before the first pending unit', async () => {
