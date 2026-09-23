@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-23T02:09:33.379Z
 Slug: daemon-reclaim-sweep-deletes-a-worktree-that-holds
 Class: needs-human
 Halting step: prd_audit
