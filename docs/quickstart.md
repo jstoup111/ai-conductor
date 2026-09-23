@@ -15,6 +15,7 @@ one is missing, so install them first.
 
 | Requirement | Needed for | Verify |
 | --- | --- | --- |
+| `curl` — or use the manual clone path below | downloading the one-line installer | `curl --version` |
 | `git` | cloning the harness; every worktree operation | `git --version` |
 | `gh`, authenticated | opening spec and implementation PRs | `gh auth status` |
 | `tmux` | `ai-conductor daemon start/stop/restart/connect/debug` | `tmux -V` |
