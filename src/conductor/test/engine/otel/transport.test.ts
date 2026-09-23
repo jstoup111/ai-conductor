@@ -144,6 +144,13 @@ describe('buildExporters', () => {
       expect(metricExporter.selectAggregationTemporality?.(InstrumentType.HISTOGRAM)).toBe(AggregationTemporality.DELTA);
       expect(metricExporter.selectAggregationTemporality?.(InstrumentType.COUNTER)).toBe(AggregationTemporality.DELTA);
     });
+
+    it('file metric exporter prefers the same DELTA temporality as the OTLP exporters', () => {
+      const resolved = resolveOtelConfig({ otel: { exporter: 'file' } }, pipelineDir);
+      const { metricExporter } = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>);
+      expect(metricExporter.selectAggregationTemporality?.(InstrumentType.HISTOGRAM)).toBe(AggregationTemporality.DELTA);
+      expect(metricExporter.selectAggregationTemporality?.(InstrumentType.COUNTER)).toBe(AggregationTemporality.DELTA);
+    });
   });
 
   describe('file exporter', () => {

@@ -2,11 +2,11 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { ExportResultCode } from '@opentelemetry/core';
 import { OTLPTraceExporter as OTLPHttpTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import { OTLPMetricExporter as OTLPHttpMetricExporter, AggregationTemporalityPreference } from '@opentelemetry/exporter-metrics-otlp-http';
+import { OTLPMetricExporter as OTLPHttpMetricExporter, AggregationTemporalityPreference, DeltaTemporalitySelector } from '@opentelemetry/exporter-metrics-otlp-http';
 import { OTLPTraceExporter as OTLPGrpcTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { OTLPMetricExporter as OTLPGrpcMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc';
 import type { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace-base';
-import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
+import type { AggregationTemporality, InstrumentType, PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import { JsonTraceSerializer, JsonMetricsSerializer } from '@opentelemetry/otlp-transformer';
 import type { ResolvedOtelConfig } from './otel-config.js';
 
@@ -133,6 +133,11 @@ class FileMetricExporter implements PushMetricExporter {
   private dirEnsured = false;
 
   constructor(private readonly filePath: string) {}
+
+  /** Same temporality as the OTLP exporters: only changed series are written. */
+  selectAggregationTemporality(instrumentType: InstrumentType): AggregationTemporality {
+    return DeltaTemporalitySelector(instrumentType);
+  }
 
   export(
     metrics: ResourceMetrics,

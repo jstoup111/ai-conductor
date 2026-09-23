@@ -188,6 +188,13 @@ function warnOnceMetricExporter(
         callback(result);
       });
     },
+    // The reader asks its exporter for temporality and aggregation; a wrapper
+    // that drops these selectors silently reverts the reader to CUMULATIVE and
+    // re-exports every series ever recorded on every interval.
+    ...(exporter.selectAggregationTemporality
+      ? { selectAggregationTemporality: exporter.selectAggregationTemporality.bind(exporter) }
+      : {}),
+    ...(exporter.selectAggregation ? { selectAggregation: exporter.selectAggregation.bind(exporter) } : {}),
     forceFlush: () => exporter.forceFlush(),
     shutdown: () => exporter.shutdown(),
   };
