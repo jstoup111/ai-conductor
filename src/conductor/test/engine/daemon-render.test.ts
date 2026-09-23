@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 // pure-formatting test doesn't pull a live process dependency.
 vi.mock('execa', () => ({ execa: vi.fn() }));
 
-import { renderDaemonEvent } from '../../src/daemon-cli.js';
+import { renderDaemonEvent, resetRenderedReclaimRetentions } from '../../src/daemon-cli.js';
 import { renderedEventTypes } from '../../src/engine/event-sinks.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 
@@ -25,6 +25,7 @@ function lines(event: ConductorEvent): string[] {
 const originalLevel = chalk.level;
 afterEach(() => {
   chalk.level = originalLevel;
+  resetRenderedReclaimRetentions();
 });
 
 describe('renderDaemonEvent', () => {
@@ -371,24 +372,68 @@ describe('renderDaemonEvent', () => {
       slug: 'merged-feature',
       branch: 'feat/daemon-merged-feature',
       refusal: 'branch-delete-failed',
-    })).toHaveLength(1);
-    expect(lines({
-      type: 'worktree_reclaim_failed',
-      slug: 'dirty-feature',
-      branch: 'hotfix/dirty-feature',
-      refusal: 'dirty-worktree',
-    }).join('\n')).toContain('dirty-feature');
-    expect(lines({
-      type: 'worktree_reclaim_failed',
-      slug: 'dirty-feature',
-      branch: 'hotfix/dirty-feature',
-      refusal: 'dirty-worktree',
-    }).join('\n')).toContain('dirty-worktree');
+    })).toEqual(['· ✗ worktree reclaim failed merged-feature (feat/daemon-merged-feature; branch-delete-failed)']);
     expect(lines({
       type: 'worktree_reclaim_retained',
       slug: 'active-feature',
       reason: 'in-flight',
     })).toEqual([]);
+  });
+
+  it.each([
+    'no-merge-proof',
+    'unmerged-commits',
+    'branch-behind-merged-head',
+    'dirty-worktree',
+    'in-flight',
+    'record-missing',
+    'ancestry-check-failed',
+  ])('renders a %s refusal as a retained worktree, not a failed reclaim', (refusal) => {
+    expect(lines({
+      type: 'worktree_reclaim_failed',
+      slug: 'kept-feature',
+      branch: 'hotfix/kept-feature',
+      refusal,
+    })).toEqual([`· ↷ worktree retained kept-feature (hotfix/kept-feature; ${refusal})`]);
+  });
+
+  it.each(['worktree-remove-failed', 'branch-delete-failed', 'unpark-failed'])(
+    'renders a %s refusal as a failed reclaim on every sweep',
+    (refusal) => {
+      const event: ConductorEvent = { type: 'worktree_reclaim_failed', slug: 'broken', branch: 'fix/broken', refusal };
+      expect([...lines(event), ...lines(event)]).toEqual([
+        `· ✗ worktree reclaim failed broken (fix/broken; ${refusal})`,
+        `· ✗ worktree reclaim failed broken (fix/broken; ${refusal})`,
+      ]);
+    },
+  );
+
+  it('renders a retained worktree once per slug until its reason changes or it is reclaimed', () => {
+    const retained = (slug: string, refusal: string): ConductorEvent =>
+      ({ type: 'worktree_reclaim_failed', slug, branch: `fix/${slug}`, refusal });
+
+    const rendered = [
+      // Sweep 1
+      ...lines(retained('open-pr', 'no-merge-proof')),
+      ...lines(retained('dirty', 'dirty-worktree')),
+      // Sweep 2: identical dispositions
+      ...lines(retained('open-pr', 'no-merge-proof')),
+      ...lines(retained('dirty', 'dirty-worktree')),
+      // Sweep 3: one reason changes
+      ...lines(retained('open-pr', 'no-merge-proof')),
+      ...lines(retained('dirty', 'unmerged-commits')),
+      // A reclaim clears memory; a recreated worktree of that slug renders again.
+      ...lines({ type: 'worktree_reclaim_reclaimed', slug: 'open-pr', branch: 'fix/open-pr', proof: 'merged-pr-head' }),
+      ...lines(retained('open-pr', 'no-merge-proof')),
+    ];
+
+    expect(rendered).toEqual([
+      '· ↷ worktree retained open-pr (fix/open-pr; no-merge-proof)',
+      '· ↷ worktree retained dirty (fix/dirty; dirty-worktree)',
+      '· ↷ worktree retained dirty (fix/dirty; unmerged-commits)',
+      '· ✓ worktree reclaimed open-pr (fix/open-pr; merged-pr-head)',
+      '· ↷ worktree retained open-pr (fix/open-pr; no-merge-proof)',
+    ]);
   });
 
   it('renders sealed-artifact remediation redirects with their gap and artifact', () => {

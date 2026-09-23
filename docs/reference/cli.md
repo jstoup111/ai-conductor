@@ -445,9 +445,12 @@ reconcile '<slug>': <reason>` and exits 1. The refusal reason identifies the pro
 
 - `branch-missing` — no local branch for the slug is available to prove.
 - `no-merge-proof` — the branch is not an ancestor and no merged PR proves its current tip.
-- `unmerged-commits` — the branch has commits beyond the merged PR head. The command prints up to
-  ten `SHA subject` lines after the refusal, followed by `… and M more` when the list is longer.
-- `branch-behind-merged-head` — the local branch tip no longer matches the merged PR head proof.
+- `unmerged-commits` — the branch has commits the merged PR head does not contain, because it
+  advanced past that head or diverged from it (for example, the PR head was rebased after the last
+  local commit). The command prints up to ten `SHA subject` lines after the refusal, followed by
+  `… and M more` when the list is longer.
+- `branch-behind-merged-head` — the local branch tip is an ancestor of the merged PR head. Deleting
+  it would drop nothing, but no held proof authorizes the deletion.
 - `ancestry-check-failed` — Git or merged-PR evidence could not be checked safely.
 
 These refusals leave every branch and worktree in place. If the slug is

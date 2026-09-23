@@ -41,6 +41,8 @@ export interface ReconcileMergedParkOptions {
   worktreeLifecycle?: WorktreeLifecycleQueue;
   /** Daemon-pool liveness guard; destructive reconciliation always re-checks it. */
   isFeatureInFlight?: (slug: string) => boolean;
+  /** Clock seam for phase-marker staleness. */
+  now?: () => number;
 }
 
 type ReclaimProof = 'ancestry' | 'merged-pr-head';
@@ -82,6 +84,23 @@ export type RefusalReason =
   | 'worktree-remove-failed'
   | 'branch-delete-failed'
   | 'unpark-failed';
+
+/**
+ * Refusals raised after the helper began a destructive operation that did not
+ * complete. Every other refusal is the helper declining to act — the worktree
+ * is intact and correctly retained (missing or unproven merge evidence, a
+ * dirty checkout, a live run) — and is not an operational failure.
+ */
+const RECLAIM_OPERATION_FAILURES: ReadonlySet<string> = new Set<RefusalReason>([
+  'worktree-remove-failed',
+  'branch-delete-failed',
+  'unpark-failed',
+]);
+
+/** True when a reclaim refusal is an operation that failed, not a retention decision. */
+export function isReclaimOperationFailure(refusal: string): boolean {
+  return RECLAIM_OPERATION_FAILURES.has(refusal);
+}
 
 export type ParkClassification = 'merged' | 'orphan' | 'normal' | 'unclassified';
 
@@ -339,6 +358,9 @@ export type MergedPrHeadDiagnosis =
   | { kind: 'proven' }
   | { kind: 'no-pr' }
   | { kind: 'ahead'; headRefOid: string }
+  /** The branch and the merged head each carry commits the other lacks. */
+  | { kind: 'diverged'; headRefOid: string }
+  /** The branch tip is a strict ancestor of the merged head: deleting drops nothing, but no held proof authorizes it. */
   | { kind: 'behind'; headRefOid: string }
   | { kind: 'capability-unavailable' }
   | { kind: 'indeterminate' };
@@ -375,26 +397,73 @@ export async function proveByMergedPrHead(
     const headRefOid = prs[0]?.headRefOid;
     if (prs.length === 0) return { kind: 'no-pr' };
     if (typeof headRefOid !== 'string' || headRefOid.trim() === '') return { kind: 'indeterminate' };
-    const { stdout: tip } = await runGit(['rev-parse', ref], { cwd: projectRoot });
+    const { stdout: tipOut } = await runGit(['rev-parse', ref], { cwd: projectRoot });
+    const tip = tipOut.trim();
     const normalizedHeadRefOid = headRefOid.trim();
-    if (tip.trim() === normalizedHeadRefOid) return { kind: 'proven' };
+    if (tip === normalizedHeadRefOid) return { kind: 'proven' };
 
-    await runGit(['cat-file', '-e', `${normalizedHeadRefOid}^{commit}`], { cwd: projectRoot });
     try {
-      await runGit(['merge-base', '--is-ancestor', normalizedHeadRefOid, ref], { cwd: projectRoot });
-      return { kind: 'ahead', headRefOid: normalizedHeadRefOid };
-    } catch (error) {
-      if ((error as { code?: unknown }).code === 1) {
-        return { kind: 'behind', headRefOid: normalizedHeadRefOid };
-      }
-      return { kind: 'indeterminate' };
+      await runGit(['cat-file', '-e', `${normalizedHeadRefOid}^{commit}`], { cwd: projectRoot });
+    } catch {
+      // The merged head was never fetched (for example a suggestion commit
+      // applied on GitHub after the last push). The PR's own commit list still
+      // answers whether the local tip is one of the merged commits, which is
+      // the "behind" diagnosis; anything else stays indeterminate.
+      return (await isTipAMergedPrCommit(runGh, projectRoot, ref, tip))
+        ? { kind: 'behind', headRefOid: normalizedHeadRefOid }
+        : { kind: 'indeterminate' };
     }
+    const headContainedInBranch = await ancestry(runGit, projectRoot, normalizedHeadRefOid, ref);
+    if (headContainedInBranch === true) return { kind: 'ahead', headRefOid: normalizedHeadRefOid };
+    if (headContainedInBranch === null) return { kind: 'indeterminate' };
+    // The merged head is not in the branch. Only a tip that the merged head
+    // contains is merely behind; otherwise the branch holds commits the merge
+    // never saw (a rebased or rewritten PR head), which deleting would drop.
+    const branchContainedInHead = await ancestry(runGit, projectRoot, ref, normalizedHeadRefOid);
+    if (branchContainedInHead === true) return { kind: 'behind', headRefOid: normalizedHeadRefOid };
+    if (branchContainedInHead === false) return { kind: 'diverged', headRefOid: normalizedHeadRefOid };
+    return { kind: 'indeterminate' };
   } catch (error) {
     if (error instanceof GhCapabilityError) {
       onCapabilityError?.(error);
       return { kind: 'capability-unavailable' };
     }
     return { kind: 'indeterminate' };
+  }
+}
+
+/** `merge-base --is-ancestor`: `true`/`false` on exit 0/1, `null` when git could not answer. */
+async function ancestry(
+  runGit: GitRunner,
+  projectRoot: string,
+  ancestor: string,
+  descendant: string,
+): Promise<boolean | null> {
+  try {
+    await runGit(['merge-base', '--is-ancestor', ancestor, descendant], { cwd: projectRoot });
+    return true;
+  } catch (error) {
+    return (error as { code?: unknown }).code === 1 ? false : null;
+  }
+}
+
+/**
+ * Whether `tip` is one of the commits of the merged PR for `ref`, read from
+ * GitHub. Diagnostic only: it distinguishes `behind` from an unanswerable
+ * probe when the merged head is absent locally, and never grants deletion.
+ */
+async function isTipAMergedPrCommit(
+  runGh: GhRunner,
+  projectRoot: string,
+  ref: string,
+  tip: string,
+): Promise<boolean> {
+  try {
+    const stdout = await runTrackerAmbientRead(runGh, projectRoot, 'ambient.pull-request.read', ['pr', 'list', '--head', ref, '--state', 'merged', '--json', 'commits', '--limit', '1']);
+    const prs = JSON.parse(stdout) as Array<{ commits?: Array<{ oid?: unknown }> }>;
+    return (prs[0]?.commits ?? []).some((commit) => commit.oid === tip);
+  } catch {
+    return false;
   }
 }
 
@@ -773,6 +842,33 @@ export async function reconcileParkedFeatures(
 }
 
 /**
+ * A phase marker older than this is left behind by a run that died without
+ * clearing it. Every step dispatch rewrites the marker, so a live run's marker
+ * is never this old; the bound is deliberately far above any single step.
+ */
+export const STALE_PHASE_MARKER_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Whether a worktree's `.pipeline/phase-active` marker still indicates a live
+ * run. Fails closed: an unreadable marker, or one without a parseable
+ * `written:` timestamp, counts as live. Only a marker whose own timestamp is
+ * older than {@link STALE_PHASE_MARKER_MS} is treated as abandoned.
+ */
+async function hasLivePhaseMarker(worktreePath: string, now: number): Promise<boolean> {
+  let content: string;
+  try {
+    content = await readFile(phaseMarkerPath(worktreePath), 'utf-8');
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    return code !== 'ENOENT' && code !== 'ENOTDIR';
+  }
+  const written = /^written:\s*(\S+)\s*$/m.exec(content)?.[1];
+  const writtenAt = written === undefined ? Number.NaN : Date.parse(written);
+  if (Number.isNaN(writtenAt)) return true;
+  return now - writtenAt < STALE_PHASE_MARKER_MS;
+}
+
+/**
  * Guarded deletion seam for one parked feature. Later gates establish every
  * deletion precondition; this initial gate ensures no caller can widen scope.
  */
@@ -790,14 +886,8 @@ export async function reconcileMergedPark(
   if (opts.isFeatureInFlight?.(opts.slug)) {
     return { slug: opts.slug, steps: [], refusal: 'in-flight' };
   }
-  try {
-    await access(phaseMarkerPath(join(opts.projectRoot, '.worktrees', opts.slug)));
+  if (await hasLivePhaseMarker(join(opts.projectRoot, '.worktrees', opts.slug), opts.now?.() ?? Date.now())) {
     return { slug: opts.slug, steps: [], refusal: 'in-flight' };
-  } catch (error) {
-    const code = (error as { code?: unknown }).code;
-    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-      return { slug: opts.slug, steps: [], refusal: 'in-flight' };
-    }
   }
 
   const runGit = opts.runGit ?? makeProductionGit();
@@ -859,7 +949,8 @@ export async function reconcileMergedPark(
           return { slug: opts.slug, steps: [], refusal: 'no-merge-proof' };
         case 'capability-unavailable':
           return { slug: opts.slug, steps: [], refusal: 'no-merge-proof' };
-        case 'ahead': {
+        case 'ahead':
+        case 'diverged': {
           const unmergedCommits = await listUnmergedCommits(
             runGit,
             opts.projectRoot,

@@ -9,6 +9,7 @@ import {
   reconcileMergedPark,
   reconcileParkedFeatures,
   requiresShippedRecord,
+  STALE_PHASE_MARKER_MS,
 } from '../../src/engine/park-reconciliation.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 import { GhCapabilityError } from '../../src/engine/tracker-client.js';
@@ -52,6 +53,8 @@ interface GitWorld {
   merged?: readonly string[];
   /** Merged PR heads that are ancestors of a branch despite the branch being outside origin/main. */
   mergedPrHeads?: readonly string[];
+  /** Branches whose tip is an ancestor of their merged PR head (strictly behind it). */
+  branchesBehindHead?: readonly string[];
   /** Current tip SHA per branch, for `git rev-parse <branch>`. */
   tips?: Readonly<Record<string, string>>;
   /** Lines emitted by `git log --oneline --no-decorate <head>..<ref>`. */
@@ -131,6 +134,7 @@ function makeGit(world: GitWorld = {}): {
         throw gitFailure(128, `fatal: Not a valid object name ${ref}`);
       }
       if (args[3] !== undefined && world.mergedPrHeads?.includes(ref)) return { stdout: '' };
+      if (args[3] !== 'origin/main' && world.branchesBehindHead?.includes(ref)) return { stdout: '' };
       if (merged.includes(ref)) return { stdout: '' };
       throw gitFailure(1, 'not an ancestor');
     }
@@ -180,49 +184,100 @@ describe('engine/park-reconciliation — proveByMergedPrHead', () => {
   const mergedHead = '1111111111111111111111111111111111111111';
   const branchTip = '2222222222222222222222222222222222222222';
 
-  function probeGit(mergeBaseExit?: 1, catFileFails = false): ReturnType<typeof vi.fn<GitRunner>> {
+  interface Probe {
+    /** `merge-base --is-ancestor <merged head> <branch>` exit code. */
+    headInBranch?: 0 | 1 | 128;
+    /** `merge-base --is-ancestor <branch> <merged head>` exit code. */
+    branchInHead?: 0 | 1 | 128;
+    catFileFails?: boolean;
+  }
+
+  function probeGit(probe: Probe = {}): ReturnType<typeof vi.fn<GitRunner>> {
     return vi.fn<GitRunner>(async (args) => {
       if (args[0] === 'rev-parse') return { stdout: `${branchTip}\n` };
       if (args[0] === 'cat-file') {
-        if (catFileFails) throw gitFailure(128, 'fatal: Not a valid object name');
+        if (probe.catFileFails) throw gitFailure(128, 'fatal: Not a valid object name');
         return { stdout: '' };
       }
       if (args[0] === 'merge-base') {
-        if (mergeBaseExit === 1) throw gitFailure(1, 'not an ancestor');
+        const exit = args[2] === mergedHead ? probe.headInBranch ?? 0 : probe.branchInHead ?? 1;
+        if (exit !== 0) throw gitFailure(exit, 'not an ancestor');
         return { stdout: '' };
       }
       throw new Error(`unexpected git invocation: ${args.join(' ')}`);
     });
   }
 
+  const listHead = ['pr', 'list', '--head', ref, '--state', 'merged', '--json', 'headRefOid', '--limit', '1'];
+  const listCommits = ['pr', 'list', '--head', ref, '--state', 'merged', '--json', 'commits', '--limit', '1'];
+  const revParse = ['rev-parse', ref];
+  const catFile = ['cat-file', '-e', `${mergedHead}^{commit}`];
+  const headInBranch = ['merge-base', '--is-ancestor', mergedHead, ref];
+  const branchInHead = ['merge-base', '--is-ancestor', ref, mergedHead];
+  const mergedPr = `[{"headRefOid":"${mergedHead}"}]`;
+
   it.each([
-    { name: 'reports no-pr when no merged PR is found', pr: '[]', git: probeGit(), expected: { kind: 'no-pr' } },
+    { name: 'reports no-pr when no merged PR is found', gh: ['[]'], probe: {}, expected: { kind: 'no-pr' }, gitCalls: [], ghCalls: [listHead] },
     {
       name: 'proves a branch whose tip exactly matches the merged PR head',
-      pr: `[{"headRefOid":"${branchTip}"}]`,
-      git: probeGit(),
+      gh: [`[{"headRefOid":"${branchTip}"}]`],
+      probe: {},
       expected: { kind: 'proven' },
+      gitCalls: [revParse],
+      ghCalls: [listHead],
     },
     {
-      name: 'reports ahead after the merged PR head is guarded and is an ancestor of the branch',
-      pr: `[{"headRefOid":"${mergedHead}"}]`,
-      git: probeGit(),
+      name: 'reports ahead when the merged PR head is an ancestor of the branch',
+      gh: [mergedPr],
+      probe: { headInBranch: 0 },
       expected: { kind: 'ahead', headRefOid: mergedHead },
+      gitCalls: [revParse, catFile, headInBranch],
+      ghCalls: [listHead],
     },
     {
-      name: 'reports behind after the merged PR head is guarded but is not an ancestor of the branch',
-      pr: `[{"headRefOid":"${mergedHead}"}]`,
-      git: probeGit(1),
+      name: 'reports behind when the branch tip is an ancestor of the merged PR head',
+      gh: [mergedPr],
+      probe: { headInBranch: 1, branchInHead: 0 },
       expected: { kind: 'behind', headRefOid: mergedHead },
+      gitCalls: [revParse, catFile, headInBranch, branchInHead],
+      ghCalls: [listHead],
     },
     {
-      name: 'reports indeterminate when the mismatched merged PR head cannot be resolved locally',
-      pr: `[{"headRefOid":"${mergedHead}"}]`,
-      git: probeGit(undefined, true),
-      expected: { kind: 'indeterminate' },
+      name: 'reports diverged, never behind, when neither contains the other',
+      gh: [mergedPr],
+      probe: { headInBranch: 1, branchInHead: 1 },
+      expected: { kind: 'diverged', headRefOid: mergedHead },
+      gitCalls: [revParse, catFile, headInBranch, branchInHead],
+      ghCalls: [listHead],
     },
-  ])('$name', async ({ pr, git, expected }) => {
-    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: pr });
+    {
+      name: 'reports indeterminate when the reverse ancestry probe cannot answer',
+      gh: [mergedPr],
+      probe: { headInBranch: 1, branchInHead: 128 },
+      expected: { kind: 'indeterminate' },
+      gitCalls: [revParse, catFile, headInBranch, branchInHead],
+      ghCalls: [listHead],
+    },
+    {
+      name: 'reports behind from the merged PR commit list when the merged head is absent locally',
+      gh: [mergedPr, `[{"commits":[{"oid":"${branchTip}"},{"oid":"${mergedHead}"}]}]`],
+      probe: { catFileFails: true },
+      expected: { kind: 'behind', headRefOid: mergedHead },
+      gitCalls: [revParse, catFile],
+      ghCalls: [listHead, listCommits],
+    },
+    {
+      name: 'reports indeterminate when the absent merged head does not list the branch tip',
+      gh: [mergedPr, `[{"commits":[{"oid":"${mergedHead}"}]}]`],
+      probe: { catFileFails: true },
+      expected: { kind: 'indeterminate' },
+      gitCalls: [revParse, catFile],
+      ghCalls: [listHead, listCommits],
+    },
+  ])('$name', async ({ gh, probe, expected, gitCalls, ghCalls }) => {
+    const git = probeGit(probe as Probe);
+    const runGh = vi.fn<GhRunner>();
+    for (const stdout of gh) runGh.mockResolvedValueOnce({ stdout });
 
     const diagnosis = await proveByMergedPrHead(git, runGh, projectRoot, ref);
 
@@ -232,27 +287,8 @@ describe('engine/park-reconciliation — proveByMergedPrHead', () => {
       ghCalls: runGh.mock.calls,
     }).toEqual({
       diagnosis: expected,
-      gitCalls:
-        expected.kind === 'no-pr'
-          ? []
-          : expected.kind === 'proven'
-            ? [['rev-parse', ref]]
-          : expected.kind === 'indeterminate'
-            ? [
-                ['rev-parse', ref],
-                ['cat-file', '-e', `${mergedHead}^{commit}`],
-              ]
-            : [
-                ['rev-parse', ref],
-                ['cat-file', '-e', `${mergedHead}^{commit}`],
-                ['merge-base', '--is-ancestor', mergedHead, ref],
-              ],
-      ghCalls: [
-        [
-          ['pr', 'list', '--head', ref, '--state', 'merged', '--json', 'headRefOid', '--limit', '1'],
-          { cwd: projectRoot },
-        ],
-      ],
+      gitCalls,
+      ghCalls: ghCalls.map((args) => [args, { cwd: projectRoot }]),
     });
   });
 });
@@ -614,6 +650,63 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
   });
 
   it.each([
+    { name: 'written an hour ago', ageMs: 60 * 60 * 1000, live: true },
+    { name: 'written just inside the staleness bound', ageMs: STALE_PHASE_MARKER_MS - 1, live: true },
+    { name: 'dated in the future', ageMs: -60 * 60 * 1000, live: true },
+    { name: 'abandoned past the staleness bound', ageMs: STALE_PHASE_MARKER_MS + 1, live: false },
+  ])('treats a phase marker $name as live=$live', async ({ ageMs, live }) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'marker-aged';
+    const now = Date.parse('2026-09-23T12:00:00.000Z');
+    const { run, deleted } = makeGit({ shipped: [slug], branches: [`spec/${slug}`], merged: [`spec/${slug}`] });
+    try {
+      await mkdir(join(projectRoot, '.worktrees', slug, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(projectRoot, '.worktrees', slug, '.pipeline', 'phase-active'),
+        `step: build_review\nphase: SHIP\nwritten: ${new Date(now - ageMs).toISOString()}\n`,
+      );
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, now: () => now });
+
+      expect({ outcome, deleted }).toEqual(live
+        ? { outcome: { slug, steps: [], refusal: 'in-flight' }, deleted: [] }
+        : { outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] }, deleted: [`spec/${slug}`] });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a dirty worktree whose abandoned phase marker no longer counts as live', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'marker-aged-dirty';
+    const now = Date.parse('2026-09-23T12:00:00.000Z');
+    const { run, deleted, events } = makeGit({
+      shipped: [slug],
+      branches: [`spec/${slug}`],
+      merged: [`spec/${slug}`],
+      statusPorcelain: '?? uncommitted.ts\n',
+    });
+    try {
+      await mkdir(join(projectRoot, '.worktrees', slug, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(projectRoot, '.worktrees', slug, '.pipeline', 'phase-active'),
+        `step: build\nwritten: ${new Date(now - 2 * STALE_PHASE_MARKER_MS).toISOString()}\n`,
+      );
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, now: () => now });
+
+      expect({ outcome, deleted, events }).toEqual({
+        outcome: { slug, steps: [], refusal: 'dirty-worktree' },
+        deleted: [],
+        events: [],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
     {
       name: 'the branch exists but is not contained in origin/main and no record landed',
       world: { branches: ['feat/unmerged'], merged: [] },
@@ -759,8 +852,25 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     {
       name: 'the branch is behind the merged PR head',
       gh: '[{"headRefOid":"1111111111111111111111111111111111111111"}]',
+      branchesBehindHead: ['feat/deletion-gate-map'],
       tips: { 'feat/deletion-gate-map': '2222222222222222222222222222222222222222' },
       expectedOutcome: { steps: [], refusal: 'branch-behind-merged-head' },
+    },
+    {
+      // A rebased PR head: the local branch keeps pre-rebase commits the merge
+      // never saw, so deleting it would drop them. Never "behind".
+      name: 'the branch diverged from the merged PR head',
+      gh: '[{"headRefOid":"1111111111111111111111111111111111111111"}]',
+      tips: { 'feat/deletion-gate-map': '2222222222222222222222222222222222222222' },
+      unmergedLog: ['2222222 docs: local commit the rebased PR head dropped'],
+      expectedOutcome: {
+        steps: [],
+        refusal: 'unmerged-commits',
+        unmergedCommits: {
+          commits: [{ sha: '2222222', subject: 'docs: local commit the rebased PR head dropped' }],
+          overflow: 0,
+        },
+      },
     },
     {
       name: 'the branch tip cannot be resolved locally',
@@ -776,13 +886,15 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       // helper never escalates to force (adr-2026-08-01 D1), so the branch stays.
       expectedOutcome: { steps: ['worktree-removed'], refusal: 'branch-delete-failed' },
     },
-  ] as const)('maps deletion-gate diagnosis when $name', async ({ gh, mergedPrHeads, tips, expectedOutcome }) => {
+  ] as const)('maps deletion-gate diagnosis when $name', async ({ gh, mergedPrHeads, branchesBehindHead, unmergedLog, tips, expectedOutcome }) => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'deletion-gate-map';
     const { run, deleted } = makeGit({
       shipped: [slug],
       branches: [`feat/${slug}`],
       mergedPrHeads,
+      branchesBehindHead,
+      unmergedLog,
       tips,
     });
     const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: gh });
@@ -2100,6 +2212,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       shipped: slugs,
       branches: slugs.map((slug) => `feat/${slug}`),
       mergedPrHeads: [unmergedHead],
+      branchesBehindHead: ['feat/behind'],
       tips: Object.fromEntries(slugs.map((slug) => [
         `feat/${slug}`,
         'ffffffffffffffffffffffffffffffffffffffff',
@@ -2372,6 +2485,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     const { run } = makeGit({
       shipped: [slug],
       branches: [`feat/${slug}`],
+      branchesBehindHead: [`feat/${slug}`],
       tips: { [`feat/${slug}`]: '2222222222222222222222222222222222222222' },
     });
     const runGh = vi.fn<GhRunner>()
