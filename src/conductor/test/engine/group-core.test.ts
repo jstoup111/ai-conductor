@@ -833,6 +833,25 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
     });
   });
 
+  it("fails toward parked when the retry park predicate rejects", async () => {
+    const runner = spyRunner([{ success: false, output: "retry" }]);
+    const member: GroupMember = { name: "manual_test", skill: "manual-test", outcome: makeSkippedOutcome() };
+    const boundary = vi.fn(async () => { throw new Error("park state unavailable"); });
+
+    const outcome = await runGroupBranch(
+      member,
+      fakeState,
+      { stepRunner: runner, operatorParkBoundary: boundary },
+      3,
+    );
+
+    expect({ outcome, dispatches: runner.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
+      outcome: { kind: "parked", attempt: 2 },
+      dispatches: 1,
+      boundaryCalls: 1,
+    });
+  });
+
   it.each([
     ['rate limit', { success: false, rateLimited: true }],
     ['stale session', { success: false, sessionExpired: true }],
