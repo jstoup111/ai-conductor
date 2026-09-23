@@ -34,10 +34,15 @@ export interface ReleaseMetadataSnapshotInput {
   readonly prUrl: string;
 }
 
-/** Guarded operation authority required to restore a retained draft body. */
+/**
+ * Guarded operation authority required to restore a retained draft body.
+ * `operations` is absent when the composition root could not bind the guard;
+ * an intact block still needs no write, so the absence is only a failure once
+ * a rewrite is actually required.
+ */
 export interface ReleaseMetadataRestoreInput extends ReleaseMetadataSnapshotInput {
   readonly snapshot: ReleaseMetadataSnapshot;
-  readonly operations: GithubOperationRunner;
+  readonly operations: GithubOperationRunner | undefined;
 }
 
 export function releaseMetadataSnapshotPath(projectRoot: string): string {
@@ -123,8 +128,11 @@ export async function restoreReleaseMetadata(
     if (snapshotReleaseMetadataBlock(before) === input.snapshot.block) return;
     const merged = mergeReleaseMetadataBlock(before, input.snapshot.block);
     if (merged === null) throw new Error('captured release metadata is no longer valid');
+    if (!input.operations) {
+      throw new Error('guarded release metadata restore is unavailable at this composition boundary');
+    }
     const target = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/([1-9]\d*)$/.exec(input.prUrl);
-    if (!target) throw new Error('guarded release metadata restore is unavailable at this composition boundary');
+    if (!target) throw new Error('PR URL is not a canonical github.com pull-request URL');
     const result = await executeGithubOperation({
       operation: 'pull-request.edit',
       repository: target[1],

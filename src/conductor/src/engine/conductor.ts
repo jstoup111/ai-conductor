@@ -2918,7 +2918,7 @@ export class Conductor {
         gh: this.gh,
         operations: publication?.operations,
         log: this.log,
-        restoreReleaseMetadata: (url) => this.restoreFinishReleaseMetadata(url),
+        restoreReleaseMetadata: (url) => this.restoreFinishReleaseMetadata(url, state),
       })({ prUrl, state, mode: opts.mode });
     };
 
@@ -6742,8 +6742,19 @@ export class Conductor {
     });
   }
 
-  /** Restore the snapshot only after a verified remote read/write cycle. */
-  private async restoreFinishReleaseMetadata(prUrl: string): Promise<void> {
+  /**
+   * Restore the snapshot only after a verified remote read/write cycle.
+   *
+   * Daemon dispatch supplies `worktreeBranch` but never `featureDesc` to the
+   * constructor; durable conduct state carries both, so the guard is composed
+   * from state first (as the sibling repair at `repairFinishPr` does). An
+   * uncomposable guard is deferred to the flow, which only needs it once the
+   * body actually has to be rewritten.
+   */
+  private async restoreFinishReleaseMetadata(
+    prUrl: string,
+    state?: Pick<ConductState, 'worktree_branch' | 'feature_desc'>,
+  ): Promise<void> {
     const snapshot = this.releaseMetadataSnapshot;
     if (this.releaseMetadataFlow() !== 'active') return;
     if (!snapshot || snapshot.prUrl !== prUrl) {
@@ -6752,24 +6763,21 @@ export class Conductor {
 
     const publication = await this.resolveShipDraftPublicationDependencies({
       cwd: this.projectRoot,
-      branch: this.worktreeBranch,
+      branch: state?.worktree_branch ?? this.worktreeBranch,
       baseBranch: this.baseBranch,
-      featureDesc: this.featureDesc,
+      featureDesc: state?.feature_desc ?? this.featureDesc,
       prUrl,
       git: this.git,
       gh: this.gh,
       events: this.events,
     });
-    if (!publication) {
-      throw new Error('post-finish restore unavailable: guarded release metadata restore is unavailable at this composition boundary');
-    }
 
     await restoreReleaseMetadata({
       gh: this.gh,
       projectRoot: this.projectRoot,
       prUrl,
       snapshot,
-      operations: publication.operations,
+      operations: publication?.operations,
     });
   }
 

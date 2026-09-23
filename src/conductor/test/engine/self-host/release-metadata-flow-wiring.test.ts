@@ -109,6 +109,37 @@ describe('self-host release metadata flow wiring', () => {
     expect(runGh).not.toHaveBeenCalled();
   });
 
+  // Daemon dispatch never passes `featureDesc` to the Conductor constructor;
+  // the durable conduct state carries it. Without the fallback every daemon
+  // finish on a self-host feature failed its post-finish restore (PR #2667).
+  it('composes the post-finish restore guard from conduct state when constructor fields are absent', async () => {
+    const projectRoot = await root();
+    const prUrl = 'https://github.com/acme/conductor/pull/13';
+    const body = 'Release-Disposition: no-note';
+    const runGh = vi.fn(async () => ({ stdout: JSON.stringify({ body }) }));
+    const { conductor: subject } = conductor(
+      projectRoot,
+      { 'release-disposition': { skill: '.agents/skills/renamed/SKILL.md' } },
+      undefined,
+      runGh,
+    );
+    const resolvePublication = vi.fn(async () => undefined);
+    (subject as any).resolveShipDraftPublicationDependencies = resolvePublication;
+    (subject as any).releaseMetadataSnapshot = { prUrl, block: body };
+    (subject as any).gh = runGh;
+
+    await (subject as any).restoreFinishReleaseMetadata(prUrl, {
+      worktree_branch: 'feat/daemon-task-13',
+      feature_desc: 'task-13',
+    });
+
+    expect(resolvePublication).toHaveBeenCalledWith(expect.objectContaining({
+      branch: 'feat/daemon-task-13',
+      featureDesc: 'task-13',
+      prUrl,
+    }));
+  });
+
   it.each([
     ['outside a self-build', false, true],
     ['when the release gate is disabled', true, false],
