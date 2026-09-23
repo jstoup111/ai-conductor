@@ -609,7 +609,12 @@ export class CodexProvider implements LLMProvider {
       ? this.terminalStructuredResult(parsedRaw.output)
       : undefined;
     if (requiresNativeSchema && exitCode === 0 && finalStructuredResult === undefined) {
-      return { success: false, output: 'Codex provider parse failure: terminal result record is missing its structured result.', exitCode, authentication };
+      return {
+        success: false,
+        output: `Codex provider parse failure: terminal result record is missing its structured result. Transcript: ${output}`,
+        exitCode,
+        authentication,
+      };
     }
     return {
       success: exitCode === 0 && toolProcessCreationFailures === 0,

@@ -2675,6 +2675,11 @@ export class DefaultStepRunner implements StepRunner {
       step: 'build_review', memberId: entry.id, policy: entry.policy,
       runtimes: this.providerRuntimes, sessions: this.sessionStore.beginBranch(`build-review:${entry.id}`),
       config: this.config, runId: this.runId, tier,
+      nativeSchemaScratch: {
+        worktreeRoot: this.projectDir,
+        repository: this.projectDir,
+        featureSlug: this.featureDesc || basename(this.projectDir),
+      },
       taskAttribution: this.taskAttribution,
       withCandidateSafety: this.candidateSafetyFor('build_review')?.wrapper ?? this.withCandidateSafety,
       prepareCandidateSelfHost: this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
@@ -3334,6 +3339,11 @@ export class DefaultStepRunner implements StepRunner {
             sessions: this.sessionStore!.beginBranch(`build-review:${branch.rubric}`),
             config: this.config,
             runId: this.runId,
+            nativeSchemaScratch: {
+              worktreeRoot: this.projectDir,
+              repository: this.projectDir,
+              featureSlug: this.featureDesc || basename(this.projectDir),
+            },
             taskAttribution: this.taskAttribution,
             tier,
             withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
@@ -3556,6 +3566,9 @@ export class DefaultStepRunner implements StepRunner {
         branch.skillName,
         initial.commandUnresolvedName ?? '',
       ));
+    }
+    if (!initial.success && initial.output?.startsWith('Codex native schema scratch home failed:')) {
+      return makeBuildReviewDispatchFailure(initial.output ?? 'build_review provider invocation failed without a diagnostic');
     }
     if (!initial.success) return undefined;
     if (initial.finalStructuredResult === undefined || initial.finalStructuredResult === null || typeof initial.finalStructuredResult !== 'object' || Array.isArray(initial.finalStructuredResult)) {

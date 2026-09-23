@@ -1,7 +1,8 @@
 // Covers: task:2, task:4
 // Covers: task:9, task:10
+// Covers: task:5
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,7 +22,7 @@ import { renderRubricContractShape } from '../../src/engine/build-review-contrac
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import type { ResolvedBuildReviewCustomCatalogEntry } from '../../src/engine/resolved-config.js';
 
 const buildReviewPublication = vi.hoisted(() => ({ count: 0 }));
@@ -418,6 +419,85 @@ describe('build_review structured rubric dispatch', () => {
 
     expect(invoke).not.toHaveBeenCalled();
     expect(result).toBeUndefined();
+  });
+
+  it('gives a Codex rubric invocation an engine-owned schema scratch home and settles it', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-codex-schema-scratch-'));
+    let scratchHome: string | undefined;
+    const invoke = vi.fn(async (options: InvokeOptions) => {
+      scratchHome = options.nativeSchemaScratchHome;
+      return { success: true, output: 'ignored prose', exitCode: 0, finalStructuredResult: { findings: [] } };
+    });
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    };
+    const codexBranch = {
+      ...branch,
+      policy: { ...branch.policy, llm_provider: 'codex' as const, model: 'gpt-5.6-sol' },
+    };
+    const runner = new DefaultStepRunner(provider, 'runtime-review', projectDir, {
+      config: { llm_provider: ['codex'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'codex', provider, lifecycleCapability: provider.lifecycleCapability,
+        nativeSchemaCapability: provider.nativeSchemaCapability,
+        policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['codex'],
+    });
+
+    try {
+      await (runner as unknown as {
+        dispatchBuildReviewRubric: (value: typeof codexBranch, reviewProjection: typeof projection) => Promise<unknown>;
+      }).dispatchBuildReviewRubric(codexBranch, projection);
+
+      expect(scratchHome).toMatch(new RegExp(`^${projectDir.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}/\\.daemon/scratch/`));
+      await expect(access(scratchHome!)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves a Codex native-schema scratch failure as a named build_review dispatch fault', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-codex-schema-failure-'));
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke: vi.fn(async () => ({
+        success: false,
+        output: 'Codex native schema scratch home failed: EACCES: permission denied',
+        exitCode: 1,
+      })),
+    };
+    const codexBranch = {
+      ...branch,
+      policy: { ...branch.policy, llm_provider: 'codex' as const, model: 'gpt-5.6-sol' },
+    };
+    const runner = new DefaultStepRunner(provider, 'runtime-review', projectDir, {
+      config: { llm_provider: ['codex'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'codex', provider, lifecycleCapability: provider.lifecycleCapability,
+        nativeSchemaCapability: provider.nativeSchemaCapability,
+        policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['codex'],
+    });
+
+    try {
+      const result = await (runner as unknown as {
+        dispatchBuildReviewRubric: (value: typeof codexBranch, reviewProjection: typeof projection) => Promise<unknown>;
+      }).dispatchBuildReviewRubric(codexBranch, projection);
+
+      expect(result).toMatchObject({
+        kind: 'dispatch-failure',
+        detail: 'Codex native schema scratch home failed: EACCES: permission denied',
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('carries custom-v1 through the same dispatcher with its policy bundle before skill invocation', async () => {
