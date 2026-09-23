@@ -654,7 +654,7 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(log[0]).toContain('skipped retry when merge/issue evidence is available');
   });
 
-  it('S7 negative: with `gh` entirely down, the merged+record-on-main park STILL reconciles (a pure-git fact) and the pass never throws', async () => {
+  it('S7 negative: with `gh` entirely down, a merged non-daemon park is retained (ancestry needs merged-PR head corroboration) and the pass never throws', async () => {
     const slug = 'merged-gh-down';
     await seedParkedFeature(slug, { merged: true, record: true, sourceRef: 'acme/repo#7' });
 
@@ -671,9 +671,11 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
       }),
     ).resolves.toBeDefined();
 
-    expect(await worktreeExists(slug)).toBe(false);
-    expect(await branchExists(slug)).toBe(false);
-    expect(await isOperatorParked(projectRoot, slug)).toBe(false);
+    // adr-2026-08-01 D9 under D8: the record is never consulted for a
+    // non-daemon branch, and without gh no merged-PR head can corroborate it.
+    expect(await worktreeExists(slug)).toBe(true);
+    expect(await branchExists(slug)).toBe(true);
+    expect(await isOperatorParked(projectRoot, slug)).toBe(true);
     expect(requestRecordRepair).not.toHaveBeenCalled();
   });
 });
@@ -1037,7 +1039,8 @@ describe('parked-feature reconciliation acceptance (rem-adr-006): the production
       if (args[0] === 'api' && args[1] === 'user') return { stdout: 'test-owner\n' };
       if (args[0] === 'repo' && args[1] === 'view') return json({ nameWithOwner: 'acme/repo' });
       if (args[0] === 'pr' && args[1] === 'list' && args.includes('--state') && has('--state', 'merged')) {
-        return json([{ url: implementationPr }]);
+        // The merged head equals the branch tip, corroborating its ancestry (adr-2026-08-01 D9).
+        return json([{ url: implementationPr, headRefOid: await git(['rev-parse', `refs/heads/feature/${slug}`]) }]);
       }
       if (args[0] === 'pr' && args[1] === 'list') {
         return json(repairCreated ? [{ url: repairPr }] : []);
@@ -1120,7 +1123,11 @@ describe('parked-feature reconciliation acceptance (rem-adr-006): the production
     const ghCalls: string[][] = [];
     const gh: GhRunner = async (args) => {
       ghCalls.push(args);
-      if (args[0] === 'pr' && args[1] === 'list') return { stdout: JSON.stringify([{ url: implementationPr }]) };
+      if (args[0] === 'pr' && args[1] === 'list') {
+        // The merged head equals the branch tip, corroborating its ancestry (adr-2026-08-01 D9).
+        const headRefOid = await git(['rev-parse', `refs/heads/feature/${slug}`]);
+        return { stdout: JSON.stringify([{ url: implementationPr, headRefOid }]) };
+      }
       if (args[0] === 'pr' && args[1] === 'view' && args.includes('mergedAt')) {
         return { stdout: JSON.stringify({ mergedAt: '2026-07-27T10:11:12Z' }) };
       }
@@ -1210,7 +1217,7 @@ describe('park-reconciliation refusal observability acceptance (#1114)', () => {
     expect(printed).not.toMatch(/--force|force path/i);
   });
 
-  it('S3/S4: parked candidates report the new proof refusals until the enumerated path changes them', async () => {
+  it('S3/S4: parked candidates preserve the empty refusal tally until the enumerated path changes it', async () => {
     const noProofSlug = 'refused-no-proof';
     const aheadSlug = 'refused-ahead';
     const behindSlug = 'refused-behind';
@@ -1255,36 +1262,31 @@ describe('park-reconciliation refusal observability acceptance (#1114)', () => {
       log: (line) => logs.push(line),
     });
 
+    // Non-daemon parked branches never read the shipped-record listing
+    // (adr-2026-08-01 D8), so an unmerged park is never classified merged and
+    // never reaches the helper.
     const first = await runSweep();
-    expect(first.counts.refused).toBe(3);
-    expect(first.refusedByReason).toEqual({ 'no-merge-proof': 2, 'unmerged-commits': 1 });
+    expect(first.counts.refused).toBe(0);
+    expect(first.refusedByReason).toEqual({});
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toContain('refused=3');
-    expect(logs[0]).toContain('refusals:');
+    expect(logs[0]).toContain('refused=0');
+    expect(logs[0]).not.toContain('refusals:');
 
     reportBehindPr = true;
     const second = await runSweep();
-    expect(second.counts.refused).toBe(3);
-    expect(second.refusedByReason).toEqual({
-      'branch-behind-merged-head': 1,
-      'no-merge-proof': 1,
-      'unmerged-commits': 1,
-    });
-    expect(logs).toHaveLength(2);
+    expect(second.counts.refused).toBe(0);
+    expect(second.refusedByReason).toEqual({});
+    expect(logs).toHaveLength(1);
 
     await runSweep();
-    expect(logs).toHaveLength(2);
+    expect(logs).toHaveLength(1);
 
     await rm(join(projectRoot, '.daemon', 'parked', behindSlug));
     const enumerated = await runSweep();
-    expect(enumerated.counts.refused).toBe(3);
-    expect(enumerated.refusedByReason).toEqual({
-      'branch-behind-merged-head': 1,
-      'no-merge-proof': 1,
-      'unmerged-commits': 1,
-    });
-    expect(logs).toHaveLength(3);
-    expect(logs[2]).toMatch(/branch-behind-merged-head\D+1/);
+    expect(enumerated.counts.refused).toBe(1);
+    expect(enumerated.refusedByReason).toEqual({ 'branch-behind-merged-head': 1 });
+    expect(logs).toHaveLength(2);
+    expect(logs[1]).toMatch(/branch-behind-merged-head\D+1/);
     expect(cache.has(behindSlug)).toBe(false);
   });
 });

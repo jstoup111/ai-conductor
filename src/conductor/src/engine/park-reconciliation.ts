@@ -473,17 +473,14 @@ async function gatherMergeEvidence(
   prefetched?: { shippedStems: string[] | null; branchesBySlug: Map<string, string[]> | null },
   branch?: string,
 ): Promise<MergeEvidence | null> {
-  // A record is mandatory only for record-gated candidates (daemon branches and
-  // branchless parked slugs). For any other branch a readable record may
-  // corroborate ancestry, but that branch never DEPENDS on the listing
-  // (adr-2026-07-29 D9, adr-2026-08-01 D8): an unreadable listing reads as "no
-  // record" for it, so its merge proofs — including merged-PR head identity —
-  // are still evaluated. Only record-gated candidates fail closed on it.
-  const listedStems = prefetched === undefined
-    ? await listShippedStemsOnMain(runGit, projectRoot)
-    : prefetched.shippedStems;
-  if (listedStems === null && requiresShippedRecord(branch)) return null;
-  const shippedStems = listedStems ?? [];
+  // Only record-gated candidates (daemon branches and branchless parked slugs)
+  // consult the shipped-record listing. Any other branch never reads it
+  // (adr-2026-08-01 D8, which governs D9 per operator decision 2026-09-22):
+  // its ancestry is corroborated by merged-PR head identity alone.
+  const shippedStems = requiresShippedRecord(branch)
+    ? prefetched?.shippedStems ?? (await listShippedStemsOnMain(runGit, projectRoot))
+    : [];
+  if (shippedStems === null) return null;
   const branchesBySlug =
     prefetched?.branchesBySlug ?? (await listBranchesBySlug(runGit, projectRoot));
   if (branchesBySlug === null) return null;
@@ -564,10 +561,16 @@ export async function reconcileParkedFeatures(
   const enumeratedCandidates = [...candidates.values()]
     .filter((candidate) => !candidate.parked).length;
 
+  // Read pass-invariant evidence once. Only record-gated candidates consult the
+  // shipped-record listing (adr-2026-08-01 D8), so a pass without one never
+  // reads it.
+  const hasRecordGatedCandidate = [...candidates.values()].some((candidate) =>
+    candidate.reclaimable && requiresShippedRecord(candidate.branch),
+  );
   const prefetched = {
-    // Records corroborate ancestry for every reclaimable branch; an unreadable
-    // listing retains only record-gated candidates (see gatherMergeEvidence).
-    shippedStems: await listShippedStemsOnMain(runGit, opts.projectRoot),
+    shippedStems: hasRecordGatedCandidate
+      ? await listShippedStemsOnMain(runGit, opts.projectRoot)
+      : [],
     branchesBySlug: await listBranchesBySlug(runGit, opts.projectRoot),
   };
 
@@ -689,28 +692,19 @@ export async function reconcileParkedFeatures(
           // Event persistence must not make this best-effort sweep fail.
         }
       }
-      else if (outcome.refusal === 'record-missing') {
-        counts.deferred++;
-        retainedReason = outcome.refusal;
-        retainedByReason[outcome.refusal]++;
-      }
       else {
-        counts.refused++;
-        refusedByReason[outcome.refusal] = (refusedByReason[outcome.refusal] ?? 0) + 1;
-      if (
-        outcome.refusal === 'worktree-remove-failed'
-        || outcome.refusal === 'branch-delete-failed'
-        || outcome.refusal === 'dirty-worktree'
-        || outcome.refusal === 'no-merge-proof'
-      ) {
-          try {
-            opts.onEvent?.({ type: 'worktree_reclaim_failed', slug, branch: candidate.branch, refusal: outcome.refusal });
-          } catch {
-            // Event persistence must not make this best-effort sweep fail.
-          }
-        } else {
-          retainedReason = outcome.refusal;
-          retainedByReason[outcome.refusal]++;
+        if (outcome.refusal === 'record-missing') counts.deferred++;
+        else {
+          counts.refused++;
+          refusedByReason[outcome.refusal] = (refusedByReason[outcome.refusal] ?? 0) + 1;
+        }
+        // Every helper refusal is a failed reclaim on the spine
+        // (adr-2026-07-29 D9); retention is reserved for candidates the sweep
+        // never handed to the helper.
+        try {
+          opts.onEvent?.({ type: 'worktree_reclaim_failed', slug, branch: candidate.branch, refusal: outcome.refusal });
+        } catch {
+          // Event persistence must not make this best-effort sweep fail.
         }
       }
     }

@@ -400,26 +400,40 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
   it.each([
     {
       name: 'refuses ancestry without a shipped record or a matching merged PR head',
+      prefix: 'hotfix/',
       shipped: [],
       gh: '[]',
       expected: { steps: [], refusal: 'no-merge-proof' },
+      listingReads: 0,
     },
     {
       name: 'reclaims ancestry corroborated by a matching merged PR head',
+      prefix: 'hotfix/',
       shipped: [],
       gh: '[{"headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]',
       expected: { steps: ['worktree-removed', 'branch-deleted'], proof: 'merged-pr-head' },
+      listingReads: 0,
     },
     {
-      name: 'reclaims ancestry corroborated by a shipped record without a merged PR',
+      name: 'reclaims daemon-branch ancestry corroborated by a shipped record without a merged PR',
+      prefix: 'feat/daemon-',
       shipped: ['ancestry-corroboration'],
       gh: '[]',
       expected: { steps: ['worktree-removed', 'branch-deleted'], proof: 'ancestry' },
+      listingReads: 1,
     },
-  ] as const)('$name', async ({ shipped, gh, expected }) => {
+    {
+      name: 'refuses non-daemon ancestry with a shipped record but no merged PR, never reading the listing',
+      prefix: 'hotfix/',
+      shipped: ['ancestry-corroboration'],
+      gh: '[]',
+      expected: { steps: [], refusal: 'no-merge-proof' },
+      listingReads: 0,
+    },
+  ] as const)('$name', async ({ prefix, shipped, gh, expected, listingReads }) => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'ancestry-corroboration';
-    const branch = `hotfix/${slug}`;
+    const branch = `${prefix}${slug}`;
     const worktree = join(projectRoot, '.worktrees', slug);
     const { run } = makeGit({
       shipped,
@@ -431,15 +445,18 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     try {
       await mkdir(worktree, { recursive: true });
       const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run, runGh, emitProof: true });
-      const destructiveCalls = run.mock.calls
-        .map(([args]) => args)
+      const gitCalls = run.mock.calls.map(([args]) => args);
+      const destructiveCalls = gitCalls
         .filter((args) => (args[0] === 'worktree' && args[1] === 'remove') || (args[0] === 'branch' && args[1] === '-D'));
+      const shippedListingReads = gitCalls
+        .filter((args) => args[0] === 'ls-tree' && args.includes('origin/main:.docs/shipped')).length;
 
-      expect({ outcome, destructiveCalls }).toEqual({
+      expect({ outcome, destructiveCalls, shippedListingReads }).toEqual({
         outcome: { slug, ...expected },
-        destructiveCalls: expected.refusal === undefined
-          ? [['worktree', 'remove', '--force', worktree], ['branch', '-D', branch]]
-          : [],
+        destructiveCalls: 'refusal' in expected
+          ? []
+          : [['worktree', 'remove', '--force', worktree], ['branch', '-D', branch]],
+        shippedListingReads: listingReads,
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -2634,6 +2651,50 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
           { type: 'worktree_reclaim_failed', slug: dirtySlug, branch: dirtyBranch, refusal: 'dirty-worktree' },
           { type: 'worktree_reclaim_reclaimed', slug: cleanSlug, branch: cleanBranch, proof: 'merged-pr-head' },
           { type: 'worktree_reclaim_failed', slug: ancestryOnlySlug, branch: ancestryOnlyBranch, refusal: 'no-merge-proof' },
+        ],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('emits every helper refusal as a reclaim failure and never as a retention', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const behindSlug = 'sweep-behind';
+    const recordSlug = 'sweep-record-missing';
+    const behindBranch = `hotfix/${behindSlug}`;
+    const recordBranch = `feat/daemon-${recordSlug}`;
+    const tip = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const otherHead = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const { run } = makeGit({
+      shipped: [],
+      branches: [behindBranch, recordBranch],
+      merged: [behindBranch, recordBranch],
+      tips: { [behindBranch]: tip, [recordBranch]: tip },
+    });
+    const events: unknown[] = [];
+    const runGh = vi.fn<GhRunner>(async (args) => ({
+      stdout: `[{"headRefOid":"${args[3] === behindBranch ? otherHead : tip}"}]`,
+    }));
+    try {
+      await Promise.all([behindSlug, recordSlug].map((slug) => mkdir(join(projectRoot, '.worktrees', slug), { recursive: true })));
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        runGh,
+        worktreeListing: async () => [
+          { slug: behindSlug, branch: behindBranch },
+          { slug: recordSlug, branch: recordBranch },
+        ],
+        onEvent: (event) => events.push(event),
+      });
+
+      expect({ counts: result.counts, refusedByReason: result.refusedByReason, events }).toEqual({
+        counts: { reconciled: 0, deferred: 1, orphaned: 0, parked: 2, refused: 1, skipped: 0 },
+        refusedByReason: { 'branch-behind-merged-head': 1 },
+        events: [
+          { type: 'worktree_reclaim_failed', slug: behindSlug, branch: behindBranch, refusal: 'branch-behind-merged-head' },
+          { type: 'worktree_reclaim_failed', slug: recordSlug, branch: recordBranch, refusal: 'record-missing' },
         ],
       });
     } finally {
