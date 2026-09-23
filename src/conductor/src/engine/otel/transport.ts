@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { ExportResultCode } from '@opentelemetry/core';
 import { OTLPTraceExporter as OTLPHttpTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import { OTLPMetricExporter as OTLPHttpMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
+import { OTLPMetricExporter as OTLPHttpMetricExporter, AggregationTemporalityPreference } from '@opentelemetry/exporter-metrics-otlp-http';
 import { OTLPTraceExporter as OTLPGrpcTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { OTLPMetricExporter as OTLPGrpcMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc';
 import type { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace-base';
@@ -14,6 +14,16 @@ export interface Exporters {
   spanExporter: SpanExporter;
   metricExporter: PushMetricExporter;
 }
+
+/**
+ * Delta temporality for OTLP metrics. Backends that diff consecutive cumulative
+ * points (Datadog) need two points per series to emit a histogram sketch; the
+ * per-feature meter flushes once and exits, so its cumulative histograms
+ * (`conductor.step.duration`) never produced a distribution. Delta carries the
+ * interval's buckets in every point. Prometheus OTLP ingest drops delta unless
+ * started with `--enable-feature=otlp-deltatocumulative`.
+ */
+const METRIC_TEMPORALITY = AggregationTemporalityPreference.DELTA;
 
 /** Build the HTTP/protobuf exporter options for one OTLP signal. */
 export function buildHttpExporterOptions(
@@ -43,13 +53,13 @@ export function buildExporters(
     if (config.protocol === 'grpc') {
       return {
         spanExporter: new OTLPGrpcTraceExporter({ url }),
-        metricExporter: new OTLPGrpcMetricExporter({ url }),
+        metricExporter: new OTLPGrpcMetricExporter({ url, temporalityPreference: METRIC_TEMPORALITY }),
       };
     }
     // Default: HTTP/protobuf (port 4318)
     return {
       spanExporter: new OTLPHttpTraceExporter(buildHttpExporterOptions(config, 'traces')),
-      metricExporter: new OTLPHttpMetricExporter(buildHttpExporterOptions(config, 'metrics')),
+      metricExporter: new OTLPHttpMetricExporter({ ...buildHttpExporterOptions(config, 'metrics'), temporalityPreference: METRIC_TEMPORALITY }),
     };
   }
 

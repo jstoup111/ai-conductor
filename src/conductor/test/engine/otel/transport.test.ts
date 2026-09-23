@@ -19,6 +19,7 @@ import { OTLPTraceExporter as OTLPGrpcTraceExporter } from '@opentelemetry/expor
 import { OTLPMetricExporter as OTLPGrpcMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc';
 import { OTLPTraceExporter as OTLPHttpTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPMetricExporter as OTLPHttpMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
+import { AggregationTemporality, InstrumentType } from '@opentelemetry/sdk-metrics';
 
 describe('buildExporters', () => {
   let tempDir: string;
@@ -128,6 +129,20 @@ describe('buildExporters', () => {
       const exporters = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>);
       expect(exporters.spanExporter).not.toBeInstanceOf(OTLPHttpTraceExporter);
       expect(exporters.metricExporter).not.toBeInstanceOf(OTLPHttpMetricExporter);
+    });
+
+    // Datadog OTLP ingest builds histogram sketches by diffing consecutive
+    // cumulative points and drops any series whose diff is not clean (first
+    // point, reset, start-time mismatch). Short-lived per-feature meters emit
+    // one point and lose the distribution entirely; delta sidesteps the diff.
+    it.each(['http/protobuf', 'grpc'] as const)('%s metric exporter prefers DELTA temporality for histograms and counters', (protocol) => {
+      const resolved = resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', protocol } },
+        pipelineDir,
+      );
+      const { metricExporter } = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>);
+      expect(metricExporter.selectAggregationTemporality?.(InstrumentType.HISTOGRAM)).toBe(AggregationTemporality.DELTA);
+      expect(metricExporter.selectAggregationTemporality?.(InstrumentType.COUNTER)).toBe(AggregationTemporality.DELTA);
     });
   });
 
