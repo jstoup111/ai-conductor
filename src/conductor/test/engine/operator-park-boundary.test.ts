@@ -348,6 +348,34 @@ describe('operator park boundary contract', () => {
     });
   });
 
+  it('routes a self-host admission cancellation to the operator-park terminal before retry accounting', async () => {
+    await writeState(statePath, stateWithPending('build'));
+    const events = new ConductorEventEmitter();
+    const retries: ConductorEvent[] = [];
+    const failures: ConductorEvent[] = [];
+    events.on('step_retry', (event) => { retries.push(event); });
+    events.on('step_failed', (event) => { failures.push(event); });
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const conductor = new Conductor({
+      projectRoot, stateFilePath: statePath, stepRunner: { run }, events,
+      fromStep: 'build', mode: 'auto', daemon: true, selfHost: true,
+      verifyArtifacts: false, featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => false,
+    });
+    const admission = vi.fn(async () => ({ success: false, operatorParkedBeforeDispatch: true }));
+    (conductor as unknown as { runSelfBuildDispatch: typeof admission }).runSelfBuildDispatch = admission;
+
+    const result = await conductor.run();
+
+    expect({ result, admissionCalls: admission.mock.calls.length, runnerCalls: run.mock.calls.length, retries, failures }).toEqual({
+      result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'build', attempt: 1 } },
+      admissionCalls: 1,
+      runnerCalls: 0,
+      retries: [],
+      failures: [],
+    });
+  });
+
   it('fails toward parked when the ordinary-path retry check rejects', async () => {
     await writeState(statePath, stateWithPending('memory'));
     const boundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(

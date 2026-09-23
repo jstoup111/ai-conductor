@@ -833,6 +833,28 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
     });
   });
 
+  it.each([
+    ['rate limit', { success: false, rateLimited: true }],
+    ['stale session', { success: false, sessionExpired: true }],
+  ])('parks after a %s free retry without redispatching the member', async (_name, firstResult) => {
+    const runner = spyRunner([firstResult]);
+    const member: GroupMember = { name: 'manual_test', skill: 'manual-test', outcome: makeSkippedOutcome() };
+    const boundary = vi.fn(async () => true);
+
+    const outcome = await runGroupBranch(
+      member,
+      fakeState,
+      { stepRunner: runner, operatorParkBoundary: boundary },
+      1,
+    );
+
+    expect({ outcome, dispatches: runner.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
+      outcome: { kind: 'parked', attempt: 1 },
+      dispatches: 1,
+      boundaryCalls: 1,
+    });
+  });
+
   it("retains ordered observed intervals from unsuccessful scalar attempts followed by success", async () => {
     const firstInterval = { startedAtMs: 100, durationMs: 10 };
     const secondInterval = { startedAtMs: 200, durationMs: 20 };

@@ -8332,6 +8332,20 @@ export class Conductor {
                 // same-source member in this recovery episode.
                 consumedRecoveryTrials.add(recoverySource);
               }
+              // Auth recovery starts a fresh group branch at attempt one, so
+              // its member-level loop cannot distinguish this redispatch from
+              // initial fan-out.  Admit it here before it reaches a runner.
+              if (
+                this.daemon &&
+                this.featureSlug !== undefined &&
+                this.operatorParkBoundary &&
+                await this.operatorParkBoundary().catch(() => true)
+              ) {
+                for (const index of retryIdxs) {
+                  outcomes[index] = { kind: 'parked', attempt: 1 };
+                }
+                break;
+              }
               inFlightGroupCompletions = {};
               const retryOutcomes = await dispatchGroupRound(retryMembers);
               inFlightGroupCompletions = undefined;
@@ -10205,6 +10219,16 @@ export class Conductor {
             // just below (it needs a live attemptStartedAt to gate verdict
             // freshness) — cleared unconditionally right after that check
             // completes, further down.
+          }
+
+          // A self-host dispatch can be cancelled while waiting for admission.
+          // That is a declined attempt, not an ordinary runner failure: stop
+          // before any failure or retry accounting observes the result.
+          if (result.operatorParkedBeforeDispatch) {
+            const parked = await stopAtOperatorParkBoundary(true, {
+              kind: 'attempt', step: step.name, attempt,
+            });
+            if (parked) return parked;
           }
 
           // Rebase setup exhaustion is a pre-invocation environmental refusal.

@@ -662,6 +662,10 @@ async function runGroupBranchInner(
 
   let lastOutput = "";
   const observedIntervals: ObservedInterval[] = [];
+  // Initial fan-out is admitted by the group entry gate.  From the first
+  // provider call onward, every loop iteration is a possible redispatch,
+  // including free retries that reset `attempt` back to one.
+  let dispatchedOnce = false;
   const accumulatedObservedIntervals = () =>
     observedIntervals.length > 0 ? observedIntervals : undefined;
 
@@ -688,7 +692,7 @@ async function runGroupBranchInner(
     // The group entry gate covers initial fan-out. Re-read park state before
     // each member attempt so a member already running can drain, while a
     // retry after the park is declined without becoming a branch failure.
-    if (attempt > 1 && await deps.operatorParkBoundary?.().catch(() => true)) {
+    if (dispatchedOnce && await deps.operatorParkBoundary?.().catch(() => true)) {
       return makeParkedOutcome(attempt);
     }
 
@@ -701,6 +705,7 @@ async function runGroupBranchInner(
     });
     let result: StepRunResult;
     try {
+      dispatchedOnce = true;
       result = await deps.stepRunner.run(
         memberStep,
         state,
