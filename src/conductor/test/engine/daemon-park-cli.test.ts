@@ -381,6 +381,137 @@ describe('engine/daemon-park-cli', () => {
   });
 
   describe('dispatchDaemonPark', () => {
+    it.each(['running', 'preparing'] as const)('reports a %s step and attempt after writing the park marker', async (phase) => {
+      const slug = `active-${phase}`;
+      await makeWorktree(root, slug);
+      await mkdir(join(root, '.worktrees', slug, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(root, '.worktrees', slug, '.pipeline', 'events.jsonl'),
+        `${JSON.stringify({
+          type: 'provider_attempt',
+          step: 'build',
+          lifecycle: { phase, attemptId: 'build-2', recoveryCount: 0 },
+        })}\n`,
+      );
+      const out: string[] = [];
+
+      const code = await dispatchDaemonPark(
+        { kind: 'park', slug },
+        {
+          cwd: root,
+          out: (line) => out.push(line),
+          readPidRecord: async () => ({ pid: 123, uuid: 'daemon', startedAt: '2026-09-23T00:00:00.000Z', engineDir: '/tmp' }),
+          isLive: () => true,
+        },
+      );
+
+      expect(code).toBe(0);
+      expect(await isOperatorParked(root, slug)).toBe(true);
+      expect(out.join('\n')).toMatch(/still running.*build.*build-2/i);
+    });
+
+    it('reports fully stopped when the daemon is not live', async () => {
+      const slug = 'stopped-build';
+      await makeWorktree(root, slug);
+      const out: string[] = [];
+
+      const code = await dispatchDaemonPark(
+        { kind: 'park', slug },
+        { cwd: root, out: (line) => out.push(line), readPidRecord: async () => null },
+      );
+
+      expect(code).toBe(0);
+      expect(await isOperatorParked(root, slug)).toBe(true);
+      expect(out.join('\n')).toMatch(/fully stopped/i);
+    });
+
+    it('reports fully stopped for a settled attempt and for a known slug without a worktree', async () => {
+      const settledSlug = 'settled-build';
+      await makeWorktree(root, settledSlug);
+      await mkdir(join(root, '.worktrees', settledSlug, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(root, '.worktrees', settledSlug, '.pipeline', 'events.jsonl'),
+        `${JSON.stringify({
+          type: 'provider_attempt',
+          step: 'build',
+          lifecycle: { phase: 'settled', attemptId: 'build-2', recoveryCount: 0, outcome: 'completed' },
+        })}\n`,
+      );
+      const settledOut: string[] = [];
+      const settledCode = await dispatchDaemonPark(
+        { kind: 'park', slug: settledSlug },
+        {
+          cwd: root,
+          out: (line) => settledOut.push(line),
+          readPidRecord: async () => ({ pid: 123, uuid: 'daemon', startedAt: '2026-09-23T00:00:00.000Z', engineDir: '/tmp' }),
+          isLive: () => true,
+        },
+      );
+
+      const missingSlug = 'no-worktree';
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(root, '.docs', 'plans', `${missingSlug}.md`), '# known\n');
+      const missingOut: string[] = [];
+      const missingCode = await dispatchDaemonPark(
+        { kind: 'park', slug: missingSlug },
+        { cwd: root, out: (line) => missingOut.push(line), readPidRecord: async () => null },
+      );
+
+      expect({ settledCode, missingCode }).toEqual({ settledCode: 0, missingCode: 0 });
+      expect(await isOperatorParked(root, settledSlug)).toBe(true);
+      expect(await isOperatorParked(root, missingSlug)).toBe(true);
+      expect(settledOut.join('\n')).toMatch(/fully stopped/i);
+      expect(missingOut.join('\n')).toMatch(/fully stopped/i);
+    });
+
+    it.each([
+      ['unreadable events', async (slug: string) => {
+        await mkdir(join(root, '.worktrees', slug, '.pipeline', 'events.jsonl'), { recursive: true });
+      }],
+      ['malformed provider attempts', async (slug: string) => {
+        await mkdir(join(root, '.worktrees', slug, '.pipeline'), { recursive: true });
+        await writeFile(
+          join(root, '.worktrees', slug, '.pipeline', 'events.jsonl'),
+          `${JSON.stringify({ type: 'provider_attempt', step: 'build', lifecycle: { phase: 'nonsense' } })}\n`,
+        );
+      }],
+      ['liveness lookup error', async (_slug: string) => {}],
+    ])('reports unknown work without changing park success for %s', async (reason, setup) => {
+      const slug = `unknown-${reason.replaceAll(' ', '-')}`;
+      await makeWorktree(root, slug);
+      await setup(slug);
+      const out: string[] = [];
+      const lookup = reason === 'liveness lookup error'
+        ? async () => { throw new Error('pidfile unreadable'); }
+        : async () => ({ pid: 123, uuid: 'daemon', startedAt: '2026-09-23T00:00:00.000Z', engineDir: '/tmp' });
+
+      const code = await dispatchDaemonPark(
+        { kind: 'park', slug },
+        { cwd: root, out: (line) => out.push(line), readPidRecord: lookup, isLive: () => true },
+      );
+
+      expect(code).toBe(0);
+      expect(await isOperatorParked(root, slug)).toBe(true);
+      expect(out.join('\n')).toMatch(/unknown/i);
+      expect(out.join('\n')).not.toMatch(/fully stopped/i);
+    });
+
+    it('reports work when re-parking an already parked feature', async () => {
+      const slug = 'repark-active';
+      await makeWorktree(root, slug);
+      await dispatchDaemonPark({ kind: 'park', slug }, { cwd: root, out: () => {} });
+      const out: string[] = [];
+
+      const code = await dispatchDaemonPark(
+        { kind: 'park', slug },
+        { cwd: root, out: (line) => out.push(line), readPidRecord: async () => null },
+      );
+
+      expect(code).toBe(0);
+      expect(out.join('\n')).toMatch(/already parked/i);
+      expect(out.join('\n')).toMatch(/fully stopped/i);
+    });
+
     it('park writes the marker and prints a confirmation naming the slug', async () => {
       await makeWorktree(root, 'feat-widgets');
       const out: string[] = [];

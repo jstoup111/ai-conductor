@@ -23,6 +23,8 @@ import { runProjectTeardown } from './worktree-prepare.js';
 import { loadConfig } from './config.js';
 import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 import { detectAutoResume } from './auto-resume.js';
+import { classifyRunningWork } from './daemon-dashboard.js';
+import { isLive, readPidRecord } from './daemon-lock.js';
 import type { ReconcileMergedParkOutcome } from './park-reconciliation.js';
 import type { GitRunner, GhRunner } from './pr-labels.js';
 
@@ -121,6 +123,37 @@ export interface DaemonParkDeps {
   removeWorktree?: (repoRoot: string, worktreePath: string) => Promise<void>;
   /** Resolved project teardown timeout; production callers may supply it. */
   teardownTimeoutSeconds?: number;
+  /** Read-only daemon pidfile lookup; injectable to isolate CLI tests. */
+  readPidRecord?: (repoPath: string) => Promise<{ pid: number } | null>;
+  /** Read-only pid liveness probe; injectable to isolate CLI tests. */
+  isLive?: (pid: number) => boolean;
+}
+
+async function reportParkRunningWork(
+  projectRoot: string,
+  slug: string,
+  deps: DaemonParkDeps,
+  out: (line: string) => void,
+): Promise<void> {
+  try {
+    const record = await (deps.readPidRecord ?? readPidRecord)(projectRoot);
+    if (!record || !(deps.isLive ?? isLive)(record.pid)) {
+      out(`Work for '${slug}' is fully stopped.`);
+      return;
+    }
+
+    const work = await classifyRunningWork(join(projectRoot, '.worktrees', slug));
+    if (work.state === 'running') {
+      out(`Work for '${slug}' is still running: step ${work.step}, attempt ${work.attemptId}.`);
+    } else if (work.state === 'stopped') {
+      out(`Work for '${slug}' is fully stopped.`);
+    } else {
+      out(`Running work for '${slug}' is unknown.`);
+    }
+  } catch {
+    // A park is durable even if the post-write observation cannot be made.
+    out(`Running work for '${slug}' is unknown.`);
+  }
 }
 
 /**
@@ -258,6 +291,7 @@ export async function dispatchDaemonPark(
         );
         out(`Marked for park: ${markerPath}`);
       }
+      await reportParkRunningWork(resolvedRoot, cmd.slug, deps, out);
     } else {
       const wasParked = await isOperatorParked(resolvedRoot, cmd.slug);
       if (!wasParked) {
