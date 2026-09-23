@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-23T23:49:33.751Z
 Slug: continuous-daemon-grows-to-4-2-gb-in-three-hours-a
 Class: needs-human
 Halting step: prd_audit
