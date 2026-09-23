@@ -1,25 +1,26 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-23T15:45:00.959Z
+Status: halted
 Slug: daemon-park-does-not-stop-retries-inside-an-alread
 Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-daemon-park-does-not-stop-retries-inside-an-alread
-Head SHA: 6973dd78019b1874eb19141200741427a65f740a
-Halted at: 2026-09-23T14:14:14.541Z
+Head SHA: ecd3662c8f0c9e74ee67830963e2f3037480814f
+Halted at: 2026-09-23T23:18:44.999Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-3 (Story 11)
+rebase conflict — parked for human resolution
+rebase continuation state transition was refused; inspect concurrent state updates before resuming
+Conflicted files: (unknown)
 
-Blocking findings:
-AB-1 (REMEDIABLE; Task 9): `buildParallelFailureEvents` was changed and tested for parked outcomes but has no production caller.
-AB-2 (REMEDIABLE; Task 3): Finish-publication progress and test-suite infrastructure retries bypass the per-attempt park gate.
-AB-3 (DESIGN; Story 11): The approved pidfile seam erases indeterminate liveness and causes a false “fully stopped” report.
+Resume procedure:
+  1. Resolve the conflicts in the listed file(s).
+  2. git rebase --continue
+  3. rm .pipeline/HALT
+  4. Re-queue the feature for the daemon.
 ```
