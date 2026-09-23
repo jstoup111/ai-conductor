@@ -68,7 +68,7 @@ const userConfigFixture = vi.hoisted(() => ({ path: '' }));
 const registeredProviderRoots = vi.hoisted(() => [] as PluginRegistry[]);
 const daemonResolvedConfigs = vi.hoisted(() => [] as HarnessConfig[]);
 
-vi.mock('../../src/engine/user-config.js', async (importOriginal) => {
+vi.mock(import('../../src/engine/user-config.js'), async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/user-config.js')>();
   return {
     ...actual,
