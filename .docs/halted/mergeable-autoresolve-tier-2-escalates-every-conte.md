@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-23T07:34:16.094Z
+Status: halted
 Slug: mergeable-autoresolve-tier-2-escalates-every-conte
-Class: plan-gap
+Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-mergeable-autoresolve-tier-2-escalates-every-conte
-Head SHA: b5af2712a0a0710429817a42ce5bb2eadb3fd5ea
-Halted at: 2026-09-23T02:23:11.418Z
+Head SHA: 5d3e8643bb60b669ab8a95a2a7cd466643e0c422
+Halted at: 2026-09-23T16:01:53.107Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome
+Validation group "prd_audit" halted: branch "prd_audit" produced no-verdict after 3 attempts (PRD widening recovery (persistence-failed): affected 0827eb5d-3686-416d-bbe0-e99cb117dca8. Recovery: resolve the store or lease failure, verify the durable records, then resume.).
 ```
