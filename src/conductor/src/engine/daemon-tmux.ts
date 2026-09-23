@@ -18,13 +18,21 @@ import { unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { resolveCanonicalLauncher, shellQuote } from './canonical-launcher.js';
+import { DEFAULT_DAEMON_HEAP_LIMIT_MB } from './config.js';
+import type { Config } from '../types/config.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants — only place that encodes the session prefix and foreground command.
 // ─────────────────────────────────────────────────────────────────────────────
 export const SESSION_PREFIX = 'cc-daemon-';
-export const DAEMON_FOREGROUND_COMMAND =
-  `${shellQuote(resolveCanonicalLauncher())} daemon --continuous`;
+
+/** Builds the continuous-daemon pane command with its V8 old-space cap. */
+export function buildDaemonForegroundCommand(
+  config: Pick<Config, 'daemon_heap_limit_mb'> = {},
+): string {
+  const heapLimitMb = config.daemon_heap_limit_mb ?? DEFAULT_DAEMON_HEAP_LIMIT_MB;
+  return `NODE_OPTIONS=--max-old-space-size=${heapLimitMb} ${shellQuote(resolveCanonicalLauncher())} daemon --continuous`;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TmuxRunner — injectable execution boundary (allows deterministic unit tests).
@@ -323,7 +331,7 @@ export interface RespawnOutcome {
 export async function respawnPane(
   name: string,
   run: TmuxRunner = defaultTmuxRunner,
-  cmd: string = DAEMON_FOREGROUND_COMMAND,
+  cmd: string = buildDaemonForegroundCommand(),
 ): Promise<RespawnOutcome> {
   let wrappedCmd = cmd;
   let scrollbackPreserved = false;
@@ -436,7 +444,7 @@ export interface Supervisor {
    */
   hasSession(repo: string): Promise<boolean>;
   /** Ensures a daemon session exists (idempotent — no-op when already running). */
-  start(repo: string): Promise<void>;
+  start(repo: string, command?: string): Promise<void>;
   /** Kills the daemon session (no-op when not running). */
   stop(repo: string): Promise<void>;
   /**
@@ -445,7 +453,7 @@ export interface Supervisor {
    * kill-session + new-session, with an explicit degraded outcome, when the
    * respawn tooling fails.
    */
-  restart(repo: string): Promise<RestartOutcome>;
+  restart(repo: string, command?: string): Promise<RestartOutcome>;
   /**
    * Attaches the terminal to the daemon session. Pass readOnly:true to watch.
    * Pass `into: <tmux target>` to deliver the attach into an already-open pane
@@ -496,7 +504,7 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
       return hasSession(name, run);
     },
 
-    async start(repo: string): Promise<void> {
+    async start(repo: string, command = buildDaemonForegroundCommand()): Promise<void> {
       await requireTmux(run);
       const name = sessionNameForRepo(repo);
       if (await hasSession(name, run)) {
@@ -505,11 +513,11 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
         // rather than creating a second session or silently no-op'ing.
         if (await isPaneDead(name, run)) {
           await setRemainOnExit(name, run);
-          await respawnPane(name, run);
+          await respawnPane(name, run, command);
         }
         return; // already running (or just revived) — idempotent
       }
-      await newDetachedSession(name, DAEMON_FOREGROUND_COMMAND, repo, run);
+      await newDetachedSession(name, command, repo, run);
       await setRemainOnExit(name, run);
     },
 
@@ -519,7 +527,7 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
       await killSession(name, run);
     },
 
-    async restart(repo: string): Promise<RestartOutcome> {
+    async restart(repo: string, command = buildDaemonForegroundCommand()): Promise<RestartOutcome> {
       // Respawn-in-place (ADR-014, FR-20): the session and its window are left
       // alone — only the daemon's own pane is torn down and relaunched. This
       // preserves any operator windows/panes attached to the same session and
@@ -530,7 +538,7 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
       const name = sessionNameForRepo(repo);
       await setRemainOnExit(name, run);
       try {
-        const { scrollbackPreserved } = await respawnPane(name, run);
+        const { scrollbackPreserved } = await respawnPane(name, run, command);
         return {
           degraded: false,
           message: scrollbackPreserved
@@ -544,7 +552,7 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
         // up running — but this loses the old session's scrollback/history,
         // so callers MUST be told explicitly (FR-20 neg, Task 24).
         await killSession(name, run);
-        await newDetachedSession(name, DAEMON_FOREGROUND_COMMAND, repo, run);
+        await newDetachedSession(name, command, repo, run);
         const reason = err instanceof Error ? err.message : String(err);
         return {
           degraded: true,

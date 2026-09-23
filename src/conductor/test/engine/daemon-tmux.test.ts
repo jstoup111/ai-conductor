@@ -1,6 +1,9 @@
 // Covers: task:1, task:2, task:3
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { DEFAULT_DAEMON_HEAP_LIMIT_MB } from '../../src/engine/config.js';
 
 // Guard tests must remain harmless during RED and test-quality's production
 // rollback. In particular, targetless `respawn-pane -k` selects the live pane.
@@ -128,6 +131,24 @@ describe('sessionNameForRepo: format, stability, and safety chars', () => {
     const nameFor = requireFn(await load(), 'sessionNameForRepo');
     const name: string = nameFor('/home/alice/widgets');
     expect(name).toMatch(/-[0-9a-f]{6}$/);
+  });
+});
+
+describe('buildDaemonForegroundCommand', () => {
+  it('uses the default 4096 MB old-space cap and retains the continuous daemon invocation', async () => {
+    const build = requireFn(await load(), 'buildDaemonForegroundCommand');
+    expect(build({})).toContain('NODE_OPTIONS=--max-old-space-size=4096');
+    expect(build({})).toMatch(/ daemon --continuous$/);
+  });
+
+  it('uses the configured old-space cap', async () => {
+    const build = requireFn(await load(), 'buildDaemonForegroundCommand');
+    expect(build({ daemon_heap_limit_mb: 6144 })).toContain('NODE_OPTIONS=--max-old-space-size=6144');
+  });
+
+  it('documents the default heap limit in the configuration reference', async () => {
+    const reference = await readFile(resolve(process.cwd(), '../../docs/reference/configuration.md'), 'utf8');
+    expect(reference).toContain(`| \`daemon_heap_limit_mb\` | number | \`${DEFAULT_DAEMON_HEAP_LIMIT_MB}\` |`);
   });
 });
 
@@ -377,7 +398,7 @@ describe('respawnPane: argv and error handling', () => {
 
   it('wraps the respawned command to re-emit captured scrollback then exec the daemon command, targeting the active pane', async () => {
     const respawnPane = requireFn(await load(), 'respawnPane');
-    const { DAEMON_FOREGROUND_COMMAND } = await load();
+    const { buildDaemonForegroundCommand } = await load();
     const { run, calls } = spyRunner({ 'capture-pane': { code: 0, stdout: 'old scrollback\n' } });
     await respawnPane('cc-daemon-myapp-abc123', run);
     const respawnCall = calls.find((c) => c.args[0] === 'respawn-pane')!;
@@ -387,7 +408,7 @@ describe('respawnPane: argv and error handling', () => {
     expect(respawnCall.args[3]).toBe('=cc-daemon-myapp-abc123:');
     const wrapped = respawnCall.args[4];
     expect(wrapped).toMatch(/^cat .+; rm -f .+; exec .+ daemon --continuous$/);
-    expect(wrapped).toContain(DAEMON_FOREGROUND_COMMAND as string);
+    expect(wrapped).toContain(buildDaemonForegroundCommand({}) as string);
     expect(respawnCall.inherit).toBe(false);
   });
 
@@ -400,25 +421,25 @@ describe('respawnPane: argv and error handling', () => {
 
   it('falls back to the bare command and reports scrollbackPreserved:false when capture-pane fails', async () => {
     const respawnPane = requireFn(await load(), 'respawnPane');
-    const { DAEMON_FOREGROUND_COMMAND } = await load();
+    const { buildDaemonForegroundCommand } = await load();
     const { run, calls } = spyRunner({ 'capture-pane': { code: 1 } });
     const outcome = await respawnPane('cc-daemon-myapp-abc123', run);
     expect(outcome).toEqual({ scrollbackPreserved: false });
     const respawnCall = calls.find((c) => c.args[0] === 'respawn-pane')!;
     expect(respawnCall.args).toEqual([
-      'respawn-pane', '-k', '-t', '=cc-daemon-myapp-abc123:', DAEMON_FOREGROUND_COMMAND,
+      'respawn-pane', '-k', '-t', '=cc-daemon-myapp-abc123:', buildDaemonForegroundCommand({}),
     ]);
   });
 
   it('falls back to the bare command and reports scrollbackPreserved:false when capture-pane returns empty stdout', async () => {
     const respawnPane = requireFn(await load(), 'respawnPane');
-    const { DAEMON_FOREGROUND_COMMAND } = await load();
+    const { buildDaemonForegroundCommand } = await load();
     const { run, calls } = spyRunner({ 'capture-pane': { code: 0, stdout: '' } });
     const outcome = await respawnPane('cc-daemon-myapp-abc123', run);
     expect(outcome).toEqual({ scrollbackPreserved: false });
     const respawnCall = calls.find((c) => c.args[0] === 'respawn-pane')!;
     expect(respawnCall.args).toEqual([
-      'respawn-pane', '-k', '-t', '=cc-daemon-myapp-abc123:', DAEMON_FOREGROUND_COMMAND,
+      'respawn-pane', '-k', '-t', '=cc-daemon-myapp-abc123:', buildDaemonForegroundCommand({}),
     ]);
   });
 
@@ -644,7 +665,7 @@ describe('makeTmuxSupervisor().restart: respawn fallback on failure (FR-20 neg)'
 
   it('the recreated session after fallback uses the same session name and foreground command', async () => {
     const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
-    const { DAEMON_FOREGROUND_COMMAND } = await load();
+    const { buildDaemonForegroundCommand } = await load();
     const { run, calls } = spyRunner({ '-V': { code: 0 }, 'respawn-pane': { code: 1 } });
     await makeTmuxSupervisor(run).restart('/home/alice/myapp');
     const killCall = calls.find((c) => c.args[0] === 'kill-session')!;
@@ -652,7 +673,7 @@ describe('makeTmuxSupervisor().restart: respawn fallback on failure (FR-20 neg)'
     expect(killCall.args).toEqual(
       expect.arrayContaining([expect.stringMatching(/^=cc-daemon-myapp-[0-9a-f]{6}$/)]),
     );
-    expect(newCall.args).toContain(DAEMON_FOREGROUND_COMMAND as string);
+    expect(newCall.args).toContain(buildDaemonForegroundCommand({}) as string);
   });
 });
 

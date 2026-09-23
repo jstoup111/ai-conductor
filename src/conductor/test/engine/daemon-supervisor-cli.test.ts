@@ -170,6 +170,51 @@ describe('dispatchDaemonSupervisor: verb → supervisor method routing', () => {
   });
 });
 
+describe('dispatchDaemonSupervisor: heap-cap command validation', () => {
+  it.each([0, -1, 1.5, 'big'])('rejects daemon_heap_limit_mb=%p before calling tmux', async (value) => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+    const message = 'daemon_heap_limit_mb must be an integer in the accepted range [256, ∞)';
+
+    const code: number = await dispatch(
+      { verb: 'start', detach: true },
+      {
+        supervisor,
+        cwd: CWD,
+        out: (line: string) => out.push(line),
+        ensureFresh: async () => {},
+        loadConfig: async () => ({
+          ok: false,
+          error: { type: 'validation_error', message: `${message}: ${value}` },
+        }) as never,
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(calls).toEqual([]);
+    expect(out.join('\n')).toContain(message);
+  });
+
+  it('passes the configured heap cap to the start command', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { calls, supervisor } = makeFakeSupervisor();
+
+    const code: number = await dispatch(
+      { verb: 'start', detach: true },
+      {
+        supervisor,
+        cwd: CWD,
+        ensureFresh: async () => {},
+        loadConfig: async () => ({ ok: true, config: { daemon_heap_limit_mb: 6144 }, warnings: [] }) as never,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(calls[0]?.args).toEqual([CWD, expect.stringContaining('--max-old-space-size=6144')]);
+  });
+});
+
 // ═════════════════════════════════════════════════════════════════════════════
 // connect --write: read-write attach from the same subcommand, without needing
 // to already know to invoke `debug` instead.

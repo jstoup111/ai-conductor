@@ -18,7 +18,7 @@
 // Production call sites of the daemon's effective-config derivation (§3d):
 //   - src/conductor/src/daemon-cli.ts:497  runDaemonMode  (the only one)
 //   - src/conductor/src/index.ts:650       main → runDaemonMode (direct launch)
-//   - src/conductor/src/engine/daemon-tmux.ts:25 DAEMON_FOREGROUND_COMMAND
+//   - src/conductor/src/engine/daemon-tmux.ts:25 buildDaemonForegroundCommand
 //     ('conduct-ts daemon --continuous') — the supervised launch, which routes
 //     back through main → runDaemonMode. Covered by the Story 3 spec below.
 //
@@ -47,7 +47,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runDaemonMode } from '../../src/daemon-cli.js';
 import { daemonLogPath } from '../../src/engine/daemon-log.js';
-import { DAEMON_FOREGROUND_COMMAND } from '../../src/engine/daemon-tmux.js';
+import { buildDaemonForegroundCommand } from '../../src/engine/daemon-tmux.js';
 import { detectDaemonCommand, detectDaemonSupervisorCommand } from '../../src/engine/daemon-command.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { CodexProvider } from '../../src/execution/codex-provider.js';
@@ -394,13 +394,13 @@ describe('#967 Story 2 — project policy retains precise precedence', () => {
 
 describe('#967 Story 3 — every daemon launch uses one effective-config boundary', () => {
   it('happy: the supervised foreground launch resolves to the same daemon run command as a direct launch', async () => {
-    // The supervisor starts the daemon by running DAEMON_FOREGROUND_COMMAND in
+    // The supervisor starts the daemon by running buildDaemonForegroundCommand in
     // a tmux pane. Parsing that command's argv with the PRODUCTION dispatchers
     // proves it is not intercepted by a management verb and lands on the same
     // `daemon` run command that main() routes into runDaemonMode — i.e. both
     // launch paths converge on one composition root, and therefore on one
     // effective-config boundary.
-    const supervisedArgv = ['node', ...DAEMON_FOREGROUND_COMMAND.split(' ')];
+    const supervisedArgv = ['node', ...buildDaemonForegroundCommand({}).split(' ').slice(1)];
 
     expect(detectDaemonSupervisorCommand(supervisedArgv)).toBeNull();
     const daemonCmd = detectDaemonCommand(supervisedArgv);

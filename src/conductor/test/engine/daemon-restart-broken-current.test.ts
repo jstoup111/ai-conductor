@@ -30,7 +30,6 @@ import type { TmuxRunner } from '../../src/engine/daemon-tmux.js';
 import {
   makeTmuxSupervisor,
   sessionNameForRepo,
-  DAEMON_FOREGROUND_COMMAND,
 } from '../../src/engine/daemon-tmux.js';
 import { writeRestartPending, readRestartPending, consumeOnBoot } from '../../src/engine/restart-marker.js';
 

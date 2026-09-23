@@ -6,7 +6,8 @@
 // (makeTmuxSupervisor()) is only resolved at call time to avoid importing the
 // supervisor runtime eagerly.
 
-import { makeTmuxSupervisor, TmuxNotInstalledError, type Supervisor } from './daemon-tmux.js';
+import { buildDaemonForegroundCommand, makeTmuxSupervisor, TmuxNotInstalledError, type Supervisor } from './daemon-tmux.js';
+import { loadConfig } from './config.js';
 import type { DaemonSupervisorCommand } from './daemon-command.js';
 import {
   ensureInstallFresh,
@@ -165,6 +166,8 @@ export interface DaemonSupervisorDeps {
   relinkSkills?: () => Promise<void>;
   /** Refresh the installed self-host source before rebuilding on restart. */
   refreshSource?: () => Promise<FastForwardOutcome | void>;
+  /** Project config loader; injectable for command-validation tests. */
+  loadConfig?: typeof loadConfig;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -233,6 +236,17 @@ export async function dispatchDaemonSupervisor(
       const { fastForwardRoot } = await import('./daemon-backlog.js');
       return fastForwardRoot(installed.root, out);
     });
+  const loadDaemonConfig = deps.loadConfig ?? loadConfig;
+
+  const foregroundCommand = async (repo = cwd): Promise<string> => {
+    const result = await loadDaemonConfig(repo);
+    // A missing config has always allowed daemon management with defaults.
+    // A present invalid config must refuse before any tmux action.
+    if (!result.ok && result.error.type !== 'missing') {
+      throw new Error(result.error.message);
+    }
+    return buildDaemonForegroundCommand(result.ok ? result.config : {});
+  };
 
   // Fleet dispatch (FR-3/FR-17/FR-18): pause/resume/restart accept a named subset or
   // `--all` and iterate the registry instead of acting on `cwd` alone. This
@@ -297,13 +311,13 @@ export async function dispatchDaemonSupervisor(
       }
 
       try {
-        const outcome = await supervisor.restart(record.path);
+        const outcome = await supervisor.restart(record.path, await foregroundCommand(record.path));
         return outcome.message;
       } catch (err) {
         // Restart failed — likely "no session". Try starting instead.
         // This handles the case where the daemon was stopped.
         try {
-          await supervisor.start(record.path);
+          await supervisor.start(record.path, await foregroundCommand(record.path));
           return 'daemon started (was stopped)';
         } catch (startErr) {
           // Both restart and start failed — propagate the error so
@@ -325,7 +339,7 @@ export async function dispatchDaemonSupervisor(
         // Refuse to launch a daemon on a stale install — otherwise newly-added
         // skills are unregistered and daemon-dispatched skills fail silently.
         await ensureFresh();
-        await supervisor.start(cwd);
+        await supervisor.start(cwd, await foregroundCommand());
         // Auto-attach (read-only) so `start` drops the operator into the live
         // session. Skipped when detached (-D) or there's no TTY to attach to —
         // `tmux attach` errors without a controlling terminal, which would turn
@@ -404,7 +418,7 @@ export async function dispatchDaemonSupervisor(
         // failure (Task 12 handles non-zero exit).
         await relinkSkills();
 
-        const outcome = await supervisor.restart(cwd);
+        const outcome = await supervisor.restart(cwd, await foregroundCommand());
         // Always surface the outcome — degraded restarts (fallback kill+recreate)
         // MUST be reported explicitly so the operator knows scrollback/session
         // continuity was lost (FR-20 neg, Task 24).
