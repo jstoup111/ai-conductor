@@ -161,11 +161,11 @@ As an operator, I want a feature whose daemon was killed mid-build to continue f
 
 #### Negative Paths
 - Given a completed task whose commit carries a `Task:` trailer but whose `task-status.json` row was lost, when the feature is re-dispatched, then the row is restored as `completed` from the trailer and the task is not redone
-- Given the daemon was killed while task 19 was mid-flight with no commit, when the feature is re-dispatched, then task 19 is dispatched again from pending and no half-finished state is treated as complete
+- Given the daemon was killed while task 19 was mid-flight with no commit, when the feature is re-dispatched, then task 19 keeps its preserved `in_progress` row and is dispatched again, and no half-finished state is treated as complete
 - Given the feature had no `.pipeline/HALT` written because the daemon died abruptly, when the new daemon scans the backlog, then the feature is re-dispatched on the next poll without an operator clearing anything
 
 ### Done When
 - [ ] An acceptance test seeds a worktree with trailered commits and a `task-status.json`, simulates the daemon death, re-dispatches, and asserts the resumed task index and untouched earlier rows
 - [ ] The same test asserts pre-kill `.pipeline/events.jsonl` and `conduct-state.json` contents survive the redispatch
-- [ ] A test asserts a trailer-only completed task is restored as `completed` and an uncommitted mid-flight task returns to pending
+- [ ] A test asserts a trailer-only completed task is restored as `completed` and an uncommitted mid-flight task keeps its preserved `in_progress` row and is re-dispatched rather than treated as complete
 - [ ] A test asserts a killed feature with no HALT marker is picked up on the next poll

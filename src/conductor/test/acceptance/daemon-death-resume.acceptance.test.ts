@@ -202,16 +202,12 @@ describe('Story 7 — a feature interrupted by daemon death resumes committed pr
   });
 
   it('restores a missing completed row from its Task trailer', async () => {
+    // The #1102 reconstruction shape: the branch forked from origin/main, the
+    // worktree's gitignored task-status.json was lost, and the re-seed
+    // restores trailer-proven rows from the merge-base..HEAD range.
+    await git(root, ['update-ref', 'refs/remotes/origin/main', 'HEAD']);
     const commits = await commitTasks(root, 18);
-    const rows = Array.from({ length: 25 }, (_, index): TaskRow => {
-      const id = String(index + 1);
-      if (id === '18') return { id, name: 'Work 18', status: 'pending' };
-      if (index < 17) {
-        return { id, name: `Work ${id}`, status: 'completed', commit: commits.get(id) };
-      }
-      return { id, name: `Work ${id}`, status: 'pending' };
-    });
-    await writeTaskStatus(root, rows.filter((row) => row.id !== '18'));
+    await rm(join(root, '.pipeline/task-status.json'), { force: true });
 
     await seedTaskStatus(root, PLAN_REL);
 
@@ -220,9 +216,10 @@ describe('Story 7 — a feature interrupted by daemon death resumes committed pr
       status: 'completed',
       commit: commits.get('18'),
     });
+    expect(seeded.tasks.find((row) => row.status !== 'completed')?.id).toBe('19');
   });
 
-  it('resets an uncommitted in-flight task to pending for redispatch', async () => {
+  it('keeps an uncommitted in-flight task in_progress and re-dispatches it rather than treating it as complete', async () => {
     await writeTaskStatus(
       root,
       Array.from({ length: 25 }, (_, index): TaskRow => ({
@@ -235,7 +232,10 @@ describe('Story 7 — a feature interrupted by daemon death resumes committed pr
     await seedTaskStatus(root, PLAN_REL);
 
     const seeded = await readTaskStatus(root);
-    expect(seeded.tasks.find((row) => row.id === '19')).toMatchObject({ status: 'pending' });
+    const row19 = seeded.tasks.find((row) => row.id === '19');
+    expect(row19).toMatchObject({ status: 'in_progress' });
+    expect(row19?.commit).toBeUndefined();
+    expect(seeded.tasks.some((row) => row.status === 'completed')).toBe(false);
   });
 
   it('dispatches the unfinished feature on the next poll when daemon death left no HALT', async () => {

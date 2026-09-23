@@ -34,7 +34,7 @@ try {
       reason: String(test.failureMessages?.[0] ?? 'daemon death resume assertion failed').split('\n')[0],
     })),
     intentRationale:
-      'The failures show that a daemon redispatch does not yet restore every trailer-proven row and reset uncommitted in-flight work to pending as Story 7 requires.',
+      'The failures show that a daemon redispatch does not yet restore every trailer-proven row and keep uncommitted in-flight work in_progress for re-dispatch as Story 7 requires.',
   };
 } catch (error) {
   evidence = {
