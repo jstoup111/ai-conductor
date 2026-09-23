@@ -114,6 +114,12 @@ a daemon re-dispatch — reuses it instead of re-reading a body the prose author
 Dispatching `release-disposition` discards the capture, so a kickback that rewrites the disposition
 never has its superseded block restored over the new one.
 
+Before FINISH begins publication, it also checks every configured custom step that occurs earlier in
+the resolved flow and declares both `enforcement: gating` and a `completion_artifact`. Each such step
+must be `done` and have a fresh regular-file marker for the current run. A blocked publication names
+all unsatisfied custom step keys; advisory and structural custom steps, steps without a completion
+marker, and steps after FINISH are not FINISH publication prerequisites.
+
 Both configured gates read the **retained SHIP PR**, which the engine adopts at SHIP-phase entry. If
 that PR is a reused `needs-remediation` halt placeholder, the engine makes it presentable whenever
 that identity is resolved — at adoption, at the pre-finish snapshot, or at the finish-time

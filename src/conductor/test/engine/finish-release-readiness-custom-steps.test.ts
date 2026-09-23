@@ -1,0 +1,489 @@
+// Covers: task:3, task:4, task:5, task:6
+import { mkdtemp, mkdir, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import { loadConfig } from '../../src/engine/config.js';
+import {
+  createProductionFinishPublicationCoordinator,
+  createProductionReleaseReadinessObserver,
+} from '../../src/engine/finish-publication-production.js';
+import type { HarnessConfig } from '../../src/types/config.js';
+import type { ConductState } from '../../src/types/index.js';
+
+const runStartedAt = Date.UTC(2026, 8, 22, 12, 0, 0);
+
+function customConfig(names: readonly string[]): HarnessConfig {
+  return {
+    steps: Object.fromEntries(names.map((name, index) => [name, {
+      after: index === 0 ? 'rebase' : names[index - 1]!,
+      skill: `${name}/SKILL.md`, enforcement: 'gating',
+      completion_artifact: `.pipeline/${name}-pass`,
+    }])),
+  };
+}
+
+async function freshMarker(root: string, name: string): Promise<void> {
+  const marker = join(root, '.pipeline', `${name}-pass`);
+  await Promise.all([
+    writeFile(marker, 'PASS\n'),
+    writeRunState(root),
+  ]);
+  await utimes(marker, new Date(runStartedAt + 1), new Date(runStartedAt + 1));
+}
+
+async function writeRunState(root: string, startedAt = runStartedAt): Promise<void> {
+  await writeFile(
+    join(root, '.pipeline', 'conduct-state.json'),
+    JSON.stringify({ run_started_at: startedAt }),
+  );
+}
+
+function doneState(names: readonly string[]): ConductState {
+  return {
+    ...Object.fromEntries(names.map((name) => [name, 'done'])),
+    run_started_at: runStartedAt,
+  } as ConductState;
+}
+
+async function advanceCoordinatorWithFreshCustomGates(root: string, names: readonly string[]) {
+  const trace: string[] = [];
+  const observer = createProductionReleaseReadinessObserver({ projectRoot: root, config: customConfig(names) });
+  const coordinator = createProductionFinishPublicationCoordinator({
+    projectRoot: root,
+    stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+    baseBranch: 'main',
+    git: async (args) => {
+      trace.push(`git:${args.join(' ')}`);
+      if (args[0] === 'rev-list') return { stdout: '1\n' };
+      if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
+      return { stdout: '' };
+    },
+    gh: async (args) => {
+      trace.push(`gh:${args.join(' ')}`);
+      if (args[0] === 'pr' && args[1] === 'view') throw new Error('no open PR');
+      if (args[0] === 'pr' && args[1] === 'create') return { stdout: 'https://github.com/acme/widget/pull/1172\n' };
+      return { stdout: '' };
+    },
+    acquireInteractiveIntent: async () => 'pr',
+    observeReleaseReadiness: async (state) => observer(state),
+  });
+  const result = await coordinator.advance({
+    state: { ...doneState(names), feature_desc: 'feature', worktree_branch: 'feat/feature', build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done' } as ConductState,
+    mode: 'interactive', daemon: false, dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+  });
+  return { result, trace };
+}
+
+describe('production FINISH custom-step release readiness', () => {
+  it('observes a fresh done compliance gate as present', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      await freshMarker(root, 'compliance-gate');
+      const observe = createProductionReleaseReadinessObserver({
+        projectRoot: root,
+        config: {
+          steps: {
+            'compliance-gate': {
+              after: 'rebase', skill: 'compliance/SKILL.md', enforcement: 'gating',
+              completion_artifact: '.pipeline/compliance-gate-pass',
+            },
+          },
+        },
+      });
+
+      await expect(observe({
+        ...({ 'compliance-gate': 'done' } as Record<string, unknown>),
+        run_started_at: runStartedAt,
+      } as ConductState)).resolves.toEqual({ observation: 'present', steps: [] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reads the persisted feature run start on every observation without a clock fallback', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    const statePath = join(root, '.pipeline', 'conduct-state.json');
+    try {
+      await mkdir(join(root, '.pipeline'));
+      await freshMarker(root, 'compliance-gate');
+      const observe = createProductionReleaseReadinessObserver({
+        projectRoot: root,
+        config: customConfig(['compliance-gate']),
+      });
+
+      await writeFile(statePath, JSON.stringify({ run_started_at: runStartedAt + 2 }));
+      await expect(observe({
+        ...doneState(['compliance-gate']),
+        run_started_at: runStartedAt,
+      })).resolves.toEqual({ observation: 'stale', steps: ['compliance-gate'] });
+
+      await writeFile(statePath, JSON.stringify({ run_started_at: runStartedAt }));
+      const restartedObserver = createProductionReleaseReadinessObserver({
+        projectRoot: root,
+        config: customConfig(['compliance-gate']),
+      });
+      await expect(restartedObserver({
+        ...doneState(['compliance-gate']),
+        run_started_at: runStartedAt + 2,
+      })).resolves.toEqual({ observation: 'present', steps: [] });
+
+      const now = vi.spyOn(Date, 'now').mockReturnValue(runStartedAt);
+      await writeFile(statePath, JSON.stringify({}));
+      await expect(observe(doneState(['compliance-gate'])))
+        .resolves.toEqual({ observation: 'unavailable', steps: ['compliance-gate'] });
+      expect(now).not.toHaveBeenCalled();
+      now.mockRestore();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a marker timestamp equal to the persisted feature run start as present', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      await freshMarker(root, 'compliance-gate');
+      const marker = join(root, '.pipeline', 'compliance-gate-pass');
+      await utimes(marker, new Date(runStartedAt), new Date(runStartedAt));
+
+      await expect(createProductionReleaseReadinessObserver({
+        projectRoot: root, config: customConfig(['compliance-gate']),
+      })(doneState(['compliance-gate']))).resolves.toEqual({
+        observation: 'present', steps: [],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['missing', 'malformed', 'unreadable'] as const)(
+    'returns unavailable when persisted run state is %s',
+    async (stateKind) => {
+      const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+      const statePath = join(root, '.pipeline', 'conduct-state.json');
+      try {
+        await mkdir(join(root, '.pipeline'));
+        await freshMarker(root, 'compliance-gate');
+        if (stateKind === 'missing') await rm(statePath);
+        if (stateKind === 'malformed') await writeFile(statePath, '{');
+        if (stateKind === 'unreadable') {
+          await rm(statePath);
+          await mkdir(statePath);
+        }
+
+        await expect(createProductionReleaseReadinessObserver({
+          projectRoot: root, config: customConfig(['compliance-gate']),
+        })(doneState(['compliance-gate']))).resolves.toEqual({
+          observation: 'unavailable', steps: ['compliance-gate'],
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(['pending', 'in_progress', 'failed'] as const)(
+    'observes a %s gating custom step as missing',
+    async (status) => {
+      const observe = createProductionReleaseReadinessObserver({
+        projectRoot: '.', config: customConfig(['compliance-gate']),
+      });
+
+      await expect(observe({
+        ...({ 'compliance-gate': status } as Record<string, unknown>),
+        run_started_at: runStartedAt,
+      } as ConductState)).resolves.toEqual({ observation: 'missing', steps: ['compliance-gate'] });
+    },
+  );
+
+  it('observes a skipped gating custom step as missing', async () => {
+    const observe = createProductionReleaseReadinessObserver({
+      projectRoot: '.', config: customConfig(['compliance-gate']),
+    });
+
+    await expect(observe({
+      ...({ 'compliance-gate': 'skipped' } as Record<string, unknown>),
+      run_started_at: runStartedAt,
+    } as ConductState)).resolves.toEqual({ observation: 'missing', steps: ['compliance-gate'] });
+  });
+
+  it('observes two fresh done gating custom steps as present', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      await Promise.all(['compliance-gate', 'notes-gate'].map((name) => freshMarker(root, name)));
+
+      await expect(createProductionReleaseReadinessObserver({
+        projectRoot: root, config: customConfig(['compliance-gate', 'notes-gate']),
+      })(doneState(['compliance-gate', 'notes-gate']))).resolves.toEqual({ observation: 'present', steps: [] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('observes every selected custom gate whose release evidence is missing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      await expect(createProductionReleaseReadinessObserver({
+        projectRoot: root, config: customConfig(['compliance-gate', 'notes-gate']),
+      })({
+        ...({ 'compliance-gate': 'pending', 'notes-gate': 'done' } as Record<string, unknown>),
+        run_started_at: runStartedAt,
+      } as ConductState)).resolves.toEqual({ observation: 'missing', steps: ['compliance-gate', 'notes-gate'] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('observes a done custom gate without its marker as missing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      await freshMarker(root, 'compliance-gate');
+
+      await expect(createProductionReleaseReadinessObserver({
+        projectRoot: root, config: customConfig(['compliance-gate', 'notes-gate']),
+      })(doneState(['compliance-gate', 'notes-gate'])))
+        .resolves.toEqual({ observation: 'missing', steps: ['notes-gate'] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('prioritizes malformed evidence over stale evidence across selected done gates', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      const staleMarker = join(root, '.pipeline', 'compliance-gate-pass');
+      await writeFile(staleMarker, 'PASS\n');
+      await writeRunState(root);
+      await utimes(staleMarker, new Date(runStartedAt - 1), new Date(runStartedAt - 1));
+      await mkdir(join(root, '.pipeline', 'notes-gate-pass'));
+
+      await expect(createProductionReleaseReadinessObserver({
+        projectRoot: root, config: customConfig(['compliance-gate', 'notes-gate']),
+      })(doneState(['compliance-gate', 'notes-gate'])))
+        .resolves.toEqual({ observation: 'malformed', steps: ['compliance-gate', 'notes-gate'] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('observes a symbolic-link marker as malformed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await writeRunState(root);
+      await writeFile(join(pipeline, 'marker-target'), 'PASS\n');
+      await symlink('marker-target', join(pipeline, 'compliance-gate-pass'));
+
+      await expect(createProductionReleaseReadinessObserver({
+        projectRoot: root, config: customConfig(['compliance-gate']),
+      })(doneState(['compliance-gate']))).resolves.toEqual({
+        observation: 'malformed', steps: ['compliance-gate'],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not stat the filesystem when no custom prerequisite is selected', async () => {
+    const lstat = vi.fn();
+    vi.resetModules();
+    vi.doMock('node:fs/promises', async () => ({
+      ...await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises'),
+      lstat,
+    }));
+    try {
+      const { createProductionReleaseReadinessObserver: createObserver } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      await expect(createObserver({ projectRoot: tmpdir(), config: {} })({} as ConductState))
+        .resolves.toEqual({ observation: 'present', steps: [] });
+      expect(lstat).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('node:fs/promises');
+      vi.resetModules();
+    }
+  });
+
+  it('does not require a gating custom step ordered after finish when its marker is absent', async () => {
+    const observe = createProductionReleaseReadinessObserver({
+      projectRoot: '.',
+      config: {
+        steps: {
+          'post-finish-gate': {
+            after: 'finish', skill: 'post-finish/SKILL.md', enforcement: 'gating',
+            completion_artifact: '.pipeline/post-finish-gate-pass',
+          },
+        },
+      },
+    });
+
+    await expect(observe({ 'post-finish-gate': 'done' } as ConductState))
+      .resolves.toEqual({ observation: 'present', steps: [] });
+  });
+
+  it('does not require an advisory custom step when its marker is absent', async () => {
+    const observe = createProductionReleaseReadinessObserver({
+      projectRoot: '.',
+      config: {
+        steps: {
+          'advisory-gate': {
+            after: 'rebase', skill: 'advisory/SKILL.md', enforcement: 'advisory',
+            completion_artifact: '.pipeline/advisory-gate-pass',
+          },
+        },
+      },
+    });
+
+    await expect(observe({ 'advisory-gate': 'done' } as ConductState))
+      .resolves.toEqual({ observation: 'present', steps: [] });
+  });
+
+  it('does not require a gating custom step without a completion artifact', async () => {
+    const observe = createProductionReleaseReadinessObserver({
+      projectRoot: '.',
+      config: {
+        steps: {
+          'markerless-gate': {
+            after: 'rebase', skill: 'markerless/SKILL.md', enforcement: 'gating',
+          },
+        },
+      },
+    });
+
+    await expect(observe({ 'markerless-gate': 'done' } as ConductState))
+      .resolves.toEqual({ observation: 'present', steps: [] });
+  });
+
+  it('reports only a stale selected gate when a post-finish gate is also absent', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      const staleMarker = join(root, '.pipeline', 'selected-gate-pass');
+      await writeFile(staleMarker, 'PASS\n');
+      await writeRunState(root);
+      await utimes(staleMarker, new Date(runStartedAt - 1), new Date(runStartedAt - 1));
+      const observe = createProductionReleaseReadinessObserver({
+        projectRoot: root,
+        config: {
+          steps: {
+            'selected-gate': {
+              after: 'rebase', skill: 'selected/SKILL.md', enforcement: 'gating',
+              completion_artifact: '.pipeline/selected-gate-pass',
+            },
+            'post-finish-gate': {
+              after: 'finish', skill: 'post-finish/SKILL.md', enforcement: 'gating',
+              completion_artifact: '.pipeline/post-finish-gate-pass',
+            },
+          },
+        },
+      });
+
+      await expect(observe(doneState(['selected-gate', 'post-finish-gate'])))
+        .resolves.toEqual({ observation: 'stale', steps: ['selected-gate'] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('observes this repository checked-in custom steps as present', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      const loaded = await loadConfig(join(process.cwd(), '../..'));
+      if (!loaded.ok) throw new Error(loaded.error.message);
+      await mkdir(join(root, '.pipeline'));
+      await Promise.all(['maintain-documentation', 'release-disposition'].map((name) => freshMarker(root, name)));
+
+      await expect(createProductionReleaseReadinessObserver({ projectRoot: root, config: loaded.config })(
+        doneState(['maintain-documentation', 'release-disposition']),
+      )).resolves.toEqual({ observation: 'present', steps: [] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('passes a fresh done compliance gate through the production FINISH coordinator', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      await freshMarker(root, 'compliance-gate');
+      await expect(advanceCoordinatorWithFreshCustomGates(root, ['compliance-gate']))
+        .resolves.toMatchObject({ result: { kind: 'publication_retry', transition: 'establish_pr' } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('passes two fresh done gates through the production FINISH coordinator', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      const names = ['compliance-gate', 'notes-gate'];
+      await Promise.all(names.map((name) => freshMarker(root, name)));
+      await expect(advanceCoordinatorWithFreshCustomGates(root, names))
+        .resolves.toMatchObject({ result: { kind: 'publication_retry', transition: 'establish_pr' } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['pending', 'in_progress', 'failed'] as const)(
+    'blocks publication before provider or publication boundaries for a %s compliance gate',
+    async (status) => {
+      const root = await mkdtemp(join(tmpdir(), 'finish-custom-readiness-'));
+      const git = vi.fn(async () => ({ stdout: '' }));
+      const gh = vi.fn(async () => ({ stdout: '' }));
+      const dispatchJudgment = vi.fn(async () => ({ success: true }));
+      try {
+        await mkdir(join(root, '.pipeline'));
+        const observer = createProductionReleaseReadinessObserver({
+          projectRoot: root,
+          config: customConfig(['compliance-gate']),
+        });
+        const coordinator = createProductionFinishPublicationCoordinator({
+          projectRoot: root,
+          stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+          baseBranch: 'main',
+          git,
+          gh,
+          acquireInteractiveIntent: async () => 'pr',
+          observeReleaseReadiness: async (state) => observer(state),
+        });
+
+        const result = await coordinator.advance({
+          state: {
+            ...doneState([]),
+            feature_desc: 'feature',
+            worktree_branch: 'feat/feature',
+            build_review: 'done',
+            test_suite: 'done',
+            manual_test: 'done',
+            architecture_review_as_built: 'done',
+            'compliance-gate': status,
+          } as ConductState,
+          mode: 'interactive',
+          daemon: false,
+          dispatchJudgment,
+          emit: async () => {},
+        });
+
+        expect(result).toMatchObject({
+          kind: 'publication_retry',
+          condition: {
+            code: 'release_readiness_missing',
+            steps: ['compliance-gate'],
+          },
+        });
+        expect(dispatchJudgment).not.toHaveBeenCalled();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+});

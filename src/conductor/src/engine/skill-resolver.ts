@@ -11,6 +11,14 @@ export interface ResolvedSkill {
   isOverride: boolean;
 }
 
+export type CustomStepSkillResolution =
+  | string
+  | {
+      kind: 'name-missing' | 'file-missing';
+      stepKey: string;
+      configuredPath: string;
+    };
+
 const REQUIRED_FRONTMATTER_FIELDS = ['name', 'description', 'enforcement', 'phase'];
 
 /** Steps whose enforcement level cannot be overridden by project-local skills. */
@@ -38,6 +46,21 @@ function parseFrontmatter(content: string): Record<string, string> | null {
     }
   }
   return fields;
+}
+
+export function resolveCustomStepSkill(
+  stepKey: string,
+  configuredPath: string,
+  projectRoot: string,
+): CustomStepSkillResolution {
+  const skillPath = path.join(projectRoot, configuredPath);
+  if (!fs.existsSync(skillPath)) {
+    return { kind: 'file-missing', stepKey, configuredPath };
+  }
+
+  const content = fs.readFileSync(skillPath, 'utf-8');
+  const name = parseFrontmatter(content)?.name;
+  return name ?? { kind: 'name-missing', stepKey, configuredPath };
 }
 
 function validateOverrideFile(filePath: string): Record<string, string> {

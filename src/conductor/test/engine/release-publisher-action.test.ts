@@ -6,7 +6,7 @@ import {
   type ReleasePublisherGithub,
   runReleasePublisherAction,
 } from '../../src/engine/release-publisher-action.js';
-import { classifyReleasePublication as classifyReleasePublicationFromIndex } from '../../src/index.js';
+import { classifyReleasePublication as classifyReleasePublicationFromEntry } from '../../src/engine/self-host/release-actions.js';
 
 describe('engine/release-publisher-action — release PR provenance and retry safety (Tasks 14–16)', () => {
   const config = {
@@ -30,8 +30,8 @@ describe('engine/release-publisher-action — release PR provenance and retry sa
     expect(github.createRelease).not.toHaveBeenCalled();
   });
 
-  it('re-exports release classification from the public entry point', () => {
-    expect(classifyReleasePublicationFromIndex).toBe(classifyReleasePublication);
+  it('re-exports release classification from the release-actions entry point', () => {
+    expect(classifyReleasePublicationFromEntry).toBe(classifyReleasePublication);
   });
 
   it.each([

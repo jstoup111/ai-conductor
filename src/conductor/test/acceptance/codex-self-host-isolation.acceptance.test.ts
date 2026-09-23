@@ -124,10 +124,13 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
       prd_audit: 'done',
       architecture_review_as_built: 'done',
       rebase: 'done',
+      worktree_branch: 'feat/codex-self-host-acceptance',
+      ['release-disposition']: 'done',
       finish: 'pending',
     } as ConductState;
     await writeState(stateFilePath, finishState as ConductState);
     await seedFreshAsBuiltEvidence(projectRoot);
+    await writeFile(join(projectRoot, '.pipeline/release-disposition-pass'), 'PASS\n', 'utf-8');
     const versionGate = vi.fn(async () => ({ ok: true as const }));
     const releaseGate = vi.fn(async () => ({ ok: true as const }));
     const guardrails: SelfHostGuardrails = {
@@ -152,11 +155,23 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
       stateFilePath, stepRunner: runner, events: new ConductorEventEmitter(), projectRoot,
       mode: 'auto', daemon: true, selfHost: true, baseBranch: 'main', fromStep: 'finish',
       selfHostGuardrails: guardrails,
+      verifyArtifacts: false,
       fullSuiteVerifier: fullSuiteVerifierStub(),
+      git: vi.fn(async () => ({ stdout: '', exitCode: 1 })) as never,
+      gh: vi.fn(async () => ({ stdout: JSON.stringify({ body: 'Release-Disposition: no-note' }) })) as never,
+      runGh: vi.fn(async (args: string[]) => args[1] === 'list'
+        ? { stdout: JSON.stringify([{ url: 'https://github.com/acme/conductor/pull/905', state: 'OPEN' }]) }
+        : { stdout: JSON.stringify({ body: 'Release-Disposition: no-note' }) }),
       config: {
         steps: {
           manual_test: { disable: true },
           prd_audit: { disable: true },
+          'release-disposition': {
+            after: 'rebase',
+            skill: '.agents/skills/release-disposition/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: '.pipeline/release-disposition-pass',
+          },
         },
       } as never,
     }).run();

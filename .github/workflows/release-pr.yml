@@ -65,7 +65,7 @@ jobs:
               collectReleaseCandidates,
               renderReleaseCandidate,
               runReleasePrAction,
-            } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/index.js`);
+            } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/engine/self-host/release-actions.js`);
             const { readFile, writeFile } = await import('node:fs/promises');
             const owner = context.repo.owner;
             const repo = context.repo.repo;

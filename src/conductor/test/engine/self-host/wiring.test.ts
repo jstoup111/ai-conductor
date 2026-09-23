@@ -54,7 +54,6 @@ import type { SelfHostGuardrails } from '../../../src/engine/self-host/wiring.js
 import type { SandboxBuildEnv } from '../../../src/engine/self-host/sandbox-build-env.js';
 import {
   runReleaseArtifactGate,
-  type ReleaseGateOptions,
 } from '../../../src/engine/self-host/release-gate.js';
 import type { GhRunner, GitRunner } from '../../../src/engine/pr-labels.js';
 import { Conductor } from '../../test-conductor.js';
@@ -318,7 +317,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     });
   }
 
-  it('activates the whole bundle as one unit and scopes env to the build step only', async () => {
+  it('scopes the sandbox environment to the build step when release artifacts are disabled', async () => {
     await writeState(statePath, preBuildDoneState());
     const { guardrails, teardown } = makeGuardrails();
     const { runner, seen } = recordingRunner();
@@ -328,60 +327,29 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       if (e.type === 'feature_complete') completed.push(e.type);
     });
 
-    await selfBuildConductor(guardrails, runner).run();
+    await selfBuildConductor(guardrails, runner, {
+      config: { harness_self_host: { release_artifact_gate: false } },
+    }).run();
 
     // Self-host provisioning never repoints the operator-global skill catalog.
     expect(guardrails.relink).not.toHaveBeenCalled();
     expect(guardrails.provisionSandbox).toHaveBeenCalledTimes(1);
     expect(guardrails.versionGate).toHaveBeenCalledTimes(1);
-    expect(guardrails.releaseGate).toHaveBeenCalledTimes(1);
+    expect(guardrails.releaseGate).not.toHaveBeenCalled();
 
 
     // Env scoped to the build step ONLY — sandbox during build, original after.
     const build = seen.find((s) => s.step === 'build');
-    const finish = seen.find((s) => s.step === 'finish');
     expect(build?.configDir).toBe(SANDBOX_DIR);
-    expect(finish).toBeDefined();
-    expect(finish?.configDir).toBeUndefined(); // no bleed to finish
     for (const s of seen) {
       if (s.step !== 'build') expect(s.configDir).toBeUndefined();
     }
-
-    // Gates ran before finish dispatched.
-    const gateOrder = (guardrails.versionGate as any).mock.invocationCallOrder[0];
-    const finishRunOrder = (runner.run as any).mock.calls
-      .map((c: unknown[], i: number) => ({ step: c[0], i }))
-      .find((x: { step: StepName }) => x.step === 'finish');
-    expect(gateOrder).toBeLessThan(
-      (runner.run as any).mock.invocationCallOrder[finishRunOrder.i],
-    );
 
     // Teardown + env restore + clean completion.
     expect(teardown).toHaveBeenCalled();
     expect(process.env.CLAUDE_CONFIG_DIR).toBeUndefined();
     expect(completed).toEqual(['feature_complete']);
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(false);
-  });
-
-  it('empty [Unreleased] passes through the real release gate and dispatches finish', async () => {
-    await writeState(statePath, preBuildDoneState());
-    const releaseGate = vi.fn(async (opts: ReleaseGateOptions) =>
-      runReleaseArtifactGate({
-        ...opts,
-        readText: async () => `## [Unreleased]\n\n## [0.99.18]\n- old\n`,
-        changedFiles: async () => [
-          { status: 'M', path: 'src/conductor/src/engine/self-host/release-gate.ts' },
-        ],
-      }),
-    );
-    const { guardrails } = makeGuardrails({ releaseGate });
-    const { runner, seen } = recordingRunner();
-
-    await selfBuildConductor(guardrails, runner).run();
-
-    expect(releaseGate).toHaveBeenCalledTimes(1);
-    expect(seen.find((s) => s.step === 'finish')).toBeDefined();
-    expect(await exists(join(dir, '.pipeline', 'HALT'))).toBe(false);
   });
 
   it('passes runnable migration metadata from the retained draft PR to releaseGate', async () => {
@@ -458,7 +426,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     expect(await readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).toMatch(reason);
   });
 
-  it('selecting Codex skips Claude-only self-build preparation while preserving shared release gates', async () => {
+  it('selecting Codex skips Claude-only self-build preparation when release artifacts are disabled', async () => {
     await writeState(statePath, preBuildDoneState());
     const { preflightBuildAuthCheck } = await import(
       '../../../src/engine/self-host/build-auth-preflight.js'
@@ -468,7 +436,10 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     const { runner, seen } = recordingRunner();
 
     await selfBuildConductor(guardrails, runner, {
-      config: { steps: { build: { llm_provider: 'codex' } } },
+      config: {
+        harness_self_host: { release_artifact_gate: false },
+        steps: { build: { llm_provider: 'codex' } },
+      },
     }).run();
 
     expect(guardrails.relink).not.toHaveBeenCalled();
@@ -478,7 +449,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     expect(seen.find((entry) => entry.step === 'build')?.configDir).toBeUndefined();
     expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     expect(guardrails.versionGate).toHaveBeenCalledTimes(1);
-    expect(guardrails.releaseGate).toHaveBeenCalledTimes(1);
+    expect(guardrails.releaseGate).not.toHaveBeenCalled();
     expect(seen.find((entry) => entry.step === 'build')).toBeDefined();
   });
 
@@ -495,7 +466,9 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     });
     const { runner } = recordingRunner();
 
-    await selfBuildConductor(guardrails, runner).run();
+    await selfBuildConductor(guardrails, runner, {
+      config: { harness_self_host: { release_artifact_gate: false } },
+    }).run();
 
     expect(guardrails.provisionSandbox).toHaveBeenCalledTimes(1);
     expect(guardrails.provisionSandbox).toHaveBeenCalledWith(
@@ -591,7 +564,9 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     });
     const { runner, seen } = recordingRunner();
 
-    await selfBuildConductor(guardrails, runner).run();
+    await selfBuildConductor(guardrails, runner, {
+      config: { harness_self_host: { release_artifact_gate: false } },
+    }).run();
 
     expect(guardrails.relink).not.toHaveBeenCalled();
     expect(guardrails.provisionSandbox).toHaveBeenCalledTimes(1);

@@ -1028,11 +1028,11 @@ describe('production FINISH publication composition', () => {
   });
 
   it.each([
-    ['missing', 'missing'],
-    ['stale', 'stale'],
-    ['malformed', 'malformed'],
-    ['unavailable', 'unavailable'],
-    ['present', 'present'],
+    ['missing', { observation: 'missing', steps: ['release-disposition'] }],
+    ['stale', { observation: 'stale', steps: ['release-disposition'] }],
+    ['malformed', { observation: 'malformed', steps: ['release-disposition'] }],
+    ['unavailable', { observation: 'unavailable', steps: ['release-disposition'] }],
+    ['present', { observation: 'present', steps: [] }],
   ] as const)('observes configured release-readiness evidence as %s', async (fixture, expected) => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-readiness-observer-'));
     try {
@@ -1048,12 +1048,20 @@ describe('production FINISH publication composition', () => {
         await utimes(marker, markerDate, markerDate);
       } else if (fixture === 'malformed') {
         await mkdir(marker);
+      } else if (fixture === 'unavailable') {
+        await writeFile(marker, 'PASS\n');
+      }
+      if (fixture !== 'unavailable') {
+        await writeFile(join(pipeline, 'conduct-state.json'), JSON.stringify({ run_started_at: runStartedAt }));
       }
       const observer = createProductionReleaseReadinessObserver({
         projectRoot: root,
         config: {
           steps: {
             'release-disposition': {
+              after: 'rebase',
+              skill: 'release-disposition/SKILL.md',
+              enforcement: 'gating',
               completion_artifact: '.pipeline/release-disposition-pass',
             },
           },
@@ -1066,7 +1074,7 @@ describe('production FINISH publication composition', () => {
           : { run_started_at: runStartedAt, session_started_at: runStartedAt + 60_000 }),
       } as ConductState;
 
-      await expect(observer(state)).resolves.toBe(expected);
+      await expect(observer(state)).resolves.toEqual(expected);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

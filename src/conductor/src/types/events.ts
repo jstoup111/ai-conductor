@@ -107,13 +107,21 @@ export type FinishPublicationBlocker =
   | 'release_readiness_invalid'
   | 'release_readiness_indeterminate';
 
+/** Custom prerequisite keys are persisted only for release-readiness blockers. */
+export type FinishPublicationBlockedCondition =
+  | FinishPublicationBlocker
+  | {
+      code: Extract<FinishPublicationBlocker, `release_readiness_${string}`>;
+      steps: readonly string[];
+    };
+
 export type FinishPublicationEvent =
   | {
       type: 'finish_publication_transition';
       phase: 'started' | 'completed';
       transition: FinishPublicationTransition;
     }
-  | { type: 'finish_publication_blocked'; condition: FinishPublicationBlocker }
+  | { type: 'finish_publication_blocked'; condition: FinishPublicationBlockedCondition }
   | {
       type: 'finish_publication_disposition';
       disposition: 'retry_finish' | 'retry_build' | 'human_required' | 'complete';

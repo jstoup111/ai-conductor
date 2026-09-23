@@ -182,6 +182,7 @@ import {
   renderAuxiliarySkillInvocation,
   STEP_SKILL_INVOCATIONS,
 } from './skill-invocation.js';
+import { resolveCustomStepSkill } from './skill-resolver.js';
 import {
   createHeartbeatPulse,
 } from './step-heartbeat.js';
@@ -974,9 +975,21 @@ export class DefaultStepRunner implements StepRunner {
     )
       ? STEP_SKILL_INVOCATIONS[step]
       : undefined;
+    const configuredSkillPath = this.config?.steps?.[step]?.skill;
+    const customSkill = skillInvocation || configuredSkillPath === undefined
+      ? undefined
+      : resolveCustomStepSkill(step, configuredSkillPath, this.projectDir);
+    if (typeof customSkill !== 'string' && customSkill !== undefined) {
+      return {
+        success: false,
+        output: `Cannot dispatch custom step ${customSkill.stepKey}: configured skill ${customSkill.configuredPath} is ${customSkill.kind}.`,
+      };
+    }
     const prompt = skillInvocation
       ? renderSkillInvocation(skillInvocation, this.providerKey)
-      : `/${step}`;
+      : customSkill === undefined
+        ? `/${step}`
+        : renderAuxiliarySkillInvocation(customSkill, this.providerKey);
     // Concurrent-group branch dispatch (group-core.ts): opts.sessionId, when
     // present, overrides the runner's shared this.sessionId so the branch
     // never touches (reads or mutates) the main conductor session — see
@@ -1080,6 +1093,8 @@ export class DefaultStepRunner implements StepRunner {
           prompt,
           systemPrompt,
           false,
+          undefined,
+          customSkill,
         );
       }
       return this.runAutonomous(
@@ -1120,6 +1135,7 @@ export class DefaultStepRunner implements StepRunner {
         systemPrompt,
         true,
         interactive,
+        customSkill,
       );
     }
 
@@ -1198,6 +1214,7 @@ export class DefaultStepRunner implements StepRunner {
     systemPrompt: string,
     streaming: boolean,
     interactive = false,
+    customSkill?: string,
     invocationKind: 'skill' | 'free-form' = 'skill',
   ): Promise<StepRunResult> {
     const sessions = opts?.providerSessions ?? this.sessionStore;
@@ -1248,17 +1265,16 @@ export class DefaultStepRunner implements StepRunner {
             onAttempt: this.providerAttempt,
             warn: this.providerWarn,
             options,
-            ...(invocationKind === 'skill' && Object.prototype.hasOwnProperty.call(
+            ...(invocationKind === 'skill' && (Object.prototype.hasOwnProperty.call(
               STEP_SKILL_INVOCATIONS,
               step,
-            )
+            ) || customSkill !== undefined)
               ? {
                   optionsForCandidate: (candidateKey: string) => ({
                     ...options,
-                    prompt: renderSkillInvocation(
-                      STEP_SKILL_INVOCATIONS[step]!,
-                      candidateKey,
-                    ),
+                    prompt: customSkill === undefined
+                      ? renderSkillInvocation(STEP_SKILL_INVOCATIONS[step]!, candidateKey)
+                      : renderAuxiliarySkillInvocation(customSkill, candidateKey),
                   }),
                 }
               : {}),
@@ -1860,6 +1876,7 @@ export class DefaultStepRunner implements StepRunner {
         '',
         true,
         true,
+        undefined,
         'free-form',
       );
       return;

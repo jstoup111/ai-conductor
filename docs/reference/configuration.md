@@ -432,6 +432,13 @@ Six fields are custom-step-only:
 `llm_provider` use the same semantics as for built-in steps. A custom step's own enforcement controls
 whether it may be disabled or conditional: advisory is allowed; gating and structural are rejected.
 
+The YAML key is the step's lifecycle identity; the `skill` path supplies its invocation identity. At
+dispatch, the engine reads the configured `SKILL.md` frontmatter `name` and invokes that name using the
+selected host's native syntax: Claude Code uses `/name`; Codex uses `$name`. The two names may differ,
+which lets a configuration key describe its place in a workflow without requiring a same-named skill.
+If the configured file or its `name` field is unavailable when dispatch begins, the custom step fails
+with a diagnostic instead of falling back to the YAML key.
+
 The derived `StepDefinition` (`steps.ts:595-609`) sets `label = name`, inherits `phase` from the `after`
 target, sets `prerequisites = [after]`, `skippableForTiers = []`, `isCheckpoint = false`, and takes
 `loopGate` from the target step. A custom step inserted after a loop-gate step therefore joins the

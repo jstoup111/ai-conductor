@@ -6453,6 +6453,8 @@ describe('engine/conductor', () => {
       await seedToBuild();
       const tokenPath = join(dir, 'retry-test-token');
       await writeFile(tokenPath, 'fixture-token');
+      const installedRoot = join(dir, 'installed-harness');
+      await mkdir(installedRoot);
       const TOTAL = 4;
       const CEILING = 3;
       let progress = 0;
@@ -6492,7 +6494,7 @@ describe('engine/conductor', () => {
         selfHost,
         selfHostGuardrails: {
           resolveHarnessRoot: vi.fn().mockResolvedValue(dir),
-          resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok', root: dir }),
+          resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok', root: installedRoot }),
           relink: vi.fn(),
           provisionSandbox: vi.fn(async () => ({ configDir: dir, childEnv: () => process.env, teardown: async () => {} })),
           versionGate: vi.fn().mockResolvedValue({ ok: true }),
@@ -6502,7 +6504,10 @@ describe('engine/conductor', () => {
         maxRetries: 3,
         fromStep: 'build',
         config: {
-          harness_self_host: { build_auth: { mode: 'daemon-token', token_path: tokenPath } },
+          harness_self_host: {
+            sandbox_build_env: true,
+            build_auth: { mode: 'daemon-token', token_path: tokenPath },
+          },
           build_progress_halt: { enabled: true, attempt_ceiling: CEILING, dispatch_ceiling: 20 },
         } as HarnessConfig,
       });

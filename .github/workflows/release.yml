@@ -44,7 +44,7 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const { classifyReleasePublication } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/index.js`);
+            const { classifyReleasePublication } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/engine/self-host/release-actions.js`);
             const { owner, repo } = context.repo;
             const commit = context.sha;
             const missing = error => error && error.status === 404;
@@ -160,7 +160,7 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const { runReleasePublisherAction } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/index.js`);
+            const { runReleasePublisherAction } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/engine/self-host/release-actions.js`);
             const { owner, repo } = context.repo;
             const commit = context.sha;
 
