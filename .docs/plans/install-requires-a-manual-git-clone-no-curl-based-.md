@@ -108,6 +108,7 @@ Add one self-contained POSIX shell bootstrap script, published by the documentat
 **Done when:**
 - `docs/install.sh` defers all work to the final `main "$@"` line, asserted by the truncation test feeding four truncated prefixes to `sh` and finding an absent harness directory and an empty record file each time.
 - The truncation test fails when a top-level `git` or `mkdir` command is placed above the function definitions, demonstrated once during RED and recorded in the commit message.
+- A (length − 1) prefix, which loses only the final newline, is the complete script including the whole `main "$@"` line, so executing it is correct: the truncation test asserts that case finds the harness directory present and a non-empty record file, while every cutoff that removes any byte of `main "$@"` or earlier stays inert.
 
 **Files:** `docs/install.sh`; `test/test_bootstrap_installer.sh`
 
