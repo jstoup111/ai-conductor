@@ -61,20 +61,9 @@ import { execa } from 'execa';
 type ExecaLongCall = (file: string, args: readonly string[], options?: Options) => ReturnType<typeof execa>;
 const mockExeca = vi.mocked(execa as unknown as ExecaLongCall);
 
-// `HOME` is process-global. The aggregate suite runs test files concurrently,
-// so redirect the user-config adapter for this file rather than mutating HOME
-// while another daemon test is resolving its own configuration.
-const userConfigFixture = vi.hoisted(() => ({ path: '' }));
 const registeredProviderRoots = vi.hoisted(() => [] as PluginRegistry[]);
 const daemonResolvedConfigs = vi.hoisted(() => [] as HarnessConfig[]);
-
-vi.mock(import('../../src/engine/user-config.js'), async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/engine/user-config.js')>();
-  return {
-    ...actual,
-    readUserConfig: (path?: string) => actual.readUserConfig(path ?? userConfigFixture.path),
-  };
-});
+const originalHome = process.env.HOME;
 
 vi.mock('../../src/engine/plugin-loader.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/plugin-loader.js')>();
@@ -102,7 +91,8 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  userConfigFixture.path = '';
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
   registeredProviderRoots.splice(0);
   daemonResolvedConfigs.splice(0);
   mockExeca.mockReset();
@@ -118,6 +108,7 @@ async function tempDir(prefix: string): Promise<string> {
 /** A temp $HOME carrying (or deliberately lacking) ~/.ai-conductor/config.yml. */
 async function makeUserHome(yaml?: string): Promise<string> {
   const home = await tempDir('daemon-967-home-');
+  process.env.HOME = home;
   if (yaml !== undefined) {
     await mkdir(join(home, '.ai-conductor'), { recursive: true });
     await writeFile(join(home, '.ai-conductor', 'config.yml'), yaml, 'utf8');
@@ -155,8 +146,6 @@ async function launchDaemon(home: string, projectRoot: string): Promise<LaunchRe
   console.log = (msg?: unknown) => {
     consoleLines.push(String(msg));
   };
-  userConfigFixture.path = join(home, '.ai-conductor', 'config.yml');
-
   let error: string | undefined;
   try {
     await runDaemonMode({
