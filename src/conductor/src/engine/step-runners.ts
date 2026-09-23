@@ -139,10 +139,13 @@ import {
 import {
   deriveBuildReviewInfrastructureFailureReason,
   deriveBuildReviewScopeIncompleteFault,
+  buildReviewFindingReferenceContext,
+  diagnoseBuildReviewCustomReviewerPayloadRejection,
   diagnoseBuildReviewJudgedResultRejection,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
+  renderBuildReviewJudgedResultRejection,
   renderBuildReviewUnresolvedSkillRemedy,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
@@ -2795,7 +2798,9 @@ export class DefaultStepRunner implements StepRunner {
         };
         const policyFingerprint = fingerprintBuildReviewPolicyDeclaration({ rubric: entry.id, skill: entry.skill, question: entry.question, ...(entry.source === undefined ? {} : { source: entry.source as 'project' | 'global' | 'plugin' }), resources: entry.resources });
         const semanticIdentityFor = (model: string): BuildReviewCacheSemanticIdentity => ({
-          declarationFingerprint: policyFingerprint, effectiveBundleDigest: bundle.digest, contractVersion: 'v3', projectionVersion: 'v3',
+          declarationFingerprint: policyFingerprint, effectiveBundleDigest: bundle.digest,
+          contractVersion: entry.contract.output.version as BuildReviewCacheSemanticIdentity['contractVersion'],
+          projectionVersion: entry.contract.projection.version as BuildReviewCacheSemanticIdentity['projectionVersion'],
           semanticInputDigest: inputs.sourceSnapshot.contentDigest, executionPolicyFingerprint: fingerprintBuildReviewRubricPolicy(entry.policy),
           engineStamp: candidateEngine.engineStamp, provider: context.candidate.providerKey, model, effort: context.candidate.effort ?? 'default',
         });
@@ -2891,7 +2896,10 @@ export class DefaultStepRunner implements StepRunner {
           const semanticIdentity = semanticIdentityFor(rung.model);
           const cached = await readBuildReviewCacheEntry(this.projectDir, entry.id, { readFile: async (path) => readFile(path, 'utf-8'), readdir, mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename }, semanticIdentity);
           const cache = classifyBuildReviewCacheLookup(cached, {
-            rubric: entry.id, contractVersion: 'v3', projectionVersion: 'v3', projectionDigest: inputs.sourceSnapshot.contentDigest,
+            rubric: entry.id,
+            contractVersion: entry.contract.output.version as BuildReviewCacheSemanticIdentity['contractVersion'],
+            projectionVersion: entry.contract.projection.version as BuildReviewCacheSemanticIdentity['projectionVersion'],
+            projectionDigest: inputs.sourceSnapshot.contentDigest,
             policyFingerprint, engineIdentity: { engineStamp: candidateEngine.engineStamp, skillDigest: bundle.digest }, semanticIdentity, lapId, snapshotDigest: inputs.sourceSnapshot.digest,
           });
           await emitBuildReviewCacheDiscard(async (event) => { await this.events?.emit(event); }, cache, entry.id, lapId, candidateEngine.engineStamp);
@@ -2911,7 +2919,16 @@ export class DefaultStepRunner implements StepRunner {
         if (cacheHit) return { kind: 'hit' as const, result: invoked };
         if (!invoked.success) {
           coverageFailure = true;
-          failure = { reason: 'provider-error', detail: invoked.output ?? `Installed build-review policy ${entry.skill} provider failed` };
+          failure = {
+            reason: invoked.nativeSchemaUnsupported ? 'native-schema-unsupported' : 'provider-error',
+            detail: invoked.output ?? `Installed build-review policy ${entry.skill} provider failed`,
+          };
+          if (invoked.nativeSchemaUnsupported) {
+            await this.events?.emit({
+              type: 'build_review_rubric_infrastructure_failure', rubric: entry.id, lapId,
+              reason: 'native-schema-unsupported', cause: 'native-schema-unsupported', excerpt: failure.detail,
+            });
+          }
           await emitPolicyFailure('runtime', failure.detail);
           return { kind: 'failure' as const, result: invoked };
         }
@@ -2928,11 +2945,22 @@ export class DefaultStepRunner implements StepRunner {
           bundleDigest: bundle.digest,
           provenance: actualPolicyProvenance,
         });
-        if (dispatched.kind === 'root-rejection') {
+        const settleCustomStructuredRejection = async (value: unknown, references?: Parameters<typeof diagnoseBuildReviewCustomReviewerPayloadRejection>[1]) => {
+          const rejection = diagnoseBuildReviewCustomReviewerPayloadRejection(value, references);
           coverageFailure = true;
-          failure = { reason: 'malformed-artifact', detail: `Installed build-review policy ${entry.skill} ${dispatched.rejection.field}: ${dispatched.rejection.problem}` };
+          failure = {
+            reason: 'invalid-structured-result',
+            detail: renderBuildReviewJudgedResultRejection(rejection),
+          };
+          await this.events?.emit({
+            type: 'build_review_rubric_infrastructure_failure', rubric: entry.id, lapId,
+            reason: 'invalid-structured-result', cause: 'invalid-structured-result', rejection, excerpt: failure.detail,
+          });
           await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
+        };
+        if (dispatched.kind === 'root-rejection') {
+          return settleCustomStructuredRejection(invoked.finalStructuredResult);
         }
         const parsed = dispatched.kind === 'structured' ? dispatched.parsed : undefined;
         const runtimeUnsupported = parseBuildReviewPolicyRuntimeUnsupportedResponse(parsed, provider);
@@ -2943,19 +2971,21 @@ export class DefaultStepRunner implements StepRunner {
           await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         }
-        if (!parsed || parsed.kind === 'unsupported-policy' || parsed.kind !== 'custom-findings') {
-          coverageFailure = true;
-          failure = {
-            reason: parsed?.kind === 'unsupported-policy' ? 'preflight-failed' : 'malformed-artifact',
-            detail: parsed?.kind === 'unsupported-policy'
-              ? `Installed build-review policy ${entry.skill} is unsupported: ${parsed.requirement}`
-              : 'Installed build-review policy returned an invalid custom findings payload',
-          };
-          await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
-          return { kind: 'failure' as const, result: {
-            success: false, exitCode: 1,
-            output: failure.detail,
-          } };
+        if (!parsed || parsed.kind !== 'custom-findings') {
+          // unsupported-policy is a valid member of the native schema, but it
+          // cannot produce a finding artifact. Keep it explicit in its detail
+          // rather than laundering it into a preflight failure.
+          if (parsed?.kind === 'unsupported-policy') {
+            coverageFailure = true;
+            failure = { reason: 'invalid-structured-result', detail: `unsupported-policy: ${parsed.requirement}` };
+            await this.events?.emit({
+              type: 'build_review_rubric_infrastructure_failure', rubric: entry.id, lapId,
+              reason: 'invalid-structured-result', cause: 'invalid-structured-result', excerpt: failure.detail,
+            });
+            await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
+            return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
+          }
+          return settleCustomStructuredRejection(invoked.finalStructuredResult);
         }
         // The admitted reference set is derived by the engine from the frozen
         // baseline/head commits: each claimed region is re-read and re-hashed
@@ -2967,13 +2997,7 @@ export class DefaultStepRunner implements StepRunner {
           { read: (side, path) => frozenBlobs.readAtOptional(side === 'head' ? inputs.sourceSnapshot.headSha : inputs.sourceSnapshot.mergeBase, path) },
         );
         if (admission.kind === 'rejected') {
-          coverageFailure = true;
-          failure = { reason: 'malformed-artifact', detail: `Installed build-review policy cited unverifiable source evidence (${admission.reason}): ${admission.detail}` };
-          await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
-          return { kind: 'failure' as const, result: {
-            success: false, exitCode: 1,
-            output: failure.detail,
-          } };
+          return settleCustomStructuredRejection(invoked.finalStructuredResult, { sourceRegions: [] });
         }
         const sourceRegions = admission.sourceRegions;
         const stamped = stampBuildReviewCustomJudgedResult(parsed, {
@@ -2993,7 +3017,11 @@ export class DefaultStepRunner implements StepRunner {
           },
           reviewedInput: { version: 'v1', contentDigest: inputs.sourceSnapshot.contentDigest },
         }, { sourceRegions });
-        if (!stamped) {
+        // The custom descriptor is the production identity boundary too.  Its
+        // canonicalizer rehydrates the engine stamp, so an invalid or drifted
+        // stamped identity cannot be persisted merely because parsing passed.
+        const stampedIdentities = stamped?.findings.map((finding) => entry.contract.identity.canonicalize(finding));
+        if (!stamped || !stampedIdentities || stampedIdentities.some((identity) => identity === undefined)) {
           coverageFailure = true;
           failure = { reason: 'malformed-artifact', detail: 'Installed build-review policy returned findings that could not be stamped against the frozen input' };
           await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
@@ -3021,7 +3049,10 @@ export class DefaultStepRunner implements StepRunner {
           result: stamped,
         };
         const cacheWrite = await tryWriteBuildReviewCacheEntry(this.projectDir, {
-            version: 2, rubric: entry.id, contractVersion: 'v3', projectionVersion: 'v3', projectionDigest: inputs.sourceSnapshot.contentDigest,
+            version: 2, rubric: entry.id,
+            contractVersion: entry.contract.output.version as BuildReviewCacheSemanticIdentity['contractVersion'],
+            projectionVersion: entry.contract.projection.version as BuildReviewCacheSemanticIdentity['projectionVersion'],
+            projectionDigest: inputs.sourceSnapshot.contentDigest,
             policyFingerprint, engineIdentity: { engineStamp: candidateEngine.engineStamp, skillDigest: bundle.digest }, semanticIdentity: actualSemanticIdentity, result: member,
           }, { readFile: async (path) => readFile(path, 'utf-8'), mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename });
         if (!cacheWrite.ok) {
@@ -3591,7 +3622,17 @@ export class DefaultStepRunner implements StepRunner {
       });
     }
     const initialResult = validateBuildReviewDispatchedResult(initial.finalStructuredResult, branch.rubric, projection);
-    return initialResult ?? makeBuildReviewDispatchFailure('the structured result did not satisfy the judged contract');
+    if (initialResult) return initialResult;
+    const rejection = diagnoseBuildReviewJudgedResultRejection(
+      initial.finalStructuredResult,
+      branch.rubric,
+      { lapId: projection.lapId, snapshotDigest: projection.snapshotDigest },
+      buildReviewFindingReferenceContext(projection),
+      buildReviewCandidateScopeResolutionContext(projection),
+    );
+    return makeBuildReviewDispatchFailure(renderBuildReviewJudgedResultRejection(rejection), undefined, {
+      cause: 'invalid-structured-result', rejection,
+    });
   }
 
   private async runTautologyPreflight(inputs: BuildReviewFrozenInputs) {

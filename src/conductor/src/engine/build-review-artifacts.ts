@@ -54,7 +54,8 @@ export type BuildReviewCustomInfrastructureFailureReason =
 const CUSTOM_INFRASTRUCTURE_FAILURE_REASONS = new Set<BuildReviewCustomInfrastructureFailureReason>([
   'policy-load-failed', 'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact',
   'stale-artifact', 'identity-mismatch', 'preflight-failed', 'artifact-read-failed',
-  'artifact-write-failed', 'scope-incomplete',
+  'artifact-write-failed', 'scope-incomplete', 'projection-oversized',
+  'invalid-structured-result', 'native-schema-unsupported',
 ]);
 
 export function isBuildReviewCustomInfrastructureFailureReason(

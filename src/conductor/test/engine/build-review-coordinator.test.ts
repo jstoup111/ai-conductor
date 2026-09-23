@@ -866,9 +866,10 @@ describe("build-review coordinator: frozen fan-out", () => {
 
     expect(input.writeArtifact).toHaveBeenCalledTimes(1);
     expect(testQualityBranch(result)).toEqual({ kind: "infrastructure-failure", rubric: "testQuality", reason: "cache-write-failed" });
-    expect(emit).toHaveBeenCalledWith({
-      type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "cache-write-failed",
-    });
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current",
+      reason: "cache-write-failed", cause: "artifact-write-failed",
+    }));
   });
 
   it.each([
@@ -973,10 +974,10 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
 
     expect(testQualityBranch(result)).toMatchObject({ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-structured-result", detail });
     expect(input.writeArtifact).not.toHaveBeenCalled();
-    expect(emit).toHaveBeenCalledWith({
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "invalid-structured-result",
-      excerpt: detail,
-    });
+      cause: "invalid-structured-result", excerpt: detail,
+    }));
   });
 
   it("settles an undefined dispatch result as invalid-provider-result with an engine diagnosis", async () => {
@@ -993,6 +994,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
       type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled",
     }, {
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "invalid-provider-result",
+      cause: "malformed-artifact",
       excerpt: '"findings" must be an array (empty when no concern was found)',
     }]);
   });

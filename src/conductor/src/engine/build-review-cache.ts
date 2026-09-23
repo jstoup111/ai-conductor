@@ -53,8 +53,9 @@ export interface BuildReviewCacheSemanticIdentity {
 export interface BuildReviewCacheEntry {
   version: typeof LEGACY_CACHE_VERSION | typeof CACHE_VERSION;
   rubric: BuildReviewRubricId | string;
-  contractVersion: "v3";
-  projectionVersion: "v3";
+  /** The member descriptor owns these versions (built-ins v3/v3, custom-v1 v1/v1). */
+  contractVersion: BuildReviewRubricContractVersion;
+  projectionVersion: "v1" | "v2" | "v3";
   projectionDigest: string;
   policyFingerprint: string;
   engineIdentity: BuildReviewEngineIdentity;
@@ -90,8 +91,8 @@ export async function tryWriteBuildReviewCacheEntry(
 /** The complete identity that must match before a semantic cache entry is reusable. */
 export interface BuildReviewCacheLookup {
   rubric: BuildReviewRubricId | string;
-  contractVersion: "v3";
-  projectionVersion: "v3";
+  contractVersion: BuildReviewRubricContractVersion;
+  projectionVersion: "v1" | "v2" | "v3";
   projectionDigest: string;
   policyFingerprint: string;
   engineIdentity: BuildReviewEngineIdentity;
@@ -286,13 +287,18 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
 /** Strictly parses entries current code may persist or reuse. */
 export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntry | undefined {
   const entry = parseBuildReviewCacheEntryCandidate(value);
-  return entry?.version === CACHE_VERSION && entry.contractVersion === "v3" && entry.projectionVersion === "v3" &&
+  // Current persistence accepts exactly the descriptor pairs in use.  This
+  // keeps a future v4 closed while allowing custom-v1 to retain its own
+  // descriptor identity instead of pretending to be a built-in v3 entry.
+  const currentDescriptorPair = entry !== undefined && (
+    (entry.contractVersion === "v3" && entry.projectionVersion === "v3") ||
+    (entry.contractVersion === "v1" && entry.projectionVersion === "v1")
+  );
+  return entry?.version === CACHE_VERSION && currentDescriptorPair &&
     entry.engineIdentity !== undefined && entry.semanticIdentity !== undefined
     ? {
         ...entry,
         version: CACHE_VERSION,
-        contractVersion: "v3",
-        projectionVersion: "v3",
         engineIdentity: entry.engineIdentity,
         semanticIdentity: entry.semanticIdentity,
       }

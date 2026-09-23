@@ -397,6 +397,12 @@ describe('build_review structured rubric dispatch', () => {
     testSuiteProof: {}, revertedProductionManifest: [], preflight: {}, repairContext: [],
   } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
 
+  it('never imports a prose-scrape result helper into the native build_review dispatch path', async () => {
+    const source = await readFile(new URL('../../src/engine/step-runners.ts', import.meta.url), 'utf8');
+
+    expect(source).not.toMatch(/(?:import\s+[^;]*\bextractJudgedResultCandidate\b|\bextractJudgedResultCandidate\s*\()/);
+  });
+
   const dispatchBuiltIn = async (
     invoke: LLMProvider['invoke'],
     mode?: 'interactive',
