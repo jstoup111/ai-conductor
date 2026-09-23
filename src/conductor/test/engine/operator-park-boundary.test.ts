@@ -487,6 +487,53 @@ describe('operator park boundary contract', () => {
     ]);
   });
 
+  it('routes every free and budgeted serial retry back through the attempt park gate', async () => {
+    // These are deliberately asserted against the serial-loop source rather
+    // than duplicating the loop's branch mechanics in seven broad fixtures.
+    // The ordinary-path tests above execute the gate; this inventory binds
+    // every non-consuming and ordinary retry branch to that same loop entry.
+    const conductorSource = await readFile(
+      new URL('../../src/engine/conductor.ts', import.meta.url),
+      'utf8',
+    );
+    const serialLoopStart = conductorSource.indexOf('while (attempt < stepMaxRetries) {');
+    const serialLoopEnd = conductorSource.indexOf('\n\n        if (succeeded &&', serialLoopStart);
+    expect(serialLoopStart).toBeGreaterThan(-1);
+    expect(serialLoopEnd).toBeGreaterThan(serialLoopStart);
+    const serialLoop = conductorSource.slice(serialLoopStart, serialLoopEnd);
+
+    const reentryCases = [
+      ['rate-limit wait', 'if (result.rateLimited)', 'attempt--;\n            continue;'],
+      ['stale-session reset', 'if (result.sessionExpired)', 'attempt--;\n            continue;'],
+      ['auth refresh', 'if (result.authFailure)', 'attempt--;\n            continue;'],
+      ['finish-publication progress retry', 'if (progressBypassed || attempt < stepMaxRetries)', 'continue;'],
+      ['test-suite infrastructure retry', 'MAX_SUITE_INFRASTRUCTURE_RETRIES', 'attempt--;\n                continue;'],
+      ['build-review mechanical-fault retry', 'result.currentLapMechanicalFault === true', 'attempt--;\n                continue;'],
+      ['budgeted completion-check miss', "reason: completion.reason ?? 'completion check failed'", 'continue;'],
+    ] as const;
+
+    for (const [name, branch, reentry] of reentryCases) {
+      const branchOffset = serialLoop.indexOf(branch);
+      expect(branchOffset, `${name} branch is inside the serial retry loop`).toBeGreaterThan(-1);
+      expect(
+        serialLoop.indexOf(reentry, branchOffset),
+        `${name} re-enters the serial retry loop`,
+      ).toBeGreaterThan(branchOffset);
+    }
+
+    const attemptGate = `this.daemon &&
+                              this.featureSlug !== undefined &&
+                              this.operatorParkBoundary &&
+                              await this.operatorParkBoundary().catch(() => true)`;
+    expect(serialLoop.indexOf(attemptGate)).toBeGreaterThan(-1);
+    // The runtime cases immediately above prove a rejected gate returns the
+    // typed termination before a runner call. Every listed `continue` returns
+    // to this one loop entry, so no free or budgeted retry can bypass it.
+    expect(serialLoop.indexOf(attemptGate)).toBeLessThan(
+      serialLoop.indexOf('this.stepRunner.run(step.name, state, {'),
+    );
+  });
+
   it('settles the active serial step once, persists it, then parks before the next step', async () => {
     await writeState(statePath, stateWithPending('memory', 'explore'));
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
