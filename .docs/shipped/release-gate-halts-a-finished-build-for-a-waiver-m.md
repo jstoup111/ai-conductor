@@ -4,6 +4,12 @@ spec_hash: a98d0fab335c2f319e2bd6c64965248b0be49692f1b23c432815f8bed8a0e3d6
 pr: https://github.com/jstoup111/ai-conductor/pull/2667
 shipped: 2026-09-23
 engine_version: 20260923T141639Z-c4581785bc4a
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/engine/daemon-cli.test.ts:1038-1042 (commit aaf4fddd9) — unplanned SIGTERM fake-timer synchronization in an unrelated daemon test"
+    accepted: true
 ---
 
 ## Cost
