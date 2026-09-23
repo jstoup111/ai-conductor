@@ -2,7 +2,11 @@
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { HarnessConfig } from '../../types/config.js';
-import type { GhRunner } from '../tracker-client.js';
+import {
+  executeGithubOperation,
+  type GithubOperationRunner,
+} from '../github-operations.js';
+import { runTrackerUrlRead, type GhRunner } from '../tracker-client.js';
 import { mergeReleaseMetadataBlock, snapshotReleaseMetadataBlock } from '../release-metadata.js';
 
 export type ReleaseMetadataFlow = 'inactive' | 'active' | 'step-missing';
@@ -25,6 +29,12 @@ export interface ReleaseMetadataSnapshotInput {
   readonly gh: GhRunner;
   readonly projectRoot: string;
   readonly prUrl: string;
+}
+
+/** Guarded operation authority required to restore a retained draft body. */
+export interface ReleaseMetadataRestoreInput extends ReleaseMetadataSnapshotInput {
+  readonly snapshot: ReleaseMetadataSnapshot;
+  readonly operations: GithubOperationRunner;
 }
 
 export function releaseMetadataSnapshotPath(projectRoot: string): string {
@@ -59,9 +69,12 @@ export async function snapshotReleaseMetadata(
   if (retained?.prUrl === input.prUrl) return retained;
 
   try {
-    const { stdout } = await input.gh(
+    const stdout = await runTrackerUrlRead(
+      input.gh,
+      input.projectRoot,
+      'pull-request',
+      input.prUrl,
       ['pr', 'view', input.prUrl, '--json', 'body'],
-      { cwd: input.projectRoot },
     );
     const body = (JSON.parse(stdout) as { body?: unknown }).body;
     if (typeof body !== 'string') throw new Error('PR body is absent');
@@ -84,7 +97,7 @@ export async function snapshotReleaseMetadata(
 
 /** Restore a capture after finish rewrites the PR body, then verify the remote result. */
 export async function restoreReleaseMetadata(
-  input: ReleaseMetadataSnapshotInput & { readonly snapshot: ReleaseMetadataSnapshot },
+  input: ReleaseMetadataRestoreInput,
 ): Promise<void> {
   if (input.snapshot.prUrl !== input.prUrl) {
     throw new Error('pre-finish snapshot unavailable for the retained draft PR');
@@ -92,9 +105,12 @@ export async function restoreReleaseMetadata(
 
   try {
     const readBody = async (): Promise<string> => {
-      const { stdout } = await input.gh(
+      const stdout = await runTrackerUrlRead(
+        input.gh,
+        input.projectRoot,
+        'pull-request',
+        input.prUrl,
         ['pr', 'view', input.prUrl, '--json', 'body'],
-        { cwd: input.projectRoot },
       );
       const body = (JSON.parse(stdout) as { body?: unknown }).body;
       if (typeof body !== 'string') throw new Error('PR body is absent');
@@ -104,7 +120,16 @@ export async function restoreReleaseMetadata(
     if (snapshotReleaseMetadataBlock(before) === input.snapshot.block) return;
     const merged = mergeReleaseMetadataBlock(before, input.snapshot.block);
     if (merged === null) throw new Error('captured release metadata is no longer valid');
-    await input.gh(['pr', 'edit', input.prUrl, '--body', merged], { cwd: input.projectRoot });
+    const target = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/([1-9]\d*)$/.exec(input.prUrl);
+    if (!target) throw new Error('guarded release metadata restore is unavailable at this composition boundary');
+    const result = await executeGithubOperation({
+      operation: 'pull-request.edit',
+      repository: target[1],
+      resource: { kind: 'pull-request', number: Number(target[2]) },
+      context: { actor: 'finish-release-metadata-restore' },
+      payload: { body: merged },
+    }, input.operations);
+    if (result.kind !== 'executed') throw new Error('guarded release metadata restore was refused or failed');
     const after = await readBody();
     if (snapshotReleaseMetadataBlock(after) !== input.snapshot.block) {
       throw new Error('release metadata restore could not be verified');

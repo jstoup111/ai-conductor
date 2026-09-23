@@ -6749,11 +6749,26 @@ export class Conductor {
       throw new Error('pre-finish snapshot unavailable for the retained draft PR');
     }
 
+    const publication = await this.resolveShipDraftPublicationDependencies({
+      cwd: this.projectRoot,
+      branch: this.worktreeBranch,
+      baseBranch: this.baseBranch,
+      featureDesc: this.featureDesc,
+      prUrl,
+      git: this.git,
+      gh: this.gh,
+      events: this.events,
+    });
+    if (!publication) {
+      throw new Error('post-finish restore unavailable: guarded release metadata restore is unavailable at this composition boundary');
+    }
+
     await restoreReleaseMetadata({
       gh: this.gh,
       projectRoot: this.projectRoot,
       prUrl,
       snapshot,
+      operations: publication.operations,
     });
   }
 
