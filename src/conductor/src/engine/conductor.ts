@@ -7442,7 +7442,10 @@ export class Conductor {
     let lastSettledUnit: SchedulingUnitRef | undefined;
     let parkedAtOperatorBoundary = false;
     const stopAtOperatorParkBoundary =
-      async (alreadyObserved = false): Promise<OperatorParkedTermination | undefined> => {
+      async (
+        alreadyObserved = false,
+        observedBoundary?: SchedulingUnitRef,
+      ): Promise<OperatorParkedTermination | undefined> => {
         if (
           !this.daemon ||
           this.featureSlug === undefined ||
@@ -7456,7 +7459,7 @@ export class Conductor {
           return undefined;
         }
 
-        const boundary: SchedulingUnitRef = lastSettledUnit ?? { kind: 'pre-first-unit' };
+        const boundary: SchedulingUnitRef = observedBoundary ?? lastSettledUnit ?? { kind: 'pre-first-unit' };
         await emitTracked({
           type: 'operator_park_boundary',
           featureSlug: this.featureSlug,
@@ -10112,6 +10115,14 @@ export class Conductor {
                               serialExecutionContext,
                             )
                           : await (async (): Promise<StepRunResult> => {
+                            if (
+                              this.daemon &&
+                              this.featureSlug !== undefined &&
+                              this.operatorParkBoundary &&
+                              await this.operatorParkBoundary().catch(() => true)
+                            ) {
+                              return { success: false, operatorParkedBeforeDispatch: true };
+                            }
                             // PRD widening preparation stays outside the
                             // runner-throw contract, matching the group
                             // branch, which prepares before its fan-out.
@@ -10146,7 +10157,11 @@ export class Conductor {
                             }
                           })());
             if (result.operatorParkedBeforeDispatch) {
-              const queuedPark = await stopAtOperatorParkBoundary(true);
+              const queuedPark = await stopAtOperatorParkBoundary(true, {
+                kind: 'attempt',
+                step: step.name,
+                attempt,
+              });
               if (queuedPark) return queuedPark;
             }
           } finally {

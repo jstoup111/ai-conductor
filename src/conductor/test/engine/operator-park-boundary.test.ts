@@ -316,6 +316,177 @@ describe('operator park boundary contract', () => {
     });
   });
 
+  it('declines an ordinary-path retry after a park lands during attempt one', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    let parked = false;
+    const run = vi.fn<StepRunner['run']>(async () => {
+      parked = true;
+      return { success: false, output: 'retry me' };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => parked,
+    });
+
+    const result = await conductor.run();
+
+    expect({ result, runnerCalls: run.mock.calls.length }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'attempt', step: 'memory', attempt: 2 },
+      },
+      runnerCalls: 1,
+    });
+  });
+
+  it('fails toward parked when the ordinary-path retry check rejects', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    const boundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(
+      async () => {
+        if (boundary.mock.calls.length >= 3) throw new Error('park boundary unreadable');
+        return false;
+      },
+    );
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: false, output: 'retry me' }));
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: boundary,
+    });
+
+    const result = await conductor.run();
+
+    expect({ result, runnerCalls: run.mock.calls.length }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'attempt', step: 'memory', attempt: 2 },
+      },
+      runnerCalls: 1,
+    });
+  });
+
+  it('allows an ordinary-path retry dispatch when no park is active', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    const run = vi.fn<StepRunner['run']>()
+      .mockResolvedValueOnce({ success: false, output: 'retry me' })
+      .mockResolvedValueOnce({ success: true });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => false,
+    });
+
+    const result = await conductor.run();
+
+    expect({ result, runnerCalls: run.mock.calls.length }).toEqual({
+      result: undefined,
+      runnerCalls: 2,
+    });
+  });
+
+  it('allows an ordinary-path retry dispatch when a park is removed before its check', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    let parked = false;
+    const boundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(async () => {
+      // The park marker existed after attempt one but is removed before this
+      // next-attempt read, so retry admission proceeds normally.
+      parked = false;
+      return parked;
+    });
+    let calls = 0;
+    const run = vi.fn<StepRunner['run']>(async () => {
+      calls += 1;
+      if (calls === 1) {
+        parked = true;
+        return { success: false, output: 'retry me' };
+      }
+      return { success: true };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: boundary,
+    });
+
+    const result = await conductor.run();
+
+    expect({ result, runnerCalls: run.mock.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
+      result: undefined,
+      runnerCalls: 2,
+      boundaryCalls: 3,
+    });
+  });
+
+  it('emits one attempt-boundary event when the ordinary-path retry is declined', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    let parked = false;
+    const events = new ConductorEventEmitter();
+    const boundaries: Array<Extract<ConductorEvent, { type: 'operator_park_boundary' }>> = [];
+    events.on('operator_park_boundary', (event) => {
+      if (event.type === 'operator_park_boundary') boundaries.push(event);
+    });
+    const run = vi.fn<StepRunner['run']>(async () => {
+      parked = true;
+      return { success: false, output: 'retry me' };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => parked,
+    });
+
+    await conductor.run();
+
+    expect(boundaries).toEqual([
+      {
+        type: 'operator_park_boundary',
+        featureSlug: 'operator-park-boundary',
+        boundary: { kind: 'attempt', step: 'memory', attempt: 2 },
+      },
+    ]);
+  });
+
   it('settles the active serial step once, persists it, then parks before the next step', async () => {
     await writeState(statePath, stateWithPending('memory', 'explore'));
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
@@ -371,7 +542,7 @@ describe('operator park boundary contract', () => {
         boundary: { kind: 'step', name: 'memory' },
       },
       runnerSteps: ['memory'],
-      boundaryChecks: 2,
+      boundaryChecks: 3,
       boundaryObservation: { memory: 'done', explore: 'pending' },
       settledStepsStillInProgress: [],
       persisted: { memory: 'done', explore: 'pending' },
@@ -396,7 +567,7 @@ describe('operator park boundary contract', () => {
       NonNullable<ConductorOptions['operatorParkBoundary']>
     >(async () => {
       boundaryChecks += 1;
-      return boundaryChecks > 1;
+      return boundaryChecks > 2;
     });
     const conductor = new Conductor({
       projectRoot,
@@ -432,7 +603,7 @@ describe('operator park boundary contract', () => {
     });
   });
 
-  it('keeps a failed gate diagnostic authoritative when parking becomes active during bounded recovery', async () => {
+  it('parks before bounded recovery dispatch when a failed gate activates the park', async () => {
     await writeState(statePath, stateWithPending('build_review'));
     let parked = false;
     const events = new ConductorEventEmitter();
@@ -485,17 +656,20 @@ describe('operator park boundary contract', () => {
           }
         : persisted,
     }).toEqual({
-      result: undefined,
-      runnerSteps: ['build_review', 'build_review'],
-      failed: [
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'attempt', step: 'build_review', attempt: 2 },
+      },
+      runnerSteps: ['build_review'],
+      failed: [],
+      parkedBoundaries: [
         {
-          step: 'build_review',
-          error: 'build review found a genuine structural gap',
-          retryCount: 2,
+          type: 'operator_park_boundary',
+          featureSlug: 'operator-park-boundary',
+          boundary: { kind: 'attempt', step: 'build_review', attempt: 2 },
         },
       ],
-      parkedBoundaries: [],
-      persisted: { buildReview: 'failed' },
+      persisted: { buildReview: 'in_progress' },
     });
   });
 
