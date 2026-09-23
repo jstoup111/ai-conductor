@@ -144,6 +144,7 @@ describe('build_review oversized projection step', () => {
 
   it('halts needs-human after three invalid structured-result laps without publishing an aggregate', async () => {
     const runner = createRunner('findings must be an array', 'invalid-structured-result');
+    const dispatchesBefore = vi.mocked(coordinateBuildReviewRubrics).mock.calls.length;
 
     await expect(runner.run('build_review', state)).resolves.toMatchObject({ currentLapMechanicalFault: true });
     await expect(runner.run('build_review', state)).resolves.toMatchObject({ currentLapMechanicalFault: true });
@@ -155,6 +156,7 @@ describe('build_review oversized projection step', () => {
     expect((await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults).toBe(3);
     await expect(access(join(projectRoot, '.pipeline', 'build-review.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(buildReviewPublication.count).toBe(0);
+    expect(vi.mocked(coordinateBuildReviewRubrics)).toHaveBeenCalledTimes(dispatchesBefore + 3);
   });
 
   it('charges native-schema-unsupported once per lap and records the same candidate-set lever on a later lap', async () => {

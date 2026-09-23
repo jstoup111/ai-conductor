@@ -993,6 +993,16 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
     expect(writeArtifact).not.toHaveBeenCalled();
     expect(writeCache).not.toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "build_review_rubric_result", verdict: "FAIL" }));
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current",
+      reason: "invalid-structured-result", cause: "invalid-structured-result",
+      rejection: expect.objectContaining({
+        kind: "explained",
+        problems: expect.arrayContaining([
+          expect.objectContaining({ field: "counterfactualSensitivity" }),
+        ]),
+      }),
+    }));
     expect(rubricFailures).toEqual({ testQuality: 3 });
   });
 
