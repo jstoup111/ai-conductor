@@ -322,6 +322,29 @@ const infrastructureFailureWithoutProjectionBytes = {
 } satisfies ConductorEvent;
 void infrastructureFailureWithoutProjectionBytes;
 
+// Native-schema faults remain occurrences on the existing infrastructure
+// event.  A structured-result rejection is optional because capability faults
+// have no provider payload to reject.
+const nativeSchemaUnsupportedFault = {
+  type: 'build_review_rubric_infrastructure_failure',
+  rubric: 'testQuality',
+  lapId: 'lap-current',
+  reason: 'native-schema-unsupported',
+  cause: 'native-schema-unsupported',
+} satisfies ConductorEvent;
+const invalidStructuredResultFault = {
+  type: 'build_review_rubric_infrastructure_failure',
+  rubric: 'testQuality',
+  lapId: 'lap-current',
+  reason: 'invalid-structured-result',
+  cause: 'invalid-structured-result',
+  rejection: {
+    kind: 'explained',
+    problems: [{ field: 'findings', required: 'must be an array', detail: 'findings must be an array' }],
+  },
+} satisfies ConductorEvent;
+void [nativeSchemaUnsupportedFault, invalidStructuredResultFault];
+
 // @ts-expect-error -- retained reclamation reasons are a closed union.
 const reclaimRetentionWithUnlistedReason = { type: 'worktree_reclaim_retained', slug: 'feature', reason: 'operator-maybe' } satisfies ConductorEvent;
 void reclaimRetentionWithUnlistedReason;
@@ -605,6 +628,27 @@ describe('event sink subscriptions', () => {
       const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
         .trim().split('\n').map((line) => JSON.parse(line));
       expect(records).toEqual([{ ...event, ts: expect.any(String) }]);
+      expect(await readdir(join(projectRoot, '.pipeline'))).toEqual(['events.jsonl']);
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('persists native-schema mechanical faults on the existing occurrence without a sidecar', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-review-native-schema-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const faultLap = [nativeSchemaUnsupportedFault, invalidStructuredResultFault];
+
+    try {
+      persister.start();
+      for (const event of faultLap) await events.emit(event);
+      persister.stop();
+
+      const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(records).toEqual(faultLap.map((event) => ({ ...event, ts: expect.any(String) })));
       expect(await readdir(join(projectRoot, '.pipeline'))).toEqual(['events.jsonl']);
     } finally {
       persister.stop();

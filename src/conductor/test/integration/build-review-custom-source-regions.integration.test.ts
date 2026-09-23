@@ -52,8 +52,11 @@ async function review(region: { path: string; startLine: number; endLine: number
     concernId: 'concern.one', summary: 'A concern.', evidenceLocations: [`${region.path}:${region.startLine}`],
     sourceRegions: [{ ...region, display: 'cited region' }],
   }] };
-  const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload) }));
-  const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+  const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
+  const provider: LLMProvider = {
+    invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+    nativeSchemaCapability: { nativeOutputSchema: true },
+  };
   const runner = new DefaultStepRunner(provider, 'custom-source-regions', root, {
     featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
     config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
@@ -99,13 +102,13 @@ describe('custom source regions are validated against frozen source bytes', () =
 
   it('refuses a forged content hash on a changed path', async () => {
     const { artifact } = await review({ path: 'src/a.ts', startLine: 1, endLine: 1, contentHash: `sha256:${'f'.repeat(64)}` });
-    expect(artifact.result).toMatchObject({ kind: 'infrastructure-failure', reason: 'malformed-artifact' });
+    expect(artifact.result).toMatchObject({ kind: 'infrastructure-failure', reason: 'invalid-structured-result' });
     expect(artifact.result.detail).toContain('src/a.ts:1-1');
   });
 
   it('refuses a line range beyond the frozen blob', async () => {
     const { artifact } = await review({ path: 'src/a.ts', startLine: 2, endLine: 9, contentHash: sha('export const other = 2;\n') });
-    expect(artifact.result).toMatchObject({ kind: 'infrastructure-failure', reason: 'malformed-artifact' });
+    expect(artifact.result).toMatchObject({ kind: 'infrastructure-failure', reason: 'invalid-structured-result' });
   });
 
   it('admits a declared dependency written in a non-normalized form that capture already resolved', async () => {

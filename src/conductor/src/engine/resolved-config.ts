@@ -21,6 +21,11 @@ import {
 import { escalateAttempt } from './escalation.js';
 import { normalizeProviderSelection } from './provider-selection.js';
 import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
+import { resolveBuildReviewCustomContract } from './build-review-policy-resolver.js';
+import { resolveBuildReviewContractCatalog, type RubricContractDescriptor } from './build-review-contract.js';
+import type { BuildReviewCustomReviewerPayload } from './build-review-domain.js';
+import type { BuildReviewCustomFindingIdentity } from './build-review-finding-identity.js';
+import type { BuildReviewFrozenInputScope } from './build-review-containment.js';
 
 // Legacy aliases retained for existing consumers. New resolution accepts a
 // provider policy explicitly, so these never participate in provider-aware
@@ -729,6 +734,12 @@ export interface ResolvedBuildReviewCustomCatalogEntry {
   readonly source?: string;
   readonly resources: readonly string[];
   readonly policy: ResolvedBuildReviewRubricPolicy;
+  readonly contract: RubricContractDescriptor<
+    BuildReviewFrozenInputScope,
+    BuildReviewFrozenInputScope,
+    BuildReviewCustomReviewerPayload,
+    BuildReviewCustomFindingIdentity
+  >;
 }
 
 export type ResolvedBuildReviewCatalogEntry =
@@ -749,6 +760,25 @@ export interface ResolvedBuildReviewConfig {
   rubrics: Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
   /** Immutable enabled execution branches. */
   catalog: readonly ResolvedBuildReviewCatalogEntry[];
+}
+
+/**
+ * Validate resolved custom descriptors before they join the live catalog.
+ * The config resolver calls this exact boundary after policy resolution, so
+ * malformed custom contracts cannot reach provider dispatch.
+ */
+export function resolveBuildReviewCustomCatalog(
+  entries: readonly ResolvedBuildReviewCustomCatalogEntry[],
+): readonly ResolvedBuildReviewCustomCatalogEntry[] {
+  const validated = resolveBuildReviewContractCatalog(entries.map((entry) => ({
+    id: entry.id,
+    contract: entry.contract,
+  })));
+  return Object.freeze(validated.map(({ id }, index) => {
+    const entry = entries[index]!;
+    if (entry.id !== id) throw new Error(`Build-review custom catalog order changed for ${id}`);
+    return entry;
+  }));
 }
 
 /**
@@ -891,20 +921,14 @@ export function resolveBuildReviewConfig(
     && !Array.isArray(customRubrics)
     ? Object.entries(customRubrics)
     : [];
-  const catalog = block?.enabled === false
-    ? Object.freeze([]) as readonly ResolvedBuildReviewCatalogEntry[]
-    : Object.freeze([
-      ...BUILD_REVIEW_RUBRIC_IDS.flatMap((id): ResolvedBuildReviewCatalogEntry[] => {
-        const policy = rubrics[id];
-        return policy.enabled
-          ? [Object.freeze({ id, kind: 'builtin' as const, policy })]
-          : [];
-      }),
-      ...customEntries.flatMap(([id, custom]): ResolvedBuildReviewCatalogEntry[] => {
+  const customCatalog = block?.enabled === false
+    ? Object.freeze([]) as readonly ResolvedBuildReviewCustomCatalogEntry[]
+    : resolveBuildReviewCustomCatalog(customEntries.flatMap(
+      ([id, custom]): ResolvedBuildReviewCustomCatalogEntry[] => {
         const declaration = custom as BuildReviewCustomRubricConfig;
         const policy = resolveRubricPolicy(declaration, false);
         return policy.enabled
-          ? [Object.freeze({
+          ? [resolveBuildReviewCustomContract({
               id,
               kind: 'custom' as const,
               skill: declaration.skill,
@@ -914,7 +938,18 @@ export function resolveBuildReviewConfig(
               policy,
             })]
           : [];
+      },
+    ));
+  const catalog = block?.enabled === false
+    ? Object.freeze([]) as readonly ResolvedBuildReviewCatalogEntry[]
+    : Object.freeze([
+      ...BUILD_REVIEW_RUBRIC_IDS.flatMap((id): ResolvedBuildReviewCatalogEntry[] => {
+        const policy = rubrics[id];
+        return policy.enabled
+          ? [Object.freeze({ id, kind: 'builtin' as const, policy })]
+          : [];
       }),
+      ...customCatalog,
     ]);
   const enabledRubricCount = catalog.length;
 

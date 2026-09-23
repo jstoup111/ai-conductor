@@ -6,6 +6,11 @@ import { tmpdir } from 'node:os';
 
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import {
+  deriveEffectiveBuildReviewVerdict,
+  deriveEffectiveBuildReviewVerdictWithDispositions,
+  joinBuildReviewRubricOutcomes,
+} from '../../src/engine/build-review-aggregate.js';
+import {
   canonicalizeBuildReviewFindingIdentity,
   stampBuildReviewCustomJudgedResult,
 } from '../../src/engine/build-review-finding-identity.js';
@@ -504,6 +509,54 @@ describe('build-review dispositions', () => {
     };
 
     expect(matchesBuildReviewDisposition(feature, reReported, [accepted])).toBe(true);
+  });
+
+  it('preserves a pre-migration v3 testQuality disposition when post-migration summary wording changes', () => {
+    const preMigrationIdentity = canonicalizeBuildReviewFindingIdentity(currentContractFindings[0][1])!;
+    const postMigrationFinding = {
+      concernKind: 'test-insensitive' as const,
+      summary: 'Reworded reviewer prose after descriptor dispatch.',
+      evidenceLocations: ['test/widget.test.ts:12'],
+      anchor: currentContractFindings[0][1].anchor,
+    };
+    const postMigrationIdentity = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'testQuality', contractVersion: 'v3', concernKind: postMigrationFinding.concernKind,
+      anchor: postMigrationFinding.anchor,
+    })!;
+    const accepted: BuildReviewDispositionRecord = {
+      version: 'v1', feature, finding: preMigrationIdentity, sourceLapId: parseBuildReviewLapId('lap-before-migration')!,
+      summary: 'Original reviewer wording before the migration.', rationale: 'accepted risk', operator: 'james', acceptedAt: '2026-08-21T12:00:00.000Z',
+    };
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId: parseBuildReviewLapId('lap-after-migration')!, snapshotDigest: 'sha256:snapshot-after-migration',
+      results: {
+        testQuality: {
+          kind: 'judged', rubric: 'testQuality', lapId: parseBuildReviewLapId('lap-after-migration')!, snapshotDigest: 'sha256:snapshot-after-migration',
+          contractVersion: 'v3', findings: [postMigrationFinding], verdict: 'FAIL',
+        },
+        security: {
+          kind: 'judged', rubric: 'security', lapId: parseBuildReviewLapId('lap-after-migration')!, snapshotDigest: 'sha256:snapshot-after-migration',
+          contractVersion: 'v3', findings: [], verdict: 'PASS',
+        },
+      },
+    });
+
+    expect({
+      ids: [preMigrationIdentity.id, postMigrationIdentity.id],
+      canonicalJson: [preMigrationIdentity.canonicalJson, postMigrationIdentity.canonicalJson],
+      matches: matchesBuildReviewDisposition(feature, postMigrationIdentity, [accepted]),
+    }).toEqual({
+      ids: [preMigrationIdentity.id, preMigrationIdentity.id],
+      canonicalJson: [preMigrationIdentity.canonicalJson, preMigrationIdentity.canonicalJson],
+      matches: true,
+    });
+    expect(accepted.finding.canonicalPayload).toMatchObject({ contractVersion: 'v3' });
+    expect(deriveEffectiveBuildReviewVerdict(aggregate, new Set([postMigrationIdentity.id]))).toMatchObject({
+      verdict: 'PASS', acceptedFindingIds: [postMigrationIdentity.id], unresolvedFindingIds: [],
+    });
+    expect(deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, [accepted])).toMatchObject({
+      verdict: 'PASS', acceptedFindingIds: [postMigrationIdentity.id], unresolvedFindingIds: [],
+    });
   });
 
   it('persists and matches accepted custom risk only for the exact judged declaration and content', async () => {

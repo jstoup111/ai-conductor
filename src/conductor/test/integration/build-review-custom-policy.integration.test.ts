@@ -13,21 +13,11 @@ import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import * as buildReviewProjections from '../../src/engine/build-review-projections.js';
 import * as buildReviewCache from '../../src/engine/build-review-cache.js';
 import { assembleBuildReviewAdjudicationContext } from '../../src/engine/build-review-adjudication-context.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
-
-vi.mock('../../src/engine/build-review-projections.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/engine/build-review-projections.js')>();
-  return {
-    ...actual,
-    buildReviewEffectiveResultDescriptor: vi.fn(actual.buildReviewEffectiveResultDescriptor),
-    parseBuildReviewReviewerPayload: vi.fn(actual.parseBuildReviewReviewerPayload),
-  };
-});
 
 vi.mock('../../src/engine/build-review-cache.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/build-review-cache.js')>();
@@ -85,15 +75,17 @@ describe('custom build-review policy runner', () => {
     ['claude', 'project'], ['claude', 'global'], ['claude', 'plugin'],
     ['codex', 'project'], ['codex', 'global'], ['codex', 'plugin'],
   ] as const)('runs an installed %s %s policy through a prepared candidate', async (providerKey, source) => {
-    vi.mocked(buildReviewProjections.buildReviewEffectiveResultDescriptor).mockClear();
-    vi.mocked(buildReviewProjections.parseBuildReviewReviewerPayload).mockClear();
     const root = await fixture();
-    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) }));
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
     const preparedEnv = { CODEX_HOME: '/prepared/candidate-home', CANDIDATE_ONLY: providerKey };
     const policyCatalog = vi.fn(async () => [{
       semanticName: 'portable-policy', source, ...(source === 'plugin' ? { plugin: { id: 'policy-plugin', version: '1.0.0' } } : {}), installationOrigin: `/fixture/${source}`, canonicalSkillPath: `/fixture/${source}/SKILL.md`, packageRoot: `/fixture/${source}`, declaredDependencies: [], availability: 'available' as const,
     }]);
-    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
     const events = new ConductorEventEmitter();
     const resolvedEvents: unknown[] = [];
     const rubricResults: unknown[] = [];
@@ -145,13 +137,9 @@ describe('custom build-review policy runner', () => {
     if (!firstInvocation?.model || !firstInvocation.effort) throw new Error('expected a prepared provider candidate');
     const preparedCandidate = { provider: providerKey, model: firstInvocation.model, effort: firstInvocation.effort };
     expect(firstInvocation?.prompt).toContain('Portable policy');
-    expect(buildReviewProjections.buildReviewEffectiveResultDescriptor).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'portable', kind: 'custom', skill: source === 'plugin' ? 'policy-plugin:portable-policy' : 'portable-policy',
+    expect(firstInvocation.nativeSchema).toEqual(expect.objectContaining({
+      oneOf: expect.arrayContaining([expect.objectContaining({ type: 'object' })]),
     }));
-    expect(buildReviewProjections.parseBuildReviewReviewerPayload).toHaveBeenCalledWith(
-      { kind: 'custom-findings', version: 'v1', findings: [] },
-      { kind: 'custom', rubric: 'portable', parser: 'custom-findings-v1' },
-    );
     expect(resolvedEvents).toEqual([expect.objectContaining({
       source, bundleDigest: `sha256-v1:${'a'.repeat(64)}`,
       provenance: expect.objectContaining({
@@ -179,9 +167,11 @@ describe('custom build-review policy runner', () => {
     const root = await fixture();
     const skillBody = `# Portable policy\n\n${'Review every changed handler for the portable policy. '.repeat(400)}`;
     const siblingBody = `# Sibling skill\n\n${'Unrelated sibling reviewer instructions. '.repeat(400)}`;
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
     const provider: LLMProvider = {
-      invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) })),
+      invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })),
       supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
     };
     const runner = new DefaultStepRunner(provider, 'custom-policy-criteria', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
@@ -249,10 +239,12 @@ describe('custom build-review policy runner', () => {
 
   it('publishes a custom-only outer verdict when effective resolution fails', async () => {
     const root = await fixture();
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
     const provider: LLMProvider = {
-      invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) })),
+      invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })),
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
     };
     const events = new ConductorEventEmitter();
     const outerVerdicts: unknown[] = [];
@@ -282,10 +274,12 @@ describe('custom build-review policy runner', () => {
     readonly minConfidence?: number;
     readonly resolver: (projectRoot: string, aggregate: unknown) => Promise<unknown>;
   }): DefaultStepRunner {
+    const payload = { kind: 'custom-findings', version: 'v1', findings: options.findings };
     const provider: LLMProvider = {
-      invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: options.findings }) })),
+      invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })),
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
     };
     return new DefaultStepRunner(provider, 'custom-only-durable-evidence', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
@@ -381,9 +375,13 @@ describe('custom build-review policy runner', () => {
         output: prompt.includes('Build Review Security rubric.')
           ? JSON.stringify({ findings: [] })
           : JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }),
+        finalStructuredResult: prompt.includes('Build Review Security rubric.')
+          ? { findings: [] }
+          : { kind: 'custom-findings', version: 'v1', findings: [] },
       })),
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
     };
     const events = new ConductorEventEmitter();
     const rubricResults: unknown[] = [];
@@ -421,7 +419,10 @@ describe('custom build-review policy runner', () => {
   it('refuses an ambiguous installed selection without invoking a provider', async () => {
     const root = await fixture();
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: '{}' }));
-    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
     const events = new ConductorEventEmitter();
     const failures: unknown[] = [];
     events.on('build_review_policy_failed', (event) => { failures.push(event); });
@@ -462,7 +463,10 @@ describe('custom build-review policy runner', () => {
     vi.mocked(buildReviewCache.readBuildReviewCacheEntry).mockClear();
     const root = await fixture();
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: '{}' }));
-    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
     const runner = new DefaultStepRunner(provider, 'custom-policy-failure', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
@@ -533,7 +537,10 @@ describe('custom build-review policy discovery under candidate authority', () =>
   ) {
     const root = await fixture();
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: '{}' }));
-    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
     const events = new ConductorEventEmitter();
     const failures: unknown[] = [];
     events.on('build_review_policy_failed', (event) => { failures.push(event); });

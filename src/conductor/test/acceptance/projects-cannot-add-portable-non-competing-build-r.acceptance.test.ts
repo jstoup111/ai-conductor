@@ -210,13 +210,15 @@ async function runFlow(input: {
       }],
     }] : [];
     expect(options.prompt).toContain('Portable policy');
-    return { success: true, output: JSON.stringify({
+    const payload = {
       kind: 'custom-findings', version: 'v1', findings,
-    }), exitCode: 0 };
+    };
+    return { success: true, output: JSON.stringify(payload), finalStructuredResult: payload, exitCode: 0 };
   });
   const provider: LLMProvider = {
     supportsSessionResume: true,
     lifecycleCapability: { synchronousSpawnPermit: true },
+    nativeSchemaCapability: { nativeOutputSchema: true },
     invoke,
   };
   const runtime = {

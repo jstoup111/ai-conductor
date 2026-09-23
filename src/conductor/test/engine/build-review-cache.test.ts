@@ -5,6 +5,7 @@ import {
   classifyBuildReviewCacheLookup,
   parseBuildReviewCacheEntry,
   readBuildReviewCacheEntry,
+  tryWriteBuildReviewCacheEntry,
   writeBuildReviewCacheEntry,
   type BuildReviewCacheEntry,
   type BuildReviewCacheFilesystem,
@@ -12,7 +13,9 @@ import {
 } from "../../src/engine/build-review-cache.js";
 import { engineContentStamp } from "../../src/engine/engine-version-id.js";
 import { coordinateBuildReviewRubrics } from "../../src/engine/build-review-coordinator.js";
+import { getBuildReviewRubricDescriptor } from "../../src/engine/build-review-registry.js";
 import { parseBuildReviewLapId } from "../../src/engine/build-review-domain.js";
+import { stampBuildReviewCustomJudgedResult } from "../../src/engine/build-review-finding-identity.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
 import { fingerprintBuildReviewPolicyDeclaration } from "../../src/engine/build-review-policy.js";
@@ -179,6 +182,46 @@ describe("build-review semantic cache", () => {
 
   it("rejects v2 entries at the current public parse boundary", () => {
     expect(parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v2" })).toBeUndefined();
+  });
+
+  it("preserves the v3 cache contract boundary by rejecting a future v4 contract version", () => {
+    expect(parseBuildReviewCacheEntry({ ...entry(), contractVersion: "v4" })).toBeUndefined();
+  });
+
+  it("persists the custom descriptor's v1/v1 cache pair without widening the v3 boundary", async () => {
+    const descriptor = {
+      version: "v1" as const,
+      semanticSkill: "portable-policy",
+      declaration: {
+        version: "v1" as const, rubricId: "portablePolicy", semanticSkill: "portable-policy",
+        question: "Check the frozen input.", resources: [],
+      },
+      installation: { source: "project" as const },
+      effectivePolicy: { version: "v1" as const, bundleDigest: `sha256:${"a".repeat(64)}` },
+      reviewedInput: { version: "v1" as const, contentDigest: `sha256:${"b".repeat(64)}` },
+      producer: { provider: "codex", model: "gpt-5.6-sol", effort: "medium" },
+    };
+    const result = stampBuildReviewCustomJudgedResult(
+      { kind: "custom-findings", version: "v1", findings: [] },
+      {
+        rubric: descriptor.declaration.rubricId, lapId: "lap-a",
+        declaration: descriptor.declaration, policy: descriptor.effectivePolicy,
+        candidate: descriptor.producer, reviewedInput: descriptor.reviewedInput,
+      },
+      { sourceRegions: [] },
+    )!;
+    const customEntry: BuildReviewCacheEntry = {
+      ...entry(), rubric: descriptor.declaration.rubricId,
+      contractVersion: "v1", projectionVersion: "v1",
+      semanticIdentity: candidateIdentity({ contractVersion: "v1", projectionVersion: "v1" }),
+      result: { descriptor, result },
+    };
+    const fs = memoryFilesystem();
+
+    await expect(tryWriteBuildReviewCacheEntry("/feature", customEntry, fs)).resolves.toEqual({ ok: true });
+    await expect(readBuildReviewCacheEntry("/feature", customEntry.rubric, fs, customEntry.semanticIdentity))
+      .resolves.toMatchObject({ contractVersion: "v1", projectionVersion: "v1" });
+    expect(parseBuildReviewCacheEntry({ ...customEntry, contractVersion: "v4" })).toBeUndefined();
   });
 
   it("parses legacy projection candidates through the read seam, then misses against the current v3 identity", async () => {
@@ -716,10 +759,11 @@ describe("engine identity injection into the coordinator (D5/D6)", () => {
     });
   });
 
-  it("emits build_review_cache_discarded on an engine-identity miss and stamps writes with the identity", async () => {
+  it("keeps v3 descriptor versions when a pre-migration cache entry misses on engine identity", async () => {
     const cachedIdentity = { engineStamp: "aaaaaaaaaaaa", skillDigest: "sha256:skill-a" };
     const currentIdentity = { engineStamp: "bbbbbbbbbbbb", skillDigests: { testQuality: { kind: "resolved" as const, digest: "sha256:skill-a" } } };
-    const written: unknown[] = [];
+    const fs = memoryFilesystem();
+    const written: BuildReviewCacheEntry[] = [];
     const events: unknown[] = [];
     const coordination = await coordinateBuildReviewRubrics({
       config, inputs: frozenInputs, lapId: lap(), preflight,
@@ -730,7 +774,11 @@ describe("engine identity injection into the coordinator (D5/D6)", () => {
       }),
       dispatchModel: dispatch,
       writeArtifact: async (artifact: never) => ({ version: 1 as const, ...(artifact as object) }),
-      writeCache: async (cacheEntry: unknown) => { written.push(cacheEntry); },
+      writeCache: async (cacheEntry: BuildReviewCacheEntry) => {
+        written.push(cacheEntry);
+        const persisted = await tryWriteBuildReviewCacheEntry('/feature', cacheEntry, fs);
+        if (!persisted.ok) throw persisted.error;
+      },
       emit: async (event: unknown) => { events.push(event); },
     } as never);
 
@@ -743,7 +791,16 @@ describe("engine identity injection into the coordinator (D5/D6)", () => {
       cachedEngineStamp: "aaaaaaaaaaaa",
       currentEngineStamp: "bbbbbbbbbbbb",
     });
-    expect(written[0]).toMatchObject({ engineIdentity: { engineStamp: "bbbbbbbbbbbb", skillDigest: "sha256:skill-a" } });
+    const fresh = written[0]!;
+    const descriptor = getBuildReviewRubricDescriptor('testQuality');
+    expect(fresh).toMatchObject({
+      contractVersion: descriptor.contract.output.version,
+      projectionVersion: descriptor.contract.projection.version,
+      engineIdentity: { engineStamp: "bbbbbbbbbbbb", skillDigest: "sha256:skill-a" },
+    });
+    await expect(readBuildReviewCacheEntry('/feature', 'testQuality', fs, fresh.semanticIdentity)).resolves.toMatchObject({
+      contractVersion: 'v3', projectionVersion: 'v3',
+    });
   });
 });
 

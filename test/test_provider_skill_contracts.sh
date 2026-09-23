@@ -37,11 +37,30 @@ require_absent_pattern() {
   local description=$1
   local pattern=$2
   local file=$3
-  if grep -qiE "$pattern" "$file"; then
-    fail "$description"
+  if matches_audit_pattern "$pattern" "$file"; then
+    fail "$description: $file matches $pattern"
   else
     pass "$description"
   fi
+}
+
+# The fenced-findings rule is intentionally multiline: mentioning `findings`
+# in ordinary judgement prose is allowed, but showing it in a payload fence
+# would reintroduce a second output contract alongside the native schema.
+matches_audit_pattern() {
+  local pattern=$1
+  local file=$2
+
+  case "$pattern" in
+    'fenced block containing "findings":')
+      awk '
+        /^```/ { in_fence = !in_fence; next }
+        in_fence && /"findings":/ { found = 1; exit }
+        END { exit !found }
+      ' "$file"
+      ;;
+    *) grep -qiE "$pattern" "$file" ;;
+  esac
 }
 
 require_max_lines() {
@@ -274,6 +293,18 @@ require_pattern 'composer uses the canonical ai-conductor compose CLI vocabulary
 require_absent_pattern 'composer contains no legacy conduct-ts engineer CLI examples' \
   'conduct-ts engineer' "$composer_skill"
 
+# build_review output shape is engine-owned. These rules stop the shipped
+# rubric skills from reintroducing a competing prose payload contract.
+for build_review_skill in build-review-test-quality build-review-security; do
+  build_review_skill_file="$HARNESS_DIR/skills/${build_review_skill}/SKILL.md"
+  require_absent_pattern "${build_review_skill} forbids ^## Result contract" \
+    '^## Result contract' "$build_review_skill_file"
+  require_absent_pattern "${build_review_skill} forbids fenced block containing \"findings\":" \
+    'fenced block containing "findings":' "$build_review_skill_file"
+  require_absent_pattern "${build_review_skill} forbids ^Return exactly one provider payload" \
+    '^Return exactly one provider payload' "$build_review_skill_file"
+done
+
 require_pattern 'engineer remains a compatibility delegate to composer' \
   '(canonical|delegate).{0,100}composer|composer.{0,100}(canonical|delegate)' \
   "$engineer_skill"
@@ -444,6 +475,56 @@ expect_audit 'provider audit rejects unscoped interactive Claude command' 1 "$co
 
 printf '%s\n' 'Claude Code invokes `conduct` as `/conduct`; Codex invokes it as `$conduct`.' > "$contract_fixture"
 expect_audit 'provider audit rejects a compatibility edit that removes the shared gate' 1 "$contract_fixture" 'Shared lifecycle gate'
+
+build_review_skill_prose_audit() {
+  local file=$1
+  local pattern
+  local violations=0
+
+  for pattern in \
+    '^## Result contract' \
+    'fenced block containing "findings":' \
+    '^Return exactly one provider payload'; do
+    if matches_audit_pattern "$pattern" "$file"; then
+      printf 'build_review output-format prose rejected: %s matches %s\n' "$file" "$pattern"
+      violations=1
+    fi
+  done
+
+  [ "$violations" -eq 0 ]
+}
+
+expect_build_review_skill_prose_fixture_failure() {
+  local fixture=$1
+  local expected_pattern=$2
+  local output
+  local status
+
+  set +e
+  output=$(build_review_skill_prose_audit "$fixture" 2>&1)
+  status=$?
+  set -e
+
+  if [ "$status" -ne 0 ] \
+    && [[ "$output" == *"$fixture"* ]] \
+    && [[ "$output" == *"$expected_pattern"* ]]; then
+    pass "build_review prose fixture rejects $(basename "$fixture") naming file and pattern"
+  else
+    fail "build_review prose fixture rejects $(basename "$fixture") naming file and pattern"
+  fi
+}
+
+for build_review_fixture in \
+  "$HARNESS_DIR/test/fixtures/build-review-skill-prose/result-contract-heading.md" \
+  "$HARNESS_DIR/test/fixtures/build-review-skill-prose/fenced-findings.md" \
+  "$HARNESS_DIR/test/fixtures/build-review-skill-prose/payload-sentence.md"; do
+  case "$(basename "$build_review_fixture")" in
+    result-contract-heading.md) expected_pattern='^## Result contract' ;;
+    fenced-findings.md) expected_pattern='fenced block containing "findings":' ;;
+    payload-sentence.md) expected_pattern='^Return exactly one provider payload' ;;
+  esac
+  expect_build_review_skill_prose_fixture_failure "$build_review_fixture" "$expected_pattern"
+done
 
 for provider_contract_file in \
   "$HARNESS_DIR/HARNESS.md" \

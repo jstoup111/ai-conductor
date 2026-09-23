@@ -1762,8 +1762,17 @@ echo -e "${BOLD}25. Build-review rubric vocabulary contract${NC}"
 
 rubric_vocabulary_check="${HARNESS_DIR}/test/check_build_review_rubric_skill_vocabularies.sh"
 if [ -f "$rubric_vocabulary_check" ]; then
+  # The vocabulary guard imports the emitted rubric descriptor so it verifies
+  # exactly the schema used by provider dispatch. dist is intentionally
+  # untracked, and an existing copy can be stale, so build it immediately
+  # before this check rather than relying on a later engine test to do so.
   set +e
-  rubric_vocabulary_output=$(bash "$rubric_vocabulary_check" 2>&1)
+  rubric_vocabulary_output=$(
+    (
+      cd "${HARNESS_DIR}/src/conductor" && npm run build >/dev/null &&
+        bash "$rubric_vocabulary_check"
+    ) 2>&1
+  )
   rubric_vocabulary_exit=$?
   set -e
 

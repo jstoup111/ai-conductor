@@ -13,12 +13,10 @@ import type { ConductState, ExecutionContext, ProviderAttemptEvent, StepName } f
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
 import {
-  extractJudgedResultCandidate,
   DefaultStepRunner,
   parseTierFromOutput,
   parseSignalCountsFromOutput,
   scoreComplexityFromCounts,
-  RUBRIC_FAILURE_DETAIL_CAP_BYTES,
 } from '../../src/engine/step-runners.js';
 import {
   CLAUDE_MODEL_POLICY as CLAUDE_POLICY,
@@ -62,15 +60,18 @@ function interactiveRuntime(
   const policy =
     key === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
   const lifecycleCapability = { synchronousSpawnPermit: true } as const;
+  const nativeSchemaCapability = { nativeOutputSchema: true } as const;
   return {
     key,
     provider: {
       supportsSessionResume: key === 'claude',
       lifecycleCapability,
+      nativeSchemaCapability,
       invoke: async (options: InvokeOptions): Promise<InvokeResult> =>
         (await invokeResponse(options)) ?? { success: true, output: '', exitCode: 0 },
     },
     lifecycleCapability,
+    nativeSchemaCapability,
     policy,
     builtIn: true,
     availability: new ModelAvailability(policy.modelFallbackLadder),
@@ -4040,7 +4041,7 @@ TIER: M`,
       visualizer.start(events);
       const invoke = vi.fn(async (options: InvokeOptions) => {
         options.spawnPermit?.();
-        return { success: true, output: '{"findings":[]}', exitCode: 0 };
+        return { success: true, output: '{"findings":[]}', exitCode: 0, finalStructuredResult: { findings: [] } };
       });
       const runner = new DefaultStepRunner(createMockProvider(), 'correlation', dir, {
         gitRunner: scriptedGit(), planPath,
@@ -4335,9 +4336,7 @@ TIER: M`,
             const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!) as typeof observedProjections[number];
             observedProjections.push(projection);
             const scopeContext = JSON.parse(options.prompt.match(/Candidate-resolution authority \(use only these ids, regions, and obligations\):\n(\{[\s\S]*?\})\n\nYour final/)![1]);
-            return { success: true, exitCode: 0, output: JSON.stringify({
-              kind: 'judged', rubric: 'testQuality', lapId: (projection as any).lapId,
-              snapshotDigest: (projection as any).snapshotDigest, contractVersion: (projection as any).contractVersion,
+            const payload = {
               findings: [],
               scopeResolutions: scopeContext.candidates.map((candidate: any) => ({
                 candidateId: candidate.candidateId,
@@ -4346,7 +4345,8 @@ TIER: M`,
                 obligationReferences: candidate.obligationReferences,
                 associationReason: 'The pinned declaration is a test target.',
               })),
-            }) };
+            };
+            return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
           }),
         };
         // AB-1 (Task 20): every shared-`.git` worktree mutation the preflight
@@ -4592,7 +4592,7 @@ TIER: M`,
       expect(result).toMatchObject({
         success: false,
         currentLapMechanicalFault: true,
-        output: 'build_review mechanical fault in testQuality (malformed-artifact): invalid-provider-result: testQuality omitted the required verdict',
+        output: 'build_review mechanical fault in testQuality (invalid-structured-result): invalid-structured-result: testQuality omitted the required verdict',
       });
       expect(dispatch.mock.calls.map(([branch]) => (branch as { rubric: string }).rubric)).toEqual([
         'testQuality',
@@ -4602,8 +4602,8 @@ TIER: M`,
         mechanicalFaults: 1,
         lastMechanicalFault: {
           rubric: 'testQuality',
-          reason: 'malformed-artifact',
-          detail: 'invalid-provider-result: testQuality omitted the required verdict',
+          reason: 'invalid-structured-result',
+          detail: 'invalid-structured-result: testQuality omitted the required verdict',
           lapId: 'lap-head',
         },
       });
@@ -4651,7 +4651,7 @@ TIER: M`,
           test_suite: { scoped_command: 'true' },
           build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
         } as HarnessConfig,
-        expectedInvokeCalls: 2,
+        expectedInvokeCalls: 1,
       },
       {
         name: 'test-quality uses its configured policy',
@@ -4663,7 +4663,7 @@ TIER: M`,
           },
           wiring: { entry_points: ['src/index.ts'] },
         } as HarnessConfig,
-        expectedInvokeCalls: 2,
+        expectedInvokeCalls: 1,
       },
     ])('uses the production rubric coordinator when $name', async ({ config, expectedInvokeCalls }) => {
       await scopedPlan();
@@ -4869,7 +4869,7 @@ TIER: M`,
       };
     }
 
-    it('leaves no verdict artifact after a byte-identical vocabulary repair is rejected', async () => {
+    it('leaves no verdict artifact after an invalid vocabulary result is rejected', async () => {
       await scopedPlan();
       const invoke = vi.fn().mockResolvedValue({
         success: true,
@@ -4894,7 +4894,7 @@ TIER: M`,
 
       expect(result.success).toBe(false);
       await expect(access(join(dir, '.pipeline/build-review.json'))).rejects.toThrow();
-      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(invoke).toHaveBeenCalledTimes(1);
       const ledger = await readKickbackLedger(dir);
       expect(ledger.gates.build_review?.count ?? 0).toBe(0);
       expect(ledger.gates.build_review?.cumulative ?? 0).toBe(0);
@@ -4914,8 +4914,7 @@ TIER: M`,
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
-      // One test-quality branch gets one dispatch plus one bounded repair turn.
-      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(invoke).toHaveBeenCalledTimes(1);
       for (const [options] of invoke.mock.calls) {
         const opts = options as InvokeOptions;
         expect(opts.resume).toBe(false);
@@ -4949,11 +4948,11 @@ TIER: M`,
 
       const result = await runner.run('build_review', emptyState);
 
-      // The feature's own plan binds the scope: one test-quality dispatch plus
-      // one bounded repair turn. The wrong plan would have empty-passed.
+      // The feature's own plan binds the scope. The wrong plan would have
+      // empty-passed.
       expect(result.success).toBe(false);
       expect(result.output).not.toContain('test_quality_empty_scope');
-      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(invoke).toHaveBeenCalledTimes(1);
       const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
       expect(prompts).toContain(SCOPED_SELECTOR);
     });
@@ -4976,8 +4975,7 @@ TIER: M`,
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
-      // One test-quality branch gets one dispatch plus one bounded repair turn.
-      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(invoke).toHaveBeenCalledTimes(1);
       expect(result.baseFreshness).toEqual({
         mergeBase: 'abc123',
         trackingRefSha: null,
@@ -5058,8 +5056,7 @@ TIER: M`,
       const result = await runner.run('build_review', emptyState);
 
       expect(result.repairProvenance).toEqual({ disposition: 'none_warranted' });
-      // One test-quality branch gets one dispatch plus one bounded repair turn.
-      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(invoke).toHaveBeenCalledTimes(1);
     });
 
     it('attaches baseFreshness even on a ladder-exhausted failure (fire-and-forget telemetry)', async () => {
@@ -5381,27 +5378,7 @@ describe('auxiliary provider dispatch tier telemetry', () => {
   });
 });
 
-describe('extractJudgedResultCandidate', () => {
-  const judged = { kind: 'judged', rubric: 'testQuality', contractVersion: 'v3', findings: [] };
-
-  it('parses raw JSON output', () => {
-    expect(extractJudgedResultCandidate(JSON.stringify(judged))).toEqual(judged);
-  });
-
-  it('parses JSON wrapped in a markdown fence', () => {
-    expect(extractJudgedResultCandidate('Here is the verdict:\n```json\n' + JSON.stringify(judged) + '\n```\n')).toEqual(judged);
-  });
-
-  it('parses JSON surrounded by prose', () => {
-    expect(extractJudgedResultCandidate('The scope review found no issues.\n' + JSON.stringify(judged) + '\nLet me know if you need anything else.')).toEqual(judged);
-  });
-
-  it('returns undefined when no candidate parses', () => {
-    expect(extractJudgedResultCandidate('no json here at all')).toBeUndefined();
-  });
-});
-
-describe('build_review rubric dispatch: validate-and-repair loop', () => {
+describe('build_review rubric dispatch', () => {
   const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
   const snapshotDigest = 'sha256:434fa33612c7d7188d5ba5398a748b54a28400bcb534988863610f64a70896f8';
   const projection = {
@@ -5416,54 +5393,13 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
   };
   const branch = { rubric: 'testQuality' as const, skillName: 'build-review-test-quality', policy };
 
-  // The 2026-08-15 lap-a237011e failure verbatim in miniature: a semantically
-  // complete judgement whose finding flattens the anchor into structured
-  // top-level objects — the shape the strict parser rejects.
-  const incidentShapedOutput = [
-    'I read the referenced diff and measured each changed test.',
-    '```json',
-    JSON.stringify({
-      kind: 'judged', rubric: 'testQuality', contractVersion: 'v3', lapId, snapshotDigest,
-      findings: [{
-        concernKind: 'test-insensitive',
-        summary: 'The assertion compares a test-local mutated copy and can never fail.',
-        evidenceLocations: ['src/conductor/test/engine/event-sinks.test.ts:519'],
-        anchor: { rubric: 'testQuality' },
-      }],
-    }),
-    '```',
-  ].join('\n');
-  const validOutput = JSON.stringify({
-    findings: [],
-  });
-
   function dispatch(runner: DefaultStepRunner) {
     return (runner as unknown as {
       dispatchBuildReviewRubric: (branch: unknown, projection: unknown) => Promise<unknown>;
     }).dispatchBuildReviewRubric(branch, projection);
   }
 
-  it('repairs an unparseable-then-valid sequence within the same dispatch', async () => {
-    const invoke = vi.fn()
-      .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
-      .mockResolvedValueOnce({ success: true, output: validOutput, exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
-
-    const result = await dispatch(runner);
-
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({ kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, verdict: 'PASS' });
-    const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
-    expect(repairPrompt).toContain('ONLY one JSON object');
-    expect(repairPrompt).toContain('did not satisfy the judged-result contract');
-    expect(repairPrompt).toContain('anchor');
-    expect(repairPrompt).toContain('findings: [{');
-    expect(repairPrompt).toContain(
-      'Your previous response (bounded excerpt):\nI read the referenced diff and measured each changed test.',
-    );
-  });
-
-  it('records an unresolved rubric skill command as a named dispatch failure without a repair turn', async () => {
+  it('records an unresolved rubric skill command as a named dispatch failure', async () => {
     const invoke = vi.fn().mockResolvedValue({
       success: false,
       output: 'unknown skill command',
@@ -5485,177 +5421,6 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     });
   });
 
-  it('preserves contract-violation repair behavior without adding an unresolved-command remedy', async () => {
-    const invoke = vi.fn()
-      .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
-      .mockResolvedValueOnce({ success: true, output: 'still invalid after repair', exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
-
-    const result = await dispatch(runner);
-
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({
-      kind: 'dispatch-failure',
-      detail: expect.stringContaining('judged-result contract not satisfied after one repair turn'),
-    });
-    expect((result as { detail: string }).detail).not.toContain('could not be dispatched');
-    expect((result as { detail: string }).detail).not.toContain('retrying cannot make the command resolvable');
-  });
-
-  it('diagnoses findings-only output through the same v3-stamped candidate it validates', async () => {
-    const findingsOnlyOutput = JSON.stringify({
-      findings: [{
-        concernKind: 'test-insensitive',
-        summary: 'The assertion mirrors source text.',
-        evidenceLocations: ['test/engine/event-sinks.test.ts:519'],
-        anchor: {
-          rubric: 'testQuality',
-        },
-      }],
-    });
-    const invoke = vi.fn()
-      .mockResolvedValueOnce({ success: true, output: findingsOnlyOutput, exitCode: 0 })
-      .mockResolvedValueOnce({ success: true, output: validOutput, exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
-
-    const result = await dispatch(runner);
-
-    expect(result).toMatchObject({ kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest });
-    const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
-    expect(repairPrompt).toContain('findings');
-    expect(repairPrompt).not.toMatch(/top-level "kind"|"rubric" must be|"contractVersion" must be|"lapId" must echo|"snapshotDigest" must echo/);
-  });
-
-  it('embeds the exact per-rubric anchor schema in the initial dispatch prompt', async () => {
-    const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
-
-    await dispatch(runner);
-
-    expect(invoke).toHaveBeenCalledTimes(1);
-    const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('rubric: "testQuality"');
-    expect(prompt).toContain('locus: { path: string, contentHash: string, display: string }');
-    expect(prompt).toContain('never flattened');
-  });
-
-  it('instructs graders with findings and optional counterfactual sensitivity in the structured-anchor payload', async () => {
-    const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
-
-    await dispatch(runner);
-
-    const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('`findings` is an array; `scopeResolutions` has exactly one entry per supplied candidate');
-    expect(prompt).not.toContain('`contractVersion` is "v3"');
-    expect(prompt).not.toContain('`contractVersion` is "v2"');
-    expect(prompt).not.toContain('every anchor value is a plain string');
-    expect(prompt).toContain('content-region');
-  });
-
-  it('renders the security prompt from its findings-only projection and vocabulary', async () => {
-    const events = new ConductorEventEmitter();
-    const promptEvents: unknown[] = [];
-    events.on('build_review_rubric_prompt', (event) => { promptEvents.push(event); });
-    const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project', { events, providerKey: 'codex' });
-    const securityProjection = {
-      rubric: 'security', contractVersion: 'v3', projectionVersion: 'v3',
-      lapId, snapshotDigest, contentDigest: 'sha256:content', digest: 'sha256:security-projection',
-      mergeBase: 'base', headSha: 'head',
-      changedFiles: [{ path: 'src/handler.ts', changeKind: 'modified', hunks: [] }],
-    } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
-    const securityBranch = { ...branch, rubric: 'security' as const, skillName: 'build-review-security' };
-
-    await (runner as unknown as {
-      dispatchBuildReviewRubric: (branch: unknown, projection: unknown) => Promise<unknown>;
-    }).dispatchBuildReviewRubric(securityBranch, securityProjection);
-
-    const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('$build-review-security');
-    expect(prompt).toContain('Build Review Security rubric.');
-    expect(prompt).toContain('committed-secret');
-    expect(prompt).toContain('injection');
-    expect(prompt).toContain('broken-access-control');
-    expect(prompt).toContain('path-traversal');
-    expect(prompt).toContain('unsafe-deserialization');
-    expect(prompt).toContain('cryptographic-failure');
-    expect(prompt).toContain('security-misconfiguration');
-    expect(prompt).toContain('authentication-failure');
-    expect(prompt).toContain('integrity-failure');
-    expect(prompt).toContain('ssrf');
-    expect(prompt).toContain(JSON.stringify(securityProjection));
-    expect(prompt).not.toContain('scopeResolutions');
-    expect(promptEvents).toEqual([expect.objectContaining({
-      type: 'build_review_rubric_prompt', rubric: 'security', lapId,
-    })]);
-  });
-
-  it('yields a bounded dispatch-failure report with the raw output excerpt when the repair turn is still bad', async () => {
-    const invoke = vi.fn()
-      .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
-      .mockResolvedValueOnce({ success: true, output: `still prose ${'x'.repeat(10_000)} tail-marker`, exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
-
-    const result = await dispatch(runner);
-
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({ kind: 'dispatch-failure' });
-    const detail = (result as { detail: string }).detail;
-    expect(Buffer.byteLength(detail, 'utf8')).toBeLessThanOrEqual(RUBRIC_FAILURE_DETAIL_CAP_BYTES);
-    expect(detail).toContain('Raw output excerpt: still prose');
-    expect(detail).toContain('tail-marker');
-    expect(detail).toContain('[...truncated');
-  });
-
-  it.each([
-    incidentShapedOutput,
-    '```json\n{"findings":[{}]}\n```',
-    'The anchor remains flattened after the repair instruction.',
-  ])('settles a byte-identical repair without another rubric dispatch', async (replayedOutput) => {
-    const invoke = vi.fn()
-      .mockResolvedValueOnce({ success: true, output: replayedOutput, exitCode: 0 })
-      .mockResolvedValueOnce({ success: true, output: replayedOutput, exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
-
-    const result = await dispatch(runner);
-
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({ kind: 'dispatch-failure', detail: expect.stringContaining('byte-identical') });
-  });
-
-  it('records the changed repair payload diagnosis rather than the initial diagnosis', async () => {
-    const initialOutput = '{"findings":[{}]}';
-    const repairedOutput = incidentShapedOutput;
-    const invoke = vi.fn()
-      .mockResolvedValueOnce({ success: true, output: initialOutput, exitCode: 0 })
-      .mockResolvedValueOnce({ success: true, output: repairedOutput, exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
-
-    const result = await dispatch(runner);
-
-    expect(result).toMatchObject({
-      kind: 'dispatch-failure',
-      detail: expect.stringContaining('judged-result contract'),
-    });
-    expect((result as { detail: string }).detail).not.toContain('findings[0].anchor is required');
-  });
-
-  it('keeps the initial diagnosis when the repair invocation returns no output', async () => {
-    const initialOutput = '{"findings":[{}]}';
-    const invoke = vi.fn()
-      .mockResolvedValueOnce({ success: true, output: initialOutput, exitCode: 0 })
-      .mockResolvedValueOnce({ success: true, exitCode: 0 });
-    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
-
-    const result = await dispatch(runner);
-
-    expect(result).toMatchObject({
-      kind: 'dispatch-failure',
-      detail: expect.stringContaining('judged-result contract'),
-    });
-  });
-
   it('returns undefined (not a failure report) when the provider invocation itself fails', async () => {
     const invoke = vi.fn().mockResolvedValue({ success: false, output: 'crashed', exitCode: 1 });
     const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
@@ -5664,41 +5429,6 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['claude', 'codex'] as const)('repairs within the same dispatch on the %s runtime-candidates path', async (providerKey) => {
-    const runtimeIncidentShapedOutput = incidentShapedOutput.replace(
-      'I read the referenced diff and measured each changed test.',
-      'Runtime-candidates repair output marker.',
-    );
-    const invoke = vi.fn()
-      .mockResolvedValueOnce({ success: true, output: runtimeIncidentShapedOutput, exitCode: 0 })
-      .mockResolvedValueOnce({ success: true, output: validOutput, exitCode: 0 });
-    const policyForKey = providerKey === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
-    const runtime = {
-      key: providerKey,
-      provider: { lifecycleCapability: { synchronousSpawnPermit: true } as const, invoke },
-      policy: policyForKey,
-      builtIn: true,
-      availability: new ModelAvailability(policyForKey.modelFallbackLadder),
-    };
-    const runner = new DefaultStepRunner(createMockProvider(), 'session-1', '/tmp/project', {
-      config: { llm_provider: [providerKey] },
-      providerRuntimes: new ProviderRuntimeSet([runtime]),
-      sessionStore: new ProviderSessionStore(),
-      configuredProviders: [providerKey],
-    });
-
-    const result = await (runner as unknown as {
-      dispatchBuildReviewRubric: (branch: unknown, projection: unknown) => Promise<unknown>;
-    }).dispatchBuildReviewRubric({ ...branch, policy: { ...policy, llm_provider: providerKey } }, projection);
-
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({ kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest });
-    const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
-    expect(repairPrompt).toContain('ONLY one JSON object');
-    expect(repairPrompt).toContain(
-      'Your previous response (bounded excerpt):\nRuntime-candidates repair output marker.',
-    );
-  });
 });
 
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

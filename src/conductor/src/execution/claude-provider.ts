@@ -813,6 +813,7 @@ export class ClaudeProvider implements LLMProvider {
           ? 'Claude provider parse failure: terminal result record has malformed structured result JSON.'
           : 'Claude provider parse failure: terminal result record is missing its structured result.',
         exitCode,
+        structuredResultFailure: structuredResult.kind === 'absent' ? 'missing' : 'malformed',
         observedIntervals: [observedInterval],
       };
     }

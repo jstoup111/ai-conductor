@@ -303,6 +303,16 @@ reconstruct acceptance from prose.
 > output is parsed from markdown or free text. The shape shown to the model is rendered from the same
 > JSON Schema the engine validates against, so the advertised and accepted contracts have one source.
 >
+> **D1.3 — The shared dispatch seam is `dispatchRubricContract`.** Operator clarification of D1.2,
+> 2026-09-23. "One generic dispatch path" is satisfied by the single engine function
+> `dispatchRubricContract` in `step-runners.ts`, through which built-in and custom-policy members
+> alike render the descriptor's shape, request native structured output with the descriptor's JSON
+> Schema, and validate the terminal structured result with the descriptor's parser. The build_review
+> coordinator stays keyed to the built-in rubric ids for projection, cache, artifact, and settlement;
+> custom-policy members are routed to `dispatchInstalledBuildReviewPolicy` after the catalog lookup and
+> reach the same `dispatchRubricContract` seam there. That route is the accepted member-kind branch; it
+> does not reintroduce prose scraping or a second output contract.
+>
 > **D2.2 — Output version joins the cache identity.** §7's cache key already carries the rubric
 > contract version and the projection version from the registry descriptor. Those two fields are now
 > read from the member's rubric contract descriptor, and advancing either invalidates deterministically

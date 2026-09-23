@@ -160,7 +160,7 @@ an engine still asserting one.
 
 ### A-9 — Event spine (`.agents/skills/event-spine/SKILL.md`; adr-2026-07-26-event-sink-registry-exhaustiveness) — fits
 
-No new channel. The two new fault causes ride the existing `build_review_rubric_mechanical_fault`
+No new channel. The two new fault causes ride the existing `build_review_rubric_infrastructure_failure`
 event under its closed-cause field; the sink registry's exhaustiveness check must admit the new
 members in the same change.
 
@@ -188,7 +188,7 @@ canonical shipped sources.
 | Generic rubric dispatch (replaces built-in and custom dispatch in `step-runners.ts`) | The build_review step runner's fan-out over the effective catalog |
 | `nativeSchema` on rubric invocations | Passed through the existing `InvokeOptions` into `provider-execution.ts` candidate execution |
 | Descriptor-rendered prompt shape | Replaces `renderBuildReviewProviderPayloadShape` / `renderBuildReviewCustomReviewerPayloadShape` at the prompt-assembly sites in `step-runners.ts` and `build-review-policy-contract.ts` |
-| Fault causes `native-schema-unsupported`, `invalid-structured-result` | Emitted by the coordinator's terminal classification; consumed by the mechanical-fault lane and the `build_review_rubric_mechanical_fault` sink |
+| Fault causes `native-schema-unsupported`, `invalid-structured-result` | Emitted by the coordinator's terminal classification; consumed by the mechanical-fault lane and the `build_review_rubric_infrastructure_failure` sink |
 | Provider-contract audit rule (forbidden output-format prose) | `test/test_provider_skill_contracts.sh`, run by `test/test_harness_integrity.sh` |
 | Vocabulary drift guard (descriptor enum ⇄ SKILL.md definitions) | `test/check_build_review_rubric_skill_vocabularies.sh`, run by `test/test_harness_integrity.sh` |
 | Retired: `extractJudgedResultCandidate` for build_review, the repair turn, the prose shape renderers | Removed callers in `step-runners.ts`; `code-removal` skill governs the deletion |

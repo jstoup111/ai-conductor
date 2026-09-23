@@ -799,6 +799,7 @@ export async function executeProviderCandidates({
     const cachedUnavailable = runtime.runWideUnavailable !== undefined;
     let schemaScratchHome: string | undefined;
     let schemaScratchRunId: string | undefined;
+    let nativeSchemaScratchFailure: unknown;
     let invocationResult: Promise<InvokeResult> | undefined;
     const teardownCallbacks: Array<() => Promise<void>> = [];
     const invokeProvider = (
@@ -827,12 +828,17 @@ export async function executeProviderCandidates({
             if (selfHost === undefined && providerKey === 'codex' && rungOptions.nativeSchema !== undefined && nativeSchemaScratch !== undefined) {
               if (schemaScratchHome === undefined) {
                 schemaScratchRunId = runId ?? randomUUID();
-                schemaScratchHome = await acquireScratchHome({
-                  worktreeRoot: nativeSchemaScratch.worktreeRoot,
-                  repository: nativeSchemaScratch.repository,
-                  featureSlug: nativeSchemaScratch.featureSlug || basename(nativeSchemaScratch.worktreeRoot),
-                  runId: schemaScratchRunId, attempt, provider: 'codex',
-                });
+                try {
+                  schemaScratchHome = await acquireScratchHome({
+                    worktreeRoot: nativeSchemaScratch.worktreeRoot,
+                    repository: nativeSchemaScratch.repository,
+                    featureSlug: nativeSchemaScratch.featureSlug || basename(nativeSchemaScratch.worktreeRoot),
+                    runId: schemaScratchRunId, attempt, provider: 'codex',
+                  });
+                } catch (error) {
+                  nativeSchemaScratchFailure = error;
+                  throw error;
+                }
               }
               return { ...rungOptions, nativeSchemaScratchHome: schemaScratchHome };
             }
@@ -903,7 +909,10 @@ export async function executeProviderCandidates({
                   worktreeRoot: nativeSchemaScratch!.worktreeRoot,
                   runId: schemaScratchRunId!, attempt, provider: 'codex',
                 });
-                if (released.kind === 'failed') throw new Error(`native schema scratch teardown failed: ${released.error}`);
+                if (released.kind === 'failed') {
+                  nativeSchemaScratchFailure = new Error(`native schema scratch teardown failed: ${released.error}`);
+                  throw nativeSchemaScratchFailure;
+                }
               }
             } finally {
               try { candidateObserver?.close(); } catch {
@@ -920,13 +929,25 @@ export async function executeProviderCandidates({
     const requiresNativeSchemaCapability = candidateOptions.nativeSchema !== undefined;
     const supportsNativeSchemaCapability =
       runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
-    const result = requiresLifecycleCapability && !supportsLifecycleCapability
-      ? unsupportedLifecycleProviderResult(providerKey)
-      : requiresNativeSchemaCapability && !supportsNativeSchemaCapability
-        ? unsupportedNativeSchemaProviderResult(providerKey)
-        : withCandidateSafety
-          ? await withCandidateSafety(candidate, invoke)
-          : await invoke();
+    let result: InvokeResult;
+    try {
+      result = requiresLifecycleCapability && !supportsLifecycleCapability
+        ? unsupportedLifecycleProviderResult(providerKey)
+        : requiresNativeSchemaCapability && !supportsNativeSchemaCapability
+          ? unsupportedNativeSchemaProviderResult(providerKey)
+          : withCandidateSafety
+            ? await withCandidateSafety(candidate, invoke)
+            : await invoke();
+    } catch (error) {
+      if (nativeSchemaScratchFailure === undefined) throw error;
+      result = {
+        success: false,
+        exitCode: 1,
+        output: `Codex native schema scratch home failed: ${nativeSchemaScratchFailure instanceof Error
+          ? nativeSchemaScratchFailure.message
+          : String(nativeSchemaScratchFailure)}`,
+      };
+    }
     // A prepared cache hit or cancellation did not consult provider availability.
     if (result.providerUnavailable === true) {
       setupUnavailable ??= skippedCandidateSetupUnavailable(providerKey, result, cachedUnavailable);

@@ -12,7 +12,7 @@ unchanged and elided.
 sequenceDiagram
     participant Cat as Effective catalog
     participant Desc as Rubric contract descriptor
-    participant Disp as Generic rubric dispatch
+    participant Disp as dispatchRubricContract (shared seam)
     participant Prov as Provider adapter (Claude or Codex)
     participant Grader as Rubric session
     participant Coord as build_review coordinator
@@ -30,7 +30,7 @@ sequenceDiagram
         Prov-->>Disp: unsupported
         Disp-->>Coord: pre-dispatch skip, cause native-schema-unsupported
         Coord->>Fault: settle absent, charge no kickback, tick no cap
-        Fault->>Spine: build_review_rubric_mechanical_fault with the closed cause
+        Fault->>Spine: build_review_rubric_infrastructure_failure with the closed cause
     else provider supports nativeOutputSchema
         Disp->>Desc: output.jsonSchema and renderShape()
         Desc-->>Disp: schema object and prompt shape text
@@ -44,7 +44,7 @@ sequenceDiagram
         alt structured result absent or violates the contract
             Desc-->>Coord: rejection naming the field and the form it requires
             Coord->>Fault: settle absent, cause invalid-structured-result
-            Fault->>Spine: build_review_rubric_mechanical_fault with the named field
+            Fault->>Spine: build_review_rubric_infrastructure_failure with the named field
         else structured result validates
             Desc-->>Coord: provider payload (findings and closed companion fields)
             Coord->>Coord: stamp kind, rubric, contractVersion, lapId, snapshotDigest from the projection
@@ -59,7 +59,9 @@ sequenceDiagram
 ## Legend
 
 - **Effective catalog** — built-in registry members and resolved custom-policy members. Both hand
-  back the same descriptor shape; the coordinator never branches on member kind after this lookup.
+  back the same descriptor shape. Built-in members run through the coordinator as drawn; `custom-v1`
+  is routed through `dispatchInstalledBuildReviewPolicy`, which calls the same `dispatchRubricContract`
+  seam (ADR D1.3).
 - **Rubric contract descriptor** — the projection builder, the output JSON Schema, the parser, and
   the identity canonicalizer for one member. `renderShape()` derives the prompt text from the
   schema, so the shape the model is shown and the shape the engine validates cannot diverge.
@@ -75,3 +77,4 @@ sequenceDiagram
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-09-22 | Initial generation | Spec for #2384 — typed rubric output on the native-schema seam |
+| 2026-09-23 | Rename fault event to `build_review_rubric_infrastructure_failure`; name the shared seam | ADR D1.3 clarification after as-built AB-1 |

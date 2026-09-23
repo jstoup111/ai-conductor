@@ -4,6 +4,8 @@ import type { BuildReviewRubricId } from "../types/config.js";
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import {
   CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+  deriveBuildReviewInfrastructureFailureReason,
+  diagnoseBuildReviewJudgedResultRejection,
   describeBuildReviewJudgedResultRejection,
   parseBuildReviewCandidateScopeResolutions,
   parseBuildReviewDispatchFailure,
@@ -39,13 +41,13 @@ import {
 import type { BuildReviewFrozenInputs } from "./build-review-inputs.js";
 import { buildReviewScopeCandidateIdentityKey } from "./build-review-scope-identity.js";
 import {
-  deriveBuildReviewRubricProjections,
   isTestQualityProjection,
   canonicalJson,
   type BuildReviewProjectionJson,
   type BuildReviewRubricProjections,
   type BuildReviewRubricProjection,
   type BuildReviewTestQualityProjectionInput,
+  type BuildReviewProjectionSource,
 } from "./build-review-projections.js";
 import {
   projectTestQualityPreflight,
@@ -57,7 +59,6 @@ import type {
   ResolvedBuildReviewRubricPolicy,
 } from "./resolved-config.js";
 import type { ConductorEvent } from "../types/events.js";
-import { canonicalizeBuildReviewFindingSet } from "./build-review-finding-identity.js";
 
 const BUILD_REVIEW_RUBRICS = BUILD_REVIEW_RUBRIC_IDS;
 const TEST_QUALITY_RUBRIC: BuildReviewRubricId = "testQuality";
@@ -101,6 +102,8 @@ export type BuildReviewCoordinatedBranch =
       readonly detail?: string;
       /** Terminal setup-only dispatch signal, carried to the owning build-review step. */
       readonly providerSetupExhaustion?: ProviderSetupExhaustion;
+      /** Typed structured-output rejection retained for the mechanical-fault event. */
+      readonly rejection?: import('./build-review-domain.js').BuildReviewJudgedResultRejection;
     };
 
 /**
@@ -255,8 +258,19 @@ export function preflightProjection(preflight: TautologyPreflightResult): BuildR
   };
 }
 
-function infrastructure(rubric: BuildReviewRubricId, reason: BuildReviewCoordinatorFailureReason, detail?: string, setupExhaustion?: ProviderSetupExhaustion): BuildReviewCoordinatedBranch {
-  return { kind: "infrastructure-failure", rubric, reason, ...(detail === undefined ? {} : { detail }), ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}) };
+function infrastructure(
+  rubric: BuildReviewRubricId,
+  reason: BuildReviewCoordinatorFailureReason,
+  detail?: string,
+  setupExhaustion?: ProviderSetupExhaustion,
+  rejection?: import('./build-review-domain.js').BuildReviewJudgedResultRejection,
+): BuildReviewCoordinatedBranch {
+  return {
+    kind: "infrastructure-failure", rubric, reason,
+    ...(detail === undefined ? {} : { detail }),
+    ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}),
+    ...(rejection ? { rejection } : {}),
+  };
 }
 
 /** Complete built-in candidate identity for the v2 cache envelope. */
@@ -462,10 +476,15 @@ export function validateBuildReviewDispatchedResult(
   // Treat the provider list as one boundary value.  Parsing individual
   // findings is insufficient: duplicate/colliding identities would otherwise
   // become two independently persisted branch facts.
-  const canonical = result && canonicalizeBuildReviewFindingSet(result.findings.map((finding) => ({
-    rubric: result.rubric, contractVersion: result.contractVersion, ...finding,
-  })));
-  return result && canonical && canonical.length === result.findings.length ? result : undefined;
+  const canonical = result && result.findings.map((finding) =>
+    getBuildReviewRubricDescriptor(result.rubric).contract.identity.canonicalize({
+      rubric: result.rubric, contractVersion: result.contractVersion, ...finding,
+    }),
+  );
+  return result && canonical && canonical.every((identity) => identity !== undefined) &&
+    new Set(canonical.map((identity) => identity!.id)).size === result.findings.length
+    ? result
+    : undefined;
 }
 
 /**
@@ -591,7 +610,7 @@ export async function coordinateBuildReviewRubrics(
       ),
     },
   };
-  const derivedProjections = deriveBuildReviewRubricProjections({
+  const projectionSource: BuildReviewProjectionSource = {
     lapId: input.lapId,
     inputs: projectionInputs,
     testQuality: preflight ? {
@@ -604,7 +623,16 @@ export async function coordinateBuildReviewRubrics(
     } : {
       runnerSelectors: [], changedTestSelectors: [], unresolvedMarkers, revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
-  });
+  };
+  // The descriptor is the live projection seam.  Keeping construction here
+  // lets the coordinator retain its preflight inputs while preventing a
+  // parallel direct projection path from drifting away from the registry.
+  const derivedProjections = Object.freeze(Object.fromEntries(
+    BUILD_REVIEW_RUBRICS.map((rubric) => [
+      rubric,
+      getBuildReviewRubricDescriptor(rubric).contract.projection.build(projectionSource),
+    ]),
+  )) as BuildReviewRubricProjections;
   const projections: Readonly<Record<BuildReviewRubricId, BuildReviewRubricProjection>> = {
     ...derivedProjections,
     ...input.projections,
@@ -753,18 +781,27 @@ export async function coordinateBuildReviewRubrics(
           // No pre-formed dispatch failure: the engine derives the failed
           // requirement itself from the stamped candidate, so the diagnosis
           // is produced by the same validation surface that rejected it.
-          const detail = cacheWriteDetail ?? failure?.detail ?? (dispatched === undefined ? undefined : (
-            typeof dispatched !== "object" || dispatched === null || Array.isArray(dispatched)
-              ? "no parseable JSON object was found in the response"
-              : describeBuildReviewDispatchedResultRejection(candidate, rubric, projection)
-          ));
+          const rejection = failure?.rejection ?? diagnoseBuildReviewJudgedResultRejection(
+            candidate,
+            rubric,
+            { lapId: projection.lapId, snapshotDigest: projection.snapshotDigest },
+            buildReviewFindingReferenceContext(projection),
+            buildReviewCandidateScopeResolutionContext(projection),
+          );
+          const detail = cacheWriteDetail ?? failure?.detail ?? describeBuildReviewDispatchedResultRejection(candidate, rubric, projection);
+          const structuredResultWasRejected = failure?.cause === 'invalid-structured-result' || dispatched !== undefined;
           return {
             rubric,
             branch: infrastructure(
               rubric,
-              cacheWriteFailure ? 'cache-write-failed' : 'invalid-provider-result',
+              cacheWriteFailure ? 'cache-write-failed' : failure?.cause === 'native-schema-unsupported'
+                ? 'native-schema-unsupported'
+                : structuredResultWasRejected
+                ? 'invalid-structured-result'
+                : 'invalid-provider-result',
               detail,
               failure?.providerSetupExhaustion,
+              failure?.cause === 'native-schema-unsupported' ? undefined : structuredResultWasRejected ? rejection : undefined,
             ),
           };
         }
@@ -818,6 +855,8 @@ export async function coordinateBuildReviewRubrics(
         rubric: outcome.rubric,
         lapId: input.lapId,
         reason: outcome.branch.reason,
+        cause: deriveBuildReviewInfrastructureFailureReason(outcome.branch),
+        ...(outcome.branch.rejection !== undefined ? { rejection: outcome.branch.rejection } : {}),
         ...(outcome.branch.detail !== undefined ? { excerpt: outcome.branch.detail } : {}),
       });
     }

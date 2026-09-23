@@ -1,4 +1,5 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:3
+// Covers: task:1, task:2
 import { describe, it, expect, vi } from 'vitest';
 import {
   resolveStepConfig,
@@ -35,6 +36,7 @@ type EffectiveReviewCatalogMember = {
   question?: string;
   source?: string;
   resources?: readonly string[];
+  contract?: { output: { version: string } };
   policy: {
     enabled: boolean;
     llm_provider: string[];
@@ -401,6 +403,7 @@ describe('engine/resolved-config', () => {
           min_confidence: 0.8,
         },
       });
+      expect(kotlinPolicy?.kind === 'custom' ? kotlinPolicy.contract.output.version : undefined).toBe('v1');
       expect(Object.isFrozen(resolved.catalog)).toBe(true);
       expect(Object.isFrozen(testQuality)).toBe(true);
       expect(Object.isFrozen(testQuality?.policy)).toBe(true);

@@ -1,3 +1,4 @@
+// Covers: task:2, task:3
 // Covers: task:10, task:11
 import { describe, expect, it, vi } from 'vitest';
 
@@ -13,9 +14,9 @@ import type { CapturedReviewPolicyBundle } from '../../src/engine/build-review-p
 import {
   classifyBuildReviewPolicyIncompatibility,
   mapBuildReviewPolicyIncompatibilityToCoordinatorFailureReason,
-  renderBuildReviewCustomReviewerPayloadShape,
 } from '../../src/engine/build-review-domain.js';
 import { parseBuildReviewReviewerPayload } from '../../src/engine/build-review-projections.js';
+import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
 
 const ordinarySkillText = [
   '---',
@@ -66,7 +67,39 @@ const readOnlyReviewProfile: BuildReviewPolicyCapabilityProfile = {
   admittedDependencies: ['criteria/public-api.md'],
 };
 
+function descriptorAlternativeFields(schema: unknown): string[][] {
+  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
+    throw new Error('expected a JSON Schema object');
+  }
+  const source = schema as Record<string, unknown>;
+  const alternatives = Array.isArray(source.oneOf) ? source.oneOf : [source];
+  return alternatives.map((alternative) => {
+    if (alternative === null || typeof alternative !== 'object' || Array.isArray(alternative)) {
+      throw new Error('expected a JSON Schema object alternative');
+    }
+    const properties = (alternative as Record<string, unknown>).properties;
+    if (properties === null || typeof properties !== 'object' || Array.isArray(properties)) {
+      throw new Error('expected JSON Schema properties');
+    }
+    return Object.keys(properties as Record<string, unknown>).sort();
+  });
+}
+
+function renderedAlternativeFields(shape: string): string[][] {
+  return shape.split(' Or ').map((alternative) =>
+    [...alternative.matchAll(/`([^`]+)`:/g)].map((match) => match[1]!).sort(),
+  );
+}
+
 describe('engine/build-review-policy-contract', () => {
+  it('requires a selected descriptor at the rendering boundary', () => {
+    expect(() => renderBuildReviewPolicyContract({
+      bundle: bundle(),
+      question: 'Are boundary changes safe?',
+      scope: 'Review frozen sources.',
+    } as unknown as Parameters<typeof renderBuildReviewPolicyContract>[0])).toThrow(/descriptor is required/i);
+  });
+
   it('adapts an ordinary selected skill unchanged into the versioned read-only review role', () => {
     const selectedBundle = bundle();
     const definition = selectedBundle.manifest.find((entry) => entry.relativePath.endsWith('/SKILL.md'))!;
@@ -75,6 +108,7 @@ describe('engine/build-review-policy-contract', () => {
       bundle: selectedBundle,
       question: 'Do changed public boundaries retain compatibility evidence?',
       scope: 'Review the frozen implementation diff only.',
+      contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
     });
 
     expect(rendered).toContain(`Build-review policy contract: ${BUILD_REVIEW_POLICY_CONTRACT_VERSION}`);
@@ -100,19 +134,50 @@ describe('engine/build-review-policy-contract', () => {
       bundle: bundle(standalonePresentation),
       question: 'Are boundary changes safe?',
       scope: 'Review frozen sources.',
+      contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
     });
 
     expect(rendered).toContain(standalonePresentation);
     expect(rendered).toContain('Do not choose an aggregate verdict, authorize repair work, edit code, install dependencies, or publish comments.');
     expect(rendered).toContain('The engine alone validates findings and owns aggregate verdicts and repair work orders.');
-    expect(rendered).toContain("{ kind: 'custom-findings', version: 'v1', findings: [...] }");
+    expect(rendered).toContain('`custom-findings`');
   });
 
-  it('renders only custom-reviewer payloads accepted by the production parser', () => {
+  it('renders the two custom-v1 top-level alternatives exactly from its descriptor schema', () => {
     const rendered = renderBuildReviewPolicyContract({
       bundle: bundle(),
       question: 'Are boundary changes safe?',
       scope: 'Review frozen sources.',
+      contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+    });
+    const shape = rendered.match(/^Shared findings payload schema: (.+)$/m)?.[1];
+
+    expect(shape).toBeDefined();
+    expect(renderedAlternativeFields(shape!)).toEqual(
+      descriptorAlternativeFields(BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema),
+    );
+    expect(renderedAlternativeFields(shape!)).toEqual([
+      ['findings', 'kind', 'version'],
+      ['kind', 'requirement'],
+    ]);
+  });
+
+  it('renders only the selected descriptor schema', () => {
+    const selectedContract = Object.freeze({
+      ...BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+      output: Object.freeze({
+        ...BUILD_REVIEW_CUSTOM_V1_CONTRACT.output,
+        jsonSchema: Object.freeze({
+          type: 'object', additionalProperties: false, required: ['selected'],
+          properties: { selected: { type: 'string', enum: ['selected-schema'] } },
+        }),
+      }),
+    });
+    const rendered = renderBuildReviewPolicyContract({
+      bundle: bundle(),
+      question: 'Are boundary changes safe?',
+      scope: 'Review frozen sources.',
+      contract: selectedContract,
     });
     const empty = { kind: 'custom-findings', version: 'v1', findings: [] };
     const finding = {
@@ -128,9 +193,9 @@ describe('engine/build-review-policy-contract', () => {
     const unsupported = { kind: 'unsupported-policy', requirement: 'requires deployment credentials' };
     const descriptor = { kind: 'custom', rubric: 'boundaryPolicy', parser: 'custom-findings-v1' } as const;
 
-    expect(rendered).toContain(renderBuildReviewCustomReviewerPayloadShape());
-    expect(rendered).toContain("kind: 'custom-findings'");
-    expect(rendered).toContain("kind: 'unsupported-policy'");
+    expect(rendered).toContain('`selected`');
+    expect(rendered).toContain('`selected-schema`');
+    expect(rendered).not.toContain("{ kind: 'custom-findings', version: 'v1', findings: [...] }");
     expect(parseBuildReviewReviewerPayload(empty, descriptor)).toEqual(empty);
     expect(parseBuildReviewReviewerPayload({ ...empty, findings: [finding, withConfidence] }, descriptor)).toEqual({
       ...empty,
@@ -189,8 +254,8 @@ describe('engine/build-review-policy-contract', () => {
     });
     expect(parseBuildReviewPolicyRuntimeUnsupportedResponse({ findings: [] }, 'claude')).toBeUndefined();
     expect(classifyBuildReviewPolicyIncompatibility(runtime!)).toEqual({
-      kind: 'infrastructure-failure',
-      reason: 'provider-error',
+      kind: 'unsupported-policy',
+      requirement: 'requires an undeclared deployment token',
       detail: runtime!.incompatibility,
     });
   });
@@ -201,7 +266,7 @@ describe('engine/build-review-policy-contract', () => {
       'unavailable-capability': 'preflight-failed',
       'unavailable-tool': 'preflight-failed',
       'unavailable-dependency': 'preflight-failed',
-      'runtime-unsupported': 'provider-error',
+      'runtime-unsupported': 'unsupported-policy',
     });
   });
 });

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
+import type { RubricOutputJsonSchema } from './build-review-contract.js';
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import type {
   BuildReviewPolicyIncompatibility,
@@ -18,9 +19,9 @@ export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' }
 export type BuildReviewRubricContractVersion = 'v1' | 'v2' | 'v3';
 export const CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION = 'v3' as const;
 export type BuildReviewSkipReason = 'disabled' | 'test_quality_empty_scope';
-export type BuildReviewInfrastructureFailureReason = 'provider-error' | 'retry-exhausted' | 'missing-artifact' | 'malformed-artifact' | 'stale-artifact' | 'identity-mismatch' | 'preflight-failed' | 'artifact-read-failed' | 'artifact-write-failed' | 'scope-incomplete' | 'projection-oversized';
+export type BuildReviewInfrastructureFailureReason = 'provider-error' | 'retry-exhausted' | 'missing-artifact' | 'malformed-artifact' | 'stale-artifact' | 'identity-mismatch' | 'preflight-failed' | 'artifact-read-failed' | 'artifact-write-failed' | 'scope-incomplete' | 'projection-oversized' | 'invalid-structured-result' | 'native-schema-unsupported';
 export const mapBuildReviewCoordinatorFailureReason = Object.freeze({
-  'no-changed-tests': 'preflight-failed', 'no-production-changes': 'preflight-failed', 'missing-scoped-configuration': 'preflight-failed', 'materialization-failed': 'preflight-failed', 'missing-merge-base-file': 'preflight-failed', 'scoped-run-failed': 'preflight-failed', 'scoped-run-launch-failed': 'preflight-failed', 'scoped-run-timeout': 'preflight-failed', 'scoped-run-signaled': 'preflight-failed', aborted: 'preflight-failed', 'cleanup-failed': 'preflight-failed', 'cache-read-failed': 'artifact-read-failed', 'cache-write-failed': 'artifact-write-failed', 'artifact-write-failed': 'artifact-write-failed', 'projection-rubric-mismatch': 'malformed-artifact', 'projection-oversized': 'projection-oversized', 'invalid-provider-result': 'malformed-artifact', 'provider-error': 'provider-error', 'missing-settlement': 'missing-artifact', 'scope-incomplete': 'scope-incomplete',
+  'no-changed-tests': 'preflight-failed', 'no-production-changes': 'preflight-failed', 'missing-scoped-configuration': 'preflight-failed', 'materialization-failed': 'preflight-failed', 'missing-merge-base-file': 'preflight-failed', 'scoped-run-failed': 'preflight-failed', 'scoped-run-launch-failed': 'preflight-failed', 'scoped-run-timeout': 'preflight-failed', 'scoped-run-signaled': 'preflight-failed', aborted: 'preflight-failed', 'cleanup-failed': 'preflight-failed', 'cache-read-failed': 'artifact-read-failed', 'cache-write-failed': 'artifact-write-failed', 'artifact-write-failed': 'artifact-write-failed', 'projection-rubric-mismatch': 'malformed-artifact', 'projection-oversized': 'projection-oversized', 'invalid-provider-result': 'malformed-artifact', 'invalid-structured-result': 'invalid-structured-result', 'native-schema-unsupported': 'native-schema-unsupported', 'provider-error': 'provider-error', 'missing-settlement': 'missing-artifact', 'scope-incomplete': 'scope-incomplete',
 } satisfies Record<string, BuildReviewInfrastructureFailureReason>);
 export type BuildReviewCoordinatorFailureReason = keyof typeof mapBuildReviewCoordinatorFailureReason;
 export function deriveBuildReviewInfrastructureFailureReason(branch: { readonly reason: BuildReviewCoordinatorFailureReason }): BuildReviewInfrastructureFailureReason { return mapBuildReviewCoordinatorFailureReason[branch.reason]; }
@@ -34,20 +35,25 @@ export const mapBuildReviewPolicyIncompatibilityToCoordinatorFailureReason = Obj
   'unavailable-capability': 'preflight-failed',
   'unavailable-tool': 'preflight-failed',
   'unavailable-dependency': 'preflight-failed',
-  'runtime-unsupported': 'provider-error',
-} satisfies Record<BuildReviewPolicyIncompatibilityKind, BuildReviewInfrastructureFailureReason>);
+  'runtime-unsupported': 'unsupported-policy',
+} satisfies Record<BuildReviewPolicyIncompatibilityKind, BuildReviewInfrastructureFailureReason | 'unsupported-policy'>);
 
-export interface BuildReviewPolicyIncompatibilityClassification {
+export type BuildReviewPolicyIncompatibilityClassification =
+  | {
   readonly kind: 'infrastructure-failure';
   readonly reason: BuildReviewInfrastructureFailureReason;
   /** Typed cause retained for coverage and later dynamic-rubric projection. */
   readonly detail: BuildReviewPolicyIncompatibility;
-}
+  }
+  | { readonly kind: 'unsupported-policy'; readonly requirement: string; readonly detail: BuildReviewPolicyIncompatibility };
 
-/** Converts policy refusal into unjudged infrastructure coverage, never PASS. */
+/** Converts policy refusal into a closed uncovered result, never PASS. */
 export function classifyBuildReviewPolicyIncompatibility(
   result: BuildReviewPolicyUnsupportedResult,
 ): BuildReviewPolicyIncompatibilityClassification {
+  if (result.incompatibility.kind === 'runtime-unsupported') {
+    return { kind: 'unsupported-policy', requirement: result.incompatibility.requirement, detail: result.incompatibility };
+  }
   return {
     kind: 'infrastructure-failure',
     reason: mapBuildReviewPolicyIncompatibilityToCoordinatorFailureReason[result.incompatibility.kind],
@@ -117,7 +123,7 @@ export interface BuildReviewCustomUnsupportedPayload {
 }
 export type BuildReviewCustomReviewerPayload = BuildReviewCustomFindingsPayload | BuildReviewCustomUnsupportedPayload;
 export interface BuildReviewSkip { readonly kind: 'skipped'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewSkipReason; }
-export interface BuildReviewInfrastructureFailure { readonly kind: 'infrastructure-failure'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewInfrastructureFailureReason; readonly detail: string; readonly providerSetupExhaustion?: ProviderSetupExhaustion; }
+export interface BuildReviewInfrastructureFailure { readonly kind: 'infrastructure-failure'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewInfrastructureFailureReason; readonly detail: string; readonly providerSetupExhaustion?: ProviderSetupExhaustion; readonly rejection?: BuildReviewJudgedResultRejection; }
 export type BuildReviewRubricResult = BuildReviewJudgedResult | BuildReviewSkip | BuildReviewInfrastructureFailure;
 /** A non-judgment coverage fault derived only from an already-valid judged result. */
 export interface BuildReviewScopeIncompleteFault {
@@ -149,6 +155,123 @@ export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
 });
 export const COUNTERFACTUAL_SENSITIVITY_VOCABULARY = Object.freeze(['supports', 'indeterminate', 'not-applicable'] as const);
 export type CounterfactualSensitivity = typeof COUNTERFACTUAL_SENSITIVITY_VOCABULARY[number];
+const BUILD_REVIEW_CONFIDENCE_VALUES = Object.freeze(Array.from({ length: 101 }, (_, value) => value));
+
+/**
+ * Parser-enforced grammar stated in the descriptor schemas, restricted to the
+ * keyword subset the native provider grammar accepts: `enum`, `pattern`, and
+ * `minItems` of 0 or 1. Claude's structured outputs reject `minLength`,
+ * `maxLength`, `minimum`, `maximum`, and `maxItems` with a 400, so length,
+ * count, and ordinal bounds stay parser-only and are named by the rejection
+ * diagnosis instead.
+ */
+const NON_BLANK_STRING_PATTERN = '\\S';
+const SHA256_CONTENT_HASH_PATTERN = '^sha256:[a-f0-9]{64}$';
+export const CUSTOM_SOURCE_REGION_CONTENT_HASH = new RegExp(SHA256_CONTENT_HASH_PATTERN);
+const NON_BLANK_STRING = Object.freeze({ type: 'string', pattern: NON_BLANK_STRING_PATTERN });
+const CONTENT_HASH_STRING = Object.freeze({ type: 'string', pattern: SHA256_CONTENT_HASH_PATTERN });
+const NON_EMPTY_NON_BLANK_STRING_ARRAY = Object.freeze({ type: 'array', minItems: 1, items: NON_BLANK_STRING });
+
+export interface BuildReviewJudgedV3Schema extends RubricOutputJsonSchema {
+  readonly type: 'object';
+  readonly additionalProperties: false;
+  readonly required: readonly string[];
+  readonly properties: Readonly<Record<string, unknown>>;
+}
+
+function freezeSchema<Value>(value: Value): Value {
+  if (value !== null && typeof value === 'object') {
+    for (const child of Object.values(value)) freezeSchema(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function buildReviewJudgedV3Schema(rubric: BuildReviewRubricId): BuildReviewJudgedV3Schema {
+  return freezeSchema({
+    type: 'object',
+    additionalProperties: false,
+    required: ['findings'],
+    properties: {
+      findings: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['concernKind', 'summary', 'evidenceLocations', 'anchor'],
+          properties: {
+            concernKind: { type: 'string', enum: BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds },
+            summary: NON_BLANK_STRING,
+            evidenceLocations: NON_EMPTY_NON_BLANK_STRING_ARRAY,
+            confidence: { type: 'integer', enum: BUILD_REVIEW_CONFIDENCE_VALUES },
+            anchor: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['rubric', 'locus'],
+              properties: {
+                rubric: { type: 'string', enum: [rubric] },
+                locus: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['path', 'contentHash', 'display'],
+                  properties: {
+                    path: NON_BLANK_STRING,
+                    // Security loci are sha256 content hashes; test-quality loci
+                    // may also carry projected title hashes, so only non-blankness
+                    // is grammar there and membership stays in the diagnosis.
+                    contentHash: rubric === 'security' ? CONTENT_HASH_STRING : NON_BLANK_STRING,
+                    display: NON_BLANK_STRING,
+                    occurrence: { type: 'integer' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      relocationAudit: { type: 'array', items: { type: 'object', additionalProperties: false, required: [], properties: {} } },
+      counterfactualSensitivity: { type: 'string', enum: COUNTERFACTUAL_SENSITIVITY_VOCABULARY },
+      scopeResolutions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['candidateId', 'status'],
+          properties: {
+            candidateId: NON_BLANK_STRING,
+            status: { type: 'string', enum: ['resolved', 'out-of-scope', 'indeterminate'] },
+            sourceRegion: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['path', 'startLine', 'endLine', 'contentHash', 'display'],
+              properties: {
+                path: NON_BLANK_STRING,
+                startLine: { type: 'integer' },
+                endLine: { type: 'integer' },
+                contentHash: CONTENT_HASH_STRING,
+                display: NON_BLANK_STRING,
+              },
+            },
+            obligationReferences: NON_EMPTY_NON_BLANK_STRING_ARRAY,
+            associationReason: NON_BLANK_STRING,
+            exclusionReason: NON_BLANK_STRING,
+            missingEvidenceReason: NON_BLANK_STRING,
+          },
+        },
+      },
+    },
+  }) as BuildReviewJudgedV3Schema;
+}
+
+/** The test-quality judged-v3 schema; every built-in branch uses a rubric-bound variant below. */
+export const BUILD_REVIEW_JUDGED_V3_SCHEMA = buildReviewJudgedV3Schema('testQuality');
+
+/** Closed per-rubric variants keep concern-kind vocabulary in the engine-owned schema. */
+export const BUILD_REVIEW_JUDGED_V3_SCHEMAS = Object.freeze({
+  testQuality: BUILD_REVIEW_JUDGED_V3_SCHEMA,
+  security: buildReviewJudgedV3Schema('security'),
+});
+
 export function normalizeBuildReviewFindingVocabularyMember(value: string): string { return value.toLowerCase().replaceAll('_', '-'); }
 export function parseBuildReviewFindingConcernKind(value: unknown, rubric: BuildReviewRubricId): string | undefined {
   const normalized = typeof value === 'string' ? normalizeBuildReviewFindingVocabularyMember(value) : '';
@@ -171,41 +294,68 @@ export const MAX_CUSTOM_SOURCE_REGIONS = 64;
 export const MAX_CUSTOM_SUMMARY_LENGTH = 4_096;
 export const MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH = 1_024;
 export const MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH = 512;
-export const CUSTOM_SOURCE_REGION_CONTENT_HASH = /^sha256:[a-f0-9]{64}$/;
-/**
- * The reviewer-facing shape is rendered by the policy contract. Keep its
- * structure and bounds beside the parser so the advertised and accepted
- * contracts have one source of truth.
- */
-export const BUILD_REVIEW_CUSTOM_REVIEWER_PAYLOAD_SCHEMA = Object.freeze({
-  customFindings: Object.freeze({
-    kind: 'custom-findings',
-    version: 'v1',
-    rootKeys: Object.freeze(['kind', 'version', 'findings']),
-    findingKeys: Object.freeze(['concernId', 'summary', 'evidenceLocations', 'sourceRegions']),
-    optionalFindingKeys: Object.freeze(['confidence']),
-    sourceRegionKeys: Object.freeze(['path', 'startLine', 'endLine', 'contentHash', 'display']),
-  }),
-  unsupportedPolicy: Object.freeze({
-    kind: 'unsupported-policy',
-    rootKeys: Object.freeze(['kind', 'requirement']),
-  }),
-});
 
-/** The exact accepted reviewer payload grammar for the provider contract. */
-export function renderBuildReviewCustomReviewerPayloadShape(): string {
-  const { customFindings, unsupportedPolicy } = BUILD_REVIEW_CUSTOM_REVIEWER_PAYLOAD_SCHEMA;
-  return [
-    `{ kind: '${customFindings.kind}', version: '${customFindings.version}', findings: [...] }`,
-    `where each finding has exactly ${customFindings.findingKeys.join(', ')} and may additionally include confidence`,
-    `(${customFindings.findingKeys[0]} matches /${CUSTOM_CONCERN_ID.source}/; summary is non-empty and at most ${MAX_CUSTOM_SUMMARY_LENGTH} characters; ` +
-      `evidenceLocations is a non-empty array of at most ${MAX_CUSTOM_EVIDENCE_LOCATIONS} non-empty strings, each at most ${MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH} characters; ` +
-      `sourceRegions is a non-empty array of at most ${MAX_CUSTOM_SOURCE_REGIONS} objects with exactly ${customFindings.sourceRegionKeys.join(', ')}, ` +
-      `path is repository-relative, startLine/endLine are positive integers with startLine <= endLine, contentHash matches /${CUSTOM_SOURCE_REGION_CONTENT_HASH.source}/, and display is non-empty; ` +
-      `confidence, when present, is an integer 0..100; findings has at most ${MAX_CUSTOM_FINDINGS} entries).`,
-    `Or { kind: '${unsupportedPolicy.kind}', requirement: string } with exactly ${unsupportedPolicy.rootKeys.join(', ')} and a non-empty requirement of at most ${MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH} characters.`,
-  ].join(' ');
-}
+/**
+ * Native structural schema for the reviewer-owned custom-v1 payload. It states
+ * every parser-enforced grammar the native provider subset can express
+ * (identifier and hash patterns, non-blank strings, non-empty arrays). The
+ * `MAX_CUSTOM_*` count and length bounds and the line-number ordering need
+ * `maxItems`/`maxLength`/`minimum`, which the Claude native grammar rejects,
+ * so they remain parser-enforced and are named by the rejection diagnosis.
+ */
+export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
+  oneOf: [
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'version', 'findings'],
+      properties: {
+        kind: { type: 'string', enum: ['custom-findings'] },
+        version: { type: 'string', enum: ['v1'] },
+        findings: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['concernId', 'summary', 'evidenceLocations', 'sourceRegions'],
+            properties: {
+              concernId: { type: 'string', pattern: CUSTOM_CONCERN_ID.source },
+              summary: NON_BLANK_STRING,
+              confidence: { type: 'integer', enum: BUILD_REVIEW_CONFIDENCE_VALUES },
+              evidenceLocations: NON_EMPTY_NON_BLANK_STRING_ARRAY,
+              sourceRegions: {
+                type: 'array',
+                minItems: 1,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['path', 'startLine', 'endLine', 'contentHash', 'display'],
+                  properties: {
+                    path: NON_BLANK_STRING,
+                    startLine: { type: 'integer' },
+                    endLine: { type: 'integer' },
+                    contentHash: CONTENT_HASH_STRING,
+                    display: NON_BLANK_STRING,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'requirement'],
+      properties: {
+        kind: { type: 'string', enum: ['unsupported-policy'] },
+        requirement: NON_BLANK_STRING,
+      },
+    },
+  ],
+}) satisfies RubricOutputJsonSchema;
+
 function object(value: unknown): Record<string, unknown> | undefined { return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 function text(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0; }
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -449,7 +599,7 @@ function securityRegion(value: unknown): BuildReviewContentRegionReference | und
   const allowed = source.occurrence === undefined
     ? ['path', 'contentHash', 'display']
     : ['path', 'contentHash', 'display', 'occurrence'];
-  return Object.keys(source).length === allowed.length && Object.keys(source).every((key) => allowed.includes(key)) && /^sha256:[a-f0-9]{64}$/.test(locus.contentHash)
+  return Object.keys(source).length === allowed.length && Object.keys(source).every((key) => allowed.includes(key)) && CUSTOM_SOURCE_REGION_CONTENT_HASH.test(locus.contentHash)
     ? locus
     : undefined;
 }
@@ -464,7 +614,28 @@ export function parseBuildReviewFindingAnchor(value: unknown, references?: Build
 }
 function finding(value: unknown, rubric: BuildReviewRubricId, references?: BuildReviewFindingReferenceContext): BuildReviewFinding | undefined { const source = object(value); const anchor = source && parseBuildReviewFindingAnchor(source.anchor, references); const confidence = source?.confidence; const concernKind = parseBuildReviewFindingConcernKind(source?.concernKind, rubric); if (!source || !anchor || anchor.rubric !== rubric || !concernKind || !text(source.summary) || !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 || source.evidenceLocations.some((item) => !text(item)) || (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100))) return undefined; return { concernKind, summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations] as string[]), anchor, ...(confidence === undefined ? {} : { confidence: confidence as number }) }; }
 const TEST_QUALITY_EVIDENCE_FIELDS = ['scopeResolutions', 'relocationAudit', 'counterfactualSensitivity'] as const;
-export function parseBuildReviewJudgedResult(value: unknown, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): BuildReviewJudgedResult | undefined { const source = object(value); const rubric = source?.rubric; if (rubric === 'security' && TEST_QUALITY_EVIDENCE_FIELDS.some((field) => source?.[field] !== undefined)) return undefined; if (!source || source.kind !== 'judged' || (rubric !== 'testQuality' && rubric !== 'security') || !parseBuildReviewLapId(source.lapId) || !text(source.snapshotDigest) || !parseBuildReviewRubricContractVersion(source.contractVersion) || !Array.isArray(source.findings)) return undefined; const scopeResolutions = source.scopeResolutions === undefined ? undefined : (scopeContext ? parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext) : parsePersistedBuildReviewCandidateScopeResolutions(source.scopeResolutions)); const findings = source.findings.map((entry) => finding(entry, rubric, references)); const counterfactualSensitivity = source.counterfactualSensitivity === undefined ? undefined : parseCounterfactualSensitivity(source.counterfactualSensitivity); if (findings.some((entry) => !entry) || (source.scopeResolutions !== undefined && !scopeResolutions) || (scopeContext && scopeContext.candidates.length > 0 && scopeResolutions === undefined) || (source.counterfactualSensitivity !== undefined && !counterfactualSensitivity)) return undefined; return { kind: 'judged', rubric, lapId: source.lapId as BuildReviewLapId, snapshotDigest: source.snapshotDigest, contractVersion: source.contractVersion as BuildReviewRubricContractVersion, findings: Object.freeze(findings as BuildReviewFinding[]), ...(scopeResolutions === undefined ? {} : { scopeResolutions }), ...(counterfactualSensitivity === undefined ? {} : { counterfactualSensitivity }), verdict: findings.length ? 'FAIL' : 'PASS' }; }
+function judgedFindingIdentityId(rubric: BuildReviewRubricId, contractVersion: BuildReviewRubricContractVersion, concernKind: string, anchor: BuildReviewFindingAnchor): string {
+  const locus = anchor.locus;
+  const canonical = JSON.stringify({
+    anchor: { locus: { contentHash: locus.contentHash, ...(locus.occurrence === undefined ? {} : { occurrence: locus.occurrence }), path: locus.path }, rubric: anchor.rubric },
+    concernKind: normalizeBuildReviewFindingVocabularyMember(concernKind),
+    contractVersion,
+    rubric,
+  });
+  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
+}
+
+function hasDuplicateJudgedFindingIdentity(findings: readonly BuildReviewFinding[], contractVersion: BuildReviewRubricContractVersion): boolean {
+  const ids = new Set<string>();
+  for (const entry of findings) {
+    const id = judgedFindingIdentityId(entry.anchor.rubric, contractVersion, entry.concernKind, entry.anchor);
+    if (ids.has(id)) return true;
+    ids.add(id);
+  }
+  return false;
+}
+
+export function parseBuildReviewJudgedResult(value: unknown, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): BuildReviewJudgedResult | undefined { const source = object(value); const rubric = source?.rubric; const contractVersion = parseBuildReviewRubricContractVersion(source?.contractVersion); if (rubric === 'security' && TEST_QUALITY_EVIDENCE_FIELDS.some((field) => source?.[field] !== undefined)) return undefined; if (!source || source.kind !== 'judged' || (rubric !== 'testQuality' && rubric !== 'security') || !parseBuildReviewLapId(source.lapId) || !text(source.snapshotDigest) || !contractVersion || !Array.isArray(source.findings)) return undefined; const scopeResolutions = source.scopeResolutions === undefined ? undefined : (scopeContext ? parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext) : parsePersistedBuildReviewCandidateScopeResolutions(source.scopeResolutions)); const findings = source.findings.map((entry) => finding(entry, rubric, references)); const counterfactualSensitivity = source.counterfactualSensitivity === undefined ? undefined : parseCounterfactualSensitivity(source.counterfactualSensitivity); if (findings.some((entry) => !entry) || hasDuplicateJudgedFindingIdentity(findings as BuildReviewFinding[], contractVersion) || (source.scopeResolutions !== undefined && !scopeResolutions) || (scopeContext && scopeContext.candidates.length > 0 && scopeResolutions === undefined) || (source.counterfactualSensitivity !== undefined && !counterfactualSensitivity)) return undefined; return { kind: 'judged', rubric, lapId: source.lapId as BuildReviewLapId, snapshotDigest: source.snapshotDigest, contractVersion, findings: Object.freeze(findings as BuildReviewFinding[]), ...(scopeResolutions === undefined ? {} : { scopeResolutions }), ...(counterfactualSensitivity === undefined ? {} : { counterfactualSensitivity }), verdict: findings.length ? 'FAIL' : 'PASS' }; }
 export function parseBuildReviewSkip(value: unknown): BuildReviewSkip | undefined { const source = object(value); return source?.kind === 'skipped' && (source.rubric === 'testQuality' || source.rubric === 'security') && (source.reason === 'disabled' || (source.rubric === 'testQuality' && source.reason === 'test_quality_empty_scope')) ? { kind: 'skipped', rubric: source.rubric, reason: source.reason } : undefined; }
 export function parseBuildReviewInfrastructureFailure(value: unknown): BuildReviewInfrastructureFailure | undefined { const source = object(value); return source?.kind === 'infrastructure-failure' && (source.rubric === 'testQuality' || source.rubric === 'security') && typeof source.reason === 'string' && (Object.values(mapBuildReviewCoordinatorFailureReason) as string[]).includes(source.reason) && text(source.detail) ? { kind: 'infrastructure-failure', rubric: source.rubric, reason: source.reason as BuildReviewInfrastructureFailureReason, detail: source.detail } : undefined; }
 function customFinding(value: unknown): BuildReviewCustomFinding | undefined {
@@ -489,13 +660,29 @@ function customFinding(value: unknown): BuildReviewCustomFinding | undefined {
     ...(confidence === undefined ? {} : { confidence: confidence as number }),
   });
 }
+
+/**
+ * These fields belong to the engine-stamped envelope, not the custom-v1
+ * reviewer payload.  Native schemas do not request them, but providers can
+ * still wrap a structured result with routing metadata.  Discard the wrapper
+ * metadata before applying the closed reviewer-payload grammar.
+ */
+const CUSTOM_REVIEWER_ENVELOPE_FIELDS = new Set(['rubric', 'lapId']);
+
+function reviewerOwnedCustomPayload(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([field]) => !CUSTOM_REVIEWER_ENVELOPE_FIELDS.has(field)),
+  );
+}
+
 /**
  * Parses only the reviewer-owned custom payload.  Rubric, policy, provider,
  * lap, verdict, case, effect, and disposition identity remain engine-owned.
  */
 export function parseBuildReviewCustomReviewerPayload(value: unknown): BuildReviewCustomReviewerPayload | undefined {
-  const source = object(value);
-  if (!source) return undefined;
+  const raw = object(value);
+  if (!raw) return undefined;
+  const source = reviewerOwnedCustomPayload(raw);
   if (source.kind === 'unsupported-policy') {
     return exactKeys(source, ['kind', 'requirement']) && text(source.requirement) && source.requirement.length <= MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH
       ? Object.freeze({ kind: 'unsupported-policy', requirement: source.requirement })
@@ -506,6 +693,85 @@ export function parseBuildReviewCustomReviewerPayload(value: unknown): BuildRevi
   return findings.some((entry) => !entry)
     ? undefined
     : Object.freeze({ kind: 'custom-findings', version: 'v1', findings: Object.freeze(findings as BuildReviewCustomFinding[]) });
+}
+
+/** Explain custom-v1 payload rejection without trusting its envelope fields. */
+export function diagnoseBuildReviewCustomReviewerPayloadRejection(
+  value: unknown,
+  references?: BuildReviewCustomFindingReferenceContext,
+): BuildReviewJudgedResultRejection {
+  const raw = object(value);
+  if (!raw) {
+    return Object.freeze({ kind: 'explained', problems: Object.freeze([
+      rejectionProblem('$', 'must be an object', 'the custom result is not a single JSON object'),
+    ]) });
+  }
+  const source = reviewerOwnedCustomPayload(raw);
+  const problems: BuildReviewJudgedResultRejectionProblem[] = [];
+  if (source.kind === 'unsupported-policy') {
+    if (!text(source.requirement) || source.requirement.length > MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH) {
+      problems.push(rejectionProblem('requirement', `must be a non-empty string no longer than ${MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH} characters`));
+    }
+  } else {
+    if (source.kind !== 'custom-findings') problems.push(rejectionProblem('kind', 'must be "custom-findings" or "unsupported-policy"'));
+    if (source.version !== 'v1') problems.push(rejectionProblem('version', 'must be "v1" for custom-findings'));
+    if (!Array.isArray(source.findings) || source.findings.length > MAX_CUSTOM_FINDINGS) {
+      problems.push(rejectionProblem('findings', `must be an array of at most ${MAX_CUSTOM_FINDINGS} findings`));
+    } else {
+      source.findings.forEach((entry, findingIndex) => {
+        const findingSource = object(entry);
+        const prefix = `findings[${findingIndex}]`;
+        if (!findingSource) {
+          problems.push(rejectionProblem(prefix, 'must be an object'));
+          return;
+        }
+        // Parser-only bounds (kept out of the native schema because provider
+        // structured outputs reject maxItems/maxLength/minimum) are named here
+        // per field, so a violation never collapses to a generic `$` rejection.
+        if (typeof findingSource.concernId !== 'string' || !CUSTOM_CONCERN_ID.test(findingSource.concernId)) {
+          problems.push(rejectionProblem(`${prefix}.concernId`, `must match ${CUSTOM_CONCERN_ID.source}`));
+        }
+        if (!text(findingSource.summary) || findingSource.summary.length > MAX_CUSTOM_SUMMARY_LENGTH) {
+          problems.push(rejectionProblem(`${prefix}.summary`, `must be a non-empty string no longer than ${MAX_CUSTOM_SUMMARY_LENGTH} characters`));
+        }
+        const evidenceLocations = findingSource.evidenceLocations;
+        if (!Array.isArray(evidenceLocations) || evidenceLocations.length === 0 || evidenceLocations.length > MAX_CUSTOM_EVIDENCE_LOCATIONS) {
+          problems.push(rejectionProblem(`${prefix}.evidenceLocations`, `must be a non-empty array of at most ${MAX_CUSTOM_EVIDENCE_LOCATIONS} locations`));
+        } else {
+          evidenceLocations.forEach((location, locationIndex) => {
+            if (!text(location) || location.length > MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH) {
+              problems.push(rejectionProblem(`${prefix}.evidenceLocations[${locationIndex}]`, `must be a non-empty string no longer than ${MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH} characters`));
+            }
+          });
+        }
+        const confidence = findingSource.confidence;
+        if (confidence !== undefined && (
+          typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100
+        )) {
+          problems.push(rejectionProblem(`${prefix}.confidence`, 'must be an integer from 0 to 100'));
+        }
+        if (!Array.isArray(findingSource.sourceRegions) || findingSource.sourceRegions.length === 0 || findingSource.sourceRegions.length > MAX_CUSTOM_SOURCE_REGIONS) {
+          problems.push(rejectionProblem(`${prefix}.sourceRegions`, `must be a non-empty array of at most ${MAX_CUSTOM_SOURCE_REGIONS} source regions`));
+          return;
+        }
+        findingSource.sourceRegions.forEach((regionValue, regionIndex) => {
+          const sourceRegion = customSourceRegion(regionValue);
+          const field = `findings[${findingIndex}].sourceRegions[${regionIndex}]`;
+          if (!sourceRegion) {
+            problems.push(rejectionProblem(field, 'must be a source region with path, startLine, endLine, contentHash, and display'));
+          } else if (references && !references.sourceRegions.some((admitted) => sameCandidateScopeSourceRegion(admitted, sourceRegion))) {
+            problems.push(rejectionProblem(field, 'must exactly match an admitted frozen source region'));
+          }
+        });
+      });
+    }
+  }
+  if (problems.length === 0 && parseBuildReviewCustomReviewerPayload(value) === undefined) {
+    problems.push(rejectionProblem('$', 'must satisfy the custom-v1 reviewer payload contract'));
+  }
+  return problems.length === 0
+    ? Object.freeze({ kind: 'unexplained', problems: Object.freeze([]) })
+    : Object.freeze({ kind: 'explained', problems: Object.freeze(problems.slice(0, MAX_REJECTION_PROBLEMS)) });
 }
 /** The effective catalog chooses a parser; global enabled rubric maps never do. */
 export function parseBuildReviewReviewerPayload(
@@ -532,16 +798,21 @@ export function deriveBuildReviewScopeIncompleteFault(result: BuildReviewJudgedR
   ).join('; ').slice(0, 2_048);
   return Object.freeze({ rubric: result.rubric, reason: 'scope-incomplete', candidates: Object.freeze(candidates), detail });
 }
-/**
- * The provider returns only this payload. The dispatch boundary stamps the
- * judged envelope from the frozen projection before validation or persistence.
- */
-export function renderBuildReviewProviderPayloadShape(rubric: BuildReviewRubricId): string {
-  if (rubric === 'security') return `{ findings: [{ concernKind: ${BUILD_REVIEW_FINDING_VOCABULARIES.security.concernKinds.map((kind) => JSON.stringify(kind)).join(' | ')}, summary: string, evidenceLocations: string[], confidence?: integer (0..100), anchor: { rubric: "security", locus: { path: string, contentHash: "sha256:" + 64 lowercase hex characters, display: string, occurrence?: integer (0-based ordinal among equal-content regions in this path; omit when unique or first) } } }] }`;
-  return '{ findings: [{ concernKind: "test-insensitive", summary: string, evidenceLocations: string[], confidence?: integer (0..100), anchor: { rubric: "testQuality", locus: { path: string, contentHash: string, display: string } } }], scopeResolutions: [{ candidateId: string, status: "resolved", sourceRegion: { path: string, startLine: number, endLine: number, contentHash: string, display: string }, obligationReferences: string[], associationReason: string } | { candidateId: string, status: "out-of-scope", exclusionReason: string } | { candidateId: string, status: "indeterminate", missingEvidenceReason: string }], counterfactualSensitivity?: "supports" | "indeterminate" | "not-applicable" }';
-}
-export function renderBuildReviewJudgedResultShape(rubric: BuildReviewRubricId): string { return rubric === 'security' ? `{ kind: "judged", rubric: "security", lapId: string, snapshotDigest: string, contractVersion: "v3", findings: [{ concernKind: ${BUILD_REVIEW_FINDING_VOCABULARIES.security.concernKinds.map((kind) => JSON.stringify(kind)).join(' | ')}, summary: string, evidenceLocations: string[], confidence?: integer (0..100), anchor: { rubric: "security", locus: { path: string, contentHash: "sha256:" + 64 lowercase hex characters, display: string, occurrence?: integer (0-based ordinal among equal-content regions in this path; omit when unique or first) } } }] }` : '{ kind: "judged", rubric: "testQuality", lapId: string, snapshotDigest: string, contractVersion: "v3", findings: [{ concernKind: "test-insensitive", summary: string, evidenceLocations: string[], confidence?: integer (0..100), anchor: { rubric: "testQuality", locus: { path: string, contentHash: string, display: string } } }] }'; }
 const MAX_REJECTION_PROBLEMS = 6;
+export interface BuildReviewJudgedResultRejectionProblem {
+  readonly field: string;
+  readonly required: string;
+  /** Compatibility rendering for existing human-facing diagnostics. */
+  readonly detail: string;
+}
+export interface BuildReviewJudgedResultRejection {
+  readonly kind: 'explained' | 'unexplained';
+  readonly problems: readonly BuildReviewJudgedResultRejectionProblem[];
+  readonly omittedProblemCount?: number;
+}
+function rejectionProblem(field: string, required: string, detail = `${field} ${required}`): BuildReviewJudgedResultRejectionProblem {
+  return Object.freeze({ field, required, detail });
+}
 function candidateScopeResolutionProblems(value: unknown, context: BuildReviewCandidateScopeResolutionContext): readonly string[] {
   const candidates = context.candidates.map(candidateScopeCandidate);
   if (candidates.some((candidate) => !candidate)) return ['"scopeResolutions" cannot be checked because its frozen candidate context is invalid'];
@@ -572,56 +843,73 @@ function candidateScopeResolutionProblems(value: unknown, context: BuildReviewCa
   return problems;
 }
 /**
- * Names every enumerated contract problem in a rejected judged result so the
- * bounded in-session repair turn can tell the grader WHAT to fix, never only
- * that the result was rejected. The predicate that accepts or rejects stays
- * `parseBuildReviewJudgedResult`; this only explains its verdict.
+ * Names every enumerated contract problem in a rejected judged result. The
+ * predicate that accepts or rejects stays `parseBuildReviewJudgedResult`; this
+ * only explains its verdict.
  */
-export function describeBuildReviewJudgedResultRejection(value: unknown, rubric: BuildReviewRubricId, expected: { readonly lapId: string; readonly snapshotDigest: string }, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): string {
+export function diagnoseBuildReviewJudgedResultRejection(value: unknown, rubric: BuildReviewRubricId, expected: { readonly lapId: string; readonly snapshotDigest: string }, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): BuildReviewJudgedResultRejection {
   const source = object(value);
-  if (!source) return 'the result is not a single JSON object';
-  const problems: string[] = [];
+  if (!source) return Object.freeze({ kind: 'explained', problems: Object.freeze([rejectionProblem('$', 'must be an object', 'the result is not a single JSON object')]) });
+  const problems: BuildReviewJudgedResultRejectionProblem[] = [];
   if (rubric === 'security') {
     for (const field of TEST_QUALITY_EVIDENCE_FIELDS) {
-      if (source[field] !== undefined) problems.push(`"${field}" is test-quality evidence and is forbidden for security`);
+      if (source[field] !== undefined) problems.push(rejectionProblem(field, 'is test-quality evidence and is forbidden for security', `"${field}" is test-quality evidence and is forbidden for security`));
     }
   }
-  if (source.kind !== 'judged') problems.push(`top-level "kind" must be exactly the string "judged" (got ${(JSON.stringify(source.kind) ?? 'no kind field').slice(0, 64)})`);
-  if (source.rubric !== rubric) problems.push(`"rubric" must be "${rubric}"`);
-  if (source.lapId !== expected.lapId) problems.push(`"lapId" must echo the projection's lapId "${expected.lapId}" verbatim`);
-  if (source.contractVersion !== CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION) problems.push(`"contractVersion" must be "${CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION}"`);
-  if (source.snapshotDigest !== expected.snapshotDigest) problems.push('"snapshotDigest" must echo the projection\'s snapshotDigest verbatim');
-  if (source.counterfactualSensitivity !== undefined && !parseCounterfactualSensitivity(source.counterfactualSensitivity)) problems.push(`"counterfactualSensitivity" must be one of ${COUNTERFACTUAL_SENSITIVITY_VOCABULARY.map((member) => `"${member}"`).join(', ')} (got ${JSON.stringify(source.counterfactualSensitivity).slice(0, 64)})`);
-  if (scopeContext) problems.push(...candidateScopeResolutionProblems(source.scopeResolutions, scopeContext));
+  if (source.kind !== 'judged') problems.push(rejectionProblem('kind', `must be exactly the string "judged" (got ${(JSON.stringify(source.kind) ?? 'no kind field').slice(0, 64)})`, `top-level "kind" must be exactly the string "judged" (got ${(JSON.stringify(source.kind) ?? 'no kind field').slice(0, 64)})`));
+  if (source.rubric !== rubric) problems.push(rejectionProblem('rubric', `must be "${rubric}"`, `"rubric" must be "${rubric}"`));
+  if (source.lapId !== expected.lapId) problems.push(rejectionProblem('lapId', `must echo the projection's lapId "${expected.lapId}" verbatim`, `"lapId" must echo the projection's lapId "${expected.lapId}" verbatim`));
+  if (source.contractVersion !== CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION) problems.push(rejectionProblem('contractVersion', `must be "${CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION}"`, `"contractVersion" must be "${CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION}"`));
+  if (source.snapshotDigest !== expected.snapshotDigest) problems.push(rejectionProblem('snapshotDigest', "must echo the projection's snapshotDigest verbatim", '"snapshotDigest" must echo the projection\'s snapshotDigest verbatim'));
+  if (source.counterfactualSensitivity !== undefined && !parseCounterfactualSensitivity(source.counterfactualSensitivity)) problems.push(rejectionProblem('counterfactualSensitivity', `must be one of ${COUNTERFACTUAL_SENSITIVITY_VOCABULARY.map((member) => `"${member}"`).join(', ')} (got ${JSON.stringify(source.counterfactualSensitivity).slice(0, 64)})`, `"counterfactualSensitivity" must be one of ${COUNTERFACTUAL_SENSITIVITY_VOCABULARY.map((member) => `"${member}"`).join(', ')} (got ${JSON.stringify(source.counterfactualSensitivity).slice(0, 64)})`));
+  if (scopeContext) problems.push(...candidateScopeResolutionProblems(source.scopeResolutions, scopeContext).map((detail) => rejectionProblem('scopeResolutions', detail, detail)));
   if (!Array.isArray(source.findings)) {
-    problems.push('"findings" must be an array (empty when no concern was found)');
+    problems.push(rejectionProblem('findings', 'must be an array (empty when no concern was found)', '"findings" must be an array (empty when no concern was found)'));
   } else {
     const vocabulary = BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds;
     source.findings.forEach((entry, index) => {
       const item = object(entry);
-      if (!item) { problems.push(`findings[${index}] is not an object`); return; }
-      if (!text(item.concernKind)) problems.push(`findings[${index}].concernKind must be a non-empty string (never "kind")`);
-      else if (parseBuildReviewFindingConcernKind(item.concernKind, rubric) === undefined) problems.push(`findings[${index}].concernKind must be one of ${vocabulary.map((member) => `"${member}"`).join(', ')} (got ${JSON.stringify(item.concernKind).slice(0, 64)})`);
-      if (!text(item.summary)) problems.push(`findings[${index}].summary must be a non-empty string`);
-      if (!Array.isArray(item.evidenceLocations) || item.evidenceLocations.length === 0 || item.evidenceLocations.some((location) => !text(location))) problems.push(`findings[${index}].evidenceLocations must be a non-empty array of "path:line" strings`);
+      if (!item) { problems.push(rejectionProblem(`findings[${index}]`, 'must be an object')); return; }
+      if (!text(item.concernKind)) problems.push(rejectionProblem(`findings[${index}].concernKind`, 'must be a non-empty string (never "kind")'));
+      else if (parseBuildReviewFindingConcernKind(item.concernKind, rubric) === undefined) problems.push(rejectionProblem(`findings[${index}].concernKind`, `must be one of ${vocabulary.map((member) => `"${member}"`).join(', ')} (got ${JSON.stringify(item.concernKind).slice(0, 64)})`));
+      if (!text(item.summary)) problems.push(rejectionProblem(`findings[${index}].summary`, 'must be a non-empty string'));
+      if (!Array.isArray(item.evidenceLocations) || item.evidenceLocations.length === 0 || item.evidenceLocations.some((location) => !text(location))) problems.push(rejectionProblem(`findings[${index}].evidenceLocations`, 'must be a non-empty array of "path:line" strings'));
       const anchor = object(item.anchor);
-      if (!anchor) { problems.push(`findings[${index}].anchor is required: a nested object {"rubric": "${rubric}", "locus": {"path", "contentHash", "display"}} — never flattened top-level fields, and never an alternate name such as "anchors"`); return; }
-      if (anchor.rubric !== rubric) problems.push(`findings[${index}].anchor.rubric must be "${rubric}"`);
+      if (!anchor) { problems.push(rejectionProblem(`findings[${index}].anchor`, `is required: a nested object {"rubric": "${rubric}", "locus": {"path", "contentHash", "display"}} — never flattened top-level fields, and never an alternate name such as "anchors"`)); return; }
+      if (anchor.rubric !== rubric) problems.push(rejectionProblem(`findings[${index}].anchor.rubric`, `must be "${rubric}"`));
       const locus = rubric === 'security' ? securityRegion(anchor.locus) : region(anchor.locus);
-      if (!locus) problems.push(`findings[${index}].anchor.locus must be a content-region reference {"path", "contentHash", "display", "occurrence"?}`);
-      else if (rubric === 'security' && references && !references.changedContentRegions.some((candidate) => sameRegion(candidate, locus))) problems.push(`findings[${index}].anchor.locus must reference a projected changed content region (path, contentHash, and occurrence must match one)`);
-      else if (rubric === 'testQuality' && references?.changedTestRegions && !references.changedTestRegions.some((candidate) => sameRegion(candidate, locus))) problems.push(`findings[${index}].anchor.locus must reference a projected in-scope content region (path, contentHash, and occurrence must match one)`);
+      if (!locus) problems.push(rejectionProblem(`findings[${index}].anchor.locus`, 'must be a content-region reference {"path", "contentHash", "display", "occurrence"?}'));
+      else if (rubric === 'security' && references && !references.changedContentRegions.some((candidate) => sameRegion(candidate, locus))) problems.push(rejectionProblem(`findings[${index}].anchor.locus.contentHash`, 'must equal a contentHash listed by the projected changed content regions', `findings[${index}].anchor.locus must reference a projected changed content region (path, contentHash, and occurrence must match one)`));
+      else if (rubric === 'testQuality' && references?.changedTestRegions && !references.changedTestRegions.some((candidate) => sameRegion(candidate, locus))) problems.push(rejectionProblem(`findings[${index}].anchor.locus.contentHash`, 'must equal a contentHash listed by the projected in-scope content regions', `findings[${index}].anchor.locus must reference a projected in-scope content region (path, contentHash, and occurrence must match one)`));
     });
-    const duplicates = new Set<string>();
+    const duplicates = new Map<string, number>();
     const seen = new Set<string>();
-    for (const entry of source.findings) { const item = object(entry); const anchor = item && object(item.anchor); const locus = anchor && region(anchor.locus); if (!locus || !text(item.concernKind)) continue; const key = `${normalizeBuildReviewFindingVocabularyMember(item.concernKind)}\u0000${locus.path}\u0000${locus.contentHash}\u0000${locus.occurrence ?? 0}`; if (seen.has(key)) duplicates.add(locus.display); seen.add(key); }
-    if (duplicates.size > 0) problems.push(`findings must not repeat one concern on one content region (duplicated: ${[...duplicates].map((display) => `"${display}"`).join(', ')}) — merge equivalent findings`);
+    const contractVersion = parseBuildReviewRubricContractVersion(source.contractVersion) ?? CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION;
+    source.findings.forEach((entry, index) => { const item = object(entry); const anchor = item && object(item.anchor); const locus = anchor && region(anchor.locus); if (!locus || !text(item.concernKind)) return; const key = `${normalizeBuildReviewFindingVocabularyMember(item.concernKind)}\u0000${locus.path}\u0000${locus.contentHash}\u0000${locus.occurrence ?? 0}`; if (seen.has(key)) duplicates.set(judgedFindingIdentityId(rubric, contractVersion, item.concernKind, { rubric, locus }), index); seen.add(key); });
+    for (const [id, index] of duplicates) problems.push(rejectionProblem(`findings[${index}].identity`, `must not duplicate finding identity ${id}`, `findings must not repeat one concern on one content region (duplicated identity: ${id}) — merge equivalent findings`));
   }
-  if (problems.length === 0) return `the result did not satisfy the judged contract and no enumerated check explains why; it must match ${renderBuildReviewJudgedResultShape(rubric)} and echo the projection lapId and snapshotDigest`;
+  if (problems.length === 0) return Object.freeze({ kind: 'unexplained', problems: Object.freeze([]) });
   const shown = problems.slice(0, MAX_REJECTION_PROBLEMS);
-  return shown.join('; ') + (problems.length > shown.length ? `; and ${problems.length - shown.length} more problem(s)` : '');
+  return Object.freeze({ kind: 'explained', problems: Object.freeze(shown), ...(problems.length > shown.length ? { omittedProblemCount: problems.length - shown.length } : {}) });
 }
-export interface BuildReviewDispatchFailure { readonly kind: 'dispatch-failure'; readonly detail: string; readonly providerSetupExhaustion?: ProviderSetupExhaustion; }
+
+export function renderBuildReviewJudgedResultRejection(rejection: BuildReviewJudgedResultRejection): string {
+  if (rejection.kind === 'unexplained') return 'the result did not satisfy the judged contract and no enumerated check explains why';
+  return rejection.problems.map((problem) => problem.detail).join('; ') + (rejection.omittedProblemCount === undefined ? '' : `; and ${rejection.omittedProblemCount} more problem(s)`);
+}
+
+export function describeBuildReviewJudgedResultRejection(value: unknown, rubric: BuildReviewRubricId, expected: { readonly lapId: string; readonly snapshotDigest: string }, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): string {
+  return renderBuildReviewJudgedResultRejection(diagnoseBuildReviewJudgedResultRejection(value, rubric, expected, references, scopeContext));
+}
+export interface BuildReviewDispatchFailure {
+  readonly kind: 'dispatch-failure';
+  readonly detail: string;
+  readonly providerSetupExhaustion?: ProviderSetupExhaustion;
+  /** A native structured payload was present but rejected by the engine contract. */
+  readonly cause?: 'invalid-structured-result' | 'native-schema-unsupported';
+  /** Kept typed so the existing fault event can carry it once its union admits the field. */
+  readonly rejection?: BuildReviewJudgedResultRejection;
+}
 export function renderBuildReviewUnresolvedSkillRemedy(rubricSkillName: string, unresolvedCommandName: string): string {
   const commandDetail = unresolvedCommandName.trim()
     ? ` The unresolved command was "${unresolvedCommandName}".`
@@ -629,5 +917,35 @@ export function renderBuildReviewUnresolvedSkillRemedy(rubricSkillName: string, 
   return `Build-review rubric skill "${rubricSkillName}" could not be dispatched.${commandDetail} No judgement was produced, and retrying cannot make the command resolvable. Relink the provider skill catalog; if this feature's base predates the skill, rebase the feature.`;
 }
 function providerSetupExhaustion(value: unknown): ProviderSetupExhaustion | undefined { const source = object(value); if (!source || !Array.isArray(source.candidates) || source.candidates.length === 0) return undefined; const candidates = source.candidates.map(object); if (candidates.some((candidate) => !candidate || !text(candidate.provider) || !text(candidate.reason) || !text(candidate.recoveryAction) || (candidate.capability !== undefined && !text(candidate.capability)))) return undefined; return { candidates: candidates.map((candidate) => ({ provider: candidate!.provider as string, reason: candidate!.reason as string, recoveryAction: candidate!.recoveryAction as string, ...(candidate!.capability === undefined ? {} : { capability: candidate!.capability as string }) })) as unknown as ProviderSetupExhaustion['candidates'] }; }
-export function makeBuildReviewDispatchFailure(detail: string, setupExhaustion?: ProviderSetupExhaustion): BuildReviewDispatchFailure { return { kind: 'dispatch-failure', detail, ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}) }; }
-export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDispatchFailure | undefined { const source = object(value); const setupExhaustion = source && (source.providerSetupExhaustion === undefined ? undefined : providerSetupExhaustion(source.providerSetupExhaustion)); return source?.kind === 'dispatch-failure' && text(source.detail) && (source.providerSetupExhaustion === undefined || setupExhaustion) ? { kind: 'dispatch-failure', detail: source.detail, ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}) } : undefined; }
+export function makeBuildReviewDispatchFailure(
+  detail: string,
+  setupExhaustion?: ProviderSetupExhaustion,
+  structuredFailure?: { readonly cause: 'invalid-structured-result'; readonly rejection: BuildReviewJudgedResultRejection } | { readonly cause: 'native-schema-unsupported' },
+): BuildReviewDispatchFailure {
+  return {
+    kind: 'dispatch-failure', detail,
+    ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}),
+    ...(structuredFailure?.cause === 'invalid-structured-result'
+      ? { cause: structuredFailure.cause, rejection: structuredFailure.rejection }
+      : structuredFailure ? { cause: structuredFailure.cause } : {}),
+  };
+}
+export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDispatchFailure | undefined {
+  const source = object(value);
+  const setupExhaustion = source && (source.providerSetupExhaustion === undefined ? undefined : providerSetupExhaustion(source.providerSetupExhaustion));
+  // Dispatch failures are engine-created values. Preserve the rejection only
+  // for the explicitly stamped cause; ordinary provider failures remain
+  // unstructured diagnostics.
+  const invalidStructuredResult = source?.cause === 'invalid-structured-result' && source.rejection !== undefined
+    ? source.rejection as BuildReviewJudgedResultRejection
+    : undefined;
+  const nativeSchemaUnsupported = source?.cause === 'native-schema-unsupported';
+  return source?.kind === 'dispatch-failure' && text(source.detail) && (source.providerSetupExhaustion === undefined || setupExhaustion)
+    ? {
+        kind: 'dispatch-failure', detail: source.detail,
+        ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}),
+        ...(invalidStructuredResult ? { cause: 'invalid-structured-result' as const, rejection: invalidStructuredResult } : {}),
+        ...(nativeSchemaUnsupported ? { cause: 'native-schema-unsupported' as const } : {}),
+      }
+    : undefined;
+}

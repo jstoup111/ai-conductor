@@ -54,7 +54,8 @@ export type BuildReviewCustomInfrastructureFailureReason =
 const CUSTOM_INFRASTRUCTURE_FAILURE_REASONS = new Set<BuildReviewCustomInfrastructureFailureReason>([
   'policy-load-failed', 'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact',
   'stale-artifact', 'identity-mismatch', 'preflight-failed', 'artifact-read-failed',
-  'artifact-write-failed', 'scope-incomplete',
+  'artifact-write-failed', 'scope-incomplete', 'projection-oversized',
+  'invalid-structured-result', 'native-schema-unsupported',
 ]);
 
 export function isBuildReviewCustomInfrastructureFailureReason(
@@ -65,6 +66,7 @@ export function isBuildReviewCustomInfrastructureFailureReason(
 
 export type BuildReviewCustomArtifactResult =
   | { readonly kind: 'judged'; readonly contractVersion: 'custom-v1'; readonly rubric: string; readonly lapId: string; readonly declaration: BuildReviewCustomEvidenceDescriptor['declaration']; readonly policy: BuildReviewCustomEvidenceDescriptor['effectivePolicy']; readonly candidate: BuildReviewCustomEvidenceDescriptor['producer']; readonly reviewedInput: BuildReviewCustomEvidenceDescriptor['reviewedInput']; readonly findings: readonly unknown[]; readonly verdict: 'PASS' | 'FAIL'; readonly identity: { readonly id: string; readonly canonicalPayload: unknown; readonly canonicalJson: string } }
+  | { readonly kind: 'unsupported-policy'; readonly rubric: string; readonly requirement: string }
   | { readonly kind: 'infrastructure-failure'; readonly rubric: string; readonly reason: BuildReviewCustomInfrastructureFailureReason; readonly detail: string };
 
 export interface BuildReviewCustomArtifactMember {
@@ -186,6 +188,13 @@ export function parseBuildReviewCustomArtifactMember(value: unknown): BuildRevie
       ...(declaration === undefined ? {} : { declaration }),
       result: result as Extract<BuildReviewCustomArtifactResult, { readonly kind: 'infrastructure-failure' }>,
     };
+  }
+  if (result.kind === 'unsupported-policy') {
+    const declaration = source.declaration === undefined ? undefined : parseBuildReviewCustomDeclaration(source.declaration);
+    if (!exactKeys(source, declaration === undefined ? ['result'] : ['declaration', 'result']) || !exactKeys(result, ['kind', 'rubric', 'requirement']) ||
+      !isCustomRubric(result.rubric) || !isNonEmptyString(result.requirement) ||
+      (declaration !== undefined && declaration.rubricId !== result.rubric)) return undefined;
+    return { ...(declaration === undefined ? {} : { declaration }), result: result as Extract<BuildReviewCustomArtifactResult, { readonly kind: 'unsupported-policy' }> };
   }
   if (result.kind !== 'judged' || !exactKeys(source, ['descriptor', 'result'])) return undefined;
   const descriptor = parseCustomDescriptor(source.descriptor);

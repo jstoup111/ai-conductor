@@ -1,4 +1,5 @@
 // Covers: task:2
+// Covers: task:5
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
 import { PassThrough } from 'node:stream';
@@ -8,6 +9,13 @@ import {
   parseRateLimitWaitSeconds,
 } from '../../src/execution/claude-provider.js';
 import { classifyMetering } from '../../src/engine/metering.js';
+import { executeAuxiliaryProviderCandidates } from '../../src/engine/provider-execution.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionScope } from '../../src/engine/provider-session.js';
+import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { BUILD_REVIEW_RUBRIC_REGISTRY } from '../../src/engine/build-review-registry.js';
+import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-config.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 
@@ -20,7 +28,8 @@ const { mockValidateSpawnPermit } = vi.hoisted(() => ({
   mockValidateSpawnPermit: vi.fn((permit, purpose) =>
     permit?.(purpose) ?? { permitted: true as const }),
 }));
-vi.mock('../../src/engine/provider-runtime.js', () => ({
+vi.mock('../../src/engine/provider-runtime.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/provider-runtime.js')>(),
   validateSpawnPermit: mockValidateSpawnPermit,
 }));
 
@@ -50,6 +59,30 @@ type ExecaInvocation = (
   options?: ExecaOptions,
 ) => Promise<ExecaResult>;
 const mockExeca = vi.mocked(execa) as unknown as Mock<ExecaInvocation>;
+
+const claudeRubricPolicy: ResolvedBuildReviewRubricPolicy = {
+  enabled: true,
+  max_projection_bytes: 1_048_576,
+  llm_provider: 'claude',
+  model: 'opus',
+  effort: 'high',
+  model_fallback_ladder: ['opus'],
+  max_retries: 1,
+  escalate: false,
+  min_confidence: 0,
+};
+
+function claudeRuntime(provider: ClaudeProvider): ProviderRuntimeSet {
+  return new ProviderRuntimeSet([{
+    key: 'claude',
+    provider,
+    lifecycleCapability: provider.lifecycleCapability,
+    nativeSchemaCapability: provider.nativeSchemaCapability,
+    policy: CLAUDE_MODEL_POLICY,
+    builtIn: true,
+    availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+  }]);
+}
 
 describe('ClaudeProvider', () => {
   let provider: ClaudeProvider;
@@ -164,6 +197,39 @@ describe('ClaudeProvider', () => {
         });
       });
 
+      it('passes the security descriptor schema through provider execution to Claude argv', async () => {
+        const nativeSchema = BUILD_REVIEW_RUBRIC_REGISTRY.security.contract.output.jsonSchema;
+        mockExeca.mockResolvedValue({
+          stdout: JSON.stringify({
+            type: 'result',
+            result: 'Security judgement complete.',
+            structured_output: JSON.stringify({ findings: [] }),
+          }),
+          stderr: '',
+          exitCode: 0,
+          failed: false,
+        } as any);
+
+        const result = await executeAuxiliaryProviderCandidates({
+          step: 'build_review',
+          memberId: 'security',
+          policy: claudeRubricPolicy,
+          runtimes: claudeRuntime(provider),
+          sessions: new ProviderSessionScope(vi.fn()),
+          options: { prompt: 'Judge the security rubric.', nativeSchema },
+        });
+
+        const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
+        const schemaIndex = args.indexOf('--json-schema');
+        expect(schemaIndex).toBeGreaterThanOrEqual(0);
+        expect(JSON.parse(args[schemaIndex + 1]!)).toEqual(nativeSchema);
+        expect(result).toMatchObject({
+          success: true,
+          output: 'Security judgement complete.',
+          finalStructuredResult: { findings: [] },
+        });
+      });
+
       it.each([
         {
           name: 'has no terminal result envelope',
@@ -172,11 +238,13 @@ describe('ClaudeProvider', () => {
             message: { content: [{ type: 'tool_use', name: 'inspect', input: { structured_output: { forged: true } } }] },
           }),
           expected: 'missing terminal result record',
+          structuredResultFailure: undefined,
         },
         {
           name: 'is absent from the terminal result envelope',
           stdout: JSON.stringify({ type: 'result', result: 'Reconciliation complete.' }),
           expected: 'missing its structured result',
+          structuredResultFailure: 'missing',
         },
         {
           name: 'is malformed JSON in the terminal result envelope',
@@ -186,13 +254,15 @@ describe('ClaudeProvider', () => {
             structured_output: '{not valid JSON',
           }),
           expected: 'malformed structured result',
+          structuredResultFailure: 'malformed',
         },
-      ])('fails closed when the structured result $name', async ({ stdout, expected }) => {
+      ])('fails closed when the structured result $name', async ({ stdout, expected, structuredResultFailure }) => {
         mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 0, failed: false } as any);
 
         const result = await provider.invoke({ ...baseOptions, nativeSchema: schema });
 
         expect(result).toMatchObject({ success: false, exitCode: 0 });
+        expect(result.structuredResultFailure).toBe(structuredResultFailure);
         expect(result.output).toContain(expected);
         expect(result.finalStructuredResult).toBeUndefined();
       });

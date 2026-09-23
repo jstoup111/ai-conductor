@@ -112,10 +112,14 @@ describe('build-review candidate cache runner ordering', () => {
     const root = await fixture();
     const preparedHome = join(root, 'prepared-codex-home');
     const catalogHomes: string[] = [];
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
     const invoke = vi.fn(async (options: { model?: string }) => options.model === 'gpt-5.6-sol'
       ? { success: false, exitCode: 1, output: 'model unavailable', modelUnavailable: true }
-      : { success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) });
-    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+      : { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload });
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
     const providerRuntimes = new ProviderRuntimeSet([{
       key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true,
       availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -199,8 +203,14 @@ describe('build-review candidate cache runner ordering', () => {
     const root = await fixture();
     const codexInvoke = vi.fn(async () => ({ success: false, exitCode: 127, output: 'codex unavailable', providerUnavailable: true, providerUnavailableScope: 'run' as const, providerUnavailableReason: 'codex unavailable' }));
     const claudeInvoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) }));
-    const codex: LLMProvider = { invoke: codexInvoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
-    const claude: LLMProvider = { invoke: claudeInvoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const codex: LLMProvider = {
+      invoke: codexInvoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    const claude: LLMProvider = {
+      invoke: claudeInvoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
     const runtimes = new ProviderRuntimeSet([
       { key: 'codex', provider: codex, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) },
       { key: 'claude', provider: claude, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
@@ -243,8 +253,12 @@ describe('build-review candidate cache runner ordering', () => {
 
   it('publishes one discard when an actual candidate reloads the policy under a new bundle digest', async () => {
     const root = await fixture();
-    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) }));
-    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
     const runtimes = new ProviderRuntimeSet([{ key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) }]);
     const events = new ConductorEventEmitter();
     const discarded: unknown[] = [];
@@ -273,7 +287,10 @@ describe('build-review candidate cache runner ordering', () => {
   it('bounds built-in installed-policy discovery at the production candidate deadline', async () => {
     const root = await fixture();
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: '{}' }));
-    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
     const runtimes = new ProviderRuntimeSet([{ key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) }]);
     const catalog = vi.fn(async ({ signal }: { signal?: AbortSignal }) => new Promise<never>((_resolve, reject) => {
       if (signal === undefined) throw new Error('built-in discovery received no candidate signal');
@@ -300,8 +317,12 @@ describe('build-review candidate cache runner ordering', () => {
 
   it('loads, captures, judges, and caches the actual built-in candidate policy despite unavailable harness-root evidence', async () => {
     const root = await fixture();
-    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ findings: [], scopeResolutions: [], counterfactualSensitivity: 'indeterminate' }) }));
-    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const payload = { findings: [], scopeResolutions: [], counterfactualSensitivity: 'indeterminate' };
+    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
     const runtimes = new ProviderRuntimeSet([{ key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) }]);
     const catalog = vi.fn(async () => [{ semanticName: 'build-review-test-quality', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }]);
     const capture = vi.fn(async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Built-in policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }));

@@ -96,7 +96,7 @@ As the build_review coordinator, I want a lap whose admitted candidates cannot h
 - [ ] `native-schema-unsupported` is a closed cause in the mechanical-fault mapping, charged once per lap and never retried within the lap.
 - [ ] A test asserts an incapable-only candidate set launches no provider and settles `absent` with the cause and recovery action.
 - [ ] A test asserts an adapter-reported `nativeSchemaUnsupported` result classifies as `native-schema-unsupported`.
-- [ ] The event-sink exhaustiveness check admits both new causes on `build_review_rubric_mechanical_fault`.
+- [ ] The event-sink exhaustiveness check admits both new causes on `build_review_rubric_infrastructure_failure`.
 
 ## Story 5: The custom-v1 reviewer contract is a descriptor on the shared seam
 

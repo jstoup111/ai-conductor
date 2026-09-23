@@ -24,7 +24,7 @@ graph TD
         SHAPE["renderShape(): prompt text derived from jsonSchema"]
     end
 
-    subgraph Dispatch["Generic rubric dispatch (step-runners → provider-execution)"]
+    subgraph Dispatch["Shared seam: dispatchRubricContract (step-runners → provider-execution)"]
         RENDER["render projection + policy bundle + skill invocation"]
         REQ["invoke with nativeSchema = descriptor.output.jsonSchema"]
         CAP{"provider declares<br/>nativeOutputSchema?"}
@@ -51,6 +51,9 @@ graph TD
     TQ --> Descriptor
     SEC --> Descriptor
     CUS --> Descriptor
+    TQ -. built-in route: coordinator .-> RENDER
+    SEC -. built-in route: coordinator .-> RENDER
+    CUS -. custom route: dispatchInstalledBuildReviewPolicy .-> RENDER
     PROJ --> RENDER
     SHAPE --> RENDER
     OUT --> REQ
@@ -80,8 +83,10 @@ graph TD
   handed to the provider natively and the single source from which both the prompt shape and the
   rejection diagnosis are rendered; `identity` wraps the existing `custom-v1` and built-in
   canonicalizers unchanged.
-- **Generic rubric dispatch** — replaces the two scrape-and-parse paths (built-in
-  `dispatchBuildReviewRubric` and the custom-policy dispatch). `extractJudgedResultCandidate` and
+- **Shared seam `dispatchRubricContract`** — replaces the two scrape-and-parse paths (built-in
+  `dispatchBuildReviewRubric` and the custom-policy dispatch). Built-in members reach it through the
+  built-in-keyed coordinator; `custom-v1` reaches it through `dispatchInstalledBuildReviewPolicy`
+  (ADR D1.3). Both routes share one render, one native-schema request, and one parser. `extractJudgedResultCandidate` and
   the bounded repair turn are retired; the provider's terminal structured result is the only input
   to validation.
 - **Mechanical-fault lane** — existing lane (adr-2026-08-18-mechanical-rubric-faults) with two
@@ -95,3 +100,4 @@ graph TD
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-09-22 | Initial generation | Spec for #2384 — typed, structurally keyed rubric output on one descriptor seam |
+| 2026-09-23 | Name `dispatchRubricContract` as the shared seam; show built-in and custom routes | ADR D1.3 clarification after as-built AB-1 |
