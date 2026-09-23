@@ -64,7 +64,7 @@ export async function buildPrFixture(opts: {
   await git(['init', '-q', '-b', 'main']);
   await git(['config', 'user.email', 't@example.test']);
   await git(['config', 'user.name', 'Test']);
-  await execFile('git', ['init', '--bare', '-q', remote]);
+  await execFile('git', ['init', '--bare', '-q', '-b', 'main', remote]);
   await execFile('git', ['config', 'core.logAllRefUpdates', 'true'], { cwd: remote });
   await git(['remote', 'add', 'origin', remote]);
   await writeFile(join(repo, '.gitignore'), '.remote.git/\n');

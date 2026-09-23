@@ -116,7 +116,7 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
     try {
       await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
       const remote = join(repo, 'remote.git');
-      await execFile('git', ['init', '--bare', '-q', remote]);
+      await execFile('git', ['init', '--bare', '-q', '-b', 'main', remote]);
       await execFile('git', ['config', 'core.logAllRefUpdates', 'true'], { cwd: remote });
       await git(['config', 'user.email', 't@example.test']);
       await git(['config', 'user.name', 'Test']);
@@ -194,7 +194,7 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
     try {
       await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
       const remote = join(repo, 'remote.git');
-      await execFile('git', ['init', '--bare', '-q', remote]);
+      await execFile('git', ['init', '--bare', '-q', '-b', 'main', remote]);
       await git(['config', 'user.email', 't@example.test']);
       await git(['config', 'user.name', 'Test']);
       await git(['remote', 'add', 'origin', remote]);
