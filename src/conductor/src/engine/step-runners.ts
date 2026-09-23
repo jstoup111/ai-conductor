@@ -743,6 +743,9 @@ export async function dispatchRubricContract<Output>(input: {
   readonly prepareStructured?: (value: Record<string, unknown>) => unknown;
 }): Promise<RubricContractDispatch<Output>> {
   const invocation = await input.invoke({ ...input.options, nativeSchema: input.descriptor.output.jsonSchema });
+  if (invocation.structuredResultFailure !== undefined) {
+    return { kind: 'root-rejection', invocation, rejection: { field: 'root', problem: 'a structured result is required' } };
+  }
   if (!invocation.success) return { kind: 'provider-failure', invocation };
   const structuredResult = invocation.finalStructuredResult;
   if (structuredResult === null || typeof structuredResult !== 'object' || Array.isArray(structuredResult)) {
@@ -2637,6 +2640,16 @@ export class DefaultStepRunner implements StepRunner {
       const output = `build_review custom policy ${entry.id} has no frozen source materialization`;
       return { id: entry.id, success: true, output, member: failedMember('preflight-failed', output) };
     }
+    // Custom contracts own the frozen-input projection just as built-in
+    // descriptors own theirs. Rendering its output keeps this route on the
+    // descriptor boundary without changing the established prompt bytes.
+    const projection = entry.contract.projection.build({
+      contentDigest: inputs.sourceSnapshot.contentDigest,
+      mergeBase: inputs.sourceSnapshot.mergeBase,
+      headSha: inputs.sourceSnapshot.headSha,
+      changes: inputs.sourceSnapshot.sourceChanges ?? [],
+      ...(source === undefined ? {} : { view: source }),
+    });
     const options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'> = {
       prompt: `Build-review custom policy ${entry.id}: the candidate will supply the selected immutable policy contract before judgment. Return only the custom findings payload.`,
       cwd: source?.headPath ?? this.projectDir,
@@ -2885,8 +2898,7 @@ export class DefaultStepRunner implements StepRunner {
             prompt: `${renderBuildReviewPolicyContract({
             bundle, question: entry.question, contract: entry.contract,
             scope: renderBuildReviewFrozenInputScope({
-              contentDigest: inputs.sourceSnapshot.contentDigest, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha,
-              changes: inputs.sourceSnapshot.sourceChanges ?? [], ...(source === undefined ? {} : { view: source }),
+              ...projection,
             }),
             })}\n\n${renderAuxiliarySkillInvocation(entry.skill, context.candidate.providerKey)}`,
             cwd: source?.headPath ?? this.projectDir,
@@ -2917,7 +2929,7 @@ export class DefaultStepRunner implements StepRunner {
         });
         const invoked = dispatched.invocation;
         if (cacheHit) return { kind: 'hit' as const, result: invoked };
-        if (!invoked.success) {
+        if (!invoked.success && dispatched.kind !== 'root-rejection') {
           coverageFailure = true;
           failure = {
             reason: invoked.nativeSchemaUnsupported ? 'native-schema-unsupported' : 'provider-error',
@@ -3330,6 +3342,7 @@ export class DefaultStepRunner implements StepRunner {
       success: boolean;
       output?: string;
       finalStructuredResult?: unknown;
+      structuredResultFailure?: 'missing' | 'malformed';
       commandUnresolved?: boolean;
       commandUnresolvedName?: string;
       nativeSchemaUnsupported?: true;
@@ -3339,6 +3352,7 @@ export class DefaultStepRunner implements StepRunner {
         success: boolean;
         output?: string;
         finalStructuredResult?: unknown;
+        structuredResultFailure?: 'missing' | 'malformed';
         commandUnresolved?: boolean;
         commandUnresolvedName?: string;
         nativeSchemaUnsupported?: true;
@@ -3347,6 +3361,7 @@ export class DefaultStepRunner implements StepRunner {
         success: result.success,
         ...(typeof result.output === 'string' ? { output: result.output } : {}),
         ...(result.finalStructuredResult === undefined ? {} : { finalStructuredResult: result.finalStructuredResult }),
+        ...(result.structuredResultFailure === undefined ? {} : { structuredResultFailure: result.structuredResultFailure }),
         ...(result.commandUnresolved ? {
           commandUnresolved: true,
           ...(result.commandUnresolvedName ? { commandUnresolvedName: result.commandUnresolvedName } : {}),
@@ -3537,7 +3552,7 @@ export class DefaultStepRunner implements StepRunner {
                 await inputs?.sourceMaterialization?.settle(branch.rubric);
                 return { kind: 'hit' as const, result: invoked };
               }
-              if (!invoked.success) {
+              if (!invoked.success && dispatched.kind !== 'root-rejection') {
                 await inputs?.sourceMaterialization?.settle(branch.rubric);
                 return { kind: 'judged' as const, result: invoked };
               }
@@ -3626,6 +3641,17 @@ export class DefaultStepRunner implements StepRunner {
         undefined,
         { cause: 'native-schema-unsupported' },
       );
+    }
+    if (initial.structuredResultFailure !== undefined) {
+      const rejection = diagnoseBuildReviewJudgedResultRejection(
+        initial.finalStructuredResult,
+        branch.rubric,
+        { lapId: projection.lapId, snapshotDigest: projection.snapshotDigest },
+      );
+      return makeBuildReviewDispatchFailure('root: a structured result is required', undefined, {
+        cause: 'invalid-structured-result',
+        rejection,
+      });
     }
     if (!initial.success && initial.output?.startsWith('Codex native schema scratch home failed:')) {
       return makeBuildReviewDispatchFailure(initial.output ?? 'build_review provider invocation failed without a diagnostic');

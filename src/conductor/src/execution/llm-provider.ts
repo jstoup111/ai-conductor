@@ -213,6 +213,8 @@ export interface InvokeResult {
    * schema request authorizes adapters to populate it.
    */
   finalStructuredResult?: unknown;
+  /** A native-schema invocation ended without a usable terminal result. */
+  structuredResultFailure?: 'missing' | 'malformed';
   /** A requested native schema could not be enforced by the selected adapter. */
   nativeSchemaUnsupported?: true;
   /** Engine-observed provider subprocess intervals, separate from provider-reported usage. */

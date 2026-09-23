@@ -794,8 +794,8 @@ describe("engine identity injection into the coordinator (D5/D6)", () => {
     const fresh = written[0]!;
     const descriptor = getBuildReviewRubricDescriptor('testQuality');
     expect(fresh).toMatchObject({
-      contractVersion: descriptor.contractVersion,
-      projectionVersion: descriptor.projectionVersion,
+      contractVersion: descriptor.contract.output.version,
+      projectionVersion: descriptor.contract.projection.version,
       engineIdentity: { engineStamp: "bbbbbbbbbbbb", skillDigest: "sha256:skill-a" },
     });
     await expect(readBuildReviewCacheEntry('/feature', 'testQuality', fs, fresh.semanticIdentity)).resolves.toMatchObject({

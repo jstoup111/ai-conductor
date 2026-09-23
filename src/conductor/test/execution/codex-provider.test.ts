@@ -370,7 +370,7 @@ describe('CodexProvider', () => {
         options: { prompt: 'Judge the security rubric.', cwd: worktree, nativeSchema: BUILD_REVIEW_RUBRIC_REGISTRY.security.contract.output.jsonSchema },
       });
 
-      expect(result).toMatchObject({ success: false, output: expect.stringContaining('missing its structured result') });
+      expect(result).toMatchObject({ success: false, output: expect.stringContaining('missing its structured result'), structuredResultFailure: 'malformed' });
       expect(result.output).toContain('I inspected the diff.');
       expect(result.finalStructuredResult).toBeUndefined();
     } finally {

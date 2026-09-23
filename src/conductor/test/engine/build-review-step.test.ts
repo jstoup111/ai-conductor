@@ -793,6 +793,32 @@ describe('build_review structured rubric dispatch', () => {
     expect(customInvoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema);
   });
 
+  it.each(['missing', 'malformed'] as const)('routes an adapter %s structured-result marker to the root rejection', async (structuredResultFailure) => {
+    const dispatched = await dispatchRubricContract({
+      descriptor: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+      invoke: async () => ({ success: false, output: 'adapter retained transcript', exitCode: 0, structuredResultFailure }),
+      options: { prompt: 'review', cwd: '/fixture', interactive: false },
+    });
+
+    expect(dispatched).toMatchObject({
+      kind: 'root-rejection',
+      rejection: { field: 'root', problem: 'a structured result is required' },
+    });
+  });
+
+  it('settles a built-in adapter structured-result marker as invalid-structured-result', async () => {
+    const { result } = await dispatchBuiltIn(async () => ({
+      success: false, output: 'terminal result record is missing its structured result', exitCode: 0,
+      structuredResultFailure: 'missing',
+    }));
+
+    expect(result).toMatchObject({
+      kind: 'dispatch-failure',
+      detail: 'root: a structured result is required',
+      cause: 'invalid-structured-result',
+    });
+  });
+
   it('uses only final structured custom-v1 results for engine stamps, refusals, and field-named rejection', async () => {
     const source = {
       path: 'src/widget.ts', startLine: 8, endLine: 12,
@@ -868,11 +894,13 @@ describe('build_review structured rubric dispatch', () => {
       nativeSchemaCapability: { nativeOutputSchema: true },
       invoke,
     };
+    const buildProjection = vi.fn((scope) => scope);
     const entry: ResolvedBuildReviewCustomCatalogEntry = {
       id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
       policy: branch.policy,
       contract: Object.freeze({
         ...BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+        projection: Object.freeze({ ...BUILD_REVIEW_CUSTOM_V1_CONTRACT.projection, build: buildProjection }),
         output: Object.freeze({
           ...BUILD_REVIEW_CUSTOM_V1_CONTRACT.output,
           jsonSchema: Object.freeze({
@@ -914,7 +942,61 @@ describe('build_review structured rubric dispatch', () => {
       expect(options?.prompt.indexOf('# policy bundle')).toBeLessThan(options?.prompt.indexOf('/custom-policy') ?? -1);
       expect(options?.prompt).toContain('`sentinel`');
       expect(options?.prompt).toContain('`selected-custom-contract`');
+      expect(buildProjection).toHaveBeenCalledWith({
+        contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', changes: [],
+      });
       expect(outcome).toMatchObject({ success: true, id: 'custom-policy' });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('settles a custom adapter structured-result marker as invalid-structured-result', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-structured-failure-'));
+    const runtimeProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke: vi.fn(async () => ({
+        success: false, output: 'terminal result record is missing its structured result', exitCode: 0,
+        structuredResultFailure: 'missing' as const,
+      })),
+    };
+    const entry: ResolvedBuildReviewCustomCatalogEntry = {
+      id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
+      policy: branch.policy, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+    };
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'custom-structured-failure', projectDir, {
+      gitRunner: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider: runtimeProvider, lifecycleCapability: runtimeProvider.lifecycleCapability,
+        nativeSchemaCapability: runtimeProvider.nativeSchemaCapability,
+        policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'],
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'custom-policy', source: 'project', installationOrigin: '/fixture/policy',
+        canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+    });
+    try {
+      const outcome = await (runner as unknown as {
+        dispatchInstalledBuildReviewPolicy: (entry: ResolvedBuildReviewCustomCatalogEntry, inputs: unknown, lapId: string) => Promise<unknown>;
+      }).dispatchInstalledBuildReviewPolicy(entry, {
+        sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot', sourceChanges: [] },
+      }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8');
+
+      expect(outcome).toMatchObject({
+        success: true,
+        member: { result: { kind: 'infrastructure-failure', reason: 'invalid-structured-result' } },
+      });
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }

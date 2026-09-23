@@ -234,11 +234,13 @@ describe('ClaudeProvider', () => {
             message: { content: [{ type: 'tool_use', name: 'inspect', input: { structured_output: { forged: true } } }] },
           }),
           expected: 'missing terminal result record',
+          structuredResultFailure: undefined,
         },
         {
           name: 'is absent from the terminal result envelope',
           stdout: JSON.stringify({ type: 'result', result: 'Reconciliation complete.' }),
           expected: 'missing its structured result',
+          structuredResultFailure: 'missing',
         },
         {
           name: 'is malformed JSON in the terminal result envelope',
@@ -248,13 +250,15 @@ describe('ClaudeProvider', () => {
             structured_output: '{not valid JSON',
           }),
           expected: 'malformed structured result',
+          structuredResultFailure: 'malformed',
         },
-      ])('fails closed when the structured result $name', async ({ stdout, expected }) => {
+      ])('fails closed when the structured result $name', async ({ stdout, expected, structuredResultFailure }) => {
         mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 0, failed: false } as any);
 
         const result = await provider.invoke({ ...baseOptions, nativeSchema: schema });
 
         expect(result).toMatchObject({ success: false, exitCode: 0 });
+        expect(result.structuredResultFailure).toBe(structuredResultFailure);
         expect(result.output).toContain(expected);
         expect(result.finalStructuredResult).toBeUndefined();
       });

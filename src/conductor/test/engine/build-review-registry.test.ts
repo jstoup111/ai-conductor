@@ -20,19 +20,21 @@ describe('engine/build-review-registry', () => {
     expect(BUILD_REVIEW_RUBRIC_REGISTRY).toMatchObject({
       testQuality: {
         skillName: 'build-review-test-quality',
-        contractVersion: 'v3',
-        projectionVersion: 'v3',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
+        contract: { projection: { version: 'v3' }, output: { version: 'v3' } },
       },
       security: {
         skillName: 'build-review-security',
-        contractVersion: 'v3',
-        projectionVersion: 'v3',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
+        contract: { projection: { version: 'v3' }, output: { version: 'v3' } },
       },
     });
+    for (const descriptor of Object.values(BUILD_REVIEW_RUBRIC_REGISTRY)) {
+      expect(descriptor).not.toHaveProperty('contractVersion');
+      expect(descriptor).not.toHaveProperty('projectionVersion');
+    }
     expect(Object.isFrozen(BUILD_REVIEW_RUBRIC_REGISTRY)).toBe(true);
     expect(Object.values(BUILD_REVIEW_RUBRIC_REGISTRY).every(Object.isFrozen)).toBe(true);
   });

@@ -454,8 +454,8 @@ function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectio
   const snapshot = source.inputs.sourceSnapshot;
   return {
     rubric,
-    contractVersion: descriptor.contractVersion,
-    projectionVersion: descriptor.projectionVersion,
+    contractVersion: descriptor.contract.output.version as 'v3',
+    projectionVersion: descriptor.contract.projection.version as 'v3',
     lapId: source.lapId,
     snapshotDigest: snapshot.digest,
     contentDigest: snapshot.contentDigest,

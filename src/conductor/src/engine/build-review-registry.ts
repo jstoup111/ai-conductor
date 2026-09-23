@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 
 import {
   BUILD_REVIEW_JUDGED_V3_SCHEMAS,
-  CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
   parseBuildReviewJudgedResult,
 } from './build-review-domain.js';
 import {
@@ -22,8 +21,6 @@ export type BuildReviewRubricPrerequisite = 'none';
 
 export interface BuildReviewRubricDescriptor {
   readonly skillName: string;
-  readonly contractVersion: typeof CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION;
-  readonly projectionVersion: 'v3';
   readonly cachePolicy: BuildReviewRubricCachePolicy;
   readonly prerequisite: BuildReviewRubricPrerequisite;
   readonly contract: RubricContractDescriptor<
@@ -69,8 +66,6 @@ const BUILD_REVIEW_RUBRIC_CATALOG: readonly BuildReviewRubricRegistryCatalogMemb
     id: 'testQuality',
     descriptor: Object.freeze({
     skillName: 'build-review-test-quality',
-    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
-    projectionVersion: 'v3',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
     contract: Object.freeze({
@@ -91,8 +86,6 @@ const BUILD_REVIEW_RUBRIC_CATALOG: readonly BuildReviewRubricRegistryCatalogMemb
     id: 'security',
     descriptor: Object.freeze({
     skillName: 'build-review-security',
-    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
-    projectionVersion: 'v3',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
     contract: Object.freeze({

@@ -614,6 +614,7 @@ export class CodexProvider implements LLMProvider {
         output: `Codex provider parse failure: terminal result record is missing its structured result. Transcript: ${output}`,
         exitCode,
         authentication,
+        structuredResultFailure: 'malformed',
       };
     }
     return {
