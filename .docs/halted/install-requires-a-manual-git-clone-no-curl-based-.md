@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-23T01:40:25.565Z
 Slug: install-requires-a-manual-git-clone-no-curl-based-
 Class: plan-gap
 Halting step: prd_audit
