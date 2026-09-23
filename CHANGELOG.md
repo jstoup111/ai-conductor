@@ -46,6 +46,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A feature halted on a failing prd_audit or as-built review no longer re-halts as a false "rebase conflict" after a file-changing rebase. ([implementation PR #2686](https://github.com/jstoup111/ai-conductor/pull/2686)).
 - Fix daemon rebases so completed repair tasks keep their translated boundaries. ([implementation PR #2652](https://github.com/jstoup111/ai-conductor/pull/2652)).
 - The daemon reclaims merged worktrees left behind by a dead run's stale phase marker, reports diverged branches accurately, and logs retained worktrees once instead of as a failure on every sweep. ([implementation PR #2688](https://github.com/jstoup111/ai-conductor/pull/2688)).
+- The daemon no longer opens false shipped-record repair PRs right after a merge, never switches branches in the root checkout, and refuses any repair that would drop data from an existing shipped record. ([implementation PR #2687](https://github.com/jstoup111/ai-conductor/pull/2687)).
 
 ## [1.4.0] - 2026-09-19
 
