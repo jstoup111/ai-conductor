@@ -16,6 +16,8 @@ import { startFeatureEventPersistence } from '../../src/engine/event-persister.j
 import {
   PASSING_SUITE,
   buildPrFixture,
+  permittedRemoteGitFor,
+  recordingOperations,
   settleAndContinue,
   skipReplay,
   type PrFixture,
@@ -79,6 +81,9 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
         { enabled: true, suiteCommand: 'unused', cooldownMinutes: 0, attemptCap: 1 },
         {
           runGh: gh,
+          operations: recordingOperations(gh),
+          // No origin is configured, so the bound transport fails the publish.
+          remoteGit: permittedRemoteGitFor(join(repo, 'remote.git')),
           runSuite: async () => {
             suiteRuns += 1;
             return { exitCode: 0, durationMs: 0, configured: true };
@@ -152,6 +157,8 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
         { enabled: true, suiteCommand: 'unused', cooldownMinutes: 0, attemptCap: 1 },
         {
           runGh: gh,
+          operations: recordingOperations(gh),
+          remoteGit: permittedRemoteGitFor(remote),
           runSuite: async () => ({ exitCode: 0, durationMs: 0, configured: true }),
           resolver: async ({ projectRoot }) => {
             await writeFile(join(projectRoot, path), `resolved ${mode} path\n`);
@@ -233,6 +240,8 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
         { enabled: true, suiteCommand: 'npm test', cooldownMinutes: 0, attemptCap: 3 },
         {
           runGh: gh,
+          operations: recordingOperations(gh),
+          remoteGit: permittedRemoteGitFor(remote),
           runSuite: async () => ({ exitCode: 0, durationMs: 0, configured: true }),
           resolver: async ({ projectRoot, supersessionJudgement }) => {
             calls += 1;
@@ -293,7 +302,7 @@ describe('engine/autoresolve — resolveConflictingPr sweep judgement flow (real
       { prUrl: fx.prUrl, slug: 'feature', repoCwd: fx.repo },
       'feature',
       config,
-      { runGh: fx.gh, runSuite: PASSING_SUITE, resolver, log: fx.log, events: fx.events, ...extra },
+      { ...fx.deps, runSuite: PASSING_SUITE, resolver, log: fx.log, events: fx.events, ...extra },
     );
 
   it('S1.1: publishes a declared test-only supersession with one lease push and a non-halt tier-2 outcome', async () => {

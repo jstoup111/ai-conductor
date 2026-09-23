@@ -86,11 +86,18 @@ describe('resolveConflictingPr — judged publication audit (real git, stubbed g
       'feature',
       { enabled: true, suiteCommand, cooldownMinutes: 0, attemptCap: 2 },
       {
-        runGh: async (args, opts) => {
-          if (args[1] === 'comment' && (args[args.indexOf('--body') + 1] ?? '').includes(SUPERSESSION_AUDIT_MARKER)) {
-            order.push('audit');
-          }
-          return fx.gh(args, opts);
+        ...fx.deps,
+        // The audit is posted through the typed operations runner.
+        operations: {
+          run: async (request) => {
+            if (
+              request.operation === 'pull-request.comment.create'
+              && String((request.payload as { body?: unknown } | undefined)?.body ?? '').includes(SUPERSESSION_AUDIT_MARKER)
+            ) {
+              order.push('audit');
+            }
+            return fx.operations.run(request);
+          },
         },
         runSuite: async () => {
           order.push('suite');

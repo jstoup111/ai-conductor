@@ -83,7 +83,7 @@ describe('resolveConflictingPr — mixed conflict intent stop (S2.2)', () => {
         'feature',
         { enabled: true, suiteCommand: 'npm test', cooldownMinutes: 0, attemptCap: 2 },
         {
-          runGh: fx.gh,
+          ...fx.deps,
           runSuite: PASSING_SUITE,
           resolver: async (ctx) => {
             seen.push(ctx);

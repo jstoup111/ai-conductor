@@ -7,6 +7,13 @@
  * with a private bare remote. GitHub is the only third-party boundary and is
  * replaced by a recording `GhRunner`; the push boundary is observed through the
  * bare remote's reflog, which records every ref update a push makes.
+ *
+ * `resolveConflictingPr` refuses PR mutations lacking provenance unless a typed
+ * `operations` runner is injected, and publishes through an injectable
+ * `remoteGit`. The fixture supplies both: `recordingOperations` replays each
+ * typed mutation into the recording `GhRunner` as argv, and
+ * `permittedRemoteGitFor` executes only when `origin` is the fixture's private
+ * bare remote, so no test can reach real `gh` or a real remote.
  */
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -15,9 +22,63 @@ import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
+import type { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 
 const execFile = promisify(execFileCb);
+
+/**
+ * A permitted remote-git transport bound to one private bare remote. Ownership
+ * is covered at the guarded-operation boundary; here the push executes only
+ * when the resolving checkout's `origin` is exactly `remote`, otherwise it
+ * fails without running.
+ */
+export function permittedRemoteGitFor(remote: string): typeof executeRemoteGit {
+  return async (args, dependencies) => {
+    try {
+      const origin = (await dependencies.config(['remote', 'get-url', 'origin'])).stdout.trim();
+      if (origin !== remote) throw new Error(`refusing push: origin ${origin || '<none>'} is not the fixture remote`);
+      await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd });
+      return { kind: 'executed', targets: [] };
+    } catch (error) {
+      return { kind: 'failed', error: error instanceof Error ? error.message : String(error), targets: [] };
+    }
+  };
+}
+
+/**
+ * A typed GitHub operation runner that replays every mutation into `gh` as the
+ * equivalent argv, so recording fakes (and their failure injection) observe
+ * guarded comments and labels exactly as they observed raw `gh` calls.
+ */
+export function recordingOperations(gh: GhRunner): GithubOperationRunner {
+  return {
+    run: async (request) => {
+      const target = request.target;
+      const number = 'number' in target ? String(target.number) : '';
+      const payload = (request.payload ?? {}) as Record<string, unknown>;
+      const opts = { cwd: '/fixture' };
+      switch (request.operation) {
+        case 'pull-request.comment.create':
+          await gh(['pr', 'comment', number, '--repo', target.repository, '--body', String(payload.body)], opts);
+          return {};
+        case 'pull-request.comment.update':
+          await gh(['api', '--method', 'PATCH', `repos/${target.repository}/issues/comments/${String(payload.commentId)}`, '-f', `body=${String(payload.body)}`], opts);
+          return {};
+        case 'pull-request.label.add':
+          await gh(['api', '--method', 'POST', `repos/${target.repository}/issues/${number}/labels`, '-f', `labels[]=${String(payload.label)}`], opts);
+          return {};
+        case 'pull-request.label.remove':
+          await gh(['api', '--method', 'DELETE', `repos/${target.repository}/issues/${number}/labels/${String(payload.label)}`], opts);
+          return {};
+        default:
+          await gh(['operation', request.operation, JSON.stringify(target), JSON.stringify(payload)], opts);
+          return {};
+      }
+    },
+  };
+}
 
 export interface FeatureCommit {
   subject: string;
@@ -31,6 +92,12 @@ export interface PrFixture {
   /** Feature commit shas in replay order. */
   shas: string[];
   gh: GhRunner;
+  /** Typed mutation runner recording into `ghCalls` through `gh`. */
+  operations: GithubOperationRunner;
+  /** Push transport bound to the fixture's private bare remote. */
+  remoteGit: typeof executeRemoteGit;
+  /** The fixture's transport deps for `resolveConflictingPr`. */
+  deps: { runGh: GhRunner; operations: GithubOperationRunner; remoteGit: typeof executeRemoteGit };
   ghCalls: string[][];
   emitted: ConductorEvent[];
   /** Minimal emitter stub accepted by the resolution deps. */
@@ -102,6 +169,8 @@ export async function buildPrFixture(opts: {
   };
   const emitted: ConductorEvent[] = [];
   const logs: string[] = [];
+  const operations = recordingOperations(gh);
+  const remoteGit = permittedRemoteGitFor(remote);
 
   return {
     repo,
@@ -109,6 +178,9 @@ export async function buildPrFixture(opts: {
     prUrl: 'https://github.com/example/repo/pull/77',
     shas,
     gh,
+    operations,
+    remoteGit,
+    deps: { runGh: gh, operations, remoteGit },
     ghCalls,
     emitted,
     events: { emit: async (event: ConductorEvent) => { emitted.push(event); } } as never,

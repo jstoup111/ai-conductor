@@ -29,7 +29,7 @@ describe('resolveConflictingPr — rejected verdicts publish nothing (real git, 
       'feature',
       { enabled: true, suiteCommand: 'npm test', cooldownMinutes: 0, attemptCap: 2 },
       {
-        runGh: fx.gh,
+        ...fx.deps,
         runSuite: PASSING_SUITE,
         resolver: ({ projectRoot }) => resolver(projectRoot),
         log: fx.log,
