@@ -5,6 +5,11 @@ import { describe, expect, it } from 'vitest';
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
   diagnoseBuildReviewCustomReviewerPayloadRejection,
+  MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH,
+  MAX_CUSTOM_EVIDENCE_LOCATIONS,
+  MAX_CUSTOM_FINDINGS,
+  MAX_CUSTOM_SOURCE_REGIONS,
+  MAX_CUSTOM_SUMMARY_LENGTH,
   normalizeBuildReviewFindingVocabularyMember,
   parseBuildReviewCustomReviewerPayload,
   type BuildReviewFindingReferenceContext,
@@ -300,6 +305,33 @@ describe('build-review finding identity', () => {
     expect(diagnoseBuildReviewCustomReviewerPayloadRejection(fractionalConfidence, customReferenceContext)).toMatchObject({
       kind: 'explained', problems: [{ field: 'findings[0].confidence', required: 'must be an integer from 0 to 100' }],
     });
+  });
+
+  it('names the offending field for each parser-only custom-v1 bound instead of a generic root rejection', () => {
+    const region = customReferenceContext.sourceRegions[0]!;
+    const base = {
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      evidenceLocations: ['src/widget.ts:8'], sourceRegions: customReferenceContext.sourceRegions,
+    };
+    const cases: Array<[string, unknown]> = [
+      ['findings', customPayload({ findings: Array.from({ length: MAX_CUSTOM_FINDINGS + 1 }, () => base) })],
+      ['findings[0].summary', customPayload({ findings: [{ ...base, summary: 'x'.repeat(MAX_CUSTOM_SUMMARY_LENGTH + 1) }] })],
+      ['findings[0].summary', customPayload({ findings: [{ ...base, summary: '' }] })],
+      ['findings[0].evidenceLocations', customPayload({ findings: [{ ...base, evidenceLocations: [] }] })],
+      ['findings[0].evidenceLocations', customPayload({ findings: [{ ...base, evidenceLocations: Array.from({ length: MAX_CUSTOM_EVIDENCE_LOCATIONS + 1 }, () => 'src/widget.ts:8') }] })],
+      ['findings[0].evidenceLocations[1]', customPayload({ findings: [{ ...base, evidenceLocations: ['src/widget.ts:8', 'y'.repeat(MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH + 1)] }] })],
+      ['findings[0].sourceRegions', customPayload({ findings: [{ ...base, sourceRegions: [] }] })],
+      ['findings[0].sourceRegions', customPayload({ findings: [{ ...base, sourceRegions: Array.from({ length: MAX_CUSTOM_SOURCE_REGIONS + 1 }, () => region) }] })],
+      ['findings[0].concernId', customPayload({ findings: [{ ...base, concernId: 'Not A Concern Id!' }] })],
+    ];
+
+    for (const [field, payload] of cases) {
+      expect(parseBuildReviewCustomReviewerPayload(payload)).toBeUndefined();
+      const rejection = diagnoseBuildReviewCustomReviewerPayloadRejection(payload, customReferenceContext);
+      expect(rejection.kind, field).toBe('explained');
+      expect(rejection.problems.map((problem) => problem.field), field).toContain(field);
+      expect(rejection.problems.map((problem) => problem.field), field).not.toContain('$');
+    }
   });
 
   it('accepts the versioned digest emitted by the captured policy package', () => {

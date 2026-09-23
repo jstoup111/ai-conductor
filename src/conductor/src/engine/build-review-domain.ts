@@ -715,23 +715,43 @@ export function diagnoseBuildReviewCustomReviewerPayloadRejection(
   } else {
     if (source.kind !== 'custom-findings') problems.push(rejectionProblem('kind', 'must be "custom-findings" or "unsupported-policy"'));
     if (source.version !== 'v1') problems.push(rejectionProblem('version', 'must be "v1" for custom-findings'));
-    if (!Array.isArray(source.findings)) {
-      problems.push(rejectionProblem('findings', 'must be an array'));
+    if (!Array.isArray(source.findings) || source.findings.length > MAX_CUSTOM_FINDINGS) {
+      problems.push(rejectionProblem('findings', `must be an array of at most ${MAX_CUSTOM_FINDINGS} findings`));
     } else {
       source.findings.forEach((entry, findingIndex) => {
         const findingSource = object(entry);
+        const prefix = `findings[${findingIndex}]`;
         if (!findingSource) {
-          problems.push(rejectionProblem(`findings[${findingIndex}]`, 'must be an object'));
+          problems.push(rejectionProblem(prefix, 'must be an object'));
           return;
+        }
+        // Parser-only bounds (kept out of the native schema because provider
+        // structured outputs reject maxItems/maxLength/minimum) are named here
+        // per field, so a violation never collapses to a generic `$` rejection.
+        if (typeof findingSource.concernId !== 'string' || !CUSTOM_CONCERN_ID.test(findingSource.concernId)) {
+          problems.push(rejectionProblem(`${prefix}.concernId`, `must match ${CUSTOM_CONCERN_ID.source}`));
+        }
+        if (!text(findingSource.summary) || findingSource.summary.length > MAX_CUSTOM_SUMMARY_LENGTH) {
+          problems.push(rejectionProblem(`${prefix}.summary`, `must be a non-empty string no longer than ${MAX_CUSTOM_SUMMARY_LENGTH} characters`));
+        }
+        const evidenceLocations = findingSource.evidenceLocations;
+        if (!Array.isArray(evidenceLocations) || evidenceLocations.length === 0 || evidenceLocations.length > MAX_CUSTOM_EVIDENCE_LOCATIONS) {
+          problems.push(rejectionProblem(`${prefix}.evidenceLocations`, `must be a non-empty array of at most ${MAX_CUSTOM_EVIDENCE_LOCATIONS} locations`));
+        } else {
+          evidenceLocations.forEach((location, locationIndex) => {
+            if (!text(location) || location.length > MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH) {
+              problems.push(rejectionProblem(`${prefix}.evidenceLocations[${locationIndex}]`, `must be a non-empty string no longer than ${MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH} characters`));
+            }
+          });
         }
         const confidence = findingSource.confidence;
         if (confidence !== undefined && (
           typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100
         )) {
-          problems.push(rejectionProblem(`findings[${findingIndex}].confidence`, 'must be an integer from 0 to 100'));
+          problems.push(rejectionProblem(`${prefix}.confidence`, 'must be an integer from 0 to 100'));
         }
-        if (!Array.isArray(findingSource.sourceRegions)) {
-          problems.push(rejectionProblem(`findings[${findingIndex}].sourceRegions`, 'must be a non-empty array of source regions'));
+        if (!Array.isArray(findingSource.sourceRegions) || findingSource.sourceRegions.length === 0 || findingSource.sourceRegions.length > MAX_CUSTOM_SOURCE_REGIONS) {
+          problems.push(rejectionProblem(`${prefix}.sourceRegions`, `must be a non-empty array of at most ${MAX_CUSTOM_SOURCE_REGIONS} source regions`));
           return;
         }
         findingSource.sourceRegions.forEach((regionValue, regionIndex) => {
