@@ -11,6 +11,9 @@ export interface SinkDeclaration {
 
 export const EVENT_SINKS = {
   daemon_backlog_snapshot: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
+  daemon_memory_sample: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
+  daemon_heap_dump_written: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
+  daemon_exited: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
   feature_dispatch_started: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   feature_dispatch_ended: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   feature_shipped: { render: false, persist: true, audit: false, otel: true, otelTrace: false },

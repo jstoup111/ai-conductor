@@ -136,6 +136,9 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
 // non-halt event must update this contract explicitly.
 const PINNED_PERSISTED_EVENT_TYPES = [
   'daemon_backlog_snapshot',
+  'daemon_memory_sample',
+  'daemon_heap_dump_written',
+  'daemon_exited',
   'feature_dispatch_started',
   'feature_dispatch_ended',
   'feature_shipped',
@@ -516,6 +519,61 @@ describe('event sink subscriptions', () => {
     });
     expect(otelEventTypes()).not.toContain('unattributed_progress');
     expect(otelTracedEventTypes()).not.toContain('unattributed_progress');
+  });
+
+  it('registers daemon memory, heap-dump, and exit occurrences on the persistent event spine', () => {
+    const events = [
+      {
+        type: 'daemon_memory_sample',
+        rss: 100,
+        heapUsed: 80,
+        heapTotal: 90,
+        external: 10,
+        slug: 'feature',
+        step: 'build',
+        boundary: 'started',
+        pid: 123,
+        dispatchSeq: 1,
+      },
+      {
+        type: 'daemon_heap_dump_written',
+        path: '.daemon/heap/dump.heapsnapshot',
+        bytes: 200,
+        rss: 100,
+        pid: 123,
+      },
+      {
+        type: 'daemon_exited',
+        pid: 123,
+        code: null,
+        signal: 'SIGKILL',
+        at: '2026-09-22T00:00:00.000Z',
+      },
+    ] satisfies ConductorEvent[];
+    const daemonEventTypes = [
+      'daemon_memory_sample',
+      'daemon_heap_dump_written',
+      'daemon_exited',
+    ] satisfies Array<ConductorEvent['type']>;
+    const expected = { render: false, persist: true, audit: false, otel: false, otelTrace: false };
+
+    expect({
+      events,
+      sinks: {
+        daemon_memory_sample: EVENT_SINKS.daemon_memory_sample,
+        daemon_heap_dump_written: EVENT_SINKS.daemon_heap_dump_written,
+        daemon_exited: EVENT_SINKS.daemon_exited,
+      },
+      persisted: daemonEventTypes.map((type) => persistedEventTypes().includes(type)),
+    }).toEqual({
+      events,
+      sinks: {
+        daemon_memory_sample: expected,
+        daemon_heap_dump_written: expected,
+        daemon_exited: expected,
+      },
+      persisted: [true, true, true],
+    });
   });
 
   it('declares feature cost snapshots as OpenTelemetry-only ledger projections', () => {
