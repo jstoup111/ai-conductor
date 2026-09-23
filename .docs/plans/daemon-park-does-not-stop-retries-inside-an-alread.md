@@ -18,7 +18,7 @@ This plan makes an operator park decline every new provider attempt of a running
 - **Group members.** `group-core.ts` gains a `parked` `BranchOutcome`. The member attempt loop checks the threaded park predicate before each retry, next to its existing abort check. A parked member never reads as `no-verdict`, so it does not fail the group, and a join with a parked member maps to the typed stop (D13). A genuine failure in the same join keeps its failure outcome (D8).
 - **Reporting on the existing spine.** The `operator_park_boundary` event gains an attempt boundary (Task 1); there is no new event type. `daemon park` composes a new `classifyRunningWork` export in daemon-dashboard.ts, which reuses the provider_attempt lifecycle parser, with pidfile liveness from daemon-lock.ts. It reports running, stopped, or unknown and never inspects processes (D14).
 - **Sequencing.** Task 1 (event shape) comes first. Task 2 (core gate) unblocks the serial proofs, Tasks 3–7 and 13. Tasks 8 and 11 are independent roots. Task 9 needs Tasks 1 and 8, and Task 12 needs Task 11.
-- **Out of scope.** Provider calls inside one attempt (review sub-reviewers and spot-audit verification) finish with that attempt (amended FR-6). Operator documentation for FR-13 is owned by the gating `maintain-documentation` step, and the coherence waiver records it.
+- **Out of scope.** Provider calls inside one attempt (review sub-reviewers and spot-audit verification) finish with that attempt (amended FR-6). Operator documentation is owned by the gating `maintain-documentation` step, and the coherence waiver records it.
 
 ## Prerequisites
 

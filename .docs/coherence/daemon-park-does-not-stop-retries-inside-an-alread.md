@@ -7,7 +7,7 @@
 
 ## Consistency pass
 
-Each staged outcome maps to the stories that deliver it. Outcome 1 (no new attempts) maps to Stories 1, 2, and 7. Outcome 2 (park output tells whether work stopped) maps to Stories 9–11. Outcome 3 (no daemon stop needed) maps to Story 8. Outcome 5 (a running provider that park cannot interrupt is reported) maps to Stories 9 and 11. Outcome 4 (runbook documentation) and FR-13 are documentation. The stories and plan skills forbid documentation stories and tasks, so both are `gap` rows waived to the gating `maintain-documentation` step (see `.docs/coherence-waivers/daemon-park-does-not-stop-retries-inside-an-alread.md`), by operator decision on 2026-09-22.
+Each staged outcome maps to the stories that deliver it. Outcome 1 (no new attempts) maps to Stories 1, 2, and 7. Outcome 2 (park output tells whether work stopped) maps to Stories 9–11. Outcome 3 (no daemon stop needed) maps to Story 8. Outcome 5 (a running provider that park cannot interrupt is reported) maps to Stories 9 and 11. Outcome 4 (runbook documentation) is documentation. The stories and plan skills forbid documentation stories and tasks, so it is a `gap` row waived to the gating `maintain-documentation` step (see `.docs/coherence-waivers/daemon-park-does-not-stop-retries-inside-an-alread.md`), by operator decision on 2026-09-22.
 
 The amended ADR `adr-2026-07-29-operator-park-scheduling-unit-boundary` is adjudicated by the `adr` row below. Its per-decision obligations D1–D14 are tabled in the plan's Architecture Obligation Coverage section.
 
@@ -30,7 +30,6 @@ The amended ADR `adr-2026-07-29-operator-park-scheduling-unit-boundary` is adjud
 | fr | fr-10 | story-11 | covered | Story 11 cites FR-10. |
 | fr | fr-11 | story-10 | covered | Story 10 cites FR-11. |
 | fr | fr-12 | story-12 | covered | Story 12 cites FR-12. |
-| fr | fr-13 | | gap | fr-13: operator documentation is owned by the maintain-documentation step (waived). |
 | fr | fr-14 | story-13 | covered | Story 13 cites FR-14. |
 | story | story-1 | task-2 | covered | A parked serial step launches no further attempt — every criterion is quoted from a cited task below. |
 | story | story-2 | task-3 | covered | Every retry path honors park — every criterion is quoted from a cited task below. |
@@ -107,6 +106,6 @@ The amended ADR `adr-2026-07-29-operator-park-scheduling-unit-boundary` is adjud
 ## Verify-Claims Ledger
 
 - [verified] There are five staged outcomes; their text is copied from `.pipeline/intake-outcomes.md` into the outcome rows.
-- [verified] FR-1 through FR-14 exist in the approved PRD; every FR except FR-13 is cited by a story's Requirement line.
+- [verified] FR-1 through FR-12 and FR-14 exist in the approved PRD; every FR is cited by a story's Requirement line.
 - [verified] Stories 1–13 are each cited by at least one plan task's Story line, and every criterion row quotes a Done-when bullet of a cited task.
 - [verified] The amended ADR parses to citable decisions 1–14, and each has one obligation row in the plan.
