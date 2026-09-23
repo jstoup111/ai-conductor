@@ -70,6 +70,38 @@ describe('self-host release metadata snapshots', () => {
     ]);
   });
 
+  // The daemon's post-finish restore used to require a composed GitHub guard
+  // before it had even read the PR body, so an intact block still failed the
+  // finish step whenever the guard could not be composed.
+  it('leaves an intact release block alone without requiring a composed guard', async () => {
+    const projectRoot = await root();
+    const body = `## Summary\n\n${releaseBlock}\n`;
+    const calls: string[][] = [];
+    const gh: GhRunner = async (args) => {
+      calls.push(args);
+      return { stdout: JSON.stringify({ body }) };
+    };
+    const snapshot = await snapshotReleaseMetadata({ gh, projectRoot, prUrl });
+
+    await expect(restoreReleaseMetadata({ gh, projectRoot, prUrl, snapshot, operations: undefined }))
+      .resolves.toBeUndefined();
+    expect(calls).toEqual([
+      ['pr', 'view', prUrl, '--json', 'body'],
+      ['pr', 'view', prUrl, '--json', 'body'],
+    ]);
+  });
+
+  it('names the missing guard only when a rewritten body actually needs restoring', async () => {
+    const projectRoot = await root();
+    let body = `## Summary\n\n${releaseBlock}\n`;
+    const gh: GhRunner = async () => ({ stdout: JSON.stringify({ body }) });
+    const snapshot = await snapshotReleaseMetadata({ gh, projectRoot, prUrl });
+    body = '## Summary\n\nRewritten by finish.\n';
+
+    await expect(restoreReleaseMetadata({ gh, projectRoot, prUrl, snapshot, operations: undefined }))
+      .rejects.toThrow('post-finish restore unavailable: guarded release metadata restore is unavailable at this composition boundary');
+  });
+
   it('rejects a refused guarded edit without a raw GitHub fallback', async () => {
     const projectRoot = await root();
     let body = `## Summary\n\n${releaseBlock}\n`;
