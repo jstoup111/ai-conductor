@@ -5,6 +5,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
@@ -59,6 +63,57 @@ describe('custom step dispatch', () => {
     const { provider } = await dispatch(projectRoot, config, 'docs-gate', 'codex');
 
     expect(vi.mocked(provider.invoke).mock.calls[0]?.[0]?.prompt).toBe('$maintain-documentation');
+  });
+
+  it('re-renders the configured custom skill for each provider during fallback', async () => {
+    const { projectRoot, config } = await fixture();
+    config.llm_provider = ['claude', 'codex'];
+    config.steps!['docs-gate']!.llm_provider = 'claude';
+    const claude: LLMProvider = {
+      invoke: vi.fn().mockResolvedValue({
+        success: false,
+        output: 'Claude unavailable',
+        exitCode: 1,
+        providerUnavailable: true,
+        providerUnavailableScope: 'run',
+        providerUnavailableReason: 'Claude unavailable',
+      }),
+    };
+    const codex: LLMProvider = {
+      invoke: vi.fn().mockResolvedValue({ success: true, output: 'done', exitCode: 0 }),
+    };
+    const runner = new DefaultStepRunner(claude, 'custom-step-fallback', projectRoot, {
+      config,
+      providerExecution: {
+        configuredProviders: ['claude', 'codex'],
+        runtimes: new ProviderRuntimeSet([
+          {
+            key: 'claude', provider: claude, policy: CLAUDE_MODEL_POLICY, builtIn: true,
+            lifecycleCapability: { synchronousSpawnPermit: true },
+            availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+          },
+          {
+            key: 'codex', provider: codex, policy: CODEX_MODEL_POLICY, builtIn: true,
+            lifecycleCapability: { synchronousSpawnPermit: true },
+            availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+          },
+        ]),
+        sessions: new ProviderSessionStore(),
+      },
+    });
+    await runner.resetSession('docs-gate' as StepName);
+
+    const result = await runner.run('docs-gate' as StepName, {} as ConductState);
+    const prompts = [
+      vi.mocked(claude.invoke).mock.calls[0]?.[0]?.prompt,
+      vi.mocked(codex.invoke).mock.calls[0]?.[0]?.prompt,
+    ];
+
+    expect({ success: result.success, prompts }).toEqual({
+      success: true,
+      prompts: ['/maintain-documentation', '$maintain-documentation'],
+    });
+    expect(prompts).not.toContain('docs-gate');
   });
 
   it.each([
