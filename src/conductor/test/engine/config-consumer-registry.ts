@@ -69,6 +69,8 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   validation_concurrency: consumer(CONDUCTOR),
   daemon_concurrency: consumer(DAEMON_CLI),
   daemon_heap_limit_mb: consumer('src/conductor/src/engine/daemon-tmux.ts'),
+  daemon_heap_dump_threshold_mb: consumer('src/conductor/src/engine/daemon-memory.ts'),
+  daemon_heap_dump_retention: consumer('src/conductor/src/engine/daemon-memory.ts'),
   harness_self_host: consumer(RESOLVED_CONFIG),
   model_fallback_ladder: consumer('src/conductor/src/engine/provider-execution.ts'),
   auto_restart_on_stale_engine: consumer('src/conductor/src/engine/stale-engine-init.ts'),

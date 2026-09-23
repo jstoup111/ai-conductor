@@ -3,9 +3,21 @@ import { appendFileSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSyn
 import { writeHeapSnapshot } from 'node:v8';
 import { join } from 'node:path';
 import type { ConductorEvent } from '../types/index.js';
+import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
 
 export const DEFAULT_HEAP_DUMP_THRESHOLD_MB = 3072;
+export const DEFAULT_HEAP_DUMP_RETENTION = 3;
+
+/** The operator-configured heap-dump threshold and retention; absent keys keep the defaults. */
+export function heapDumpOptionsFromConfig(
+  config: Partial<Pick<HarnessConfig, 'daemon_heap_dump_threshold_mb' | 'daemon_heap_dump_retention'>> | null | undefined,
+): Pick<DaemonMemorySamplerOptions, 'heapDumpThresholdMb' | 'heapDumpRetention'> {
+  return {
+    ...(config?.daemon_heap_dump_threshold_mb !== undefined ? { heapDumpThresholdMb: config.daemon_heap_dump_threshold_mb } : {}),
+    ...(config?.daemon_heap_dump_retention !== undefined ? { heapDumpRetention: config.daemon_heap_dump_retention } : {}),
+  };
+}
 
 export interface DaemonMemorySamplerOptions {
   memoryUsage?: () => NodeJS.MemoryUsage;
@@ -32,7 +44,7 @@ export function startDaemonMemorySampler(
   const heapDumpDir = options.heapDumpDir ?? join(process.cwd(), '.daemon', 'heap');
   const snapshot = options.writeHeapSnapshot ?? writeHeapSnapshot;
   const now = options.now ?? (() => new Date());
-  const heapDumpRetention = options.heapDumpRetention ?? 3;
+  const heapDumpRetention = options.heapDumpRetention ?? DEFAULT_HEAP_DUMP_RETENTION;
   let dumped = false;
   let nextDispatchSeq = 0;
   const activeDispatches = new Map<string, number>();

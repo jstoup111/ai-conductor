@@ -4,7 +4,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDaemonEventPersistence, startFeatureEventPersistence } from '../../src/engine/event-persister.js';
-import { DEFAULT_HEAP_DUMP_THRESHOLD_MB, startDaemonMemorySampler } from '../../src/engine/daemon-memory.js';
+import {
+  DEFAULT_HEAP_DUMP_RETENTION,
+  DEFAULT_HEAP_DUMP_THRESHOLD_MB,
+  heapDumpOptionsFromConfig,
+  startDaemonMemorySampler,
+} from '../../src/engine/daemon-memory.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 describe('startDaemonMemorySampler', () => {
@@ -50,9 +55,45 @@ describe('startDaemonMemorySampler', () => {
     } finally { sampler.stop(); feature.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
-  it('exports the documented default heap dump threshold', async () => {
+  it('documents the default heap dump threshold and retention', async () => {
     const reference = await readFile(join(process.cwd(), '../../docs/reference/configuration.md'), 'utf8');
-    expect(reference).toContain(`DEFAULT_HEAP_DUMP_THRESHOLD_MB (${DEFAULT_HEAP_DUMP_THRESHOLD_MB} MB)`);
+    expect(reference).toContain(`\`daemon_heap_dump_threshold_mb\` (default \`${DEFAULT_HEAP_DUMP_THRESHOLD_MB}\`)`);
+    expect(reference).toContain(`\`daemon_heap_dump_retention\` (default \`${DEFAULT_HEAP_DUMP_RETENTION}\`)`);
+  });
+
+  it('projects configured heap dump threshold and retention into sampler options', () => {
+    expect(heapDumpOptionsFromConfig({ daemon_heap_dump_threshold_mb: 2048, daemon_heap_dump_retention: 5 }))
+      .toEqual({ heapDumpThresholdMb: 2048, heapDumpRetention: 5 });
+    expect(heapDumpOptionsFromConfig({})).toEqual({});
+    expect(heapDumpOptionsFromConfig(undefined)).toEqual({});
+  });
+
+  it('dumps at the configured threshold and prunes to the configured retention', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR ?? '/tmp', 'daemon-heap-config-'));
+    const events = new ConductorEventEmitter();
+    const feature = startFeatureEventPersistence(join(root, 'f'), events, 'f');
+    const heap = join(root, '.daemon', 'heap');
+    const { mkdirSync, readdirSync } = await import('node:fs');
+    mkdirSync(heap, { recursive: true });
+    for (const name of ['2026-01-01T00:00:00.000Z-1.heapsnapshot', '2026-01-02T00:00:00.000Z-1.heapsnapshot']) {
+      writeFileSync(join(heap, name), 'old');
+    }
+    const writes: string[] = [];
+    const sampler = startDaemonMemorySampler(events, {
+      ...heapDumpOptionsFromConfig({ daemon_heap_dump_threshold_mb: 120, daemon_heap_dump_retention: 2 }),
+      memoryUsage: () => ({ rss: 130 * 1024 * 1024, heapUsed: 1, heapTotal: 1, external: 1, arrayBuffers: 0 }),
+      pid: 7, heapDumpDir: heap, now: () => new Date('2026-09-23T12:00:00.000Z'),
+      writeHeapSnapshot: (path) => { writes.push(path); writeFileSync(path, 'dump'); return path; },
+    });
+    try {
+      await feature.events.emit({ type: 'step_started', step: 'build', index: 0 });
+      await feature.events.emit({ type: 'step_completed', step: 'build', status: 'done' });
+      expect(writes).toHaveLength(1);
+      expect(readdirSync(heap).filter((name) => name.endsWith('.heapsnapshot')).sort()).toEqual([
+        '2026-01-02T00:00:00.000Z-1.heapsnapshot',
+        '2026-09-23T12:00:00.000Z-7.heapsnapshot',
+      ]);
+    } finally { sampler.stop(); feature.stop(); await rm(root, { recursive: true, force: true }); }
   });
   it('records root-bus step boundaries in the daemon ledger, not the feature ledger', async () => {
     const root = await mkdtemp(join(process.env.TMPDIR ?? '/tmp', 'daemon-memory-'));

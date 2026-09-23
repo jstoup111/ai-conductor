@@ -592,6 +592,27 @@ steps:
       });
     });
 
+    it('accepts daemon_heap_dump_threshold_mb and daemon_heap_dump_retention and retains them', () => {
+      const result = validateConfig({ daemon_heap_dump_threshold_mb: 2048, daemon_heap_dump_retention: 5 });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: { daemon_heap_dump_threshold_mb: 2048, daemon_heap_dump_retention: 5 },
+      });
+    });
+
+    it.each([
+      ['daemon_heap_dump_threshold_mb', 0], ['daemon_heap_dump_threshold_mb', 1.5], ['daemon_heap_dump_threshold_mb', 'big'],
+      ['daemon_heap_dump_retention', 0], ['daemon_heap_dump_retention', -2], ['daemon_heap_dump_retention', 2.5],
+    ] as const)('rejects %s %j outside the accepted integer range [1, ∞)', (key, value) => {
+      const result = validateConfig({ [key]: value as never });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain(key);
+      expect(result.error.message).toContain('[1, ∞)');
+    });
+
     it.each([0, -1, 1.5, 'big'] as const)(
       'rejects daemon_heap_limit_mb %j outside the accepted integer range [256, ∞)',
       (daemonHeapLimitMb) => {

@@ -608,6 +608,16 @@ export interface HarnessConfig {
    */
   daemon_heap_limit_mb?: number;
   /**
+   * RSS threshold, in megabytes, at which the continuous daemon writes its one
+   * heap snapshot under `.daemon/heap/`. Absent → 3072 MB. Positive integer.
+   */
+  daemon_heap_dump_threshold_mb?: number;
+  /**
+   * Maximum heap snapshots kept under `.daemon/heap/`; the oldest is removed
+   * before a new one is written. Absent → 3. Positive integer.
+   */
+  daemon_heap_dump_retention?: number;
+  /**
    * Harness self-host guardrails (adr-2026-06-30-self-host-detection-seam):
    * activation override + per-gate toggles. Absent → auto-detect, all gates on
    * (the safe default). Scoped to harness self-builds; no effect on other repos.
