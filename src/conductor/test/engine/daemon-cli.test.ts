@@ -1035,6 +1035,11 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
       await startedWorkers;
       vi.useFakeTimers();
       process.emit('SIGTERM');
+      // SIGTERM handlers are async because they first close any active
+      // conductor executions.  Let that continuation arm the teardown timer
+      // before advancing fake time; otherwise a busy worker can advance the
+      // clock before this daemon has observed its own signal.
+      await vi.advanceTimersByTimeAsync(0);
       // The two running executors each receive the full 30-second allowance.
       // Stopping just short of 60 seconds makes the scaled boundary observable:
       // the former single-executor 30-second timeout would have force-released
