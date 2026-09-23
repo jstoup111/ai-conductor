@@ -85,4 +85,28 @@ describe('repository-local release-disposition contract', () => {
       noneAuthorsNothing: true,
     });
   });
+
+  it('requires a waiver verdict to leave one fresh, committed waiver before PASS', async () => {
+    const skill = await readFile(join(canonicalDir, 'SKILL.md'), 'utf8');
+
+    expect({
+      planStemWaiver: /waiver[\s\S]*plan stem[\s\S]*\.docs\/release-waivers\//i.test(skill),
+      canonicalSurfaces: /Waives:[\s\S]*listing every[\s\S]*classified canonical surface/i.test(skill),
+      rationale: /non-empty[\s\S]*Rationale:/i.test(skill),
+      commitBeforePass: /commit[\s\S]*before[\s\S]*release-disposition-pass/i.test(skill),
+      failedCommitBlocked: /commit[\s\S]*fails[\s\S]*BLOCKED[\s\S]*pass marker absent/i.test(skill),
+      reuseComplete: /already[\s\S]*feature diff[\s\S]*every classified surface[\s\S]*no[\s\S]*second[\s\S]*nothing to commit[\s\S]*success/i.test(skill),
+      amendIncomplete: /omits a classified[\s\S]*surface[\s\S]*amend[\s\S]*same waiver[\s\S]*exactly one waiver/i.test(skill),
+      baseIsNotFresh: /base branch[\s\S]*commit[\s\S]*feature diff/i.test(skill),
+    }).toEqual({
+      planStemWaiver: true,
+      canonicalSurfaces: true,
+      rationale: true,
+      commitBeforePass: true,
+      failedCommitBlocked: true,
+      reuseComplete: true,
+      amendIncomplete: true,
+      baseIsNotFresh: true,
+    });
+  });
 });
