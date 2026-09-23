@@ -2852,11 +2852,15 @@ export class Conductor {
         planPath = undefined;
       }
       const sourceRef = await this.resolveIntakeSourceRef(state.feature_desc, planPath);
+      // The label write targets the PR, so provenance must be bound to the PR:
+      // without `prUrl` it binds to the branch ref and the owner gate refuses
+      // every mirror as `invalid-target`.
       const publication = await this.resolveShipDraftPublicationDependencies({
         cwd: this.projectRoot,
         branch: state.worktree_branch,
         baseBranch: this.baseBranch,
         featureDesc: state.feature_desc,
+        prUrl,
         git: this.git,
         gh: this.gh,
         events: this.events,
