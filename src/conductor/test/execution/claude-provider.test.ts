@@ -1510,16 +1510,19 @@ describe('ClaudeProvider', () => {
       expect(result.modelUnavailable).toBeUndefined();
     });
 
-    it('detects auth failure from "Not logged in" message', async () => {
+    it('detects auth failure from "Not logged in. Please run /login" message', async () => {
+      const stdout = 'Not logged in. Please run /login';
       mockExeca.mockResolvedValue({
-        stdout: 'Error: Not logged in',
+        stdout,
         exitCode: 1,
         failed: true,
       } as any);
 
       const result = await provider.invoke(baseOptions);
       expect(result.authFailure).toBe(true);
+      expect(result.rateLimited).toBeUndefined();
       expect(result.success).toBe(false);
+      expect(detectsSessionLimit(stdout)).toBe(false);
     });
 
     it('detects auth failure from "Please run /login" message', async () => {
