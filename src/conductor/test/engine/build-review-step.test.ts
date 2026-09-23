@@ -19,6 +19,8 @@ import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coor
 import { BUILD_REVIEW_RUBRIC_REGISTRY } from '../../src/engine/build-review-registry.js';
 import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
 import { renderRubricContractShape } from '../../src/engine/build-review-contract.js';
+import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
+import { diagnoseBuildReviewCustomReviewerPayloadRejection } from '../../src/engine/build-review-domain.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -756,6 +758,68 @@ describe('build_review structured rubric dispatch', () => {
     expect(custom).toMatchObject({ kind: 'structured', parsed: { kind: 'custom-findings', findings: [] } });
     expect(customInvoke.mock.calls[0]?.[0]?.prompt).toMatch(/^bundle text\n\n\$portable-policy/);
     expect(customInvoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema);
+  });
+
+  it('uses only final structured custom-v1 results for engine stamps, refusals, and field-named rejection', async () => {
+    const source = {
+      path: 'src/widget.ts', startLine: 8, endLine: 12,
+      contentHash: `sha256:${'a'.repeat(64)}`, display: 'public boundary',
+    };
+    const engineStamp = {
+      rubric: 'portablePolicy', lapId: 'lap-engine',
+      declaration: { version: 'v1' as const, rubricId: 'portablePolicy', semanticSkill: 'portable-policy', question: 'Check the frozen input.', resources: [] },
+      policy: { version: 'v1' as const, bundleDigest: `sha256:${'b'.repeat(64)}` },
+      candidate: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' },
+      reviewedInput: { version: 'v1' as const, contentDigest: `sha256:${'c'.repeat(64)}` },
+    };
+    const finding = {
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      confidence: 72, evidenceLocations: ['src/widget.ts:8'], sourceRegions: [source],
+    };
+    const structuredFinding = {
+      kind: 'custom-findings', version: 'v1', findings: [finding],
+      rubric: 'provider-rubric', lapId: 'provider-lap',
+    };
+    const invoke = vi.fn(async (_options: Pick<InvokeOptions, 'nativeSchema'>) => ({
+      success: true, output: 'provider prose is not the contract', exitCode: 0,
+      finalStructuredResult: structuredFinding,
+    }));
+
+    const dispatched = await dispatchRubricContract({
+      descriptor: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+      invoke,
+      options: { prompt: 'review', cwd: '/fixture', interactive: false },
+    });
+    const golden = stampBuildReviewCustomJudgedResult(
+      { kind: 'custom-findings', version: 'v1', findings: [finding] }, engineStamp, { sourceRegions: [source] },
+    );
+    const stamped = dispatched.kind === 'structured'
+      ? stampBuildReviewCustomJudgedResult(dispatched.parsed, engineStamp, { sourceRegions: [source] })
+      : undefined;
+
+    expect(invoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema);
+    expect(stamped).toEqual(golden);
+    expect(stamped).toMatchObject({
+      rubric: 'portablePolicy', lapId: 'lap-engine', policy: engineStamp.policy,
+      candidate: engineStamp.candidate, verdict: 'FAIL',
+      findings: [{ identity: golden?.findings[0]?.identity }],
+    });
+
+    const unsupported = await dispatchRubricContract({
+      descriptor: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+      invoke: async () => ({ success: true, output: '', exitCode: 0, finalStructuredResult: { kind: 'unsupported-policy', requirement: 'requires deployment credentials' } }),
+      options: { prompt: 'review', cwd: '/fixture', interactive: false },
+    });
+    expect(unsupported).toMatchObject({ kind: 'structured', parsed: { kind: 'unsupported-policy', requirement: 'requires deployment credentials' } });
+
+    const fractional = { ...structuredFinding, findings: [{ ...finding, confidence: 85.5 }] };
+    const outsideRegion = { ...structuredFinding, findings: [{ ...finding, sourceRegions: [{ ...source, startLine: 13, endLine: 13 }] }] };
+    expect(diagnoseBuildReviewCustomReviewerPayloadRejection(fractional, { sourceRegions: [source] })).toMatchObject({
+      kind: 'explained', problems: [{ field: 'findings[0].confidence', required: 'must be an integer from 0 to 100' }],
+    });
+    expect(diagnoseBuildReviewCustomReviewerPayloadRejection(outsideRegion, { sourceRegions: [source] })).toMatchObject({
+      kind: 'explained', problems: [{ field: 'findings[0].sourceRegions[0]' }],
+    });
   });
 
   it('runs a resolved custom member through the recording-provider dispatcher after its policy bundle', async () => {
