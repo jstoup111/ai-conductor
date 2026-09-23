@@ -2,7 +2,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
 import { PassThrough } from 'node:stream';
-import { ClaudeProvider, parseRateLimitWaitSeconds } from '../../src/execution/claude-provider.js';
+import {
+  ClaudeProvider,
+  detectsSessionLimit,
+  parseRateLimitWaitSeconds,
+} from '../../src/execution/claude-provider.js';
 import { classifyMetering } from '../../src/engine/metering.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
@@ -1355,6 +1359,22 @@ describe('ClaudeProvider', () => {
       expect(result.success).toBe(false);
       expect(result.waitSeconds).toBeUndefined();
       expect(result.deadline).toBeUndefined();
+    });
+
+    it('keeps a prose mention of weekly limit successful and unclassified', async () => {
+      const stdout = 'Discussion about weekly limit policies in documentation';
+      mockExeca.mockResolvedValue({
+        stdout,
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke({ ...baseOptions, interactive: true });
+
+      expect(result.rateLimited).toBeUndefined();
+      expect(result.success).toBe(true);
+      expect(detectsSessionLimit(stdout)).toBe(false);
     });
 
     it('detects usage-limit variant as rateLimited', async () => {
