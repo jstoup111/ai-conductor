@@ -11,12 +11,20 @@ Markdown skills directly.
 ## Requirements
 
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) v2.0+ and/or [Codex](https://github.com/openai/codex)
-- Git, and [GitHub CLI](https://cli.github.com/) 2.73.0 or later, authenticated (`gh auth login`)
+- `curl` for the one-line installer (or Git for a manual clone), and [GitHub CLI](https://cli.github.com/) 2.73.0 or later, authenticated (`gh auth login`)
 - Node.js 26.7.0 (minimum Node 26; the engine pins 26.7.0 via `asdf`), npm, tmux, and `python3` with PyYAML
 - A project to work on — Rails + PostgreSQL has full tech-context support; other stacks work with the
   generic skills
 
 ## Install
+
+```bash
+curl -fsSL https://jstoup111.github.io/ai-conductor/install.sh | sh
+```
+
+This installs the `stable` channel into `~/.ai-conductor/harness` and runs `./bin/install` there. Pass options after `sh -s --`, for example `... | sh -s -- --channel main --providers claude,codex`. Re-running it updates an existing install through `bin/update`.
+
+To install from a manual clone instead:
 
 ```bash
 git clone --branch stable --single-branch git@github.com:jstoup111/ai-conductor.git

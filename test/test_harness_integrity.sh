@@ -844,6 +844,147 @@ else
   fi
 fi
 
+# 9e. The bootstrap installer option-parsing contract.
+bootstrap_installer_test="${HARNESS_DIR}/test/test_bootstrap_installer.sh"
+if [ ! -f "$bootstrap_installer_test" ]; then
+  assert "test/test_bootstrap_installer.sh exists" 1
+else
+  set +e
+  bootstrap_installer_output=$(bash "$bootstrap_installer_test" 2>&1)
+  bootstrap_installer_exit=$?
+  set -e
+
+  if [ "$bootstrap_installer_exit" -eq 0 ]; then
+    assert "test/test_bootstrap_installer.sh — bootstrap installer contracts pass" 0
+  else
+    echo "$bootstrap_installer_output" | sed 's/^/    /'
+    assert "test/test_bootstrap_installer.sh — bootstrap installer contracts pass" 1
+  fi
+fi
+
+# 9f. The bootstrap script is a published plain file with one checkout path.
+# Covers: task:12
+bootstrap_doc_script="${HARNESS_DIR}/docs/install.sh"
+bootstrap_bin_link="${HARNESS_DIR}/bin/bootstrap"
+bootstrap_site_config="${HARNESS_DIR}/docs/_config.yml"
+
+# Return success only when Jekyll's static-file path can publish SCRIPT unchanged.
+# This is intentionally independent of the fallback copy below: copying a file is
+# not evidence that the site configuration would leave it alone.
+bootstrap_static_publishable() {
+  bootstrap_static_script=$1
+  bootstrap_static_config=$2
+  bootstrap_static_relative=$3
+
+  [ "$(head -n 1 "$bootstrap_static_script")" != '---' ] || return 1
+  case "/$bootstrap_static_relative" in
+    */_*|*/.*) return 1 ;;
+  esac
+
+  awk '
+    function claims_install(value) {
+      return value ~ /(^|[^[:alnum:]_.-])(install\.sh|\*\.sh)([^[:alnum:]_.-]|$)/
+    }
+    function defaults_cover_install(    normalized, normalized_type) {
+      normalized = default_path
+      gsub(/["'"'"'[:space:]]/, "", normalized)
+      normalized_type = default_type
+      gsub(/["'"'"'[:space:]]/, "", normalized_type)
+      return default_layout && (normalized_type == "" || normalized_type ~ /[*?]/) && (normalized == "" || normalized == "." || normalized == "/" || normalized ~ /(^|\/)install\.sh$/ || normalized ~ /[*?]/)
+    }
+    function finish_default() {
+      if (defaults_cover_install()) found = 1
+      default_path = ""
+      default_type = ""
+      default_layout = 0
+    }
+    /^[[:space:]]*(exclude|include|plugins|gems):/ {
+      active = $0
+      if (claims_install($0)) found = 1
+    }
+    /^[^[:space:]][^:]*:/ && $0 !~ /^defaults:/ { active = "" }
+    active != "" && /^[[:space:]]*-[[:space:]]/ && claims_install($0) { found = 1 }
+    /^defaults:[[:space:]]*$/ { in_defaults = 1; next }
+    in_defaults && /^[^[:space:]]/ { finish_default(); in_defaults = 0 }
+    in_defaults && /^[[:space:]]*-[[:space:]]/ { finish_default() }
+    in_defaults && /^[[:space:]]*path:[[:space:]]*/ {
+      default_path = $0
+      sub(/^[^:]*:[[:space:]]*/, "", default_path)
+    }
+    in_defaults && /^[[:space:]]*type:[[:space:]]*/ {
+      default_type = $0
+      sub(/^[^:]*:[[:space:]]*/, "", default_type)
+    }
+    in_defaults && /^[[:space:]]*layout:[[:space:]]*/ { default_layout = 1 }
+    END { if (in_defaults) finish_default(); exit found ? 1 : 0 }
+  ' "$bootstrap_static_config"
+}
+if [ -f "$bootstrap_doc_script" ] && [ ! -L "$bootstrap_doc_script" ] \
+  && [ "$(head -n 1 "$bootstrap_doc_script")" = '#!/bin/sh' ]; then
+  assert "docs/install.sh is a plain published shell script" 0
+else
+  assert "docs/install.sh is a plain published shell script" 1
+fi
+
+if [ -L "$bootstrap_bin_link" ] && [ "$(readlink "$bootstrap_bin_link")" = '../docs/install.sh' ] \
+  && [ "$(readlink -f "$bootstrap_bin_link")" = "$(readlink -f "$bootstrap_doc_script")" ]; then
+  assert "bin/bootstrap links to docs/install.sh" 0
+else
+  assert "bin/bootstrap links to docs/install.sh" 1
+fi
+
+if bootstrap_static_publishable "$bootstrap_doc_script" "$bootstrap_site_config" install.sh; then
+  assert "docs site does not exclude install.sh" 0
+else
+  assert "docs site does not exclude install.sh" 1
+fi
+
+bootstrap_mutation_dir=$(mktemp -d)
+cp "$bootstrap_site_config" "$bootstrap_mutation_dir/_config.yml"
+printf '%s\n' 'defaults:' '  - scope:' '      path: ""' '    values:' '      layout: default' >> "$bootstrap_mutation_dir/_config.yml"
+if bootstrap_static_publishable "$bootstrap_doc_script" "$bootstrap_mutation_dir/_config.yml" install.sh; then
+  assert "static publication fallback rejects defaults layout covering install.sh" 1
+else
+  assert "static publication fallback rejects defaults layout covering install.sh" 0
+fi
+printf '%s\n' 'exclude: [install.sh]' > "$bootstrap_mutation_dir/exclude-config.yml"
+if bootstrap_static_publishable "$bootstrap_doc_script" "$bootstrap_mutation_dir/exclude-config.yml" install.sh; then
+  assert "static publication fallback rejects inline exclude for install.sh" 1
+else
+  assert "static publication fallback rejects inline exclude for install.sh" 0
+fi
+printf '%s\n' '---' 'layout: default' '---' > "$bootstrap_mutation_dir/install.sh"
+cat "$bootstrap_doc_script" >> "$bootstrap_mutation_dir/install.sh"
+if bootstrap_static_publishable "$bootstrap_mutation_dir/install.sh" "$bootstrap_site_config" install.sh; then
+  assert "static publication fallback rejects script front matter" 1
+else
+  assert "static publication fallback rejects script front matter" 0
+fi
+rm -rf "$bootstrap_mutation_dir"
+
+bootstrap_publish_dir=$(mktemp -d)
+if command -v jekyll >/dev/null 2>&1; then
+  if (cd "${HARNESS_DIR}/docs" && jekyll build --destination "$bootstrap_publish_dir"); then
+    bootstrap_publish_status=0
+  else
+    bootstrap_publish_status=1
+  fi
+  if [ "$bootstrap_publish_status" -eq 0 ] \
+    && [ -f "$bootstrap_publish_dir/install.sh" ] \
+    && cmp -s "$bootstrap_doc_script" "$bootstrap_publish_dir/install.sh"; then
+    assert "docs/install.sh is published verbatim" 0
+  else
+    assert "docs/install.sh is published verbatim" 1
+  fi
+else
+  # Without a site builder there is nothing to compare against: copying the
+  # script and cmp-ing it with itself passes by construction. The static-file
+  # rule is already asserted above; the byte-identical proof is recorded as
+  # not run rather than claimed.
+  warn_check "docs/install.sh is published verbatim (jekyll not on PATH; comparison not run)" 1
+fi
+rm -rf "$bootstrap_publish_dir"
+
 # ── 10. Writer-audit for task-status.json single authority ──────────────────
 # Task #302 enforces that ONLY the engine (src/conductor/src/engine/) writes to
 # `.pipeline/task-status.json`. This is the single source of truth for task

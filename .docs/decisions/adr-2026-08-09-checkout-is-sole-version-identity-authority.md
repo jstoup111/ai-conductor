@@ -119,6 +119,18 @@ Behavioral commitments (operator-confirmed):
 - The record continues to be written so a correct value is what #1400's seed makes permanent.
 - Channels remain `tagged` and `main` only.
 
+> **Amended 2026-09-21 by the operator (as-built review of the curl-based installer):** the
+> channel set is `stable`, `tagged`, and `main`. The `stable` channel postdates this decision:
+> `origin/stable` has existed since 2026-08-14, `bin/install` offers it as the recommended
+> default, and the README installs from it. `stable` is a branch that advances only after
+> release CI has published the matching semver tag and GitHub Release, so a `stable` checkout
+> always sits exactly on a release tag. Nothing else in this decision changes: identity is
+> still derived from the checkout on every invocation by the baseline/distance mechanism
+> above, a `stable` checkout resolves to the `release` identity state (distance 0), and the
+> persisted record keeps no read-authority. The sentence "Channels remain `tagged` and `main`
+> only" is superseded by this amendment; a bootstrap or installer that defaults to `stable`
+> conforms to this ADR.
+
 > **Amended 2026-08-09 by #1437 (same DECIDE pass, during `/stories`):** what gets **persisted**
 > is the **baseline**, never the display identity. `bin/migrate:60-73` reads `currentVersion` as
 > `FROM_VERSION` and `bin/migrate:328-331` validates it against `^v?[0-9]+(\.[0-9]+)+$`. A
