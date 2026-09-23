@@ -1284,6 +1284,29 @@ describe('ClaudeProvider', () => {
       expect(result.waitSeconds).toBeDefined();
     });
 
+    it('detects weekly-limit message with reset time on exit 0', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-09-22T20:00:00-04:00'));
+      mockExeca.mockResolvedValue({
+        stdout: "You've hit your weekly limit · resets 9pm (America/New_York)",
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      try {
+        const now = Date.now();
+        const result = await provider.invoke({ ...baseOptions, interactive: true });
+
+        expect(result.rateLimited).toBe(true);
+        expect(result.success).toBe(false);
+        expect(typeof result.deadline).toBe('number');
+        expect(result.deadline).toBeGreaterThan(now);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('detects usage-limit variant as rateLimited', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'usage limit reached · resets 3:20pm (America/New_York)',

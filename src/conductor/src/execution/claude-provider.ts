@@ -41,14 +41,16 @@ const RATE_LIMIT_RE = /rate limit|429|overloaded/i;
 // regardless of exit code (similar to OUT_OF_CREDITS_RE) because session-limit
 // can ride on exit=0 as a "soft notice" that the session quota is exhausted.
 // Patterns matched:
-// - "You've hit your session/usage limit" (exact CLI message)
+// - "You've hit your <one-word qualifier> limit" (exact CLI message)
 // - "session/usage limit reached" (variant)
-// - "session/usage limit · resets" (with reset time)
+// - "<one-word qualifier> limit · resets" (with reset time)
+// The qualifier is deliberately one word so "monthly spend limit" does not
+// match here; OUT_OF_CREDITS_RE owns that distinct notice.
 // Precedence: checked BEFORE AUTH_FAILURE_RE so a message like
 // "You've hit your session limit and not logged in" classifies as session-limit,
 // not auth failure. Avoids false positives by requiring context beyond bare
 // "session limit" in prose.
-const SESSION_LIMIT_RE = /you've hit your (?:session|usage) limit|session limit reached|usage limit reached|(?:session|usage) limit\s+·\s+resets/i;
+const SESSION_LIMIT_RE = /you've hit your \S+ limit|session limit reached|usage limit reached|\S+ limit\s+·\s+resets/i;
 const STALE_SESSION_RE = /No conversation found/i;
 // A session-id lock ("already in use" / "session is in use by another
 // process"). Recovers the same way as a stale session — reset to a fresh
