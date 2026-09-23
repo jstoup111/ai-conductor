@@ -1,10 +1,19 @@
 import { forwardedFeatureOf, isForwardedFromFeature } from './event-persister.js';
+import { mkdirSync, statSync } from 'node:fs';
+import { writeHeapSnapshot } from 'node:v8';
+import { join } from 'node:path';
 import type { ConductorEvent } from '../types/index.js';
 import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
+
+export const DEFAULT_HEAP_DUMP_THRESHOLD_MB = 3072;
 
 export interface DaemonMemorySamplerOptions {
   memoryUsage?: () => NodeJS.MemoryUsage;
   pid?: number;
+  heapDumpThresholdMb?: number;
+  heapDumpDir?: string;
+  writeHeapSnapshot?: (path: string) => string;
+  now?: () => Date;
 }
 
 /**
@@ -18,6 +27,10 @@ export function startDaemonMemorySampler(
 ): { stop: () => void } {
   const memoryUsage = options.memoryUsage ?? process.memoryUsage;
   const pid = options.pid ?? process.pid;
+  const heapDumpThresholdMb = options.heapDumpThresholdMb ?? DEFAULT_HEAP_DUMP_THRESHOLD_MB;
+  const heapDumpDir = options.heapDumpDir ?? join(process.cwd(), '.daemon', 'heap');
+  const snapshot = options.writeHeapSnapshot ?? writeHeapSnapshot;
+  const now = options.now ?? (() => new Date());
   let nextDispatchSeq = 0;
   const activeDispatches = new Map<string, number>();
 
@@ -49,6 +62,14 @@ export function startDaemonMemorySampler(
       pid,
       dispatchSeq,
     });
+    if (usage.rss >= heapDumpThresholdMb * 1024 * 1024) {
+      mkdirSync(heapDumpDir, { recursive: true });
+      const path = join(heapDumpDir, `${now().toISOString()}-${pid}.heapsnapshot`);
+      snapshot(path);
+      await events.emit({
+        type: 'daemon_heap_dump_written', path, bytes: statSync(path).size, rss: usage.rss, pid,
+      });
+    }
   };
 
   events.on('step_started', handleBoundary);

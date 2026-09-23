@@ -1,12 +1,40 @@
-// Covers: task:2
+// Covers: task:2, task:4
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDaemonEventPersistence, startFeatureEventPersistence } from '../../src/engine/event-persister.js';
-import { startDaemonMemorySampler } from '../../src/engine/daemon-memory.js';
+import { DEFAULT_HEAP_DUMP_THRESHOLD_MB, startDaemonMemorySampler } from '../../src/engine/daemon-memory.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 describe('startDaemonMemorySampler', () => {
+  it('writes a heap snapshot and event when RSS crosses the configured threshold', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR ?? '/tmp', 'daemon-heap-'));
+    const events = new ConductorEventEmitter();
+    const feature = startFeatureEventPersistence(join(root, 'f'), events, 'f');
+    const writes: string[] = [];
+    const dumps: any[] = [];
+    let rss = 50 * 1024 * 1024;
+    events.on('daemon_heap_dump_written', (event) => { dumps.push(event); });
+    const sampler = startDaemonMemorySampler(events, {
+      memoryUsage: () => ({ rss, heapUsed: 1, heapTotal: 1, external: 1, arrayBuffers: 0 }),
+      pid: 105, heapDumpThresholdMb: 100, heapDumpDir: join(root, '.daemon', 'heap'),
+      now: () => new Date('2026-09-23T12:00:00.000Z'),
+      writeHeapSnapshot: (path) => { writes.push(path); writeFileSync(path, 'dump'); return path; },
+    });
+    try {
+      await feature.events.emit({ type: 'step_started', step: 'build', index: 0 });
+      rss = 150 * 1024 * 1024;
+      await feature.events.emit({ type: 'step_completed', step: 'build', status: 'done' });
+      expect(writes).toEqual([join(root, '.daemon', 'heap', '2026-09-23T12:00:00.000Z-105.heapsnapshot')]);
+      expect(dumps).toEqual([expect.objectContaining({ path: writes[0], bytes: 4, rss, pid: 105 })]);
+    } finally { sampler.stop(); feature.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('exports the documented default heap dump threshold', async () => {
+    const reference = await readFile(join(process.cwd(), '../../docs/reference/configuration.md'), 'utf8');
+    expect(reference).toContain(`DEFAULT_HEAP_DUMP_THRESHOLD_MB (${DEFAULT_HEAP_DUMP_THRESHOLD_MB} MB)`);
+  });
   it('records root-bus step boundaries in the daemon ledger, not the feature ledger', async () => {
     const root = await mkdtemp(join(process.env.TMPDIR ?? '/tmp', 'daemon-memory-'));
     const rootEvents = new ConductorEventEmitter();

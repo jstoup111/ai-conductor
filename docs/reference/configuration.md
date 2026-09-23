@@ -1602,6 +1602,11 @@ daemon_heap_limit_mb: 6144
 Only integers in `[256, ∞)` are valid. Invalid values stop `ai-conductor daemon start` and
 `ai-conductor daemon restart` before tmux launches or respawns a daemon.
 
+## Daemon heap dump threshold
+
+The daemon writes a heap snapshot when a boundary memory sample reaches
+`DEFAULT_HEAP_DUMP_THRESHOLD_MB (3072 MB)`. Snapshots are stored under `.daemon/heap/`.
+
 ## stale_claim_window_hours
 
 Controls how long a `claimed` engineer-intake ledger entry may remain unfinished before it is
