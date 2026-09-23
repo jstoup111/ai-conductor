@@ -78,6 +78,7 @@ export type RefusalReason =
   | 'unmerged-commits'
   | 'branch-behind-merged-head'
   | 'record-missing'
+  | 'dirty-worktree'
   | 'worktree-remove-failed'
   | 'branch-delete-failed'
   | 'unpark-failed';
@@ -472,19 +473,20 @@ async function gatherMergeEvidence(
   prefetched?: { shippedStems: string[] | null; branchesBySlug: Map<string, string[]> | null },
   branch?: string,
 ): Promise<MergeEvidence | null> {
-  const recordRequired = requiresShippedRecord(branch);
-  const shippedStems = recordRequired
+  // Only record-gated candidates (daemon branches and branchless parked slugs)
+  // consult the shipped-record listing. Any other branch never reads it
+  // (adr-2026-08-01 D8, which governs D9 per operator decision 2026-09-22):
+  // its ancestry is corroborated by merged-PR head identity alone.
+  const shippedStems = requiresShippedRecord(branch)
     ? prefetched?.shippedStems ?? (await listShippedStemsOnMain(runGit, projectRoot))
     : [];
-  if (recordRequired && shippedStems === null) return null;
+  if (shippedStems === null) return null;
   const branchesBySlug =
     prefetched?.branchesBySlug ?? (await listBranchesBySlug(runGit, projectRoot));
   if (branchesBySlug === null) return null;
 
   const key = undatedStem(slug);
-  const shippedRecordOnMain = recordRequired
-    && shippedStems !== null
-    && shippedStems.some((stem) => undatedStem(stem) === key);
+  const shippedRecordOnMain = shippedStems.some((stem) => undatedStem(stem) === key);
   const branches = branch === undefined
     ? branchesBySlug.get(key) ?? []
     : [...branchesBySlug.values()].some((refs) => refs.includes(branch)) ? [branch] : [];
@@ -536,6 +538,7 @@ export async function reconcileParkedFeatures(
     'unmerged-commits': 0,
     'branch-behind-merged-head': 0,
     'record-missing': 0,
+    'dirty-worktree': 0,
     'worktree-remove-failed': 0,
     'branch-delete-failed': 0,
     'unpark-failed': 0,
@@ -558,8 +561,9 @@ export async function reconcileParkedFeatures(
   const enumeratedCandidates = [...candidates.values()]
     .filter((candidate) => !candidate.parked).length;
 
-  // Read pass-invariant evidence once. A record listing is unnecessary when
-  // every candidate is a non-daemon listed branch, so do not consult it then.
+  // Read pass-invariant evidence once. Only record-gated candidates consult the
+  // shipped-record listing (adr-2026-08-01 D8), so a pass without one never
+  // reads it.
   const hasRecordGatedCandidate = [...candidates.values()].some((candidate) =>
     candidate.reclaimable && requiresShippedRecord(candidate.branch),
   );
@@ -688,23 +692,19 @@ export async function reconcileParkedFeatures(
           // Event persistence must not make this best-effort sweep fail.
         }
       }
-      else if (outcome.refusal === 'record-missing') {
-        counts.deferred++;
-        retainedReason = outcome.refusal;
-        retainedByReason[outcome.refusal]++;
-      }
       else {
-        counts.refused++;
-        refusedByReason[outcome.refusal] = (refusedByReason[outcome.refusal] ?? 0) + 1;
-        if (outcome.refusal === 'worktree-remove-failed' || outcome.refusal === 'branch-delete-failed') {
-          try {
-            opts.onEvent?.({ type: 'worktree_reclaim_failed', slug, branch: candidate.branch, refusal: outcome.refusal });
-          } catch {
-            // Event persistence must not make this best-effort sweep fail.
-          }
-        } else {
-          retainedReason = outcome.refusal;
-          retainedByReason[outcome.refusal]++;
+        if (outcome.refusal === 'record-missing') counts.deferred++;
+        else {
+          counts.refused++;
+          refusedByReason[outcome.refusal] = (refusedByReason[outcome.refusal] ?? 0) + 1;
+        }
+        // Every helper refusal is a failed reclaim on the spine
+        // (adr-2026-07-29 D9); retention is reserved for candidates the sweep
+        // never handed to the helper.
+        try {
+          opts.onEvent?.({ type: 'worktree_reclaim_failed', slug, branch: candidate.branch, refusal: outcome.refusal });
+        } catch {
+          // Event persistence must not make this best-effort sweep fail.
         }
       }
     }
@@ -837,10 +837,15 @@ export async function reconcileMergedPark(
   //       is structurally always false).
   // Neither proof available ⇒ refuse, exactly as before.
   let proof: ReclaimProof = 'ancestry';
-  const unproven = evidence.branches.filter((ref) => !evidence.mergedBranches.includes(ref));
-  if (unproven.length > 0) {
+  // A shipped record corroborates ancestry. Without one, ancestry must be
+  // corroborated by the merged PR's exact head too; otherwise a branch that
+  // merely happens to be an ancestor can still carry an unreconciled checkout.
+  const branchesRequiringPrProof = evidence.shippedRecordOnMain
+    ? evidence.branches.filter((ref) => !evidence.mergedBranches.includes(ref))
+    : evidence.branches;
+  if (branchesRequiringPrProof.length > 0) {
     const runGh = opts.runGh ?? makeProductionGh();
-    for (const ref of unproven) {
+    for (const ref of branchesRequiringPrProof) {
       const diagnosis = await proveByMergedPrHead(runGit, runGh, opts.projectRoot, ref, (error) => {
         (opts.capabilityLog ?? opts.log)?.(
           `[parked-reconciliation] ${opts.slug}: gh capability unavailable for ${error.field}`,
@@ -868,7 +873,11 @@ export async function reconcileMergedPark(
         case 'behind':
           return { slug: opts.slug, steps: [], refusal: 'branch-behind-merged-head' };
         case 'indeterminate':
-          return { slug: opts.slug, steps: [], refusal: 'ancestry-check-failed' };
+          return {
+            slug: opts.slug,
+            steps: [],
+            refusal: evidence.mergedBranches.includes(ref) ? 'no-merge-proof' : 'ancestry-check-failed',
+          };
       }
     }
   }
@@ -915,7 +924,6 @@ export async function reconcileMergedPark(
 
   const steps: string[] = [];
   const worktreePath = join(opts.projectRoot, '.worktrees', opts.slug);
-  opts.disposeHaltWatcher?.(opts.slug);
 
   let worktreeOnDisk = true;
   try {
@@ -928,18 +936,45 @@ export async function reconcileMergedPark(
   }
 
   if (worktreeOnDisk) {
+    try {
+      const { stdout } = await runGit(['status', '--porcelain'], { cwd: worktreePath });
+      if (stdout.length > 0) {
+        return { slug: opts.slug, steps, refusal: 'dirty-worktree' };
+      }
+    } catch {
+      return { slug: opts.slug, steps, refusal: 'dirty-worktree' };
+    }
+  }
+
+  opts.disposeHaltWatcher?.(opts.slug);
+
+  if (worktreeOnDisk) {
     const configResult = await loadConfig(opts.projectRoot);
     const timeoutSeconds = opts.teardownTimeoutSeconds ?? resolveTeardownTimeoutSeconds(
       configResult.ok ? configResult.config : undefined,
     );
     await runProjectTeardown(worktreePath, opts.teardownLog ?? opts.log, { timeoutSeconds, verbose: opts.verbose });
+    // D10: the project teardown runs inside the worktree and can write files,
+    // so the probe that authorizes removal must run AFTER it, immediately
+    // before the destructive step. Fail closed on any output or probe failure.
     try {
+      const { stdout } = await runGit(['status', '--porcelain'], { cwd: worktreePath });
+      if (stdout.length > 0) {
+        return { slug: opts.slug, steps, refusal: 'dirty-worktree' };
+      }
+    } catch {
+      return { slug: opts.slug, steps, refusal: 'dirty-worktree' };
+    }
+    try {
+      // D1: no force flag. Plain `worktree remove` still removes gitignored
+      // output (git's clean check never lists ignored paths) and refuses any
+      // modified or untracked path; a refusal is final, never escalated.
       if (opts.worktreeLifecycle) {
         await opts.worktreeLifecycle.run(() =>
-          runGit(['worktree', 'remove', '--force', worktreePath], { cwd: opts.projectRoot }),
+          runGit(['worktree', 'remove', worktreePath], { cwd: opts.projectRoot }),
         );
       } else {
-        await runGit(['worktree', 'remove', '--force', worktreePath], { cwd: opts.projectRoot });
+        await runGit(['worktree', 'remove', worktreePath], { cwd: opts.projectRoot });
       }
     } catch {
       // A removal failure on a path git actually owns is a real failure. A path
@@ -967,11 +1002,11 @@ export async function reconcileMergedPark(
   } else {
     for (const ref of evidence.branches) {
       try {
-        // Force delete. THIS function is the authority that deleting these refs
-        // drops no commit, and one of its two proofs — merged-PR head identity —
-        // is precisely the squash-merge case where git's own `-d` merge check is
-        // permanently false. `-d` would refuse every squash-merged branch here.
-        await runGit(['branch', '-D', ref], { cwd: opts.projectRoot });
+        // Safe delete only (adr-2026-08-01 D1: no force flag exists anywhere).
+        // git's own `-d` merge check refuses a squash-merged branch whose tip
+        // is not an ancestor; that branch is left in place (operator decision
+        // 2026-09-23) and the refusal is reported, never escalated to `-D`.
+        await runGit(['branch', '-d', ref], { cwd: opts.projectRoot });
       } catch {
         return { slug: opts.slug, steps, refusal: 'branch-delete-failed' };
       }

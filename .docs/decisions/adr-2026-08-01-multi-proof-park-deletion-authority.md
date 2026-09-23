@@ -122,10 +122,13 @@ branches. Rejected on cost/benefit, not on correctness.
 > base. This amendment narrows what the set can delete; it adds no proof.
 >
 > 9. **Ancestry alone never authorizes deletion.** An ancestry-proven branch is reclaimable only when
->    a MERGED pull request's `headRefOid` equals its current tip, or a shipped record for the slug is
->    on `origin/main`. Without either, the helper refuses with `no-merge-proof` and the candidate is
->    retained. Merged-PR head identity stays sufficient on its own. The strength of Decision 1 is
->    narrowed, never widened.
+>    a MERGED pull request's `headRefOid` equals its current tip, or — for a record-gated candidate
+>    under Decision 8 (a `feat/daemon-*` branch or a branchless parked slug) — a shipped record for
+>    the slug is on `origin/main`. Without the applicable corroboration, the helper refuses with
+>    `no-merge-proof` and the candidate is retained. Merged-PR head identity stays sufficient on its
+>    own. A non-daemon candidate is corroborated only by merged-PR head identity and never reads the
+>    shipped-record listing: per operator decision 2026-09-22, Decision 8 governs where the two
+>    clauses meet. The strength of Decision 1 is narrowed, never widened.
 >
 > 10. **A dirty worktree is never removed.** Immediately before the destructive step, and after every
 >     merge proof has passed, the helper runs `git status --porcelain` in the candidate worktree. Any

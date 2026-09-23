@@ -38,12 +38,12 @@ As an operator who has just created a working branch from `origin/main`, I want 
 #### Happy Path
 - Given a clean worktree whose non-daemon branch tip is an ancestor of `origin/main` and no merged pull request has that tip as its head, when `reconcileMergedPark` runs for its slug, then it returns refusal `no-merge-proof` and neither the worktree nor the branch is removed.
 - Given a clean worktree whose branch tip is an ancestor of `origin/main` and a merged pull request reports that tip as its `headRefOid`, when `reconcileMergedPark` runs for its slug, then the worktree and branch are removed.
-- Given a clean worktree whose branch tip is an ancestor of `origin/main` and a shipped record for the slug is on `origin/main`, when `reconcileMergedPark` runs for its slug, then the worktree and branch are removed.
+- Given a clean worktree whose `feat/daemon-*` branch tip is an ancestor of `origin/main` and a shipped record for the slug is on `origin/main`, when `reconcileMergedPark` runs for its slug, then the worktree and branch are removed.
 
 #### Negative Paths
 - Given an ancestry-proven branch without a shipped record whose merged-PR lookup fails because gh is unavailable, when `reconcileMergedPark` runs for its slug, then it returns refusal `no-merge-proof` and nothing is removed.
 - Given an ancestry-proven branch without a shipped record whose only merged pull request reports a different head commit, when `reconcileMergedPark` runs for its slug, then nothing is removed and the refusal is not a success outcome.
-- Given a squash-merged branch that is not an ancestor of `origin/main` and whose merged pull request head equals its tip, when `reconcileMergedPark` runs for its slug, then it is reclaimed exactly as before this change.
+- Given a squash-merged branch that is not an ancestor of `origin/main` and whose merged pull request head equals its tip, when `reconcileMergedPark` runs for its slug, then the branch is left in place, the result carries refusal `branch-delete-failed`, and no force-delete command is issued.
 
 ### Done When
 - [ ] A test of a fresh branch (tip equals `origin/main`, no PR, no record, clean tree) asserts refusal `no-merge-proof` and that no `worktree remove` or `branch -D` reached the git boundary.

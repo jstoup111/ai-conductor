@@ -201,6 +201,12 @@ function makeGit(world: GitWorld): { run: ReturnType<typeof vi.fn<GitRunner>>; d
         return { stdout: '' };
       case 'log':
         return { stdout: `${(world.unmergedLog ?? []).join('\n')}\n` };
+      // These fixtures model a clean, registered candidate.  The production
+      // deletion guard now probes porcelain before any destructive command;
+      // leaving that command unmodelled would correctly be treated as an
+      // unreadable (and therefore dirty) worktree instead.
+      case 'status':
+        return { stdout: '' };
       case 'worktree':
         return { stdout: '' };
       case 'branch':
@@ -231,19 +237,22 @@ describe('engine/park-reconciliation — listed branch merge evidence', () => {
     return path;
   }
 
-  it('proves hotfix/x by ancestry without querying gh when it is the listed branch for hotfix-x', async () => {
+  it('proves hotfix/x by ancestry corroborated by its merged PR head when it is the listed branch for hotfix-x', async () => {
     const slug = 'hotfix-x';
     const branch = 'hotfix/x';
+    const tip = '3333333333333333333333333333333333333333';
     await parkedWorktree(slug);
-    const { run, deleted } = makeGit({ shipped: [slug], branches: [branch], merged: [branch] });
-    const runGh = vi.fn<GhRunner>();
+    // A shipped record exists but is never consulted for a non-daemon branch
+    // (adr-2026-08-01 D8): only the merged PR head corroborates its ancestry.
+    const { run, deleted } = makeGit({ shipped: [slug], branches: [branch], merged: [branch], tips: { [branch]: tip } });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: `[{"headRefOid":"${tip}"}]` });
 
     const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run, runGh });
 
-    expect({ outcome, deleted, ghCalls: runGh.mock.calls }).toEqual({
+    expect({ outcome, deleted, ghCalls: runGh.mock.calls.length }).toEqual({
       outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
       deleted: [branch],
-      ghCalls: [],
+      ghCalls: 1,
     });
   });
 

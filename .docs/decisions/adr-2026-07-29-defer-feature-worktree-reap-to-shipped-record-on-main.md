@@ -111,6 +111,14 @@ pass a gate."
 >    branchless parked slugs); per adr-2026-08-01 D8 a non-daemon candidate never reads or depends
 >    on that listing (operator decision 2026-09-18: D8 takes precedence). The
 >    daemon log line is a rendering of the event, never a parallel write.
+>    Event classification (operator decision 2026-09-22, spec
+>    `daemon-reclaim-sweep-deletes-a-worktree-that-holds`, superseding the split above): every
+>    refusal returned by the single-slug helper — including `no-merge-proof` and `dirty-worktree` —
+>    is emitted as `worktree_reclaim_failed` carrying its `refusal`, as adr-2026-08-01 D3 and D11
+>    already assume. `worktree_reclaim_retained` is reserved for candidates the sweep never hands
+>    to the helper: in-flight, excluded prefixes, invalid slugs, a live `.pipeline/HALT`, an
+>    unreadable listing, or no merge classification. A removal error is a helper refusal and stays
+>    on `worktree_reclaim_failed`.
 
 ## Relationship to adjacent approved decisions
 

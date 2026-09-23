@@ -570,9 +570,14 @@ commits added after the merged PR head (`unmerged-commits`), a branch that is be
 (`branch-behind-merged-head`), and evidence that Git or `gh` could not check
 (`ancestry-check-failed`). For `unmerged-commits`, `daemon reconcile-parked` prints up to ten
 `SHA subject` lines and an overflow count, so the operator can inspect what cleanup would drop.
-Once a proof holds, the branch is deleted with `git branch -D`: the reconciler, not git, is the
-authority that no commit is dropped, and git's own `-d` merge check is structurally false forever
-for a squash-merged branch.
+Once a proof holds, the branch is deleted with the safe `git branch -d` only; no force flag is ever
+used. git's own `-d` merge check refuses a squash-merged branch whose tip is not an ancestor of the
+local default branch. That branch is left in place and the refusal is reported as
+`branch-delete-failed`, never escalated to `-D`.
+
+Before any worktree is removed, the reconciler checks `git status --porcelain` inside it, both
+before and after the project teardown runs. Any output, or a status that cannot be read, refuses
+cleanup with `dirty-worktree`, so uncommitted or untracked work in a worktree is never deleted.
 
 Worktree removal tolerates one more real-world shape. Some `.worktrees/<slug>` paths exist on disk
 without ever having been registered as git worktrees, and `git worktree remove` rejects those with
