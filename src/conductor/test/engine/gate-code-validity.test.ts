@@ -26,6 +26,7 @@ import {
 import {
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   BUILD_REVIEW_VERDICT,
+  FINISH_CHOICE_MARKER,
   MANUAL_TEST_CODE_STAMP,
   PRD_AUDIT_CODE_STAMP,
 } from '../../src/engine/artifacts.js';
@@ -516,6 +517,55 @@ describe('gateVerdictStillValid', () => {
     expect(rechecked.satisfied).toBe(true);
     expect((await readVerdict(s.repo, 'build_review'))?.preservation).toEqual(preservation);
     await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBeNull();
+  });
+
+  it('allows finish completion through the production predicate for a fresh preserved-gate re-judgement', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 150,
+      rebaseOperation: {
+        id: 'finish-fresh-prd-audit',
+        status: 'applied',
+        appliedAt: 100,
+        transition: { preserved: ['prd_audit'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await writeVerdict(s.repo, 'prd_audit', { satisfied: true, checkedAt: 200 });
+    await writeFile(join(s.repo, FINISH_CHOICE_MARKER), 'keep');
+
+    const result = await checkGateCompletion(s.repo, 'finish', {});
+
+    expect(result.done).toBe(true);
+    expect(result.reason ?? '').not.toContain('replay-bound authority');
+    expect(result.reason ?? '').not.toContain('outstanding prd_audit');
+  });
+
+  it('keeps finish incomplete for an unstamped preserved verdict not newer than appliedAt', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 250,
+      rebaseOperation: {
+        id: 'finish-stale-prd-audit',
+        status: 'applied',
+        appliedAt: 200,
+        transition: { preserved: ['prd_audit'], invalidated: [], reverified: [] },
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      },
+    });
+    await writeVerdict(s.repo, 'prd_audit', { satisfied: true, checkedAt: 200 });
+    await writeFile(join(s.repo, FINISH_CHOICE_MARKER), 'keep');
+
+    const result = await checkGateCompletion(s.repo, 'finish', {});
+
+    expect(result).toMatchObject({
+      done: false,
+      reason: 'rebase transition preserved prd_audit without its replay-bound authority',
+    });
   });
 
   it('accepts a fresh re-judgement beside a correctly bound preserved verdict', async () => {
