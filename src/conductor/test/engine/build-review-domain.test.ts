@@ -21,8 +21,6 @@ import {
   parseBuildReviewRubricResult,
   parseBuildReviewSkip,
   renderBuildReviewUnresolvedSkillRemedy,
-  renderBuildReviewJudgedResultShape,
-  renderBuildReviewProviderPayloadShape,
   type BuildReviewInfrastructureFailureReason, describeBuildReviewJudgedResultRejection } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
@@ -93,13 +91,6 @@ describe('build-review domain', () => {
     expect(describeBuildReviewJudgedResultRejection(payload, 'security', { lapId: 'lap-1', snapshotDigest: 'sha256:abc' })).toContain(field);
   });
 
-  it('renders the engine concern vocabulary in both security schemas', () => {
-    for (const render of [renderBuildReviewProviderPayloadShape, renderBuildReviewJudgedResultShape]) {
-      const members = render('security').split('concernKind: ')[1]!.split(', summary:')[0]!.split(' | ').map((member) => JSON.parse(member));
-      expect(members).toEqual(BUILD_REVIEW_FINDING_VOCABULARIES.security.concernKinds);
-    }
-  });
-
   it('round-trips empty scope only as a test-quality skip', () => {
     const skipped = { kind: 'skipped', rubric: 'testQuality', reason: 'test_quality_empty_scope' };
     expect(parseBuildReviewSkip(skipped)).toEqual(skipped);
@@ -135,18 +126,6 @@ describe('build-review domain', () => {
     };
 
     expect(describeBuildReviewJudgedResultRejection(result, 'security', expected, { changedTests: [], changedContentRegions: [{ path: 'src/auth.ts', contentHash: HASH, display: 'added command' }], changedPaths: ['src/auth.ts'], planTasks: [] })).toContain('content-region reference');
-  });
-
-  it('renders duplicate security-region occurrences into each provider prompt shape', () => {
-    const providerShape = renderBuildReviewProviderPayloadShape('security');
-    const judgedShape = renderBuildReviewJudgedResultShape('security');
-
-    expect(providerShape).not.toContain('scopeResolutions');
-    for (const shape of [providerShape, judgedShape]) {
-      expect(shape).toContain('occurrence?: integer');
-      expect(shape).toContain('0-based ordinal among equal-content regions in this path');
-      expect(shape).toContain('omit when unique or first');
-    }
   });
 
   it('diagnoses an out-of-vocabulary security concern and an anchor outside frozen input', () => {
@@ -364,7 +343,7 @@ describe('build-review domain', () => {
     expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: { ...target, contentHash: titleHash('unrelated sibling'), display: 'unrelated sibling' } }, references)).toBeUndefined();
   });
 
-  it('names each enumerated contract problem in a rejection so the repair turn can act on it', () => {
+  it('names each enumerated contract problem in a rejection', () => {
     const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:snapshot' };
     const locus = { path: 'test/widget.test.ts', contentHash: `sha256:${'a'.repeat(64)}`, display: 'widget renders' };
     const valid = { concernKind: 'test-insensitive', summary: 'Passes against a stub.', evidenceLocations: ['test/widget.test.ts:3'], anchor: { rubric: 'testQuality', locus } };
@@ -553,30 +532,6 @@ describe('build-review domain', () => {
       expect(closed, coordinatorReason).toContain(infrastructureReason);
       expect(deriveBuildReviewInfrastructureFailureReason({ reason: coordinatorReason as keyof typeof mapBuildReviewCoordinatorFailureReason })).toBe(infrastructureReason);
     }
-  });
-
-  it('renders every test-quality vocabulary member into the dispatch shape with no catch-all', () => {
-    const shape = renderBuildReviewJudgedResultShape('testQuality');
-    const vocabulary = BUILD_REVIEW_FINDING_VOCABULARIES.testQuality;
-
-    expect(vocabulary.concernKinds.length).toBeGreaterThan(0);
-    for (const member of [...vocabulary.members, ...vocabulary.concernKinds]) expect(shape).toContain(member);
-    expect(shape).toContain('rubric: "testQuality"');
-    expect(shape).toContain('contractVersion: "v3"');
-    expect(shape).toContain('contentHash');
-    expect(shape).not.toMatch(/(?:^|[-_"\s])other(?:$|[-_"\s])/);
-    expect([...vocabulary.members, ...vocabulary.concernKinds].some((member) => /(?:^|[-_])other(?:$|[-_])/.test(member))).toBe(false);
-  });
-
-  it('renders the provider payload without engine-stamped envelope identity', () => {
-    const shape = renderBuildReviewProviderPayloadShape('testQuality');
-
-    expect(shape).toContain('findings');
-    expect(shape).toContain('scopeResolutions');
-    expect(shape).toContain('counterfactualSensitivity');
-    expect(shape).not.toContain('lapId');
-    expect(shape).not.toContain('snapshotDigest');
-    expect(shape).not.toContain('contractVersion');
   });
 
   it('round-trips a dispatch-failure report and rejects other shapes', () => {

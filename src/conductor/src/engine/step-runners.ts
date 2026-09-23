@@ -109,7 +109,6 @@ import {
   emitBuildReviewCacheDiscard,
   type BuildReviewCoordinationEngineIdentity,
   type BuildReviewRubricSkillDigest,
-  describeBuildReviewDispatchedResultRejection,
   buildReviewCandidateScopeResolutionContext,
   stampBuildReviewDispatchedCandidate,
   validateBuildReviewDispatchedResult,
@@ -721,31 +720,8 @@ type ProviderAwareOneShotRequest =
     });
 
 
-/**
- * Extracts the judged-result JSON object from a rubric session's output.
- * Sessions intermittently wrap the JSON in prose or markdown fences; a strict
- * whole-output parse turned that wrapping into `invalid-provider-result`
- * infrastructure failures. Parsing tries the raw output first, then a fenced
- * block, then the outermost balanced object. Returns undefined when no
- * candidate parses — validation of the parsed shape stays with the caller.
- */
-/** Byte cap for the previous-output excerpt embedded in a rubric repair prompt. */
-export const RUBRIC_REPAIR_PROMPT_EXCERPT_CAP_BYTES = 8_192;
 /** Byte cap for the raw-output diagnostic detail on a final rubric shape failure. */
 export const RUBRIC_FAILURE_DETAIL_CAP_BYTES = 2_048;
-
-export function extractJudgedResultCandidate(output: string): unknown {
-  const candidates: string[] = [output.trim()];
-  const fence = output.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
-  if (fence) candidates.push(fence[1].trim());
-  const first = output.indexOf('{');
-  const last = output.lastIndexOf('}');
-  if (first !== -1 && last > first) candidates.push(output.slice(first, last + 1));
-  for (const candidate of candidates) {
-    try { return JSON.parse(candidate); } catch { /* try next shape */ }
-  }
-  return undefined;
-}
 
 export type RubricContractDispatch<Output = unknown> =
   | { readonly kind: 'structured'; readonly invocation: InvokeResult; readonly parsed: Output | undefined }
@@ -2506,9 +2482,9 @@ export class DefaultStepRunner implements StepRunner {
       result.kind === 'infrastructure-failure',
     );
     // A semantically valid indeterminate candidate is a non-judgment fault,
-    // not a malformed result. It consumes the existing durable allowance but
-    // never gets an in-session repair turn, and its judged findings remain in
-    // the branch artifact for the terminal aggregate.
+    // not a malformed result. It consumes the existing durable allowance and
+    // its judged findings remain in the branch artifact for the terminal
+    // aggregate.
     if (scopeIncompleteFault) {
       const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review', {
         rubric: scopeIncompleteFault.rubric,
@@ -3542,13 +3518,6 @@ export class DefaultStepRunner implements StepRunner {
         : dispatched.invocation);
     };
 
-    // Validate-and-repair loop (deterministic shape enforcement): a session
-    // that answered but missed the judged contract gets exactly ONE bounded
-    // repair invocation — a pure re-emit task carrying the rejection
-    // diagnosis, the exact contract shape, and a bounded excerpt of its own
-    // previous output — instead of burning the whole dispatch as an
-    // infrastructure failure. Provider-agnostic by construction: both the
-    // runtime-candidates path and the legacy provider path share invokeOnce.
     const initial = await invokeOnce(rubricPrompt);
     if (cacheWriteFailureDetail !== undefined) {
       return { kind: 'cache-write-failed', detail: cacheWriteFailureDetail };
@@ -3575,64 +3544,7 @@ export class DefaultStepRunner implements StepRunner {
       return makeBuildReviewDispatchFailure('root: a structured result is required');
     }
     const initialResult = validateBuildReviewDispatchedResult(initial.finalStructuredResult, branch.rubric, projection);
-    const validated = initialResult ? { result: initialResult, rejection: '' } : { rejection: 'the structured result did not satisfy the judged contract' };
-    if (validated.result) return validated.result;
-    const repairPrompt = [
-      `Your previous response for the Build Review ${label[branch.rubric]} rubric did not satisfy the judged-result contract: ${validated.rejection}.`,
-      `Re-emit your judgement as ONLY one JSON object — no prose, no markdown fences, no other text — of exactly this shape:\n${contractShape}`,
-      'Preserve the semantic content of your previous findings; change only the shape.',
-      `Your previous response (bounded excerpt):\n${boundedHeadTailExcerpt(initial.output ?? '', RUBRIC_REPAIR_PROMPT_EXCERPT_CAP_BYTES)}`,
-    ].join('\n\n');
-    const repair = await invokeOnce(repairPrompt);
-    if (repair.providerSetupExhaustion) {
-      return makeBuildReviewDispatchFailure(
-        `All configured providers were unavailable during setup: ${repair.providerSetupExhaustion.candidates.map(
-          ({ provider, reason, recoveryAction }) => `${provider}: ${redactSafetyText(reason)} Recovery: ${redactSafetyText(recoveryAction)}`,
-        ).join('; ')}`,
-        repair.providerSetupExhaustion,
-      );
-    }
-    if (repair.success && repair.output !== undefined) {
-      if (repair.output === initial.output) {
-        return makeBuildReviewDispatchFailure(
-          'judged-result repair was byte-identical to the rejected output; no further retry can act on the same payload',
-        );
-      }
-      const repaired = this.validateRubricOutput(repair.output, branch.rubric, projection);
-      if (repaired.result) return repaired.result;
-      return makeBuildReviewDispatchFailure(boundedHeadTailExcerpt(
-        `judged-result contract not satisfied after one repair turn: ${repaired.rejection}. Raw output excerpt: ${repair.output}`,
-        RUBRIC_FAILURE_DETAIL_CAP_BYTES,
-      ));
-    }
-    return makeBuildReviewDispatchFailure(boundedHeadTailExcerpt(
-      `judged-result contract not satisfied: ${validated.rejection}; the repair invocation failed. Raw output excerpt: ${initial.output}`,
-      RUBRIC_FAILURE_DETAIL_CAP_BYTES,
-    ));
-  }
-
-  /** Shared accept/reject predicate for rubric outputs — identical to the coordinator's settlement check. */
-  private validateRubricOutput(
-    output: string,
-    rubric: BuildReviewDispatchableRubric['rubric'],
-    projection: BuildReviewRubricProjection,
-  ): { result?: ReturnType<typeof validateBuildReviewDispatchedResult>; rejection: string } {
-    const candidate = extractJudgedResultCandidate(output);
-    if (candidate === undefined) {
-      return { rejection: 'no parseable JSON object was found in the response' };
-    }
-    const stampedCandidate = stampBuildReviewDispatchedCandidate(candidate, rubric, projection);
-    const result = validateBuildReviewDispatchedResult(stampedCandidate, rubric, projection);
-    if (result) return { result, rejection: '' };
-    try {
-      return {
-        rejection: describeBuildReviewDispatchedResultRejection(stampedCandidate, rubric, projection),
-      };
-    } catch {
-      // Diagnosis must never turn a repairable shape failure into a thrown
-      // provider-error that burns the dispatch.
-      return { rejection: 'the result did not satisfy the judged contract' };
-    }
+    return initialResult ?? makeBuildReviewDispatchFailure('the structured result did not satisfy the judged contract');
   }
 
   private async runTautologyPreflight(inputs: BuildReviewFrozenInputs) {

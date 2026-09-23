@@ -330,40 +330,6 @@ export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
   ],
 }) satisfies RubricOutputJsonSchema;
 
-/**
- * The reviewer-facing shape is rendered by the policy contract. Keep its
- * structure and bounds beside the parser so the advertised and accepted
- * contracts have one source of truth.
- */
-export const BUILD_REVIEW_CUSTOM_REVIEWER_PAYLOAD_SCHEMA = Object.freeze({
-  customFindings: Object.freeze({
-    kind: 'custom-findings',
-    version: 'v1',
-    rootKeys: Object.freeze(['kind', 'version', 'findings']),
-    findingKeys: Object.freeze(['concernId', 'summary', 'evidenceLocations', 'sourceRegions']),
-    optionalFindingKeys: Object.freeze(['confidence']),
-    sourceRegionKeys: Object.freeze(['path', 'startLine', 'endLine', 'contentHash', 'display']),
-  }),
-  unsupportedPolicy: Object.freeze({
-    kind: 'unsupported-policy',
-    rootKeys: Object.freeze(['kind', 'requirement']),
-  }),
-});
-
-/** The exact accepted reviewer payload grammar for the provider contract. */
-export function renderBuildReviewCustomReviewerPayloadShape(): string {
-  const { customFindings, unsupportedPolicy } = BUILD_REVIEW_CUSTOM_REVIEWER_PAYLOAD_SCHEMA;
-  return [
-    `{ kind: '${customFindings.kind}', version: '${customFindings.version}', findings: [...] }`,
-    `where each finding has exactly ${customFindings.findingKeys.join(', ')} and may additionally include confidence`,
-    `(${customFindings.findingKeys[0]} matches /${CUSTOM_CONCERN_ID.source}/; summary is non-empty and at most ${MAX_CUSTOM_SUMMARY_LENGTH} characters; ` +
-      `evidenceLocations is a non-empty array of at most ${MAX_CUSTOM_EVIDENCE_LOCATIONS} non-empty strings, each at most ${MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH} characters; ` +
-      `sourceRegions is a non-empty array of at most ${MAX_CUSTOM_SOURCE_REGIONS} objects with exactly ${customFindings.sourceRegionKeys.join(', ')}, ` +
-      `path is repository-relative, startLine/endLine are positive integers with startLine <= endLine, contentHash matches /${CUSTOM_SOURCE_REGION_CONTENT_HASH.source}/, and display is non-empty; ` +
-      `confidence, when present, is an integer 0..100; findings has at most ${MAX_CUSTOM_FINDINGS} entries).`,
-    `Or { kind: '${unsupportedPolicy.kind}', requirement: string } with exactly ${unsupportedPolicy.rootKeys.join(', ')} and a non-empty requirement of at most ${MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH} characters.`,
-  ].join(' ');
-}
 function object(value: unknown): Record<string, unknown> | undefined { return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 function text(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0; }
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -690,15 +656,6 @@ export function deriveBuildReviewScopeIncompleteFault(result: BuildReviewJudgedR
   ).join('; ').slice(0, 2_048);
   return Object.freeze({ rubric: result.rubric, reason: 'scope-incomplete', candidates: Object.freeze(candidates), detail });
 }
-/**
- * The provider returns only this payload. The dispatch boundary stamps the
- * judged envelope from the frozen projection before validation or persistence.
- */
-export function renderBuildReviewProviderPayloadShape(rubric: BuildReviewRubricId): string {
-  if (rubric === 'security') return `{ findings: [{ concernKind: ${BUILD_REVIEW_FINDING_VOCABULARIES.security.concernKinds.map((kind) => JSON.stringify(kind)).join(' | ')}, summary: string, evidenceLocations: string[], confidence?: integer (0..100), anchor: { rubric: "security", locus: { path: string, contentHash: "sha256:" + 64 lowercase hex characters, display: string, occurrence?: integer (0-based ordinal among equal-content regions in this path; omit when unique or first) } } }] }`;
-  return '{ findings: [{ concernKind: "test-insensitive", summary: string, evidenceLocations: string[], confidence?: integer (0..100), anchor: { rubric: "testQuality", locus: { path: string, contentHash: string, display: string } } }], scopeResolutions: [{ candidateId: string, status: "resolved", sourceRegion: { path: string, startLine: number, endLine: number, contentHash: string, display: string }, obligationReferences: string[], associationReason: string } | { candidateId: string, status: "out-of-scope", exclusionReason: string } | { candidateId: string, status: "indeterminate", missingEvidenceReason: string }], counterfactualSensitivity?: "supports" | "indeterminate" | "not-applicable" }';
-}
-export function renderBuildReviewJudgedResultShape(rubric: BuildReviewRubricId): string { return rubric === 'security' ? `{ kind: "judged", rubric: "security", lapId: string, snapshotDigest: string, contractVersion: "v3", findings: [{ concernKind: ${BUILD_REVIEW_FINDING_VOCABULARIES.security.concernKinds.map((kind) => JSON.stringify(kind)).join(' | ')}, summary: string, evidenceLocations: string[], confidence?: integer (0..100), anchor: { rubric: "security", locus: { path: string, contentHash: "sha256:" + 64 lowercase hex characters, display: string, occurrence?: integer (0-based ordinal among equal-content regions in this path; omit when unique or first) } } }] }` : '{ kind: "judged", rubric: "testQuality", lapId: string, snapshotDigest: string, contractVersion: "v3", findings: [{ concernKind: "test-insensitive", summary: string, evidenceLocations: string[], confidence?: integer (0..100), anchor: { rubric: "testQuality", locus: { path: string, contentHash: string, display: string } } }] }'; }
 const MAX_REJECTION_PROBLEMS = 6;
 function candidateScopeResolutionProblems(value: unknown, context: BuildReviewCandidateScopeResolutionContext): readonly string[] {
   const candidates = context.candidates.map(candidateScopeCandidate);
@@ -730,10 +687,9 @@ function candidateScopeResolutionProblems(value: unknown, context: BuildReviewCa
   return problems;
 }
 /**
- * Names every enumerated contract problem in a rejected judged result so the
- * bounded in-session repair turn can tell the grader WHAT to fix, never only
- * that the result was rejected. The predicate that accepts or rejects stays
- * `parseBuildReviewJudgedResult`; this only explains its verdict.
+ * Names every enumerated contract problem in a rejected judged result. The
+ * predicate that accepts or rejects stays `parseBuildReviewJudgedResult`; this
+ * only explains its verdict.
  */
 export function describeBuildReviewJudgedResultRejection(value: unknown, rubric: BuildReviewRubricId, expected: { readonly lapId: string; readonly snapshotDigest: string }, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): string {
   const source = object(value);
@@ -775,7 +731,7 @@ export function describeBuildReviewJudgedResultRejection(value: unknown, rubric:
     for (const entry of source.findings) { const item = object(entry); const anchor = item && object(item.anchor); const locus = anchor && region(anchor.locus); if (!locus || !text(item.concernKind)) continue; const key = `${normalizeBuildReviewFindingVocabularyMember(item.concernKind)}\u0000${locus.path}\u0000${locus.contentHash}\u0000${locus.occurrence ?? 0}`; if (seen.has(key)) duplicates.add(locus.display); seen.add(key); }
     if (duplicates.size > 0) problems.push(`findings must not repeat one concern on one content region (duplicated: ${[...duplicates].map((display) => `"${display}"`).join(', ')}) — merge equivalent findings`);
   }
-  if (problems.length === 0) return `the result did not satisfy the judged contract and no enumerated check explains why; it must match ${renderBuildReviewJudgedResultShape(rubric)} and echo the projection lapId and snapshotDigest`;
+  if (problems.length === 0) return 'the result did not satisfy the judged contract and no enumerated check explains why';
   const shown = problems.slice(0, MAX_REJECTION_PROBLEMS);
   return shown.join('; ') + (problems.length > shown.length ? `; and ${problems.length - shown.length} more problem(s)` : '');
 }

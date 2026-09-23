@@ -317,11 +317,10 @@ describe('build_review structured rubric dispatch', () => {
 
   const dispatchBuiltIn = async (invoke: LLMProvider['invoke']) => {
     const runner = new DefaultStepRunner({ invoke }, 'structured-review', '/fixture');
-    const proseScrape = vi.spyOn(runner as any, 'validateRubricOutput');
     const result = await (runner as unknown as {
       dispatchBuildReviewRubric: (value: typeof branch, reviewProjection: import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection) => Promise<unknown>;
     }).dispatchBuildReviewRubric(branch, projection);
-    return { result, proseScrape };
+    return { result };
   };
 
   it('runs testQuality through the recording provider schema boundary and stamps structured A over prose B', async () => {
@@ -331,14 +330,13 @@ describe('build_review structured rubric dispatch', () => {
       exitCode: 0,
       finalStructuredResult: { findings: [] },
     }));
-    const { result, proseScrape } = await dispatchBuiltIn(invoke);
+    const { result } = await dispatchBuiltIn(invoke);
 
     expect(invoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output.jsonSchema);
     expect(invoke.mock.calls[0]?.[0]?.prompt).toContain(
       renderRubricContractShape(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract),
     );
     expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
-    expect(proseScrape).not.toHaveBeenCalled();
   });
 
   it('derives the live nested result guidance from the selected built-in schema fixture', async () => {
@@ -383,17 +381,30 @@ describe('build_review structured rubric dispatch', () => {
     }
   });
 
-  it('rejects a prose-only success at root without a repair or prose finding', async () => {
+  it('rejects a prose-only success at the native structured-result boundary', async () => {
     const invoke = vi.fn(async (_options: InvokeOptions) => ({
       success: true,
       output: JSON.stringify({ findings: [{ summary: 'prose only must not stamp' }] }),
       exitCode: 0,
     }));
-    const { result, proseScrape } = await dispatchBuiltIn(invoke);
+    const { result } = await dispatchBuiltIn(invoke);
 
     expect(result).toMatchObject({ kind: 'dispatch-failure', detail: 'root: a structured result is required' });
     expect(invoke).toHaveBeenCalledOnce();
-    expect(proseScrape).not.toHaveBeenCalled();
+  });
+
+  it('settles a rejected structured result after its first provider invocation', async () => {
+    const invoke = vi.fn(async (_options: InvokeOptions) => ({
+      success: true,
+      output: 'ignored prose',
+      exitCode: 0,
+      finalStructuredResult: { findings: [{ concernKind: 'test-insensitive' }] },
+    }));
+    const { result } = await dispatchBuiltIn(invoke);
+
+    expect(result).toMatchObject({ kind: 'dispatch-failure' });
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke.mock.calls.slice(1).some(([options]) => options.prompt.includes('repair'))).toBe(false);
   });
 
   it('refuses an incapable runtime provider before invoking a no-input rubric dispatch', async () => {
