@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:9
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
@@ -138,12 +138,21 @@ describe('buildDaemonForegroundCommand', () => {
   it('uses the default 4096 MB old-space cap and retains the continuous daemon invocation', async () => {
     const build = requireFn(await load(), 'buildDaemonForegroundCommand');
     expect(build({})).toContain('NODE_OPTIONS=--max-old-space-size=4096');
-    expect(build({})).toMatch(/ daemon --continuous$/);
+    expect(build({})).toContain(' daemon --continuous');
   });
 
   it('uses the configured old-space cap', async () => {
     const build = requireFn(await load(), 'buildDaemonForegroundCommand');
     expect(build({ daemon_heap_limit_mb: 6144 })).toContain('NODE_OPTIONS=--max-old-space-size=6144');
+  });
+
+  it('runs one daemon child then witnesses that exact pid and status', async () => {
+    const build = requireFn(await load(), 'buildDaemonForegroundCommand');
+    const command = build({});
+
+    expect(command).toMatch(/^sh -c /);
+    expect(command).toContain(' daemon --continuous & pid=$!; wait "$pid"; rc=$?; ');
+    expect(command).toContain(' daemon exit-witness --pid "$pid" --status "$rc"');
   });
 
   it('documents the default heap limit in the configuration reference', async () => {
@@ -407,7 +416,7 @@ describe('respawnPane: argv and error handling', () => {
     expect(respawnCall.args[2]).toBe('-t');
     expect(respawnCall.args[3]).toBe('=cc-daemon-myapp-abc123:');
     const wrapped = respawnCall.args[4];
-    expect(wrapped).toMatch(/^cat .+; rm -f .+; exec .+ daemon --continuous$/);
+    expect(wrapped).toMatch(/^cat .+; rm -f .+; exec sh -c /);
     expect(wrapped).toContain(buildDaemonForegroundCommand({}) as string);
     expect(respawnCall.inherit).toBe(false);
   });

@@ -31,7 +31,13 @@ export function buildDaemonForegroundCommand(
   config: Pick<Config, 'daemon_heap_limit_mb'> = {},
 ): string {
   const heapLimitMb = config.daemon_heap_limit_mb ?? DEFAULT_DAEMON_HEAP_LIMIT_MB;
-  return `NODE_OPTIONS=--max-old-space-size=${heapLimitMb} ${shellQuote(resolveCanonicalLauncher())} daemon --continuous`;
+  const launcher = shellQuote(resolveCanonicalLauncher());
+  const daemon = `NODE_OPTIONS=--max-old-space-size=${heapLimitMb} ${launcher} daemon --continuous`;
+  // The pane shell owns one daemon child. It waits for that exact child before
+  // invoking the short-lived witness from the pane's repository cwd.
+  return `sh -c ${shellQuote(
+    `${daemon} & pid=$!; wait "$pid"; rc=$?; ${launcher} daemon exit-witness --pid "$pid" --status "$rc"; exit "$rc"`,
+  )}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
