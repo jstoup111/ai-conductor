@@ -135,8 +135,10 @@ describe('repository-local release-disposition contract', () => {
       unclassifiableAuthorsNothing: /unclassifiable.*neither a waiver nor a migration block/i.test(skill),
       gateRetainsHalt: /unclassifiable[\s\S]*release gate to halt[\s\S]*exactly as it does today/i.test(skill),
       invalidVerdictBlocked: /outside `none`, `migration`, `waiver`,[\s\S]*`unclassifiable`[\s\S]*BLOCKED[\s\S]*pass marker absent/i.test(skill),
+      uncertainSelectsUnclassifiable: /classified\s+breaking\s+surface\s+and\s+no\s+waiver\s+committed\s+in\s+the\s+feature\s+diff[\s\S]{0,120}cannot\s+confidently\s+judge[\s\S]{0,80}internal-only\s+or\s+consumer-facing[\s\S]{0,20}record\s+`Surface-Verdict: unclassifiable`/i.test(skill),
     }).toEqual({
       unclassifiableAuthorsNothing: true,
+      uncertainSelectsUnclassifiable: true,
       gateRetainsHalt: true,
       invalidVerdictBlocked: true,
     });

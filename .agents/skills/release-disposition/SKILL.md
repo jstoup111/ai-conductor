@@ -30,7 +30,10 @@ draft PR. Claude Code invokes this skill as `/release-disposition`; Codex invoke
    is one of `none|migration|waiver|unclassifiable`. Classify breaking surfaces using the release
    gate's canonical names: `bin/conduct CLI`, `skill symlink targets`, `hook wiring`, and
    `settings.json schema`. Record `Surface-Verdict: none` when the diff has no classified breaking
-   surface; it authors no waiver and no migration block.
+   surface; it authors no waiver and no migration block. When the diff has a classified breaking
+   surface and no waiver committed in the feature diff, and you cannot confidently judge whether the
+   change is internal-only or consumer-facing, record `Surface-Verdict: unclassifiable`; do not
+   guess `waiver` or `migration`.
 4. Replace any existing `Release-Disposition`, `Release-Category`, `Release-Semver`,
    `Release-Note`, and `## Migration` metadata while preserving all unrelated PR-body content.
 5. Write one of these valid forms directly to the retained draft PR body:
