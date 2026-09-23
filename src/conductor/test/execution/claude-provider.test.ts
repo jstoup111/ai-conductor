@@ -1325,6 +1325,22 @@ describe('ClaudeProvider', () => {
       expect(result.success).toBe(false);
     });
 
+    it('classifies a weekly limit before trailing auth-failure prose', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: "You've hit your weekly limit · resets 9pm (America/New_York). Failed to authenticate. API Error: 401",
+        stderr: '',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect(result.rateLimited).toBe(true);
+      expect(result.authFailure).toBeUndefined();
+      expect(result.success).toBe(false);
+      expect(result.waitSeconds).toBeDefined();
+    });
+
     it('detects usage-limit variant as rateLimited', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'usage limit reached · resets 3:20pm (America/New_York)',
