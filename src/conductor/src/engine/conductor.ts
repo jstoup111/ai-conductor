@@ -8369,11 +8369,6 @@ export class Conductor {
               (outcome) => outcome.kind === 'permission-denied',
             );
             const parkedIdx = outcomes.findIndex((outcome) => outcome.kind === 'parked');
-            const parallelMembers: GroupMember[] = membership.dispatchable.map((member, index) => ({
-              name: member.name,
-              skill: member.skill ?? '',
-              outcome: outcomes[index]!,
-            }));
             const hasGenuineFailure = outcomes.some(
               (outcome) =>
                 outcome.kind === 'no-verdict' ||
@@ -8389,9 +8384,6 @@ export class Conductor {
                 member: member.name,
               });
               if (parked) return parked;
-            }
-            for (const event of buildParallelFailureEvents(step.name, parallelMembers)) {
-              await emitTracked(event);
             }
             if (permissionDeniedIdx !== -1) {
               const outcome = outcomes[permissionDeniedIdx]!;
