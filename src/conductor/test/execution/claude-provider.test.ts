@@ -1232,6 +1232,7 @@ describe('ClaudeProvider', () => {
 
       const result = await provider.invoke({ ...baseOptions, interactive: true });
       expect(result).toMatchObject({ modelUnavailable: true, success: false });
+      expect(result.rateLimited).toBeUndefined();
     });
 
     it('does not flag modelUnavailable when prose quotes the monthly spend limit message', async () => {
