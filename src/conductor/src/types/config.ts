@@ -602,6 +602,12 @@ export interface HarnessConfig {
    */
   daemon_concurrency?: number;
   /**
+   * Maximum V8 old-space heap size, in megabytes, for the continuous daemon.
+   * Absent → the launcher applies the 4096 MB default. Values must be positive
+   * integers of at least 256 MB; validation rejects invalid values.
+   */
+  daemon_heap_limit_mb?: number;
+  /**
    * Harness self-host guardrails (adr-2026-06-30-self-host-detection-seam):
    * activation override + per-gate toggles. Absent → auto-detect, all gates on
    * (the safe default). Scoped to harness self-builds; no effect on other repos.

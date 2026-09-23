@@ -590,6 +590,27 @@ steps:
       expect(resolveDaemonConcurrency({})).toBe(1);
     });
 
+    it('accepts daemon_heap_limit_mb 6144 and retains it in the validated config', () => {
+      const result = validateConfig({ daemon_heap_limit_mb: 6144 });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: { daemon_heap_limit_mb: 6144 },
+      });
+    });
+
+    it.each([0, -1, 1.5, 'big'] as const)(
+      'rejects daemon_heap_limit_mb %j outside the accepted integer range [256, ∞)',
+      (daemonHeapLimitMb) => {
+        const result = validateConfig({ daemon_heap_limit_mb: daemonHeapLimitMb as never });
+
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.error.message).toContain('daemon_heap_limit_mb');
+        expect(result.error.message).toContain('[256, ∞)');
+      },
+    );
+
     it('resolveValidationConcurrency defaults to 4 when absent', () => {
       expect(resolveValidationConcurrency({})).toBe(4);
     });
