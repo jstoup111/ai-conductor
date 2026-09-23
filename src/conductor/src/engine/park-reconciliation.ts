@@ -954,13 +954,27 @@ export async function reconcileMergedPark(
       configResult.ok ? configResult.config : undefined,
     );
     await runProjectTeardown(worktreePath, opts.teardownLog ?? opts.log, { timeoutSeconds, verbose: opts.verbose });
+    // D10: the project teardown runs inside the worktree and can write files,
+    // so the probe that authorizes removal must run AFTER it, immediately
+    // before the destructive step. Fail closed on any output or probe failure.
     try {
+      const { stdout } = await runGit(['status', '--porcelain'], { cwd: worktreePath });
+      if (stdout.length > 0) {
+        return { slug: opts.slug, steps, refusal: 'dirty-worktree' };
+      }
+    } catch {
+      return { slug: opts.slug, steps, refusal: 'dirty-worktree' };
+    }
+    try {
+      // D1: no force flag. Plain `worktree remove` still removes gitignored
+      // output (git's clean check never lists ignored paths) and refuses any
+      // modified or untracked path; a refusal is final, never escalated.
       if (opts.worktreeLifecycle) {
         await opts.worktreeLifecycle.run(() =>
-          runGit(['worktree', 'remove', '--force', worktreePath], { cwd: opts.projectRoot }),
+          runGit(['worktree', 'remove', worktreePath], { cwd: opts.projectRoot }),
         );
       } else {
-        await runGit(['worktree', 'remove', '--force', worktreePath], { cwd: opts.projectRoot });
+        await runGit(['worktree', 'remove', worktreePath], { cwd: opts.projectRoot });
       }
     } catch {
       // A removal failure on a path git actually owns is a real failure. A path
@@ -988,11 +1002,11 @@ export async function reconcileMergedPark(
   } else {
     for (const ref of evidence.branches) {
       try {
-        // Force delete. THIS function is the authority that deleting these refs
-        // drops no commit, and one of its two proofs — merged-PR head identity —
-        // is precisely the squash-merge case where git's own `-d` merge check is
-        // permanently false. `-d` would refuse every squash-merged branch here.
-        await runGit(['branch', '-D', ref], { cwd: opts.projectRoot });
+        // Safe delete only (adr-2026-08-01 D1: no force flag exists anywhere).
+        // git's own `-d` merge check refuses a squash-merged branch whose tip
+        // is not an ancestor; that branch is left in place (operator decision
+        // 2026-09-23) and the refusal is reported, never escalated to `-D`.
+        await runGit(['branch', '-d', ref], { cwd: opts.projectRoot });
       } catch {
         return { slug: opts.slug, steps, refusal: 'branch-delete-failed' };
       }

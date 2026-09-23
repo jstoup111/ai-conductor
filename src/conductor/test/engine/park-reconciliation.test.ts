@@ -307,7 +307,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run });
       const destructiveCalls = run.mock.calls
         .map(([args]) => args)
-        .filter((args) => (args[0] === 'worktree' && args[1] === 'remove') || (args[0] === 'branch' && args[1] === '-D'));
+        .filter((args) => (args[0] === 'worktree' && args[1] === 'remove') || (args[0] === 'branch' && (args[1] === '-d' || args[1] === '-D')));
 
       expect({
         outcome,
@@ -320,8 +320,10 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
         outcome: dirty
           ? { slug, steps: [], refusal: 'dirty-worktree' }
           : { slug, steps: ['worktree-removed', 'branch-deleted'] },
-        statusCalls: [[['status', '--porcelain'], { cwd: worktree }]],
-        destructiveCalls: dirty ? [] : [['worktree', 'remove', '--force', worktree], ['branch', '-D', branch]],
+        // Clean trees are probed twice: before teardown and again immediately
+        // before removal (D10), since teardown runs inside the worktree.
+        statusCalls: Array.from({ length: dirty ? 1 : 2 }, () => [['status', '--porcelain'], { cwd: worktree }]),
+        destructiveCalls: dirty ? [] : [['worktree', 'remove', worktree], ['branch', '-d', branch]],
         worktreeRemains: true,
         fileRemains: true,
         branchRemains: dirty,
@@ -343,7 +345,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run });
       const destructiveCalls = run.mock.calls
         .map(([args]) => args)
-        .filter((args) => (args[0] === 'worktree' && args[1] === 'remove') || (args[0] === 'branch' && args[1] === '-D'));
+        .filter((args) => (args[0] === 'worktree' && args[1] === 'remove') || (args[0] === 'branch' && (args[1] === '-d' || args[1] === '-D')));
 
       expect({ outcome, destructiveCalls }).toEqual({
         outcome: { slug, steps: [], refusal: 'dirty-worktree' },
@@ -366,11 +368,91 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run });
       const destructiveCalls = run.mock.calls
         .map(([args]) => args)
-        .filter((args) => (args[0] === 'worktree' && args[1] === 'remove') || (args[0] === 'branch' && args[1] === '-D'));
+        .filter((args) => (args[0] === 'worktree' && args[1] === 'remove') || (args[0] === 'branch' && (args[1] === '-d' || args[1] === '-D')));
 
       expect({ outcome, destructiveCalls }).toEqual({
         outcome: { slug, steps: [], refusal: 'dirty-worktree' },
         destructiveCalls: [],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('re-probes porcelain after project teardown and refuses when teardown dirtied the worktree', async () => {
+    const projectRoot = await mkdtemp(join(process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir(), 'park-reconciliation-'));
+    const slug = 'teardown-dirties';
+    const branch = `hotfix/${slug}`;
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const written = join(worktree, 'teardown-output.txt');
+    const base = makeGit({ branches: [branch], merged: [branch] });
+    // Porcelain reflects the real tree: clean until teardown writes its file.
+    const run = vi.fn<GitRunner>(async (args, options) => {
+      if (args[0] === 'status') {
+        return { stdout: (await access(written).then(() => true, () => false)) ? '?? teardown-output.txt\n' : '' };
+      }
+      return base.run(args, options);
+    });
+    try {
+      const teardown = join(worktree, TEARDOWN_SCRIPT);
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(join(worktree, 'package.json'), '{"type":"commonjs"}\n', 'utf-8');
+      await writeFile(teardown, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(written)}, 'teardown\\n');\n`);
+      await chmod(teardown, 0o755);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run });
+      const gitCalls = run.mock.calls.map(([args]) => args);
+
+      expect({
+        outcome,
+        statusCalls: gitCalls.filter((args) => args[0] === 'status').length,
+        destructiveCalls: gitCalls.filter((args) => (args[0] === 'worktree' && args[1] === 'remove') || args[0] === 'branch'),
+        teardownFileRemains: await access(written).then(() => true, () => false),
+        branchRemains: !base.deleted.includes(branch),
+      }).toEqual({
+        outcome: { slug, steps: [], refusal: 'dirty-worktree' },
+        statusCalls: 2,
+        destructiveCalls: [],
+        teardownFileRemains: true,
+        branchRemains: true,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: 'an ancestry-proven reclaim', world: { merged: ['hotfix/no-force'], tips: { 'hotfix/no-force': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } }, removeFails: false },
+    { name: 'a squash-merged branch git refuses to safe-delete', world: { tips: { 'hotfix/no-force': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } }, removeFails: false },
+    { name: 'a registered worktree whose safe removal fails', world: { merged: ['hotfix/no-force'], tips: { 'hotfix/no-force': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } }, removeFails: true },
+  ])('never passes a force flag or update-ref to git for $name', async ({ world, removeFails }) => {
+    const projectRoot = await mkdtemp(join(process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir(), 'park-reconciliation-'));
+    const slug = 'no-force';
+    const branch = `hotfix/${slug}`;
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run } = makeGit({
+      branches: [branch],
+      registeredWorktrees: [worktree],
+      ...(removeFails ? { worktreeRemoveFails: 'fatal: contains modified or untracked files, use --force to delete it' } : {}),
+      ...world,
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: '[{"headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]' });
+    try {
+      await mkdir(worktree, { recursive: true });
+      const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run, runGh });
+      const gitCalls = run.mock.calls.map(([args]) => args);
+
+      expect({
+        forceArgv: gitCalls.filter((args) =>
+          args[0] === 'update-ref' || args.some((arg) => arg === '--force' || arg === '-f' || arg === '-D')),
+        removeCalls: gitCalls.filter((args) => args[0] === 'worktree' && args[1] === 'remove'),
+        branchCalls: gitCalls.filter((args) => args[0] === 'branch'),
+        refusal: outcome.refusal,
+      }).toEqual({
+        forceArgv: [],
+        removeCalls: [['worktree', 'remove', worktree]],
+        branchCalls: removeFails ? [] : [['branch', '-d', branch]],
+        refusal: removeFails ? 'worktree-remove-failed' : 'merged' in world ? undefined : 'branch-delete-failed',
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -447,7 +529,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run, runGh, emitProof: true });
       const gitCalls = run.mock.calls.map(([args]) => args);
       const destructiveCalls = gitCalls
-        .filter((args) => (args[0] === 'worktree' && args[1] === 'remove') || (args[0] === 'branch' && args[1] === '-D'));
+        .filter((args) => (args[0] === 'worktree' && args[1] === 'remove') || (args[0] === 'branch' && (args[1] === '-d' || args[1] === '-D')));
       const shippedListingReads = gitCalls
         .filter((args) => args[0] === 'ls-tree' && args.includes('origin/main:.docs/shipped')).length;
 
@@ -455,7 +537,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
         outcome: { slug, ...expected },
         destructiveCalls: 'refusal' in expected
           ? []
-          : [['worktree', 'remove', '--force', worktree], ['branch', '-D', branch]],
+          : [['worktree', 'remove', worktree], ['branch', '-d', branch]],
         shippedListingReads: listingReads,
       });
     } finally {
@@ -480,7 +562,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run, runGh: vi.fn<GhRunner>().mockImplementation(gh) });
       const destructiveCalls = run.mock.calls
         .map(([args]) => args)
-        .filter((args) => (args[0] === 'worktree' && args[1] === 'remove') || (args[0] === 'branch' && args[1] === '-D'));
+        .filter((args) => (args[0] === 'worktree' && args[1] === 'remove') || (args[0] === 'branch' && (args[1] === '-d' || args[1] === '-D')));
 
       expect({ outcome, destructiveCalls }).toEqual({
         outcome: { slug, steps: [], refusal },
@@ -690,7 +772,9 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       name: 'the current tip equals the merged PR head',
       gh: '[{"headRefOid":"1111111111111111111111111111111111111111"}]',
       tips: { 'feat/deletion-gate-map': '1111111111111111111111111111111111111111' },
-      expectedOutcome: { steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+      // Squash merge: the safe `branch -d` refuses a non-ancestor tip and the
+      // helper never escalates to force (adr-2026-08-01 D1), so the branch stays.
+      expectedOutcome: { steps: ['worktree-removed'], refusal: 'branch-delete-failed' },
     },
   ] as const)('maps deletion-gate diagnosis when $name', async ({ gh, mergedPrHeads, tips, expectedOutcome }) => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
@@ -709,7 +793,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
 
       expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
         outcome: { slug, ...expectedOutcome },
-        deleted: expectedOutcome.refusal === undefined ? [`feat/${slug}`] : [],
+        deleted: [],
         parked: expectedOutcome.refusal !== undefined,
       });
       if (expectedOutcome.refusal !== 'unmerged-commits') {
@@ -720,7 +804,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     }
   });
 
-  it('deletes a squash-merged branch whose tip matches the merged PR head oid', async () => {
+  it('keeps a squash-merged branch whose tip matches the merged PR head oid rather than force-deleting it', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'squash-merged';
     const tip = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
@@ -745,18 +829,18 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
         ghCalls: runGh.mock.calls,
         parked: await isOperatorParked(projectRoot, slug),
       }).toEqual({
-        outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
-        deleted: [`fix/${slug}`],
-        // Force delete: this function, not git, established that the tip is the
-        // commit the squash merge landed, and `-d` refuses that ref forever.
-        deleteArgv: [['branch', '-D', `fix/${slug}`]],
+        outcome: { slug, steps: ['worktree-removed'], refusal: 'branch-delete-failed' },
+        deleted: [],
+        // Safe delete only: `-d` refuses a squash-merged ref, and the helper
+        // leaves it in place instead of escalating to `-D` (D1: no force flag).
+        deleteArgv: [['branch', '-d', `fix/${slug}`]],
         ghCalls: [
           [
             ['pr', 'list', '--head', `fix/${slug}`, '--state', 'merged', '--json', 'headRefOid', '--limit', '1'],
             { cwd: projectRoot },
           ],
         ],
-        parked: false,
+        parked: true,
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -988,7 +1072,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
         'ls-tree --name-only',
         'for-each-ref --format=%(refname:short)',
         'merge-base --is-ancestor',
-        'branch -D',
+        'branch -d',
       ],
       ghCalls: [],
     });
@@ -1080,7 +1164,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     expect(outcome).toEqual({ slug, steps: [], refusal: 'ancestry-check-failed' });
   });
 
-  it('reclaims a squash-merged non-daemon branch by merged-PR head when the shipped-record listing is unreadable', async () => {
+  it('keeps a squash-merged non-daemon branch proven by merged-PR head when the shipped-record listing is unreadable', async () => {
     const slug = 'hotfix-unreadable-records';
     const branch = `hotfix/${slug}`;
     const head = '2222222222222222222222222222222222222222';
@@ -1103,8 +1187,8 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     });
 
     expect({ outcome, deleted, repairs: requestRecordRepair.mock.calls }).toEqual({
-      outcome: { slug, steps: ['worktree-removed', 'branch-deleted'] },
-      deleted: [branch],
+      outcome: { slug, steps: ['worktree-removed'], refusal: 'branch-delete-failed' },
+      deleted: [],
       repairs: [],
     });
   });
@@ -2527,8 +2611,8 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
         onEvent: (event) => events.push(event),
       });
       expect({ deleted, events }).toEqual({
-        deleted: [squashBranch],
-        events: [{ type: 'worktree_reclaim_reclaimed', slug: squashSlug, branch: squashBranch, proof: 'merged-pr-head' }],
+        deleted: [],
+        events: [{ type: 'worktree_reclaim_failed', slug: squashSlug, branch: squashBranch, refusal: 'branch-delete-failed' }],
       });
 
       const unavailable = makeGit({ refsUnavailable: true });
@@ -2547,7 +2631,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     }
   });
 
-  it('reclaims a non-daemon squash candidate and retains only the record-gated candidate when records are unreadable', async () => {
+  it('keeps a non-daemon squash candidate branch and retains the record-gated candidate when records are unreadable', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'sweep-hotfix-unreadable-records';
     const branch = `hotfix/${slug}`;
@@ -2572,9 +2656,9 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       });
 
       expect({ deleted, events }).toEqual({
-        deleted: [branch],
+        deleted: [],
         events: [
-          { type: 'worktree_reclaim_reclaimed', slug, branch, proof: 'merged-pr-head' },
+          { type: 'worktree_reclaim_failed', slug, branch, refusal: 'branch-delete-failed' },
           { type: 'worktree_reclaim_retained', slug: daemonSlug, branch: daemonBranch, reason: 'evidence-unavailable' },
         ],
       });
