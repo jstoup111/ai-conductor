@@ -566,7 +566,8 @@ drop, by **either** of two proofs:
 
 If neither proof holds for some branch, cleanup is refused and nothing is deleted, even though the
 slug still classifies `merged`. The reason distinguishes no merged-PR proof (`no-merge-proof`),
-commits added after the merged PR head (`unmerged-commits`), a branch that is behind that head
+commits the merged PR head does not contain, whether added after it or left behind by a rebased PR
+head (`unmerged-commits`), a branch whose tip is an ancestor of that head
 (`branch-behind-merged-head`), and evidence that Git or `gh` could not check
 (`ancestry-check-failed`). For `unmerged-commits`, `daemon reconcile-parked` prints up to ten
 `SHA subject` lines and an overflow count, so the operator can inspect what cleanup would drop.
@@ -602,7 +603,12 @@ ai-conductor daemon reconcile-parked <slug>
 See [`daemon reconcile-parked`](../reference/cli.md#daemon-reconcile-parked) for its exact output
 and refusal reasons. Reclaimed, retained, and failed registered-worktree outcomes are persisted in
 the daemon event ledger as `worktree_reclaim_reclaimed`, `worktree_reclaim_retained`, and
-`worktree_reclaim_failed`; reclaimed and failed outcomes are also rendered in the daemon log. An
+`worktree_reclaim_failed`. The daemon log renders reclaimed outcomes, and a failed removal,
+branch deletion, or unpark as `✗ worktree reclaim failed`. Any other helper refusal leaves the
+worktree intact and renders as `↷ worktree retained <slug> (<branch>; <reason>)`. It is shown once
+per slug until its branch or reason changes, although the ledger records it on every sweep. A
+worktree whose `.pipeline/phase-active` marker is more than seven days old is treated as abandoned
+rather than in flight; every merge proof and the dirty-worktree check still apply to it. An
 `orphan` classification is never auto-reconciled — it needs an operator to decide whether to park it,
 delete it, or resume it manually.
 

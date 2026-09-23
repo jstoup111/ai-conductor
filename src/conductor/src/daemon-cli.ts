@@ -174,7 +174,11 @@ import {
   writePersistedBaseSha,
 } from './engine/daemon-sha.js';
 import { scanInheritedState, renderDashboard, type ParkedEntry } from './engine/daemon-dashboard.js';
-import { reconcileParkedFeatures, type ParkClassification } from './engine/park-reconciliation.js';
+import {
+  isReclaimOperationFailure,
+  reconcileParkedFeatures,
+  type ParkClassification,
+} from './engine/park-reconciliation.js';
 import { makeRecordRepairRequester } from './engine/shipment-evidence-cli.js';
 import { writeGatedSnapshot } from './engine/gated-snapshot.js';
 import { announceGatedPr, announceGatedIssue } from './engine/gate-writeback.js';
@@ -2640,6 +2644,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
 }
 
 /**
+ * Last rendered retention detail per worktree slug, so a sweep that re-emits
+ * the same retained refusal every pass logs it only when it changes.
+ */
+const renderedReclaimRetentions = new Map<string, string>();
+
+/** Test seam: forget which reclaim retentions have already been rendered. */
+export function resetRenderedReclaimRetentions(): void {
+  renderedReclaimRetentions.clear();
+}
+
+/**
  * Render the meaningful inner-loop events to the daemon console. Keeps the
  * signal high: step boundaries, failures/retries, unsatisfied gates, kickbacks,
  * halts/convergence, and rate limits — not the full event firehose.
@@ -2902,11 +2917,24 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot} ${chalk.red('✗')} scratch cleanup failed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
       break;
     case 'worktree_reclaim_reclaimed':
+      renderedReclaimRetentions.delete(event.slug);
       log(`${dot} ${chalk.green('✓')} worktree reclaimed ${event.slug}${event.branch === undefined ? '' : ` (${[event.branch, event.proof].filter(Boolean).join('; ')})`}`);
       break;
-    case 'worktree_reclaim_failed':
-      log(`${dot} ${chalk.red('✗')} worktree reclaim failed ${event.slug} (${[event.branch, event.refusal].filter(Boolean).join('; ')})`);
+    case 'worktree_reclaim_failed': {
+      const detail = [event.branch, event.refusal].filter(Boolean).join('; ');
+      if (isReclaimOperationFailure(event.refusal)) {
+        renderedReclaimRetentions.delete(event.slug);
+        log(`${dot} ${chalk.red('✗')} worktree reclaim failed ${event.slug} (${detail})`);
+        break;
+      }
+      // The helper declined to act and the worktree is intact. The sweep
+      // re-emits this every pass (the event ledger keeps each one); the log
+      // shows it once per slug until its branch or reason changes.
+      if (renderedReclaimRetentions.get(event.slug) === detail) break;
+      renderedReclaimRetentions.set(event.slug, detail);
+      log(`${dot} ${chalk.yellow('↷')} worktree retained ${event.slug} (${detail})`);
       break;
+    }
     case 'provider_fallback':
       log(
         chalk.bold.yellow(
