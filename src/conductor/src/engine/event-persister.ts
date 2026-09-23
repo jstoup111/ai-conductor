@@ -322,6 +322,10 @@ export function startDaemonEventPersistence(
   log: (message: string) => void = () => {},
 ): { stop: () => void } {
   const persister = new EventPersister(join(mainRoot, '.daemon', 'events.jsonl'), events);
+  // A full daemon ledger remains unavailable after a write failure. Boundary
+  // sampling continues so other listeners can run, but repeating the same
+  // write error for every sample would turn one outage into log noise.
+  let loggedMemorySampleFailure = false;
   const handler: EventHandler = (event) => {
     if (isForwardedFromFeature(event)) return;
     try {
@@ -329,6 +333,8 @@ export function startDaemonEventPersistence(
       // would duplicate subscriptions. The direct method is runtime-private only and preserves its schema.
       (persister as unknown as { persist(event: ConductorEvent): void }).persist(event);
     } catch (error) {
+      if (event.type === 'daemon_memory_sample' && loggedMemorySampleFailure) return;
+      if (event.type === 'daemon_memory_sample') loggedMemorySampleFailure = true;
       log(`[daemon] event persistence failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   };

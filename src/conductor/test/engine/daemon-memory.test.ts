@@ -1,4 +1,4 @@
-// Covers: task:2, task:4, task:5
+// Covers: task:2, task:3, task:4, task:5
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
@@ -116,6 +116,54 @@ describe('startDaemonMemorySampler', () => {
     } finally {
       sampler.stop();
       feature.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('stays idle-silent and logs one daemon-ledger failure without stopping later boundary listeners', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR ?? '/tmp', 'daemon-memory-failure-'));
+    const events = new ConductorEventEmitter();
+    const messages: string[] = [];
+    const feature = startFeatureEventPersistence(join(root, 'f'), events, 'f');
+    const samples: unknown[] = [];
+    let completedListenerCalls = 0;
+    events.on('daemon_memory_sample', (event) => { samples.push(event); });
+    const sampler = startDaemonMemorySampler(events, {
+      memoryUsage: () => ({ rss: 1, heapUsed: 2, heapTotal: 3, external: 4, arrayBuffers: 0 }),
+    });
+    events.on('step_completed', () => { completedListenerCalls += 1; });
+    let persistence: { stop: () => void } | undefined;
+
+    try {
+      await events.emit({
+        type: 'daemon_backlog_snapshot',
+        counts: { eligible: 0, waiting: 0, blocked: 0, gated: 0, parked: 0 },
+        oldestAgeSeconds: {},
+        slots: { busy: 0, free: 1 },
+        inFlight: [],
+        blocked: {},
+        pollDurationMs: 0,
+      });
+      expect(samples).toEqual([]);
+
+      // A file at .daemon makes every EventPersister mkdir attempt fail with
+      // EEXIST; this is the filesystem boundary under test, not a real service.
+      writeFileSync(join(root, '.daemon'), 'not a directory');
+      persistence = startDaemonEventPersistence(root, events, (message) => messages.push(message));
+
+      await feature.events.emit({ type: 'step_started', step: 'build', index: 0 });
+      await feature.events.emit({ type: 'step_completed', step: 'build', status: 'done' });
+      await feature.events.emit({ type: 'step_started', step: 'test_suite', index: 1 });
+
+      expect(samples).toHaveLength(3);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain(join(root, '.daemon', 'events.jsonl'));
+      expect(messages[0]).toContain('EEXIST');
+      expect(completedListenerCalls).toBe(1);
+    } finally {
+      sampler.stop();
+      feature.stop();
+      persistence?.stop();
       await rm(root, { recursive: true, force: true });
     }
   });
