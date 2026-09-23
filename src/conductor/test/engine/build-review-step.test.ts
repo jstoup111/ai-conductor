@@ -474,6 +474,21 @@ describe('build_review structured rubric dispatch', () => {
     expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS' });
   });
 
+  it.each([
+    [branch, 'scopeResolutions: [{ candidateId: string'],
+    [{ ...branch, rubric: 'security' as const, skillName: 'build-review-security' }, 'contentHash: "sha256:" + 64 lowercase hex characters'],
+  ] as const)('renders the $0.rubric prompt from its descriptor rather than the retired prose shape', async (rubricBranch, retiredShapeText) => {
+    const invoke = vi.fn(async (_options: InvokeOptions) => ({
+      success: true, output: 'ignored prose', exitCode: 0, finalStructuredResult: { findings: [] },
+    }));
+
+    await dispatchBuiltIn(invoke, undefined, rubricBranch);
+
+    const prompt = invoke.mock.calls[0]?.[0]?.prompt ?? '';
+    expect(prompt).toContain(renderRubricContractShape(BUILD_REVIEW_RUBRIC_REGISTRY[rubricBranch.rubric].contract));
+    expect(prompt).not.toContain(retiredShapeText);
+  });
+
   it('makes a forced interactive Claude rubric schema refusal observable to the coordinator lane', async () => {
     const provider = new ClaudeProvider();
     const dispatched = await dispatchRubricContract({
