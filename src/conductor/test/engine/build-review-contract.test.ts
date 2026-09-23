@@ -1,6 +1,6 @@
 // Covers: task:1, task:3
 // Covers: task:2
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   renderRubricContractShape,
@@ -179,11 +179,16 @@ describe('engine/build-review-contract', () => {
     expect(custom.contract.identity.canonicalize(stamped?.findings[0])?.id).toBe(stamped?.findings[0]?.identity.id);
   });
 
-  it('rejects a member without output.jsonSchema while resolving the contract catalog', () => {
+  it('rejects a member without output.jsonSchema while resolving the contract catalog before any descriptor dispatch', () => {
+    const dispatch = vi.fn();
     const member = {
       ...builtinMembers[0],
       contract: {
         ...builtinMembers[0]!.contract,
+        projection: {
+          ...builtinMembers[0]!.contract.projection,
+          build: dispatch,
+        },
         output: {
           ...builtinMembers[0]!.contract.output,
           jsonSchema: undefined,
@@ -192,13 +197,26 @@ describe('engine/build-review-contract', () => {
     } as unknown as BuildReviewContractCatalogMember;
 
     expect(() => resolveBuildReviewContractCatalog([member])).toThrow(/testQuality.*output\.jsonSchema/i);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it('rejects duplicate rubric ids while resolving the contract catalog', () => {
+  it('rejects duplicate rubric ids while resolving the contract catalog before any descriptor dispatch', () => {
+    const dispatch = vi.fn();
     const [first] = builtinMembers;
-    const duplicate = { ...first!, id: first!.id };
+    const dispatchingFirst = {
+      ...first!,
+      contract: {
+        ...first!.contract,
+        projection: {
+          ...first!.contract.projection,
+          build: dispatch,
+        },
+      },
+    };
+    const duplicate = { ...dispatchingFirst, id: dispatchingFirst.id };
 
-    expect(() => resolveBuildReviewContractCatalog([first!, duplicate])).toThrow(/testQuality/i);
+    expect(() => resolveBuildReviewContractCatalog([dispatchingFirst, duplicate])).toThrow(/testQuality/i);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it('rejects an incomplete descriptor at the live registry construction boundary', () => {
