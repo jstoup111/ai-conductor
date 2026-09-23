@@ -1,5 +1,11 @@
 // Covers: task:11, task:12
 import { describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { resolveConflictingPr } from '../../src/engine/autoresolve.js';
+import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { buildPrFixture, skipReplay, type PrFixture } from './autoresolve-pr-fixture.js';
 import {
   SUPERSESSION_AUDIT_MARKER,
   guardedPrRunner,
@@ -62,5 +68,93 @@ describe('postSupersessionAudit', () => {
     });
     expect(calls.some((args) => args.includes('PATCH'))).toBe(true);
     expect(calls.some((args) => args[0] === 'pr' && args[1] === 'comment')).toBe(false);
+  });
+});
+
+describe('resolveConflictingPr — judged publication audit (real git, stubbed gh)', () => {
+  const suiteCommand = 'npm run test:ci';
+  const rationale = 'upstream rewrote the assertion';
+  const fixture = (failCommentContaining?: string) => buildPrFixture({
+    initial: { 'rewrite.test.ts': 'base\n' },
+    feature: [{ subject: 'test: rewrite assertion', files: { 'rewrite.test.ts': 'feature\n' } }],
+    main: { 'rewrite.test.ts': 'upstream\n' },
+    failCommentContaining,
+  });
+  const run = (fx: PrFixture, order: string[], events: never = fx.events) =>
+    resolveConflictingPr(
+      { prUrl: fx.prUrl, slug: 'feature', repoCwd: fx.repo },
+      'feature',
+      { enabled: true, suiteCommand, cooldownMinutes: 0, attemptCap: 2 },
+      {
+        runGh: async (args, opts) => {
+          if (args[1] === 'comment' && (args[args.indexOf('--body') + 1] ?? '').includes(SUPERSESSION_AUDIT_MARKER)) {
+            order.push('audit');
+          }
+          return fx.gh(args, opts);
+        },
+        runSuite: async () => {
+          order.push('suite');
+          return { exitCode: 0, durationMs: 0, configured: true };
+        },
+        resolver: async ({ projectRoot }) => {
+          await skipReplay(projectRoot);
+          return { resolved: true, verdict: { choice: 'superseded', rationale, superseded: [fx.shas[0]] } };
+        },
+        log: fx.log,
+        events,
+      },
+    );
+
+  it('S4.1: posts the audit after the suite, naming choice, rationale, superseded sha and the passing command', async () => {
+    const fx = await fixture();
+    try {
+      const order: string[] = [];
+      expect(await run(fx, order)).toEqual({ kind: 'refreshed' });
+      expect(order).toEqual(['suite', 'audit']);
+      const audits = fx.commentBodies().filter((body) => body.includes(SUPERSESSION_AUDIT_MARKER));
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toContain('**Choice:** superseded');
+      expect(audits[0]).toContain(rationale);
+      expect(audits[0]).toContain(fx.shas[0]);
+      expect(audits[0]).toContain(`\`${suiteCommand}\` (exit 0)`);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  it('S4.2: emits exactly one verdict event and persists it to the feature event log', async () => {
+    const fx = await fixture();
+    const featureWorktree = join(fx.repo, '.feature-worktree');
+    const bus = new ConductorEventEmitter();
+    const scope = startFeatureEventPersistence(featureWorktree, bus, 'feature');
+    try {
+      expect(await run(fx, [], scope.events as never)).toEqual({ kind: 'refreshed' });
+      scope.stop();
+      const lines = (await readFile(join(featureWorktree, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+      const verdicts = lines.filter((line) => line.type === 'rebase_supersession_verdict');
+      expect(verdicts).toHaveLength(1);
+      expect(verdicts[0]).toMatchObject({
+        choice: 'superseded',
+        rationale,
+        superseded: [fx.shas[0]],
+        verification: { command: suiteCommand, exitCode: 0 },
+      });
+    } finally {
+      scope.stop();
+      await fx.cleanup();
+    }
+  });
+
+  it('S4.4: a failing audit comment keeps the publication, logs the failure, and still emits the event', async () => {
+    const fx = await fixture(SUPERSESSION_AUDIT_MARKER);
+    try {
+      expect(await run(fx, [])).toEqual({ kind: 'refreshed' });
+      expect(await fx.pushes()).toBe(1);
+      expect(fx.logs.some((line) => line.includes(fx.prUrl) && line.includes('gh comment unavailable'))).toBe(true);
+      expect(fx.emitted.filter((event) => event.type === 'rebase_supersession_verdict')).toHaveLength(1);
+    } finally {
+      await fx.cleanup();
+    }
   });
 });
