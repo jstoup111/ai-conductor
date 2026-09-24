@@ -735,6 +735,15 @@ export type RubricContractDispatch<Output = unknown> =
 
 type RubricContractInvokeOptions = Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort' | 'nativeSchema'>;
 
+/**
+ * The invocation a rubric cache hit stands in for. It carries the cached
+ * verdict as `finalStructuredResult`, because `dispatchRubricContract` judges
+ * only the structured result and root-rejects an invocation without one.
+ */
+export function cachedRubricInvocation(result: unknown): InvokeResult {
+  return { success: true, exitCode: 0, output: JSON.stringify(result), finalStructuredResult: result, providerInvocationSkipped: true };
+}
+
 /** Native-schema invocation boundary shared by built-in and custom rubrics. */
 export async function dispatchRubricContract<Output>(input: {
   readonly descriptor: Pick<RubricContractDescriptor<unknown, unknown, Output>, 'output'>;
@@ -2925,7 +2934,7 @@ export class DefaultStepRunner implements StepRunner {
               source: policy.source, bundleDigest: bundle.digest, ...policyProvenance,
               originalLapId: cache.hit.provenance.cachedLapId, originalSnapshotDigest: cache.hit.provenance.cachedSnapshotDigest,
             } });
-            return { success: true, exitCode: 0, output: JSON.stringify(cache.hit.result), providerInvocationSkipped: true };
+            return cachedRubricInvocation(cache.hit.result);
           }
           return invoke();
           }),
@@ -3545,7 +3554,7 @@ export class DefaultStepRunner implements StepRunner {
                 if (cache.kind === 'hit' && validateBuildReviewDispatchedResult(cache.hit.result, branch.rubric, projection)) {
                   cacheHit = true;
                   await this.events?.emit({ type: 'build_review_cache_hit', rubric: branch.rubric, lapId: projection.lapId });
-                  return { success: true, exitCode: 0, output: JSON.stringify(cache.hit.result), providerInvocationSkipped: true };
+                  return cachedRubricInvocation(cache.hit.result);
                 }
                 return invoke();
                 }),

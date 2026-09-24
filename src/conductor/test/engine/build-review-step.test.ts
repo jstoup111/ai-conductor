@@ -6,7 +6,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DefaultStepRunner, dispatchRubricContract, type StepRunnerOptions } from '../../src/engine/step-runners.js';
+import { DefaultStepRunner, cachedRubricInvocation, dispatchRubricContract, type StepRunnerOptions } from '../../src/engine/step-runners.js';
 import { classifyRetryDecision } from '../../src/engine/artifacts.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
@@ -522,6 +522,20 @@ describe('build_review structured rubric dispatch', () => {
     const prompt = invoke.mock.calls[0]?.[0]?.prompt ?? '';
     expect(prompt).toContain(renderRubricContractShape(BUILD_REVIEW_RUBRIC_REGISTRY[rubricBranch.rubric].contract));
     expect(prompt).not.toContain(retiredShapeText);
+  });
+
+  it('judges a cached rubric verdict as a structured result instead of root-rejecting it', async () => {
+    // A lap re-run at an unchanged snapshot serves a rubric from cache. The
+    // shortcut invocation must carry the cached verdict as the structured
+    // result, or every re-lap burns a mechanical fault on the cached rubric.
+    const cachedVerdict = { findings: [] };
+    const dispatched = await dispatchRubricContract({
+      descriptor: { output: { ...BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output, parse: (value: unknown) => value } },
+      options: { prompt: 'judge', cwd: '/fixture' },
+      invoke: async () => cachedRubricInvocation(cachedVerdict),
+    });
+
+    expect(dispatched).toMatchObject({ kind: 'structured', prepared: cachedVerdict, parsed: cachedVerdict });
   });
 
   it('makes a forced interactive Claude rubric schema refusal observable to the coordinator lane', async () => {
