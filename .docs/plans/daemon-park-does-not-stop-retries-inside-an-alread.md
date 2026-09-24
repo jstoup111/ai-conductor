@@ -386,3 +386,11 @@ Task 11 ──► Task 12
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-ab1-1: src/conductor/src/engine/report-renderer.ts:433-453 — add an attempt branch to renderOperatorParkBoundaries so a kind attempt boundary with a string step and numeric attempt renders a row with the feature, boundary type attempt, and a settled-unit cell naming the step, the attempt number, and the member when present, leaving the pre-first-unit/step/group branches unchanged; in src/conductor/test/engine/report-renderer.test.ts add cases for an attempt-only serial boundary and a member attempt boundary asserting the rows render and the empty-state text does not, keeping the existing unit-boundary cases near line 673 unchanged
+**Gate:** as-built
+**Rationale:** REMEDIABLE conforming consumer-wiring drift under adr-2026-07-29-operator-park-scheduling-unit-boundary decision 14: renderOperatorParkBoundaries (src/conductor/src/engine/report-renderer.ts:433-453) accepts only pre-first-unit/step/group, so an attempt-only ledger reaches 'No operator park boundaries recorded' on the production `conduct inline --report` path (index.ts:1189 -> report-renderer.ts:302); the approved ADR already requires the shape, so this is build, not architecture_review. No existing task admits it (report-renderer.ts is in no task's Files; Task 1's Done-when covers only the daemon-cli.ts renderer), so existing-task does not apply. Matched-pair counterpart: the daemon-log renderer at daemon-cli.ts:3068-3078 already renders attempt and member boundaries and stays unchanged; the report row text follows its step/attempt/member wording. Sweep of boundary.kind consumers of SchedulingUnitRef under src/conductor/src found only these two sites. Existing pre-first-unit/step/group branches and their report-renderer.test.ts:673-700 cases are kept unchanged, preserving Task 1's delivered unit-boundary coverage.
+**Governing clause:** adr-2026-07-29-operator-park-scheduling-unit-boundary decision 14
+**Done when:**
+- adr-2026-07-29-operator-park-scheduling-unit-boundary decision 14 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab1-1 is complete.
