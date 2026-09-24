@@ -1,6 +1,6 @@
 // Covers: task:1, task:3, task:12, task:17
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -4689,6 +4689,38 @@ TIER: M`,
         ]),
       );
       expect(prompts.join('\n')).not.toContain('Build Review Scope rubric');
+    });
+
+    it('persists the exact dispatched rubric prompt beside the lap artifact for offline replay', async () => {
+      await scopedPlan();
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scopedGit(),
+        planPath,
+        config: {
+          test_suite: { scoped_command: 'true' },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+        } as HarnessConfig,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+          } as never),
+        },
+      });
+
+      await runner.run('build_review', emptyState);
+
+      const dispatched = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls
+        .map(([options]) => options.prompt as string)
+        .find((prompt) => prompt.includes('Build Review Test Quality rubric'));
+      expect(dispatched).toBeDefined();
+      const laps = await readdir(join(dir, '.pipeline/build-review'));
+      const stored = await Promise.all(laps.filter((lap) => lap.startsWith('lap-')).map((lap) =>
+        readFile(join(dir, '.pipeline/build-review', lap, 'testQuality.prompt.txt'), 'utf8').catch(() => undefined)));
+      const prompt = stored.find((body) => body !== undefined);
+      expect(prompt).toContain('Build Review Test Quality rubric');
+      // The provider prompt only prefixes the skill command; the rest is byte-identical.
+      expect(dispatched!.endsWith(prompt!)).toBe(true);
     });
 
     it('does not dispatch the coordinator or legacy scalar grader when the whole gate is disabled', async () => {
