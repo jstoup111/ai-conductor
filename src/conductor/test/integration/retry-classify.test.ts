@@ -542,7 +542,7 @@ describe('integration/retry-classify (#646)', () => {
     await conductor.run();
 
     expect(stepRetries).toHaveLength(1);
-    expect(stepRetries[0]?.reason).toContain('coverage_binding refused: cited Done when checks do not assert the criterion.');
+    expect(stepRetries[0]?.reason).toContain('coverage_binding refused: cited Done when checks do not assert the required claim.');
     expect(stepRetries[0]?.reason).not.toMatch(/produced no output/);
   });
 
