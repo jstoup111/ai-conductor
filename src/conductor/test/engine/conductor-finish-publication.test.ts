@@ -933,7 +933,7 @@ describe('Conductor FINISH publication routing', () => {
     await mkdir(pipeline);
     await writeGreenShipValidatorEvidence(dir);
     await mkdir(join(dir, '.docs', 'shipped'), { recursive: true });
-    await writeFile(join(dir, '.docs', 'shipped', 'finish-publication.md'), 'shipped\n');
+    await writeFile(join(dir, '.docs', 'shipped', 'finish-publication.md'), '---\nslug: finish-publication\n---\n');
     const state: Record<string, unknown> = {
       complexity_tier: 'S',
       // This focused coordinator fixture has no product or architecture
@@ -1044,7 +1044,7 @@ describe('Conductor FINISH publication routing', () => {
     await mkdir(pipeline);
     await writeGreenShipValidatorEvidence(dir);
     await mkdir(join(dir, '.docs', 'shipped'), { recursive: true });
-    await writeFile(join(dir, '.docs', 'shipped', 'finish-publication.md'), 'shipped\n');
+    await writeFile(join(dir, '.docs', 'shipped', 'finish-publication.md'), '---\nslug: finish-publication\n---\n');
     const state: Record<string, unknown> = {
       complexity_tier: 'S',
       track: 'technical',

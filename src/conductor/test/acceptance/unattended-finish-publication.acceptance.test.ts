@@ -639,7 +639,7 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
       observeReleaseReadiness: async () => 'present',
       writeShippedRecord: async () => {
         await mkdir(join(conductorRoot!, '.docs', 'shipped'), { recursive: true });
-        await writeFile(join(conductorRoot!, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+        await writeFile(join(conductorRoot!, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
         return 0;
       },
       recordFinish: async () => {
@@ -824,7 +824,7 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
     }
     await writeState(stateFilePath, state as ConductState);
     await mkdir(join(conductorRoot, '.docs', 'shipped'), { recursive: true });
-    await writeFile(join(conductorRoot, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+    await writeFile(join(conductorRoot, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
     await mkdir(join(conductorRoot, '.docs', 'plans'), { recursive: true });
     await writeFile(join(conductorRoot, '.docs', 'plans', 'feature.md'), 'plan\n');
     const asBuiltReport = join(pipeline, 'architecture-review-as-built.md');
