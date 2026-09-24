@@ -665,6 +665,7 @@ export function createProductionFinishPublicationCoordinator(
                 .filter((name) => name.endsWith('.md'))
                 .map((name) => join('.docs', 'plans', name));
               const resolution = resolveShipmentIdentity(state.feature_desc, planPaths);
+              if (resolution.kind === 'ambiguous') return 'malformed';
               const recordPath = resolution.kind === 'resolved'
                 ? resolution.identity.recordPath
                 : join('.docs', 'shipped', `${state.feature_desc}.md`);
@@ -673,7 +674,8 @@ export function createProductionFinishPublicationCoordinator(
                 : state.feature_desc;
               const absoluteRecordPath = join(deps.projectRoot, recordPath);
               if (!await exists(absoluteRecordPath)) return 'missing';
-              const record = await readFile(absoluteRecordPath, 'utf8');
+              const record = await readFile(absoluteRecordPath, 'utf8').catch(() => undefined);
+              if (record === undefined) return 'unavailable';
               const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(record);
               const slug = frontmatter && /^slug:\s*(.*?)\s*$/m.exec(frontmatter[1]);
               return slug?.[1].trim() === canonicalSlug ? 'present' : 'malformed';
