@@ -668,7 +668,15 @@ export function createProductionFinishPublicationCoordinator(
               const recordPath = resolution.kind === 'resolved'
                 ? resolution.identity.recordPath
                 : join('.docs', 'shipped', `${state.feature_desc}.md`);
-              return await exists(join(deps.projectRoot, recordPath)) ? 'present' : 'missing';
+              const canonicalSlug = resolution.kind === 'resolved'
+                ? resolution.identity.slug
+                : state.feature_desc;
+              const absoluteRecordPath = join(deps.projectRoot, recordPath);
+              if (!await exists(absoluteRecordPath)) return 'missing';
+              const record = await readFile(absoluteRecordPath, 'utf8');
+              const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(record);
+              const slug = frontmatter && /^slug:\s*(.*?)\s*$/m.exec(frontmatter[1]);
+              return slug?.[1].trim() === canonicalSlug ? 'present' : 'malformed';
             },
           },
           releaseReadiness: {
