@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-24T13:51:48.712Z
 Slug: accepted-stories-are-never-checked-against-the-eng
 Class: needs-human
 Halting step: unknown
