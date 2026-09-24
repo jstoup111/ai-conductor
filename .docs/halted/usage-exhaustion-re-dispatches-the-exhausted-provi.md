@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-24T15:10:59.107Z
 Slug: usage-exhaustion-re-dispatches-the-exhausted-provi
 Class: needs-human
 Halting step: unknown
