@@ -1,7 +1,11 @@
-// Covers: S3.1, S3.2, S3.3
+// Covers: S2.1, S2.2, S2.3, S3.1, S3.2, S3.3
 import { describe, expect, it } from 'vitest';
 import { extractAuthoritativeStoryCriteria } from '../../src/engine/artifacts.js';
-import { extractStoryCriterionIds, splitStoryBlocks } from '../../src/engine/story-criteria.js';
+import {
+  assessAcceptedStoryReadability,
+  extractStoryCriterionIds,
+  splitStoryBlocks,
+} from '../../src/engine/story-criteria.js';
 
 /** One story block in the heading shape real stories files use. */
 function story(id: string, happy: readonly string[], negative: readonly string[] = []): string {
@@ -149,5 +153,34 @@ describe('extractStoryCriterionIds', () => {
       '',
     ].join('\n');
     expect(extractStoryCriterionIds(text)).toEqual(['S2.1']);
+  });
+});
+
+describe('assessAcceptedStoryReadability', () => {
+  it('reports readable, zero-criteria, and missing-negative-path stories', () => {
+    const stories = [
+      story('1', ['the condition is satisfied'], ['the condition is refused']),
+      [
+        '## Story 2: No criteria',
+        '',
+        '#### Happy Path',
+        '',
+        '- A statement without criterion clauses',
+        '',
+        '#### Negative Paths',
+        '',
+        '- Another non-criterion statement',
+      ].join('\n'),
+      story('3', ['the condition is satisfied']),
+    ].join('\n');
+
+    expect(assessAcceptedStoryReadability(stories)).toEqual({
+      stories: [
+        { id: '1', readable: true },
+        { id: '2', readable: false },
+        { id: '3', readable: false },
+      ],
+      firstUnreadableStoryId: '2',
+    });
   });
 });

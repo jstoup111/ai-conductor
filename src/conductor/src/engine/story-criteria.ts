@@ -11,6 +11,14 @@ export interface StoryBlock {
   text: string;
 }
 
+export interface AcceptedStoryReadability {
+  stories: readonly {
+    id?: string;
+    readable: boolean;
+  }[];
+  firstUnreadableStoryId?: string;
+}
+
 /**
  * Split a stories file into per-story blocks on `## Story <id>:` headings.
  * Single-story files (no such heading) return one block spanning the file.
@@ -104,4 +112,26 @@ export function extractStoryCriterionIds(storiesText: string): string[] {
     }
   }
   return ids;
+}
+
+/**
+ * Assess whether each accepted story has criteria the engine can derive.
+ * A Happy Path section requires a matching Negative Paths section, and each
+ * story needs at least one criterion across its headed path sections.
+ */
+export function assessAcceptedStoryReadability(storiesText: string): AcceptedStoryReadability {
+  const stories = splitStoryBlocks(storiesText).map((block) => {
+    const happyPath = sectionBody(block.text, /happy\s*path/i);
+    const negativePaths = sectionBody(block.text, /negative\s*paths?/i);
+    const criteria = [happyPath, negativePaths]
+      .flatMap((section) => section === null ? [] : listItems(section))
+      .filter((item) => /\bgiven\b/i.test(item) && /\bthen\b/i.test(item));
+    const readable = criteria.length > 0 && !(happyPath !== null && negativePaths === null);
+    return { id: block.id, readable };
+  });
+
+  return {
+    stories,
+    firstUnreadableStoryId: stories.find((story) => !story.readable)?.id,
+  };
 }
