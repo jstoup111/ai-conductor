@@ -211,6 +211,72 @@ sidecar log.
 > `adr-2026-08-26-config-key-consumer-registry-and-dead-surface-removal` D4. A value of 1 reproduces the pre-amendment one-claim-per-session shape. No new event type
 > joins the spine: `coverage_binding_judged` is still emitted once per claim (D9).
 
+> **Amended 2026-09-23 by #1700:** A DECIDE amendment made after the plan was approved must reach
+> this step before any further build lap. D4's "inputs are exactly the claims D1 parses" is widened
+> by the ADR-obligation layer and amendment claims below; D5's verdict identity, digest cache, batch
+> shape (D12-D14), and infrastructure-failure lane are unchanged for criterion claims. D7's "no
+> existing build path changes behavior" no longer holds for D16, D17, and D19: the void, the
+> ADR-obligation refusal, and the criterion-digest reopen all act with the judge off. The step stays non-tree-attesting
+> (`adr-2026-09-11-finish-mergeability-respects-active-review-inputs` decision 7), and an advanced
+> base that changes DECIDE inputs is still owned by the post-rebase refresh
+> (`adr-2026-09-11-selective-post-rebase-verification` decision 4), which D19 never reaches.
+>
+> **D16 — An operator reseal that changes DECIDE content voids this step's completion.** The
+> feature's DECIDE set is: the plan, its `**Stories:**` path, the feature's architecture review, its
+> PRD when present, and every ADR the plan's `## Architecture Obligation Coverage` table cites or
+> that the branch adds or modifies since its merge-base. The step's completion is voided when
+> `resealProtectedArtifactSeal` rebaselines a DECIDE-set path whose new fingerprint differs from its
+> prior fingerprint. A seal-reported self-amendment without a reseal voids nothing; it stays the
+> non-fatal advisory of `adr-2026-07-27-protected-artifact-seal-self-amendment-visibility`. A void
+> sets the envelope status to `invalidated` — which joins D14's statuses as non-terminal and
+> non-completing, like `partial` — and marks the
+> step's persisted status and gate verdict unsatisfied through the conduct-state mutation port, with
+> a typed `decide-change` origin that is distinct from, and never routed through, the rebase-only
+> kickback path. The next dispatch, resume, or rewind that reaches BUILD re-runs this step before any
+> build task. A byte-identical reseal, a path outside the DECIDE set, or a refused reseal voids
+> nothing. The void is persisted on the event spine as `coverage_binding_invalidated` naming the
+> changed paths and the origin.
+>
+> **D17 — The ADR-obligation layer runs before the judge, whatever D7's key says.** With no model
+> call, the step runs `validateArchitectureObligationCoverage` over the plan against the current
+> `parseAdrDecisions` decision-id set of the DECIDE set's ADRs (the land gate's validator; no second
+> parser). Any violation stamps `refused` / `needs-human` exactly as D6, and the halt and
+> `step_refused` name, per violation, the ADR path, the decision id, and the missing plan coverage.
+> A plan with no `## Architecture Obligation Coverage` section, and an ADR with no citable decision
+> (`adr-2026-09-02-adr-decision-citability-contract`), are recorded `not-applicable` (D8's legacy
+> tolerance), and at tier S the layer is `not-applicable`, matching the land gate's reduced S
+> surface. Story criteria are not re-validated here; the criterion layer stays at land
+> (`adr-2026-08-23-criterion-layer-is-structural-at-land`).
+>
+> **D18 — Amendment clauses are a separately typed claim kind.** Each `> **Amended YYYY-MM-DD by
+> #N:**` block in the DECIDE set, excluding the plan's own amendments, becomes an amendment claim
+> carrying the artifact path, the amendment text, and every plan task id with its `Done when`
+> checks. Amendment claims are batched apart from criterion claims under their own result schema:
+> the judge returns, per claim, exactly one of `carried` (non-empty issued task ids), `not-carried`
+> (non-empty `missingObligation`), or `no-plan-obligation`; on a run following a D16 void it may
+> also return `contradictsCompleted` (D19). `not-carried` refuses as D6, rendering
+> the artifact, the amendment text, and `missingObligation`; `carried` and `no-plan-obligation`
+> pass with no operator action. Amendment claims use D5's digest cache and D13's exact-digest-set
+> validation. With D7's key off they are recorded `unjudged` and do not block. Criterion-claim
+> prompts, verdicts, and events are unchanged.
+>
+> **D19 — On a D16 re-run, completed work the change contradicts is reopened, never re-planned.**
+> Only a run following a D16 void reopens. Then, (a) a criterion claim whose digest is absent from
+> the previous envelope's recorded digests and that cites a completed task, and (b) a completed task
+> the judge lists in an amendment claim's `contradictsCompleted` (a subset of the completed task ids
+> issued in that batch; any other id rejects the batch under D13), are reopened through the
+> repair-obligation admission and restage path (`adr-2026-09-06-reopened-task-resolution`,
+> amended decision 10). The envelope records every criterion and amendment digest on every run,
+> including with D7's key off, so a disabled or legacy prior envelope with no digests is a baseline
+> and reopens nothing. The step never appends a plan task and never routes to `plan` (D6).
+>
+> **D20 — Occurrences ride the spine.** Two occurrences join the `ConductorEvent` union with
+> render/persist/audit/otel declarations: `coverage_binding_invalidated` (D16) and
+> `coverage_binding_task_reopened` (per reopened task: task id, cause claim digest). Amendment
+> claims emit `coverage_binding_amendment_judged` (verdict in D18's values plus `unjudged`) so
+> `coverage_binding_judged`'s criterion vocabulary is untouched. Refusals ride the existing
+> `step_refused` and `loop_halt` events. No sidecar log.
+
 ## Consequences
 
 ### Positive
