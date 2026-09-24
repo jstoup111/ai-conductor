@@ -187,7 +187,7 @@ There are 27 tasks. That is above the 20-task band; the operator chose a single 
 - The governing-ADR section equals the ADRs cited by the plan's Architecture Obligation Coverage table joined with the ADRs added in the feature diff, filtered to APPROVED, each with the decision ids and decision text `parseAdrDecisions` reports, so the fixture yields exactly three ADRs, as asserted by the governing-set test
 - The prior-findings section lists both pending findings from a two-entry fixture ledger with their class, governing reference, and summary, and is empty with the projection still produced when the ledger file does not exist, as asserted by the prior-findings tests
 - `buildAsBuiltProjection` over a fixture whose ledger file cannot be parsed returns `ok: false` with a mechanical fault whose `dimension` is `pending-findings` and whose detail names the ledger path, and returns no projection, as asserted by the unreadable-ledger projection test
-- Two `renderAsBuiltProjection` calls over unchanged fixture inputs return byte-identical text, as asserted by the determinism test
+- Two `renderAsBuiltProjection` calls over unchanged fixture inputs return byte-identical text, as asserted by the determinism test; and dispatching the as-built step twice against the same unchanged fixture inputs yields two dispatches whose prompts carry byte-identical projection blocks, as asserted by the dispatch-determinism test
 
 **Files likely touched:**
 - src/conductor/src/engine/as-built-projection.ts
