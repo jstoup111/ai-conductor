@@ -80,7 +80,7 @@ As an operator, I want a Small spec's plan-carried criterion claims checked at l
 
 ## Story 4: coverage_binding is a registered BUILD-phase step, off by default
 
-As an operator, I want a `coverage_binding` step between `coherence_check` and `acceptance_specs` that the daemon executes and that does nothing until I enable it, so that the judge ships with zero change to how existing builds judge criterion claims.
+As an operator, I want a `coverage_binding` step between `coherence_check` and `acceptance_specs` that the daemon executes and that judges no criterion claim until I enable it, so that the judge ships with zero change to how existing builds judge criterion claims.
 
 ### Acceptance Criteria
 
