@@ -1386,7 +1386,15 @@ export async function featureCommitsPreserved(
     r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0),
   );
   const missing = subjectsBefore.filter((s) => !currentSubjects.has(s));
-  if (missing.length === 0) return { kind: 'preserved' };
+  // Judgement mode checks every declaration on its own, not only those whose
+  // subject went missing: a declared non-test commit is refused even when its
+  // subject survived the rebase.
+  const invalidDeclarations = declaredSuperseded === undefined
+    ? []
+    : await invalidSupersededDeclarations(git, declaredSuperseded);
+  if (missing.length === 0) {
+    return invalidDeclarations.length === 0 ? { kind: 'preserved' } : { kind: 'rejected', missing: invalidDeclarations };
+  }
 
   // NUL-delimited so a subject containing whitespace still splits correctly.
   const pre = await git(['log', '--format=%H%x00%s', `${baseRef}..ORIG_HEAD`]);
@@ -1418,6 +1426,8 @@ export async function featureCommitsPreserved(
         rejected.push({ subject, sha, cause: 'undeclared superseded commit', path: null });
         continue;
       }
+      // Already refused by the per-declaration check above.
+      if (invalidDeclarations.some((failure) => failure.sha === sha)) continue;
       const paths = await git(['show', '--format=', '--name-only', sha]);
       const changed = paths.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
       const testOnly = paths.exitCode === 0 && changed.length > 0 && changed.every(isTestPath);
@@ -1444,7 +1454,30 @@ export async function featureCommitsPreserved(
       rejected.push({ subject, sha, cause: supersession.cause, path: supersession.path });
     }
   }
-  return rejected.length === 0 ? { kind: 'preserved', excused } : { kind: 'rejected', missing: rejected };
+  const failures = [...invalidDeclarations, ...rejected];
+  return failures.length === 0 ? { kind: 'preserved', excused } : { kind: 'rejected', missing: failures };
+}
+
+/** Every declared superseded commit must be inspectable and touch only test paths. */
+async function invalidSupersededDeclarations(
+  git: GitRunner,
+  declaredSuperseded: string[],
+): Promise<FeatureCommitPreservationFailure[]> {
+  const failures: FeatureCommitPreservationFailure[] = [];
+  for (const sha of new Set(declaredSuperseded)) {
+    const shown = await git(['show', '--format=%s', '--name-only', sha]);
+    const [subject = sha, ...rest] = shown.stdout.split('\n').map((line) => line.trim());
+    const changed = rest.filter(Boolean);
+    if (shown.exitCode !== 0) {
+      failures.push({ subject: sha, sha, cause: 'could not inspect declared superseded commit', path: null });
+    } else if (changed.length === 0 || !changed.every(isTestPath)) {
+      failures.push({
+        subject, sha, cause: 'declared superseded commit touches a non-test path',
+        path: changed.find((path) => !isTestPath(path)) ?? null,
+      });
+    }
+  }
+  return failures;
 }
 
 /**

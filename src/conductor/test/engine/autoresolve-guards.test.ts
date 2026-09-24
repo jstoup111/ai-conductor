@@ -168,6 +168,23 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
     });
   });
 
+  it('refuses a declared non-test commit whose subject survived the rebase (all-declared case)', async () => {
+    const git: GitRunner = makeGitRunner(repo);
+    await g(['checkout', '-q', '-b', 'surviving-declared', 'main']);
+    await writeFile(join(repo, 'runtime-survivor.ts'), 'runtime change\n');
+    await g(['add', 'runtime-survivor.ts']);
+    await g(['commit', '-q', '-m', 'feat: runtime survivor']);
+    const sha = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    const result = await autoresolve.runAcceptanceGuards(git, 'main', ['feat: runtime survivor'], [sha]);
+    expect(result).toMatchObject({
+      ok: false,
+      guard: 'featureCommitsPreserved',
+      reason: expect.stringContaining('declared superseded commit touches a non-test path'),
+    });
+  });
+
   it('names the declared test-only reason and touched paths for an excused drop', async () => {
     await g(['checkout', '-q', '-b', 'declared-test-drop', 'main']);
     await writeFile(join(repo, 'declared-drop.test.ts'), 'same upstream intent\n');
