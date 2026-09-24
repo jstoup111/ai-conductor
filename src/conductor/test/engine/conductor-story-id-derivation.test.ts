@@ -1,3 +1,4 @@
+// Covers: S3.2
 /**
  * Regression specs for the story-id derivation defect in conductor.ts.
  *
@@ -55,6 +56,21 @@ const STORIES = [
   '',
   '#### Negative Paths',
   '- Given a suffixed story id, when the path is negative, then S5a.3 is an edge case.',
+  '',
+].join('\n');
+
+const WRAPPED_FIRST_CRITERION_STORIES = [
+  '# Stories',
+  '',
+  '## Story 1: Wrapped first criterion',
+  '',
+  '#### Happy Path',
+  '- Given the first criterion starts on this bullet, when it wraps onto a continuation line,',
+  '  then it remains the first authored criterion.',
+  '- Given a second happy criterion, when it is read, then it remains second.',
+  '',
+  '#### Negative Paths',
+  '- Given the final criterion, when its path is negative, then it remains third.',
   '',
 ].join('\n');
 
@@ -182,5 +198,13 @@ describe('criterionStorySection resolves suffixed story ids (via routePrdAuditPl
       kind: 'halt',
       haltClass: 'plan-gap',
     });
+  });
+
+  it('records S1.3 from a wrapped-first-criterion story as its authored negative path', () => {
+    expect(routePrdAuditPlanGaps(planGapReport('S1.3'), WRAPPED_FIRST_CRITERION_STORIES, {} as never))
+      .toMatchObject({
+        kind: 'record',
+        findings: [{ gate: 'prd_audit', grade: 'PLAN_GAP', criterion: 'S1.3' }],
+      });
   });
 });
