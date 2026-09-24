@@ -146,6 +146,103 @@ Execution bundles, validated verdicts, and case state are durable evidence under
 > reviewer's unsupported-policy result is a valid structured result under the schema, not a parse
 > failure.
 
+> **Amended 2026-09-24 by #2735:** D5 required an OS-proven read-only boundary for every member of
+> a custom-policy lap: a Linux bubblewrap mount profile, a two-sided probe that also demanded a
+> nested sandbox, a scratch provider home and an allowlisted environment, and "no prompt-only or
+> writable fallback". That makes custom review impossible on macOS and native Windows, and on stock
+> Ubuntu 24.04+, where the default AppArmor userns restriction forbids nested bubblewrap. Every
+> enabled custom rubric there halts its feature after three `preflight-failed` faults. The operator
+> judged the boundary disproportionate. Custom rubrics are a project's own opt-in policy choice, and
+> ordinary BUILD steps already run with full host access. D5's input guarantee is therefore
+> restated as prevent-then-detect. The frozen view, the uniform binding of every lap member to it,
+> and D12's scoping to the read-only review role are unchanged. The operator approved this on
+> 2026-09-24.
+>
+> **D5.1 — OS containment is retired for custom-policy laps.** No member of a custom-policy lap,
+> custom or built-in peer, is launched inside the bubblewrap review profile. The containment probe,
+> mount composition, checkout masks, host-state sentinel, scratch provider home, copied provider
+> login, and review env allowlist have no remaining caller and are removed. Each member launches
+> through the same prepared invocation that an ordinary step for that candidate uses. On a self-host
+> project that remains the self-host prepared invocation, including its throwaway provider homes
+> (adr-2026-07-26-concurrent-task-telemetry-and-symmetric-self-host-isolation) and live-checkout
+> containment (adr-2026-08-17-structural-live-checkout-containment), both unchanged. Built-in-only
+> laps, ordinary BUILD, and general custom steps are untouched.
+>
+> **D5.2 — Writes are prevented by the provider's own read-only review mode.** The additive
+> `InvokeOptions` field that carried the containment profile is replaced by an engine-owned
+> read-only review option on the same single `invoke` member
+> (adr-2026-08-24-one-dispatch-member-on-the-provider-contract D1/D3). Each adapter maps it to its
+> native mechanism, set by the engine and never read from project or operator configuration:
+> - **Claude:** `--restricted`, which removes the code-running tools and WebFetch, and ignores user,
+>   project and local settings files, so a project cannot re-enable hooks or a nested sandbox.
+>   Add `--tools` naming only Read, Grep, Glob and Bash; restricted mode alone still exposes Edit,
+>   Write and Agent, gated only by an unanswerable permission prompt. Add `--allowedTools` rules
+>   that admit only read-only git subcommands such as `git show`, `git diff` and `git log`, so
+>   built-in peers keep the pinned-ref `git show` reads they already rely on. Any other Bash command
+>   is denied in print mode (verified 2026-09-24). Add `--strict-mcp-config` with no MCP
+>   configuration. The option always drops `--dangerously-skip-permissions`, which restricted mode
+>   rejects.
+> - **Codex:** `sandbox_mode="read-only"` with approval `never`, in place of the engine's
+>   workspace-write and network overrides.
+>
+> A provider with no read-only review mode is never admitted to a custom-policy lap. The native
+> output schema seam, including its engine-owned schema scratch home, is unchanged. Both read-only
+> modes run read-only `git`, so the established `git` tool admission is unchanged.
+>
+> **D5.3 — Writes that still land are detected, and the lap is discarded.** Before fan-out and after
+> the join the engine records a digest over:
+> - the frozen head tree
+> - the frozen baseline tree
+> - the captured policy material
+> - the original installed policy package
+> - every engine-evidence file present at fan-out
+>
+> Files the engine itself writes during the lap are not in the set. The feature checkout is not in
+> the set either: it is protected by D5.2 alone, and a checkout change during a lap leaves reviewers
+> on that lap's captured input, as today. The digest record is engine
+> evidence under the lap's existing build-review evidence root, a path already excluded from
+> live-boundary fingerprinting. If any input differs, every member result of that lap is discarded
+> before aggregation. Members share one frozen view and run concurrently, so a change cannot be
+> attributed to a single member. The lap settles with the closed cause `review-input-mutated`
+> (adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane D2.3), naming the changed inputs.
+>
+> **D5.4 — Reads are tool-restricted, not proven.** Reading host state or sibling review evidence
+> is limited only by each provider's read-only tool set and sandbox. This role no longer carries an
+> OS-proven read boundary or an allowlisted environment. D5's sentence "There is no prompt-only or
+> writable fallback" is superseded for the read half only. Writes remain prevented by D5.2 and
+> detected by D5.3.
+>
+> **D5.5 — Read-only mode availability is established on the host and reported up front.** A
+> candidate is admitted to a custom-policy lap only when its read-only mode is available on the
+> current host. Availability is a two-sided check that uses the provider's own mechanism, never a
+> platform table:
+> - **Codex:** a process starts under `codex sandbox` with the read-only permission profile, and a
+>   probe write from it is refused.
+> - **Claude:** the installed CLI accepts the restricted-mode flags.
+>
+> The result names `process.platform` and the reason. The check runs at daemon start, and at
+> interactive config load for each provider named by an enabled custom member's candidate policy.
+> Each result rides one new `ConductorEvent` with declared sinks (D12). Interactive config load
+> prints it as a config warning, and `daemon status` renders the latest result from the spine. The
+> daemon-scoped result is created once in `runDaemonMode` and threaded to each Conductor, as
+> `rateLimitEpisode` is. At dispatch, an unavailable candidate is skipped through the existing
+> candidate setup-skip path: `provider_attempt` records `invoked: false`, the existing
+> `skipReason` `setup-unavailable`, a `setupCapability` naming the read-only review mode, and a
+> recovery action. The next candidate is then tried, so no new skip reason is introduced. The
+> provider admission gate of adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability
+> D1 subsumes this skip when it is built. A member whose every candidate is skipped this way settles
+> `read-only-review-unavailable` (adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane D2.3)
+> without spending a judging call.
+>
+> Consequences: "Negative / Operator decisions required", first bullet ("Initial custom-policy
+> execution requires proven Linux/bubblewrap containment…"), no longer applies. Custom review runs
+> wherever a candidate's read-only mode is available. A reviewer can read host state it has no
+> business reading, and an admitted read-only git subcommand that can write an output file is
+> caught only by D5.3; both are accepted costs. Rejected alternatives: per-platform OS backends
+> (bubblewrap without nesting plus a hand-written Seatbelt profile), and `@anthropic-ai/sandbox-runtime`
+> as the outer boundary. Both preserve an OS-proven read boundary at roughly three times the cost,
+> and neither can be proven on this repository's Linux-only CI for macOS.
+
 ## Consequences
 
 ### Positive
