@@ -1,8 +1,11 @@
-// Covers: task:2, task:7, task:8, task:rem-as-built-rem-ab4-1
+// Covers: task:1, task:2, task:7, task:8, task:rem-as-built-rem-ab4-1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
+import { writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { applyRebaseTransition } from '../../src/engine/rebase-transition.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -28,6 +31,7 @@ import {
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   MAX_SUITE_INFRASTRUCTURE_RETRIES,
   recordGrowth,
+  recordKickbackCapEvidence,
   settleRemediationRound,
   readGrowth,
   readKickbackLedger,
@@ -97,6 +101,92 @@ describe('kickback-ledger', () => {
   });
 
   describe('plan growth', () => {
+    it('round-trips growth cap evidence and normalizes legacy evidence to laps', async () => {
+      await recordKickbackCapEvidence(dir, 'prd_audit', {
+        allowance: 'growth', consumed: 6, limit: 10, latestReason: 'growth exhausted', haltGeneration: 'halt-growth',
+      });
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {
+          prd_audit: (await readKickbackLedger(dir)).gates.prd_audit!,
+          architecture_review_as_built: {
+            count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+            capEvidence: { gate: 'architecture_review_as_built', consumed: 2, limit: 2, latestReason: 'laps exhausted', haltGeneration: 'halt-laps' },
+          },
+        },
+      });
+
+      await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+        gates: {
+          prd_audit: { capEvidence: { allowance: 'growth' } },
+          architecture_review_as_built: { capEvidence: { allowance: 'laps' } },
+        },
+      });
+    });
+
+    it('isolates an invalid cap evidence allowance to its gate', async () => {
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {
+          prd_audit: {
+            count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+            capEvidence: { gate: 'prd_audit', allowance: 'tasks', consumed: 1, limit: 1, latestReason: 'invalid', haltGeneration: 'halt-invalid' },
+          } as unknown as KickbackGateEntry,
+          architecture_review_as_built: { count: 0, cumulative: 0, laps: 2, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+        },
+      });
+
+      const ledger = await readKickbackLedger(dir);
+      expect(unreadableKickbackGates(ledger)).toEqual(['prd_audit']);
+      expect(ledger.gates.architecture_review_as_built?.laps).toBe(2);
+    });
+
+    it.each([0, -1, 1.5, '12'])('fails the whole ledger closed for invalid effective growth cap %p', async (effectiveGrowthCap) => {
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: { prd_audit: { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 } },
+        effectiveGrowthCap,
+      } as unknown as KickbackLedger);
+      const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+      const before = await readFile(ledgerPath, 'utf8');
+
+      expect(isUnreadableKickbackLedger(await readKickbackLedger(dir))).toBe(true);
+      await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(before);
+    });
+
+    it('preserves an effective growth cap through lap credit, rebase credit, and growth recomputation', async () => {
+      const credited = creditKickbackGateLaps({
+        count: 1, cumulative: 2, laps: 2, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+      });
+      expect(credited).toMatchObject({ cumulative: 0, laps: 0 });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/active.md' }));
+      await writeFile(join(dir, '.docs/plans/active.md'), '### Task 1: Original work\n### Task 2: More work');
+      await writeKickbackLedger(dir, {
+        version: 1, effectiveGrowthCap: 12, gates: {},
+        growth: { authored: 1, added: 4, byGate: { prd_audit: 3 } },
+      } as KickbackLedger);
+
+      await expect(readGrowth(dir, 10)).resolves.toMatchObject({ authored: 2, added: 0, byGate: {} });
+      await expect(readKickbackLedger(dir)).resolves.toMatchObject({ effectiveGrowthCap: 12 });
+
+      await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ build_review: 'done' }));
+      await writeKickbackLedger(dir, {
+        version: 1, effectiveGrowthCap: 12,
+        gates: { build_review: { count: 1, cumulative: 2, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 } },
+      } as KickbackLedger);
+      await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+      await applyRebaseTransition({
+        projectRoot: dir,
+        stateStore: createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json')),
+        operationId: 'preserve-growth-cap',
+        replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+        invalidated: ['build_review'], preserved: [], preservedCandidates: [],
+      });
+      await expect(readKickbackLedger(dir)).resolves.toMatchObject({ effectiveGrowthCap: 12 });
+    });
+
     it('persists authored and gate-added tasks, then reports the remaining cap', async () => {
       await recordGrowth(dir, {
         authored: 19,
@@ -339,7 +429,14 @@ describe('kickback-ledger', () => {
 
     await expect(readKickbackLedger(dir)).resolves.toEqual({
       version: 1,
-      gates: { build_review: { ...entry, chargedEffectIds: [] } },
+      gates: {
+        build_review: {
+          ...entry,
+          capEvidence: { ...entry.capEvidence!, allowance: 'laps' },
+          chargedEffectIds: [],
+        },
+      },
+      settlementReceipts: undefined,
     });
   });
 

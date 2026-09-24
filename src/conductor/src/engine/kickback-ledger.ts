@@ -32,6 +32,7 @@ export interface KickbackBudgetAdjustment {
   rationale: string;
   timestamp: string;
   haltGeneration: string;
+  allowance?: 'laps' | 'growth';
 }
 
 export interface KickbackCapEvidence {
@@ -40,6 +41,7 @@ export interface KickbackCapEvidence {
   limit: number;
   latestReason: string;
   haltGeneration: string;
+  allowance?: 'laps' | 'growth';
 }
 
 export interface KickbackResumeAuthorization {
@@ -117,6 +119,8 @@ export interface KickbackLedger {
   /** Invalid entries do not erase healthy sibling accounting, but still fail closed. */
   unreadableGates?: string[];
   growth?: PlanGrowthRecord;
+  /** Feature-specific plan-growth cap authorized by an operator. */
+  effectiveGrowthCap?: number;
   pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
   settlementReceipts?: Record<string, { gates: string[] }>;
   /** Applied-rebase operation ids whose build-review convergence laps were refunded. */
@@ -136,6 +140,7 @@ interface PersistedKickbackLedger {
   version: 1;
   gates: Record<string, PersistedKickbackGateEntry>;
   growth?: PlanGrowthRecord;
+  effectiveGrowthCap?: number;
   pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
   settlementReceipts?: Record<string, { gates: string[] }>;
   convergenceCreditReceipts?: Record<string, { gate: 'build_review' }>;
@@ -321,7 +326,8 @@ function isBudgetAdjustment(value: unknown): value is KickbackBudgetAdjustment {
     isNonEmptyString(adjustment.operator) &&
     isNonEmptyString(adjustment.rationale) &&
     isNonEmptyString(adjustment.timestamp) &&
-    isNonEmptyString(adjustment.haltGeneration);
+    isNonEmptyString(adjustment.haltGeneration) &&
+    (adjustment.allowance === undefined || adjustment.allowance === 'laps' || adjustment.allowance === 'growth');
 }
 
 function isCapEvidence(value: unknown): value is KickbackCapEvidence {
@@ -331,7 +337,8 @@ function isCapEvidence(value: unknown): value is KickbackCapEvidence {
     isNonNegativeInteger(evidence.consumed) &&
     isNonNegativeInteger(evidence.limit) &&
     isNonEmptyString(evidence.latestReason) &&
-    isNonEmptyString(evidence.haltGeneration);
+    isNonEmptyString(evidence.haltGeneration) &&
+    (evidence.allowance === undefined || evidence.allowance === 'laps' || evidence.allowance === 'growth');
 }
 
 function isResumeAuthorization(value: unknown): value is KickbackResumeAuthorization {
@@ -441,6 +448,7 @@ function isKickbackLedger(value: unknown): value is PersistedKickbackLedger {
 
   return Object.values(ledger.gates).every(isKickbackGateEntry) &&
     (ledger.growth === undefined || isPlanGrowthRecord(ledger.growth)) &&
+    (ledger.effectiveGrowthCap === undefined || isPositiveSafeInteger(ledger.effectiveGrowthCap)) &&
     (
       ledger.pendingAsBuiltRemediationFindings === undefined ||
       isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
@@ -492,7 +500,15 @@ function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedge
 function normalizeKickbackGateEntry(value: unknown): PersistedKickbackGateEntry | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const entry = value as Record<string, unknown>;
-  const withoutHistory = { ...entry };
+  const withoutHistory: Record<string, unknown> = {
+    ...entry,
+    ...(entry.capEvidence === undefined ? {} : {
+      capEvidence: {
+        ...(entry.capEvidence as Record<string, unknown>),
+        allowance: (entry.capEvidence as Record<string, unknown>).allowance ?? 'laps',
+      },
+    }),
+  };
   const historyIsValid = entry.adjustments === undefined || (
     Array.isArray(entry.adjustments) && entry.adjustments.every(isBudgetAdjustment)
   );
@@ -527,6 +543,9 @@ function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
   if (ledger.growth !== undefined && !isPlanGrowthRecord(ledger.growth)) {
     return unreadableLedger(normalizeKickbackLedger({ version: 1, gates }).gates);
   }
+  if (ledger.effectiveGrowthCap !== undefined && !isPositiveSafeInteger(ledger.effectiveGrowthCap)) {
+    return unreadableLedger(normalizeKickbackLedger({ version: 1, gates }).gates);
+  }
   if (
     ledger.pendingAsBuiltRemediationFindings !== undefined &&
     !isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
@@ -542,6 +561,9 @@ function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
     version: 1,
     gates,
     ...(ledger.growth !== undefined && isPlanGrowthRecord(ledger.growth) ? { growth: ledger.growth } : {}),
+    ...(ledger.effectiveGrowthCap !== undefined && isPositiveSafeInteger(ledger.effectiveGrowthCap)
+      ? { effectiveGrowthCap: ledger.effectiveGrowthCap }
+      : {}),
     ...(ledger.pendingAsBuiltRemediationFindings !== undefined && isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
       ? { pendingAsBuiltRemediationFindings: ledger.pendingAsBuiltRemediationFindings }
       : {}),
