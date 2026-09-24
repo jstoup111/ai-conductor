@@ -447,6 +447,17 @@ function renderOperatorParkBoundaries(events: ParsedEvent[]): string {
       typeof boundary.name === 'string'
     ) {
       rows.push([event.featureSlug, boundary.kind, boundary.name]);
+    } else if (
+      boundary.kind === 'attempt' &&
+      typeof boundary.step === 'string' &&
+      typeof boundary.attempt === 'number'
+    ) {
+      const settledUnit = boundary.member === undefined
+        ? `attempt ${boundary.attempt} for step ${boundary.step}`
+        : typeof boundary.member === 'string'
+          ? `attempt ${boundary.attempt} for group step ${boundary.step} member ${boundary.member}`
+          : undefined;
+      if (settledUnit !== undefined) rows.push([event.featureSlug, 'attempt', settledUnit]);
     }
   }
 

@@ -703,4 +703,32 @@ describe('report-renderer', () => {
     expect(report).toMatch(/early-feature\s+pre-first-unit\s+—/);
     expect(report).not.toMatch(/\b(?:DONE|HALT|ERROR)\b/);
   });
+
+  it('reports serial and group-member attempt operator park boundaries', async () => {
+    const content = makeLines([
+      {
+        event: {
+          type: 'operator_park_boundary',
+          featureSlug: 'serial-attempt-feature',
+          boundary: { kind: 'attempt', step: 'build', attempt: 2 },
+        },
+        ts: '2026-01-01T00:00:01.000Z',
+      },
+      {
+        event: {
+          type: 'operator_park_boundary',
+          featureSlug: 'member-attempt-feature',
+          boundary: { kind: 'attempt', step: 'ship', attempt: 3, member: 'architecture_review_as_built' },
+        },
+        ts: '2026-01-01T00:00:02.000Z',
+      },
+    ]);
+    await writeFile(eventsPath, content, 'utf-8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(/serial-attempt-feature\s+attempt\s+attempt 2 for step build/);
+    expect(report).toMatch(/member-attempt-feature\s+attempt\s+attempt 3 for group step ship member architecture_review_as_built/);
+    expect(report).not.toContain('No operator park boundaries recorded');
+  });
 });
