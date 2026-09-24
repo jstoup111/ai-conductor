@@ -80,18 +80,18 @@ As an operator, I want a Small spec's plan-carried criterion claims checked at l
 
 ## Story 4: coverage_binding is a registered BUILD-phase step, off by default
 
-As an operator, I want a `coverage_binding` step between `coherence_check` and `acceptance_specs` that the daemon executes and that does nothing until I enable it, so that the judge ships with zero change to existing builds.
+As an operator, I want a `coverage_binding` step between `coherence_check` and `acceptance_specs` that the daemon executes and that judges no criterion claim until I enable it, so that the judge ships with zero change to how existing builds judge criterion claims.
 
 ### Acceptance Criteria
 
 #### Happy Path
 - Given `ALL_STEPS`, when its order is read, then `coverage_binding` follows `coherence_check` and precedes `acceptance_specs`, with `phase: 'BUILD'`, `enforcement: 'gating'`, prerequisites `['plan']`, and no `skippableForTiers` or `skippableForTracks`
 - Given the daemon's derived preseed set, when it is computed, then `coverage_binding` is not a member
-- Given a config with no `coverage_binding` block, when the step runs, then it completes successfully with output `coverage_binding judge disabled` and writes `.pipeline/coverage-binding.json` recording `disabled`
+- Given a config with no `coverage_binding` block and a plan with no architecture-obligation violation, when the step runs, then it completes successfully with output `coverage_binding judge disabled` and writes `.pipeline/coverage-binding.json` recording `disabled`
 
 #### Negative Paths
 - Given `coverage_binding.judge.enabled: "yes"` (non-boolean), when the config is validated, then validation fails naming the key and the expected boolean type
-- Given the disabled default, when the step runs on a spec with a `does-not-assert`-shaped claim, then no provider dispatch occurs and no halt is written
+- Given the disabled default, when the step runs on a spec with a `does-not-assert`-shaped claim, then no provider dispatch occurs and that claim writes no halt
 - Given a tier-S feature, when the step table's tier skips are evaluated, then `coverage_binding` is not skipped
 
 ### Done When
