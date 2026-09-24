@@ -4,7 +4,7 @@ import {
   resolveCanonicalLauncher,
   shellQuote,
 } from '../../src/engine/canonical-launcher.js';
-import { DAEMON_FOREGROUND_COMMAND } from '../../src/engine/daemon-tmux.js';
+import { buildDaemonForegroundCommand } from '../../src/engine/daemon-tmux.js';
 import { BRAIN_FOREGROUND_COMMAND } from '../../src/engine/brain-supervisor-cli.js';
 
 describe('resolveCanonicalLauncher', () => {
@@ -57,7 +57,7 @@ describe('resolveCanonicalLauncher', () => {
 
 describe('foreground commands', () => {
   it('launch the current bundle through its canonical repo-relative launcher', () => {
-    for (const command of [DAEMON_FOREGROUND_COMMAND, BRAIN_FOREGROUND_COMMAND]) {
+    for (const command of [buildDaemonForegroundCommand({}), BRAIN_FOREGROUND_COMMAND]) {
       expect(command).toContain('bin/ai-conductor');
       expect(command).not.toMatch(/^ai-conductor\b/);
     }

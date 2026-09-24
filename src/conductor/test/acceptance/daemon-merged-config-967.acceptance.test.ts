@@ -18,7 +18,7 @@
 // Production call sites of the daemon's effective-config derivation (§3d):
 //   - src/conductor/src/daemon-cli.ts:497  runDaemonMode  (the only one)
 //   - src/conductor/src/index.ts:650       main → runDaemonMode (direct launch)
-//   - src/conductor/src/engine/daemon-tmux.ts:25 DAEMON_FOREGROUND_COMMAND
+//   - src/conductor/src/engine/daemon-tmux.ts:25 buildDaemonForegroundCommand
 //     ('conduct-ts daemon --continuous') — the supervised launch, which routes
 //     back through main → runDaemonMode. Covered by the Story 3 spec below.
 //
@@ -47,7 +47,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runDaemonMode } from '../../src/daemon-cli.js';
 import { daemonLogPath } from '../../src/engine/daemon-log.js';
-import { DAEMON_FOREGROUND_COMMAND } from '../../src/engine/daemon-tmux.js';
+import { buildDaemonForegroundCommand } from '../../src/engine/daemon-tmux.js';
 import { detectDaemonCommand, detectDaemonSupervisorCommand } from '../../src/engine/daemon-command.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { CodexProvider } from '../../src/execution/codex-provider.js';
@@ -61,20 +61,9 @@ import { execa } from 'execa';
 type ExecaLongCall = (file: string, args: readonly string[], options?: Options) => ReturnType<typeof execa>;
 const mockExeca = vi.mocked(execa as unknown as ExecaLongCall);
 
-// `HOME` is process-global. The aggregate suite runs test files concurrently,
-// so redirect the user-config adapter for this file rather than mutating HOME
-// while another daemon test is resolving its own configuration.
-const userConfigFixture = vi.hoisted(() => ({ path: '' }));
 const registeredProviderRoots = vi.hoisted(() => [] as PluginRegistry[]);
 const daemonResolvedConfigs = vi.hoisted(() => [] as HarnessConfig[]);
-
-vi.mock('../../src/engine/user-config.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/engine/user-config.js')>();
-  return {
-    ...actual,
-    readUserConfig: (path?: string) => actual.readUserConfig(path ?? userConfigFixture.path),
-  };
-});
+const originalHome = process.env.HOME;
 
 vi.mock('../../src/engine/plugin-loader.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/plugin-loader.js')>();
@@ -102,7 +91,8 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  userConfigFixture.path = '';
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
   registeredProviderRoots.splice(0);
   daemonResolvedConfigs.splice(0);
   mockExeca.mockReset();
@@ -118,6 +108,7 @@ async function tempDir(prefix: string): Promise<string> {
 /** A temp $HOME carrying (or deliberately lacking) ~/.ai-conductor/config.yml. */
 async function makeUserHome(yaml?: string): Promise<string> {
   const home = await tempDir('daemon-967-home-');
+  process.env.HOME = home;
   if (yaml !== undefined) {
     await mkdir(join(home, '.ai-conductor'), { recursive: true });
     await writeFile(join(home, '.ai-conductor', 'config.yml'), yaml, 'utf8');
@@ -155,8 +146,6 @@ async function launchDaemon(home: string, projectRoot: string): Promise<LaunchRe
   console.log = (msg?: unknown) => {
     consoleLines.push(String(msg));
   };
-  userConfigFixture.path = join(home, '.ai-conductor', 'config.yml');
-
   let error: string | undefined;
   try {
     await runDaemonMode({
@@ -394,13 +383,13 @@ describe('#967 Story 2 — project policy retains precise precedence', () => {
 
 describe('#967 Story 3 — every daemon launch uses one effective-config boundary', () => {
   it('happy: the supervised foreground launch resolves to the same daemon run command as a direct launch', async () => {
-    // The supervisor starts the daemon by running DAEMON_FOREGROUND_COMMAND in
+    // The supervisor starts the daemon by running buildDaemonForegroundCommand in
     // a tmux pane. Parsing that command's argv with the PRODUCTION dispatchers
     // proves it is not intercepted by a management verb and lands on the same
     // `daemon` run command that main() routes into runDaemonMode — i.e. both
     // launch paths converge on one composition root, and therefore on one
     // effective-config boundary.
-    const supervisedArgv = ['node', ...DAEMON_FOREGROUND_COMMAND.split(' ')];
+    const supervisedArgv = ['node', ...buildDaemonForegroundCommand({}).split(' ').slice(1)];
 
     expect(detectDaemonSupervisorCommand(supervisedArgv)).toBeNull();
     const daemonCmd = detectDaemonCommand(supervisedArgv);

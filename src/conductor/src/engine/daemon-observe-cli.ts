@@ -27,6 +27,11 @@ import { prdAuditAppendCap } from './conductor.js';
 import { loadConfig } from './config.js';
 import { readGrowth, readKickbackLedger } from './kickback-ledger.js';
 import { renderKickbackBudgetView } from './kickback-budget-view.js';
+import {
+  readDaemonTimeline,
+  type DaemonExitRecord,
+  type DaemonMemorySample,
+} from './daemon-ledger-readers.js';
 import type { HarnessConfig } from '../types/config.js';
 
 /** Fallback label when a pidfile record has no `engineDir`, or its basename
@@ -146,6 +151,12 @@ export interface DaemonStatusRow {
    *  set — "version-unknown" when absent/unrecognized (legacy record, no
    *  pidfile, dangling engineDir). */
   versionId: string;
+  /** Most recent witnessed death for this row's dead pid, if one was recorded. */
+  lastExit?: DaemonExitRecord;
+  /** Most recent daemon memory sample for this repository. */
+  lastMemorySample?: DaemonMemorySample;
+  /** Malformed ledger lines skipped while reading observability records. */
+  skippedUnparseable?: number;
 }
 
 export interface DaemonStatusDeps {
@@ -157,6 +168,10 @@ export interface DaemonStatusDeps {
   out?: (line: string) => void;
   /** Injectable clock (tests) — used only for GATED-section freshness ("Nm ago"). */
   clock?: Clock;
+  /** Injectable tmux session probe (tests). */
+  hasSessionProbe?: (repoPath: string) => boolean | Promise<boolean>;
+  /** Injectable tmux pane-death probe (tests). */
+  paneDeadProbe?: (repoPath: string) => boolean | Promise<boolean>;
 }
 
 /**
@@ -316,6 +331,19 @@ function formatStatusRow(row: DaemonStatusRow): string {
     parts.push(`  last${at}: ${row.lastActivity}`);
   }
   parts.push(`  session:${row.sessionPresent ? 'up' : 'down'}`);
+  if (row.state === 'dead-pane' || row.liveness === 'stale') {
+    if (row.lastExit) {
+      const cause = row.lastExit.signal ? 'killed by ' + row.lastExit.signal : 'exited ' + row.lastExit.code;
+      parts.push('  ' + cause + ' at ' + row.lastExit.at);
+    } else {
+      parts.push('  exit cause unknown');
+    }
+  }
+  const rss = row.lastMemorySample?.rss;
+  if (typeof rss === 'number') {
+    parts.push('  mem ' + Math.round(rss / 1024 / 1024) + ' MB at ' + String(row.lastMemorySample?.ts ?? 'unknown'));
+  }
+  if (row.skippedUnparseable) parts.push('  (skipped ' + row.skippedUnparseable + ' unparseable)');
   if (row.detail) parts.push(`  — ${row.detail}`);
   return parts.join('');
 }
@@ -533,7 +561,18 @@ export async function runDaemonStatus(
 
   const rows: DaemonStatusRow[] = [];
   for (const record of records) {
-    const row = await computeStatusRow(record, deps.kill);
+    const row = await computeStatusRow(record, deps.kill, deps.hasSessionProbe, deps.paneDeadProbe);
+    const timeline = await readDaemonTimeline(record.path);
+    if ('event' in timeline) {
+      const newest = [...(timeline.event ?? [])].reverse();
+      if ((row.state === 'dead-pane' || row.liveness === 'stale') && row.pid !== undefined) {
+        const exit = newest.find((entry): entry is DaemonExitRecord => entry.type === 'daemon_exited' && entry.pid === row.pid);
+        if (exit) row.lastExit = exit;
+      }
+      const sample = newest.find((entry): entry is DaemonMemorySample => entry.type === 'daemon_memory_sample');
+      if (sample) row.lastMemorySample = sample;
+      row.skippedUnparseable = timeline.skipped;
+    }
     rows.push(row);
     out(formatStatusRow(row));
     // path-missing repos have no `.daemon/` directory to read from — never

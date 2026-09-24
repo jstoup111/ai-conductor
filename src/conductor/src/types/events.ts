@@ -292,6 +292,32 @@ export type ConductorEvent =
       blocked: Record<DispatchBlockReason, boolean>;
       pollDurationMs: number;
     }
+  | {
+      type: 'daemon_memory_sample';
+      rss: number;
+      heapUsed: number;
+      heapTotal: number;
+      external: number;
+      slug: string;
+      step: string;
+      boundary: 'started' | 'completed';
+      pid: number;
+      dispatchSeq: number;
+    }
+  | {
+      type: 'daemon_heap_dump_written';
+      path: string;
+      bytes: number;
+      rss: number;
+      pid: number;
+    }
+  | {
+      type: 'daemon_exited';
+      pid: number;
+      code: number | null;
+      signal: string | null;
+      at: string;
+    }
   | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind; tier?: ComplexityTier }
   | {
       type: 'feature_dispatch_ended';

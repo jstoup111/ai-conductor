@@ -108,7 +108,8 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'markdown_viewer', 'mermaid_renderer', 'assess', 'acceptance_spec_globs', 'test_suite',
     'llm_provider', 'ui_renderer', 'visualizers', 'memory_provider', 'otel', 'build_progress',
     'provider_stream', 'spec_owner', 'owner_gate_cutover', 'attribution_audit_sample_pct',
-    'rebase_resolution_attempts', 'validation_concurrency', 'daemon_concurrency', 'harness_self_host',
+    'rebase_resolution_attempts', 'validation_concurrency', 'daemon_concurrency', 'daemon_heap_limit_mb',
+    'daemon_heap_dump_threshold_mb', 'daemon_heap_dump_retention', 'harness_self_host',
     'model_fallback_ladder', 'auto_restart_on_stale_engine', 'engine_refresh_min_interval_seconds',
     'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'build_review', 'conflict_check',
     'prd_audit', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
@@ -171,6 +172,9 @@ const DEPRECATED_BUILD_REVIEW_ADR =
 
 /** Default hard floor for live provider-stream observation emission. */
 export const DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS = 5_000;
+
+/** Default V8 old-space heap limit, in megabytes, for the continuous daemon. */
+export const DEFAULT_DAEMON_HEAP_LIMIT_MB = 4096;
 
 function normalizeKeyedBlock(
   blockName: string,
@@ -1078,6 +1082,28 @@ export function validateConfig(
       obj.daemon_concurrency < 1
     ) {
       return errVal('daemon_concurrency must be an integer in the accepted range [1, ∞)');
+    }
+  }
+
+  // daemon_heap_limit_mb — V8's old-space cap must leave enough room for a
+  // viable daemon while remaining an exact megabyte count for NODE_OPTIONS.
+  if (obj.daemon_heap_limit_mb !== undefined) {
+    if (
+      typeof obj.daemon_heap_limit_mb !== 'number' ||
+      !Number.isFinite(obj.daemon_heap_limit_mb) ||
+      !Number.isInteger(obj.daemon_heap_limit_mb) ||
+      obj.daemon_heap_limit_mb < 256
+    ) {
+      return errVal('daemon_heap_limit_mb must be an integer in the accepted range [256, ∞)');
+    }
+  }
+
+  // daemon_heap_dump_threshold_mb / daemon_heap_dump_retention — the heap
+  // snapshot trigger and the number of snapshots kept under .daemon/heap/.
+  for (const key of ['daemon_heap_dump_threshold_mb', 'daemon_heap_dump_retention'] as const) {
+    const value = obj[key];
+    if (value !== undefined && (typeof value !== 'number' || !Number.isInteger(value) || value < 1)) {
+      return errVal(`${key} must be an integer in the accepted range [1, ∞)`);
     }
   }
 

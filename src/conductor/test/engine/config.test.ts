@@ -1,18 +1,10 @@
 // Covers: task:1, task:2, task:2.1, task:4, task:5, task:9, task:3
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-const userConfigFixture = vi.hoisted(() => ({ path: '' }));
-
-vi.mock('../../src/engine/user-config.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/engine/user-config.js')>();
-  return {
-    ...actual,
-    readUserConfig: (path?: string) => actual.readUserConfig(path ?? userConfigFixture.path),
-  };
-});
+const originalHome = process.env.HOME;
 
 import {
   loadConfig,
@@ -43,7 +35,8 @@ describe('config', () => {
   });
 
   afterEach(async () => {
-    userConfigFixture.path = '';
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     await rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -589,6 +582,48 @@ steps:
     it('resolveDaemonConcurrency defaults to 1 when daemon_concurrency is absent', () => {
       expect(resolveDaemonConcurrency({})).toBe(1);
     });
+
+    it('accepts daemon_heap_limit_mb 6144 and retains it in the validated config', () => {
+      const result = validateConfig({ daemon_heap_limit_mb: 6144 });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: { daemon_heap_limit_mb: 6144 },
+      });
+    });
+
+    it('accepts daemon_heap_dump_threshold_mb and daemon_heap_dump_retention and retains them', () => {
+      const result = validateConfig({ daemon_heap_dump_threshold_mb: 2048, daemon_heap_dump_retention: 5 });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: { daemon_heap_dump_threshold_mb: 2048, daemon_heap_dump_retention: 5 },
+      });
+    });
+
+    it.each([
+      ['daemon_heap_dump_threshold_mb', 0], ['daemon_heap_dump_threshold_mb', 1.5], ['daemon_heap_dump_threshold_mb', 'big'],
+      ['daemon_heap_dump_retention', 0], ['daemon_heap_dump_retention', -2], ['daemon_heap_dump_retention', 2.5],
+    ] as const)('rejects %s %j outside the accepted integer range [1, ∞)', (key, value) => {
+      const result = validateConfig({ [key]: value as never });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain(key);
+      expect(result.error.message).toContain('[1, ∞)');
+    });
+
+    it.each([0, -1, 1.5, 'big'] as const)(
+      'rejects daemon_heap_limit_mb %j outside the accepted integer range [256, ∞)',
+      (daemonHeapLimitMb) => {
+        const result = validateConfig({ daemon_heap_limit_mb: daemonHeapLimitMb as never });
+
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.error.message).toContain('daemon_heap_limit_mb');
+        expect(result.error.message).toContain('[256, ∞)');
+      },
+    );
 
     it('resolveValidationConcurrency defaults to 4 when absent', () => {
       expect(resolveValidationConcurrency({})).toBe(4);
@@ -1351,10 +1386,10 @@ steps:
     it('rejects scalar command and commands together after ordinary user/project merging', async () => {
       const home = await mkdtemp(join(tmpdir(), 'config-user-'));
       try {
-        userConfigFixture.path = join(home, '.ai-conductor', 'config.yml');
+        process.env.HOME = home;
         await mkdir(join(home, '.ai-conductor'), { recursive: true });
         await writeFile(
-          userConfigFixture.path,
+          join(home, '.ai-conductor', 'config.yml'),
           'test_suite:\n  commands:\n    - command: npm run test:unit\n',
         );
         await writeFile(
@@ -1379,10 +1414,10 @@ steps:
     it('replaces a user command list with the ordered project list without concatenation', async () => {
       const home = await mkdtemp(join(tmpdir(), 'config-user-'));
       try {
-        userConfigFixture.path = join(home, '.ai-conductor', 'config.yml');
+        process.env.HOME = home;
         await mkdir(join(home, '.ai-conductor'), { recursive: true });
         await writeFile(
-          userConfigFixture.path,
+          join(home, '.ai-conductor', 'config.yml'),
           'test_suite:\n  commands:\n    - command: npm run test:obsolete\n',
         );
         await writeFile(

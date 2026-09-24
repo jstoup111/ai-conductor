@@ -39,7 +39,7 @@ import {
 } from './engineer/worktree-authoring.js';
 import { INTAKE_OUTCOMES_RELATIVE_PATH } from './engineer/outcome-staging.js';
 import { recordAuthoredKey } from './engineer/authored-ledger.js';
-import { ensureRunning } from './daemon-lock.js';
+import { ensureRunning, type EnsureRunningOpts } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter used by
 // deterministic engineer commands and the interactive launch pre-poll.
 import { brainLoopAlive } from './engineer/brain-liveness.js';
@@ -475,6 +475,8 @@ export interface DispatchEngineerOpts {
   handoffPublication?: HandoffDeps['publication'];
   /** Injected ensureRunning launch spy (for tests). */
   ensureRunningLaunch?: (repoPath: string) => void | Promise<void>;
+  /** Test-only overrides passed through the real ensureRunning path. */
+  ensureRunningOpts?: Omit<EnsureRunningOpts, 'onReclaim'>;
   /**
    * Injected interactive launcher (for tests). When provided, the 'launch' kind
    * calls this instead of spawning a real `claude` process and returns its exit code.
@@ -1364,7 +1366,10 @@ export async function dispatchEngineer(
         if (launchFn) {
           await Promise.resolve(launchFn(target.canonicalPath));
         } else {
-          await ensureRunning(target.canonicalPath, {});
+          await ensureRunning(target.canonicalPath, {
+            ...opts.ensureRunningOpts,
+            onReclaim: (message) => printErr(message),
+          });
         }
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);

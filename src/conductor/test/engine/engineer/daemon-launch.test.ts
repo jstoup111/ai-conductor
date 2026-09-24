@@ -10,7 +10,10 @@
 // The supervisor is injectable via opts.supervisor so the test verifies the exact
 // delegation without spawning real tmux.
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { launchDaemon, NO_AUTOLAUNCH_ENV } from '../../../src/engine/engineer/daemon-launch.js';
 import type { DaemonStarter } from '../../../src/engine/engineer/daemon-launch.js';
 import * as daemonLaunchModule from '../../../src/engine/engineer/daemon-launch.js';
@@ -45,6 +48,12 @@ describe('launchDaemon — auto-launch kill-switch (NO_AUTOLAUNCH_ENV)', () => {
 });
 
 describe('launchDaemon (ADR-014 mechanism: tmux Supervisor.start)', () => {
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
   it('delegates to supervisor.start(project) exactly once', async () => {
     const { supervisor, starts } = makeStarterSpy();
 
@@ -64,6 +73,18 @@ describe('launchDaemon (ADR-014 mechanism: tmux Supervisor.start)', () => {
     expect(starts).toEqual(['/projects/alpha']);
   });
 
+  it('passes the configured heap-capped foreground command to supervisor.start', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'daemon-launch-'));
+    roots.push(root);
+    await mkdir(join(root, '.ai-conductor'));
+    await writeFile(join(root, '.ai-conductor', 'config.yml'), 'daemon_heap_limit_mb: 6144\n');
+    const { supervisor } = makeStarterSpy();
+
+    await launchDaemon(root, { supervisor });
+
+    expect(supervisor.start).toHaveBeenCalledWith(root, expect.stringContaining('--max-old-space-size=6144'));
+  });
+
   it('does NOT return a manageable handle (launch ≠ manage)', () => {
     const { supervisor } = makeStarterSpy();
 
@@ -78,7 +99,7 @@ describe('launchDaemon (ADR-014 mechanism: tmux Supervisor.start)', () => {
     }
   });
 
-  it('propagates a start() failure rather than retaining a half-launched handle', () => {
+  it('propagates a start() failure rather than retaining a half-launched handle', async () => {
     const supervisor: DaemonStarter = {
       start: vi.fn(() => {
         throw new Error('tmux is not installed');
@@ -87,7 +108,7 @@ describe('launchDaemon (ADR-014 mechanism: tmux Supervisor.start)', () => {
 
     // The error surfaces to the caller (engineer handoff swallows it); the helper
     // never holds a handle to a daemon it failed to start.
-    expect(() => launchDaemon('/projects/my-app', { supervisor })).toThrow(/tmux/i);
+    await expect(launchDaemon('/projects/my-app', { supervisor })).rejects.toThrow(/tmux/i);
   });
 });
 

@@ -148,6 +148,18 @@
 # Allowed: an integer >= 1; zero, negative, fractional, or non-numeric values fail the load.
 # Default: 1 (serial).
 # Changing it: anything above 1 shares one repository between builds, so expect more rebase kickbacks and provider spend that scales with the width; a daemon --concurrency flag overrides it.
+# Controls: daemon_heap_limit_mb — the V8 old-space heap cap in megabytes for the continuous daemon.
+# Allowed: an integer >= 256.
+# Default: 4096.
+# Changing it: lower values make an out-of-memory failure happen sooner with a V8 diagnostic; higher values allow more old-space memory and need enough host RAM.
+# Controls: daemon_heap_dump_threshold_mb — the resident-memory size in megabytes at which the continuous daemon writes one heap snapshot under .daemon/heap/.
+# Allowed: an integer >= 1.
+# Default: 3072.
+# Changing it: keep it below daemon_heap_limit_mb so a snapshot lands before the heap cap stops the daemon.
+# Controls: daemon_heap_dump_retention — how many heap snapshots are kept under .daemon/heap/; the oldest is removed first.
+# Allowed: an integer >= 1.
+# Default: 3.
+# Changing it: snapshots are roughly the size of the heap, so a higher count needs matching disk space.
 # Controls: harness_self_host — guardrails used only when the project being built is the ai-conductor harness itself.
 # Allowed: an object with activation (auto, force_on, force_off), version_freeze, auth_park_timeout_minutes, build_auth (mode, token_path), sandbox_build_env, live_containment, version_approval_gate, and release_artifact_gate.
 # Default: unset; activation auto with every gate enabled, which leaves ordinary projects unaffected.

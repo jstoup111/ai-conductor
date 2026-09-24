@@ -1,6 +1,6 @@
-// Covers: task:10
+// Covers: task:10, task:8
 import { describe, it, expect } from 'vitest';
-import { detectDaemonCommand } from '../../src/engine/daemon-command.js';
+import { DAEMON_SUBVERBS, detectDaemonCommand } from '../../src/engine/daemon-command.js';
 
 // argv is process.argv: [node, entry, sub, ...rest].
 const argv = (...rest: string[]) => ['node', 'conduct', ...rest];
@@ -39,6 +39,11 @@ describe('detectDaemonCommand', () => {
     expect(detectDaemonCommand(argv('daemon', 'status'))).toBeNull();
     expect(detectDaemonCommand(argv('daemon', 'logs'))).toBeNull();
     expect(detectDaemonCommand(argv('daemon', 'logs', '--follow'))).toBeNull();
+  });
+
+  it('recognizes exit-witness as a daemon subverb without launching the daemon', () => {
+    expect(DAEMON_SUBVERBS.has('exit-witness')).toBe(true);
+    expect(detectDaemonCommand(argv('daemon', 'exit-witness', '--pid', '1', '--status', '0'))).toBeNull();
   });
 
   it('detects a bare `daemon` with defaults (concurrency 1, watch true, idle-poll 60, drain once)', () => {

@@ -71,6 +71,7 @@ As an operator, I want the daemon's V8 heap capped so that a runaway run fails i
 
 ### Done When
 - [ ] `daemon_heap_limit_mb` is declared in `types/config.ts`, listed among recognized keys, and validated as a positive integer following the `daemon_concurrency` pattern
+- [ ] `docs/reference/configuration.md` documents `daemon_heap_limit_mb` with its default `4096`, asserted by a test
 - [ ] A unit test asserts the foreground command contains `--max-old-space-size=<default>` with no key set and `--max-old-space-size=6144` with the key set
 - [ ] A unit test asserts `0`, `-1`, `1.5`, and `"big"` are rejected with a message naming the key
 - [ ] The existing tests that assert the exact foreground command string are updated in the same change and pass
@@ -84,7 +85,7 @@ As an operator, I want the daemon's exit status recorded from outside the dying 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a tmux-hosted daemon, when the daemon process exits for any reason, then the pane foreground appends one `daemon_exited` record to `.daemon/exit-events.jsonl` carrying the daemon pid, the exit code or the signal name, and a timestamp, before the pane foreground itself exits
+- Given a tmux-hosted daemon, when the daemon process exits with code 0, exits with a non-zero code, or is killed by `SIGKILL`, then the pane foreground appends exactly one `daemon_exited` record to `.daemon/exit-events.jsonl` carrying the daemon pid, the exit code or the signal name, and a timestamp, before the pane foreground itself exits
 - Given the daemon is killed with `SIGKILL`, when the witness runs, then the record carries `signal: SIGKILL` and a null exit code
 - Given the daemon exits with code 134 after a V8 heap abort, when the witness runs, then the record carries `code: 134` and `signal: SIGABRT`
 
@@ -97,6 +98,7 @@ As an operator, I want the daemon's exit status recorded from outside the dying 
 ### Done When
 - [ ] `daemon_exited` is a `ConductorEvent` variant with a sink-registry row of `render: false, persist: true, audit: false, otel: false`
 - [ ] `exit-witness` is a registered daemon subverb and the foreground command built for both fresh sessions and respawned panes runs the launcher as the single child and invokes the witness with that child's pid and exit status
+- [ ] Real-tmux cases on a fixture-owned private socket assert exactly one `daemon_exited` record, written before the wrapper exits, for a daemon child exiting 0, exiting 3, and killed with `SIGKILL`
 - [ ] A real-tmux test on a fixture-owned private socket kills the daemon child with `SIGKILL` and asserts one `daemon_exited` record with `signal: SIGKILL` in `.daemon/exit-events.jsonl` and none in `.daemon/events.jsonl`
 - [ ] A unit test asserts an unwritable exit ledger falls back to one `daemon.log` line and a non-zero witness exit
 - [ ] A unit test asserts missing `--pid` or exit status is rejected with usage and no write
@@ -159,11 +161,11 @@ As an operator, I want a feature whose daemon was killed mid-build to continue f
 
 #### Negative Paths
 - Given a completed task whose commit carries a `Task:` trailer but whose `task-status.json` row was lost, when the feature is re-dispatched, then the row is restored as `completed` from the trailer and the task is not redone
-- Given the daemon was killed while task 19 was mid-flight with no commit, when the feature is re-dispatched, then task 19 is dispatched again from pending and no half-finished state is treated as complete
+- Given the daemon was killed while task 19 was mid-flight with no commit, when the feature is re-dispatched, then task 19 keeps its preserved `in_progress` row and is dispatched again, and no half-finished state is treated as complete
 - Given the feature had no `.pipeline/HALT` written because the daemon died abruptly, when the new daemon scans the backlog, then the feature is re-dispatched on the next poll without an operator clearing anything
 
 ### Done When
 - [ ] An acceptance test seeds a worktree with trailered commits and a `task-status.json`, simulates the daemon death, re-dispatches, and asserts the resumed task index and untouched earlier rows
 - [ ] The same test asserts pre-kill `.pipeline/events.jsonl` and `conduct-state.json` contents survive the redispatch
-- [ ] A test asserts a trailer-only completed task is restored as `completed` and an uncommitted mid-flight task returns to pending
+- [ ] A test asserts a trailer-only completed task is restored as `completed` and an uncommitted mid-flight task keeps its preserved `in_progress` row and is re-dispatched rather than treated as complete
 - [ ] A test asserts a killed feature with no HALT marker is picked up on the next poll

@@ -164,7 +164,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
-44 top-level keys are allow-listed (plus one retired, no-op key — `wiring`, see
+45 top-level keys are allow-listed (plus one retired, no-op key — `wiring`, see
 [build_review](#build_review)). Everything else fails the load.
 
 | Key | Type | Default | Section |
@@ -193,6 +193,9 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `rebase_resolution_attempts` | number | `3` | [rebase_resolution_attempts](#rebase_resolution_attempts) |
 | `validation_concurrency` | number | `4` | [validation_concurrency](#validation_concurrency) |
 | `daemon_concurrency` | number | `1` | [daemon_concurrency](#daemon_concurrency) |
+| `daemon_heap_limit_mb` | number | `4096` | [daemon_heap_limit_mb](#daemon_heap_limit_mb) |
+| `daemon_heap_dump_threshold_mb` | number | `3072` | [Daemon heap dump threshold](#daemon-heap-dump-threshold) |
+| `daemon_heap_dump_retention` | number | `3` | [Daemon heap dump threshold](#daemon-heap-dump-threshold) |
 | `harness_self_host` | object | see section | [harness_self_host](#harness_self_host) |
 | `model_fallback_ladder` | string[] | provider policy | [model_fallback_ladder](#model_fallback_ladder) |
 | `auto_restart_on_stale_engine` | boolean | `false` | [auto_restart_on_stale_engine](#auto_restart_on_stale_engine) |
@@ -1601,6 +1604,32 @@ process-global provider environment. To avoid concurrent environment mutation, i
 effective daemon concurrency above `1` before build dispatch and reports
 `LEGACY_NO_PROVIDER_EXECUTION_CONCURRENCY_REFUSAL`. That compatibility-path refusal is not a clamp
 on the daemon's normal worker pool.
+
+## daemon_heap_limit_mb
+
+Sets the V8 old-space heap cap for a continuous daemon. It defaults to `4096` MB and is passed to
+the daemon pane as `NODE_OPTIONS=--max-old-space-size=<n>` before the launcher command:
+
+```yaml
+daemon_heap_limit_mb: 6144
+```
+
+Only integers in `[256, ∞)` are valid. Invalid values stop `ai-conductor daemon start` and
+`ai-conductor daemon restart` before tmux launches or respawns a daemon.
+
+## Daemon heap dump threshold
+
+The daemon writes one heap snapshot per lifetime when a boundary memory sample's RSS reaches
+`daemon_heap_dump_threshold_mb` (default `3072`). Snapshots are stored under `.daemon/heap/`, and
+at most `daemon_heap_dump_retention` (default `3`) are kept; the oldest is removed first:
+
+```yaml
+daemon_heap_dump_threshold_mb: 2048
+daemon_heap_dump_retention: 5
+```
+
+Both must be integers in `[1, ∞)`. Keep the threshold below `daemon_heap_limit_mb` so the snapshot
+lands before the heap cap stops the daemon.
 
 ## stale_claim_window_hours
 

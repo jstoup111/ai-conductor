@@ -127,6 +127,10 @@ import {
   detectUnknownDaemonSubcommand,
   type DaemonCommandOptions,
 } from './engine/daemon-command.js';
+import {
+  detectDaemonExitWitnessCommand,
+  dispatchDaemonExitWitness,
+} from './engine/daemon-exit-witness.js';
 import { detectRenderCommand, dispatchRender } from './engine/render-cli.js';
 import { detectRateCardCommand, dispatchRateCard } from './engine/rate-card-cli.js';
 import {
@@ -208,7 +212,8 @@ import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { runOverlapScan, renderReport as renderOverlapReport } from './engine/overlap-scan.js';
 import { makeProductionGh } from './engine/pr-labels.js';
-import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
+import { buildDaemonExitWitnessCommand, hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
+import { resolveDaemonForegroundCommand } from './engine/daemon-supervisor-cli.js';
 
 // ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
 
@@ -390,12 +395,16 @@ export async function buildDaemonModeOptions(
     sessionNameForRepo: typeof sessionNameForRepo;
     hasSession: typeof hasSession;
     respawnPane: typeof respawnPane;
-  } = { sessionNameForRepo, hasSession, respawnPane },
+    resolveDaemonForegroundCommand?: typeof resolveDaemonForegroundCommand;
+    buildDaemonExitWitnessCommand?: typeof buildDaemonExitWitnessCommand;
+  } = { sessionNameForRepo, hasSession, respawnPane, resolveDaemonForegroundCommand, buildDaemonExitWitnessCommand },
 ): Promise<DaemonCommandOptions & { projectRoot: string; triggerSelfRestart?: () => Promise<void> }> {
   const sessionName = deps.sessionNameForRepo(projectRoot);
   const triggerSelfRestart = (await deps.hasSession(sessionName))
     ? async () => {
-        await deps.respawnPane(sessionName);
+        const command = await (deps.resolveDaemonForegroundCommand ?? resolveDaemonForegroundCommand)(projectRoot);
+        const witnessCommand = (deps.buildDaemonExitWitnessCommand ?? buildDaemonExitWitnessCommand)(command, projectRoot);
+        await deps.respawnPane(sessionName, undefined, witnessCommand);
       }
     : undefined;
   return {
@@ -1040,6 +1049,15 @@ async function main(): Promise<void> {
     }
     const code = await dispatchDaemonPark(daemonParkCmd, { cwd: resolved.root });
     process.exit(code);
+  }
+
+  // The pane foreground invokes this short-lived writer after its daemon child
+  // exits. Handle it before the supervisor/run fallthrough so it never starts
+  // a daemon itself.
+  const daemonExitWitnessCmd = detectDaemonExitWitnessCommand(process.argv);
+  if (daemonExitWitnessCmd) {
+    const projectRoot = await resolveDaemonProjectRoot(process.cwd());
+    process.exit(dispatchDaemonExitWitness(daemonExitWitnessCmd, projectRoot));
   }
 
   // Daemon management verbs (start / stop / restart / connect / debug) route to

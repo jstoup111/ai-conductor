@@ -24,6 +24,7 @@ anything.
 | `another daemon is already running (pid N) …`, exit 3 | [Lock contention](#lock-contention) |
 | `daemon status` shows `○ stale` | [Lock contention](#lock-contention) |
 | `daemon status` shows `⚠ session-up/process-dead` | [Orphaned process or session](#orphaned-process-or-session) |
+| `daemon status` shows `killed by …`, `exited …`, or `exit cause unknown` | [Orphaned process or session](#orphaned-process-or-session) |
 | `daemon status` shows `⏳ restart-pending` | [A restart is queued](#a-restart-is-queued) |
 | `daemon status` shows `⏸ paused (process dead)` | [A paused daemon that looks dead](#a-paused-daemon-that-looks-dead) |
 | The same feature fails identically on every start | [Spin loops](#spin-loops) |
@@ -42,7 +43,8 @@ ai-conductor daemon logs --lines 100
 
 `daemon status` sweeps the project registry and prints, per repo: state badge, name, path, pid,
 start time, `version:<engine-version-id>`, pause metadata, the last log line with its mtime, and
-`session:up|down`. It exits 0 for the sweep itself — stale and missing entries are *reported*,
+`session:up|down`. A dead pane or stale pid also names its witnessed exit signal or code when available;
+every recorded boundary sample adds the latest RSS and timestamp. It exits 0 for the sweep itself — stale and missing entries are *reported*,
 not treated as command failures. It exits 1 only when the registry itself cannot be read. An
 empty registry prints `No projects registered.` followed by a hint to register one.
 
@@ -152,7 +154,9 @@ where deletion would be safe.
 ### Orphaned process or session
 
 `⚠ session-up/process-dead` means the tmux session exists but the recorded daemon process is
-gone. The mirror case — process alive, session gone — is what `restart` calls an orphan.
+gone. Its status row names the matching witnessed exit signal or code when available; `exit cause
+unknown` means no matching witness was readable. The mirror case — process alive, session gone — is
+what `restart` calls an orphan.
 
 ```bash
 ai-conductor daemon restart

@@ -17,29 +17,20 @@
  * process, network, or third-party boundary is needed to observe the returned effective config.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { HarnessConfig } from '../../src/types/config.js';
 
-const userConfigFixture = vi.hoisted(() => ({ path: '' }));
-
-vi.mock('../../src/engine/user-config.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/engine/user-config.js')>();
-  return {
-    ...actual,
-    readUserConfig: (path?: string) => actual.readUserConfig(path ?? userConfigFixture.path),
-  };
-});
-
 import { loadMergedConfig } from '../../src/engine/config.js';
 
 const tempDirs: string[] = [];
+const originalHome = process.env.HOME;
 
 afterEach(async () => {
-  vi.restoreAllMocks();
-  userConfigFixture.path = '';
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -54,10 +45,10 @@ async function makeConfigPair(
   await mkdir(join(root, '.ai-conductor'), { recursive: true });
   await writeFile(join(root, '.ai-conductor', 'config.yml'), projectYaml, 'utf8');
 
-  userConfigFixture.path = join(home, '.ai-conductor', 'config.yml');
+  process.env.HOME = home;
   if (userYaml !== undefined) {
     await mkdir(join(home, '.ai-conductor'), { recursive: true });
-    await writeFile(userConfigFixture.path, userYaml, 'utf8');
+    await writeFile(join(home, '.ai-conductor', 'config.yml'), userYaml, 'utf8');
   }
 
   return root;
