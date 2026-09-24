@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:7, task:8, task:12, task:17
+// Covers: task:1, task:3, task:7, task:8, task:10, task:12, task:17
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
@@ -605,6 +605,40 @@ describe('DefaultStepRunner', () => {
       const envelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
       expect(envelope).toMatchObject({ status: 'failed', entries: [] });
       await expect(readFile(join(projectDir, '.pipeline', 'HALT'), 'utf8')).rejects.toThrow();
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an amendment-shaped batch atomically before recording a verdict or reopening work', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-invalid-amendment-payload-'));
+    const planPath = join(projectDir, 'plan.md');
+    const featureDesc = 'coverage-binding-invalid-amendment-payload';
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+      return {
+        success: true,
+        output: JSON.stringify({ verdicts: [{ digest: claims[0]!.digest, verdict: 'carried', taskIds: ['foreign-task'] }] }),
+        exitCode: 0,
+      };
+    });
+    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits an audit record.\n`);
+    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits an audit record | task-1 | covered | "emits an audit record" | diff-local |\n`);
+    const runner = new DefaultStepRunner(provider, 'coverage-run-invalid-amendment-payload', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
+        success: false,
+        infrastructureFailure: { name: 'CoverageBindingPayloadError', kind: 'coverage-binding-payload' },
+      });
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        status: 'failed', entries: [],
+      });
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
