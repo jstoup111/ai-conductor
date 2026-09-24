@@ -48,7 +48,7 @@ As the build_review step, I want a lap in which one rubric was rejected after re
 #### Negative Paths
 - Given three PASS rubrics and one infrastructure-failure rubric at the allowance cap, when the lap join completes, then the aggregate is published with `coverage.<rubric>: infrastructure-failure` and the effective verdict is FAIL
 - Given one rubric judged FAIL with a finding and another rubric rejected after repair, when the lap join completes, then the aggregate is published for the current lap with the judged finding and the infrastructure failure, and the kickback reason names only that lap's finding
-- Given a lap where every rubric is a retriable infrastructure failure (any closed reason other than `projection-oversized`, adr-2026-08-18 D3.1), when the lap join completes below cap, then no aggregate is written and the step result names the first failing rubric and its closed reason
+- Given a lap where every rubric is a retriable infrastructure failure (any closed reason other than the deterministic causes `projection-oversized`, `native-schema-unsupported` and `read-only-review-unavailable`, adr-2026-08-18 D3.1, D2.2 and D3.2), when the lap join completes below cap, then no aggregate is written and the step result names the first failing rubric and its closed reason
 - Given the prior lap's aggregate is on disk and the current lap is a below-cap mechanical fault, when completion is consulted for build_review, then it classifies the verdict absent (Story 1) and the prior lap's findings do not appear in any kickback reason
 
 ### Done When

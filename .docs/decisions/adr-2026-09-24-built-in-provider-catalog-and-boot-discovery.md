@@ -90,6 +90,16 @@ D7. `engine/live-e2e-providers.ts` is keyed by catalog ids. Per adr-2026-08-12, 
 
 D8. Order and scope of the startup check. Validation of configured provider names runs in two steps. First, a name that is a catalog id but was not discovered as installed raises the not-installed error. Only after that does the existing registered-provider validation raise unknown-provider for names that are neither a catalog id nor a registered plugin, and its available-names list shows installed providers only. Discovery and the fail-fast check run only at entry points that dispatch provider work: daemon start, `conduct` runs, and other subcommands that invoke a provider. Subcommands that never dispatch a provider do not probe executables and do not fail on missing ones. This covers, for example, `rate-card refresh`, `overlap-scan`, `render-diagrams`, and the `compose` registry and land primitives. It also covers any subcommand CI runs on a runner without provider CLIs. The default test suite never depends on which provider binaries the machine has installed.
 
+
+> **Amended 2026-09-24 by #2735:** D2 and D6 name a `buildReviewContainment` capability. #2735
+> (adr-2026-09-10-portable-build-review-policy D5.1–D5.5) retires bubblewrap review containment and
+> replaces it with each provider's read-only review mode, which custom-policy build_review laps
+> require. The flag is therefore named `readOnlyReview`: a provider declares it when its adapter maps
+> the engine's read-only review option to a native read-only mode. Claude and Codex declare it; Pi
+> does not. Its consumer is the custom-policy read-only review admission check, which now owns the
+> refusal that `build-review-containment.ts` used to. Every other statement in D2 and D6 is
+> unchanged.
+
 ## Consequences
 
 - Adding a fourth provider is one descriptor plus one adapter. The structural test fails if a new id literal appears elsewhere.

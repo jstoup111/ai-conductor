@@ -36,7 +36,7 @@ As an operator, I want a step that needs a capability Pi does not yet have to fa
 ### Acceptance Criteria
 
 #### Happy Path
-- Given claude and codex declare their current capabilities, when self-host, build-review containment, and review-policy catalog paths run for them, then behavior is unchanged.
+- Given claude and codex declare their current capabilities, when self-host, build-review read-only review, and review-policy catalog paths run for them, then behavior is unchanged.
 - Given pi is selected for an ordinary build step, when the step dispatches, then no capability refusal occurs.
 
 #### Negative Paths

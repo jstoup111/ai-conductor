@@ -37,7 +37,7 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 **Done when:**
 - `execution/provider-catalog.ts` exports `BUILT_IN_PROVIDERS`, `BuiltInProviderId`, `DEFAULT_PROVIDER`, and `ProviderWith`, and `BuiltInProviderId` is derived from the table ids rather than written as a literal union
 - a test asserts `resolveProviderExecutable` returns the `CLAUDE_EXECUTABLE` value when it is set to an absolute path and `claude` when it is unset
-- a test asserts, for each of readiness, selfHost, buildReviewContainment, reviewPolicyCatalog, supportsSessionResume, costSelfReporting, writeFence, and nativeSchema, a descriptor omitting that flag is reported unsupported by the catalog capability query
+- a test asserts, for each of readiness, selfHost, readOnlyReview, reviewPolicyCatalog, supportsSessionResume, costSelfReporting, writeFence, and nativeSchema, a descriptor omitting that flag is reported unsupported by the catalog capability query
 
 **Files likely touched:**
 - src/conductor/src/execution/provider-catalog.ts — new catalog module
@@ -52,7 +52,7 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 **Steps:**
 1. Write failing test: in `src/conductor/test/execution/provider-catalog.test.ts`, assert `requireProviderCapability` throws for a descriptor lacking `selfHost` with a message containing the provider id, `selfHost`, and the owning intake reference, and returns a narrowed provider when the flag is declared.
 2. Verify test fails (RED).
-3. Implement: add `requireProviderCapability(id, capability)` to `execution/provider-catalog.ts`, returning `ProviderWith<cap>` or throwing `ProviderCapabilityUnsupportedError`; each capability maps to its owning intake (#1887 selfHost, #1886 buildReviewContainment, #1888 reviewPolicyCatalog, #1889 costSelfReporting) in the catalog.
+3. Implement: add `requireProviderCapability(id, capability)` to `execution/provider-catalog.ts`, returning `ProviderWith<cap>` or throwing `ProviderCapabilityUnsupportedError`; each capability maps to its owning intake (#1887 selfHost, #1886 readOnlyReview, #1888 reviewPolicyCatalog, #1889 costSelfReporting) in the catalog.
 4. Verify test passes (GREEN).
 5. Commit with message: "feat(providers): refuse unsupported provider capabilities by name"
 
@@ -121,23 +121,23 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 
 **Dependencies:** 1
 
-### Task 5: Build-review containment and policy paths narrow by capability
+### Task 5: Build-review read-only review and policy paths narrow by capability
 **Story:** 2
 **Type:** refactor
 
 **Steps:**
 1. Write failing test: in `src/conductor/test/engine/build-review-policy-catalog.test.ts`, assert the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming `reviewPolicyCatalog` and never calls the claude or codex discovery stubs.
 2. Verify test fails (RED) — the factory throws a generic unsupported-provider error.
-3. Implement: replace the `claude | codex` unions and branches in `build-review-containment.ts`, `build-review-policy-contract.ts`, `build-review-policy-resolver.ts`, and the build-review paths of `step-runners.ts` with `ProviderWith<buildReviewContainment>` / `ProviderWith<reviewPolicyCatalog>` obtained through `requireProviderCapability`, dispatching to the descriptor-registered discovery function.
+3. Implement: replace the `claude | codex` unions and branches in `build-review-policy-contract.ts`, `build-review-policy-resolver.ts`, the build-review paths of `step-runners.ts`, and the custom-policy read-only review admission check in `provider-execution.ts` with `ProviderWith<readOnlyReview>` / `ProviderWith<reviewPolicyCatalog>` obtained through `requireProviderCapability`, dispatching to the descriptor-registered discovery function.
 4. Verify test passes (GREEN); existing build-review tests for claude and codex pass unchanged.
 5. Commit with message: "refactor(build-review): narrow provider paths by capability"
 
 **Done when:**
 - a test asserts the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming `reviewPolicyCatalog`, and that neither the claude nor the codex policy discovery stub was called
-- build-review containment and policy modules accept `ProviderWith` capability types, and the existing claude and codex build-review tests pass with unchanged assertions
+- build-review read-only review and policy modules accept `ProviderWith` capability types, and the existing claude and codex build-review tests pass with unchanged assertions
 
 **Files likely touched:**
-- src/conductor/src/engine/build-review-containment.ts — capability types
+- src/conductor/src/engine/provider-execution.ts — read-only review admission via capability
 - src/conductor/src/engine/build-review-policy-contract.ts — capability types
 - src/conductor/src/engine/build-review-policy-resolver.ts — capability types
 - src/conductor/src/engine/step-runners.ts — build-review dispatch via capability
@@ -362,14 +362,14 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 **Steps:**
 1. Write failing test: in `src/conductor/test/execution/pi-provider.test.ts`, with a fake subprocess factory, assert invoke spawns the resolved pi executable with `-p --no-session --mode json` and the prompt on stdin, passes no `--model`, and that a second invoke (retry) also carries `--no-session`.
 2. Verify test fails (RED).
-3. Implement: `execution/pi-provider.ts` `PiProvider` implementing only `invoke`, `supportsSessionResume = false`, and `lifecycleCapability.synchronousSpawnPermit`; add the pi descriptor to `BUILT_IN_PROVIDERS` with version argv `--version`, override env `PI_EXECUTABLE`, a single-rung model policy that passes no `--model`, and no selfHost, buildReviewContainment, reviewPolicyCatalog, writeFence, nativeSchema, costSelfReporting, or readiness capability.
+3. Implement: `execution/pi-provider.ts` `PiProvider` implementing only `invoke`, `supportsSessionResume = false`, and `lifecycleCapability.synchronousSpawnPermit`; add the pi descriptor to `BUILT_IN_PROVIDERS` with version argv `--version`, override env `PI_EXECUTABLE`, a single-rung model policy that passes no `--model`, and no selfHost, readOnlyReview, reviewPolicyCatalog, writeFence, nativeSchema, costSelfReporting, or readiness capability.
 4. Verify test passes (GREEN).
 5. Commit with message: "feat(providers): add the Pi adapter"
 
 **Done when:**
 - a test asserts `PiProvider.invoke` spawns the resolved pi executable with `-p --no-session --mode json`, writes the prompt to stdin, and passes no `--model` argument
 - a test asserts a second invoke for a retried step also carries `--no-session`, and `PiProvider.supportsSessionResume` is false
-- the pi descriptor declares no selfHost, buildReviewContainment, reviewPolicyCatalog, writeFence, nativeSchema, costSelfReporting, or readiness capability, and a test asserts an ordinary build step with pi raises no capability refusal
+- the pi descriptor declares no selfHost, readOnlyReview, reviewPolicyCatalog, writeFence, nativeSchema, costSelfReporting, or readiness capability, and a test asserts an ordinary build step with pi raises no capability refusal
 - a test asserts `PiProvider` exposes only the `invoke` dispatch member and declares `lifecycleCapability.synchronousSpawnPermit` true
 - a test asserts the pi descriptor model policy has exactly one rung and that rung carries no model id
 
@@ -559,11 +559,11 @@ Task 21 <- 13
 | Story 1 negative: Given a production source file outside the catalog and the provider's own adapter module, when it contains a built-in provider id literal, then the structural test fails naming the file and line. | 8 | "`provider-id-literals.test.ts` parses production source with the TypeScript compiler API and fails listing file and line for every string-literal node equal to a catalog id outside the catalog and adapter modules" | diff-local |
 | Story 1 negative: Given a user-facing display string that names a provider, when the structural test runs, then it passes only if the string is supplied by the catalog descriptor rather than written literally. | 8 | "a test asserts a provider display string written literally in a fixture is reported, and production display strings come from the descriptor `displayName` field" | diff-local |
 | Story 1 negative: Given `CLAUDE_EXECUTABLE` names a path that does not exist, when the engine boots with claude configured, then startup fails with the not-installed error for claude naming reason not-found. | 9 | "a test asserts that when `CLAUDE_EXECUTABLE` names a path that does not exist, claude is reported missing with reason `not-found` and `validateProviderInstallation` then raises `ProviderNotInstalledError` for claude" | diff-local |
-| Story 2 happy: Given claude and codex declare their current capabilities, when self-host, build-review containment, and review-policy catalog paths run for them, then behavior is unchanged. | 5, 6 | "build-review containment and policy modules accept `ProviderWith` capability types, and the existing claude and codex build-review tests pass with unchanged assertions" | diff-local |
-| Story 2 happy: Given pi is selected for an ordinary build step, when the step dispatches, then no capability refusal occurs. | 15 | "the pi descriptor declares no selfHost, buildReviewContainment, reviewPolicyCatalog, writeFence, nativeSchema, costSelfReporting, or readiness capability, and a test asserts an ordinary build step with pi raises no capability refusal" | diff-local |
+| Story 2 happy: Given claude and codex declare their current capabilities, when self-host, build-review read-only review, and review-policy catalog paths run for them, then behavior is unchanged. | 5, 6 | "build-review read-only review and policy modules accept `ProviderWith` capability types, and the existing claude and codex build-review tests pass with unchanged assertions" | diff-local |
+| Story 2 happy: Given pi is selected for an ordinary build step, when the step dispatches, then no capability refusal occurs. | 15 | "the pi descriptor declares no selfHost, readOnlyReview, reviewPolicyCatalog, writeFence, nativeSchema, costSelfReporting, or readiness capability, and a test asserts an ordinary build step with pi raises no capability refusal" | diff-local |
 | Story 2 negative: Given pi is selected for a path that requires the selfHost capability, when that path is reached, then it fails before spawning with an error naming provider pi, capability selfHost, and the owning intake. | 6 | "a test asserts preparing a self-host provider home for pi throws `ProviderCapabilityUnsupportedError` naming `selfHost` and `#1887`, and that the subprocess spawn stub was never called" | diff-local |
 | Story 2 negative: Given pi is selected for build-review with a custom review policy, when the review-policy catalog path is reached, then it fails naming capability reviewPolicyCatalog instead of falling into the codex or claude branch. | 5 | "a test asserts the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming `reviewPolicyCatalog`, and that neither the claude nor the codex policy discovery stub was called" | diff-local |
-| Story 2 negative: Given a descriptor omits a capability flag, when any consumer queries it, then the capability is treated as unsupported. | 1 | "a test asserts, for each of readiness, selfHost, buildReviewContainment, reviewPolicyCatalog, supportsSessionResume, costSelfReporting, writeFence, and nativeSchema, a descriptor omitting that flag is reported unsupported by the catalog capability query" | diff-local |
+| Story 2 negative: Given a descriptor omits a capability flag, when any consumer queries it, then the capability is treated as unsupported. | 1 | "a test asserts, for each of readiness, selfHost, readOnlyReview, reviewPolicyCatalog, supportsSessionResume, costSelfReporting, writeFence, and nativeSchema, a descriptor omitting that flag is reported unsupported by the catalog capability query" | diff-local |
 | Story 3 happy: Given claude and codex executables resolve and their version probes exit 0 and pi is absent, when the daemon boots, then claude and codex are registered and pi is not. | 13, 9 | "a test asserts `runDaemonMode` with only claude and codex discovered registers claude and codex as `llm_provider` plugins and does not register pi" | diff-local |
 | Story 3 happy: Given a provider executable override env var is set, when discovery runs, then the override path is probed instead of the PATH lookup. | 9 | "a test asserts that when a descriptor override env var is set, the injected runner receives the override path instead of the PATH lookup result" | diff-local |
 | Story 3 happy: Given discovery completes, when the event log is read, then one provider-discovery event lists the installed ids and each missing id with its reason. | 11 | "a test asserts exactly one `provider_discovery` event carrying the installed ids and each missing id with its reason is persisted to `.pipeline/events.jsonl` per boot" | diff-local |
@@ -603,7 +603,7 @@ Task 21 <- 13
 | Decision | Disposition | Task(s) | Evidence |
 | --- | --- | --- | --- |
 | adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D1 | task | task-1, task-8 | `provider-id-literals.test.ts` parses production source with the TypeScript compiler API and fails listing file and line for every string-literal node equal to a catalog id outside the catalog and adapter modules |
-| adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D2 | task | task-1, task-2, task-5, task-6, task-7 | a test asserts, for each of readiness, selfHost, buildReviewContainment, reviewPolicyCatalog, supportsSessionResume, costSelfReporting, writeFence, and nativeSchema, a descriptor omitting that flag is reported unsupported by the catalog capability query |
+| adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D2 | task | task-1, task-2, task-5, task-6, task-7 | a test asserts, for each of readiness, selfHost, readOnlyReview, reviewPolicyCatalog, supportsSessionResume, costSelfReporting, writeFence, and nativeSchema, a descriptor omitting that flag is reported unsupported by the catalog capability query |
 | adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D3 | task | task-9, task-10, task-11, task-21 | a test asserts in both `runDaemonMode` and the CLI boot path that discovery runs before `registerBuiltins` or `registerCliBuiltins` and exactly one `provider_discovery` event is persisted |
 | adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D4 | task | task-12, task-13, task-21 | a test asserts `runDaemonMode` with run-level pi configured and discovery reporting pi missing exits non-zero with the not-installed message naming pi, its config path, and the discovery reason, and never calls the claim, worktree-create, or dispatch stubs |
 | adr-2026-09-24-built-in-provider-catalog-and-boot-discovery#D5 | task | task-15, task-16, task-18 | a test asserts `PiProvider` exposes only the `invoke` dispatch member and declares `lifecycleCapability.synchronousSpawnPermit` true |

@@ -15,7 +15,7 @@ production sites hardcode the pair as literal unions or branches. Among them:
 - `execution/child-environment.ts:54` — `REVIEW_PROVIDER_PREFIXES`
 - `execution/llm-provider.ts:169,294`
 - `engine/step-runners.ts` (lines 651, 693-703, 2723, 2842, 3508)
-- `engine/build-review-containment.ts`, `engine/build-review-policy-*.ts`
+- `engine/provider-execution.ts` (read-only review admission), `engine/build-review-policy-*.ts`
 - `engine/self-host/live-boundary.ts:205,283`
 - `engine/smoke-capability.ts:43`
 - `engine/conductor.ts:6310`
@@ -67,7 +67,7 @@ graph LR
 graph TD
     subgraph catalog["NEW execution/provider-catalog.ts: single source of truth"]
         Table["BUILT_IN_PROVIDERS descriptor table<br/>id, factory, env prefixes,<br/>home variable, executable env var"]
-        Caps["Capability flags per descriptor<br/>readiness, selfHost,<br/>buildReviewContainment, reviewPolicyCatalog"]
+        Caps["Capability flags per descriptor<br/>readiness, selfHost,<br/>readOnlyReview, reviewPolicyCatalog"]
         Types["Derived types<br/>BuiltInProviderId = ids of table<br/>ProviderWith«capability»"]
         Table --> Caps
         Table --> Types
@@ -82,7 +82,7 @@ graph TD
     Discovery["NEW provider-discovery.ts<br/>resolve executable + --version probe<br/>per descriptor"]
     Loader["plugin-loader.ts<br/>registers only installed descriptors"]
     Validator["config.ts validator<br/>unknown-provider error lists table ids"]
-    Consumers["Capability consumers<br/>self-host home, live-boundary,<br/>build-review containment and policy,<br/>child-environment prefixes, smoke"]
+    Consumers["Capability consumers<br/>self-host home, live-boundary,<br/>build-review read-only review and policy,<br/>child-environment prefixes, smoke"]
     RT["provider-runtime.ts<br/>readinessFor + fallback ladder"]
 
     Table -->|"factory"| CP
