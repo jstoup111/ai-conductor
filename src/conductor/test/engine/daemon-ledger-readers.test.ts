@@ -25,8 +25,9 @@ describe('daemon ledger readers', () => {
     );
 
     const timeline = await readDaemonTimeline(root);
-    expect(timeline).toMatchObject({ skipped: 0 });
-    if ('event' in timeline) expect(timeline.event?.at(-1)).toEqual(latest);
+    expect(timeline).toMatchObject({ event: expect.any(Array), skipped: 0 });
+    const { event } = timeline as Extract<typeof timeline, { event: unknown }>;
+    expect(event!.at(-1)).toEqual(latest);
   });
 
   it('returns only the newest exit record for the requested pid', async () => {
