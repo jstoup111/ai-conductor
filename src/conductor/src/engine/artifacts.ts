@@ -4050,10 +4050,11 @@ export const GATE_ONLY_PREDICATES: Partial<
       };
     }
     const readability = assessAcceptedStoryReadability(content);
-    if (readability.firstUnreadableStoryId) {
+    const unreadableStory = readability.stories.find((story) => !story.readable);
+    if (unreadableStory) {
       return {
         done: false,
-        reason: `${rel} (Story ${readability.firstUnreadableStoryId}): criteria are unreadable (each story needs readable Given/When/Then criteria under headed Happy Path or Negative Paths sections)`,
+        reason: `${rel} (Story ${unreadableStory.id ?? 'unnamed'}): criteria are unreadable (each story needs readable Given/When/Then criteria under headed Happy Path or Negative Paths sections)`,
       };
     }
     return { done: true };

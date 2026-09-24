@@ -406,9 +406,10 @@ export async function landSpec(
   // dispatch. Approval alone cannot make a story with no derivable criterion
   // readable, so refuse it before any downstream gate or landing write.
   const readability = assessAcceptedStoryReadability(storiesContent);
-  if (readability.firstUnreadableStoryId !== undefined) {
+  const unreadableStory = readability.stories.find((story) => !story.readable);
+  if (unreadableStory) {
     throw landGateError('stories-unreadable',
-      `landSpec: accepted stories contain an unreadable Story ${readability.firstUnreadableStoryId}. ` +
+      `landSpec: accepted stories contain an unreadable Story ${unreadableStory.id ?? 'unnamed'}. ` +
       'Each criterion must be one single-line Given/When/Then bullet under a headed Happy Path or Negative Paths section. ' +
       'Amend the stories artifact before landing.',
     );
