@@ -51,6 +51,11 @@ export interface CoverageBindingAmendmentEnvelopeEntry {
   readonly verdict: CoverageBindingAmendmentVerdict;
 }
 
+export type CoverageBindingAmendmentJudgeVerdict =
+  | { readonly verdict: 'carried'; readonly taskIds: readonly string[]; readonly contradictsCompleted?: readonly string[] }
+  | { readonly verdict: 'not-carried'; readonly missingObligation: string; readonly contradictsCompleted?: readonly string[] }
+  | { readonly verdict: 'no-plan-obligation'; readonly contradictsCompleted?: readonly string[] };
+
 /** Session-fresh, engine-stamped completion evidence for coverage_binding. */
 export interface CoverageBindingEnvelope {
   readonly version: 1;
@@ -203,6 +208,74 @@ export function parseJudgeBatchPayload(
       return { ok: false, reason: `batch verdict is missing issued digest ${digest}` };
     }
   }
+  return { ok: true, verdicts };
+}
+
+function parseAmendmentJudgePayloadValue(
+  value: unknown,
+  issuedTaskIds: ReadonlySet<string>,
+  issuedCompletedTaskIds: ReadonlySet<string>,
+): { ok: true; value: CoverageBindingAmendmentJudgeVerdict } | { ok: false; reason: string } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { ok: false, reason: 'amendment payload must be a JSON object' };
+  }
+  const candidate = value as Record<string, unknown>;
+  const contradictions = candidate.contradictsCompleted;
+  if (contradictions !== undefined && (!stringList(contradictions) || contradictions.some((taskId) => !issuedCompletedTaskIds.has(taskId)))) {
+    const foreign = Array.isArray(contradictions) ? contradictions.find((taskId) => typeof taskId === 'string' && !issuedCompletedTaskIds.has(taskId)) : undefined;
+    return { ok: false, reason: `contradictsCompleted must contain only issued completed task ids${foreign ? `; foreign task id ${foreign}` : ''}` };
+  }
+  const optionalContradictions = contradictions === undefined ? {} : { contradictsCompleted: contradictions };
+  if (candidate.verdict === 'carried') {
+    if (!exactKeys(candidate, ['verdict', 'taskIds', ...(contradictions === undefined ? [] : ['contradictsCompleted'])]) ||
+      !stringList(candidate.taskIds) || candidate.taskIds.length === 0 || candidate.taskIds.some((taskId) => !issuedTaskIds.has(taskId))) {
+      const foreign = Array.isArray(candidate.taskIds) ? candidate.taskIds.find((taskId) => typeof taskId === 'string' && !issuedTaskIds.has(taskId)) : undefined;
+      return { ok: false, reason: `carried payload requires non-empty issued taskIds${foreign ? `; foreign task id ${foreign}` : ''}` };
+    }
+    return { ok: true, value: { verdict: 'carried', taskIds: candidate.taskIds, ...optionalContradictions } };
+  }
+  if (candidate.verdict === 'not-carried') {
+    if (!exactKeys(candidate, ['verdict', 'missingObligation', ...(contradictions === undefined ? [] : ['contradictsCompleted'])]) || !text(candidate.missingObligation)) {
+      return { ok: false, reason: 'not-carried payload requires a non-empty missingObligation' };
+    }
+    return { ok: true, value: { verdict: 'not-carried', missingObligation: candidate.missingObligation, ...optionalContradictions } };
+  }
+  if (candidate.verdict === 'no-plan-obligation' && exactKeys(candidate, ['verdict', ...(contradictions === undefined ? [] : ['contradictsCompleted'])])) {
+    return { ok: true, value: { verdict: 'no-plan-obligation', ...optionalContradictions } };
+  }
+  return { ok: false, reason: 'amendment payload verdict must be carried, not-carried, or no-plan-obligation with only its permitted fields' };
+}
+
+/** Parses one complete amendment batch and rejects every verdict if any member is unsafe. */
+export function parseAmendmentBatchPayload(
+  payload: string,
+  issuedDigests: readonly string[],
+  issuedTaskIds: readonly string[],
+  issuedCompletedTaskIds: readonly string[],
+): { ok: true; verdicts: ReadonlyMap<string, CoverageBindingAmendmentJudgeVerdict> } | { ok: false; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return { ok: false, reason: 'amendment batch payload is not valid JSON' };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed) || !exactKeys(parsed as Record<string, unknown>, ['verdicts']) || !Array.isArray((parsed as Record<string, unknown>).verdicts)) {
+    return { ok: false, reason: 'amendment batch payload must contain only a verdicts array' };
+  }
+  const issued = new Set(issuedDigests);
+  const verdicts = new Map<string, CoverageBindingAmendmentJudgeVerdict>();
+  for (const entry of (parsed as { verdicts: unknown[] }).verdicts) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return { ok: false, reason: 'amendment batch verdict entry must be a JSON object' };
+    const candidate = entry as Record<string, unknown>;
+    if (!text(candidate.digest)) return { ok: false, reason: 'amendment batch verdict entry requires a non-empty digest' };
+    if (!issued.has(candidate.digest)) return { ok: false, reason: `amendment batch verdict has foreign digest ${candidate.digest}` };
+    if (verdicts.has(candidate.digest)) return { ok: false, reason: `amendment batch verdict repeats digest ${candidate.digest}` };
+    const { digest, ...verdictPayload } = candidate;
+    const verdict = parseAmendmentJudgePayloadValue(verdictPayload, new Set(issuedTaskIds), new Set(issuedCompletedTaskIds));
+    if (!verdict.ok) return { ok: false, reason: `amendment batch verdict for digest ${digest}: ${verdict.reason}` };
+    verdicts.set(digest, verdict.value);
+  }
+  for (const digest of issued) if (!verdicts.has(digest)) return { ok: false, reason: `amendment batch verdict is missing issued digest ${digest}` };
   return { ok: true, verdicts };
 }
 
