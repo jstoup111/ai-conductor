@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:5
 // The land boundary must refuse Accepted stories that its downstream criterion
 // consumers cannot read, before it writes an intake marker or commits.
 
@@ -22,8 +22,12 @@ async function git(args: string[], cwd = repoPath): Promise<string> {
   return stdout.trim();
 }
 
-async function seedSmallLandFixture(stories: string): Promise<string> {
-  const idea = 'readable stories only';
+async function seedSmallLandFixture(
+  stories: string,
+  idea = 'readable stories only',
+  plan = defaultPlan('readable-stories-only'),
+): Promise<string> {
+  const stem = idea.replaceAll(' ', '-');
   const worktreePath = (await createEngineerWorktree(repoPath, idea)).worktreePath;
   await rm(join(worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
   await Promise.all([
@@ -33,12 +37,19 @@ async function seedSmallLandFixture(stories: string): Promise<string> {
     mkdir(join(worktreePath, '.docs', 'track'), { recursive: true }),
     mkdir(join(worktreePath, '.docs', 'complexity'), { recursive: true }),
   ]);
-  await writeFile(join(worktreePath, '.docs', 'specs', 'readable-stories-only.md'), '# PRD\n\nApproved.\n');
-  await writeFile(join(worktreePath, '.docs', 'stories', 'readable-stories-only.md'), stories);
-  await writeFile(join(worktreePath, '.docs', 'plans', 'readable-stories-only.md'), [
+  await writeFile(join(worktreePath, '.docs', 'specs', `${stem}.md`), '# PRD\n\nApproved.\n');
+  await writeFile(join(worktreePath, '.docs', 'stories', `${stem}.md`), stories);
+  await writeFile(join(worktreePath, '.docs', 'plans', `${stem}.md`), plan);
+  await writeFile(join(worktreePath, '.docs', 'track', `${stem}.md`), '# Track\n\nTrack: technical\n');
+  await writeFile(join(worktreePath, '.docs', 'complexity', `${stem}.md`), '# Complexity\n\nTier: S\n');
+  return worktreePath;
+}
+
+function defaultPlan(stem: string): string {
+  return [
     '# Implementation Plan',
     '',
-    '**Stories:** .docs/stories/readable-stories-only.md',
+    `**Stories:** .docs/stories/${stem}.md`,
     '',
     '### Task 1: Validate readable stories',
     '**Story:** Story 1',
@@ -53,10 +64,7 @@ async function seedSmallLandFixture(stories: string): Promise<string> {
     '| --- | --- | --- | --- |',
     '| Story 1 happy: Given a valid story, when land runs, then it commits the artifacts. | 1 | "Given a valid story, when land runs, then it commits the artifacts." | diff-local |',
     '',
-  ].join('\n'));
-  await writeFile(join(worktreePath, '.docs', 'track', 'readable-stories-only.md'), '# Track\n\nTrack: technical\n');
-  await writeFile(join(worktreePath, '.docs', 'complexity', 'readable-stories-only.md'), '# Complexity\n\nTier: S\n');
-  return worktreePath;
+  ].join('\n');
 }
 
 async function expectUnreadableStoriesRefusal(stories: string): Promise<void> {
@@ -75,6 +83,51 @@ async function expectUnreadableStoriesRefusal(stories: string): Promise<void> {
   await expect(execFile('git', ['show', '--quiet', '--format=', 'HEAD'], { cwd: worktreePath })).resolves.toBeDefined();
 }
 
+function readableStories(storyCount = 1): string {
+  return [
+    '# Stories: readable stories only',
+    '',
+    '**Status:** Accepted',
+    '',
+    Array.from({ length: storyCount }, (_, index) => [
+      `## Story ${index + 1}: Readable story ${index + 1}`,
+      '### Acceptance Criteria',
+      '#### Happy Path',
+      `- Given an operator reads Story ${index + 1}, when land validates it, then the criterion is readable.`,
+      '',
+      '#### Negative Paths',
+      `- Given Story ${index + 1} has invalid input, when land validates it, then the criterion remains readable.`,
+      '',
+    ].join('\n')).join('\n'),
+  ].join('\n');
+}
+
+function readablePlan(stem: string, storyCount: number): string {
+  const criteria = Array.from({ length: storyCount }, (_, index) => [
+    `Given an operator reads Story ${index + 1}, when land validates it, then the criterion is readable.`,
+    `Given Story ${index + 1} has invalid input, when land validates it, then the criterion remains readable.`,
+  ]).flat();
+  return [
+    '# Implementation Plan',
+    '',
+    `**Stories:** .docs/stories/${stem}.md`,
+    '',
+    '### Task 1: Validate readable stories',
+    '**Story:** Story 1',
+    '',
+    '**Done when:**',
+    ...criteria.map((criterion) => `- ${criterion}`),
+    '',
+    '## Coverage Check',
+    '',
+    '| Criterion | Task ids | Quote | Disposition |',
+    '| --- | --- | --- | --- |',
+    ...criteria.map((criterion, index) =>
+      `| Story ${Math.floor(index / 2) + 1} ${index % 2 === 0 ? 'happy' : 'negative'}: ${criterion} | 1 | "${criterion}" | diff-local |`),
+    '',
+  ].join('\n');
+}
+
 beforeEach(async () => {
   repoPath = await mkdtemp(join(tmpdir(), 'land-spec-story-readability-'));
   await git(['init', '-b', 'main', '-q']);
@@ -90,6 +143,74 @@ afterEach(async () => {
 });
 
 describe('landSpec accepted-story readability gate', () => {
+  it('states the required single-line Given/When/Then shape in its refusal', async () => {
+    const worktreePath = await seedSmallLandFixture([
+      '# Stories: readable stories only',
+      '',
+      '**Status:** Accepted',
+      '',
+      '## Story 1: Missing criterion',
+      '#### Happy Path',
+      '- A statement without criterion clauses.',
+      '',
+      '#### Negative Paths',
+      '- Another statement without criterion clauses.',
+      '',
+    ].join('\n'));
+
+    await expect(landSpec(
+      { name: 'fixture', canonicalPath: repoPath },
+      'readable stories only',
+      worktreePath,
+      undefined,
+      { ownerConfig: {}, gh },
+    )).rejects.toThrow(
+      'Each criterion must be one single-line Given/When/Then bullet under a headed Happy Path or Negative Paths section.',
+    );
+  });
+
+  it('commits a fully readable worktree without a readability refusal', async () => {
+    const stories = readableStories();
+    const worktreePath = await seedSmallLandFixture(stories, 'readable stories only', readablePlan('readable-stories-only', 1));
+    const before = await git(['rev-parse', 'HEAD'], worktreePath);
+
+    await expect(landSpec(
+      { name: 'fixture', canonicalPath: repoPath },
+      'readable stories only',
+      worktreePath,
+      undefined,
+      { ownerConfig: {}, gh },
+    )).resolves.toMatchObject({ repoPath: worktreePath });
+
+    expect(await git(['rev-parse', 'HEAD'], worktreePath)).not.toBe(before);
+  });
+
+  it('keeps approval and plan-reference refusals ahead of readability for five readable stories', async () => {
+    const approvalWorktree = await seedSmallLandFixture(readableStories(5).replace('**Status:** Accepted', '**Status:** Proposed'));
+    const referenceIdea = 'readable stories reference';
+    const referenceWorktree = await seedSmallLandFixture(readableStories(5), referenceIdea);
+    await writeFile(join(referenceWorktree, '.docs', 'plans', 'readable-stories-reference.md'), [
+      '# Implementation Plan',
+      '',
+      '**Stories:** .docs/stories/not-the-selected-artifact.md',
+    ].join('\n'));
+
+    await expect(landSpec(
+      { name: 'fixture', canonicalPath: repoPath },
+      'readable stories only',
+      approvalWorktree,
+      undefined,
+      { ownerConfig: {}, gh },
+    )).rejects.toMatchObject({ gate: 'stories-not-approved' });
+    await expect(landSpec(
+      { name: 'fixture', canonicalPath: repoPath },
+      'readable stories only',
+      referenceWorktree,
+      undefined,
+      { ownerConfig: {}, gh },
+    )).rejects.toMatchObject({ gate: 'plan-stories-reference' });
+  });
+
   it('refuses Story 3 whose bold clause-list cannot yield a criterion', async () => {
     await expectUnreadableStoriesRefusal([
       '# Stories: readable stories only',

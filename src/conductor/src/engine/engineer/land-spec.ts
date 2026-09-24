@@ -409,8 +409,8 @@ export async function landSpec(
   if (readability.firstUnreadableStoryId !== undefined) {
     throw landGateError('stories-unreadable',
       `landSpec: accepted stories contain an unreadable Story ${readability.firstUnreadableStoryId}. ` +
-      'Each story must provide at least one Given/Then criterion, and every Happy Path section ' +
-      'must include a Negative Paths section. Amend the stories artifact before landing.',
+      'Each criterion must be one single-line Given/When/Then bullet under a headed Happy Path or Negative Paths section. ' +
+      'Amend the stories artifact before landing.',
     );
   }
 
