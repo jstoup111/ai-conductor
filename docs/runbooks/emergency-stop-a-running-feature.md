@@ -83,15 +83,21 @@ Success prints `Parked '<slug>' — it will not be dispatched or re-kicked until
 the marker path. Re-parking an already-parked slug is a no-op that prints
 `'<slug>' is already parked (originally parked at <timestamp>) — no change.`
 
+The command also reports the observed state after it writes the marker: `Work for '<slug>' is
+still running: step <step>, attempt <attempt>.`, `Work for '<slug>' is fully stopped.`, or
+`Running work for '<slug>' is unknown.` The report is diagnostic only; an unknown report does
+not undo the park. See [`daemon park`](../reference/cli.md#daemon-park-and-daemon-unpark) for
+the exact conditions behind each result.
+
 A park is honored in two places: the daemon re-checks it immediately before every build start
 (closing the selection-to-dispatch race), and the HALT re-kick sweep checks it **first**, ahead
 of everything else, so a parked feature survives every base-branch advance.
 
-For an in-flight feature, parking drains exactly the active scheduling unit. A serial step reaches
-its natural terminal status; a parallel group lets every started member settle and completes its
-join. After those statuses are durable, the daemon logs the last settled boundary and starts no
-later step or group. Parking does not cancel work inside the active unit and does not manufacture a
-HALT. If you must interrupt the active unit itself, continue to step 2.
+For an in-flight feature, parking lets an attempt already running finish naturally, then declines
+every later provider attempt, including retries. In a parallel group, each started member may finish
+its current attempt, but a parked member does not retry. The daemon records those outcomes and
+starts no later step or group. Parking does not cancel a provider call, manufacture a HALT, or spend
+a declined retry's budget. If you must interrupt an active provider call, continue to step 2.
 
 ### 2. Pause or stop the daemon
 

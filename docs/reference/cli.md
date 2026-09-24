@@ -411,6 +411,17 @@ writes `.daemon/parked/<slug>`. It prints `Parked '<slug>' — it will not be di
 until unparked.` plus `Marked for park: <path>`. An already-parked slug prints `'<slug>' is already
 parked (originally parked at <ts>) — no change.` and exits 0. An unknown slug exits 1.
 
+After writing or confirming the marker, `park` reports the observed work state. A live daemon with
+a current provider attempt prints `Work for '<slug>' is still running: step <step>, attempt
+<attempt>.`; no live daemon or a settled attempt prints `Work for '<slug>' is fully stopped.`; an
+unreadable pidfile or attempt history prints `Running work for '<slug>' is unknown.` The marker is
+still written when the result is unknown.
+
+A park never cancels an attempt already running. It declines later provider attempts, including
+serial and parallel-member retries, without consuming their retry budget. See [emergency stop a
+running feature](../runbooks/emergency-stop-a-running-feature.md) to interrupt a provider call or
+prepare to change git state.
+
 `unpark` resets the no-evidence attempt counter first, then removes the park marker, so a failed reset
 leaves the marker in place for a retry. A slug that was never parked prints `'<slug>' was not
 operator-parked — nothing to do.` and exits 0.
