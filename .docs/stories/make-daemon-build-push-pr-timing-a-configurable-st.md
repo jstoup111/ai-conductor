@@ -80,7 +80,8 @@ there is something to show so that I can watch an in-flight build remotely.
   loud log line (branch, mode, error) is emitted and the build proceeds normally — the
   step sequence and final finish publish are unaffected.
 - Given `gh` is unauthenticated, when draft-PR creation fails, then the failure is logged
-  loudly, no retry storm occurs (at most one attempt per publish point), and the build
+  loudly, no retry storm occurs (at most one attempt per credential per publish point: a
+  configured bot attempt plus at most one operator fallback), and the build
   continues to finish where the load-bearing publish path applies.
 
 ### Done When
