@@ -6,6 +6,12 @@ export interface CoverageBindingDigestClaim {
   readonly doneWhen: readonly (readonly string[])[];
 }
 
+export interface CoverageBindingAmendmentDigestClaim {
+  readonly artifactPath: string;
+  readonly amendment: string;
+  readonly doneWhen: readonly (readonly string[])[];
+}
+
 export type CoverageBindingJudgeVerdict = 'asserts' | 'does-not-assert';
 
 export interface CoverageBindingJudgePayload {
@@ -204,6 +210,16 @@ export function parseJudgeBatchPayload(
 export function claimDigest(claim: CoverageBindingDigestClaim): string {
   const canonical = JSON.stringify({
     criterion: normalized(claim.criterion),
+    doneWhen: claim.doneWhen.map((checks) => checks.map(normalized)),
+  });
+  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
+}
+
+/** Identity includes the DECIDE source, exact amendment, and plan obligations. */
+export function amendmentClaimDigest(claim: CoverageBindingAmendmentDigestClaim): string {
+  const canonical = JSON.stringify({
+    artifactPath: claim.artifactPath,
+    amendment: claim.amendment,
     doneWhen: claim.doneWhen.map((checks) => checks.map(normalized)),
   });
   return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;

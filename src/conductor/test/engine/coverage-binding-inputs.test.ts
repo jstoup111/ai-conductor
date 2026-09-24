@@ -1,7 +1,8 @@
+// Covers: task:9
 // Test: coverage-binding claim assembly
 
 import { describe, expect, it } from 'vitest';
-import { assembleCoverageBindingClaims } from '../../src/engine/coverage-binding-inputs.js';
+import { assembleAmendmentClaims, assembleCoverageBindingClaims } from '../../src/engine/coverage-binding-inputs.js';
 
 const PLAN_WITH_TASKS = `# Plan
 
@@ -19,6 +20,69 @@ const PLAN_WITH_TASKS = `# Plan
 `;
 
 describe('assembleCoverageBindingClaims', () => {
+  it('assembles one amendment claim per amendment block from non-plan DECIDE artifacts', () => {
+    const planText = `${PLAN_WITH_TASKS}
+> **Amended 2026-09-24 by #99:** This plan amendment is excluded.
+`;
+
+    expect(assembleAmendmentClaims({
+      planText,
+      decideArtifacts: [
+        {
+          path: '.docs/decisions/architecture-review-2026-09-24-feature.md',
+          text: `# Architecture review
+
+> **Amended 2026-09-24 by #100:** The architecture needs a durable boundary.
+> It must preserve the original call path.
+`,
+        },
+        {
+          path: '.docs/specs/feature.md',
+          text: '> **Amended 2026-09-24 by #101:** The PRD requires a visible recovery.\n',
+        },
+        {
+          path: '.docs/decisions/adr-feature.md',
+          text: `# ADR
+
+> **Amended 2026-09-24 by #102:** The ADR adds a safe fallback.
+
+> **Amended 2026-09-25 by #103:** The ADR also retains the audit trail.
+`,
+        },
+        { path: '.docs/stories/feature.md', text: '> **Amended 2026-09-24 by #104:** Stories are not amendment sources.\n' },
+      ],
+    })).toEqual([
+      {
+        kind: 'amendment',
+        artifactPath: '.docs/decisions/architecture-review-2026-09-24-feature.md',
+        amendment: '> **Amended 2026-09-24 by #100:** The architecture needs a durable boundary.\n> It must preserve the original call path.',
+        taskIds: ['1', '2', '3'],
+        doneWhen: [['First check is true.'], ['Second check is true.'], ['Third check is true.']],
+      },
+      {
+        kind: 'amendment',
+        artifactPath: '.docs/specs/feature.md',
+        amendment: '> **Amended 2026-09-24 by #101:** The PRD requires a visible recovery.',
+        taskIds: ['1', '2', '3'],
+        doneWhen: [['First check is true.'], ['Second check is true.'], ['Third check is true.']],
+      },
+      {
+        kind: 'amendment',
+        artifactPath: '.docs/decisions/adr-feature.md',
+        amendment: '> **Amended 2026-09-24 by #102:** The ADR adds a safe fallback.',
+        taskIds: ['1', '2', '3'],
+        doneWhen: [['First check is true.'], ['Second check is true.'], ['Third check is true.']],
+      },
+      {
+        kind: 'amendment',
+        artifactPath: '.docs/decisions/adr-feature.md',
+        amendment: '> **Amended 2026-09-25 by #103:** The ADR also retains the audit trail.',
+        taskIds: ['1', '2', '3'],
+        doneWhen: [['First check is true.'], ['Second check is true.'], ['Third check is true.']],
+      },
+    ]);
+  });
+
   it('assembles one M-tier claim per coherence criterion row with cited Done when checks', () => {
     const coherenceText = `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
 | --- | --- | --- | --- | --- | --- |
