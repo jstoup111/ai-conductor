@@ -106,10 +106,36 @@ spine already carries which artifact was rejected, why, and both run identities.
 makes no claim on `retry_decision`'s sink policy — enabling it would change telemetry volume
 for every retry decision in every step and is a separate decision about that channel.
 
+> **Amended 2026-09-23 by #2188 (`architecture_review_as_built` only):** The as-built reviewer
+> no longer writes a verdict file. `prd_audit` and `manual_test` are unaffected.
+>
+> **D2.1 — The engine writes the as-built artifact.** For `architecture_review_as_built` the
+> provider returns only its structured result. The engine persists the validated result as the
+> typed as-built verdict, stamped at settle with this dispatch's `attempt.id` and the `codeStamp`
+> in the existing gate-code-validity sidecar contract, and renders the Markdown report from it.
+> For this step, D2's "skills write only content" reads "the skill returns only content".
+>
+> **D3.1 — The handshake observes a validated result, not a file write.** For this step, D3's
+> post-dispatch handshake is satisfied only when THIS dispatch's terminal structured result
+> validated and was persisted with this dispatch's identity. A file's presence or mtime is never
+> evidence, because the engine's own write is always fresh. The observation is still written on
+> every terminal outcome.
+>
+> **D7.1 — No unstamped fallback for as-built.** An as-built artifact without an identity-stamped
+> typed verdict is scored `absent` and reruns. This includes a legacy reviewer-written Markdown
+> report from before #2188. It is never parsed and never falls back to mtime, so an always-fresh
+> engine write cannot launder a stale result. The code-stamp-first preservation of the 2026-09-06
+> amendment, D4's single reader, D5, and D9's `verdict_freshness` vocabulary apply unchanged to
+> the typed artifact.
+
 ## Supersessions and amendments
 
 - **Amended 2026-08-26 by operator (James Stoup):** D9's `retry_decision` clause — see the
   amendment note under the decision. D1–D8 stand unchanged.
+
+- **Amended 2026-09-23 by #2188:** D2, D3, and D7 for `architecture_review_as_built` only — see
+  the amendment note under D9. The engine writes that step's artifact from the validated
+  structured result, and a Markdown-only artifact scores `absent`.
 
 - **Supersedes in part:** adr-2026-07-13-session-fresh-verdict-artifacts — its non-goals
   "no session-id stamp inside the artifact" and the manual_test deferral. Its per-attempt
