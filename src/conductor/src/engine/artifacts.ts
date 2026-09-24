@@ -1203,6 +1203,12 @@ export async function recordPrBodyRegenAttempt(dir: string, prUrl: string): Prom
 /** Context threaded through completion predicates. Optional fields fail open. */
 export interface CompletionContext {
   /**
+   * Completion is being checked only to decide whether an existing verdict can
+   * be preserved before dispatch. Predicates must not update evidence in this
+   * mode because the upcoming dispatch still owns a failed verdict's record.
+   */
+  preserveProbe?: boolean;
+  /**
    * Optional task-local observability. Completion predicates deliberately do
    * not read this: the independent build-review verdict remains authority.
    */
@@ -3146,7 +3152,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (failRows.length > 0) {
       // Record the whitewash-guard evidence: the sha this FAIL was observed at.
       // A later FAIL-free file is only accepted once HEAD moves past it.
-      if (headSha) {
+      if (headSha && !ctx.preserveProbe) {
         await writeFile(
           markerPath,
           JSON.stringify(

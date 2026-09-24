@@ -7564,7 +7564,7 @@ export class Conductor {
             const completion = await checkStepCompletion(
               this.projectRoot,
               step.name,
-              await this.completionCtx(state),
+              { ...(await this.completionCtx(state)), preserveProbe: true },
             );
             if (completion.done) {
               if (completion.verdictFreshness) {
