@@ -85,6 +85,8 @@ describe('guardDaemonSessionInvocation', () => {
       // git-hook-assets.ts — commit-msg records containment from the same
       // daemon-managed maker session that authored the commit.
       argvFor('scope-check', '/worktree/.git/COMMIT_EDITMSG'),
+      // FINISH publication prompts submit PR prose through the guarded operation.
+      argvFor('github-operation', '--request-file', '/tmp/pr-prose-request.json'),
     ]) {
       expect(guardDaemonSessionInvocation(sanctioned, markedEnv())).toEqual({ allowed: true });
     }
