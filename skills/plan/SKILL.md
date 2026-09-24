@@ -227,6 +227,17 @@ required by at least one check in a cited task, with the same precision the crit
 before BUILD when any outcome is only implied. One check may carry several outcomes; when a task's
 criteria need more than five checks to cover, split the task rather than dropping outcomes.
 
+Three drift shapes account for most `coverage_binding` refusals; check each mapped criterion for them:
+
+- **Layer drift.** The check asserts a lower mechanism than the criterion names — two render calls
+  where the criterion says two dispatches, a store where it says the resolved candidate list. Assert
+  at the criterion's layer, or name how that layer carries the lower result unchanged.
+- **Dropped sequence step.** "Admitted and invoked", "written and published": each verb is its own
+  outcome. A check that stops at the first verb leaves the rest unasserted.
+- **Inverted configuration.** A criterion combining scopes or settings ("disallowed globally,
+  permitted for one step") needs a fixture in exactly that combination, asserting both the
+  override and the unaffected remainder. The mirror-image fixture does not cover it.
+
 For a preserved/default-mode behavior, make the relevant checks bound any new side effects on that
 path to their intended conditions. For a closed result/state/reason set, ensure the checks can
 represent each required scenario's actual outcome, including required absence or no-op cases. An
