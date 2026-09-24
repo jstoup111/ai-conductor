@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -65,6 +66,16 @@ describe('engine/gate-verdicts', () => {
     const v = await readVerdict(dir, 'plan');
     expect(v?.kickback?.from).toBe('build');
     expect(v?.kickback?.evidence).toMatch(/AC-7/);
+  });
+
+  it('preserves decide-change kickback provenance for an unsatisfied coverage binding', async () => {
+    await writeVerdict(dir, 'coverage_binding', {
+      satisfied: false,
+      checkedAt: 6,
+      kickback: { from: 'decide-change', evidence: 'accepted plan amendment changed coverage' },
+    });
+
+    expect((await readVerdict(dir, 'coverage_binding'))?.kickback?.from).toBe('decide-change');
   });
 
   it('round trips replay-bound preservation without replacing the original judge identity', async () => {

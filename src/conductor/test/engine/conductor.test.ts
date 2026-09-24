@@ -1462,6 +1462,47 @@ describe('engine/conductor', () => {
     expect(state.manual_test).toBe('pending');
   });
 
+  // Covers: task:2
+  it('does not reopen a decide-change kickback while advancing the rebase step', async () => {
+    const state: ConductState = { coverage_binding: 'done' };
+    await writeState(statePath, state);
+    await writeVerdict(dir, 'coverage_binding', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'decide-change', evidence: 'accepted plan amendment changed coverage' },
+    });
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      verifyArtifacts: true,
+    });
+    (conductor as unknown as { lastRebaseOutcome: { kind: 'changed' } }).lastRebaseOutcome = {
+      kind: 'changed',
+    };
+    const advanceTail = (conductor as unknown as {
+      advanceTail: (
+        step: (typeof ALL_STEPS)[number],
+        state: ConductState,
+        stuckGate: Map<StepName, number>,
+        steps: typeof ALL_STEPS,
+        indexOf: (name: StepName) => number,
+      ) => Promise<number | null | 'halt'>;
+    }).advanceTail.bind(conductor);
+
+    await advanceTail(
+      ALL_STEPS.find((step) => step.name === 'rebase')!,
+      state,
+      new Map(),
+      ALL_STEPS,
+      (name) => ALL_STEPS.findIndex((step) => step.name === name),
+    );
+
+    expect(state.coverage_binding).toBe('done');
+  });
+
   it('halts build_review for a human when consuming the sixth cumulative kickback', async () => {
     const state: Record<string, unknown> = {};
     for (const step of ALL_STEPS) {

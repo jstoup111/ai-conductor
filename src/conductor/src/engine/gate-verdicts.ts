@@ -113,7 +113,7 @@ export interface GateVerdict {
   checkedAt: number;
   /** Set only on a kickback invalidation: which step re-opened this gate, and why. */
   kickback?: {
-    from: StepName;
+    from: StepName | 'decide-change';
     evidence: string;
   };
   /** Optional additive authority for a previously judged pass after one replay. */

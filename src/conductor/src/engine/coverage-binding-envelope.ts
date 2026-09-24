@@ -14,19 +14,35 @@ export interface CoverageBindingJudgePayload {
 }
 
 export type CoverageBindingEntryVerdict = CoverageBindingJudgeVerdict | 'not-applicable';
-export const COVERAGE_BINDING_ENVELOPE_STATUSES = ['disabled', 'done', 'failed', 'partial', 'refused'] as const;
+export type CoverageBindingAmendmentVerdict = 'carried' | 'not-carried' | 'no-plan-obligation' | 'unjudged';
+export const COVERAGE_BINDING_ENVELOPE_STATUSES = ['disabled', 'done', 'failed', 'invalidated', 'partial', 'refused'] as const;
 export type CoverageBindingEnvelopeStatus = (typeof COVERAGE_BINDING_ENVELOPE_STATUSES)[number];
 /** Statuses that are valid completion evidence for the coverage-binding gate. */
 export const COVERAGE_BINDING_COMPLETION_STATUSES: readonly CoverageBindingEnvelopeStatus[] =
   ['disabled', 'done'];
 
+/**
+ * The criterion entry surface remains compatible until the amendment runner
+ * starts consuming its own typed entries in Task 9.
+ */
 export interface CoverageBindingEnvelopeEntry {
+  readonly kind?: 'criterion' | 'amendment';
   readonly digest: string;
   readonly criterion: string;
   readonly taskIds: readonly string[];
   readonly doneWhen: readonly (readonly string[])[];
   readonly verdict: CoverageBindingEntryVerdict;
   readonly missingAssertion?: string;
+}
+
+export interface CoverageBindingAmendmentEnvelopeEntry {
+  readonly kind: 'amendment';
+  readonly digest: string;
+  readonly artifactPath: string;
+  readonly amendment: string;
+  readonly taskIds: readonly string[];
+  readonly doneWhen: readonly (readonly string[])[];
+  readonly verdict: CoverageBindingAmendmentVerdict;
 }
 
 /** Session-fresh, engine-stamped completion evidence for coverage_binding. */
@@ -73,18 +89,32 @@ function doneWhen(value: unknown): value is readonly (readonly string[])[] {
 function parseEntry(value: unknown): CoverageBindingEnvelopeEntry | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
+  if (candidate.kind === 'amendment') {
+    if (!exactKeys(candidate, ['kind', 'digest', 'artifactPath', 'amendment', 'taskIds', 'doneWhen', 'verdict']) ||
+      !text(candidate.digest) || !text(candidate.artifactPath) || !text(candidate.amendment) ||
+      !stringList(candidate.taskIds) || !doneWhen(candidate.doneWhen) ||
+      !(['carried', 'not-carried', 'no-plan-obligation', 'unjudged'] as const).includes(candidate.verdict as CoverageBindingAmendmentVerdict)) {
+      return null;
+    }
+    return {
+      kind: 'amendment', digest: candidate.digest, artifactPath: candidate.artifactPath,
+      amendment: candidate.amendment, taskIds: candidate.taskIds, doneWhen: candidate.doneWhen,
+      verdict: candidate.verdict as CoverageBindingAmendmentVerdict,
+    } as unknown as CoverageBindingEnvelopeEntry;
+  }
   const hasMissingAssertion = candidate.missingAssertion !== undefined;
-  const keys = ['digest', 'criterion', 'taskIds', 'doneWhen', 'verdict', ...(hasMissingAssertion ? ['missingAssertion'] : [])];
+  const hasKind = candidate.kind !== undefined;
+  const keys = ['digest', 'criterion', 'taskIds', 'doneWhen', 'verdict', ...(hasKind ? ['kind'] : []), ...(hasMissingAssertion ? ['missingAssertion'] : [])];
   if (!exactKeys(candidate, keys) || !text(candidate.digest) || !text(candidate.criterion) ||
-    !stringList(candidate.taskIds) || !doneWhen(candidate.doneWhen)) return null;
+    !stringList(candidate.taskIds) || !doneWhen(candidate.doneWhen) || (hasKind && candidate.kind !== 'criterion')) return null;
   if (candidate.verdict === 'asserts' || candidate.verdict === 'not-applicable') {
     return hasMissingAssertion ? null : {
-      digest: candidate.digest, criterion: candidate.criterion, taskIds: candidate.taskIds,
+      kind: 'criterion', digest: candidate.digest, criterion: candidate.criterion, taskIds: candidate.taskIds,
       doneWhen: candidate.doneWhen, verdict: candidate.verdict,
     };
   }
   return candidate.verdict === 'does-not-assert' && text(candidate.missingAssertion)
-    ? { digest: candidate.digest, criterion: candidate.criterion, taskIds: candidate.taskIds, doneWhen: candidate.doneWhen, verdict: candidate.verdict, missingAssertion: candidate.missingAssertion }
+    ? { kind: 'criterion', digest: candidate.digest, criterion: candidate.criterion, taskIds: candidate.taskIds, doneWhen: candidate.doneWhen, verdict: candidate.verdict, missingAssertion: candidate.missingAssertion }
     : null;
 }
 
