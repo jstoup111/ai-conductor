@@ -74,6 +74,12 @@ const SESSION_SANCTIONED_SUBCOMMANDS: ReadonlySet<string> = new Set([
   // git-hook-assets.ts — the commit-msg hook records advisory containment
   // evidence for a commit authored inside the daemon-managed maker session.
   'scope-check',
+  // engine/conductor.ts FINISH publication prompts + skills/pr/SKILL.md — the
+  // author_pr_prose / repair passes submit PR edits as a guarded
+  // `pull-request.edit` request. github-operations.ts enforces feature
+  // ownership, and shared-write approval needs an interactive TTY a daemon
+  // session never has, so admitting it cannot reach another feature.
+  'github-operation',
 ]);
 
 export type DaemonSessionGuardVerdict =
