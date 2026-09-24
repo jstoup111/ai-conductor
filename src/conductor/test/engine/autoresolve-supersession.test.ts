@@ -28,6 +28,8 @@ const execFile = promisify(execFileCb);
 describe('engine/autoresolve — sweep supersession preservation mode', () => {
   it('takes citation-residue reasons from the supplied guard result', async () => {
     const emitted: unknown[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('rebase_citation_residue', (event) => emitted.push(event));
     const excused = [{
       sha: 'a'.repeat(40),
       subject: 'test: supplied guard reason',
@@ -36,7 +38,7 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
     }];
 
     await emitExcusedRebaseCitationResidue(
-      { emit: async (event: Parameters<ConductorEventEmitter['emit']>[0]) => { emitted.push(event); } },
+      events,
       excused,
     );
 
