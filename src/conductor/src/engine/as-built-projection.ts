@@ -202,7 +202,9 @@ export function renderAsBuiltProjection(projection: AsBuiltProjection): string {
     ...Object.entries(projection.policy).map(([check, policy]) => `- ${check}: ${policy.enabled ? 'on' : 'off'} — ${policy.reason}`),
     '', 'APPROVED DIAGRAM PATHS:', ...projection.diagrams.map((path) => `- ${path}`),
     '', 'GOVERNING ADRS:',
-    ...projection.governingAdrs.flatMap((adr) => [`- ${adr.stem}`, ...adr.decisions.map((decision) => `  - D${decision.id}: ${decision.text}`)]),
+    ...(projection.governingAdrs.length === 0
+      ? ['No ADR is pre-selected; APPROVED ADRs may be read on demand.']
+      : projection.governingAdrs.flatMap((adr) => [`- ${adr.stem}`, ...adr.decisions.map((decision) => `  - D${decision.id}: ${decision.text}`)])),
     '', 'PRIOR FINDINGS:',
     ...projection.priorFindings.map((finding) => `- ${finding.finding} | ${finding.class} | ${finding.governingClause} | ${finding.summary}`),
   ];

@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:6, task:7
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,7 +15,13 @@ import {
 const execFileAsync = promisify(execFile);
 const dirs: string[] = [];
 
-async function fixture(): Promise<string> {
+async function fixture({
+  includeDiffAdr = true,
+  includeDiagram = true,
+}: {
+  includeDiffAdr?: boolean;
+  includeDiagram?: boolean;
+} = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'as-built-projection-'));
   dirs.push(root);
   const git = async (...args: string[]) => {
@@ -76,14 +82,14 @@ Status: APPROVED
 
 2. Second plan decision.
 `);
-  await writeFile(join(root, '.docs', 'architecture', 'system.md'), '# Diagram\n');
+  if (includeDiagram) await writeFile(join(root, '.docs', 'architecture', 'system.md'), '# Diagram\n');
   await writeFile(join(root, 'tracked.ts'), 'export const unchanged = true;\n');
   await git('add', '.');
   await git('commit', '-m', 'base');
 
   await git('checkout', '-b', 'feature/projection');
   await writeFile(join(root, 'tracked.ts'), 'export const changed = true;\n');
-  await writeFile(join(root, '.docs', 'decisions', 'adr-diff.md'), `# ADR
+  if (includeDiffAdr) await writeFile(join(root, '.docs', 'decisions', 'adr-diff.md'), `# ADR
 
 Status: APPROVED
 
@@ -136,6 +142,63 @@ describe('as-built projection', () => {
     const renderedSecond = renderAsBuiltProjection(second.projection);
     expect(renderedSecond).toBe(renderedFirst);
     expect(renderedFirst).toContain(`AS-BUILT INPUT PROJECTION v${AS_BUILT_PROJECTION_VERSION}`);
+  });
+
+  it('excludes a plan-cited SUPERSEDED ADR while preserving every other populated projection section', async () => {
+    const root = await fixture();
+    const before = await buildAsBuiltProjection(root);
+    if (!before.ok) throw new Error('expected populated projection before superseding an ADR');
+
+    await writeFile(join(root, '.docs', 'decisions', 'adr-plan-one.md'), `# ADR
+
+Status: SUPERSEDED by adr-plan-two
+
+## Decision
+
+1. First plan decision.
+`);
+
+    const result = await buildAsBuiltProjection(root);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error('expected a projection after superseding an ADR');
+
+    expect(result.projection).toEqual({
+      ...before.projection,
+      governingAdrs: before.projection.governingAdrs.filter((adr) => adr.stem !== 'adr-plan-one'),
+    });
+    expect(renderAsBuiltProjection(result.projection)).not.toContain('adr-plan-one');
+  });
+
+  it('renders an empty governing ADR set without disabling repository-wide ADR compliance', async () => {
+    const root = await fixture({ includeDiffAdr: false });
+    await writeFile(join(root, '.docs', 'plans', 'feature.md'), `# Plan
+
+**Stories:** .docs/stories/feature.md
+
+### Task 1: First
+
+**Done when:**
+- first done condition
+`);
+
+    const result = await buildAsBuiltProjection(root);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error('expected a projection with no governing ADRs');
+
+    expect(result.projection.governingAdrs).toEqual([]);
+    expect(result.projection.policy.adrCompliance).toEqual({ enabled: true, reason: 'approved ADRs present' });
+    expect(renderAsBuiltProjection(result.projection)).toContain('No ADR is pre-selected; APPROVED ADRs may be read on demand.');
+  });
+
+  it('keeps an empty diagram set and the existing no-diagrams policy reason', async () => {
+    const root = await fixture({ includeDiagram: false });
+
+    const result = await buildAsBuiltProjection(root);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error('expected a projection without diagrams');
+
+    expect(result.projection.diagrams).toEqual([]);
+    expect(result.projection.policy.diagramDrift).toEqual({ enabled: false, reason: 'no diagrams' });
   });
 
   it('includes pending findings without requiring a ledger', async () => {
