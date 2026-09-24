@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 
@@ -12,13 +13,29 @@ import { makeGitRunner, originDefaultBranch, resolveBase, type GitRunner } from 
 /** Incremented only when the deterministic projection contract changes. */
 export const AS_BUILT_PROJECTION_VERSION = 1;
 
-export interface AsBuiltProjectionLimits {}
+/** Explicit UTF-8 byte limits for the engine-rendered as-built input projection. */
+export const AS_BUILT_PROJECTION_LIMITS = {
+  perFileHunksBytes: 256 * 1024,
+  totalDiffBytes: 512 * 1024,
+  planTasksBytes: 256 * 1024,
+  storyCriteriaBytes: 256 * 1024,
+  governingAdrDecisionsBytes: 256 * 1024,
+} as const;
+
+export interface AsBuiltProjectionLimits {
+  readonly perFileHunksBytes: number;
+  readonly totalDiffBytes: number;
+  readonly planTasksBytes: number;
+  readonly storyCriteriaBytes: number;
+  readonly governingAdrDecisionsBytes: number;
+}
 
 export interface AsBuiltProjection {
   readonly version: typeof AS_BUILT_PROJECTION_VERSION;
   readonly diff: {
     readonly changedFiles: readonly { readonly path: string; readonly additions: number; readonly deletions: number }[];
     readonly hunks: readonly string[];
+    readonly omittedFiles: readonly { readonly path: string; readonly digest: string }[];
   };
   readonly tasks: readonly { readonly id: string; readonly doneWhen: readonly string[] }[];
   readonly storyCriteria: readonly string[];
@@ -38,7 +55,7 @@ export interface AsBuiltProjection {
 
 export type AsBuiltProjectionResult =
   | { readonly ok: true; readonly projection: AsBuiltProjection }
-  | { readonly ok: false; readonly fault: { readonly dimension: string; readonly detail: string; readonly actual?: number; readonly limit?: number } };
+  | { readonly ok: false; readonly fault: { readonly dimension: string; readonly detail?: string; readonly actual?: number; readonly limit?: number } };
 
 function repoPath(worktree: string, path: string): string {
   return relative(worktree, path).replaceAll('\\', '/');
@@ -87,6 +104,86 @@ function parseNumstat(text: string): AsBuiltProjection['diff']['changedFiles'] {
   }).sort((left, right) => left.path.localeCompare(right.path));
 }
 
+function utf8Bytes(text: string): number {
+  return Buffer.byteLength(text, 'utf-8');
+}
+
+function projectionSectionBytes(lines: readonly string[]): number {
+  return utf8Bytes(lines.join('\n'));
+}
+
+function projectionLimitFault(dimension: string, actual: number, limit: number): AsBuiltProjectionResult {
+  return { ok: false, fault: { dimension, actual, limit } };
+}
+
+function decodeGitQuotedPath(encoded: string): string {
+  const bytes: number[] = [];
+  for (let index = 0; index < encoded.length; index += 1) {
+    const character = encoded[index]!;
+    if (character !== '\\') {
+      bytes.push(...Buffer.from(character));
+      continue;
+    }
+    const escaped = encoded[index + 1];
+    if (escaped !== undefined && /[0-7]/.test(escaped) && /^[0-7]{3}$/.test(encoded.slice(index + 1, index + 4))) {
+      bytes.push(Number.parseInt(encoded.slice(index + 1, index + 4), 8));
+      index += 3;
+      continue;
+    }
+    const escapedBytes: Record<string, number> = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11 };
+    bytes.push(escaped === undefined ? 92 : escapedBytes[escaped] ?? escaped.charCodeAt(0));
+    index += 1;
+  }
+  return Buffer.from(bytes).toString('utf-8');
+}
+
+function diffPathFromHeader(content: string): string | undefined {
+  const header = content.match(/^diff --git (.+)$/m)?.[1];
+  if (header === undefined) return undefined;
+  const quoted = header.match(/^"a\/((?:\\.|[^"\\])*)" "b\/((?:\\.|[^"\\])*)"$/);
+  if (quoted) return decodeGitQuotedPath(quoted[2]!);
+  return header.match(/^a\/.* b\/(.+)$/)?.[1];
+}
+
+function splitDiffByFile(text: string):
+  | { readonly ok: true; readonly files: readonly { readonly path: string; readonly content: string }[] }
+  | { readonly ok: false; readonly detail: string } {
+  const chunks = text.split(/(?=^diff --git )/m).filter(Boolean);
+  const files: { path: string; content: string }[] = [];
+  for (const content of chunks) {
+    const path = diffPathFromHeader(content);
+    if (path === undefined) return { ok: false, detail: 'could not parse a changed-file path from a diff header' };
+    files.push({ path, content });
+  }
+  return { ok: true, files };
+}
+
+function projectDiff(
+  diffText: string,
+  limits: AsBuiltProjectionLimits,
+):
+  | { readonly ok: true; readonly diff: Pick<AsBuiltProjection['diff'], 'hunks' | 'omittedFiles'> }
+  | { readonly ok: false; readonly detail: string } {
+  const files = splitDiffByFile(diffText);
+  if (!files.ok) return files;
+  let includedBytes = 0;
+  const hunks: string[] = [];
+  const omittedFiles: { path: string; digest: string }[] = [];
+  for (const file of files.files) {
+    const bytes = utf8Bytes(file.content);
+    if (bytes > limits.perFileHunksBytes || includedBytes + bytes > limits.totalDiffBytes) {
+      omittedFiles.push({
+        path: file.path,
+        digest: `sha256:${createHash('sha256').update(file.content).digest('hex')}`,
+      });
+      continue;
+    }
+    includedBytes += bytes;
+    hunks.push(...file.content.split('\n').filter(Boolean));
+  }
+  return { ok: true, diff: { hunks, omittedFiles } };
+}
+
 /** Match the rebase gate's local fallback before asking it to resolve a base ref. */
 async function discoverLocalBase(git: GitRunner): Promise<string> {
   const fromOrigin = await originDefaultBranch(git);
@@ -103,8 +200,9 @@ async function discoverLocalBase(git: GitRunner): Promise<string> {
 /** Build the engine-owned, bounded inputs for one as-built reviewer dispatch. */
 export async function buildAsBuiltProjection(
   worktree: string,
-  _limits?: AsBuiltProjectionLimits,
+  limitOverrides?: Partial<AsBuiltProjectionLimits>,
 ): Promise<AsBuiltProjectionResult> {
+  const limits: AsBuiltProjectionLimits = { ...AS_BUILT_PROJECTION_LIMITS, ...limitOverrides };
   const pending = await readPendingAsBuiltRemediationFindings(worktree);
   if (pending.kind === 'unreadable') {
     return { ok: false, fault: { dimension: 'pending-findings', detail: pending.reason } };
@@ -167,15 +265,35 @@ export async function buildAsBuiltProjection(
 
   const taskBodies = parsePlanTaskBodies(plan);
   const doneWhen = parsePlanTaskDoneWhen(plan);
+  const tasks = [...taskBodies.keys()].sort((a, b) => Number(a) - Number(b)).map((id) => ({ id, doneWhen: doneWhen.get(id) ?? [] }));
+  const planTasksBytes = projectionSectionBytes(tasks.flatMap((task) => [`Task ${task.id}`, ...task.doneWhen]));
+  if (planTasksBytes > limits.planTasksBytes) return projectionLimitFault('plan-tasks', planTasksBytes, limits.planTasksBytes);
+
+  const storyCriteriaBytes = projectionSectionBytes(storyCriteria);
+  if (storyCriteriaBytes > limits.storyCriteriaBytes) {
+    return projectionLimitFault('story-criteria', storyCriteriaBytes, limits.storyCriteriaBytes);
+  }
+
+  const governingAdrDecisionsBytes = projectionSectionBytes(governingAdrs.flatMap((adr) => [
+    adr.stem,
+    ...adr.decisions.map((decision) => `D${decision.id}: ${decision.text}`),
+  ]));
+  if (governingAdrDecisionsBytes > limits.governingAdrDecisionsBytes) {
+    return projectionLimitFault('governing-adr-decisions', governingAdrDecisionsBytes, limits.governingAdrDecisionsBytes);
+  }
+
   const policy = await resolveAsBuiltPolicy({ projectRoot: worktree, tier: 'M' });
   const diagrams = (await findArtifactFiles(worktree, 'architecture_diagram')).map((path) => repoPath(worktree, path)).sort();
+  const changedFiles = parseNumstat(numstat.stdout);
+  const diff = projectDiff(hunks.stdout, limits);
+  if (!diff.ok) return { ok: false, fault: { dimension: 'diff', detail: diff.detail } };
 
   return {
     ok: true,
     projection: {
       version: AS_BUILT_PROJECTION_VERSION,
-      diff: { changedFiles: parseNumstat(numstat.stdout), hunks: hunks.stdout.split('\n').filter(Boolean) },
-      tasks: [...taskBodies.keys()].sort((a, b) => Number(a) - Number(b)).map((id) => ({ id, doneWhen: doneWhen.get(id) ?? [] })),
+      diff: { changedFiles, ...diff.diff },
+      tasks,
       storyCriteria,
       policy,
       diagrams,
@@ -195,6 +313,10 @@ export function renderAsBuiltProjection(projection: AsBuiltProjection): string {
     'CHANGED FILES:',
     ...projection.diff.changedFiles.map((file) => `- ${file.path}: +${file.additions} -${file.deletions}`),
     '', 'DIFF HUNKS:', ...projection.diff.hunks,
+    '', 'OMITTED FILES:',
+    ...(projection.diff.omittedFiles.length === 0
+      ? ['None.']
+      : [...projection.diff.omittedFiles.map((file) => `- ${file.path} | ${file.digest}`), 'Omitted files may be read on demand.']),
     '', 'PLAN TASKS:',
     ...projection.tasks.flatMap((task) => [`- Task ${task.id}`, ...task.doneWhen.map((item) => `  - ${item}`)]),
     '', 'SEALED STORY CRITERIA:', ...projection.storyCriteria.map((criterion) => `- ${criterion}`),
