@@ -343,6 +343,12 @@ describe('engine/build-review-contract', () => {
       }
     });
 
+    it('declares an object root on every descriptor schema, as the Claude tool input_schema requires', () => {
+      for (const schema of [...Object.values(BUILD_REVIEW_JUDGED_V3_SCHEMAS), BUILD_REVIEW_CUSTOM_V1_SCHEMA]) {
+        expect(record(schema).type).toBe('object');
+      }
+    });
+
     it.each(['testQuality', 'security'] as const)('states the %s built-in grammar the parser enforces', (rubric) => {
       const schema = BUILD_REVIEW_JUDGED_V3_SCHEMAS[rubric];
       const valid = {

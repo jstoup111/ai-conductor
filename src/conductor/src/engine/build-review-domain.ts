@@ -308,8 +308,12 @@ export const MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH = 512;
  * `MAX_CUSTOM_*` count and length bounds and the line-number ordering need
  * `maxItems`/`maxLength`/`minimum`, which the Claude native grammar rejects,
  * so they remain parser-enforced and are named by the rejection diagnosis.
+ * The root states `type: 'object'` beside `oneOf`: Claude's tool
+ * `input_schema` rejects a root without one (400 `input_schema.type: Field
+ * required`).
  */
 export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
+  type: 'object',
   oneOf: [
     {
       type: 'object',
