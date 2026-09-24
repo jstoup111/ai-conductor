@@ -7,6 +7,7 @@ import { afterEach, describe, expect, expectTypeOf, it } from 'vitest';
 import {
   AS_BUILT_VERDICT_CONTRACT_VERSION,
   AS_BUILT_VERDICT_SCHEMA,
+  renderAsBuiltVerdictShape,
   resolveAsBuiltReferences,
   validateAsBuiltVerdict,
 } from '../src/engine/as-built-contract.js';
@@ -86,7 +87,52 @@ function everySchemaObjectIsClosed(schema: unknown): boolean {
     && nested.every(everySchemaObjectIsClosed);
 }
 
+function schemaPropertyNames(schema: unknown): string[] {
+  const source = object(schema);
+  return [
+    ...Object.keys(object(source.properties ?? {})),
+    ...Object.values(object(source.properties ?? {})).flatMap(schemaPropertyNames),
+    ...(source.items === undefined ? [] : schemaPropertyNames(source.items)),
+    ...(Array.isArray(source.oneOf) ? source.oneOf.flatMap(schemaPropertyNames) : []),
+  ];
+}
+
+function schemaEnumMembers(schema: unknown): string[] {
+  const source = object(schema);
+  return [
+    ...(Array.isArray(source.enum) ? source.enum.filter((value): value is string => typeof value === 'string') : []),
+    ...Object.values(object(source.properties ?? {})).flatMap(schemaEnumMembers),
+    ...(source.items === undefined ? [] : schemaEnumMembers(source.items)),
+    ...(Array.isArray(source.oneOf) ? source.oneOf.flatMap(schemaEnumMembers) : []),
+  ];
+}
+
 describe('as-built verdict contract', () => {
+  it('renders the reviewer-facing shape from every schema property and enum member', () => {
+    const rendered = renderAsBuiltVerdictShape(AS_BUILT_VERDICT_SCHEMA);
+
+    for (const property of schemaPropertyNames(AS_BUILT_VERDICT_SCHEMA)) {
+      expect(rendered).toContain(property);
+    }
+    for (const member of schemaEnumMembers(AS_BUILT_VERDICT_SCHEMA)) {
+      expect(rendered).toContain(member);
+    }
+  });
+
+  it('derives its fields only from the schema it receives', () => {
+    const schema = {
+      ...AS_BUILT_VERDICT_SCHEMA,
+      properties: {
+        ...AS_BUILT_VERDICT_SCHEMA.properties,
+        reviewerContext: { type: 'string' },
+      },
+    };
+    const rendered = renderAsBuiltVerdictShape(schema);
+
+    expect(rendered).toContain('reviewerContext');
+    expect(rendered).not.toContain('notInTheSchema');
+  });
+
   it('publishes a frozen, closed schema with only the accepted verdict and finding-reference vocabularies', () => {
     const schema = object(AS_BUILT_VERDICT_SCHEMA);
     const verdict = object(object(schema.properties).verdict);

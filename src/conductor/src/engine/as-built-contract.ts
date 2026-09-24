@@ -129,6 +129,27 @@ function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/** Render the provider-visible result shape by walking its own JSON Schema. */
+export function renderAsBuiltVerdictShape(schema: unknown): string {
+  if (!record(schema)) return 'unknown';
+
+  if (Array.isArray(schema.enum)) {
+    return `one of ${schema.enum.map((value) => JSON.stringify(value)).join(', ')}`;
+  }
+  if (schema.const !== undefined) return JSON.stringify(schema.const);
+  if (Array.isArray(schema.oneOf)) {
+    return schema.oneOf.map((alternative) => renderAsBuiltVerdictShape(alternative)).join(' | ');
+  }
+  if (schema.type === 'array') return `array of ${renderAsBuiltVerdictShape(schema.items)}`;
+  if (schema.type === 'object' || record(schema.properties)) {
+    const properties = record(schema.properties) ? schema.properties : {};
+    return `{ ${Object.entries(properties)
+      .map(([name, property]) => `\`${name}\`: ${renderAsBuiltVerdictShape(property)}`)
+      .join(', ')} }`;
+  }
+  return typeof schema.type === 'string' ? schema.type : 'unknown';
+}
+
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).length === keys.length && Object.keys(value).every((key) => keys.includes(key));
 }
