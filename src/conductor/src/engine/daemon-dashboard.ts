@@ -55,6 +55,12 @@ export interface ProviderLifecycleDiagnostic {
   reason?: 'preparation-timeout' | 'preparation-timeout-exhausted';
 }
 
+/** Persisted-spine classification for a feature's most recent provider attempt. */
+export type RunningWorkClassification =
+  | { state: 'running'; step: string; attemptId: string }
+  | { state: 'stopped' }
+  | { state: 'unknown' };
+
 export interface InProgressEntry {
   slug: string;
   /** Last meaningful step from conduct-state, or `unknown` when malformed. */
@@ -510,6 +516,48 @@ function parseProviderLifecycleDiagnostic(
     default:
       return undefined;
   }
+}
+
+/**
+ * Classify running work exclusively from persisted provider-attempt events.
+ * A missing ledger means no attempt was recorded; an unreadable ledger or
+ * provider-attempt evidence that cannot be validated must not claim a stop.
+ */
+export async function classifyRunningWork(worktreePath: string): Promise<RunningWorkClassification> {
+  let content: string;
+  try {
+    content = await readFile(join(worktreePath, '.pipeline/events.jsonl'), 'utf-8');
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { state: 'stopped' }
+      : { state: 'unknown' };
+  }
+
+  let sawProviderAttempt = false;
+  let latest: { step: string; lifecycle: ProviderLifecycleDiagnostic | null } | undefined;
+  for (const line of content.split('\n')) {
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(event) || event.type !== 'provider_attempt') continue;
+    sawProviderAttempt = true;
+    const step = typeof event.step === 'string' ? event.step : undefined;
+    const lifecycle = parseProviderLifecycleDiagnostic(line, step);
+    if (lifecycle !== undefined && step) latest = { step, lifecycle };
+  }
+
+  if (!latest) return sawProviderAttempt ? { state: 'unknown' } : { state: 'stopped' };
+  if (latest.lifecycle?.phase === 'preparing' || latest.lifecycle?.phase === 'running') {
+    return {
+      state: 'running',
+      step: latest.step,
+      attemptId: latest.lifecycle.attemptId,
+    };
+  }
+  return { state: 'stopped' };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,9 +1,10 @@
-// Covers: task:11
+// Covers: task:8, task:11
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   makeVerdictOutcome,
   makeNoVerdictOutcome,
   makeSkippedOutcome,
+  buildParallelFailureEvents,
   classifyOutcome,
   runWithConcurrency,
   runGroupBranch as runGroupBranchProduction,
@@ -100,6 +101,10 @@ describe("group-core: BranchOutcome constructors", () => {
 });
 
 describe("group-core: exhaustive classify helper", () => {
+  it("classifies a parked outcome distinctly from no-verdict or aborted", () => {
+    expect(classifyOutcome({ kind: "parked" } as unknown as BranchOutcome)).toBe("parked");
+  });
+
   it("classifies a verdict outcome by its verdict value", () => {
     expect(classifyOutcome(makeVerdictOutcome("pass"))).toBe("verdict:pass");
     expect(classifyOutcome(makeVerdictOutcome("fail"))).toBe("verdict:fail");
@@ -126,10 +131,38 @@ describe("group-core: exhaustive classify helper", () => {
       makeVerdictOutcome("blocked"),
       makeNoVerdictOutcome("reason"),
       makeSkippedOutcome(),
+      { kind: "parked" },
     ];
     for (const outcome of outcomes) {
       expect(() => classifyOutcome(outcome)).not.toThrow();
     }
+  });
+});
+
+describe("group-core: parked join behavior", () => {
+  it("does not emit a parallel failure for a parked member", () => {
+    expect(buildParallelFailureEvents("manual_test", [{
+      name: "parked-member",
+      skill: "manual-test",
+      outcome: { kind: "parked", attempt: 2 },
+    }])).toEqual([]);
+  });
+
+  it("emits a member-attributed parallel failure for a permission denial", () => {
+    expect(buildParallelFailureEvents("manual_test", [{
+      name: "manual_test",
+      skill: "manual-test",
+      outcome: {
+        kind: "permission-denied",
+        provider: "codex",
+        reason: "permission review denied",
+      },
+    }])).toEqual([{
+      type: "parallel_failure",
+      step: "manual_test",
+      branch: "manual_test",
+      error: "branch manual_test failed: permission-denied",
+    }]);
   });
 });
 
@@ -787,6 +820,63 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
     expect(runner.calls[0]!.opts?.resume).toBe(false);
     expect(runner.calls[1]!.opts?.resume).toBe(false);
     expect(classifyOutcome(outcome)).toBe("verdict:pass");
+  });
+
+  it("settles a member as parked when the feature parks before its retry", async () => {
+    const runner = spyRunner([{ success: false, output: "retry" }]);
+    const member: GroupMember = { name: "manual_test", skill: "manual-test", outcome: makeSkippedOutcome() };
+    const outcome = await runGroupBranch(
+      member,
+      fakeState,
+      { stepRunner: runner, operatorParkBoundary: async () => true },
+      3,
+    );
+
+    expect({ outcome, calls: runner.calls.length }).toEqual({
+      outcome: { kind: "parked", attempt: 2 },
+      calls: 1,
+    });
+  });
+
+  it("fails toward parked when the retry park predicate rejects", async () => {
+    const runner = spyRunner([{ success: false, output: "retry" }]);
+    const member: GroupMember = { name: "manual_test", skill: "manual-test", outcome: makeSkippedOutcome() };
+    const boundary = vi.fn(async () => { throw new Error("park state unavailable"); });
+
+    const outcome = await runGroupBranch(
+      member,
+      fakeState,
+      { stepRunner: runner, operatorParkBoundary: boundary },
+      3,
+    );
+
+    expect({ outcome, dispatches: runner.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
+      outcome: { kind: "parked", attempt: 2 },
+      dispatches: 1,
+      boundaryCalls: 1,
+    });
+  });
+
+  it.each([
+    ['rate limit', { success: false, rateLimited: true }],
+    ['stale session', { success: false, sessionExpired: true }],
+  ])('parks after a %s free retry without redispatching the member', async (_name, firstResult) => {
+    const runner = spyRunner([firstResult]);
+    const member: GroupMember = { name: 'manual_test', skill: 'manual-test', outcome: makeSkippedOutcome() };
+    const boundary = vi.fn(async () => true);
+
+    const outcome = await runGroupBranch(
+      member,
+      fakeState,
+      { stepRunner: runner, operatorParkBoundary: boundary },
+      1,
+    );
+
+    expect({ outcome, dispatches: runner.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
+      outcome: { kind: 'parked', attempt: 1 },
+      dispatches: 1,
+      boundaryCalls: 1,
+    });
   });
 
   it("retains ordered observed intervals from unsuccessful scalar attempts followed by success", async () => {

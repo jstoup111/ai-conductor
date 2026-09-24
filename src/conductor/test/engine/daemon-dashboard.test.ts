@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
+  classifyRunningWork,
   scanInheritedState,
   renderDashboard,
   type InheritedState,
@@ -1748,5 +1749,79 @@ describe('engine/daemon-dashboard — band annotations and fallback marker (Task
     expect(out).not.toContain('[high]');
     expect(out).not.toContain('[medium]');
     expect(out).not.toContain('[low]');
+  });
+});
+
+describe('engine/daemon-dashboard — classifyRunningWork (Task 11)', () => {
+  let worktree: string;
+
+  beforeEach(async () => {
+    worktree = await mkdtemp(join(tmpdir(), 'running-work-'));
+    await mkdir(join(worktree, '.pipeline'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(worktree, { recursive: true, force: true });
+  });
+
+  async function writeLifecycleEvents(...events: Array<Record<string, unknown>>): Promise<void> {
+    await writeFile(
+      join(worktree, '.pipeline', 'events.jsonl'),
+      events.map((event) => JSON.stringify(event)).join('\n') + '\n',
+      'utf-8',
+    );
+  }
+
+  it.each([
+    ['preparing', 'prepare-attempt'],
+    ['running', 'run-attempt'],
+  ] as const)('reports the latest %s provider attempt as running', async (phase, attemptId) => {
+    await writeLifecycleEvents({
+      type: 'provider_attempt',
+      step: 'build',
+      lifecycle: { phase, attemptId, recoveryCount: 0 },
+    });
+
+    await expect(classifyRunningWork(worktree)).resolves.toEqual({
+      state: 'running',
+      step: 'build',
+      attemptId,
+    });
+  });
+
+  it('reports stopped for a settled attempt and an absent events file', async () => {
+    await writeLifecycleEvents({
+      type: 'provider_attempt',
+      step: 'build',
+      lifecycle: { phase: 'running', attemptId: 'done-attempt', recoveryCount: 0 },
+    }, {
+      type: 'provider_attempt',
+      step: 'build',
+      lifecycle: { phase: 'settled', attemptId: 'done-attempt', recoveryCount: 0, outcome: 'completed' },
+    });
+    await expect(classifyRunningWork(worktree)).resolves.toEqual({ state: 'stopped' });
+
+    await rm(join(worktree, '.pipeline', 'events.jsonl'));
+    await writeLifecycleEvents({
+      type: 'provider_attempt',
+      step: 'build',
+      lifecycle: { phase: 'settled', attemptId: 'done-attempt', recoveryCount: 0, outcome: 'completed' },
+    });
+    await expect(classifyRunningWork(worktree)).resolves.toEqual({ state: 'stopped' });
+
+    await rm(join(worktree, '.pipeline', 'events.jsonl'));
+    await expect(classifyRunningWork(worktree)).resolves.toEqual({ state: 'stopped' });
+  });
+
+  it('reports unknown for an unreadable events file and only malformed provider attempts', async () => {
+    await mkdir(join(worktree, '.pipeline', 'events.jsonl'));
+    await expect(classifyRunningWork(worktree)).resolves.toEqual({ state: 'unknown' });
+
+    await rm(join(worktree, '.pipeline', 'events.jsonl'), { recursive: true });
+    await writeLifecycleEvents(
+      { type: 'provider_attempt', step: 'build', lifecycle: { phase: 'running' } },
+      { type: 'provider_attempt', step: 'test_suite', lifecycle: { phase: 'settled', attemptId: '', recoveryCount: 0 } },
+    );
+    await expect(classifyRunningWork(worktree)).resolves.toEqual({ state: 'unknown' });
   });
 });

@@ -72,6 +72,13 @@ export interface SkippedOutcome {
   kind: "skipped";
 }
 
+/** A member stopped between attempts because its feature was operator-parked. */
+export interface ParkedOutcome {
+  kind: "parked";
+  /** The retry admission that observed the park (group members park only on retry). */
+  attempt?: number;
+}
+
 /**
  * The outcome of a single group branch. A discriminated union — never
  * boolean flags — so that every consumer is forced to handle each case
@@ -81,7 +88,8 @@ export type BranchOutcome =
   | VerdictOutcome
   | NoVerdictOutcome
   | PermissionDeniedOutcome
-  | SkippedOutcome;
+  | SkippedOutcome
+  | ParkedOutcome;
 
 export function makeVerdictOutcome(
   verdict: Verdict,
@@ -111,6 +119,10 @@ export function makeNoVerdictOutcome(
 
 export function makeSkippedOutcome(): SkippedOutcome {
   return { kind: "skipped" };
+}
+
+export function makeParkedOutcome(attempt?: number): ParkedOutcome {
+  return { kind: "parked", ...(attempt === undefined ? {} : { attempt }) };
 }
 
 /** A single member of a concurrent group: its name, dispatched skill, and outcome. */
@@ -143,6 +155,8 @@ export function classifyOutcome(outcome: BranchOutcome): string {
       return "permission-denied";
     case "skipped":
       return "skipped";
+    case "parked":
+      return "parked";
   }
   return assertNever(outcome);
 }
@@ -189,9 +203,9 @@ export function buildParallelStartedEvent(
  * `verdict:blocked` (a real, content-level validator failure) — each event
  * naming that specific member (`branch`), so a mixed-outcome join (some
  * members pass, one or more fail) attributes the failure to the RIGHT
- * validator instead of a single ambiguous group-level failure. Skipped
- * members never produce a `parallel_failure` — they were never dispatched,
- * so there is nothing to attribute a failure to.
+ * validator instead of a single ambiguous group-level failure. Skipped and
+ * parked members never produce a `parallel_failure` — they were never
+ * dispatched or intentionally stopped.
  */
 export function buildParallelFailureEvents(
   step: StepName,
@@ -200,7 +214,10 @@ export function buildParallelFailureEvents(
   const events: ParallelFailureEvent[] = [];
   for (const member of members) {
     const { outcome } = member;
-    if (outcome.kind === "skipped") continue;
+    if (
+      outcome.kind === "skipped"
+      || outcome.kind === "parked"
+    ) continue;
     if (outcome.kind === "verdict" && outcome.verdict === "pass") continue;
 
     const error =
@@ -419,6 +436,8 @@ export interface BranchExecutorDeps {
    * recorded outcome to persist a synthetic key for.
    */
   signal?: AbortSignal;
+  /** Daemon-only admission check for a member's next provider attempt. */
+  operatorParkBoundary?: () => Promise<boolean>;
   /**
    * Task 9: project root used to scope the stale-marker sweep
    * (`sweepStaleReviewArtifacts`) to THIS member's own step name before its
@@ -641,6 +660,10 @@ async function runGroupBranchInner(
 
   let lastOutput = "";
   const observedIntervals: ObservedInterval[] = [];
+  // Initial fan-out is admitted by the group entry gate.  From the first
+  // provider call onward, every loop iteration is a possible redispatch,
+  // including free retries that reset `attempt` back to one.
+  let dispatchedOnce = false;
   const accumulatedObservedIntervals = () =>
     observedIntervals.length > 0 ? observedIntervals : undefined;
 
@@ -664,6 +687,12 @@ async function runGroupBranchInner(
         accumulatedObservedIntervals(),
       );
     }
+    // The group entry gate covers initial fan-out. Re-read park state before
+    // each member attempt so a member already running can drain, while a
+    // retry after the park is declined without becoming a branch failure.
+    if (dispatchedOnce && await deps.operatorParkBoundary?.().catch(() => true)) {
+      return makeParkedOutcome(attempt);
+    }
 
     await deps.onMemberEvent?.({
       type: "group_member_step",
@@ -674,6 +703,7 @@ async function runGroupBranchInner(
     });
     let result: StepRunResult;
     try {
+      dispatchedOnce = true;
       result = await deps.stepRunner.run(
         memberStep,
         state,

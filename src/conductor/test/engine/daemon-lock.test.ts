@@ -110,6 +110,21 @@ describe('daemon-lock: acquire is the O_EXCL 1-per-repo mutex (FR-17/FR-20)', ()
   });
 });
 
+describe('daemon-lock: diagnosed pidfile reads', () => {
+  it('distinguishes an absent pidfile from malformed pidfile contents while readPidRecord keeps null', async () => {
+    const mod = await load(LOCK_MOD);
+    const readPidRecordDiagnosed = requireFn(mod, 'readPidRecordDiagnosed');
+    const readPidRecord = requireFn(mod, 'readPidRecord');
+
+    await expect(readPidRecordDiagnosed(repoPath)).resolves.toEqual({ kind: 'absent' });
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    await writeFile(join(repoPath, '.daemon', 'daemon.pid'), '{not json');
+
+    await expect(readPidRecordDiagnosed(repoPath)).resolves.toEqual({ kind: 'unreadable' });
+    await expect(readPidRecord(repoPath)).resolves.toBeNull();
+  });
+});
+
 // ═════════════════════════════════════════════════════════════════════════════
 // FR-18: liveness via process.kill(pid, 0). ESRCH → dead; EPERM → alive.
 // ═════════════════════════════════════════════════════════════════════════════

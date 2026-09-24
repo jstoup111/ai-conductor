@@ -77,10 +77,6 @@ stopping the daemon was the only lever.
   park command says the feature is fully stopped.
 - **FR-12 — The stop is visible in daemon reporting:** When a park declines an attempt, daemon
   reporting identifies the feature, the step, and that an attempt was declined for an operator park.
-- **FR-13 — Runbook documents in-flight behavior:** The emergency-stop and park operator
-  documentation describes the in-flight behavior. That covers what park stops and what it does not,
-  how to read the park command's running-work report, and what to do when a running attempt must
-  end sooner than its own completion.
 - **FR-14 — Interactive runs unchanged:** Interactive conduct runs gain no new park behavior.
 
 ## Non-Functional Requirements

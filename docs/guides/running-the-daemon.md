@@ -495,11 +495,12 @@ An operator park outranks everything: the re-kick sweep checks it first, ahead o
 dedup and the per-SHA guard, and preserves a pending `.pipeline/REKICK` sentinel rather than
 consuming it.
 
-If the feature is already running, the daemon lets the active scheduling unit settle before it
-stops. A serial step reaches its natural status; a parallel group lets every started member settle
-and completes the group join. The daemon persists those outcomes, then blocks the next serial step
-or parallel group and logs the last settled boundary. It does not create a HALT or interrupt work
-inside the active unit. Interactive `conduct` runs are unchanged.
+If the feature is already running, the daemon lets its current provider attempt finish, then declines
+every later attempt, including retries. In a parallel group, each started member may finish its
+current attempt but a parked member does not retry. The daemon records the outcomes and blocks the
+next serial step or parallel group. It does not create a HALT or interrupt a provider call. Interactive
+`conduct` runs are unchanged. The command reports whether work is still running, fully stopped, or
+unknown; see [`daemon park`](../reference/cli.md#daemon-park-and-daemon-unpark) for the exact output.
 
 To release:
 

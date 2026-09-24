@@ -124,7 +124,6 @@ async function runSerial(input: {
   }
 
   let calls = 0;
-  let boundaryChecks = 0;
   let conductor: Conductor | undefined;
   const run = vi.fn<StepRunner['run']>(async (step, _state, options) => {
     expect(step).toBe(serialStep);
@@ -141,7 +140,10 @@ async function runSerial(input: {
   });
   conductor = new Conductor({
     projectRoot, stateFilePath, stepRunner: { run }, events, fromStep: serialStep, mode: 'auto', daemon: input.daemon ?? true, maxRetries: 2,
-    verifyArtifacts: false, featureSlug: 'serial-telemetry-parity', operatorParkBoundary: async () => ++boundaryChecks > 1,
+    // Permit the prescribed attempts, then park before this broad fixture can
+    // flow into an unrelated lifecycle step. Dedicated boundary tests cover
+    // actual parked attempts.
+    verifyArtifacts: false, featureSlug: 'serial-telemetry-parity', operatorParkBoundary: async () => calls >= input.outcomes.length,
     ...(input.widthOneGroup ? {
       config: {
         steps: Object.fromEntries(VALIDATION_GROUP.members.slice(1).map((member) => [member, { disable: true }])),
@@ -231,7 +233,9 @@ async function runBuiltinGroup(input: {
   }
 
   const calls: StepName[] = [];
-  let boundaryChecks = 0;
+  const remainingOutcomes = new Map(
+    Object.entries(input.outcomes ?? {}).map(([member, outcomes]) => [member, [...outcomes]]),
+  );
   if (input.authRecovery) {
     vi.spyOn(
       Conductor.prototype as unknown as { parkOnAuthFailure: () => Promise<unknown> },
@@ -258,11 +262,19 @@ async function runBuiltinGroup(input: {
         architecture_review_as_built: { remediation: { enabled: input.asBuiltRemediationEnabled } },
       }),
     },
-    operatorParkBoundary: async () => ++boundaryChecks > 1,
+    // Permit every prescribed member retry. Once all members have had an
+    // initial attempt and no scripted outcome remains, park before unrelated
+    // lifecycle work can enter this telemetry fixture.
+    operatorParkBoundary: async () =>
+      calls.length >= VALIDATION_GROUP.members.length &&
+      [...remainingOutcomes.values()].every((outcomes) => outcomes.length === 0) &&
+      !Object.entries(input.throwOnAttempts ?? {}).some(([member, attempts]) =>
+        attempts.some((attempt) => attempt > calls.filter((call) => call === member).length),
+      ),
     stepRunner: {
       run: async (step, _state, options) => {
         calls.push(step);
-        const outcomes = input.outcomes?.[step];
+        const outcomes = remainingOutcomes.get(step);
         const outcome = outcomes?.shift() ?? { success: true };
         const ownDuration = input.durationByMember?.[step];
         // Preserve concurrent admission while settling distinct synthetic

@@ -197,16 +197,26 @@ async function writePidfileExcl(repoPath: string, transient?: boolean): Promise<
   return record;
 }
 
-// Exported for read-only observability (`conduct daemon status`): callers get the
-// owner record (or null for absent/corrupt) without touching the pidfile path.
-export async function readPidRecord(repoPath: string): Promise<PidRecord | null> {
+/** A lossless read result for observers that must distinguish absence from uncertainty. */
+export type PidRecordRead =
+  | { kind: 'absent' }
+  | { kind: 'unreadable' }
+  | { kind: 'record'; record: PidRecord };
+
+/**
+ * Read the pidfile without collapsing an unreadable/corrupt file into absence.
+ * Mutating lock callers intentionally keep using readPidRecord's historical
+ * null contract below.
+ */
+export async function readPidRecordDiagnosed(repoPath: string): Promise<PidRecordRead> {
   let parsed: unknown;
   try {
     const raw = await readFile(pidfilePath(repoPath), 'utf8');
     parsed = JSON.parse(raw);
-  } catch {
-    // File absent or JSON parse failure — treat as absent so callers reclaim.
-    return null;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { kind: 'absent' }
+      : { kind: 'unreadable' };
   }
 
   // Runtime shape guard: a malformed pidfile (non-numeric pid, missing uuid, etc.)
@@ -220,10 +230,17 @@ export async function readPidRecord(repoPath: string): Promise<PidRecord | null>
     (parsed as any).pid <= 0 ||
     typeof (parsed as any)?.uuid !== 'string'
   ) {
-    return null;
+    return { kind: 'unreadable' };
   }
 
-  return parsed as PidRecord;
+  return { kind: 'record', record: parsed as PidRecord };
+}
+
+// Exported for lock/reclaim callers: preserve the historical null-for-anything-
+// unusable contract, while read-only diagnostics can use the lossless reader.
+export async function readPidRecord(repoPath: string): Promise<PidRecord | null> {
+  const diagnosed = await readPidRecordDiagnosed(repoPath);
+  return diagnosed.kind === 'record' ? diagnosed.record : null;
 }
 
 /**

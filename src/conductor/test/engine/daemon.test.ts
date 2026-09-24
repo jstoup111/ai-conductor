@@ -444,6 +444,85 @@ describe('engine/daemon — runDaemon', () => {
     expect(parked?.reason).toBeUndefined();
   });
 
+  it('keeps the pool running when a declined attempt returns an operator-parked termination', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-operator-park-pool-'));
+    let releaseFeatureBRetry: (() => void) | undefined;
+    const featureBRetry = new Promise<void>((resolve) => {
+      releaseFeatureBRetry = resolve;
+    });
+    const dispatches: string[] = [];
+    let featureBAttemptDispatches = 0;
+    const logs: string[] = [];
+    try {
+      const runParkedFeature = makeRunFeature({
+        createWorktree: async (slug) => {
+          const path = join(projectRoot, '.worktrees', slug);
+          await mkdir(path, { recursive: true });
+          return { path, branch: `feat/${slug}` };
+        },
+        prepareWorktree: async () => {},
+        runConductor: async () => ({
+          kind: 'operator-parked',
+          boundary: { kind: 'attempt', step: 'build', attempt: 2 },
+        }),
+        readOutcome: async () => ({ done: false, halted: false }),
+        teardownWorktree: async () => {},
+        markProcessed: async () => {},
+        daemon: true,
+        provider: {
+          invoke: async () => ({ success: true, output: '', exitCode: 0 }),
+        },
+        project: 'test-project',
+        projectRoot,
+        runGh: async () => ({ stdout: '' }),
+        enrollWatch: async () => {},
+      } satisfies FeatureRunnerDeps);
+
+      const result = await runDaemon({
+        discoverBacklog: staticBacklog([
+          { slug: 'feature-a' },
+          { slug: 'feature-b' },
+          { slug: 'feature-c' },
+        ]),
+        runFeature: async (item) => {
+          dispatches.push(item.slug);
+          if (item.slug === 'feature-a') return runParkedFeature(item);
+          if (item.slug === 'feature-b') {
+            featureBAttemptDispatches += 1;
+            await featureBRetry;
+            featureBAttemptDispatches += 1;
+            return { slug: item.slug, status: 'done' as const };
+          }
+
+          // C can only start after A's parked result releases its pool slot.
+          releaseFeatureBRetry?.();
+          return { slug: item.slug, status: 'done' as const };
+        },
+        log: (message) => logs.push(message),
+      }, { concurrency: 2, once: true });
+
+      expect({
+        dispatches,
+        featureBAttemptDispatches,
+        statuses: result.processed.map((outcome) => [outcome.slug, outcome.status]),
+        stoppedReason: result.stoppedReason,
+        shutdownEvents: logs.filter((message) => /shutdown/i.test(message)),
+      }).toEqual({
+        dispatches: ['feature-a', 'feature-b', 'feature-c'],
+        featureBAttemptDispatches: 2,
+        statuses: [
+          ['feature-a', 'parked'],
+          ['feature-c', 'done'],
+          ['feature-b', 'done'],
+        ],
+        stoppedReason: 'backlog_drained',
+        shutdownEvents: [],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('keeps an intentional park blocked until durable unpark, then reuses the slug', async () => {
     let operatorParked = false;
     let dispatches = 0;
