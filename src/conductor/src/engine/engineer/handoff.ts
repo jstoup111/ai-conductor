@@ -93,6 +93,12 @@ export interface HandoffDeps {
     readonly remote: RemoteGitOperationDependencies;
     readonly operations: GithubOperationRunner;
     readonly repository: string;
+    /**
+     * Guarded runner bound to the created PR (#2703). `operations` is bound to
+     * the repository for creation, so the owner gate refuses post-create PR
+     * edits and label writes made through it as `invalid-target`.
+     */
+    readonly presentation?: (prUrl: string) => GithubOperationRunner | undefined;
   };
 }
 
@@ -240,6 +246,10 @@ export async function openSpecPr(
   //    authored ledger identifies authoring events (one branch = one feature spec).
   await recordAuthoredKey(target.name, branch, ledgerOpts ?? {});
 
+  // Post-create presentation writes target the PR itself, not the repository
+  // the creation was authorized against (#2703).
+  const presentationOperations = deps.publication.presentation?.(url) ?? deps.publication.operations;
+
   // 3a2. Guarantee the PR declares a release disposition. `--fill` builds the
   //      body from the branch name and last commit message, so it never carries
   //      a `## Release metadata` section and the required check fails closed on
@@ -251,7 +261,7 @@ export async function openSpecPr(
       return { stdout: r.stdout };
     },
     prUrl: url,
-    operations: deps.publication.operations,
+    operations: presentationOperations,
     cwd,
     log: deps.log,
   });
@@ -267,7 +277,7 @@ export async function openSpecPr(
         return { stdout: r.stdout };
       },
       prUrl: url,
-      operations: deps.publication.operations,
+      operations: presentationOperations,
       keyword: 'Refs',
       sourceRef: deps.sourceRef,
       cwd,
@@ -279,7 +289,7 @@ export async function openSpecPr(
     //     dispatches on. Fail-open: never throws, never discards the PR.
     await mirrorIssueCriticalityLabels({
       gh: async (args, opts) => runner(args, { cwd: opts.cwd }),
-      operations: deps.publication.operations,
+      operations: presentationOperations,
       cwd,
       prUrl: url,
       sourceRef: deps.sourceRef,

@@ -181,6 +181,23 @@ function pullRequestTargetFromUrl(
 }
 
 /**
+ * Rebind an already-resolved feature mutation context to the exact PR it is
+ * about to present on (#2703). Push and PR-creation contexts are bound to a
+ * ref or the repository; reusing them for a `pull-request.edit` or label write
+ * is refused as `invalid-target`. Committed provenance is unchanged, so the
+ * owner gate still decides who may write. Undefined when the URL is not a PR
+ * in the provenance repository.
+ */
+export function bindMutationToPullRequest(
+  mutation: GithubMutationExecutionContext,
+  prUrl: string,
+): GithubMutationExecutionContext | undefined {
+  const target = pullRequestTargetFromUrl(prUrl, mutation.provenance.repository);
+  if (!target) return undefined;
+  return { ...mutation, provenance: { ...mutation.provenance, target } };
+}
+
+/**
  * Construct production-only authorization context from committed feature
  * evidence. The caller retains a typed absence when either remote identity or
  * feature provenance cannot be resolved; `openShipDraftPr` then refuses before

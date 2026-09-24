@@ -68,6 +68,7 @@ import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead } from './tracker-client.js';
+import { bindMutationToPullRequest } from './ship-draft-pr.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import {
   GH_VERSION_FLOOR,
@@ -590,7 +591,7 @@ function featureMarkerForSpecBranch(branch: string): string {
  * reads the committed spec branch (D2), never a live marker or PR hint; a
  * missing marker is a refusal before either remote mutation runs.
  */
-function initialSpecPublication(
+export function initialSpecPublication(
   target: { remote?: string },
   branch: string,
   cwd: string,
@@ -641,6 +642,12 @@ function initialSpecPublication(
         provenance: { ...mutation.provenance, target: { repository, kind: 'repository' } },
       },
     }),
+    // Post-create Refs/release-metadata/label writes rebind to the created PR
+    // (#2703); the repository binding above authorizes creation only.
+    presentation: (prUrl: string) => {
+      const bound = bindMutationToPullRequest(mutation, prUrl);
+      return bound ? createGuardedGithubOperationRunner(gh, { cwd, mutation: bound }) : undefined;
+    },
   };
 }
 
@@ -1234,6 +1241,8 @@ export async function dispatchEngineer(
           // close — the daemon's implementation PR closes it on merge).
           sourceRef,
           publication,
+          // Post-create writes are non-fatal; never let a refusal pass silently (#2703).
+          log: (msg: string) => printErr(`engineer handoff: ${msg}`),
         });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
