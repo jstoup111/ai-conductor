@@ -859,11 +859,9 @@ async function readRemediationGateAppendBudget(
   growthTaskCount: number,
   authoredTaskCount: number,
 ): Promise<RemediationGateAppendBudget> {
-  const growthCap = prdAuditAppendCap(config, authoredTaskCount);
-  const [ledger, growth] = await Promise.all([
-    readKickbackLedger(projectRoot),
-    readGrowth(projectRoot, growthCap),
-  ]);
+  const ledger = await readKickbackLedger(projectRoot);
+  const growthCap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(config, authoredTaskCount);
+  const growth = await readGrowth(projectRoot, growthCap);
   // A corrupt ledger must not be mistaken for fresh remediation allowance:
   // budget recovery is an explicit operator decision, not a best-effort
   // fallback. Scoped to THIS gate (adr-2026-08-31 decision 3) so a sibling
