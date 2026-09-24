@@ -1,8 +1,9 @@
-// Covers: task:2, task:1, task:11
+// Covers: task:2, task:1, task:9, task:11
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   claimDigest,
+  amendmentClaimDigest,
   COVERAGE_BINDING_COMPLETION_STATUSES,
   COVERAGE_BINDING_ENVELOPE_STATUSES,
   coverageBindingEnvelopePath,
@@ -35,6 +36,38 @@ function memoryFilesystem(files: Record<string, string> = {}): CoverageBindingEn
 }
 
 describe('coverage binding envelope', () => {
+  it('hashes amendment identity from its path, exact text, and plan obligations', () => {
+    const unchanged = amendmentClaimDigest({
+      artifactPath: '.docs/decisions/adr-feature.md',
+      amendment: '> **Amended 2026-09-24 by #100:** Preserve the audit trail.',
+      doneWhen: [['The audit trail is preserved.']],
+    });
+
+    expect([
+      unchanged,
+      amendmentClaimDigest({
+        artifactPath: '.docs/decisions/adr-feature.md',
+        amendment: '> **Amended 2026-09-24 by #100:** Preserve the audit trail.',
+        doneWhen: [['The audit trail is preserved.']],
+      }),
+      amendmentClaimDigest({
+        artifactPath: '.docs/decisions/adr-feature.md',
+        amendment: '> **Amended 2026-09-24 by #100:** Preserve a different audit trail.',
+        doneWhen: [['The audit trail is preserved.']],
+      }),
+      amendmentClaimDigest({
+        artifactPath: '.docs/decisions/adr-feature.md',
+        amendment: '> **Amended 2026-09-24 by #100:** Preserve the audit trail.',
+        doneWhen: [['The audit trail is retained.']],
+      }),
+    ]).toEqual([
+      unchanged,
+      unchanged,
+      expect.not.stringMatching(new RegExp(`^${unchanged.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)),
+      expect.not.stringMatching(new RegExp(`^${unchanged.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)),
+    ]);
+  });
+
   it('round-trips every envelope status while keeping invalidated outside the completion set', () => {
     const entries = [
       { kind: 'criterion' as const, digest: 'sha256:one', criterion: 'Given one', taskIds: ['1'], doneWhen: [['One is asserted.']], verdict: 'asserts' as const },
