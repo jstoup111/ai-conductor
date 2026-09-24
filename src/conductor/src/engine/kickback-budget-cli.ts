@@ -156,15 +156,19 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     if (!operator?.trim()) { print('kickback-budget: no approved operator identity is available.'); return 1; }
     // The eligibility read and adjustment arithmetic happen while the ledger
     // lease is held, after this command owns its temporary park.
-    const adjustment = await stageKickbackBudgetAdjustment(worktree, gate, (entry) => {
+    const adjustment = await stageKickbackBudgetAdjustment(worktree, gate, (entry, ledger) => {
       if (!entry.capEvidence) throw new Error('no current cap evidence for that gate');
-      const currentLimit = remediation ? (entry.effectiveLapCap ?? defaults[gate]) : (entry.effectiveLimit ?? defaults[gate]);
-      const currentConsumed = remediation ? (entry.laps ?? 0) : entry.cumulative;
+      const allowance = entry.capEvidence.allowance ?? 'laps';
+      const growth = allowance === 'growth';
+      const currentLimit = growth
+        ? (ledger.effectiveGrowthCap ?? entry.capEvidence.limit)
+        : remediation ? (entry.effectiveLapCap ?? entry.capEvidence.limit) : (entry.effectiveLimit ?? defaults[gate]);
+      const currentConsumed = growth ? (ledger.growth?.added ?? 0) : remediation ? (entry.laps ?? 0) : entry.cumulative;
       return {
         id: randomUUID(), kind: action, beforeConsumed: currentConsumed,
         afterConsumed: action === 'reset' ? 0 : currentConsumed,
         beforeLimit: currentLimit, afterLimit: action === 'raise' ? currentLimit + command.by! : currentLimit,
-        operator, rationale, timestamp: new Date().toISOString(), haltGeneration: entry.capEvidence.haltGeneration,
+        operator, rationale, timestamp: new Date().toISOString(), haltGeneration: entry.capEvidence.haltGeneration, allowance,
       };
     }, async () => {
       let haltBody: string;
@@ -183,6 +187,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       feature: command.feature, operator: adjustment.operator, rationale: adjustment.rationale,
       beforeConsumed: adjustment.beforeConsumed, afterConsumed: adjustment.afterConsumed,
       beforeLimit: adjustment.beforeLimit, afterLimit: adjustment.afterLimit, ts: adjustment.timestamp,
+      allowance: adjustment.allowance,
     };
     await appendAuthorizationEvent(worktree, event, deps.appendEvent);
     const applied = await applyKickbackBudgetAdjustment(worktree, gate, adjustment, defaults[gate]);

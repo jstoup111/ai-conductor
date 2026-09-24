@@ -46,6 +46,8 @@ export type AuditRecord = {
   lapId?: string;
   caseId?: string;
   residualEffectId?: string;
+  /** Present for kickback-budget authorizations. */
+  allowance?: 'laps' | 'growth';
   at: number;
   /**
    * #647 D3: for `event: 'kickback'` records, distinguishes a kickback that
@@ -248,6 +250,7 @@ export class AuditTrailWriter {
           event: event.type,
           reason: `${event.kind} authorized for ${event.gate}`,
           cause: event.adjustmentId,
+          ...(event.allowance ? { allowance: event.allowance } : {}),
         };
       case 'build_review_cache_discarded':
         return {

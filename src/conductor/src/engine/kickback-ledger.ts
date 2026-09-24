@@ -1191,7 +1191,7 @@ export async function consumeKickbackResumeAuthorization(
 export async function stageKickbackBudgetAdjustment(
   projectRoot: string,
   gate: string,
-  createAdjustment: (entry: KickbackGateEntry) => KickbackBudgetAdjustment,
+  createAdjustment: (entry: KickbackGateEntry, ledger: KickbackLedger) => KickbackBudgetAdjustment,
   verifyLiveHalt?: () => Promise<void>,
 ): Promise<KickbackBudgetAdjustment> {
   return withKickbackLedgerLease(projectRoot, async () => {
@@ -1200,8 +1200,8 @@ export async function stageKickbackBudgetAdjustment(
     requireReadableGate(ledger, gate);
     const entry = ledger.gates[gate];
     if (!entry) throw new Error('current cap evidence is missing or no longer matches the live halt');
-    const adjustment = createAdjustment(entry);
-    if (!capEvidenceAgreesWithAdjustment(entry, gate, adjustment, undefined)) {
+    const adjustment = createAdjustment(entry, ledger);
+    if (!capEvidenceAgreesWithAdjustment(entry, ledger, gate, adjustment, undefined)) {
       throw new Error('current cap evidence is missing or no longer matches the live halt');
     }
     if (entry.pendingAdjustment && entry.pendingAdjustment.id !== adjustment.id) {
@@ -1244,7 +1244,7 @@ export async function applyKickbackBudgetAdjustment(
     const ledger = await readKickbackLedger(projectRoot);
     requireReadableGate(ledger, gate);
     const entry = ledger.gates[gate];
-    if (!entry || !capEvidenceAgreesWithAdjustment(entry, gate, adjustment, defaultLimit)) {
+    if (!entry || !capEvidenceAgreesWithAdjustment(entry, ledger, gate, adjustment, defaultLimit)) {
       throw new Error('current cap evidence is missing or no longer matches the live halt');
     }
     const alreadyApplied = entry.adjustments?.find((item) => item.id === adjustment.id);
@@ -1252,21 +1252,31 @@ export async function applyKickbackBudgetAdjustment(
     if (entry.pendingAdjustment && entry.pendingAdjustment.id !== adjustment.id) {
       throw new Error('staged adjustment does not match the requested authorization');
     }
+    const allowance = entry.capEvidence?.allowance ?? 'laps';
     const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
-    const beforeLimit = remediation ? (entry.effectiveLapCap ?? defaultLimit) : (entry.effectiveLimit ?? defaultLimit);
-    const beforeConsumed = remediation ? (entry.laps ?? 0) : entry.cumulative;
+    const growth = allowance === 'growth';
+    const beforeLimit = growth
+      ? (ledger.effectiveGrowthCap ?? entry.capEvidence!.limit)
+      : remediation ? (entry.effectiveLapCap ?? entry.capEvidence!.limit) : (entry.effectiveLimit ?? defaultLimit);
+    const beforeConsumed = growth ? (ledger.growth?.added ?? 0) : remediation ? (entry.laps ?? 0) : entry.cumulative;
     const raised = adjustment.kind === 'raise' ? adjustment.afterLimit : beforeLimit;
     const next: KickbackGateEntry = {
       ...entry,
       adjustmentsKnown: true,
-      ...(remediation
+      ...(growth
+        ? {}
+        : remediation
         ? { effectiveLapCap: raised, laps: adjustment.kind === 'reset' ? 0 : entry.laps ?? 0 }
         : { effectiveLimit: raised, cumulative: adjustment.kind === 'reset' ? 0 : entry.cumulative }),
       adjustments: [...(entry.adjustments ?? []), { ...adjustment, beforeLimit, beforeConsumed, afterLimit: raised, afterConsumed: adjustment.kind === 'reset' ? 0 : beforeConsumed }],
       pendingAdjustment: undefined,
       resumeAuthorization: { adjustmentId: adjustment.id, haltGeneration: adjustment.haltGeneration, consumed: false },
     };
-    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates: { ...ledger.gates, [gate]: next } });
+    await writeKickbackLedgerUnsafe(projectRoot, {
+      ...ledger,
+      ...(growth ? { effectiveGrowthCap: raised } : {}),
+      gates: { ...ledger.gates, [gate]: next },
+    });
     return next;
   });
 }
@@ -1280,20 +1290,31 @@ export async function applyKickbackBudgetAdjustment(
  */
 function capEvidenceAgreesWithAdjustment(
   entry: KickbackGateEntry,
+  ledger: KickbackLedger,
   gate: string,
   adjustment: KickbackBudgetAdjustment,
   defaultLimit: number | undefined,
 ): boolean {
   const evidence = entry.capEvidence;
   if (!evidence || evidence.haltGeneration !== adjustment.haltGeneration || evidence.gate !== gate) return false;
+  const allowance = evidence.allowance ?? 'laps';
   const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
-  const currentConsumed = remediation ? (entry.laps ?? 0) : entry.cumulative;
-  const currentLimit = remediation
-    ? (entry.effectiveLapCap ?? defaultLimit ?? adjustment.beforeLimit)
-    : (entry.effectiveLimit ?? defaultLimit ?? adjustment.beforeLimit);
+  const growth = allowance === 'growth';
+  const currentConsumed = growth ? (ledger.growth?.added ?? 0) : remediation ? (entry.laps ?? 0) : entry.cumulative;
+  const currentLimit = growth
+    ? (ledger.effectiveGrowthCap ?? evidence.limit)
+    : remediation
+      ? (entry.effectiveLapCap ?? evidence.limit)
+      : (entry.effectiveLimit ?? defaultLimit ?? adjustment.beforeLimit);
+  // Pre-allowance plan-growth evidence was persisted with the growth count in
+  // `consumed`.  Task 1 deliberately reads it as the safe `laps` default, but
+  // the original snapshot remains a valid legacy recovery when it exactly
+  // matches the durable growth counter.
+  const legacyGrowthEvidence = !growth && remediation &&
+    evidence.consumed !== currentConsumed && ledger.growth?.added === evidence.consumed;
   // Staging supplies adjustment values from this same entry. At apply, the
   // values also reject a tampered/replayed authorization.
   return currentLimit !== undefined &&
-    evidence.consumed === currentConsumed && evidence.limit === currentLimit &&
+    (legacyGrowthEvidence || evidence.consumed === currentConsumed) && evidence.limit === currentLimit &&
     adjustment.beforeConsumed === currentConsumed && adjustment.beforeLimit === currentLimit;
 }
