@@ -66,7 +66,7 @@ describe('voidCoverageBindingForDecideChange', () => {
       kickback: { from: 'decide-change' },
     });
     expect(JSON.parse(await readFile(statePath, 'utf8'))).toMatchObject({ coverage_binding: 'stale' });
-    expect((await readFile(join(projectRoot, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)).toEqual([
+    expect((await readFile(join(projectRoot, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line))).toEqual([
       expect.objectContaining({
         type: 'coverage_binding_invalidated', paths: [adrPath], origin: 'decide-change',
       }),
