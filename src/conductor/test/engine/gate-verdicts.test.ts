@@ -8,6 +8,7 @@ import {
   readAllVerdicts,
   readVerdict,
   writeVerdict,
+  validRebaseOperationRecord,
   type GateVerdict,
 } from '../../src/engine/gate-verdicts.js';
 
@@ -126,6 +127,25 @@ describe('engine/gate-verdicts', () => {
       rebaseOperation: { ...operation, status: 'applied' },
     });
     expect((await readVerdict(dir, 'rebase'))?.rebaseOperation).toEqual({ ...operation, status: 'applied' });
+  });
+
+  it('validates optional appliedAt only when it is a finite positive number', () => {
+    const operation = {
+      id: 'rebase-operation-1',
+      status: 'applied' as const,
+      transition: { preserved: [], invalidated: [], reverified: [] },
+      replay: {
+        preRebaseHead: 'a'.repeat(40),
+        mergeBase: 'b'.repeat(40),
+        target: 'c'.repeat(40),
+        completedHead: 'd'.repeat(40),
+        expectedTree: 'e'.repeat(40),
+      },
+    };
+
+    expect(validRebaseOperationRecord({ ...operation, appliedAt: 123 })).toBe(true);
+    expect(validRebaseOperationRecord({ ...operation, appliedAt: Number.NaN })).toBe(false);
+    expect(validRebaseOperationRecord({ ...operation, appliedAt: '123' } as never)).toBe(false);
   });
 
   it('drops obsolete preservation metadata when an ordinary verdict replaces the record', async () => {
