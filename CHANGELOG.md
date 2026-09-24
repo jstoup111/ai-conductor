@@ -56,6 +56,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon FINISH no longer halts when the PR-prose pass submits its edit through the guarded `github-operation` command. ([implementation PR #2706](https://github.com/jstoup111/ai-conductor/pull/2706)).
 - build_review no longer halts when a lap re-runs on an unchanged snapshot, and the security rubric is no longer offered test-quality fields it must reject. ([implementation PR #2707](https://github.com/jstoup111/ai-conductor/pull/2707)).
 - Spec and implementation PRs again carry their issue link (`Refs`/`Closes`) and mirrored priority labels; handoff now reports a refused post-create write instead of silently dropping it. ([implementation PR #2704](https://github.com/jstoup111/ai-conductor/pull/2704)).
+- Judged gates now retain valid stamped verdicts after unrelated kickbacks instead of re-dispatching. ([implementation PR #2708](https://github.com/jstoup111/ai-conductor/pull/2708)).
 
 ## [1.4.0] - 2026-09-19
 
