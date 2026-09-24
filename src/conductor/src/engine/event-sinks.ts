@@ -29,6 +29,7 @@ export const EVENT_SINKS = {
   memory_setup: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
   plan_growth: { render: true, persist: true, audit: false, otel: false },
   coverage_binding_judged: { render: false, persist: true, audit: false, otel: false },
+  coverage_binding_amendment_judged: { render: false, persist: true, audit: false, otel: false },
   coverage_binding_disabled: { render: false, persist: true, audit: false, otel: false },
   coverage_binding_invalidated: { render: false, persist: true, audit: false, otel: false },
   config_deprecated_key: { render: false, persist: true, audit: false, otel: false },

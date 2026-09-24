@@ -26,6 +26,15 @@ check.
 Every other outcome in the criterion, including absence and no-op outcomes, still needs a check
 that requires it.
 
+## Amendment claims
+
+An amendment claim supplies a DECIDE artifact path, its `> **Amended …**` block, and every plan
+task with its `Done when` checks. Judge it independently. Return `carried` only with one or more
+issued task ids that explicitly carry the amendment's obligation. Return `not-carried` with a
+non-empty `missingObligation` when the plan omits required work. Return `no-plan-obligation` when
+the amendment creates no plan obligation. `contradictsCompleted`, when present, is an optional list
+of only issued completed task ids; do not include it otherwise.
+
 Do not read files, inspect a diff, use a transcript, or infer facts beyond the supplied pair.
 
 ## Result contract

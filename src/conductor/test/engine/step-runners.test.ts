@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:7, task:8, task:10, task:12, task:17
+// Covers: task:1, task:3, task:7, task:8, task:10, task:11, task:12, task:17
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
@@ -100,6 +100,18 @@ function coverageBindingBatchOutput(options: InvokeOptions, verdict: 'asserts' |
       ? { digest, verdict }
       : { digest, verdict, missingAssertion: 'No check requires emission.' }),
   });
+}
+
+async function writeAmendmentCoverageInputs(projectDir: string, featureDesc: string): Promise<string> {
+  const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+  await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+  await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+  await writeFile(planPath, '### Task 1: Carry amendment\n**Done when:**\n- The service preserves the amended behavior.\n');
+  await writeFile(
+    join(projectDir, '.docs', 'decisions', `architecture-review-review-${featureDesc}.md`),
+    '> **Amended 2026-09-24 by #11:** The service preserves the amended behavior.\n',
+  );
+  return planPath;
 }
 
 function adrWithDecisions(decisionIds: readonly string[]): string {
@@ -662,6 +674,90 @@ describe('DefaultStepRunner', () => {
       await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
         success: false,
         refusal: { kind: 'needs-human', reason: expect.stringContaining('The service writes an audit record.') },
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { verdict: 'carried', payload: { verdict: 'carried', taskIds: ['1'] } },
+    { verdict: 'no-plan-obligation', payload: { verdict: 'no-plan-obligation' } },
+  ] as const)('completes amendment claims judged $verdict and emits their dedicated event', async ({ verdict, payload }) => {
+    const projectDir = await mkdtemp(join(tmpdir(), `coverage-binding-amendment-${verdict}-`));
+    const featureDesc = `coverage-binding-amendment-${verdict}`;
+    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ digest }) => ({ digest, ...payload })) }), exitCode: 0 };
+    });
+    const events = new ConductorEventEmitter();
+    const observed: unknown[] = [];
+    events.on('coverage_binding_amendment_judged', (event) => { observed.push(event); });
+    const runner = new DefaultStepRunner(provider, `coverage-run-amendment-${verdict}`, projectDir, {
+      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(observed).toMatchObject([{ type: 'coverage_binding_amendment_judged', verdict }]);
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'done', entries: [{ kind: 'amendment', verdict }] });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a not-carried amendment with its artifact, text, and missing obligation', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-refusal-'));
+    const featureDesc = 'coverage-binding-amendment-refusal';
+    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ digest }) => ({ digest, verdict: 'not-carried', missingObligation: 'Add a preservation task.' })) }), exitCode: 0 };
+    });
+    const runner = new DefaultStepRunner(provider, 'coverage-run-amendment-refusal', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain('.docs/decisions/architecture-review-review-coverage-binding-amendment-refusal.md');
+      expect(result.output).toContain('The service preserves the amended behavior.');
+      expect(result.output).toContain('Add a preservation task.');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses carried amendment claims and records disabled ones as unjudged without dispatch', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-cache-'));
+    const featureDesc = 'coverage-binding-amendment-cache';
+    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ digest }) => ({ digest, verdict: 'carried', taskIds: ['1'] })) }), exitCode: 0 };
+    });
+    const enabled = new DefaultStepRunner(provider, 'coverage-run-amendment-cache', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    try {
+      await expect(enabled.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      await expect(enabled.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).toHaveBeenCalledOnce();
+
+      const disabledProvider = createMockProvider();
+      const disabled = new DefaultStepRunner(disabledProvider, 'coverage-run-amendment-disabled', projectDir, {
+        featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+      });
+      await expect(disabled.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(disabledProvider.invoke).not.toHaveBeenCalled();
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        status: 'disabled', entries: [{ kind: 'amendment', verdict: 'unjudged' }],
       });
     } finally {
       await rm(projectDir, { recursive: true, force: true });
