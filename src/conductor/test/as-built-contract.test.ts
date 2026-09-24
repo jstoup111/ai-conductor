@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import {
@@ -143,5 +143,109 @@ describe('as-built verdict contract', () => {
     expectTypeOf<Extract<Exclude<AsBuiltVerdict, { verdict: 'PLAN_GAP' }>, Record<'outcomeDelivered', unknown>>>().toEqualTypeOf<never>();
     expectTypeOf<Extract<AsBuiltVerdict, { verdict: 'BLOCKED' }>>().toHaveProperty('findings');
     expectTypeOf<Extract<Exclude<AsBuiltVerdict, { verdict: 'BLOCKED' }>, Record<'findings', unknown>>>().toEqualTypeOf<never>();
+  });
+
+  it('rejects a PLAN_GAP without its boolean outcomeDelivered flag', () => {
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'PLAN_GAP',
+      reachability: [],
+      driftNotes: [],
+      affectedOutcome: 'The sealed criterion needs an unplanned delivery path.',
+    })).toEqual({ ok: false, field: 'outcomeDelivered', requirement: 'a boolean is required' });
+  });
+
+  it('rejects findings on an APPROVED verdict', () => {
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'APPROVED',
+      reachability: [],
+      driftNotes: [],
+      findings: [],
+    })).toEqual({
+      ok: false,
+      field: 'findings',
+      requirement: 'findings are not permitted for an APPROVED verdict',
+    });
+  });
+
+  it('rejects a REMEDIABLE finding without a governing reference', () => {
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [],
+      driftNotes: [],
+      findings: [{ id: 'AB-1', class: 'REMEDIABLE', summary: 'The fix must follow an approved decision.' }],
+      violations: 'The delivery violates an approved decision.',
+      resolution: 'Apply the governing remediation.',
+    })).toEqual({
+      ok: false,
+      field: 'findings[0].reference',
+      requirement: 'a governing reference is required for a REMEDIABLE finding',
+    });
+  });
+
+  it('rejects a dotted ADR decision identifier', () => {
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [],
+      driftNotes: [],
+      findings: [{
+        id: 'AB-1',
+        class: 'REMEDIABLE',
+        reference: { kind: 'adr-decision', stem: 'approved-design', decision: '5.2' },
+        summary: 'The fix must follow an approved decision.',
+      }],
+      violations: 'The delivery violates an approved decision.',
+      resolution: 'Apply the governing remediation.',
+    })).toEqual({
+      ok: false,
+      field: 'findings[0].reference.decision',
+      requirement: 'a whole-number decision id is required',
+    });
+  });
+
+  it('rejects an unknown verdict with the admitted verdict values', () => {
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'UNDECIDED',
+      reachability: [],
+      driftNotes: [],
+    })).toEqual({
+      ok: false,
+      field: 'verdict',
+      requirement: 'one of APPROVED, APPROVED WITH DRIFT NOTES, PLAN_GAP, BLOCKED is required',
+    });
+  });
+
+  it('rejects an unknown finding class with the admitted finding classes', () => {
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [],
+      driftNotes: [],
+      findings: [{ id: 'AB-1', class: 'UNSUPPORTED', summary: 'The declared class is not part of the contract.' }],
+      violations: 'The delivery violates an approved decision.',
+      resolution: 'Apply the governing remediation.',
+    })).toEqual({
+      ok: false,
+      field: 'findings[0].class',
+      requirement: 'one of REMEDIABLE or DESIGN is required',
+    });
+  });
+
+  it('rejects an unknown top-level key with the admitted APPROVED keys', () => {
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'APPROVED',
+      reachability: [],
+      driftNotes: [],
+      unexplained: true,
+    })).toEqual({
+      ok: false,
+      field: 'unexplained',
+      requirement: 'only version, verdict, reachability, and driftNotes are permitted for an APPROVED verdict',
+    });
   });
 });

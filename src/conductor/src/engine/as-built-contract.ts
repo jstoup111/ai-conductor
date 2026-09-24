@@ -127,6 +127,10 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
   return Object.keys(value).length === keys.length && Object.keys(value).every((key) => keys.includes(key));
 }
 
+function unexpectedKey(value: Record<string, unknown>, keys: readonly string[]): string | undefined {
+  return Object.keys(value).find((key) => !keys.includes(key));
+}
+
 function nonEmptyText(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -194,6 +198,7 @@ function parseFindings(value: unknown): Parsed<readonly AsBuiltFinding[]> {
     const field = `findings[${index}]`;
     if (!record(item) || !nonEmptyText(item.id) || !nonEmptyText(item.summary)) return rejected(field, 'id and summary must be non-empty prose');
     if (item.class === 'REMEDIABLE') {
+      if (item.reference === undefined) return rejected(`${field}.reference`, 'a governing reference is required for a REMEDIABLE finding');
       if (!exactKeys(item, ['id', 'class', 'reference', 'summary'])) return rejected(field, 'a REMEDIABLE finding requires exactly id, class, reference, and summary');
       const reference = parseReference(item.reference, `${field}.reference`);
       if (!reference.ok) return reference;
@@ -229,17 +234,22 @@ export function validateAsBuiltVerdict(value: unknown): ValidateAsBuiltVerdictRe
   if (!driftNotes.ok) return driftNotes;
 
   if (value.verdict === 'APPROVED' || value.verdict === 'APPROVED WITH DRIFT NOTES') {
+    if (value.findings !== undefined) return rejected('findings', `findings are not permitted for an ${value.verdict} verdict`);
+    const unexpected = unexpectedKey(value, ['version', 'verdict', 'reachability', 'driftNotes']);
+    if (unexpected !== undefined) return rejected(unexpected, `only version, verdict, reachability, and driftNotes are permitted for an ${value.verdict} verdict`);
     if (!exactKeys(value, ['version', 'verdict', 'reachability', 'driftNotes'])) {
       return rejected('verdict', 'APPROVED verdicts permit no fields beyond version, verdict, reachability, and driftNotes');
     }
     return { ok: true, verdict: { version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict: value.verdict, reachability: reachability.value, driftNotes: driftNotes.value } };
   }
   if (value.verdict === 'PLAN_GAP') {
+    if (typeof value.outcomeDelivered !== 'boolean') return rejected('outcomeDelivered', 'a boolean is required');
+    if (!nonEmptyText(value.affectedOutcome)) return rejected('affectedOutcome', 'non-empty outcome prose is required');
+    const unexpected = unexpectedKey(value, ['version', 'verdict', 'reachability', 'driftNotes', 'outcomeDelivered', 'affectedOutcome']);
+    if (unexpected !== undefined) return rejected(unexpected, 'only version, verdict, reachability, driftNotes, outcomeDelivered, and affectedOutcome are permitted for a PLAN_GAP verdict');
     if (!exactKeys(value, ['version', 'verdict', 'reachability', 'driftNotes', 'outcomeDelivered', 'affectedOutcome'])) {
       return rejected('verdict', 'PLAN_GAP requires only version, verdict, reachability, driftNotes, outcomeDelivered, and affectedOutcome');
     }
-    if (typeof value.outcomeDelivered !== 'boolean') return rejected('outcomeDelivered', 'a boolean is required');
-    if (!nonEmptyText(value.affectedOutcome)) return rejected('affectedOutcome', 'non-empty outcome prose is required');
     return { ok: true, verdict: { version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict: 'PLAN_GAP', reachability: reachability.value, driftNotes: driftNotes.value, outcomeDelivered: value.outcomeDelivered, affectedOutcome: value.affectedOutcome } };
   }
   if (!exactKeys(value, ['version', 'verdict', 'reachability', 'driftNotes', 'findings', 'violations', 'resolution'])) {
