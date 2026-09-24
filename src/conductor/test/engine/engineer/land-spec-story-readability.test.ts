@@ -261,4 +261,23 @@ describe('landSpec accepted-story readability gate', () => {
       '',
     ].join('\n'));
   });
+
+  it('refuses Story 2 when one Given-only bullet accompanies four readable criteria', async () => {
+    await expectUnreadableStoriesRefusal([
+      '# Stories: readable stories only',
+      '',
+      '**Status:** Accepted',
+      '',
+      '## Story 2: One incomplete criterion',
+      '#### Happy Path',
+      '- Given an operator starts land, when validation begins, then the artifact is checked.',
+      '- Given the artifact is accepted, when land reads it, then the first criterion is derived.',
+      '- Given a story is complete, when land validates it, then the second criterion is derived.',
+      '- Given an incomplete artifact.',
+      '',
+      '#### Negative Paths',
+      '- Given validation finds invalid input, when it evaluates the story, then land refuses it.',
+      '',
+    ].join('\n'));
+  });
 });
