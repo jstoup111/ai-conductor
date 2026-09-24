@@ -25,7 +25,7 @@ As an operator, I want a conflict confined to test code to be settled by the swe
 ### Done When
 - [ ] A sweep run over a fixture shaped like pull request #2574 (one replay commit touching one test file, upstream rewrote the same lines) ends with outcome refreshed and a lease-protected push.
 - [ ] The daemon log line for that run reads a tier-2 outcome other than conflict_halt.
-- [ ] Each negative path ends with zero push invocations reaching the git boundary.
+- [ ] Each negative path ends with zero push invocations reaching the git boundary, except the lease-rejection path, which issues exactly one lease-protected push (`--force-with-lease`) that the remote rejects, followed by no retry and no unsafe force push.
 
 ## Story 2: Conflicts touching non-test code keep today's stop
 

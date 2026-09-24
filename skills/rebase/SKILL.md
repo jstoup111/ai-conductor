@@ -223,21 +223,46 @@ reached, still within this single invocation.
   The conductor's engine guards (FR-8 not-current / FR-9 dropped-commit) will
   reject it, but do not attempt it in the first place.
 - **NEVER run `git rebase --skip`** — this discards the conflicting commit
-  entirely, causing data loss. The engine guards reject this too; do not attempt it.
+  entirely, causing data loss. The sole exception is a declared-superseded commit
+  under **Sweep Test-Only Judgement** below.
 - **NEVER run `git push --force` or any destructive branch operation** during
   rebase resolution.
 - **NEVER invoke this skill mid-build** — only the conductor's finish-time rebase
-  step or an operator `/rebase` invocation is sanctioned. Implementation agents
+  step, the engine-dispatched mergeable sweep
+  (adr-2026-07-04-widen-rebase-resolution-dispatch-to-sweep), or an operator
+  `/rebase` invocation is sanctioned. Implementation agents
   running during BUILD must not call this skill; doing so violates the
   harness "no ad-hoc rebase mid-build" rule.
 
 ### 8. Result Contract
 
+### Sweep Test-Only Judgement
+
+This exception applies only when the engine dispatch prompt explicitly says it is
+in force. Full replay inspection, staged-change attribution, and the
+post-continue recheck above remain mandatory. The resolver may keep the source,
+merge both sides, or keep upstream by declaring that one replayed test-only
+commit is superseded. Only that declared-superseded commit may use `git rebase
+--skip`.
+
+On a successful sweep-judgement resolution, the final JSON line is:
+
+```json
+{"resolved":true,"verdict":{"choice":"superseded"|"merged"|"source","rationale":"why","superseded":["replayed-sha"]}}
+```
+
+If no safe choice can be made, return the ordinary unresolved result with the
+specific competing intents and missing decision.
+
 The conductor's `DefaultStepRunner` parses the last JSON object emitted to
 stdout. This contract is **load-bearing** — the conductor decides whether to
 retry or HALT based on it.
 
-Print exactly one of these as the **final line of output**, on its own line:
+In sweep judgement mode (the dispatch prompt says the exception is in force),
+a successful resolution ends with the verdict line above, and an unresolved one
+ends with the ordinary `{"resolved": false, ...}` line below. In every other
+(strict) mode, print exactly one of these as the **final line of output**, on its
+own line:
 
 ```
 {"resolved": true}
@@ -258,7 +283,8 @@ intentions, and the missing decision. If required context is unavailable, say
 {"resolved": false, "reason": "replay commit abc1234; src/auth.ts lines 41-58; source intends session renewal; upstream intends token removal; missing decision: whether renewal remains supported"}
 ```
 
-No other output format is accepted. Do not emit JSON anywhere else in your
+No other output format is accepted; the verdict line is accepted only in sweep
+judgement mode. Do not emit JSON anywhere else in your
 output; the runner takes the **last** JSON line.
 
 ## Verification
@@ -282,6 +308,6 @@ output; the runner takes the **last** JSON line.
 - [ ] A post-continue mismatch emitted `{"resolved": false}` and never `{"resolved": true}`
 - [ ] A subsequent conflict started a fresh source-intent and staged-replay validation cycle
 - [ ] Final replay commit inspected and reconciled before reporting `{"resolved": true}`
-- [ ] `git rebase --abort` and `git rebase --skip` were NOT used
-- [ ] Final line of stdout is exactly `{"resolved": true}` or `{"resolved": false, "reason": "..."}`
+- [ ] `git rebase --abort` was NOT used; `git rebase --skip` was NOT used, except (sweep judgement mode only) for the one declared-superseded commit
+- [ ] Final line of stdout is exactly `{"resolved": true}` or `{"resolved": false, "reason": "..."}`, or in sweep judgement mode the verdict line
 - [ ] If `{"resolved": true}`: `git status` shows clean working tree on rebased branch

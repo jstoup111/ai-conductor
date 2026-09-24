@@ -270,6 +270,8 @@ export interface PrMergeState {
   state: string;
   mergeable: string;
   hasFailingOrPendingChecks: boolean;
+  /** Whether the PR body contains the needs-remediation halt marker. */
+  hasHaltBodyMarker?: boolean;
   labels: string[];
   checksOutcome: 'failed' | 'pending' | 'green' | 'none';
   statusCheckRollup?: PrCheckRollupEntry[];
@@ -291,6 +293,7 @@ const ERROR_SENTINEL: PrMergeState = {
   state: 'UNKNOWN',
   mergeable: 'UNKNOWN',
   hasFailingOrPendingChecks: true,
+  hasHaltBodyMarker: false,
   labels: [],
   checksOutcome: 'none',
 };
@@ -304,6 +307,7 @@ const NOTFOUND_SENTINEL: PrMergeState = {
   state: 'NOTFOUND',
   mergeable: 'UNKNOWN',
   hasFailingOrPendingChecks: true,
+  hasHaltBodyMarker: false,
   labels: [],
   checksOutcome: 'none',
 };
@@ -433,6 +437,7 @@ export function classifyChecksOutcome(
 interface GhPrViewJson {
   state?: string;
   mergeable?: string;
+  body?: string | null;
   statusCheckRollup?: Array<{ status?: string | null; conclusion?: string | null }> | null;
   labels?: Array<{ name?: string }> | null;
   isDraft?: boolean | null;
@@ -525,7 +530,7 @@ export async function prMergeState(
   log?: (msg: string) => void,
 ): Promise<PrMergeState> {
   try {
-    const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'state,mergeable,statusCheckRollup,labels,isDraft']);
+    const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'state,mergeable,statusCheckRollup,labels,isDraft,body']);
     let parsed: unknown;
     try {
       parsed = JSON.parse(stdout);
@@ -557,6 +562,7 @@ export async function prMergeState(
       state,
       mergeable,
       hasFailingOrPendingChecks,
+      hasHaltBodyMarker: typeof data.body === 'string' && data.body.includes(NEEDS_REMEDIATION_BODY_MARKER),
       labels,
       checksOutcome,
       statusCheckRollup: checks,
@@ -850,6 +856,27 @@ export async function upsertComment(
 
   // No editable marked comment — create one carrying the marker.
   return await comment(runGh, cwd, prUrl, taggedBody, log);
+}
+
+/** Marker for the single, updatable successful supersession audit comment. */
+export const SUPERSESSION_AUDIT_MARKER = '<!-- ai-conductor:supersession-audit -->';
+
+/** Best-effort publication record; an audit failure never undoes a push. */
+export async function postSupersessionAudit(
+  runGh: PrRunner,
+  cwd: string,
+  prUrl: string,
+  audit: { choice: string; rationale: string; superseded: string[]; suiteCommand: string },
+  log?: (msg: string) => void,
+): Promise<void> {
+  await upsertComment(runGh, cwd, prUrl, SUPERSESSION_AUDIT_MARKER, [
+    '## Supersession audit',
+    '',
+    `**Choice:** ${audit.choice}`,
+    `**Rationale:** ${audit.rationale}`,
+    `**Superseded commits:** ${audit.superseded.length ? audit.superseded.join(', ') : '(none)'}`,
+    `**Verification:** \`${audit.suiteCommand}\` (exit 0)`,
+  ].join('\n'), log);
 }
 
 /**

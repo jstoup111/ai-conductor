@@ -150,6 +150,8 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   // if it reaches .pipeline/events.jsonl — its sibling rebase_gate_invalidated
   // is already persisted, so an unpersisted preservation reads as silence.
   'rebase_gate_preserved',
+  'rebase_citation_residue',
+  'rebase_supersession_verdict',
   'rebase_untracked_quarantined',
   'repair_boundary_translated',
   'operator_rewind',
@@ -182,7 +184,6 @@ const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
   'rebase_noop',
   'rebase_mergeable_skip',
   'rebase_gate_reverified',
-  'rebase_citation_residue',
   'rebase_resolution_attempt',
   'rebase_resolution_succeeded',
   'rebase_resolution_failed',

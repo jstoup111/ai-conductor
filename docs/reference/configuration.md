@@ -1115,6 +1115,19 @@ Draft PRs are never dispatched for auto-resolution. A CONFLICTING draft is logge
 `skipping resolve for <url> (draft PR)` and left alone; its `mergeable` label handling is
 unchanged, and no attempt counter is burned.
 
+For a non-draft conflicting PR, the sweep may dispatch the `rebase` resolver after its
+deterministic resolver leaves conflicts. The supersession exception is available only when every
+remaining conflict path is test-only. In that narrow case the resolver may declare one or more
+replayed test-only commits superseded; the engine rejects an empty rationale, an unknown choice,
+a SHA that was not replayed, or a supersession declaration for a mixed conflict set. It then runs
+the configured suite and the existing preservation checks before the lease-protected push. Any
+resolver, guard, suite, or push failure leaves the PR unrefreshed and escalates it for remediation.
+Finish-time and re-kick rebases never enable this exception.
+
+When a `needs-remediation` label was recorded specifically for a prior merge conflict, a later
+MERGEABLE sweep removes it only if the PR has no halt-body marker. The sweep makes at most three
+removal attempts; other `needs-remediation` causes remain sticky.
+
 
 ## conflict_check
 

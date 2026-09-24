@@ -734,9 +734,13 @@ the aggregate gate. Scoped success alone never satisfies that gate.
   list, and the conflicted files.
 - **Outputs** — no file artifact. Its output *is* the contract: the last stdout JSON line, either
   `{"resolved": true}` or `{"resolved": false, "reason": "..."}`, parsed by the step runner.
+  When an engine-dispatched mergeable sweep explicitly enables **Sweep Test-Only Judgement**, a
+  successful result instead includes a verdict with `choice`, `rationale`, and `superseded` replay
+  SHAs. That exception is unavailable to finish-time and re-kick rebase resolution.
 - **Gate role** — blocking through the structural step. An unresolved result or an unsafe hunk retries
-  up to a cap and then HALTs. Non-negotiable prohibitions: never `--abort`, never `--skip`, never
-  `push --force`, never invoke mid-build.
+  up to a cap and then HALTs. Non-negotiable prohibitions: never `--abort`, never `push --force`,
+  never invoke mid-build. `--skip` remains prohibited except for a declared-superseded replayed
+  test-only commit while that sweep-only judgement mode is enabled.
 - **Replay verification** — before editing, the skill captures the replay source commit's and
   upstream's intent as an evidence ledger, and HALTs at the first semantic ambiguity rather than
   guessing. Before `git rebase --continue`, it reviews the complete staged diff (not just the

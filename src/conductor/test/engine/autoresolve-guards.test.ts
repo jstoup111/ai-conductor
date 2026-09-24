@@ -81,7 +81,49 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
 
     const autoresolve = await import('../../src/engine/autoresolve.js');
     const result = await autoresolve.runAcceptanceGuards(git, 'main', ['feat: change a']);
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, excused: [] });
+  });
+
+  it('distinguishes legacy preservation from judgement mode for an undeclared upstream-superseded commit', async () => {
+    // Isolate this history from the conflicting setup branch: main already
+    // carries the feature change, so replay legitimately drops its subject.
+    await g(['checkout', '-q', '-b', 'supersession', 'main']);
+    await writeFile(join(repo, 'superseded.ts'), 'same upstream intent\n');
+    await g(['add', 'superseded.ts']);
+    await g(['commit', '-q', '-m', 'feat: upstream-equivalent test change']);
+
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'superseded.ts'), 'same upstream intent\n');
+    await g(['add', 'superseded.ts']);
+    await g(['commit', '-q', '-m', 'main: landed equivalent test change']);
+    await g(['checkout', '-q', 'supersession']);
+    await g(['reset', '-q', '--hard', 'main']);
+
+    const git: GitRunner = makeGitRunner(repo);
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    const subject = 'feat: upstream-equivalent test change';
+
+    // Omitted declarations are legacy callers: preserve the established
+    // supersededByBase exception exactly as before.
+    await expect(autoresolve.runAcceptanceGuards(git, 'main', [subject]))
+      .resolves.toEqual({ ok: true, excused: [] });
+
+    // An explicitly empty judgement is authoritative: no undeclared drop is
+    // permitted, even when the old heuristic would recognize its intent.
+    await expect(autoresolve.runAcceptanceGuards(git, 'main', [subject], []))
+      .resolves.toMatchObject({
+        ok: false,
+        guard: 'featureCommitsPreserved',
+        reason: expect.stringContaining(subject),
+      });
+
+    // Adding a declaration for a different replay must not weaken that rule.
+    await expect(autoresolve.runAcceptanceGuards(git, 'main', [subject], ['0'.repeat(40)]))
+      .resolves.toMatchObject({
+        ok: false,
+        guard: 'featureCommitsPreserved',
+        reason: expect.stringContaining(subject),
+      });
   });
 
   it('rejects a resolution that --skip-dropped the feature commit, naming featureCommitsPreserved (FR-9 negative)', async () => {
@@ -109,6 +151,70 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
       reason: expect.stringContaining('feat: change a'),
     });
     if (!result.ok) expect(result.reason).not.toContain('feat: retained sibling');
+  });
+
+  it('refuses a declared runtime-path drop instead of falling through to supersession-by-base', async () => {
+    const git: GitRunner = makeGitRunner(repo);
+    const sha = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await g(['rebase', 'main']).catch(() => undefined);
+    await gc(['rebase', '--skip']);
+
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    const result = await autoresolve.runAcceptanceGuards(git, 'main', ['feat: change a'], [sha]);
+    expect(result).toMatchObject({
+      ok: false,
+      guard: 'featureCommitsPreserved',
+      reason: expect.stringContaining('declared superseded commit touches a non-test path'),
+    });
+  });
+
+  it('refuses a declared non-test commit whose subject survived the rebase (all-declared case)', async () => {
+    const git: GitRunner = makeGitRunner(repo);
+    await g(['checkout', '-q', '-b', 'surviving-declared', 'main']);
+    await writeFile(join(repo, 'runtime-survivor.ts'), 'runtime change\n');
+    await g(['add', 'runtime-survivor.ts']);
+    await g(['commit', '-q', '-m', 'feat: runtime survivor']);
+    const sha = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    const result = await autoresolve.runAcceptanceGuards(git, 'main', ['feat: runtime survivor'], [sha]);
+    expect(result).toMatchObject({
+      ok: false,
+      guard: 'featureCommitsPreserved',
+      reason: expect.stringContaining('declared superseded commit touches a non-test path'),
+    });
+  });
+
+  it('names the declared test-only reason and touched paths for an excused drop', async () => {
+    await g(['checkout', '-q', '-b', 'declared-test-drop', 'main']);
+    await writeFile(join(repo, 'declared-drop.test.ts'), 'same upstream intent\n');
+    await g(['add', 'declared-drop.test.ts']);
+    await g(['commit', '-q', '-m', 'test: declared superseded drop']);
+    const sha = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'declared-drop.test.ts'), 'same upstream intent\n');
+    await g(['add', 'declared-drop.test.ts']);
+    await g(['commit', '-q', '-m', 'main: land declared equivalent test change']);
+    await g(['checkout', '-q', 'declared-test-drop']);
+    await g(['rebase', 'main']);
+
+    const git: GitRunner = makeGitRunner(repo);
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    await expect(autoresolve.runAcceptanceGuards(
+      git,
+      'main',
+      ['test: declared superseded drop'],
+      [sha],
+    )).resolves.toEqual({
+      ok: true,
+      excused: [{
+        sha,
+        subject: 'test: declared superseded drop',
+        reason: 'declared-superseded-test-only',
+        paths: ['declared-drop.test.ts'],
+      }],
+    });
   });
 
   it('rejects when the base advanced again mid-resolution, naming isBranchCurrent (FR-8 negative)', async () => {

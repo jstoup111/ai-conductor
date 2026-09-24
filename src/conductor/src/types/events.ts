@@ -1360,6 +1360,14 @@ export type ConductorEvent =
         reason: string;
       }>;
     }
+  | {
+      /** A judged supersession was suite-verified and published. */
+      type: 'rebase_supersession_verdict';
+      choice: 'superseded' | 'merged' | 'source';
+      rationale: string;
+      superseded: string[];
+      verification: { command: string; exitCode: 0 };
+    }
   // ── Rebase auto-resolution lifecycle (Phase 9 / rebase-resolution) ──
   | {
       /** One attempt at auto-resolving a conflict; index is 1-based, cap is the total budget. */

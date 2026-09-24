@@ -190,6 +190,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   rebase_untracked_quarantined: 'not-audited-by-design',
   repair_boundary_translated: 'not-audited-by-design',
   rebase_citation_residue: 'not-audited-by-design',
+  rebase_supersession_verdict: 'not-audited-by-design',
   rebase_resolution_attempt: 'not-audited-by-design',
   rebase_resolution_succeeded: 'not-audited-by-design',
   rebase_resolution_failed: 'not-audited-by-design',
@@ -666,6 +667,10 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   rebase_citation_residue: {
     type: 'rebase_citation_residue',
     residue: [{ sha: 'abc123', citingTaskIds: ['1'], citingObligationIds: [], reason: 'no patch-id match' }],
+  },
+  rebase_supersession_verdict: {
+    type: 'rebase_supersession_verdict', choice: 'superseded', rationale: 'covered upstream', superseded: ['abc123'],
+    verification: { command: 'npm test', exitCode: 0 },
   },
   rebase_resolution_attempt: { type: 'rebase_resolution_attempt', index: 1, cap: 3 },
   rebase_resolution_succeeded: { type: 'rebase_resolution_succeeded' },

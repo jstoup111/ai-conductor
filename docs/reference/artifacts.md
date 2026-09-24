@@ -730,7 +730,12 @@ those:
 `halt_marker_write_failed`, `halt_record_written`, `halt_record_write_failed`, `halt_record_push_failed`,
 `shipment_evidence_refused`, `step_status_write_refused`, `rebase_changed`, `rebase_gate_preserved`,
 `rebase_gate_invalidated`, `rebase_conflict_halt`, `unattributed_progress`, `attribution_divergence`,
-and `acceptance_red`.
+`acceptance_red`, `rebase_citation_residue`, and `rebase_supersession_verdict`.
+
+`rebase_supersession_verdict` records a successful mergeable-sweep test-only judgement: its choice,
+rationale, and declared superseded replay SHAs. `rebase_citation_residue` records the corresponding
+preservation-guard excusals. Both persist in the affected feature worktree's event ledger; neither
+is emitted by a finish-time or re-kick rebase, where supersession judgement is unavailable.
 
 `contained_live_checkout_drift` and `self_host_containment_verdict` are the containment boundary's
 closure events (`live-containment.ts`): the drift event names a concurrent operator's live-checkout
