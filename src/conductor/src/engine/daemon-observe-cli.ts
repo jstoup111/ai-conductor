@@ -28,8 +28,7 @@ import { loadConfig } from './config.js';
 import { readGrowth, readKickbackLedger } from './kickback-ledger.js';
 import { renderKickbackBudgetView } from './kickback-budget-view.js';
 import {
-  readLastExit,
-  readLastMemorySample,
+  readDaemonTimeline,
   type DaemonExitRecord,
   type DaemonMemorySample,
 } from './daemon-ledger-readers.js';
@@ -563,19 +562,16 @@ export async function runDaemonStatus(
   const rows: DaemonStatusRow[] = [];
   for (const record of records) {
     const row = await computeStatusRow(record, deps.kill, deps.hasSessionProbe, deps.paneDeadProbe);
-    const [exitResult, memoryResult] = await Promise.all([
-      (row.state === 'dead-pane' || row.liveness === 'stale') && row.pid !== undefined
-        ? readLastExit(record.path, row.pid)
-        : Promise.resolve({ event: null, skipped: 0 }),
-      readLastMemorySample(record.path),
-    ]);
-    if ('event' in exitResult) {
-      if (exitResult.event) row.lastExit = exitResult.event;
-      row.skippedUnparseable = exitResult.skipped;
-    }
-    if ('event' in memoryResult) {
-      if (memoryResult.event) row.lastMemorySample = memoryResult.event;
-      row.skippedUnparseable = (row.skippedUnparseable ?? 0) + memoryResult.skipped;
+    const timeline = await readDaemonTimeline(record.path);
+    if ('event' in timeline) {
+      const newest = [...(timeline.event ?? [])].reverse();
+      if ((row.state === 'dead-pane' || row.liveness === 'stale') && row.pid !== undefined) {
+        const exit = newest.find((entry): entry is DaemonExitRecord => entry.type === 'daemon_exited' && entry.pid === row.pid);
+        if (exit) row.lastExit = exit;
+      }
+      const sample = newest.find((entry): entry is DaemonMemorySample => entry.type === 'daemon_memory_sample');
+      if (sample) row.lastMemorySample = sample;
+      row.skippedUnparseable = timeline.skipped;
     }
     rows.push(row);
     out(formatStatusRow(row));

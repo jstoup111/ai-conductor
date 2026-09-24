@@ -433,6 +433,60 @@ describe('engine/daemon-observe-cli', () => {
       expect(out[0]).toMatch(/⚠ session-up\/process-dead.*killed by SIGKILL at 2026-09-23T12:00:00.000Z/);
     });
 
+    it('uses timestamp order rather than exit-ledger append order for a dead pane exit cause', async () => {
+      const repo = join(root, 'timestamp-ordered-exit');
+      await mkdir(join(repo, '.daemon'), { recursive: true });
+      await writePidfile(repo, { pid: 42 });
+      await writeFile(
+        join(repo, '.daemon', 'exit-events.jsonl'),
+        [
+          { type: 'daemon_exited', pid: 42, code: null, signal: 'SIGKILL', at: '2026-09-23T12:02:00.000Z' },
+          { type: 'daemon_exited', pid: 42, code: 1, signal: null, at: '2026-09-23T12:01:00.000Z' },
+        ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+        'utf8',
+      );
+      const out: string[] = [];
+
+      await runDaemonStatus({
+        registryPath: await registry([record('timestamp-ordered-exit', repo)]),
+        kill: ALIVE,
+        out: (line) => out.push(line),
+        hasSessionProbe: () => true,
+        paneDeadProbe: () => true,
+      });
+
+      expect(out[0]).toContain('killed by SIGKILL at 2026-09-23T12:02:00.000Z');
+      expect(out[0]).not.toContain('exited 1 at 2026-09-23T12:01:00.000Z');
+    });
+
+    it('renders exit and memory records selected from the merged timeline', async () => {
+      const repo = join(root, 'merged-timeline');
+      await mkdir(join(repo, '.daemon'), { recursive: true });
+      await writePidfile(repo, { pid: 46 });
+      await writeFile(
+        join(repo, '.daemon', 'exit-events.jsonl'),
+        JSON.stringify({ type: 'daemon_exited', pid: 46, code: 9, signal: null, at: '2026-09-23T12:03:00.000Z' }) + '\n',
+        'utf8',
+      );
+      await writeFile(
+        join(repo, '.daemon', 'events.jsonl'),
+        JSON.stringify({ type: 'daemon_memory_sample', rss: 256 * 1024 * 1024, ts: '2026-09-23T12:04:00.000Z' }) + '\n',
+        'utf8',
+      );
+      const out: string[] = [];
+
+      await runDaemonStatus({
+        registryPath: await registry([record('merged-timeline', repo)]),
+        kill: ALIVE,
+        out: (line) => out.push(line),
+        hasSessionProbe: () => true,
+        paneDeadProbe: () => true,
+      });
+
+      expect(out[0]).toContain('exited 9 at 2026-09-23T12:03:00.000Z');
+      expect(out[0]).toContain('mem 256 MB at 2026-09-23T12:04:00.000Z');
+    });
+
     it('renders the latest memory sample for a healthy daemon without an exit cause', async () => {
       const repo = join(root, 'healthy-memory');
       await mkdir(join(repo, '.daemon'), { recursive: true });
