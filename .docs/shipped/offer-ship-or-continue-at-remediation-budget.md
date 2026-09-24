@@ -4,6 +4,12 @@ spec_hash: eaae009a290f5deccbe99dc0f11275f1e8ddba03a1b84dfb37d5ee328b8213ea
 pr: https://github.com/jstoup111/ai-conductor/pull/2719
 shipped: 2026-09-24
 engine_version: 20260924T134314Z-2bce17700f0b
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "docs/runbooks/stalled-or-stuck-feature.md:565 — unplanned runbook paragraph routing plan-growth halts to raise and reserving reset for lap evidence"
+    accepted: true
 ---
 
 ## Cost
