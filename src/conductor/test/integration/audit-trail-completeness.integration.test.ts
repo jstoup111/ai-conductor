@@ -69,6 +69,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   setup_repair: 'not-audited-by-design',
   coverage_binding_judged: 'not-audited-by-design',
   coverage_binding_disabled: 'not-audited-by-design',
+  coverage_binding_invalidated: 'not-audited-by-design',
   config_deprecated_key: 'not-audited-by-design',
   build_review_read_only_capability: 'not-audited-by-design',
   contained_live_checkout_drift: 'not-audited-by-design',
@@ -273,6 +274,9 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     taskIds: ['1'],
   },
   coverage_binding_disabled: { type: 'coverage_binding_disabled', step: 'coverage_binding' },
+  coverage_binding_invalidated: {
+    type: 'coverage_binding_invalidated', paths: ['.docs/decisions/adr-governing.md'], origin: 'decide-change',
+  },
   config_deprecated_key: {
     type: 'config_deprecated_key',
     key: 'build_review.rubrics.scope',
