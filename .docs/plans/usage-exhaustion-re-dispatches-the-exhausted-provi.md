@@ -87,6 +87,7 @@ Sequencing rationale: configuration and the availability module are independent 
 - resolveProviderCandidates returns the configured global list unchanged when the policy disallows substitution and the step declares no selection of its own
 - with the policy unset, resolveProviderCandidates returns the union of step selection and configured providers, byte-identical to the pre-change result for the same inputs
 - a policy set for one step narrows only that step, asserted by resolving two steps where one sets the policy and the other does not, with each scope governing its own step
+- with substitution disallowed at the global scope and permitted for exactly one step, resolveProviderCandidates returns the permitted union for that step while every other step resolves to the global disallowed result, asserted over that exact configuration with neither scope silently overriding the other
 
 **Files likely touched:**
 - src/conductor/src/engine/provider-selection.ts — narrow the union when the policy disallows substitution
@@ -130,6 +131,7 @@ Sequencing rationale: configuration and the availability module are independent 
 - the later of two competing deadlines for one provider governs its window, asserted by recording an earlier deadline second
 - a deadline at or before the injected now leaves the provider admitted rather than suppressed
 - the store exposes no permanent-unavailability state and never reorders providers, asserted after repeated suppression and expiry cycles
+- with one provider suppressed, the resolved candidate list keeps the same providers in the same order as the unsuppressed resolution and differs only in that provider's admission, asserted by comparing both resolutions
 
 **Files likely touched:**
 - src/conductor/src/engine/provider-availability.ts — new module holding suppression windows keyed by provider
@@ -305,7 +307,7 @@ Sequencing rationale: configuration and the availability module are independent 
 5. Commit with message: "feat(provider): expire suppression windows automatically"
 
 **Done when:**
-- advancing the injected clock past a suppression deadline admits the provider again with no operator action
+- advancing the injected clock past a suppression deadline admits the provider again with no operator action, and the next dispatch invokes that provider, asserted on the injected provider invoker
 - advancing the injected clock past the bounded default interval admits a provider suppressed with no parsed deadline
 - a provider re-admitted after expiry and exhausted again receives a fresh window rather than an extension of the previous one
 - two admission evaluations at nearly the same moment just after a deadline both observe the provider admitted
