@@ -56,6 +56,47 @@ the *cause* — shared credential material — remained.
    be proven against the actual installed CLI in the test suite (per
    feedback_injected_runner_needs_real_binary_smoke) before the copy path is deleted.
 
+> **Amended 2026-09-24 by #2737:** The Consequences scope note deferred extending daemon-token
+> auth beyond self-host builds as "a future decision". This amendment makes that decision for one
+> consumer only — the contained Claude `build_review` reviewer (adr-2026-09-10-portable-build-review-policy
+> D5), whose scratch HOME and CLAUDE_CONFIG_DIR hide the operator login that ordinary non-self-host
+> steps read in place, so on non-self-host projects it was never authenticated. Every daemon already
+> holds a daemon build token in the default mode: `resolveSelfHostConfig` resolves an absent
+> `build_auth` block to `daemon-token`, and the daemon-level gate of
+> adr-2026-07-22-daemon-level-missing-credential-gate parks dispatch until that token is readable, for
+> every project. Decisions 1–5 are unchanged, including Decision 2: no operator credential file is
+> read for, copied into, or mounted into a sandbox or review scratch.
+>
+> 6. **Contained-reviewer credential follows the resolved build-auth mode.** The engine resolves the
+>    contained Claude reviewer's credential from the same resolved `build_auth` mode the daemon gate
+>    uses, on self-host and non-self-host projects alike. In `daemon-token` mode (including an absent
+>    block) the reviewer receives the daemon build token as `CLAUDE_CODE_OAUTH_TOKEN`. In `api-key`
+>    mode it relies on the ambient `ANTHROPIC_API_KEY` the review allowlist already admits. The
+>    operator's stored Claude login is never read for a reviewer, and a missing credential never falls
+>    back to another source. Codex reviewers keep their existing seeded-login path; non-contained steps
+>    are untouched.
+> 7. **Exactly one value crosses the boundary.** The resolved credential enters the contained reviewer
+>    solely through the provider env overlay, where the engine-owned value overrides any inherited one.
+>    No credential file, refresh token, or host config directory is copied or mounted into review
+>    scratch. The daemon token is a separately minted, non-rotating grant, so the reviewer cannot
+>    disturb the operator's interactive login. This is the deliberate re-supply
+>    adr-2026-08-04-live-tier-provisions-its-own-provider-home distinguishes from ambient inheritance;
+>    the review allowlist, mount set, and two-sided probes are unchanged.
+> 8. **Nothing usable refuses before any attempt.** When the resolved mode's credential is missing,
+>    empty, or unreadable at member preparation — an interactive run without a minted token, or a
+>    token removed after the daemon gate passed — the member is refused before the first provider
+>    attempt with the closed cause of adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane D2.3.
+>    The refusal names the mode, the credential path or variable and its state, and the shared
+>    remediation message of adr-2026-07-22-daemon-level-missing-credential-gate Decision 3, never a
+>    credential value. Decision 5's real-binary smoke already proves the daemon token authenticates a
+>    headless `claude -p` from a fresh CLAUDE_CONFIG_DIR; no new credential source is introduced.
+>
+> Rescinded before merge: an earlier draft of this amendment also read the access token of the
+> operator's stored login (with a host-side CLI refresh near expiry) when no daemon token was
+> configured. It was dropped once the daemon gate above showed every daemon run already holds a
+> daemon token; reading operator OAuth would have re-coupled the grants Decision 2 separated, and it
+> rested on an unverified claim that a login access token authenticates via the env variable.
+
 ## Evidence (verify-claims ledger)
 
 - `claude setup-token` exists and is subscription-scoped — **verified**: CLI 2.1.202

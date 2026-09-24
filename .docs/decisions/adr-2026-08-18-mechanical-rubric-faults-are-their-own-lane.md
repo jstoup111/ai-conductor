@@ -289,6 +289,21 @@ already exists and is reused; additive fields follow `adr-2026-07-26-event-sink-
 > producer for build_review and are removed from the mapping in the same change, so the mapping stays
 > total.
 
+> **Amended 2026-09-24 by #2737:** adr-2026-07-07-daemon-owned-build-credential Decision 8 refuses a
+> contained Claude reviewer that has no usable credential. The lane must name that cause, and D4's
+> re-run allowance buys nothing for it: the condition reproduces on every lap until a human acts.
+>
+> **D2.3 — One closed cause for an unavailable reviewer credential.** `reviewer-credential-unavailable`
+> is the cause when the credential of the resolved build-auth mode is missing, empty, or
+> unreadable when a contained Claude member is prepared. It is raised before any provider attempt, carries a bounded `detail` naming the mode, the
+> credential path or variable, and its state, and never carries a credential value.
+>
+> **D3.2 — It follows D3.1, not D3/D4.** Like `projection-oversized`, the cause is deterministic for
+> the lap: it is charged once, never retried, does not bump D4's mechanical-fault counter, and
+> routes directly to D5's `needs-human` HALT whose body names the cause, the credential and its state, and the
+> remediation. It publishes no finding, accepts nothing, and manufactures no PASS; D6's
+> reduced-coverage record remains the operator's attributed way past it for a custom member.
+
 ## Alternatives considered
 
 - **Amend `adr-2026-08-13` so `accept` clears an exhausted mechanical fault** (the single-verb form of
