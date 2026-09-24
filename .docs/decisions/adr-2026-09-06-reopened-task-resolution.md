@@ -37,6 +37,17 @@ The operator selected shared semantics for explicitly reopened tasks, confirmed 
 9. Preserve existing remediation eligibility, consolidated manual_test behavior, gate ownership, budgets, and plan-growth accounting. Diagnose empty remediation output, missing/unresolvable ownership, failed restaging/state persistence, and truly already-resolved emitted work separately. Emit observations through the existing ConductorEvent spine with source and task/finding context.
 
 
+> **Amended 2026-09-23 by #1700:** `coverage_binding` becomes an admitted repair source for the
+> narrow reopen that `adr-2026-08-31-coverage-binding-judge-step` D19 defines; every other decision
+> above is unchanged.
+>
+> 10. A `coverage_binding` reopen admits an obligation with source authority `coverage_binding`,
+> the claim digest as finding id, and the bound completed task ids, through the same admission,
+> idempotent replay, and restage path as existing-task remediation. It is charged to its own
+> ledger key `gates.coverage_binding` under the engine's default per-gate lap cap (no new config
+> key), never to another gate's allowance. For decision 8, its governing review is the feature's next `build_review` lap;
+> `coverage_binding` does not re-review repaired code.
+
 ## Architectural Alignment
 
 This is a durable state-transition decision, so an ADR is warranted even at Medium tier. No existing ADR covers a current repair obligation spanning resolver, reconstruction, task close, and restart. The July 23 trailer-union ADR continues to own the shared resolution/authority split; its bounded freshness exception and the July 13 no-op guard qualification are amended beside their original clauses in this same DECIDE change.
