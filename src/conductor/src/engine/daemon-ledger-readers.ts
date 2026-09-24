@@ -121,10 +121,6 @@ export function readLastExit(root: string, pid: number): Promise<DaemonLedgerRea
   );
 }
 
-export function readLastMemorySample(root: string): Promise<DaemonLedgerReadResult<DaemonMemorySample>> {
-  return readLastMatching(join(root, '.daemon', 'events.jsonl'), daemonMemorySample, (sample) => sample.ts);
-}
-
 /** Read both daemon ledgers as one timestamp-ordered diagnostic timeline. */
 export async function readDaemonTimeline(root: string): Promise<DaemonLedgerReadResult<DaemonTimelineRecord[]>> {
   const [exits, samples] = await Promise.all([

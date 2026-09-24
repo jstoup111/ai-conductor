@@ -3,7 +3,7 @@ import { describe, expect, it, afterEach } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readDaemonTimeline, readLastExit, readLastMemorySample } from '../../src/engine/daemon-ledger-readers.js';
+import { readDaemonTimeline, readLastExit } from '../../src/engine/daemon-ledger-readers.js';
 
 const roots: string[] = [];
 
@@ -24,7 +24,9 @@ describe('daemon ledger readers', () => {
       'utf8',
     );
 
-    await expect(readLastMemorySample(root)).resolves.toEqual({ event: latest, skipped: 0 });
+    const timeline = await readDaemonTimeline(root);
+    expect(timeline).toMatchObject({ skipped: 0 });
+    if ('event' in timeline) expect(timeline.event?.at(-1)).toEqual(latest);
   });
 
   it('returns only the newest exit record for the requested pid', async () => {
@@ -68,7 +70,7 @@ describe('daemon ledger readers', () => {
     await expect(readDaemonTimeline(root)).resolves.toEqual({ event: [early, exit, late], skipped: 1 });
   });
 
-  it('skips malformed lines while retaining the newest valid event', async () => {
+  it('skips malformed lines while retaining valid memory samples', async () => {
     const root = await mkdtemp(join(tmpdir(), 'daemon-ledger-readers-'));
     roots.push(root);
     await mkdir(join(root, '.daemon'));
@@ -79,7 +81,10 @@ describe('daemon ledger readers', () => {
       'utf8',
     );
 
-    await expect(readLastMemorySample(root)).resolves.toEqual({ event: latest, skipped: 1 });
+    await expect(readDaemonTimeline(root)).resolves.toEqual({
+      event: [{ type: 'daemon_memory_sample', rss: 100, pid: 1 }, latest],
+      skipped: 1,
+    });
   });
 
   it('treats an absent ledger as empty', async () => {
@@ -87,7 +92,7 @@ describe('daemon ledger readers', () => {
     roots.push(root);
 
     await expect(readLastExit(root, 7)).resolves.toEqual({ event: null, skipped: 0 });
-    await expect(readLastMemorySample(root)).resolves.toEqual({ event: null, skipped: 0 });
+    await expect(readDaemonTimeline(root)).resolves.toEqual({ event: [], skipped: 0 });
   });
 
   it('returns an error result when a ledger cannot be read', async () => {
@@ -95,6 +100,6 @@ describe('daemon ledger readers', () => {
     roots.push(root);
     await mkdir(join(root, '.daemon', 'events.jsonl'), { recursive: true });
 
-    await expect(readLastMemorySample(root)).resolves.toMatchObject({ error: expect.any(Error) });
+    await expect(readDaemonTimeline(root)).resolves.toMatchObject({ error: expect.any(Error) });
   });
 });
