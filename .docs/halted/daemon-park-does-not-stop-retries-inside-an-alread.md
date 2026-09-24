@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-24T00:13:14.548Z
 Slug: daemon-park-does-not-stop-retries-inside-an-alread
 Class: needs-human
 Halting step: unknown
