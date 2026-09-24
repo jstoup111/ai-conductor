@@ -4,24 +4,6 @@ spec_hash: 8c0ea5290e6d581450a64dd2ea10f042c79352bf2a9e36951c8d2f9eb591453d
 pr: https://github.com/jstoup111/ai-conductor/pull/2708
 shipped: 2026-09-24
 engine_version: 20260924T091032Z-b2f8c0a660c9
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "src/conductor/src/engine/artifacts.ts:1210 and :3155/:3199/:3209/:3221 — new `preserveProbe` completion-context flag suppresses manual_test marker writes and deletions during the pre-dispatch probe; no plan task lists artifacts.ts"
-    accepted: true
-  - gate: architecture_review_as_built
-    finding: AB-1
-    class: REMEDIABLE
-    governing_clause: "adr-2026-07-22-gate-evidence-code-validity-on-redispatch D2"
-    outcome: remediated
-    summary: "A surface-hit stamp can fall through to an ordinary same-session fresh result and be skipped instead of rerun."
-  - gate: architecture_review_as_built
-    finding: AB-2
-    class: REMEDIABLE
-    governing_clause: "Task 4"
-    outcome: remediated
-    summary: "Missing-stamp and kill-switch cases can also be skipped, and a manual-test preservation probe can mutate evidence before dispatch."
 ---
 
 ## Cost
@@ -41,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","2b42a955-d2b0-4de5-a256-06d39e8743c9","lifecycle-step","finish"],step:execution\u0000["timing-rollup","persisted-ledger","32150ff0-d1dd-468d-8809-91dd160368c2","lifecycle-step","prd_audit"],step:execution\u0000["timing-rollup","persisted-ledger","3baf75ff-48e6-4563-9970-59c506072294","lifecycle-step","architecture_review_as_built"]
+reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","32150ff0-d1dd-468d-8809-91dd160368c2","lifecycle-step","prd_audit"],step:execution\u0000["timing-rollup","persisted-ledger","3baf75ff-48e6-4563-9970-59c506072294","lifecycle-step","architecture_review_as_built"]
 
 ## Build Review
 laps_to_pass: 2
