@@ -1,4 +1,4 @@
-// Covers: task:2, task:1, task:9, task:11
+// Covers: task:2, task:1, task:9, task:10, task:11
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -8,6 +8,7 @@ import {
   COVERAGE_BINDING_ENVELOPE_STATUSES,
   coverageBindingEnvelopePath,
   parseCoverageBindingEnvelope,
+  parseAmendmentBatchPayload,
   parseJudgeBatchPayload,
   parseJudgePayload,
   readCoverageBindingEnvelope,
@@ -150,6 +151,35 @@ describe('coverage binding envelope', () => {
         ['sha256:first', { verdict: 'asserts' }],
         ['sha256:second', { verdict: 'does-not-assert', missingAssertion: 'The Done when checks omit the required emission.' }],
       ]),
+    });
+  });
+
+  it('accepts amendment verdicts with only their permitted payloads', () => {
+    expect(parseAmendmentBatchPayload(JSON.stringify({
+      verdicts: [
+        { digest: 'sha256:carried', verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['2'] },
+        { digest: 'sha256:not-carried', verdict: 'not-carried', missingObligation: 'The task omits the amendment obligation.' },
+        { digest: 'sha256:no-obligation', verdict: 'no-plan-obligation' },
+      ],
+    }), ['sha256:carried', 'sha256:not-carried', 'sha256:no-obligation'], ['1', '2'], ['2'])).toEqual({
+      ok: true,
+      verdicts: new Map([
+        ['sha256:carried', { verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['2'] }],
+        ['sha256:not-carried', { verdict: 'not-carried', missingObligation: 'The task omits the amendment obligation.' }],
+        ['sha256:no-obligation', { verdict: 'no-plan-obligation' }],
+      ]),
+    });
+  });
+
+  it.each([
+    ['a carried foreign task id', { digest: 'sha256:first', verdict: 'carried', taskIds: ['foreign'] }, 'foreign'],
+    ['an empty carried task list', { digest: 'sha256:first', verdict: 'carried', taskIds: [] }, 'taskIds'],
+    ['an empty missing obligation', { digest: 'sha256:first', verdict: 'not-carried', missingObligation: '' }, 'missingObligation'],
+    ['a foreign completed contradiction', { digest: 'sha256:first', verdict: 'no-plan-obligation', contradictsCompleted: ['foreign'] }, 'foreign'],
+  ])('rejects an amendment batch with %s', (_kind, verdict, reason) => {
+    expect(parseAmendmentBatchPayload(JSON.stringify({ verdicts: [verdict] }), ['sha256:first'], ['1'], ['2'])).toEqual({
+      ok: false,
+      reason: expect.stringContaining(reason),
     });
   });
 
