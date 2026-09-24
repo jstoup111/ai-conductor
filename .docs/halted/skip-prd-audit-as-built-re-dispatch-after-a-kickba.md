@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-24T01:35:43.120Z
 Slug: skip-prd-audit-as-built-re-dispatch-after-a-kickba
 Class: needs-human
 Halting step: unknown
