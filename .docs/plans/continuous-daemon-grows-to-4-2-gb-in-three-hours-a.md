@@ -360,3 +360,64 @@ Every criterion is diff-local: each is asserted by a unit, real-tmux (private so
 - [x] Every task has a `Done when:` block of falsifiable checks naming a mechanism
 - [x] Dependencies are explicit and acyclic
 - [x] Every citable decision D1–D10 of the amended hosting ADR has one obligation row
+
+### Task rem-as-built-rem-ab2-1: src/conductor/src/engine/daemon-lock.ts:661,779 — make reclaim reporting non-optional: default onReclaim to a stderr writer (process.stderr.write(message + newline)) when the caller supplies none, keeping the call before the pidfile unlink/respawn; src/conductor/src/engine/engineer-cli.ts:1358 — pass { onReclaim: (m) => printErr(m) } so compose handoff prints the line; keep every existing Task 12 test in src/conductor/test/engine/daemon-lock.test.ts (injected onReclaim, ordering before respawn) and add one that calls ensureRunning with no onReclaim and asserts the reclaim line is written to stderr before launch runs
+**Gate:** as-built
+**Rationale:** daemon-lock.ts:779 emits the reclaim summary only via optional opts.onReclaim and the sole production caller engineer-cli.ts:1358 passes {}, so Task 12's 'ensureRunning reclaim log line' never reaches an operator; making the report non-optional delivers Task 12 without changing approved architecture. Sweep: ensureRunning has exactly one production caller (engineer-cli.ts:1358); daemon start/restart never call ensureRunning, so no other site needs wiring. Existing daemon-lock.test.ts reclaim tests (Task 12) are preserved unchanged.
+**Parent task:** 12
+**Governing clause:** Task 12
+**Done when:**
+- Task 12 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-1 is complete.
+
+### Task rem-prd-audit-rem-s61-1: src/conductor/test/engine/engineer-cli.test.ts (or the existing compose-handoff test file) — with a dead pidfile owner pid 42 and a matching daemon_exited SIGKILL record in the exit ledger, drive the compose-handoff path with its real ensureRunning (launch stubbed) and assert stderr contains 'reclaiming lock from dead pid 42 (killed by SIGKILL at <iso>)' before the launch is invoked
+**Gate:** prd-audit
+**Rationale:** prd-audit S6.1 FIXABLE: daemon-lock.ts:773-779 builds the killed-by summary only for opts.onReclaim, and engineer-cli.ts:1358 wires none, so the production nudge is silent; same root cause and owner (Task 12) as AB-2, which supplies the sink — this task proves the SIGKILL line reaches the operator through the real compose-handoff caller.
+**Criterion:** S6.1
+**Parent task:** 12
+**Done when:**
+- S6.1 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s61-1 is complete.
+
+### Task rem-prd-audit-rem-s62-1: src/conductor/test/engine/engineer-cli.test.ts (compose-handoff path) — with a dead pidfile owner and no matching daemon_exited record, assert stderr contains 'reclaiming lock from dead pid <n> (exit cause unknown)' and the stubbed launch is still invoked
+**Gate:** prd-audit
+**Rationale:** prd-audit S6.2 FIXABLE: the 'exit cause unknown' summary at daemon-lock.ts:641-643 is discarded in production because engineer-cli.ts:1358 passes {}; the respawn half is already delivered and tested (Task 12), so the fix is the AB-2 sink plus a production-path assertion.
+**Criterion:** S6.2
+**Parent task:** 12
+**Done when:**
+- S6.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s62-1 is complete.
+
+### Task rem-prd-audit-rem-s63-1: src/conductor/test/engine/engineer-cli.test.ts (compose-handoff path) — with a dead pidfile owner and an unreadable exit ledger (e.g. exit-events.jsonl as a directory), assert stderr contains '(exit ledger unreadable:' , the stubbed launch is still invoked, and the handoff does not throw
+**Gate:** prd-audit
+**Rationale:** prd-audit S6.3 FIXABLE: the 'exit ledger unreadable' note at daemon-lock.ts:628-630 is discarded in production (engineer-cli.ts:1358); readLastExit already returns { error } without throwing (daemon-ledger-readers.ts:34-37), so only the sink (AB-2) and a production-path assertion are missing.
+**Criterion:** S6.3
+**Parent task:** 12
+**Done when:**
+- S6.3 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s63-1 is complete.
+
+### Task rem-as-built-rem-ab1-1: src/conductor/src/engine/daemon-supervisor-cli.ts:241-249 — extract the foregroundCommand(repo) closure into an exported resolveDaemonForegroundCommand(repo, loadConfig) (same missing-config-allowed / invalid-config-throws rule) and use it at :314,:320,:342,:421 unchanged in behavior; src/conductor/src/engine/engineer/daemon-launch.ts:67 — call supervisor.start(project, await resolveDaemonForegroundCommand(project)); add a daemon-launch test asserting the command passed to start contains --max-old-space-size=6144 when the project config sets daemon_heap_limit_mb: 6144
+**Gate:** as-built
+**Rationale:** ADR D8 requires an operator-tunable heap cap, but engineer auto-launch (daemon-launch.ts:67 supervisor.start(project)) and session self-restart (index.ts:407 respawnPane(sessionName)) fall back to buildDaemonForegroundCommand() with empty config (daemon-tmux.ts:525,352); Task 7 already requires the command be built from loadConfig(root), so this is conforming wiring drift, not an architecture change. Sweep: all production start/restart/respawn callers enumerated — daemon-supervisor-cli.ts:314,320,342,421 already pass the configured command; brain-supervisor-cli.ts:98 is the brain session, not the daemon, and is excluded.
+**Governing clause:** adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting D8
+**Done when:**
+- adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting D8 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab1-1 is complete.
+
+### Task rem-as-built-rem-ab3-1: src/conductor/src/index.ts:395-408 — in buildDaemonModeOptions build the self-restart command as buildDaemonExitWitnessCommand(await resolveDaemonForegroundCommand(projectRoot), projectRoot) (injectable via deps) and pass it as respawnPane's cmd argument; extend the existing buildDaemonModeOptions test to invoke triggerSelfRestart and assert the recorded respawnPane cmd contains 'daemon exit-witness' and --max-old-space-size=6144 when config sets daemon_heap_limit_mb: 6144
+**Gate:** as-built
+**Rationale:** Task 9 requires respawnPane to use the exit-witness wrapper, but index.ts:395-408 buildDaemonModeOptions calls deps.respawnPane(sessionName) with the raw default buildDaemonForegroundCommand() (daemon-tmux.ts:352), so a self-restarted daemon's later death writes no daemon_exited; the same call is AB-1's self-restart half, fixed together. After this change respawnPane's raw default has no production caller; it is left for existing tests and named here rather than removed.
+**Parent task:** 9
+**Governing clause:** Task 9
+**Done when:**
+- Task 9 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab3-1 is complete.
+
+### Task rem-as-built-rem-ab4-1: src/conductor/src/engine/daemon-ledger-readers.ts:26-54 — make readLastMatching select the matching record with the greatest timestamp (at for daemon_exited, ts for daemon_memory_sample; ties and unparseable timestamps fall back to later line order) instead of the last physical line, and add an exported readDaemonTimeline(root) that merges exit-events.jsonl and events.jsonl records by timestamp with a combined skipped count; in src/conductor/test/engine/daemon-ledger-readers.test.ts keep all Task 10 cases and add: an out-of-order exit ledger returns the newest-by-at record for the pid, and readDaemonTimeline interleaves records from both ledgers in timestamp order
+**Gate:** as-built
+**Rationale:** ADR D10 says readers (daemon status, ensureRunning) merge the sibling ledger by timestamp, but readLastMatching (daemon-ledger-readers.ts:26-54) keeps the last physical line and never compares at/ts; ordering reader results by record timestamp is determinable implementation drift inside Task 10's reader module and preserves D10's one-writer-per-ledger design, so it is build rather than architecture_review. Task 10's existing reader tests (newest-for-pid, malformed-line skip, unreadable { error }) are preserved; status (daemon-observe-cli.ts:562-581) and ensureRunning (daemon-lock.ts:769-779) keep their current call shapes and inherit the ordering.
+**Governing clause:** adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting D10
+**Done when:**
+- adr-2026-06-29-daemon-supervisor-port-and-attachable-hosting D10 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab4-1 is complete.
