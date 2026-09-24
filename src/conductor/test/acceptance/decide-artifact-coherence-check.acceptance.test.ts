@@ -519,7 +519,7 @@ describe('Story 5 / FR-4 — story coverage (story-<id>)', () => {
     });
     await expect(
       landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
-    ).rejects.toThrow(/unparseable-stories|no.*stor/i);
+    ).rejects.toThrow(/unreadable.*story|unparseable-stories|no.*stor/i);
   });
 });
 

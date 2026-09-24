@@ -86,7 +86,7 @@ async function writeDocs(dir: string, idea: string): Promise<void> {
   await writeFile(join(dir, '.docs', 'specs', `${slug}.md`), `# PRD: ${idea}\n\nApproved.\n`);
   await writeFile(
     join(dir, '.docs', 'stories', `${slug}.md`),
-    `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story: s\n\n### AC\n- Given a, when b, then c.\n`,
+    `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story 1: s\n\n### Acceptance Criteria\n\n#### Happy Path\n- Given a, when b, then c.\n\n#### Negative Paths\n- Given invalid input, when land runs, then it refuses.\n`,
   );
   await writeFile(join(dir, '.docs', 'plans', `${slug}.md`), `# Plan: ${idea}\n\n### Task 1\n**Dependencies:** none\n\n**Done when:**\n- The planned behavior is implemented.\n- The scoped tests pass.\n`);
 }
