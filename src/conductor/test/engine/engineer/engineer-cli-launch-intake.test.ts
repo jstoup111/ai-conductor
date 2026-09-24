@@ -101,7 +101,7 @@ async function writeDocsArtifacts(repoPath: string, idea: string): Promise<void>
   await writeFile(join(specsDir, `${slug}.md`), `# PRD: ${idea}\n\nApproved spec content.\n`, 'utf-8');
   await writeFile(
     join(storiesDir, `${slug}.md`),
-    `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story: main\n\n### AC\n- Given x, when y, then z.\n`,
+    `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story 1: main\n\n### Acceptance Criteria\n\n#### Happy Path\n- Given x, when y, then z.\n\n#### Negative Paths\n- Given invalid input, when y, then it is refused.\n`,
     'utf-8',
   );
   await writeFile(

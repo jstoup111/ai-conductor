@@ -18,7 +18,11 @@ const execFile = promisify(execFileCb);
 
 const IDEA = 'idea t';
 const STEM = 'idea-t';
-const ACCEPTED_STORIES = ['# Stories: t', '', '**Status:** Accepted', '', '## S', '### Acceptance Criteria', '- G/W/T.', ''].join('\n');
+const ACCEPTED_STORIES = [
+  '# Stories: t', '', '**Status:** Accepted', '', '## Story 1: t',
+  '### Acceptance Criteria', '#### Happy Path', '- Given X, when Y, then Z.', '',
+  '#### Negative Paths', '- Given invalid input, when Y, then it is refused.', '',
+].join('\n');
 const PLAN = ['# Plan: t', '', '**Stories:** .docs/stories/t.md', '', '## Task Dependency Graph', '```', '1', '```', ''].join('\n');
 
 let repo: string;
