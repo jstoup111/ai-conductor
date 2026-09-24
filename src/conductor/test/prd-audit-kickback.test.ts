@@ -1,4 +1,4 @@
-// Covers: task:1, S5.1, S5.2, S5.3, S5.4
+// Covers: task:1, task:5, S5.1, S5.2, S5.3, S5.4
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -260,6 +260,7 @@ async function createPrdAuditRemediationFixture(input: {
     stepRunner: runner,
     events,
     projectRoot: root,
+    featureSlug: 'prd-audit-kickback',
     mode: 'auto',
     daemon: true,
     verifyArtifacts: false,
@@ -428,6 +429,7 @@ async function createAsBuiltRemediationCapFixture(input: {
     stepRunner: runner,
     events: new ConductorEventEmitter(),
     projectRoot: root,
+    featureSlug: 'as-built-remediation-cap',
     mode: 'auto',
     daemon: true,
     verifyArtifacts: false,
@@ -1994,6 +1996,7 @@ describe('prd_audit kickback', () => {
     const evidence = (await readKickbackLedger(fixture.root)).gates.prd_audit.capEvidence;
     expect(evidence).toMatchObject({ allowance: 'laps', consumed: 1, limit: 1 });
     expect(fixture.outcome.detail).toContain(`Kickback halt generation: ${evidence?.haltGeneration}`);
+    expect(fixture.outcome.detail).toContain('Lap allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature prd-audit-kickback --gate prd_audit --by «N» --rationale "«why»"');
   });
 
   it('records the exhausted growth allowance and generation for a prd_audit cap halt', async () => {
@@ -2006,6 +2009,7 @@ describe('prd_audit kickback', () => {
     const evidence = (await readKickbackLedger(fixture.root)).gates.prd_audit.capEvidence;
     expect(evidence).toMatchObject({ allowance: 'growth', consumed: 0, limit: 3 });
     expect(fixture.outcome.detail).toContain(`Kickback halt generation: ${evidence?.haltGeneration}`);
+    expect(fixture.outcome.detail).toContain('Plan-growth allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature prd-audit-kickback --gate prd_audit --by «N» --rationale "«why»"');
   });
 
   it('records the exhausted growth allowance and generation for an as-built cap halt', async () => {
@@ -2015,6 +2019,7 @@ describe('prd_audit kickback', () => {
     const evidence = (await readKickbackLedger(fixture.root)).gates.architecture_review_as_built.capEvidence;
     expect(evidence).toMatchObject({ allowance: 'growth', consumed: 1, limit: 1 });
     expect(fixture.outcome.detail).toContain(`Kickback halt generation: ${evidence?.haltGeneration}`);
+    expect(fixture.outcome.detail).toContain('Plan-growth allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature as-built-remediation-cap --gate architecture_review_as_built --by «N» --rationale "«why»"');
   });
 
   it('records prd_audit growth evidence at the shared validation-group growth exit', async () => {
@@ -2027,6 +2032,7 @@ describe('prd_audit kickback', () => {
     const evidence = (await readKickbackLedger(fixture.root)).gates.prd_audit.capEvidence;
     expect(evidence).toMatchObject({ allowance: 'growth', consumed: 0, limit: 2 });
     expect(fixture.outcome.detail).toContain(`Kickback halt generation: ${evidence?.haltGeneration}`);
+    expect(fixture.outcome.detail).toContain('Plan-growth allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature as-built-remediation-cap --gate prd_audit --by «N» --rationale "«why»"');
     await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
   });
 

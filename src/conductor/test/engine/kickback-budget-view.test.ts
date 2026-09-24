@@ -1,10 +1,10 @@
-// Covers: task:10, task:12
+// Covers: task:5, task:10, task:12
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { kickbackBudgetView, renderKickbackBudgetView } from '../../src/engine/kickback-budget-view.js';
+import { kickbackBudgetView, renderKickbackBudgetView, renderKickbackRecoveryHint } from '../../src/engine/kickback-budget-view.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 
 async function makeFeature(ledger: unknown): Promise<{ root: string; worktree: string }> {
@@ -46,6 +46,13 @@ describe('kickback budget view', () => {
     );
     expect(rendered).toContain('Plan growth: 2/2 added; 0 remaining (config-derived cap)');
     expect(rendered).not.toContain('raised cap');
+  });
+
+  it('names the exhausted allowance and renders the exact recovery command', () => {
+    expect(renderKickbackRecoveryHint({ slug: 'feat-x', gate: 'prd_audit', allowance: 'growth' })).toBe(
+      'Plan-growth allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature feat-x --gate prd_audit --by «N» --rationale "«why»"',
+    );
+    expect(renderKickbackRecoveryHint({ gate: 'prd_audit', allowance: 'laps' })).toContain('--feature «slug»');
   });
 
   it('inspects every gate through the CLI and keeps JSON aligned with the rendered gates', async () => {

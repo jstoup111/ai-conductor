@@ -321,7 +321,7 @@ import {
   type PlanGrowth,
   type PlanGrowthEventSink,
 } from './kickback-ledger.js';
-import { renderKickbackBudgetView } from './kickback-budget-view.js';
+import { renderKickbackBudgetView, renderKickbackRecoveryHint } from './kickback-budget-view.js';
 import {
   consumeOperatorGrant,
   decideEntryDisposition,
@@ -5176,6 +5176,11 @@ export class Conductor {
             // yields '' unless an as-built BLOCKED report actually participates.
             detail: `prd_audit remediation ${capReason} before appending fix tasks. `
               + `Findings: ${findingList}.\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}`
+              + `\n${renderKickbackRecoveryHint({
+                slug: this.featureSlug,
+                gate: 'prd_audit',
+                allowance: exhausted,
+              })}`
               + renderAsBuiltBlockedFindingDetail(asBuiltReport),
           };
         }
@@ -5199,6 +5204,11 @@ export class Conductor {
             haltClass: KICKBACK_CAP_HALT_CLASS,
             detail:
               `architecture_review_as_built remediation ${capReason} before appending fix tasks. Findings:\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}` +
+              `\n${renderKickbackRecoveryHint({
+                slug: this.featureSlug,
+                gate: 'architecture_review_as_built',
+                allowance: exhausted,
+              })}` +
               renderAsBuiltBlockedFindingDetail(asBuiltReport),
           };
         }
@@ -5226,6 +5236,11 @@ export class Conductor {
           detail:
             `remediation ${capReason} before appending fix tasks.\n` +
             `Kickback halt generation: ${capEntry.capEvidence!.haltGeneration}` +
+            `\n${renderKickbackRecoveryHint({
+              slug: this.featureSlug,
+              gate: evidenceGate,
+              allowance: 'growth',
+            })}` +
             // AB-R8 / APPROVED decision 4 + Story 4: a cap terminal names the
             // allowance AND every finding. This exit is shared with prd_audit,
             // so it renders unconditionally — the helper yields '' unless an

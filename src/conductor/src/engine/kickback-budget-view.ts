@@ -18,6 +18,20 @@ export interface KickbackBudgetView {
   planGrowth?: KickbackPlanGrowthView;
 }
 
+export function renderKickbackRecoveryHint({
+  slug,
+  gate,
+  allowance,
+}: {
+  slug?: string;
+  gate: string;
+  allowance: 'laps' | 'growth';
+}): string {
+  const allowanceName = allowance === 'growth' ? 'Plan-growth' : 'Lap';
+  return `${allowanceName} allowance exhausted. Recover with: ` +
+    `ai-conductor kickback-budget raise --feature ${slug ?? '«slug»'} --gate ${gate} --by «N» --rationale "«why»"`;
+}
+
 export function kickbackBudgetView(
   entry: KickbackGateEntry | undefined,
   gate: string,
