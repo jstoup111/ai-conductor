@@ -32,7 +32,7 @@ const roots: string[] = [];
 const OLD_MTIME = new Date(2000, 0, 1);
 const gates = ['prd_audit', 'architecture_review_as_built', 'build_review', 'manual_test'] as const;
 type Gate = typeof gates[number];
-const PRD_REPORT = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | n/a | test | — |\n';
+const PRD_REPORT = '# PRD Audit\n\n**PRD:** none\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | Evidence |\n|---|---|---|---|\n| S1.1 | PASS | 1 | test |\n\n| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | n/a | test | — |\n';
 const ARCH_REPORT = '# As-Built Review\n\nVerdict: APPROVED\n';
 const MANUAL_REPORT = '# Manual Test Results\n\n## Attempt 1\n\n| Story | Result |\n|---|---|\n| S1 | PASS |\n';
 
@@ -49,6 +49,8 @@ describe('acceptance: stale judged-gate pre-dispatch preservation (#2639)', () =
     await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
     await execFile('git', ['config', 'user.name', 'Test'], { cwd: root });
     await writeFile(join(root, '.gitignore'), '.pipeline/\n');
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await writeFile(join(root, '.docs/plans/fixture.md'), '# Plan\n\n### Task 1: fixture\n');
     await writeFile(join(root, 'source.ts'), 'export const value = 1;\n');
     await execFile('git', ['add', '.'], { cwd: root });
     await execFile('git', ['commit', '-qm', 'initial'], { cwd: root });
@@ -100,7 +102,7 @@ describe('acceptance: stale judged-gate pre-dispatch preservation (#2639)', () =
     const name = gate === 'prd_audit' ? 'prd-audit.md' : gate === 'architecture_review_as_built' ? 'architecture-review-as-built.md' : gate === 'build_review' ? 'build-review.json' : 'manual-test-results.md';
     const file = join(root, '.pipeline', name);
     if (gate === 'prd_audit') {
-      await writeFile(file, clean ? PRD_REPORT : PRD_REPORT.replace('ALIGNED', 'FIXABLE'));
+      await writeFile(file, clean ? PRD_REPORT : PRD_REPORT.replace('| S1.1 | PASS |', '| S1.1 | FIXABLE |'));
       if (stamp) await writeFile(join(root, PRD_AUDIT_CODE_STAMP), JSON.stringify({ codeStamp: baseline }));
     } else if (gate === 'architecture_review_as_built') {
       await writeFile(file, clean ? ARCH_REPORT : '# As-Built Review\n\nVerdict: BLOCKED\n');
@@ -117,7 +119,7 @@ describe('acceptance: stale judged-gate pre-dispatch preservation (#2639)', () =
 
   async function run(gate: Gate, config: object = {}): Promise<{ calls: StepName[]; state: ConductState; events: object[] }> {
     activeGate.name = gate;
-    const state = Object.fromEntries([...gates.map((step) => [step, 'done']), ['complexity_tier', 'M'], [gate, 'stale']]) as ConductState;
+    const state = Object.fromEntries([...gates.map((step) => [step, 'done']), ['complexity_tier', 'M'], ['feature_desc', 'fixture'], [gate, 'stale']]) as ConductState;
     await writeState(statePath, state);
     const calls: StepName[] = [];
     const events = new ConductorEventEmitter();
@@ -190,9 +192,9 @@ describe('acceptance: stale judged-gate pre-dispatch preservation (#2639)', () =
     expect((await run(gate)).calls).toContain(gate);
   });
 
-  it('rejects the prd_audit FIXABLE report before provider dispatch', async () => {
+  it('dispatches prd_audit with a FIXABLE report', async () => {
     await seedEvidence('prd_audit', { clean: false });
-    expect((await run('prd_audit')).calls).not.toContain('prd_audit');
+    expect((await run('prd_audit')).calls).toContain('prd_audit');
   });
 
   it.each(gates)('dispatches %s with gate code validity disabled', async (gate) => {
