@@ -343,7 +343,9 @@ ai-conductor daemon status
 
 Takes no flags. Sweeps the project registry and prints one badge line per repo: state, name, path,
 `pid`, `since`, `version:<engine-version-id>`, pause metadata, the last log line with its mtime, and
-`session:up` or `session:down`. It then prints a `GATED:` section from `.daemon/gated.json`, a
+`session:up` or `session:down`. A row with a dead pane or stale pid also shows its matching witnessed
+exit (`killed by <signal>` or `exited <code>`) when available; every row with a recorded sample shows
+the latest RSS as `mem <MB> at <timestamp>`. It then prints a `GATED:` section from `.daemon/gated.json`, a
 `BLOCKED` section from `.daemon/blocked.json`, and an `attribution agreement: N% (n=…)` line from
 `.daemon/attribution-accuracy.jsonl`; all are skipped for repos whose path is missing.
 
