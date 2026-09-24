@@ -134,8 +134,13 @@ describe('daemon pane exit-witness wrapper', () => {
 
       expect(log).toContain('JavaScript heap out of memory');
       expect(records).toHaveLength(1);
-      expect(records[0]).toMatchObject({ type: 'daemon_exited', code: expect.any(Number) });
-      expect(records[0]?.code).not.toBe(0);
+      expect(records[0]).toMatchObject({
+        type: 'daemon_exited',
+        pid: expect.any(Number),
+        code: 134,
+        signal: 'SIGABRT',
+        at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+      });
     } finally { test.restore(); }
   });
 

@@ -398,7 +398,7 @@ describe('respawnPane: argv and error handling', () => {
 
   it('wraps the respawned command to re-emit captured scrollback then exec the daemon command, targeting the active pane', async () => {
     const respawnPane = requireFn(await load(), 'respawnPane');
-    const { buildDaemonForegroundCommand } = await load();
+    const buildDaemonForegroundCommand = requireFn(await load(), 'buildDaemonForegroundCommand');
     const { run, calls } = spyRunner({ 'capture-pane': { code: 0, stdout: 'old scrollback\n' } });
     await respawnPane('cc-daemon-myapp-abc123', run);
     const respawnCall = calls.find((c) => c.args[0] === 'respawn-pane')!;
@@ -421,7 +421,7 @@ describe('respawnPane: argv and error handling', () => {
 
   it('falls back to the bare command and reports scrollbackPreserved:false when capture-pane fails', async () => {
     const respawnPane = requireFn(await load(), 'respawnPane');
-    const { buildDaemonForegroundCommand } = await load();
+    const buildDaemonForegroundCommand = requireFn(await load(), 'buildDaemonForegroundCommand');
     const { run, calls } = spyRunner({ 'capture-pane': { code: 1 } });
     const outcome = await respawnPane('cc-daemon-myapp-abc123', run);
     expect(outcome).toEqual({ scrollbackPreserved: false });
@@ -433,7 +433,7 @@ describe('respawnPane: argv and error handling', () => {
 
   it('falls back to the bare command and reports scrollbackPreserved:false when capture-pane returns empty stdout', async () => {
     const respawnPane = requireFn(await load(), 'respawnPane');
-    const { buildDaemonForegroundCommand } = await load();
+    const buildDaemonForegroundCommand = requireFn(await load(), 'buildDaemonForegroundCommand');
     const { run, calls } = spyRunner({ 'capture-pane': { code: 0, stdout: '' } });
     const outcome = await respawnPane('cc-daemon-myapp-abc123', run);
     expect(outcome).toEqual({ scrollbackPreserved: false });
@@ -665,7 +665,9 @@ describe('makeTmuxSupervisor().restart: respawn fallback on failure (FR-20 neg)'
 
   it('the recreated session after fallback uses the same session name and foreground command', async () => {
     const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
-    const { buildDaemonForegroundCommand, buildDaemonExitWitnessCommand } = await load();
+    const module = await load();
+    const buildDaemonForegroundCommand = requireFn(module, 'buildDaemonForegroundCommand');
+    const buildDaemonExitWitnessCommand = requireFn(module, 'buildDaemonExitWitnessCommand');
     const { run, calls } = spyRunner({ '-V': { code: 0 }, 'respawn-pane': { code: 1 } });
     await makeTmuxSupervisor(run).restart('/home/alice/myapp');
     const killCall = calls.find((c) => c.args[0] === 'kill-session')!;

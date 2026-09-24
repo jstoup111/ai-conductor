@@ -55,6 +55,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   'friction-mapped' | 'not-audited-by-design'
 > = {
   daemon_backlog_snapshot: 'not-audited-by-design',
+  daemon_memory_sample: 'not-audited-by-design',
+  daemon_heap_dump_written: 'not-audited-by-design',
+  daemon_exited: 'not-audited-by-design',
   feature_dispatch_started: 'not-audited-by-design',
   feature_dispatch_ended: 'not-audited-by-design',
   feature_shipped: 'not-audited-by-design',
@@ -222,6 +225,16 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     inFlight: [],
     blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
     pollDurationMs: 1,
+  },
+  daemon_memory_sample: {
+    type: 'daemon_memory_sample', rss: 1, heapUsed: 1, heapTotal: 1, external: 1,
+    slug: 'feature', step: 'build', boundary: 'started', pid: 1, dispatchSeq: 1,
+  },
+  daemon_heap_dump_written: {
+    type: 'daemon_heap_dump_written', path: '/tmp/heap.heapsnapshot', bytes: 1, rss: 1, pid: 1,
+  },
+  daemon_exited: {
+    type: 'daemon_exited', pid: 1, code: 0, signal: null, at: '2026-09-23T00:00:00.000Z',
   },
   feature_dispatch_started: { type: 'feature_dispatch_started', slug: 'feature', kind: 'initial' },
   feature_dispatch_ended: { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete' },

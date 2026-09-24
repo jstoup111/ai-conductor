@@ -210,7 +210,7 @@ describe('startDaemonMemorySampler', () => {
         oldestAgeSeconds: {},
         slots: { busy: 0, free: 1 },
         inFlight: [],
-        blocked: {},
+        blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
         pollDurationMs: 0,
       });
       expect(samples).toEqual([]);
