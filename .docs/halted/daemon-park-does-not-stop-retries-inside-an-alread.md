@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: kickback-budget
+Resolved at: 2026-09-24T10:25:46.888Z
 Slug: daemon-park-does-not-stop-retries-inside-an-alread
 Class: needs-human
 Halting step: unknown
