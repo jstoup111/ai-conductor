@@ -61,6 +61,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The continuous daemon caps memory growth, retains diagnostic heap snapshots, and reports witnessed exits. ([implementation PR #2679](https://github.com/jstoup111/ai-conductor/pull/2679)).
 - Daemon gauge metrics (heartbeat, backlog, slots) no longer drop out of Prometheus dashboards during long-running steps. ([implementation PR #2712](https://github.com/jstoup111/ai-conductor/pull/2712)).
 - Custom build_review rubrics now run on Claude; previously every call was rejected because the output schema had no root type. ([implementation PR #2738](https://github.com/jstoup111/ai-conductor/pull/2738)).
+- Custom build_review rubrics now run on Claude; the output schema no longer uses a top-level oneOf, which the Claude API rejects. ([implementation PR #2739](https://github.com/jstoup111/ai-conductor/pull/2739)).
 
 ## [1.4.0] - 2026-09-19
 
