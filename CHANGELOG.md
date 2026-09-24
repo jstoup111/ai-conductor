@@ -58,6 +58,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Spec and implementation PRs again carry their issue link (`Refs`/`Closes`) and mirrored priority labels; handoff now reports a refused post-create write instead of silently dropping it. ([implementation PR #2704](https://github.com/jstoup111/ai-conductor/pull/2704)).
 - Judged gates now retain valid stamped verdicts after unrelated kickbacks instead of re-dispatching. ([implementation PR #2708](https://github.com/jstoup111/ai-conductor/pull/2708)).
 - Operators can park daemon features without later retries consuming their retry budget. ([implementation PR #2669](https://github.com/jstoup111/ai-conductor/pull/2669)).
+- The continuous daemon caps memory growth, retains diagnostic heap snapshots, and reports witnessed exits. ([implementation PR #2679](https://github.com/jstoup111/ai-conductor/pull/2679)).
 
 ## [1.4.0] - 2026-09-19
 
