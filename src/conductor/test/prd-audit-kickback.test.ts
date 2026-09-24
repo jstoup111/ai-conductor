@@ -168,6 +168,8 @@ async function createPrdAuditRemediationFixture(input: {
   criteria: string[];
   config?: Record<string, unknown>;
   priorLaps?: number;
+  priorGrowthAdded?: number;
+  existingTask?: boolean;
   report?: string;
 }) {
   const root = await mkdtemp(join(tmpdir(), 'prd-audit-kickback-'));
@@ -206,20 +208,25 @@ async function createPrdAuditRemediationFixture(input: {
       ),
     ].join('\n'),
   );
-  if (input.priorLaps !== undefined) {
+  if (input.priorLaps !== undefined || input.priorGrowthAdded !== undefined) {
     await writeKickbackLedger(root, {
       version: 1,
       gates: {
-        prd_audit: {
-          count: 0,
-          cumulative: 0,
-          treeHash: null,
-          lastReason: '',
-          priorVerdict: true,
-          resolvedBefore: 0,
-          laps: input.priorLaps,
-        },
+        ...(input.priorLaps === undefined ? {} : {
+          prd_audit: {
+            count: 0,
+            cumulative: 0,
+            treeHash: null,
+            lastReason: '',
+            priorVerdict: true,
+            resolvedBefore: 0,
+            laps: input.priorLaps,
+          },
+        }),
       },
+      ...(input.priorGrowthAdded === undefined ? {} : {
+        growth: { authored: input.taskCount, added: input.priorGrowthAdded, byGate: { prd_audit: input.priorGrowthAdded } },
+      }),
     } as never);
   }
 
@@ -230,10 +237,10 @@ async function createPrdAuditRemediationFixture(input: {
         JSON.stringify({
           dispositions: input.criteria.map((criterion) => ({
             id: criterion,
-            disposition: 'build',
+            disposition: input.existingTask ? 'existing-task' : 'build',
             category: null,
             rationale: `Repair ${criterion}.`,
-            tasks: [{ id: `rem-${criterion.toLowerCase()}`, title: `Repair ${criterion}` }],
+            tasks: [{ id: input.existingTask ? '1' : `rem-${criterion.toLowerCase()}`, title: `Repair ${criterion}` }],
           })),
         }),
       );
@@ -1972,6 +1979,62 @@ describe('prd_audit kickback', () => {
     expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
     expect(fixture.outcome.detail).toContain('S2.5');
     expect(await readFile(fixture.planPath, 'utf8')).toBe(fixture.plan);
+  });
+
+  it('records the exhausted lap allowance and generation for a prd_audit cap halt', async () => {
+    const fixture = await createPrdAuditRemediationFixture({
+      taskCount: 12,
+      criteria: ['S2.1'],
+      priorLaps: 1,
+    });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+    const evidence = (await readKickbackLedger(fixture.root)).gates.prd_audit.capEvidence;
+    expect(evidence).toMatchObject({ allowance: 'laps', consumed: 1, limit: 1 });
+    expect(fixture.outcome.detail).toContain(`Kickback halt generation: ${evidence?.haltGeneration}`);
+  });
+
+  it('records the exhausted growth allowance and generation for a prd_audit cap halt', async () => {
+    const fixture = await createPrdAuditRemediationFixture({
+      taskCount: 12,
+      criteria: ['S2.1', 'S2.2', 'S2.3', 'S2.4'],
+    });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+    const evidence = (await readKickbackLedger(fixture.root)).gates.prd_audit.capEvidence;
+    expect(evidence).toMatchObject({ allowance: 'growth', consumed: 0, limit: 3 });
+    expect(fixture.outcome.detail).toContain(`Kickback halt generation: ${evidence?.haltGeneration}`);
+  });
+
+  it('records the exhausted growth allowance and generation for an as-built cap halt', async () => {
+    const fixture = await createAsBuiltRemediationCapFixture({ priorGrowthAdded: 1 });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+    const evidence = (await readKickbackLedger(fixture.root)).gates.architecture_review_as_built.capEvidence;
+    expect(evidence).toMatchObject({ allowance: 'growth', consumed: 1, limit: 1 });
+    expect(fixture.outcome.detail).toContain(`Kickback halt generation: ${evidence?.haltGeneration}`);
+  });
+
+  it('keeps existing-task remediation outside growth evidence until its lap allowance is exhausted', async () => {
+    const admitted = await createPrdAuditRemediationFixture({
+      taskCount: 12,
+      criteria: ['S2.1'],
+      existingTask: true,
+      priorGrowthAdded: 2,
+    });
+    const admittedLedger = await readKickbackLedger(admitted.root);
+    expect(admittedLedger.gates.prd_audit?.capEvidence).toBeUndefined();
+    expect(admittedLedger.growth?.added).toBe(2);
+
+    const exhausted = await createPrdAuditRemediationFixture({
+      taskCount: 12,
+      criteria: ['S2.1'],
+      existingTask: true,
+      priorLaps: 1,
+    });
+    const evidence = (await readKickbackLedger(exhausted.root)).gates.prd_audit.capEvidence;
+    expect(exhausted.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+    expect(evidence).toMatchObject({ allowance: 'laps', consumed: 1, limit: 1 });
   });
 
   it('honors a raised configurable growth cap before appending every FIXABLE task', async () => {

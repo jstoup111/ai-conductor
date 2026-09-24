@@ -5159,8 +5159,9 @@ export class Conductor {
               `growth cap reached (${prdAuditBudget.growth.added}/${prdAuditBudget.growthCap} appended; ` +
               `${prdAuditBudget.growthTaskCount} requested, ${prdAuditBudget.growth.remaining} remaining)`;
           const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'prd_audit', {
-            consumed: prdAuditBudget.priorLaps,
-            limit: prdAuditBudget.lapCap,
+            allowance: exhausted,
+            consumed: exhausted === 'growth' ? prdAuditBudget.growth.added : prdAuditBudget.priorLaps,
+            limit: exhausted === 'growth' ? prdAuditBudget.growthCap : prdAuditBudget.lapCap,
             latestReason: capReason,
           });
           return {
@@ -5188,8 +5189,9 @@ export class Conductor {
               `shared plan-growth allowance exhausted (${asBuiltBudget.growth.added}/${asBuiltBudget.growthCap} appended; ` +
               `${asBuiltBudget.growthTaskCount} requested, ${asBuiltBudget.growth.remaining} remaining)`;
           const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'architecture_review_as_built', {
-            consumed: asBuiltBudget.priorLaps,
-            limit: asBuiltBudget.lapCap,
+            allowance: exhausted,
+            consumed: exhausted === 'growth' ? asBuiltBudget.growth.added : asBuiltBudget.priorLaps,
+            limit: exhausted === 'growth' ? asBuiltBudget.growthCap : asBuiltBudget.lapCap,
             latestReason: capReason,
           });
           return {
