@@ -548,7 +548,12 @@ export async function emitExcusedRebaseCitationResidue(
   if (excused.length === 0) return;
   await events?.emit({
     type: 'rebase_citation_residue',
-    residue: excused.map(({ sha, reason }) => ({ sha, citingTaskIds: [], reason })),
+    residue: excused.map(({ sha, reason }) => ({
+      sha,
+      citingTaskIds: [],
+      citingObligationIds: [],
+      reason,
+    })),
   });
 }
 

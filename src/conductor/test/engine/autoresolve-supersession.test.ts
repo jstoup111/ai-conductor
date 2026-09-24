@@ -36,7 +36,7 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
     }];
 
     await emitExcusedRebaseCitationResidue(
-      { emit: async (event: Parameters<ConductorEventEmitter['emit']>[0]) => { emitted.push(event); } } as never,
+      { emit: async (event: Parameters<ConductorEventEmitter['emit']>[0]) => { emitted.push(event); } },
       excused,
     );
 
@@ -45,6 +45,7 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
       residue: [{
         sha: 'a'.repeat(40),
         citingTaskIds: [],
+        citingObligationIds: [],
         reason: 'future-declared-reason',
       }],
     }]);
