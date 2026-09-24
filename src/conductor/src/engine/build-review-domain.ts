@@ -308,62 +308,50 @@ export const MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH = 512;
  * `MAX_CUSTOM_*` count and length bounds and the line-number ordering need
  * `maxItems`/`maxLength`/`minimum`, which the Claude native grammar rejects,
  * so they remain parser-enforced and are named by the rejection diagnosis.
- * The root states `type: 'object'` beside `oneOf`: Claude's tool
- * `input_schema` rejects a root without one (400 `input_schema.type: Field
- * required`).
+ * The root is one flat object: Claude's tool `input_schema` requires a root
+ * `type` and rejects `oneOf`/`anyOf`/`allOf` at the top level. Which fields
+ * each `kind` requires (`version` + `findings` for custom-findings,
+ * `requirement` for unsupported-policy) is therefore parser-enforced.
  */
 export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
   type: 'object',
-  oneOf: [
-    {
-      type: 'object',
-      additionalProperties: false,
-      required: ['kind', 'version', 'findings'],
-      properties: {
-        kind: { type: 'string', enum: ['custom-findings'] },
-        version: { type: 'string', enum: ['v1'] },
-        findings: {
-          type: 'array',
-          items: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['concernId', 'summary', 'evidenceLocations', 'sourceRegions'],
-            properties: {
-              concernId: { type: 'string', pattern: CUSTOM_CONCERN_ID.source },
-              summary: NON_BLANK_STRING,
-              confidence: { type: 'integer', enum: BUILD_REVIEW_CONFIDENCE_VALUES },
-              evidenceLocations: NON_EMPTY_NON_BLANK_STRING_ARRAY,
-              sourceRegions: {
-                type: 'array',
-                minItems: 1,
-                items: {
-                  type: 'object',
-                  additionalProperties: false,
-                  required: ['path', 'startLine', 'endLine', 'contentHash', 'display'],
-                  properties: {
-                    path: NON_BLANK_STRING,
-                    startLine: { type: 'integer' },
-                    endLine: { type: 'integer' },
-                    contentHash: CONTENT_HASH_STRING,
-                    display: NON_BLANK_STRING,
-                  },
-                },
+  additionalProperties: false,
+  required: ['kind'],
+  properties: {
+    kind: { type: 'string', enum: ['custom-findings', 'unsupported-policy'] },
+    version: { type: 'string', enum: ['v1'] },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['concernId', 'summary', 'evidenceLocations', 'sourceRegions'],
+        properties: {
+          concernId: { type: 'string', pattern: CUSTOM_CONCERN_ID.source },
+          summary: NON_BLANK_STRING,
+          confidence: { type: 'integer', enum: BUILD_REVIEW_CONFIDENCE_VALUES },
+          evidenceLocations: NON_EMPTY_NON_BLANK_STRING_ARRAY,
+          sourceRegions: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['path', 'startLine', 'endLine', 'contentHash', 'display'],
+              properties: {
+                path: NON_BLANK_STRING,
+                startLine: { type: 'integer' },
+                endLine: { type: 'integer' },
+                contentHash: CONTENT_HASH_STRING,
+                display: NON_BLANK_STRING,
               },
             },
           },
         },
       },
     },
-    {
-      type: 'object',
-      additionalProperties: false,
-      required: ['kind', 'requirement'],
-      properties: {
-        kind: { type: 'string', enum: ['unsupported-policy'] },
-        requirement: NON_BLANK_STRING,
-      },
-    },
-  ],
+    requirement: NON_BLANK_STRING,
+  },
 }) satisfies RubricOutputJsonSchema;
 
 function object(value: unknown): Record<string, unknown> | undefined { return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
