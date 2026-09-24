@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { ExportResultCode } from '@opentelemetry/core';
 import { OTLPTraceExporter as OTLPHttpTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import { OTLPMetricExporter as OTLPHttpMetricExporter, AggregationTemporalityPreference, DeltaTemporalitySelector } from '@opentelemetry/exporter-metrics-otlp-http';
+import { OTLPMetricExporter as OTLPHttpMetricExporter, AggregationTemporalityPreference, LowMemoryTemporalitySelector } from '@opentelemetry/exporter-metrics-otlp-http';
 import { OTLPTraceExporter as OTLPGrpcTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { OTLPMetricExporter as OTLPGrpcMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc';
 import type { SpanExporter, ReadableSpan } from '@opentelemetry/sdk-trace-base';
@@ -22,8 +22,16 @@ export interface Exporters {
  * (`conductor.step.duration`) never produced a distribution. Delta carries the
  * interval's buckets in every point. Prometheus OTLP ingest drops delta unless
  * started with `--enable-feature=otlp-deltatocumulative`.
+ *
+ * LOWMEMORY, not DELTA: counters and histograms stay delta, gauges stay
+ * cumulative. A delta gauge exports only in intervals where it was recorded,
+ * so a daemon gauge set from the poll loop vanished from Prometheus (5m
+ * staleness) whenever a long step held the loop. OTLP gauges carry no
+ * temporality on the wire, so Datadog maps them identically either way.
+ * LOWMEMORY also exports UpDownCounter and observable instruments cumulative,
+ * which Datadog's direct OTLP intake rejects; revisit before adding one.
  */
-const METRIC_TEMPORALITY = AggregationTemporalityPreference.DELTA;
+const METRIC_TEMPORALITY = AggregationTemporalityPreference.LOWMEMORY;
 
 /** Build the HTTP/protobuf exporter options for one OTLP signal. */
 export function buildHttpExporterOptions(
@@ -134,9 +142,9 @@ class FileMetricExporter implements PushMetricExporter {
 
   constructor(private readonly filePath: string) {}
 
-  /** Same temporality as the OTLP exporters: only changed series are written. */
+  /** Same temporality as the OTLP exporters (LOWMEMORY). */
   selectAggregationTemporality(instrumentType: InstrumentType): AggregationTemporality {
-    return DeltaTemporalitySelector(instrumentType);
+    return LowMemoryTemporalitySelector(instrumentType);
   }
 
   export(

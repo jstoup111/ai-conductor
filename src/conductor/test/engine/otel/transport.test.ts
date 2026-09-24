@@ -143,6 +143,9 @@ describe('buildExporters', () => {
       const { metricExporter } = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>);
       expect(metricExporter.selectAggregationTemporality?.(InstrumentType.HISTOGRAM)).toBe(AggregationTemporality.DELTA);
       expect(metricExporter.selectAggregationTemporality?.(InstrumentType.COUNTER)).toBe(AggregationTemporality.DELTA);
+      // A delta gauge drops out of every interval it was not recorded in; the
+      // daemon's poll-loop gauges then go stale in Prometheus during long steps.
+      expect(metricExporter.selectAggregationTemporality?.(InstrumentType.GAUGE)).toBe(AggregationTemporality.CUMULATIVE);
     });
 
     it('file metric exporter prefers the same DELTA temporality as the OTLP exporters', () => {
@@ -150,6 +153,9 @@ describe('buildExporters', () => {
       const { metricExporter } = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>);
       expect(metricExporter.selectAggregationTemporality?.(InstrumentType.HISTOGRAM)).toBe(AggregationTemporality.DELTA);
       expect(metricExporter.selectAggregationTemporality?.(InstrumentType.COUNTER)).toBe(AggregationTemporality.DELTA);
+      // A delta gauge drops out of every interval it was not recorded in; the
+      // daemon's poll-loop gauges then go stale in Prometheus during long steps.
+      expect(metricExporter.selectAggregationTemporality?.(InstrumentType.GAUGE)).toBe(AggregationTemporality.CUMULATIVE);
     });
   });
 
