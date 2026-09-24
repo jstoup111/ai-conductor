@@ -205,8 +205,7 @@ export function buildParallelStartedEvent(
  * members pass, one or more fail) attributes the failure to the RIGHT
  * validator instead of a single ambiguous group-level failure. Skipped and
  * parked members never produce a `parallel_failure` — they were never
- * dispatched or intentionally stopped. A permission denial is instead
- * recorded by the group's refusal path, which owns the terminal event.
+ * dispatched or intentionally stopped.
  */
 export function buildParallelFailureEvents(
   step: StepName,
@@ -218,7 +217,6 @@ export function buildParallelFailureEvents(
     if (
       outcome.kind === "skipped"
       || outcome.kind === "parked"
-      || outcome.kind === "permission-denied"
     ) continue;
     if (outcome.kind === "verdict" && outcome.verdict === "pass") continue;
 

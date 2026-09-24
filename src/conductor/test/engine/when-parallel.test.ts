@@ -28,7 +28,7 @@ function collectEvents(emitter: ConductorEventEmitter): ConductorEvent[] {
     'config_skip', 'navigation_back', 'rate_limit', 'session_reset',
     'feature_complete', 'dashboard_refresh', 'auto_heal', 'mode_skip',
     'build_stall', 'when_skip', 'parallel_started', 'parallel_completed',
-    'parallel_failure',
+    'parallel_failure', 'step_refused',
   ];
   for (const t of ALL_EVENT_TYPES) {
     emitter.on(t, (e) => { collected.push(e); });
@@ -401,6 +401,59 @@ describe('parallel: group execution (T15-T22)', () => {
     if (result.ok) {
       expect(result.value.explore).toBe('failed');
     }
+  });
+
+  it('attributes a non-advisory permission denial to its member without a conductor fallback', async () => {
+    await seedAllDoneExcept(statePath, 'explore');
+
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => step === 'permission-denied-member'
+        ? {
+            success: false,
+            output: 'permission review denied',
+            permissionDenied: true,
+            actualProvider: 'codex',
+          }
+        : { success: true }),
+    };
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      config: {
+        steps: {
+          explore: {
+            parallel: [
+              { name: 'permission-denied-member' },
+              { name: 'passing-member' },
+            ],
+          },
+        },
+      },
+      mode: 'auto',
+    });
+
+    await conductor.run();
+
+    const failures = emitted.filter((event): event is Extract<ConductorEvent, { type: 'parallel_failure' }> =>
+      event.type === 'parallel_failure',
+    );
+    const refusals = emitted.filter((event): event is Extract<ConductorEvent, { type: 'step_refused' }> =>
+      event.type === 'step_refused',
+    );
+
+    expect(failures).toEqual([expect.objectContaining({
+      branch: 'permission-denied-member',
+      error: 'branch permission-denied-member failed: permission-denied',
+    })]);
+    expect(failures).not.toContainEqual(expect.objectContaining({ branch: 'conductor' }));
+    expect(refusals).toEqual([expect.objectContaining({
+      step: 'explore',
+      reason: 'permission review denied',
+      provider: 'codex',
+    })]);
   });
 
   it('continues group on advisory branch failure (T19)', async () => {

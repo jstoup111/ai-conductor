@@ -148,7 +148,7 @@ describe("group-core: parked join behavior", () => {
     }])).toEqual([]);
   });
 
-  it("leaves permission denials to the group refusal terminal", () => {
+  it("emits a member-attributed parallel failure for a permission denial", () => {
     expect(buildParallelFailureEvents("manual_test", [{
       name: "manual_test",
       skill: "manual-test",
@@ -157,7 +157,12 @@ describe("group-core: parked join behavior", () => {
         provider: "codex",
         reason: "permission review denied",
       },
-    }])).toEqual([]);
+    }])).toEqual([{
+      type: "parallel_failure",
+      step: "manual_test",
+      branch: "manual_test",
+      error: "branch manual_test failed: permission-denied",
+    }]);
   });
 });
 
