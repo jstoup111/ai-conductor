@@ -7549,6 +7549,39 @@ export class Conductor {
           }
         }
 
+        // ADR-2026-07-22 D2 / #2639: a kickback marks downstream judged
+        // gates stale, but does not necessarily invalidate their stamped
+        // verdict. Ask the existing completion authority before spending a
+        // fresh provider session. Any indeterminate result falls through to
+        // the ordinary dispatch path.
+        if (
+          currentStatus === 'stale' &&
+          step.preservableOnStale &&
+          this.verifyArtifacts &&
+          !explicitlyTargeted
+        ) {
+          try {
+            const completion = await checkStepCompletion(
+              this.projectRoot,
+              step.name,
+              await this.completionCtx(state),
+            );
+            if (completion.done) {
+              if (completion.verdictFreshness) {
+                await emitTracked({
+                  type: 'verdict_freshness',
+                  step: step.name,
+                  ...completion.verdictFreshness,
+                });
+              }
+              await this.saveConductorStepStatus(state, step.name, 'done');
+              continue;
+            }
+          } catch {
+            // On doubt, dispatch rather than preserving a stale verdict.
+          }
+        }
+
         // Read complexity tier from state each iteration (may change after complexity step)
         const tier = state.complexity_tier ?? 'L';
         const scheduling = await this.resolvePlanContentScheduling(state, tier);
