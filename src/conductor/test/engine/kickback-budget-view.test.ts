@@ -37,6 +37,17 @@ describe('kickback budget view', () => {
     expect(renderKickbackBudgetView(legacy, 'build_review', 5)).toContain('Adjustment history: unavailable');
   });
 
+  it('renders config-derived plan growth without inventing a raised cap', () => {
+    const rendered = renderKickbackBudgetView(
+      { ...baseEntry, laps: 1, adjustmentsKnown: true },
+      'prd_audit',
+      2,
+      { authored: 10, added: 2, byGate: { prd_audit: 2 }, remaining: 0, cap: 2, capSource: 'config-derived' },
+    );
+    expect(rendered).toContain('Plan growth: 2/2 added; 0 remaining (config-derived cap)');
+    expect(rendered).not.toContain('raised cap');
+  });
+
   it('inspects every gate through the CLI and keeps JSON aligned with the rendered gates', async () => {
     const fixture = await makeFeature({ version: 1, gates: {
       build_review: { count: 1, cumulative: 2, adjustmentsKnown: true, treeHash: null, lastReason: 'review', priorVerdict: true, resolvedBefore: 0 },
@@ -100,3 +111,5 @@ describe('kickback budget view', () => {
     }
   });
 });
+
+const baseEntry = { count: 1, cumulative: 1, treeHash: null, lastReason: 'cap', priorVerdict: true, resolvedBefore: 0 };

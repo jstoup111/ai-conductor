@@ -444,6 +444,64 @@ describe('kickback-budget reset refuses plan-growth evidence', () => {
   });
 });
 
+// Covers: Task 9 — inspect is an operator-facing accounting view, including
+// the shared plan-growth budget that a remediation gate can exhaust.
+describe('kickback-budget inspect shows plan growth', () => {
+  const raisedGrowthLedger = {
+    version: 1,
+    effectiveGrowthCap: 12,
+    growth: { authored: 10, added: 6, byGate: { architecture_review_as_built: 6 } },
+    gates: {
+      architecture_review_as_built: {
+        ...baseEntry,
+        laps: 1,
+        adjustmentsKnown: true,
+        adjustments: [{
+          id: 'growth-raise', kind: 'raise', beforeConsumed: 6, afterConsumed: 6,
+          beforeLimit: 10, afterLimit: 12, operator: 'operator', rationale: 'one more lap',
+          timestamp: '2026-09-24T00:00:00.000Z', haltGeneration: 'growth-halt', allowance: 'growth',
+        }],
+      },
+      prd_audit: { ...baseEntry, laps: 1, adjustmentsKnown: true },
+    },
+  };
+
+  it('renders raised plan growth beside every gate and labels its adjustment allowance', async () => {
+    const fixture = await makeFeature(raisedGrowthLedger);
+    try {
+      const output: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => output.push(line) },
+      )).toBe(0);
+      expect(output[0]).toContain('Plan growth: 6/12 added; 6 remaining (raised cap)');
+      expect(output[0]).toContain('Adjustment history: raise growth-raise (growth)');
+      expect(output[0]).toContain('Kickback budget (prd_audit):');
+      const json: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => json.push(line) },
+      )).toBe(0);
+      expect(JSON.parse(json[0]).gates).toEqual(expect.arrayContaining([
+        expect.objectContaining({ planGrowth: expect.objectContaining({ added: 6, cap: 12, capSource: 'raised' }) }),
+      ]));
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('keeps a no-TTY inspect read-only while reporting a growth-halted feature', async () => {
+    const fixture = await makeFeature(raisedGrowthLedger);
+    try {
+      const ledgerPath = join(fixture.worktree, '.pipeline', 'kickback-ledger.json');
+      const before = await readFile(ledgerPath);
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, isInteractive: () => false, print: () => {} },
+      )).toBe(0);
+      expect(await readFile(ledgerPath)).toEqual(before);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+});
+
 // Covers: task:11 — D3 authority contract: machine-scoped identity through the
 // approved user-config → GitHub chain, a bounded rationale, and one shared
 // named-worktree resolution rather than a per-command copy.

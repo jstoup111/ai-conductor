@@ -8,13 +8,15 @@ import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
-import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackGate, isUnreadableKickbackLedger, readKickbackLedger, stageKickbackBudgetAdjustment, unreadableKickbackGates, type KickbackBudgetAdjustment } from './kickback-ledger.js';
-import { kickbackBudgetView, renderKickbackBudgetView } from './kickback-budget-view.js';
+import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackGate, isUnreadableKickbackLedger, readGrowth, readKickbackLedger, stageKickbackBudgetAdjustment, unreadableKickbackGates, type KickbackBudgetAdjustment } from './kickback-ledger.js';
+import { kickbackBudgetView, renderKickbackBudgetView, type KickbackPlanGrowthView } from './kickback-budget-view.js';
 import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
 import { isAcceptableOperatorRationale, resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { HALT_CLASS_MARKER } from './halt-marker.js';
 import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import { loadConfig } from './config.js';
+import { prdAuditAppendCap } from './conductor.js';
+import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
 
 const GATES = new Set(['build_review', 'prd_audit', 'architecture_review_as_built']);
@@ -108,15 +110,30 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const ledger = await readKickbackLedger(worktree);
     if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
     const defaults = await defaultsFor(worktree);
+    // Resolve plan growth from the same authored-task cap as remediation. A
+    // read-only inspect deliberately does not reconcile or persist it.
+    const storedGrowth = ledger.growth ?? await readGrowth(worktree, 0);
+    const config = await loadConfig(worktree);
+    const configGrowthCap = prdAuditAppendCap(
+      config.ok ? config.config : {} as HarnessConfig,
+      storedGrowth.authored,
+    );
+    const growthCap = ledger.effectiveGrowthCap ?? configGrowthCap;
+    const planGrowth: KickbackPlanGrowthView = {
+      ...storedGrowth,
+      remaining: Math.max(0, growthCap - storedGrowth.added),
+      cap: growthCap,
+      capSource: ledger.effectiveGrowthCap === undefined ? 'config-derived' : 'raised',
+    };
     // adr-2026-08-31 decision 3: one malformed gate is reported as unavailable;
     // its healthy siblings still render their authoritative values.
     const unavailable = unreadableKickbackGates(ledger).filter((gate) => GATES.has(gate));
     const readable = [...GATES].filter((gate) => !unavailable.includes(gate));
-    const views = readable.map((gate) => kickbackBudgetView(ledger.gates[gate], gate, defaults[gate]));
+    const views = readable.map((gate) => kickbackBudgetView(ledger.gates[gate], gate, defaults[gate], planGrowth));
     print(command.format === 'json'
       ? JSON.stringify({ feature: command.feature, gates: views, ...(unavailable.length > 0 ? { unavailableGates: unavailable } : {}) })
       : [
-        ...views.map((view) => renderKickbackBudgetView(ledger.gates[view.gate], view.gate, defaults[view.gate])),
+        ...views.map((view) => renderKickbackBudgetView(ledger.gates[view.gate], view.gate, defaults[view.gate], planGrowth)),
         ...unavailable.map((gate) => `${gate}: budget unavailable (durable entry failed validation)`),
       ].join('\n\n'));
     return unavailable.length > 0 ? 1 : 0;
