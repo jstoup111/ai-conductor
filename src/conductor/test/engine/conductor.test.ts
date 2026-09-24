@@ -80,6 +80,9 @@ import { validatePlanDoneWhen } from '../../src/engine/plan-done-when.js';
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
+import { voidCoverageBindingForDecideChange } from '../../src/engine/coverage-binding-void.js';
+import { rewindState } from '../../src/engine/rewind.js';
+import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import {
   checkStepCompletion,
   stampGateRunIdentity,
@@ -1501,6 +1504,111 @@ describe('engine/conductor', () => {
     );
 
     expect(state.coverage_binding).toBe('done');
+  });
+
+  // Covers: task:6
+  describe('coverage binding re-entry after a DECIDE void', () => {
+    const changedDecidePath = '.docs/decisions/adr-governing.md';
+
+    async function voidCompletedCoverageBinding(lastStep: StepName, buildStatus: StepStatus = 'done'): Promise<ConductState> {
+      const state = Object.fromEntries(
+        ALL_STEPS
+          .slice(0, ALL_STEPS.findIndex((step) => step.name === lastStep) + 1)
+          .map((step) => [step.name, 'done']),
+      ) as ConductState;
+      state.last_step = lastStep;
+      state.build = buildStatus;
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeState(statePath, state);
+      await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+        tasks: [{ id: '6', status: 'completed' }],
+      }) + '\n');
+      await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({
+        version: 1,
+        slug: 'test-feature',
+        runId: 'before-decide-change',
+        status: 'done',
+        entries: [],
+      }) + '\n');
+      await writeVerdict(dir, 'coverage_binding', {
+        satisfied: true,
+        checkedAt: 1,
+        reason: 'coverage binding complete',
+      });
+
+      await voidCoverageBindingForDecideChange({
+        projectRoot: dir,
+        decideSet: { paths: new Set([changedDecidePath]) },
+        rebaselines: [{
+          path: changedDecidePath,
+          priorFingerprint: 'sha256:before',
+          newFingerprint: 'sha256:after',
+        }],
+        events,
+        stateFilePath: statePath,
+      });
+      const voided = await readState(statePath);
+      if (!voided.ok) throw new Error(voided.error.message);
+      return voided.value;
+    }
+
+    function runnerThatStopsAtBuild(dispatched: StepName[]): StepRunner {
+      return {
+        run: async (step) => {
+          dispatched.push(step);
+          return step === 'build'
+            ? { success: false, output: 'expected test boundary' }
+            : { success: true };
+        },
+      };
+    }
+
+    it('re-runs coverage_binding before BUILD after an operator rewind to build', async () => {
+      const voided = await voidCompletedCoverageBinding('build_review');
+      const rewindStore = createFilesystemConductStateStore(statePath);
+      await rewindState({
+        state: voided,
+        config: {},
+        target: 'build',
+        store: rewindStore,
+        readCurrentState: async () => {
+          const current = await readState(statePath);
+          return current.ok ? current.value : {};
+        },
+      });
+
+      const dispatched: StepName[] = [];
+      await new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runnerThatStopsAtBuild(dispatched),
+        events,
+        resume: true,
+        verifyArtifacts: false,
+        onRecovery: async () => 'quit',
+      }).run();
+
+      expect(dispatched[0]).toBe('coverage_binding');
+      expect(dispatched.findIndex((step) => step === 'build')).toBe(1);
+    });
+
+    it('re-runs coverage_binding before BUILD when a daemon resumes after the void', async () => {
+      await voidCompletedCoverageBinding('acceptance_specs', 'stale');
+      const dispatched: StepName[] = [];
+      await new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runnerThatStopsAtBuild(dispatched),
+        events,
+        resume: true,
+        daemon: true,
+        verifyArtifacts: false,
+        onRecovery: async () => 'quit',
+      }).run();
+
+      expect(dispatched[0]).toBe('coverage_binding');
+      expect(dispatched.findIndex((step) => step === 'build')).toBe(1);
+    });
   });
 
   it('halts build_review for a human when consuming the sixth cumulative kickback', async () => {
