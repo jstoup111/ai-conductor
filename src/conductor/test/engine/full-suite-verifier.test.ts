@@ -3796,9 +3796,20 @@ describe('FullSuiteVerifier', () => {
     }));
     await writeFile(claimPath, existingClaim, 'utf8');
     let executions = 0;
+    let inspections = 0;
 
     const result = await new FullSuiteVerifier({
       projectRoot,
+      fingerprint: async () => {
+        inspections += 1;
+        return {
+          ok: false as const,
+          reason: {
+            code: 'git_enumeration_failed',
+            message: 'lock-classification failure must not inspect the suite',
+          },
+        };
+      },
       execute: async () => {
         executions += 1;
         throw new Error('must not execute after a recovery-claim probe failure');
@@ -3816,6 +3827,7 @@ describe('FullSuiteVerifier', () => {
     expect({
       result,
       executions,
+      inspections,
       claim: await readFile(claimPath, 'utf8'),
     }).toEqual({
       result: {
@@ -3824,6 +3836,7 @@ describe('FullSuiteVerifier', () => {
         message: 'Unable to verify full-suite recovery claim liveness: liveness denied',
       },
       executions: 0,
+      inspections: 0,
       claim: existingClaim,
     });
   });

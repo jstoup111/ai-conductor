@@ -191,6 +191,7 @@ export const ALL_STEPS: StepDefinition[] = [
     skippableForTiers: [],
     isCheckpoint: false,
     loopGate: true,
+    preservableOnStale: true,
   },
   {
     name: 'manual_test',
@@ -207,6 +208,7 @@ export const ALL_STEPS: StepDefinition[] = [
     isCheckpoint: true,
     skillName: 'manual-test',
     loopGate: true,
+    preservableOnStale: true,
     // Opt-in to per-project config disable (`steps.manual_test.disable: true`).
     // Unlike the #367 silent auto-skip this guards against, a committed config
     // key is explicit, validated, and visible in review. A disabled step is
@@ -228,6 +230,7 @@ export const ALL_STEPS: StepDefinition[] = [
     isCheckpoint: false,
     skillName: 'prd-audit',
     loopGate: true,
+    preservableOnStale: true,
     // Projects may explicitly opt out when they have a product-track fixture
     // or workflow with no PRD audit to run. This committed, validated setting
     // is observable in review; it is not the silent gating-step skip this
@@ -249,6 +252,7 @@ export const ALL_STEPS: StepDefinition[] = [
     isCheckpoint: false,
     skillName: 'architecture-review',
     loopGate: true,
+    preservableOnStale: true,
   },
   {
     // Engine-native loop gate (like `complexity`, no skillName): rebase the

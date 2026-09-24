@@ -956,6 +956,25 @@ export class FullSuiteVerifier {
       this.options.lock,
     );
     if (!acquired.ok) {
+      // A peer may have completed and persisted an exact-current PASS while
+      // this contender was resolving a stale-lock race. That PASS remains the
+      // same authority used after a normal lock acquisition, so recover only
+      // when the ordinary read-only inspection can prove it current. Do not
+      // turn a stale or indeterminate result into a reuse.
+      // Failures while *classifying* the lock (for example an unavailable
+      // recovery-claim liveness probe) are not contention. They must retain
+      // their original fail-closed diagnostic and must not start an unrelated
+      // inspection after acquisition has already failed.
+      if (acquired.message.startsWith('Unable to acquire full-suite verification lock within ')) {
+        const resolved = await this.resolveInspection();
+        if (
+          'context' in resolved &&
+          (resolved.inspection.status === 'CURRENT' ||
+            resolved.inspection.status === 'PRESERVED_WITHIN_BUDGET')
+        ) {
+          return { status: 'REUSED', evidence: resolved.inspection.evidence };
+        }
+      }
       return {
         status: 'FAILED',
         reason: 'internal_error',

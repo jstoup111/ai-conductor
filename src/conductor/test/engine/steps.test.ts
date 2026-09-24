@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { StepName, ComplexityTier } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -41,6 +42,16 @@ describe('engine/steps', () => {
 
     it('has the exact surviving registry in order', () => {
       expect(ALL_STEPS.map(s => s.name)).toEqual(expectedOrder);
+    });
+
+    it('declares stale preservation only on the four stamped judged gates', () => {
+      expect({
+        preservableOnStale: ALL_STEPS.filter((step) => step.preservableOnStale).map((step) => step.name),
+        treeAttestingCompletion: ALL_STEPS.filter((step) => step.treeAttestingCompletion).map((step) => step.name),
+      }).toEqual({
+        preservableOnStale: ['build_review', 'manual_test', 'prd_audit', 'architecture_review_as_built'],
+        treeAttestingCompletion: ['build', 'test_suite'],
+      });
     });
 
     it('worktree is SETUP/structural with no prereqs, no skip, not checkpoint', () => {
