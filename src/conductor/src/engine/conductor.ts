@@ -14483,17 +14483,16 @@ export class Conductor {
       const syntheticKey = `${groupName}__${branch.name}`;
       const success = outcome?.kind === 'verdict' && outcome.verdict === 'pass';
 
-      if (outcome?.kind === 'parked') {
-        changes[syntheticKey] = 'in_progress';
-        continue;
-      }
-
       if (success) {
         changes[syntheticKey] = 'done';
         continue;
       }
 
-      changes[syntheticKey] = 'failed';
+      // Parked members still reach the shared failure-event classifier. It
+      // deliberately emits no event for them, while preserving their
+      // resumable synthetic state and leaving group failure to genuine errors.
+      const parked = outcome?.kind === 'parked';
+      changes[syntheticKey] = parked ? 'in_progress' : 'failed';
       const failure = buildParallelFailureEvents(groupName, [{
         name: branch.name,
         skill: branch.skill ?? '',
@@ -14505,7 +14504,7 @@ export class Conductor {
           ...(branch.advisory ? { terminal: false } : {}),
         });
       }
-      if (!branch.advisory) {
+      if (!parked && !branch.advisory) {
         groupFailed = true;
       }
     }
