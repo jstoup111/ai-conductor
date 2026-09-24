@@ -374,6 +374,7 @@ Lets the mergeable sweep settle a rebase conflict confined to test code without 
 - `runAcceptanceGuards` called with `declaredSuperseded` omitted returns results identical to the pre-change guard for an undeclared missing commit that upstream superseded, asserted by the legacy-mode test reusing the existing supersededByBase fixture.
 - `runAcceptanceGuards` called with `declaredSuperseded: []` returns a `featureCommitsPreserved` failure naming the subject for that same fixture, asserted by the judgement-mode empty-declarations test.
 - `resolveConflictingPr` passes an array to `runAcceptanceGuards` on every sweep resolution, including one whose verdict declares nothing, asserted by a spy on the guard call in the sweep integration test, while the finish-time rebase step passes no `declaredSuperseded` argument, asserted by the finish-time boundary test.
+- A sweep resolution whose rebased branch is missing an undeclared feature commit escalates the pull request at the acceptance-guards stage with the missing subject named and nothing pushed, asserted by the S3.3 escalation test in `autoresolve-supersession.test.ts` (`**Stage:** acceptance-guards` in the escalation comment).
 
 **Files:** `src/conductor/src/engine/autoresolve.ts`; `src/conductor/src/engine/rebase.ts`; `src/conductor/test/engine/autoresolve-guards.test.ts`; `src/conductor/test/engine/autoresolve-supersession.test.ts`
 
