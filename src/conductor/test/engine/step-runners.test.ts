@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:12, task:17
+// Covers: task:1, task:3, task:7, task:12, task:17
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
@@ -100,6 +100,16 @@ function coverageBindingBatchOutput(options: InvokeOptions, verdict: 'asserts' |
       ? { digest, verdict }
       : { digest, verdict, missingAssertion: 'No check requires emission.' }),
   });
+}
+
+function adrWithDecisions(decisionIds: readonly string[]): string {
+  return `# ADR\n\n## Decision\n\n${decisionIds.map((id) => `${id}. **Decision ${id}.**`).join('\n')}\n`;
+}
+
+function obligationRows(adrId: string, decisionIds: readonly string[]): string {
+  return decisionIds.map((id) =>
+    `| ${adrId}#D${id} | existing | none | Decision ${id} remains in force. |`,
+  ).join('\n');
 }
 
 describe('DefaultStepRunner', () => {
@@ -233,6 +243,88 @@ describe('DefaultStepRunner', () => {
         runId: 'coverage-run-1',
         status: 'disabled',
         entries: [],
+      });
+      expect(provider.invoke).not.toHaveBeenCalled();
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('proceeds to judged claims when every DECIDE-set ADR decision has an obligation row', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-adr-obligations-pass-'));
+    const featureDesc = 'coverage-binding-adr-obligations-pass';
+    const adrId = 'adr-coverage-binding-obligations';
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
+      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
+    }));
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(join(projectDir, '.docs', 'decisions', `${adrId}.md`), adrWithDecisions(['1', '2', '3']));
+    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n${obligationRows(adrId, ['1', '2', '3'])}\n`);
+    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n`);
+    const runner = new DefaultStepRunner(provider, 'coverage-run-adr-pass', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an amended ADR decision with no coverage row before dispatching the judge', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-adr-obligations-missing-'));
+    const featureDesc = 'coverage-binding-adr-obligations-missing';
+    const adrId = 'adr-coverage-binding-amended';
+    const adrPath = `.docs/decisions/${adrId}.md`;
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    const provider = createMockProvider();
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(projectDir, adrPath), adrWithDecisions(['1', '2', '3', '4']));
+    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n${obligationRows(adrId, ['1', '2', '3'])}\n`);
+    const runner = new DefaultStepRunner(provider, 'coverage-run-adr-missing', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({
+        success: false,
+        refusal: { kind: 'needs-human' },
+      });
+      expect(result.output).toContain(adrPath);
+      expect(result.output).toContain('D4');
+      expect(result.output).toContain('no coverage row');
+      expect(provider.invoke).not.toHaveBeenCalled();
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('runs the ADR-obligation layer while the coverage-binding judge is disabled', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-adr-disabled-missing-'));
+    const featureDesc = 'coverage-binding-adr-disabled-missing';
+    const adrId = 'adr-coverage-binding-disabled';
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    const provider = createMockProvider();
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(projectDir, '.docs', 'decisions', `${adrId}.md`), adrWithDecisions(['1', '2', '3', '4']));
+    await writeFile(planPath, `## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n${obligationRows(adrId, ['1', '2', '3'])}\n`);
+    const runner = new DefaultStepRunner(provider, 'coverage-run-adr-disabled', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
+        success: false,
+        refusal: { kind: 'needs-human', reason: expect.stringContaining(`${adrId}#D4`) },
       });
       expect(provider.invoke).not.toHaveBeenCalled();
     } finally {

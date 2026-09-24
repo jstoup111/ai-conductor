@@ -46,10 +46,16 @@ import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFa
 import type { CiRepairDiagnosticReason } from '../types/events.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import {
+  parseAdrDecisions,
   resolveFeaturePlanPath,
   selectFeaturePlan,
   BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
+import {
+  formatArchitectureDecisionId,
+  validateArchitectureObligationCoverage,
+} from './architecture-obligation-coverage.js';
+import { resolveCoverageBindingDecideSet } from './coverage-binding-decide-set.js';
 import {
   parseJudgeBatchPayload,
   readCoverageBindingEnvelope,
@@ -4188,22 +4194,59 @@ export class DefaultStepRunner implements StepRunner {
       .then((result) => (result.exitCode === 0 ? result.stdout.trim() : ''))
       .catch(() => '');
 
+    const planPath = this.planPathOverride
+      ?? await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
+    let planText: string | undefined;
+    if (planPath) {
+      try {
+        planText = await readFile(planPath, 'utf8');
+      } catch (error) {
+        return { success: false, output: `coverage_binding could not read plan: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    } else if (judgeEnabled) {
+      return { success: false, output: 'coverage_binding could not resolve the feature plan' };
+    }
+
+    // Tier S and legacy plans without obligation bookkeeping have no ADR layer.
+    // This preserves their existing judge behavior while still evaluating every
+    // citable decision before the judge's configured exit on M/L plans.
+    if (planText !== undefined && state.complexity_tier !== 'S' && /^##\s+Architecture Obligation Coverage\s*$/im.test(planText)) {
+      const decideSet = await resolveCoverageBindingDecideSet(this.projectDir, this.featureDesc || undefined);
+      if (decideSet) {
+        const decisionPaths = new Map<string, string>();
+        const requiredDecisionIds = new Set<string>();
+        for (const adrPath of decideSet.adrPaths) {
+          const adr = parseAdrDecisions(await readFile(join(this.projectDir, adrPath), 'utf8'));
+          if (adr.kind !== 'decisions') continue;
+          const adrId = basename(adrPath, '.md');
+          for (const decisionId of adr.ids) {
+            const formatted = formatArchitectureDecisionId(adrId, decisionId);
+            requiredDecisionIds.add(formatted);
+            decisionPaths.set(formatted, adrPath);
+          }
+        }
+        const violations = validateArchitectureObligationCoverage(planText, requiredDecisionIds);
+        if (violations.length > 0) {
+          await writeEnvelope('refused', []);
+          const detail = violations.map((violation) => {
+            const decision = violation.decisionId.match(/#(D\d+)$/)?.[1] ?? violation.decisionId;
+            const adrPath = decisionPaths.get(violation.decisionId) ?? '(unknown ADR path)';
+            return `ADR: ${adrPath}\nDecision: ${decision}\nViolation: ${violation.detail}`;
+          }).join('\n\n');
+          const reason = `coverage_binding refused: architecture obligation coverage does not carry every current ADR decision.\n\n${detail}`;
+          return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
+        }
+      }
+    }
+
     if (!judgeEnabled) {
       await writeEnvelope('disabled', []);
       await this.events?.emit({ type: 'coverage_binding_disabled', step: 'coverage_binding' });
       return { success: true, output: 'coverage_binding judge disabled' };
     }
 
-    const planPath = this.planPathOverride
-      ?? await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
-    if (!planPath) return { success: false, output: 'coverage_binding could not resolve the feature plan' };
+    if (planText === undefined) return { success: false, output: 'coverage_binding could not resolve the feature plan' };
 
-    let planText: string;
-    try {
-      planText = await readFile(planPath, 'utf8');
-    } catch (error) {
-      return { success: false, output: `coverage_binding could not read plan: ${error instanceof Error ? error.message : String(error)}` };
-    }
     const coherencePath = join(this.projectDir, '.docs', 'coherence', `${this.featureDesc}.md`);
     const coherenceText = await readFile(coherencePath, 'utf8').catch(() => null);
     const claims = assembleCoverageBindingClaims({
