@@ -59,6 +59,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Judged gates now retain valid stamped verdicts after unrelated kickbacks instead of re-dispatching. ([implementation PR #2708](https://github.com/jstoup111/ai-conductor/pull/2708)).
 - Operators can park daemon features without later retries consuming their retry budget. ([implementation PR #2669](https://github.com/jstoup111/ai-conductor/pull/2669)).
 - The continuous daemon caps memory growth, retains diagnostic heap snapshots, and reports witnessed exits. ([implementation PR #2679](https://github.com/jstoup111/ai-conductor/pull/2679)).
+- Daemon gauge metrics (heartbeat, backlog, slots) no longer drop out of Prometheus dashboards during long-running steps. ([implementation PR #2712](https://github.com/jstoup111/ai-conductor/pull/2712)).
 
 ## [1.4.0] - 2026-09-19
 
