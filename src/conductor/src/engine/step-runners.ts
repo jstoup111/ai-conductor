@@ -118,6 +118,7 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import { classifyBuildReviewCacheLookup, readBuildReviewCacheEntry, tryWriteBuildReviewCacheEntry, writeBuildReviewCacheEntry, type BuildReviewCacheSemanticIdentity } from './build-review-cache.js';
 import {
   parseBuildReviewCustomArtifactMember,
+  buildReviewRubricPromptPath,
   readBuildReviewBranchArtifact,
   writeBuildReviewBranchArtifact,
   type BuildReviewBranchProvenance,
@@ -3359,6 +3360,12 @@ export class DefaultStepRunner implements StepRunner {
       lapId: projection.lapId,
       promptBytes: Buffer.byteLength(rubricPrompt, 'utf8'),
     });
+    // Offline eval input (#1612): the frozen prompt is otherwise lost, since
+    // only its digest is cached. Best-effort — a failed write never fails review.
+    const promptPath = buildReviewRubricPromptPath(this.projectDir, projection.lapId, branch.rubric);
+    await mkdir(dirname(promptPath), { recursive: true })
+      .then(() => writeFile(promptPath, rubricPrompt, 'utf8'))
+      .catch(() => undefined);
     let cacheWriteFailureDetail: string | undefined;
     const invokeOnce = async (prompt: string): Promise<{
       success: boolean;

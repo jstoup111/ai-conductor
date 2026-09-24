@@ -230,6 +230,19 @@ export function buildReviewBranchArtifactPath(
   return join(projectRoot, ARTIFACT_DIRECTORY, lapId, `${rubric}.json`);
 }
 
+/**
+ * The exact rubric prompt a lap dispatched, kept beside its artifact so an
+ * offline eval can re-grade the frozen projection (#1612). Never read by the
+ * engine; the `.txt` suffix keeps it out of every `.json` artifact reader.
+ */
+export function buildReviewRubricPromptPath(
+  projectRoot: string,
+  lapId: BuildReviewLapId,
+  rubric: BuildReviewArtifactRubric,
+): string {
+  return join(projectRoot, ARTIFACT_DIRECTORY, lapId, `${rubric}.prompt.txt`);
+}
+
 function artifactDirectory(projectRoot: string, lapId: BuildReviewLapId): string {
   return join(projectRoot, ARTIFACT_DIRECTORY, lapId);
 }
