@@ -79,6 +79,10 @@ The provider descriptor manifest introduced by the companion ADR is the single s
 compares against, so the manifest — not a doc table, not a workflow matrix, not a prose
 responsibility table — is the one place a provider's live-tier facts are recorded.
 
+> **Amended 2026-09-24 by #1884:** Registration of built-in providers now depends on boot-time installation discovery (adr-2026-09-24-built-in-provider-catalog-and-boot-discovery D3), so "registered" no longer names a machine-independent set.
+>
+> 1. **Enumerate the catalog plus registered plugins.** The structural coverage test enumerates every id in the built-in provider catalog (`BUILT_IN_PROVIDERS`) together with every externally registered `llm_provider` plugin id, and asserts each has a live smoke leg and a descriptor entry. It never enumerates only the providers discovered as installed on the test machine, so a machine with no provider binaries still checks every built-in.
+
 ## Consequences
 
 ### Positive

@@ -26,6 +26,10 @@ Two intake outcomes are deterministic-machinery concerns, not LLM work:
 
    > **Amended 2026-09-11 by #2153:** The operator approved CI repair inheriting the existing build provider/model/effort/fallback configuration. The later `adr-2026-07-24-provider-aware-step-execution-fresh-session-scope` and `adr-2026-07-29-codex-readiness-probe-failure-disposition` govern readiness and execution. The independent Claude-only startup veto is no longer required or permitted: selected-provider readiness belongs at the existing provider execution boundary. Preserve explicit, classified diagnostics and do not consume a repair attempt on a proven pre-execution refusal. Authentication failure does not authorize provider fallback; an inconclusive Codex readiness probe retains its established ordinary-dispatch behavior. This clarification changes neither general provider routing nor the authority of guards, configured verification, and lease-protected publication.
 
+   > **Amended 2026-09-24 by #1884:** Installation and runtime unavailability are separate conditions.
+   >
+   > 3. **Installation is a boot fault; runtime unavailability keeps CI-repair fallback.** A configured provider whose executable is not installed fails startup under adr-2026-09-24-built-in-provider-catalog-and-boot-discovery D4, before any CI repair can run. That provider-neutral, catalog-driven installation check does not reinstate the Claude-only veto removed above. An installed provider that is unavailable at runtime (exit 127 after boot, credit or usage exhaustion, readiness refusal) keeps the existing fallback-to-usable-provider behavior at the execution boundary.
+
 2. **Error classification at the resolver boundary.** When a dispatch/spawn fails, classify it
    into `flag-invalid` (arg-parse / unknown-option), `auth` (credential/login failure),
    `spawn-env` (ENOENT / PATH), or `unknown`, and log a diagnosable line. Replace the bare
