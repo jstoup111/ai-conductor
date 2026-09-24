@@ -371,6 +371,79 @@ describe('kickback-budget raise follows the exhausted allowance', () => {
   });
 });
 
+// Covers: Task 7 — plan-growth exhaustion is recoverable only by extending
+// the plan-growth allowance; resetting the gate's lap counter cannot recover it.
+describe('kickback-budget reset refuses plan-growth evidence', () => {
+  const growthLedger = () => ({
+    version: 1,
+    growth: { authored: 10, added: 6, byGate: { architecture_review_as_built: 6 } },
+    gates: {
+      architecture_review_as_built: {
+        ...baseEntry,
+        laps: 1,
+        capEvidence: {
+          gate: 'architecture_review_as_built', consumed: 6, limit: 10,
+          latestReason: 'plan growth cap reached (6/10)', haltGeneration: 'growth-halt', allowance: 'growth',
+        },
+      },
+    },
+  });
+
+  const haltForGrowth = async (fixture: { worktree: string }, body = 'halted\nKickback halt generation: growth-halt'): Promise<void> => {
+    await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), body);
+    await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'kickback-cap');
+  };
+
+  const reset = (fixture: { root: string }, output: string[]): Promise<number> =>
+    dispatchKickbackBudgetCommand(
+      { kind: 'kickback-budget', action: 'reset', feature: 'feature', gate: 'architecture_review_as_built', rationale: 'fresh review', format: 'human' },
+      {
+        cwd: fixture.root, resolveMainRoot: async () => fixture.root, isInteractive: () => true,
+        resolveOperator: () => 'operator', print: (line) => output.push(line), appendEvent: () => {},
+      },
+    );
+
+  it('refuses reset without changing the ledger or either absent or pre-existing park state', async () => {
+    const fixture = await makeFeature(growthLedger());
+    const park = join(fixture.root, '.daemon', 'parked', 'feature');
+    try {
+      await haltForGrowth(fixture);
+      const ledgerPath = join(fixture.worktree, '.pipeline', 'kickback-ledger.json');
+      const before = await readFile(ledgerPath);
+      const output: string[] = [];
+
+      expect(await reset(fixture, output)).toBe(1);
+      expect(output.join('\n')).toContain('raise');
+      expect(await readFile(ledgerPath)).toEqual(before);
+      await expect(access(park)).rejects.toThrow();
+
+      await mkdir(join(fixture.root, '.daemon', 'parked'), { recursive: true });
+      await writeFile(park, 'operator parked\n');
+      output.length = 0;
+      expect(await reset(fixture, output)).toBe(1);
+      expect(output.join('\n')).toContain('raise');
+      expect(await readFile(ledgerPath)).toEqual(before);
+      await expect(access(park)).resolves.toBeUndefined();
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('raises from ledger evidence after the HALT recovery-command line was deleted', async () => {
+    const fixture = await makeFeature(growthLedger());
+    try {
+      await haltForGrowth(fixture, 'halted\nKickback halt generation: growth-halt');
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'architecture_review_as_built', by: 2, rationale: 'one more lap', format: 'human' },
+        {
+          cwd: fixture.root, resolveMainRoot: async () => fixture.root, isInteractive: () => true,
+          resolveOperator: () => 'operator', print: () => {}, appendEvent: () => {},
+        },
+      )).toBe(0);
+      const ledger = JSON.parse(await readFile(join(fixture.worktree, '.pipeline', 'kickback-ledger.json'), 'utf8'));
+      expect(ledger.effectiveGrowthCap).toBe(12);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+});
+
 // Covers: task:11 — D3 authority contract: machine-scoped identity through the
 // approved user-config → GitHub chain, a bounded rationale, and one shared
 // named-worktree resolution rather than a per-command copy.

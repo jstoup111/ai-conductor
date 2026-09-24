@@ -137,6 +137,16 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   // write `kickback-cap` (adr-2026-08-25 D4, preserved by D1's amendment). Read
   // the raw sidecar — `readHaltClass` folds every class outside the daemon's
   // scheduling union to `unclassified`, which would refuse both of them.
+  // Resetting a lap counter cannot recover exhausted plan-growth allowance.
+  // This is deliberately outside the shared staging refusal: the same durable
+  // evidence authorizes raise, and it must be rejected before taking a park.
+  if (command.action === 'reset') {
+    const ledger = await readKickbackLedger(worktree);
+    if (!isUnreadableKickbackLedger(ledger) && ledger.gates[gate]?.capEvidence?.allowance === 'growth') {
+      print('kickback-budget: refused — plan-growth evidence requires `raise` recovery.');
+      return 1;
+    }
+  }
   const parked = await isOperatorParked(root, command.feature);
   if (!parked) {
     const result = await dispatchDaemonPark({ kind: 'park', slug: command.feature }, { cwd: root, out: () => {} });
