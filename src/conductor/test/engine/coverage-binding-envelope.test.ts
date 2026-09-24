@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:11
+// Covers: task:2, task:1, task:11
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -35,24 +35,56 @@ function memoryFilesystem(files: Record<string, string> = {}): CoverageBindingEn
 }
 
 describe('coverage binding envelope', () => {
-  it('round-trips every envelope status while keeping partial outside the completion set', () => {
+  it('round-trips every envelope status while keeping invalidated outside the completion set', () => {
     const entries = [
-      { digest: 'sha256:one', criterion: 'Given one', taskIds: ['1'], doneWhen: [['One is asserted.']], verdict: 'asserts' as const },
-      { digest: 'sha256:two', criterion: 'Given two', taskIds: ['2'], doneWhen: [['Two is asserted.']], verdict: 'not-applicable' as const },
+      { kind: 'criterion' as const, digest: 'sha256:one', criterion: 'Given one', taskIds: ['1'], doneWhen: [['One is asserted.']], verdict: 'asserts' as const },
+      { kind: 'criterion' as const, digest: 'sha256:two', criterion: 'Given two', taskIds: ['2'], doneWhen: [['Two is asserted.']], verdict: 'not-applicable' as const },
     ];
     const envelope = { version: 1, slug: 'feature', runId: 'run-1', entries } as const;
 
     expect([
-      ['disabled', 'done', 'failed', 'partial', 'refused'].map((status) =>
+      ['disabled', 'done', 'failed', 'invalidated', 'partial', 'refused'].map((status) =>
         parseCoverageBindingEnvelope({ ...envelope, status }),
       ),
       COVERAGE_BINDING_ENVELOPE_STATUSES,
       COVERAGE_BINDING_COMPLETION_STATUSES,
     ]).toEqual([
-      ['disabled', 'done', 'failed', 'partial', 'refused'].map((status) => ({ ...envelope, status })),
-      expect.arrayContaining(['partial']),
+      ['disabled', 'done', 'failed', 'invalidated', 'partial', 'refused'].map((status) => ({ ...envelope, status })),
+      expect.arrayContaining(['invalidated', 'partial']),
       ['disabled', 'done'],
     ]);
+  });
+
+  it('round-trips amendment verdict entries and defaults legacy entries to criterion', () => {
+    const envelope = {
+      version: 1,
+      slug: 'feature',
+      runId: 'run-1',
+      status: 'done',
+      entries: [
+        ...(['carried', 'not-carried', 'no-plan-obligation', 'unjudged'] as const).map((verdict) => ({
+          kind: 'amendment' as const,
+          digest: `sha256:${verdict}`,
+          artifactPath: '.docs/decisions/adr.md',
+          amendment: 'The amended decision changes the execution boundary.',
+          taskIds: ['1'],
+          doneWhen: [['The execution boundary is implemented.']],
+          verdict,
+        })),
+        {
+          digest: 'sha256:legacy',
+          criterion: 'Given legacy evidence',
+          taskIds: ['2'],
+          doneWhen: [['The legacy criterion remains supported.']],
+          verdict: 'asserts' as const,
+        },
+      ],
+    } as const;
+
+    expect(parseCoverageBindingEnvelope(envelope)).toEqual({
+      ...envelope,
+      entries: [...envelope.entries.slice(0, -1), { ...envelope.entries.at(-1)!, kind: 'criterion' }],
+    });
   });
 
   it('accepts only the closed judge verdict payloads', () => {
@@ -133,7 +165,7 @@ describe('coverage binding envelope', () => {
   it('atomically writes and reads engine-stamped entries while missing, malformed, or structurally invalid files are ignored', async () => {
     const root = '/feature';
     const fs = memoryFilesystem();
-    const entry = { digest: 'sha256:claim', criterion: 'Given a criterion', taskIds: ['11'], doneWhen: [['The requirement is asserted.']], verdict: 'asserts' as const };
+    const entry = { kind: 'criterion' as const, digest: 'sha256:claim', criterion: 'Given a criterion', taskIds: ['11'], doneWhen: [['The requirement is asserted.']], verdict: 'asserts' as const };
     await writeCoverageBindingEnvelope(root, { version: 1, slug: 'feature', runId: 'run-1', status: 'done', entries: [entry] }, fs);
     const path = coverageBindingEnvelopePath(root);
     expect({
