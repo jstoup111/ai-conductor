@@ -1,4 +1,6 @@
+// Covers: S3.1, S3.2, S3.3
 import { describe, expect, it } from 'vitest';
+import { extractAuthoritativeStoryCriteria } from '../../src/engine/artifacts.js';
 import { extractStoryCriterionIds, splitStoryBlocks } from '../../src/engine/story-criteria.js';
 
 /** One story block in the heading shape real stories files use. */
@@ -103,6 +105,36 @@ describe('extractStoryCriterionIds', () => {
       '',
     ].join('\n');
     expect(extractStoryCriterionIds(text)).toEqual(['S1.1', 'S1.2', 'S1.3', 'S1.4']);
+  });
+
+  it('keeps authoritative criteria aligned with ids for hard-wrapped bullets', () => {
+    const text = [
+      '## Story 1: First wrapped',
+      '',
+      '#### Happy Path',
+      '- Given the first criterion begins on the bullet line,',
+      '  when the continuation is indented, then it remains one criterion.',
+      '- Given a second criterion, when it runs, then it follows the first.',
+      '',
+      '## Story 2: Also wrapped',
+      '',
+      '#### Negative Paths',
+      '- Given the negative criterion begins on the bullet line,',
+      '  when the continuation is indented, then it remains one criterion.',
+      '',
+    ].join('\n');
+
+    const authoritative = extractAuthoritativeStoryCriteria(text);
+    const ids = extractStoryCriterionIds(text);
+
+    expect({ authoritative, idCount: ids.length }).toEqual({
+      authoritative: [
+        'Story 1 happy: Given the first criterion begins on the bullet line, when the continuation is indented, then it remains one criterion.',
+        'Story 1 happy: Given a second criterion, when it runs, then it follows the first.',
+        'Story 2 negative: Given the negative criterion begins on the bullet line, when the continuation is indented, then it remains one criterion.',
+      ],
+      idCount: 3,
+    });
   });
 
   it('does not join a following bullet or unindented prose into the previous row', () => {
