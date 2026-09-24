@@ -320,9 +320,10 @@ access.
 #### Happy Paths
 
 - **HP-1:** Given an unattended initial, grouped, auxiliary, model-ladder, or resumed
-  Codex invocation, when it starts, then its effective policy is explicitly
-  `workspace-write`, `on-request`, and automatic review, with default secret filtering
-  enforced.
+  Codex invocation other than a read-only review member of a custom-policy build_review lap,
+  when it starts, then its effective policy is explicitly `workspace-write`, `on-request`, and
+  automatic review, with default secret filtering enforced; a read-only review member runs
+  `read-only` with approval `never`.
 - **HP-2:** Given a routine action reads or writes within the feature worktree, when
   Codex executes it, then it can proceed inside the bounded workspace without routine
   unrestricted host access.

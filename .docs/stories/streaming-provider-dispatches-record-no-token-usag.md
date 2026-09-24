@@ -178,7 +178,7 @@ so that unification does not silently drop an enforcement.
 
 #### Happy Path
 - Given any dispatch through the unified path, when the adapter entry is reached, then fresh-session enforcement is applied and the dispatch carries a freshly minted session id.
-- Given an unattended codex dispatch, when its argument list is constructed, then the workspace-write sandbox, network access, approval policy, and reviewer configuration are all present.
+- Given an unattended codex dispatch that is not a read-only review member of a custom-policy build_review lap, when its argument list is constructed, then the workspace-write sandbox, network access, approval policy, and reviewer configuration are all present.
 - Given any dispatch through the unified path, when the provider is selected, then the model-availability cache is consulted before dispatch and a model already marked dead is substituted with the first live ladder model.
 - Given an autonomous step dispatched after unification, when its behavior is compared with before, then its text output and its recorded usage are unchanged.
 - Given a dispatch supplied with a branch session id, when it is dispatched, then it reaches the provider through the same unified entry point as every other dispatch.
