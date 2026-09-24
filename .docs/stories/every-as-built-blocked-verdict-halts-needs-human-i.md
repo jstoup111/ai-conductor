@@ -8,43 +8,43 @@ architecture-review-2026-08-25-every-as-built-blocked-verdict-halts-needs-human-
 
 ## Story 1: BLOCKED reports carry a per-finding classification table
 
-As the as-built review skill, I want every BLOCKED report to carry a machine-read
-`## Blocking Findings` table so that the engine can tell remediable findings from design
-findings.
+As the as-built review skill, I want every BLOCKED verdict to carry typed per-finding
+classifications so that the engine can tell remediable findings from design findings.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the as-built review reaches a BLOCKED verdict, when it writes the report, then the report contains a `## Blocking Findings` table with one row per finding carrying a finding id, a class from the closed set REMEDIABLE or DESIGN, a governing approved clause reference (ADR filename stem plus decision number, or a plan task id), and a one-line summary
-- Given a finding whose remedy is already required by an APPROVED artifact, when the review classifies it, then the row's class is REMEDIABLE and its clause names that artifact and decision
+- Given the as-built review reaches a BLOCKED verdict, when it returns its structured result, then the typed verdict carries one finding per blocking issue with a finding id, a class from the closed set REMEDIABLE or DESIGN, a structural governing reference (`{kind: "adr-decision", stem, decision}` or `{kind: "plan-task", taskId}`), and a one-line summary
+- Given a finding whose remedy is already required by an APPROVED artifact, when the review classifies it, then the finding's class is REMEDIABLE and its reference names that artifact and decision
 
 #### Negative Paths
-- Given a non-BLOCKED verdict (APPROVED, DRIFT NOTES, or PLAN_GAP), when the report is written, then no `## Blocking Findings` table is required and the existing verdict handling is byte-for-byte unchanged
-- Given a finding requiring a decision no approved artifact has made, when the review classifies it, then the row's class is DESIGN and the prose `## Resolution` section still states the code-fix-or-superseding-ADR choice
+- Given a non-BLOCKED verdict (APPROVED, DRIFT NOTES, or PLAN_GAP), when the structured result is validated, then it carries no findings, a findings array on it is rejected, and the existing verdict handling is unchanged
+- Given a finding requiring a decision no approved artifact has made, when the review classifies it, then the finding's class is DESIGN and the rendered report's resolution text still states the code-fix-or-superseding-ADR choice
 
 ### Done When
-- [ ] The architecture-review skill's as-built section specifies the table contract (columns, closed class set, clause grammar) and the skill validation suite passes
-- [ ] A fixture BLOCKED report with the table parses; the table is additive so existing verdict parsing of all four verdicts is unchanged in the test suite
+- [ ] The as-built output contract defines the typed finding (id, closed class set, structural reference, summary), the architecture-review skill's as-built section carries the class semantics as judgement guidance, and the skill validation suite passes
+- [ ] A fixture BLOCKED typed verdict with findings validates, and contract tests accept all four verdicts with findings admitted only on BLOCKED
 
 ## Story 2: Fail-closed parsing of the classification table
 
-As the conductor, I want a mechanical parser for the `## Blocking Findings` table that treats
-any defect as invalid so that ambiguity always fails toward a human.
+As the conductor, I want mechanical validation of the typed as-built findings that treats any
+defect as a rejected result so that ambiguity never becomes a verdict and always fails toward a
+human.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a BLOCKED report whose table rows all carry a valid class and clause, when the engine classifies the outcome, then the outcome is blocked-remediable when every row is REMEDIABLE and blocked-design when any row is DESIGN
+- Given a BLOCKED typed verdict whose findings all carry a valid class and resolvable reference, when the engine classifies the outcome, then the outcome is blocked-remediable when every finding is REMEDIABLE and blocked-design when any finding is DESIGN
 
 #### Negative Paths
-- Given a BLOCKED report with no `## Blocking Findings` table, when the engine classifies the outcome, then the outcome is invalid and the feature halts with class needs-human and a halt body naming the missing table
-- Given a table row whose class is not exactly REMEDIABLE or DESIGN, when the engine classifies the outcome, then the outcome is invalid and the halt body names the offending row and value
-- Given a REMEDIABLE row that names no governing clause, when the engine classifies the outcome, then the outcome is invalid and the halt body names the clause-less finding
-- Given a table whose header row lacks a required column, when the engine classifies the outcome, then the outcome is invalid and the halt body names the malformed header
+- Given a BLOCKED structured result with no findings, when the engine validates it, then it is rejected naming `findings`, the attempt is scored `absent`, and the step reruns in a fresh session within its existing retry budget
+- Given a finding whose class is not exactly REMEDIABLE or DESIGN, when the engine validates the result, then it is rejected naming that finding's class field and the admitted values, and the attempt is scored `absent` and reruns
+- Given a REMEDIABLE finding that carries no reference, when the engine validates the result, then it is rejected naming that finding's reference field, and the attempt is scored `absent` and reruns
+- Given every retry in the budget ends in a rejected or missing structured result, when the budget is exhausted, then the feature halts with class needs-human and a halt body naming the as-built step and the last rejected field
 
 ### Done When
-- [ ] A parser for the table exists in the engine's artifact module, section-scoped and header-validated in the same shape as the prd-audit report parser, with unit tests covering each malformed case above
-- [ ] The as-built outcome type distinguishes blocked-remediable from blocked-design, and invalid is returned for every malformed-table case
+- [ ] Contract validation of the typed as-built result rejects each malformed case above with a field-named diagnostic, covered by unit tests, and a dispatch-path test proves a rejected result scores `absent`, reruns, and halts needs-human on exhaustion
+- [ ] The as-built outcome type distinguishes blocked-remediable from blocked-design, and no rejected result is ever classified as a verdict
 
 ## Story 3: All-remediable reports route to BUILD through the single appender
 
@@ -61,7 +61,7 @@ tasks and route back to BUILD so that the feature converges without an operator.
 #### Negative Paths
 - Given the remediation kill switch is off, when a blocked-remediable outcome is handled, then no tasks are appended and the feature halts needs-human exactly as before this feature (a test proves the revert)
 - Given a blocked-remediable outcome in a validation group, when the group commits, then exactly one consolidated remediation dispatch occurs (per-gate budgets intact) and sibling refusal stamping is unchanged
-- Given an appended-task candidate whose governing clause cannot be resolved against the approved artifacts on disk, when admission runs, then that finding is not appended and the feature halts needs-human naming the unresolvable clause
+- Given a REMEDIABLE finding whose structural reference cannot be resolved against the approved artifacts on disk or the active plan, when the structured result is validated, then it is rejected naming that reference field, the attempt is scored `absent` and reruns, no task is appended, and admission's own resolution check remains a defensive invariant that halts needs-human naming the unresolvable reference
 
 ### Done When
 - [ ] Both halt-writer sites (serial SHIP walk and validation-group join) branch on the widened outcome; blocked-remediable reaches the remediation path in both, proven by tests at each site
@@ -123,7 +123,7 @@ durable artifacts so that I can audit convergence without reading daemon logs.
 - Given a converged feature, when the shipped record is parsed by its existing consumer, then pre-existing recorded-findings consumers still parse (shape is additive, proven by a round-trip test)
 
 ### Done When
-- [ ] The recorded-findings projection includes as-built remediation entries in both the verdict artifact and the shipped record, with a round-trip parse test
+- [ ] The recorded-findings projection writes as-built remediation entries into the typed as-built verdict, re-renders the report from it, and the shipped record reads them from the typed verdict, with a test asserting both carry each finding's class, reference, and outcome
 - [ ] Daemon status output surfaces the as-built plan-growth entry through the existing PLAN GROWTH rendering
 
 ## Story 7: Every new exit emits its lifecycle terminal and refusal stamp
@@ -137,9 +137,10 @@ that remediation never poisons lifecycle completeness.
 - Given a blocked-remediable route to BUILD, when the step exits, then exactly one lifecycle terminal is emitted for the started execution
 
 #### Negative Paths
-- Given a kickback-cap halt, a design needs-human halt, or an invalid-report halt, when each exit fires, then each emits its terminal event and, on the validation-group commit path, the existing refusal stamp for the judging member, proven by one test per exit
+- Given a kickback-cap halt or a design needs-human halt, when each exit fires, then each emits its terminal event and, on the validation-group commit path, the existing refusal stamp for the judging member, proven by one test per exit
+- Given an as-built structured result that is still rejected or missing when the retry budget is exhausted, when the exit fires, then it emits its terminal event and, on the validation-group commit path, is handled as a no-verdict branch through the existing step-failure handling, recorded `failed` rather than `refused`, with no synthetic remediation gap
 - Given the kill-switch-off halt path, when it fires, then its terminal emission matches today's behavior (no regression in the lifecycle rollup test)
 
 ### Done When
-- [ ] Lifecycle tests cover all four new exits (route, cap halt, design halt, invalid halt) with exactly-one-terminal assertions
+- [ ] Lifecycle tests cover all four new exits (route, cap halt, design halt, exhausted invalid-result halt) with exactly-one-terminal assertions
 - [ ] Any new event member added for remediation declares its sink row in the compile-time-exhaustive sink registry

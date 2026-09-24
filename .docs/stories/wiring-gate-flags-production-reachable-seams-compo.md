@@ -103,7 +103,7 @@ As an operator, I want BUILD and SHIP to recognize the same fully proven product
 
 #### Happy Path
 
-- Given shipped source contains an exact same-file caller-to-export reference and the defining module is transitively reached from a real production entry point, when `architecture-review --as-built` performs its production-reachability sweep, then it cites the entry point, module caller, and export locations and counts the primitive as production-reachable.
+- Given shipped source contains an exact same-file caller-to-export reference and the defining module is transitively reached from a real production entry point, when `architecture-review --as-built` performs its production-reachability sweep, then it records the entry point, module caller, and export locations as a production-reachability entry in the typed as-built verdict, the rendered report shows that entry, and it counts the primitive as production-reachable.
 - Given BUILD persisted a typed `same-file-composition` proof, when the as-built review runs, then it may use that proof as corroborating context but independently verifies the shipped source chain before approving.
 
 #### Negative Paths

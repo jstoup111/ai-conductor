@@ -39,9 +39,10 @@ unchanged inputs" signal, routing through the EXISTING remediation path.
 
 - **named-route (signal a):** a completion-gate miss where the step's completion check reports a
   **fresh** artifact recording an **adverse** verdict whose resolution is a known remediation/kickback
-  target (as-built non-APPROVED; prd_audit `classifyPrdAuditGaps` non-clean; build_review FAIL). The
-  reason already names the route. Route on **try 1**.
-- **absent (rerun):** the artifact is missing / stale / unparseable — the judging session has not
+  target (as-built: a fresh typed as-built verdict that is non-APPROVED; prd_audit
+  `classifyPrdAuditGaps` non-clean; build_review FAIL). The reason already names the route. Route on **try 1**.
+- **absent (rerun):** the artifact is missing / stale / unparseable — for as-built, the structured
+  result is missing, rejected by validation, or stale by run identity — the judging session has not
   produced a verdict; a re-run CAN help. Rerun.
 - **identical-repeat (signal b):** `attempt >= 2` AND the current `completion.reason` is byte-identical
   to the immediately-prior attempt's AND inputs are unchanged (HEAD sha unchanged since the prior
@@ -54,8 +55,8 @@ unchanged inputs" signal, routing through the EXISTING remediation path.
 As the daemon engine, when a fresh `architecture_review_as_built` verdict is BLOCKED (adverse, route
 named) on unchanged code, I route to remediation on the first signal so I don't waste retries.
 
-- **Given** daemon mode, `retry_routing.enabled` (default) true, and a fresh
-  `.pipeline/architecture-review-as-built.md` whose verdict is `BLOCKED`
+- **Given** daemon mode, `retry_routing.enabled` (default) true, and a fresh typed as-built verdict
+  of `BLOCKED` stamped with the current attempt's identity
 - **When** the completion check fails on attempt 1 with the adverse-verdict reason (routeClass
   `named-route`)
 - **Then** the classifier returns `route` with signal `named-route`, the retry loop breaks
@@ -69,8 +70,9 @@ named) on unchanged code, I route to remediation on the first signal so I don't 
 As the daemon engine, when the judging session has NOT produced a fresh verdict, I rerun (a re-run can
 produce one) rather than routing on nothing.
 
-- **Given** daemon mode and the as-built check fails because the artifact is **absent** (no file) or
-  **stale** (mtime predates the freshness floor)
+- **Given** daemon mode and the as-built check fails because the typed verdict is **absent** (no
+  structured result), **rejected** (the structured result failed validation), or **stale by run
+  identity** (stamped with an earlier attempt's identity that its code stamp cannot vouch for)
 - **When** the classifier runs on attempt 1
 - **Then** it returns `rerun` (routeClass `absent`), the loop `continue`s and emits `step_retry` exactly
   as today

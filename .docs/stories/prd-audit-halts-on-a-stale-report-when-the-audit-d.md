@@ -33,12 +33,14 @@ As the conductor, I want to verify immediately after a verdict dispatch settles 
 
 #### Happy Path
 - Given a prd_audit dispatch writes `.pipeline/prd-audit.md` during its run, when the handshake runs after settle, then the attempt is eligible for completion checking with no handshake finding
+- Given an architecture_review_as_built dispatch settles, when the handshake runs, then its evidence is that this dispatch's structured result was validated and persisted as the typed verdict stamped with this dispatch's attempt id, and no file written by the provider counts as evidence
 - Given any terminal dispatch outcome (success, error, halt), when the step concludes, then the handshake observation is recorded — not only on the success path
 
 #### Negative Paths
 - Given a dispatch settles ✓ but wrote neither report nor marker, when the handshake runs, then the attempt is scored failed with a reason naming each missing artifact, the expected run identity, and the found identity/mtime of whatever is on disk
 - Given a dispatch settles ✓ but only the report (not the marker) was rewritten, when the handshake runs, then the reason names specifically the artifact that was not produced
 - Given the handshake's own read throws (unreadable file, corrupt sidecar), when it evaluates, then the attempt is treated as not-verified (fail-closed for the verdict) while the engine itself does not crash
+- Given an architecture_review_as_built dispatch whose structured result is missing or rejected, when the handshake runs, then it records the rejection outcome, no typed verdict is persisted for that attempt, and the attempt is scored absent
 
 ### Done When
 - [ ] Replaying the 2026-08-23 shape (settle ✓, artifacts untouched from a prior lap) yields a failed attempt whose reason names `.pipeline/prd-audit.md`, the expected attempt id, and the stale identity/mtime — and never quotes the stale report's findings
@@ -104,21 +106,23 @@ As an operator, I want clearing the halt to be sufficient so that recovery does 
 
 ## Story 6: Unstamped artifacts fall back to mtime; kill-switch reverts cleanly
 
-As the engine, I want legacy artifacts and disabled deployments to behave exactly as today so that the contract rolls out and reverts safely.
+As the engine, I want legacy prd_audit and manual_test artifacts and disabled deployments to behave exactly as today, and the as-built gate to accept only its identity-stamped typed verdict, so that the contract rolls out and reverts safely.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a verdict artifact with no run-identity stamp (written pre-upgrade), when readers evaluate it, then today's mtime-floor behavior applies unchanged
-- Given the existing gate-code-validity kill-switch is off, when the gates run, then identity checking is bypassed and pure mtime behavior applies end-to-end
+- Given a prd_audit or manual_test verdict artifact with no run-identity stamp (written pre-upgrade), when readers evaluate it, then today's mtime-floor behavior applies unchanged
+- Given the existing gate-code-validity kill-switch is off, when the prd_audit and manual_test gates run, then identity checking is bypassed and pure mtime behavior applies end-to-end
+- Given the existing gate-code-validity kill-switch is off, when the architecture_review_as_built gate runs, then identity checking stays in force: freshness is the typed verdict's attempt id and no mtime comparison decides it
 
 #### Negative Paths
 - Given an unstamped stale artifact, when readers evaluate it, then it is not treated as MORE trusted than today (fallback never widens acceptance)
-- Given a corrupt/unparseable sidecar, when the identity helper reads it, then it degrades to the unstamped path without throwing
+- Given a corrupt/unparseable prd_audit or manual_test sidecar, when the identity helper reads it, then it degrades to the unstamped path without throwing
+- Given an unstamped or Markdown-only as-built artifact, even one whose mtime is newer than the dispatch start, when readers evaluate it, then it is scored absent and the step reruns — the as-built gate has no mtime fallback
 
 ### Done When
-- [ ] Fallback tests: unstamped-fresh passes, unstamped-stale fails, identical to pre-change behavior
-- [ ] Kill-switch test: with the flag off, no identity comparison occurs and existing suites pass unchanged
+- [ ] Fallback tests: for prd_audit and manual_test, unstamped-fresh passes and unstamped-stale fails, identical to pre-change behavior; an unstamped or Markdown-only as-built artifact scores absent
+- [ ] Kill-switch test: with the flag off, no identity comparison occurs for prd_audit and manual_test and existing suites pass unchanged, while the as-built gate still judges its typed verdict by run identity
 
 ## Story 7: manual_test composes with its whitewash machinery
 

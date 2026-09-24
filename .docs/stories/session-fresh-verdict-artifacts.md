@@ -30,26 +30,37 @@ I must accept it — including a byte-identical rewrite — so a legitimate re-r
 
 ### Happy Path
 
-- **Given** `architecture_review_as_built` dispatched with a per-attempt floor `attemptStartedAt = T`,
-  and the review session writes `.pipeline/architecture-review-as-built.md` with `Verdict: APPROVED`
-  and mtime `>= T`,
+- **Given** `prd_audit` dispatched with a per-attempt floor `attemptStartedAt = T`, and the audit
+  session writes `.pipeline/prd-audit.md` with all-ALIGNED rows and mtime `>= T`,
 - **When** the completion check runs with `ctx.attemptStartedAt = T`,
 - **Then** the artifact is fresh (`mtime >= verdictFreshnessFloor(ctx)`), the verdict is parsed, and the
   step is `done` — regardless of whether the content is identical to a prior attempt's verdict.
+- **Given** `architecture_review_as_built` dispatched as an attempt whose structured result the engine
+  validates and persists as the typed verdict stamped with that attempt's `attempt.id`,
+- **When** the completion check runs,
+- **Then** the typed verdict is fresh by run identity and the step is `done` — regardless of whether its
+  content is identical to a prior attempt's verdict.
 
 ### Negative Path — verdict not rewritten this attempt is scored "no fresh verdict"
 
-- **Given** the same step re-dispatched at `attemptStartedAt = T2 > T`, but the session does **not**
+- **Given** `prd_audit` re-dispatched at `attemptStartedAt = T2 > T`, but the session does **not**
   rewrite the artifact (its mtime is still `T`, from the earlier attempt),
 - **When** the completion check runs with `ctx.attemptStartedAt = T2`,
 - **Then** the check returns `done:false` with a **distinct** "no fresh verdict — the judging session
-  did not rewrite its verdict this attempt" reason (not the prior-feature-stale reason, and not the
-  BLOCKED-verdict reason), and the stale verdict's *content* is never consulted.
+  did not rewrite its verdict this attempt" reason (not the prior-feature-stale reason, and not a
+  failing-verdict reason), and the stale verdict's *content* is never consulted.
+- **Given** `architecture_review_as_built` re-dispatched as a new attempt whose structured result is
+  missing or rejected, and a typed verdict stamped with an earlier attempt's identity whose code stamp
+  cannot vouch for it,
+- **When** the completion check runs,
+- **Then** the gate is scored `absent` and the step reruns, and the earlier verdict's *content* is never
+  consulted.
 
 ## Story 2 — the guard applies to all three dispatched-judge verdict artifacts
 
-As the freshness rule, I apply identically to `architecture_review_as_built`, `prd_audit`, and
-`build_review`, so no dispatched-judge verdict can be reused across attempts.
+As the freshness rule, I apply to `prd_audit` and `build_review`, and `architecture_review_as_built`
+meets the same guarantee through its identity-stamped typed verdict, so no dispatched-judge verdict can
+be reused across attempts.
 
 ### Happy Path
 
@@ -65,25 +76,36 @@ As the freshness rule, I apply identically to `architecture_review_as_built`, `p
 - **When** the check runs,
 - **Then** it returns `done:false` "no fresh verdict" — a prior session's passing verdict never
   false-GREENs the current attempt.
+- **Given** an `architecture_review_as_built` report file whose mtime is `>= attemptStartedAt` and no
+  typed verdict stamped with the current attempt's identity (nor an earlier one whose code stamp still
+  vouches for it),
+- **When** the check runs,
+- **Then** the gate is scored `absent` — mtime never satisfies the as-built gate.
 
 ## Story 3 — no per-attempt floor falls back to the conductor-session floor
 
-As the guard, when no per-attempt floor is provided (resume/backstop `completionCtx`, legacy state,
-tests), I behave exactly as before — `fileIsFreshSinceSession(f, sessionStartedAt)`.
+As the guard for `prd_audit` and `build_review`, when no per-attempt floor is provided (resume/backstop
+`completionCtx`, legacy state, tests), I behave exactly as before —
+`fileIsFreshSinceSession(f, sessionStartedAt)`. The `architecture_review_as_built` check has no mtime
+floor to fall back to: only an identity-stamped typed verdict satisfies it.
 
 ### Happy Path
 
 - **Given** `ctx.attemptStartedAt === undefined` and `ctx.sessionStartedAt = S`,
-- **When** any verdict check runs,
+- **When** a `prd_audit` or `build_review` verdict check runs,
 - **Then** `verdictFreshnessFloor(ctx) === S`, and the outcome is identical to the pre-change behaviour
   (artifact fresh iff `mtime >= S`).
 
 ### Negative Path — undefined session floor too is fail-open
 
 - **Given** both `attemptStartedAt` and `sessionStartedAt` undefined (very old state),
-- **When** a verdict check runs,
+- **When** a `prd_audit` or `build_review` verdict check runs,
 - **Then** `fileIsFreshSinceSession` returns true on file presence (fail-open on upgrade, unchanged from
   today) — the change never hard-fails an in-flight feature on rollout.
+- **Given** both floors undefined and a worktree holding only an unstamped or Markdown-only
+  `.pipeline/architecture-review-as-built.md`,
+- **When** the as-built check runs,
+- **Then** the gate is scored `absent` and the step reruns rather than passing on file presence.
 
 ## Story 4 — the fresh/stale-reused outcome is auditable per attempt
 

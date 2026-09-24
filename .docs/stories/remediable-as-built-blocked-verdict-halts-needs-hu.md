@@ -43,16 +43,16 @@ As the operator reading a needs-human halt, I want the as-built gate's BLOCKED r
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an as-built report with Verdict BLOCKED and at least one finding of class DESIGN, when the `architecture_review_as_built` completion gate evaluates it, then the gate's reason states the verdict needs a human decision and names each DESIGN finding id with its governing clause.
-- Given an as-built report with Verdict BLOCKED and every finding REMEDIABLE, when the gate evaluates it, then the gate's reason states every blocking finding is REMEDIABLE and that the verdict is a repair, and does not describe it as a decision.
+- Given a typed as-built verdict of BLOCKED with at least one finding of class DESIGN, when the `architecture_review_as_built` completion gate evaluates it, then the gate's reason states the verdict needs a human decision and names each DESIGN finding id with its governing clause.
+- Given a typed as-built verdict of BLOCKED with every finding REMEDIABLE, when the gate evaluates it, then the gate's reason states every blocking finding is REMEDIABLE and that the verdict is a repair, and does not describe it as a decision.
 
 #### Negative Paths
-- Given a BLOCKED report mixing one DESIGN and two REMEDIABLE findings, when the gate evaluates it, then the reason names only the DESIGN finding as the decision and does not list the REMEDIABLE ids as decisions.
-- Given a BLOCKED report whose Blocking Findings table is unparseable, when the gate evaluates it, then the reason remains the existing invalid-findings message and neither the decision nor the repair wording appears.
+- Given a typed BLOCKED verdict mixing one DESIGN and two REMEDIABLE findings, when the gate evaluates it, then the reason names only the DESIGN finding as the decision and does not list the REMEDIABLE ids as decisions.
+- Given a BLOCKED structured result whose findings fail validation, when the step settles, then it is rejected with a diagnostic naming the defective finding field, no typed verdict is persisted, the attempt is scored absent and reruns, and neither the decision nor the repair wording appears in any reason.
 
 ### Done When
 - [ ] The `architecture_review_as_built` gate returns two distinct reason strings for `blocked-design` and `blocked-remediable`, the design reason naming each DESIGN finding id and clause.
-- [ ] Unit tests cover all-DESIGN, all-REMEDIABLE, mixed, and unparseable inputs and assert the exact reason wording for each.
+- [ ] Unit tests cover all-DESIGN, all-REMEDIABLE, and mixed typed verdicts and rejected structured results, and assert the exact reason wording for each.
 - [ ] The existing gate test that pins the collapsed reason string is updated to the new wording rather than deleted.
 
 ## Story 3: The validation-group as-built halt lists every finding whatever its class
@@ -67,7 +67,7 @@ As the operator reading a validation-group halt on an as-built verdict, I want t
 
 #### Negative Paths
 - Given a validation-group round whose as-built verdict is BLOCKED with a DESIGN finding, when the group halts, then the `Blocking findings:` listing block appears exactly once in the halt text, not duplicated by the gate reason and the group site both rendering it.
-- Given a validation-group round whose as-built report is invalid (no Verdict line), when the group halts, then the halt reason is the existing invalid-verdict message with no finding listing and no remediation wording.
+- Given a validation-group round whose as-built structured result is still missing or rejected when the step's retry budget is exhausted, when the group settles, then the as-built branch is a no-verdict branch handled by the existing step-failure handling and recorded `failed`, and its halt reason names the as-built step and the rejected field with no finding listing and no remediation wording.
 
 ### Done When
 - [ ] The validation-group as-built halt appends the per-finding listing for `blocked-remediable` as well as `blocked-design`, with a cause clause naming why remediation did not run (disabled, non-daemon, or planner failure).
