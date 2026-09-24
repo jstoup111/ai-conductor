@@ -355,6 +355,7 @@ describe('kickback-budget raise follows the exhausted allowance', () => {
       expect(after.effectiveGrowthCap).toBeUndefined();
       expect(after.growth.added).toBe(6);
       expect(output.join('\n')).toContain('1/11 consumed');
+      expect(output.join('\n')).toContain('Plan growth: 6/2 added; 0 remaining (config-derived cap)');
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
