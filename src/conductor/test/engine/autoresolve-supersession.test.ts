@@ -29,7 +29,7 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
   it('takes citation-residue reasons from the supplied guard result', async () => {
     const emitted: unknown[] = [];
     const events = new ConductorEventEmitter();
-    events.on('rebase_citation_residue', (event) => emitted.push(event));
+    events.on('rebase_citation_residue', (event) => { emitted.push(event); });
     const excused = [{
       sha: 'a'.repeat(40),
       subject: 'test: supplied guard reason',
