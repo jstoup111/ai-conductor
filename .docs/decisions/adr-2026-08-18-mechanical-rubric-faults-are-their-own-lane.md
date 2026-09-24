@@ -289,6 +289,35 @@ already exists and is reused; additive fields follow `adr-2026-07-26-event-sink-
 > producer for build_review and are removed from the mapping in the same change, so the mapping stays
 > total.
 
+> **Amended 2026-09-24 by #2735:** adr-2026-09-10-portable-build-review-policy D5.1–D5.5 replace
+> custom-policy OS containment with each provider's read-only review mode plus an engine integrity
+> digest. That retires the containment `preflight-failed` producer and introduces two reasons the
+> lane must name. D2's total closed mapping is extended, not bypassed.
+>
+> **D2.3 — Two closed causes for read-only review.**
+> - `read-only-review-unavailable` is the cause when a custom-policy lap member has no candidate
+>   whose read-only review mode is available on the host. `detail` names the platform and each
+>   refused candidate's reason.
+> - `review-input-mutated` is the cause when the lap's before and after integrity digests differ.
+>   `detail` names the changed inputs, bounded. It settles every member of that lap, because a
+>   change cannot be attributed to one member.
+>
+> Both join the custom infrastructure-failure set and settle their branches `absent`.
+>
+> **D3.2 — One is deterministic, one is retryable.** `read-only-review-unavailable` is deterministic
+> for the host and the lap's candidate set, like `projection-oversized` (D3.1) and
+> `native-schema-unsupported` (D2.2). It is charged once, never retried within the lap, and routes
+> directly to D5's `needs-human` HALT, whose body names the platform. `review-input-mutated` is
+> retryable under D4's bound. Neither provider's read-only mode leaves a write path, so a mutation
+> most likely comes from outside the reviewers (an operator updating the installed policy, or a
+> foreign process touching the lap's private frozen view). The lap publishes no aggregate under D3, and the re-run materializes a fresh frozen
+> view. D6's reduced-coverage record remains the operator's attributed way past either cause;
+> nothing here accepts a finding or manufactures a PASS.
+>
+> **D10.2 — Both ride the existing spine.** Each occurrence is emitted on the existing
+> `build_review_rubric_infrastructure_failure` event with its closed `cause`. The platform and the
+> changed-input list are carried as additive optional fields. No new event, ledger, or sidecar.
+
 ## Alternatives considered
 
 - **Amend `adr-2026-08-13` so `accept` clears an exhausted mechanical fault** (the single-verb form of
