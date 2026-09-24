@@ -229,6 +229,14 @@ function buildReviewJudgedV3Schema(rubric: BuildReviewRubricId): BuildReviewJudg
           },
         },
       },
+      // Test-quality evidence only: the security parser rejects these fields, so
+      // offering them in the security schema invites a result it must refuse.
+      ...(rubric === 'testQuality' ? TEST_QUALITY_EVIDENCE_SCHEMA_PROPERTIES : {}),
+    },
+  }) as BuildReviewJudgedV3Schema;
+}
+
+const TEST_QUALITY_EVIDENCE_SCHEMA_PROPERTIES = {
       relocationAudit: { type: 'array', items: { type: 'object', additionalProperties: false, required: [], properties: {} } },
       counterfactualSensitivity: { type: 'string', enum: COUNTERFACTUAL_SENSITIVITY_VOCABULARY },
       scopeResolutions: {
@@ -259,9 +267,7 @@ function buildReviewJudgedV3Schema(rubric: BuildReviewRubricId): BuildReviewJudg
           },
         },
       },
-    },
-  }) as BuildReviewJudgedV3Schema;
-}
+} as const;
 
 /** The test-quality judged-v3 schema; every built-in branch uses a rubric-bound variant below. */
 export const BUILD_REVIEW_JUDGED_V3_SCHEMA = buildReviewJudgedV3Schema('testQuality');

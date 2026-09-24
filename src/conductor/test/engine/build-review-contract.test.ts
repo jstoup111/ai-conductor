@@ -278,6 +278,19 @@ describe('engine/build-review-contract', () => {
     })).toThrow();
   });
 
+  it('offers test-quality evidence fields only in the testQuality schema', () => {
+    // The security parser rejects these fields; a security schema that offers
+    // them invites a result the engine must refuse as a mechanical fault.
+    const evidence = ['relocationAudit', 'counterfactualSensitivity', 'scopeResolutions'];
+    const testQuality = Object.keys(properties(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output.jsonSchema));
+    const security = Object.keys(properties(BUILD_REVIEW_RUBRIC_REGISTRY.security.contract.output.jsonSchema));
+
+    expect({
+      testQuality: evidence.filter((field) => testQuality.includes(field)),
+      security: evidence.filter((field) => security.includes(field)),
+    }).toEqual({ testQuality: evidence, security: [] });
+  });
+
   it.each(['testQuality', 'security'] as const)(
     'binds %s concern kinds directly from the engine vocabulary',
     (rubric) => {
