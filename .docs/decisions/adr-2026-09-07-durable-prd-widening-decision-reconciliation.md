@@ -144,9 +144,11 @@ The existing mixed-build-review ADR and #2383's suppression/recurrence behavior 
 > digest, and the reviewer reads it on demand. A required structured dimension (plan tasks and
 > `Done when` blocks, sealed story criteria, a governing ADR's decisions) that is missing,
 > unreadable, or over its limit is a deterministic fault. It names the dimension, the actual
-> size, and the limit, and halts without retry and without truncation. An empty governing-ADR
-> set or an absent diagram set is not a fault; it disables that check as today
-> (adr-2026-08-22-as-built-review-runs-always-with-plan-gap decision 1).
+> size, and the limit, and halts without retry and without truncation. An empty governing-ADR set
+> is not a fault: the projection states that no ADR is pre-selected, and ADR compliance keeps
+> today's enablement (on whenever APPROVED ADRs exist in the repository), judged against APPROVED
+> ADRs the reviewer reads on demand. An absent diagram set is not a fault and disables diagram
+> drift as today (adr-2026-08-22-as-built-review-runs-always-with-plan-gap decision 1).
 
 ## Consequences
 
