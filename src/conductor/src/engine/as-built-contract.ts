@@ -1,3 +1,9 @@
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { adrApprovalStatus, parseAdrDecisions, readActivePlanText } from './artifacts.js';
+import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
+
 /** The versioned, engine-owned output contract for as-built review verdicts. */
 export const AS_BUILT_VERDICT_CONTRACT_VERSION = 'v1' as const;
 
@@ -260,4 +266,85 @@ export function validateAsBuiltVerdict(value: unknown): ValidateAsBuiltVerdictRe
   if (!nonEmptyText(value.violations)) return rejected('violations', 'non-empty violation prose is required');
   if (!nonEmptyText(value.resolution)) return rejected('resolution', 'non-empty resolution prose is required');
   return { ok: true, verdict: { version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict: 'BLOCKED', reachability: reachability.value, driftNotes: driftNotes.value, findings: findings.value, violations: value.violations, resolution: value.resolution } };
+}
+
+/** Resolve every typed governing reference against the worktree's approved ADRs and active plan. */
+export async function resolveAsBuiltReferences(
+  verdict: AsBuiltVerdict,
+  worktree: string,
+): Promise<ValidateAsBuiltVerdictResult> {
+  if (verdict.verdict !== 'BLOCKED') return { ok: true, verdict };
+
+  const references = verdict.findings.flatMap((finding, index) =>
+    finding.reference === undefined ? [] : [{ reference: finding.reference, field: `findings[${index}].reference` }],
+  );
+  if (references.length === 0) return { ok: true, verdict };
+
+  let decisionFiles: string[] | undefined;
+  let activePlanTaskIds: ReadonlySet<string> | undefined;
+  let activePlanRead = false;
+
+  for (const { reference, field } of references) {
+    if (reference.kind === 'adr-decision') {
+      if (decisionFiles === undefined) {
+        try {
+          decisionFiles = await readdir(join(worktree, '.docs', 'decisions'));
+        } catch {
+          return rejected(`${field}.stem`, `an ADR with status APPROVED is required; ${reference.stem} is unavailable`);
+        }
+      }
+      const decisionFile = decisionFiles.find((file) => file.toLowerCase() === `${reference.stem}.md`.toLowerCase());
+      if (decisionFile === undefined) {
+        return rejected(`${field}.stem`, `an ADR with status APPROVED is required; ${reference.stem} is unavailable`);
+      }
+
+      let content: string;
+      try {
+        content = await readFile(join(worktree, '.docs', 'decisions', decisionFile), 'utf8');
+      } catch {
+        return rejected(`${field}.stem`, `an ADR with status APPROVED is required; ${reference.stem} is unavailable`);
+      }
+      const approval = adrApprovalStatus(content);
+      if (!approval.approved || approval.found === null || !/^approved\b/i.test(approval.found)) {
+        return rejected(
+          `${field}.stem`,
+          `an ADR with status APPROVED is required; ${reference.stem} has status ${approval.found ?? 'missing'}`,
+        );
+      }
+      const decisions = parseAdrDecisions(content);
+      if (decisions.kind !== 'decisions' || !decisions.ids.has(String(reference.decision))) {
+        const ids = decisions.kind === 'decisions'
+          ? [...decisions.ids].sort((left, right) => Number(left) - Number(right)).join(', ')
+          : 'none';
+        return rejected(
+          `${field}.decision`,
+          `one of ADR ${reference.stem} declared decision ids ${ids} is required`,
+        );
+      }
+      continue;
+    }
+
+    if (!activePlanRead) {
+      const activePlan = await readActivePlanText(worktree);
+      activePlanTaskIds = activePlan === undefined
+        ? undefined
+        : new Set(parsePlanTaskBodies(activePlan).keys());
+      activePlanRead = true;
+    }
+    if (activePlanTaskIds === undefined) {
+      return rejected(`${field}.taskId`, `an active plan declaring task ${reference.taskId} is required`);
+    }
+    const resolution = resolvePlanTaskReference(reference.taskId, activePlanTaskIds);
+    if (resolution.kind === 'malformed') {
+      return rejected(`${field}.taskId`, 'a task id matching the shared active-plan grammar is required');
+    }
+    if (resolution.kind === 'unresolvable') {
+      return rejected(
+        `${field}.taskId`,
+        `plan task ${resolution.ids.join(', ')} is not declared by the active plan`,
+      );
+    }
+  }
+
+  return { ok: true, verdict };
 }

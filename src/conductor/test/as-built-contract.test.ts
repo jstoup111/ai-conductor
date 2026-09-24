@@ -1,12 +1,61 @@
-// Covers: task:1, task:2
-import { describe, expect, expectTypeOf, it } from 'vitest';
+// Covers: task:1, task:2, task:3
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, expectTypeOf, it } from 'vitest';
 
 import {
   AS_BUILT_VERDICT_CONTRACT_VERSION,
   AS_BUILT_VERDICT_SCHEMA,
+  resolveAsBuiltReferences,
   validateAsBuiltVerdict,
 } from '../src/engine/as-built-contract.js';
 import type { AsBuiltVerdict } from '../src/engine/as-built-contract.js';
+
+const dirs: string[] = [];
+
+async function governingReferenceFixture(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'as-built-contract-'));
+  dirs.push(root);
+  await mkdir(join(root, '.docs', 'decisions'), { recursive: true });
+  await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+  await writeFile(join(root, '.docs', 'decisions', 'adr-approved.md'), [
+    '# ADR: Approved architecture',
+    '',
+    'Status: APPROVED',
+    '',
+    '## Decision',
+    '',
+    '1. First decision.',
+    '2. Second decision.',
+    '3. Third decision.',
+    '4. Fourth decision.',
+    '5. Fifth decision, including D5.2 detail.',
+    '',
+    '### D5.2: Detail',
+  ].join('\n'));
+  await writeFile(join(root, '.docs', 'decisions', 'adr-superseded.md'), [
+    '# ADR: Superseded architecture',
+    '',
+    'Status: SUPERSEDED',
+    '',
+    '## Decision',
+    '',
+    '1. Superseded decision.',
+  ].join('\n'));
+  await writeFile(join(root, '.docs', 'plans', 'feature.md'), [
+    '### Task 1: First',
+    '',
+    '### Task 2: Second',
+    '',
+    '### Task 3: Third',
+  ].join('\n'));
+  return root;
+}
+
+afterEach(async () => {
+  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 function object(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -246,6 +295,78 @@ describe('as-built verdict contract', () => {
       ok: false,
       field: 'unexplained',
       requirement: 'only version, verdict, reachability, and driftNotes are permitted for an APPROVED verdict',
+    });
+  });
+
+  it('resolves REMEDIABLE ADR and active-plan task references', async () => {
+    const root = await governingReferenceFixture();
+    const verdict: AsBuiltVerdict = {
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [],
+      driftNotes: [],
+      findings: [
+        { id: 'AB-ADR', class: 'REMEDIABLE', reference: { kind: 'adr-decision', stem: 'adr-approved', decision: 4 }, summary: 'Apply the approved fourth decision.' },
+        { id: 'AB-TASK', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Complete the active second task.' },
+      ],
+      violations: 'The implementation misses both governing obligations.',
+      resolution: 'Apply the approved ADR and active-plan task.',
+    };
+
+    await expect(resolveAsBuiltReferences(verdict, root)).resolves.toEqual({ ok: true, verdict });
+  });
+
+  it('rejects a reference to a SUPERSEDED ADR', async () => {
+    const root = await governingReferenceFixture();
+    const verdict: AsBuiltVerdict = {
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [], driftNotes: [],
+      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'adr-decision', stem: 'adr-superseded', decision: 1 }, summary: 'Follow superseded work.' }],
+      violations: 'The implementation is governed by a superseded ADR.',
+      resolution: 'Use a current ADR.',
+    };
+
+    await expect(resolveAsBuiltReferences(verdict, root)).resolves.toEqual({
+      ok: false,
+      field: 'findings[0].reference.stem',
+      requirement: 'an ADR with status APPROVED is required; adr-superseded has status SUPERSEDED',
+    });
+  });
+
+  it('rejects an undeclared ADR decision with the declared decision ids', async () => {
+    const root = await governingReferenceFixture();
+    const verdict: AsBuiltVerdict = {
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [], driftNotes: [],
+      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'adr-decision', stem: 'adr-approved', decision: 9 }, summary: 'Follow a missing decision.' }],
+      violations: 'The implementation cites no declared decision.',
+      resolution: 'Use a declared decision.',
+    };
+
+    await expect(resolveAsBuiltReferences(verdict, root)).resolves.toEqual({
+      ok: false,
+      field: 'findings[0].reference.decision',
+      requirement: 'one of ADR adr-approved declared decision ids 1, 2, 3, 4, 5 is required',
+    });
+  });
+
+  it('rejects a task absent from the active plan', async () => {
+    const root = await governingReferenceFixture();
+    const verdict: AsBuiltVerdict = {
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [], driftNotes: [],
+      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '7' }, summary: 'Complete an absent task.' }],
+      violations: 'The implementation cites no active task.',
+      resolution: 'Use an active task.',
+    };
+
+    await expect(resolveAsBuiltReferences(verdict, root)).resolves.toEqual({
+      ok: false,
+      field: 'findings[0].reference.taskId',
+      requirement: 'plan task 7 is not declared by the active plan',
     });
   });
 });
