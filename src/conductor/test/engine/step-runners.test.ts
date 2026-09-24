@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:7, task:12, task:17
+// Covers: task:1, task:3, task:7, task:8, task:12, task:17
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
@@ -327,6 +327,180 @@ describe('DefaultStepRunner', () => {
         refusal: { kind: 'needs-human', reason: expect.stringContaining(`${adrId}#D4`) },
       });
       expect(provider.invoke).not.toHaveBeenCalled();
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the existing judge path when a legacy plan has no architecture obligation section', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-no-obligation-section-'));
+    const featureDesc = 'coverage-binding-no-obligation-section';
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
+      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
+    }));
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(planPath, '### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n');
+    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n');
+    const runner = new DefaultStepRunner(provider, 'coverage-run-no-obligation-section', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).toHaveBeenCalledOnce();
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('tolerates the ADR layer at tier S without reading a cited ADR', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-tier-s-obligations-'));
+    const featureDesc = 'coverage-binding-tier-s-obligations';
+    const adrId = 'adr-tier-s-unreadable';
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
+      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
+    }));
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | existing | none | Decision remains in force. |\n`);
+    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n');
+    const runner = new DefaultStepRunner(provider, 'coverage-run-tier-s-obligations', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'S' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).not.toHaveBeenCalled();
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'done' });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('tolerates a cited ADR with no citable decision', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-uncitable-adr-'));
+    const featureDesc = 'coverage-binding-uncitable-adr';
+    const adrId = 'adr-uncitable';
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
+      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
+    }));
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(join(projectDir, '.docs', 'decisions', `${adrId}.md`), '# ADR\n\nNo Decision section is available.\n');
+    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | existing | none | Decision remains in force. |\n`);
+    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n');
+    const runner = new DefaultStepRunner(provider, 'coverage-run-uncitable-adr', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).toHaveBeenCalledOnce();
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a malformed coverage row with its ADR path and decision', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-malformed-obligation-'));
+    const featureDesc = 'coverage-binding-malformed-obligation';
+    const adrId = 'adr-malformed-obligation';
+    const adrPath = `.docs/decisions/${adrId}.md`;
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(projectDir, adrPath), adrWithDecisions(['1']));
+    await writeFile(planPath, `## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | existing | none |\n`);
+    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-malformed-obligation', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain(adrPath);
+      expect(result.output).toContain('D1');
+      expect(result.output).toContain('expected 4');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses ungrounded obligation evidence with its ADR path and decision', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-ungrounded-obligation-'));
+    const featureDesc = 'coverage-binding-ungrounded-obligation';
+    const adrId = 'adr-ungrounded-obligation';
+    const adrPath = `.docs/decisions/${adrId}.md`;
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(projectDir, adrPath), adrWithDecisions(['1']));
+    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | task | task-1 | The missing evidence. |\n`);
+    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-ungrounded-obligation', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain(adrPath);
+      expect(result.output).toContain('D1');
+      expect(result.output).toContain('evidence is absent');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an invented decision with the cited ADR path', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-invented-obligation-'));
+    const featureDesc = 'coverage-binding-invented-obligation';
+    const adrId = 'adr-invented-obligation';
+    const adrPath = `.docs/decisions/${adrId}.md`;
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(projectDir, adrPath), adrWithDecisions(['1']));
+    await writeFile(planPath, `## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n${obligationRows(adrId, ['1'])}\n| ${adrId}#D99 | existing | none | Invented decision. |\n`);
+    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-invented-obligation', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain(adrPath);
+      expect(result.output).toContain('D99');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns an infrastructure failure for an unreadable DECIDE-set ADR without an envelope', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-unreadable-adr-'));
+    const featureDesc = 'coverage-binding-unreadable-adr';
+    const adrId = 'adr-unreadable';
+    const adrPath = `.docs/decisions/${adrId}.md`;
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await writeFile(planPath, `## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | existing | none | Decision remains in force. |\n`);
+    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-unreadable-adr', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({ success: false });
+      expect(result).not.toHaveProperty('refusal');
+      expect(result.output).toContain(adrPath);
+      await expect(access(join(projectDir, '.pipeline', 'coverage-binding.json'))).rejects.toThrow();
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
