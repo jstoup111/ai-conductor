@@ -210,6 +210,14 @@ import {
   resolveAsBuiltPolicy,
   type AsBuiltPolicyConfig,
 } from './as-built-policy.js';
+import {
+  AS_BUILT_VERDICT_SCHEMA,
+  renderAsBuiltVerdictShape,
+} from './as-built-contract.js';
+import {
+  buildAsBuiltProjection,
+  renderAsBuiltProjection,
+} from './as-built-projection.js';
 
 /** A closed coverage-binding payload that cannot be treated as a verdict. */
 export class CoverageBindingPayloadError extends Error {
@@ -699,7 +707,7 @@ function establishedBuildReviewTools(provider: 'claude' | 'codex'): readonly str
   return provider === 'claude' || provider === 'codex' ? ['git'] : [];
 }
 
-type ProviderAwareSkillOneShotStep = 'complexity' | 'remediate' | 'rebase';
+type ProviderAwareSkillOneShotStep = 'complexity' | 'remediate' | 'rebase' | 'architecture_review_as_built';
 type ProviderAwareFreeFormOneShotStep =
   | 'worktree'
   | 'build'
@@ -1088,6 +1096,48 @@ export class DefaultStepRunner implements StepRunner {
       state.complexity_tier,
       opts?.prdWideningReviewContext,
     );
+
+    // As-built architecture review is a provider-native, schema-constrained
+    // judgement. It always takes the fresh one-shot branch: the engine owns
+    // both the bounded input projection and the output contract, while the
+    // provider-aware executor retains candidate routing and scratch lifecycle.
+    if (step === 'architecture_review_as_built' && this.providerRuntimes && branchSessionId === undefined) {
+      const projection = await buildAsBuiltProjection(this.projectDir);
+      if (!projection.ok) {
+        const { dimension, detail, actual, limit } = projection.fault;
+        const bounds = actual === undefined || limit === undefined
+          ? ''
+          : ` (actual ${actual}, limit ${limit})`;
+        return {
+          success: false,
+          output: `as-built input projection fault: ${dimension}${bounds}${detail ? `: ${detail}` : ''}`,
+        };
+      }
+      try {
+        const result = await this.executeProviderAwareSkillOneShot(
+          step,
+          {
+            prompt: `${renderAsBuiltProjection(projection.projection)}\n${renderAsBuiltVerdictShape(AS_BUILT_VERDICT_SCHEMA)}`,
+            systemPrompt,
+            cwd: this.projectDir,
+            dangerouslySkipPermissions: true,
+            interactive: false,
+            nativeSchema: AS_BUILT_VERDICT_SCHEMA,
+          },
+          state.complexity_tier,
+          opts,
+        );
+        if (result) {
+          this.callCount++;
+          return this.toStepRunResult(step, result);
+        }
+      } catch (error) {
+        this.callCount++;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.log(`Session for ${step} exited with error: ${errorMessage}`);
+        return { success: false, output: `Session for ${step} exited with error: ${errorMessage}` };
+      }
+    }
 
     // Every dispatch reaches the provider through invoke(). `interactive`
     // selects the REPL; non-REPL collaborative steps still receive the
