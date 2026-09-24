@@ -4,6 +4,18 @@ spec_hash: 708e243fae8d52fd3d537b96ef1762edb2a0994418554d711be5245f8053f47f
 pr: https://github.com/jstoup111/ai-conductor/pull/2669
 shipped: 2026-09-24
 engine_version: 20260924T091032Z-b2f8c0a660c9
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/engine/engineer/non-autonomy.test.ts:120 — engineer no-merge guard regex narrowed to require a quoted `gh` token on the same line"
+    accepted: true
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-07-29-operator-park-scheduling-unit-boundary decision 14"
+    outcome: remediated
+    summary: "The production report renderer silently drops the new attempt-level `operator_park_boundary` variant."
 ---
 
 ## Cost
