@@ -4,13 +4,6 @@ spec_hash: c5a35f6f982ac49f33d9897c2fa7a4cec95559bf323c43db1909a62f4f971154
 pr: https://github.com/jstoup111/ai-conductor/pull/2646
 shipped: 2026-09-24
 engine_version: 20260923T231757Z-437f09322025
-findings:
-  - gate: architecture_review_as_built
-    finding: AB-1
-    class: REMEDIABLE
-    governing_clause: "adr-2026-07-12-rebase-evidence-stamp-translation D8"
-    outcome: remediated
-    summary: "The new `rebase_citation_residue` emitter omits required `citingObligationIds`, and its focused test codifies the incomplete event shape."
 ---
 
 ## Cost
@@ -30,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","291fdaff-eeec-4741-a111-776e0d9eeb7d","lifecycle-step","build"],step:execution\u0000["timing-rollup","persisted-ledger","a027227d-a33f-41e7-a824-a409e3bab815","lifecycle-step","build"],step:execution\u0000["timing-rollup","persisted-ledger","d594f8e7-4233-449e-968b-2f1d829533a2","lifecycle-step","finish"]
+reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","291fdaff-eeec-4741-a111-776e0d9eeb7d","lifecycle-step","build"],step:execution\u0000["timing-rollup","persisted-ledger","a027227d-a33f-41e7-a824-a409e3bab815","lifecycle-step","build"]
 
 ## Build Review
 laps_to_pass: 3
