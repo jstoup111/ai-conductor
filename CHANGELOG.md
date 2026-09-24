@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.5.0] - 2026-09-23
+## [1.5.0] - 2026-09-24
 
 ### Added
 
@@ -51,6 +51,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Fix daemon rebases so completed repair tasks keep their translated boundaries. ([implementation PR #2652](https://github.com/jstoup111/ai-conductor/pull/2652)).
 - The daemon reclaims merged worktrees left behind by a dead run's stale phase marker, reports diverged branches accurately, and logs retained worktrees once instead of as a failure on every sweep. ([implementation PR #2688](https://github.com/jstoup111/ai-conductor/pull/2688)).
 - The daemon no longer opens false shipped-record repair PRs right after a merge, never switches branches in the root checkout, and refuses any repair that would drop data from an existing shipped record. ([implementation PR #2687](https://github.com/jstoup111/ai-conductor/pull/2687)).
+- Finish accepts a fresh satisfied re-judgement after a rebase preserves a gate. ([implementation PR #2689](https://github.com/jstoup111/ai-conductor/pull/2689)).
 
 ## [1.4.0] - 2026-09-19
 
