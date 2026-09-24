@@ -68,6 +68,12 @@ export interface StepDefinition {
    */
   treeAttestingCompletion?: boolean;
   /**
+   * Marks a gate whose completion predicate can preserve a stamped PASS on
+   * stale re-entry (adr-2026-07-22 D2). Consumed only by the step loop's
+   * pre-dispatch check.
+   */
+  preservableOnStale?: boolean;
+  /**
    * This step participates in the gate-driven tail loop (build…finish): its
    * objective verdict is recomputed after it runs and the selector may route
    * to/over it. The conductor derives the loop region and the front/loop
