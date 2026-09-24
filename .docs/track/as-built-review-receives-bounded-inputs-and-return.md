@@ -1,0 +1,7 @@
+# Track: As-built review receives bounded inputs and returns typed verdicts
+
+Track: technical
+
+Scope boundary: All seven Desired-outcome bullets of jstoup111/ai-conductor#2188 in one spec (operator-confirmed 2026-09-23). The `architecture_review_as_built` step receives a bounded, versioned engine-rendered input projection and returns a native schema-constrained typed verdict; the engine validates it, stamps it with the run identity as the sole authority, and renders the human-readable report from it; every as-built consumer reads the typed result and the as-built Markdown judge parsers are retired; the as-built section of `skills/architecture-review/SKILL.md` stops prescribing input-reading recipes and output format, guarded by the provider skill-contract audit; Claude and Codex honor the same contract. Over-limit diff content is an explicit omission list with on-demand inspection, not a halt; over-limit required structured inputs (plan tasks, story criteria, ADR decisions) are a named mechanical fault. Excluded: which responsibilities the reviewer judges (#2184), new finding-history inputs and reconciliation (#2440), PRD-audit and remediation migrations (#2521, #2522), a generic judged-gate contract catalog (#191), and the other modes of the architecture-review skill.
+
+Internal engine contract migration of one gate's inputs and outputs; no user-facing capability, so acceptance criteria live in stories and no PRD is authored.

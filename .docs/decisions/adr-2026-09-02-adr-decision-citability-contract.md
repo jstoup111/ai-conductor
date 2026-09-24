@@ -79,6 +79,23 @@ says a repeatedly violated mechanical invariant gets machinery at the point of t
    uncitable and untouched by this change; the gate catches only new/edited ones. Correcting
    legacy files stays an operator judgement outside this feature.
 
+> **Amended 2026-09-23 by #2188 (operator-approved):** Item 6 required operator approval before
+> any ADR-decision reference is persisted. The operator approved the scoping below.
+>
+> **D6.1 — As-built governing references persist as their own versioned contract.** The as-built
+> verdict contract persists each finding's governing reference as a structural
+> `{kind: "adr-decision", stem, decision}` or `{kind: "plan-task", taskId}` object. This is a
+> separate versioned contract owned by the as-built verdict, not a finding-identity anchor:
+>
+> - it is not added to adr-2026-08-18-content-anchored-finding-reference-schema's rubric
+>   reference kinds;
+> - that ADR's three-kind set and its integrity pin are unchanged; and
+> - no build_review consumer reads it.
+>
+> Decision ids are produced and validated only by `parseAdrDecisions` (item 1). The text grammar
+> accepted by item 3's resolver is retired with the Markdown table. Its APPROVED-status and
+> decision-existence checks remain the resolution authority.
+
 ## Consequences
 
 ### Positive

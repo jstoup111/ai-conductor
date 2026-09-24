@@ -11,6 +11,9 @@ route to `adr-2026-07-10-validation-group-join` decision 3.
 **Amended:** 2026-08-31 by #2119 — decision 9 added: a finding whose remedy existing plan
 tasks already own takes a non-appending `existing-task` disposition that never draws on the
 plan-growth allowance; decisions 3, 4, and 7 are qualified accordingly.
+**Amended:** 2026-09-23 by #2188 — decisions 1, 2, 6, and 7 are qualified: findings arrive as
+typed fields of the engine-owned as-built verdict contract instead of a Markdown table (see the
+amendment note under decision 9).
 
 ## Context
 
@@ -168,6 +171,49 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    naming the budget actually exhausted as diagnostics only
    (adr-2026-08-29-kickback-budget-recovery-uses-needs-human-halt-class D2); the typed
    ledger remains the authority.
+
+> **Amended 2026-09-23 by #2188:** Decisions 1, 2, 6, and 7 assumed a reviewer-written Markdown
+> report parsed by the engine. The as-built verdict is now an engine-owned typed contract
+> (adr-2026-09-07-durable-prd-widening-decision-reconciliation D6.2). The class meanings, the
+> bounded route (decisions 3-5), validation-group primacy (decision 8), and `existing-task`
+> (decision 9) are unchanged.
+>
+> **D1.1 — Findings are typed fields, not a table.** A BLOCKED as-built verdict carries its
+> findings as a typed array in the as-built verdict contract. Each finding has an id, a class
+> from the closed JSON Schema enum `REMEDIABLE | DESIGN`, a structural governing reference that
+> is exactly one of `{kind: "adr-decision", stem, decision}` or `{kind: "plan-task", taskId}`,
+> and a one-line summary. A `REMEDIABLE` finding requires a governing reference. The class
+> meanings in decision 1 are unchanged. The `## Blocking Findings` table, its copy-exact header,
+> its cell grammar, and the governing-clause text grammar are retired. The violation and
+> resolution prose that decision 1 left unparsed become prose fields of the same verdict: the
+> engine renders them but never routes on them.
+>
+> **D2.1 — Validation at the dispatch boundary replaces the parser.** The engine validates the
+> provider's terminal structured result against the contract before any consumer reads it. It
+> resolves each reference fail-closed: an ADR reference through `parseAdrDecisions` against an
+> APPROVED ADR (adr-2026-09-02-adr-decision-citability-contract item 3), and a plan-task
+> reference through the shared plan-task resolver
+> (adr-2026-08-30-shared-plan-task-reference-resolver D1). A missing or schema-invalid result,
+> or an unresolvable reference, is not a verdict. It is scored `absent` and reruns within the
+> step's existing retry budget, then halts `needs-human` on exhaustion with the rejected field
+> named (adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity D5). This supersedes
+> decision 2's "invalid as a whole ... halts `needs-human`" for the provider-output defects it
+> covered. The `blocked-remediable` / `blocked-design` split is unchanged and is derived from the
+> typed classes.
+>
+> **D6.1 — The typed verdict is the record.** Decision 6's "verdict artifact" is the
+> engine-persisted typed as-built verdict. Per-finding classification and remediation outcomes
+> are typed fields on it. The engine renders `.pipeline/architecture-review-as-built.md` from it
+> and never reads that file back. The shipped record reads the same typed fields; no Markdown or
+> fenced-JSON scrape remains.
+>
+> **D7.1 — The input projection reads pending findings through the seam.** The as-built input
+> projection may carry `pendingAsBuiltRemediationFindings` as context for the next review. It
+> reads them through a read-only accessor exported by the remediation seam, which uses the
+> fail-closed ledger read (adr-2026-08-31-kickback-ledger-read-fails-closed item 1): an absent
+> ledger reads as no pending findings, and an unreadable ledger is a named fault, never an empty
+> list. Decision 7's write, validation, and clear rules are unchanged, and the remediation seam
+> remains the only writer.
 
 ## Consequences
 
