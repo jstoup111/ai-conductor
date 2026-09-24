@@ -27,23 +27,23 @@ As the engine, I want one `parseAdrDecisions` function to interpret an ADR's `##
 
 ## Story 2: As-built resolver adopts the shared parser
 
-As the as-built validation group, I want governing-clause resolution to use the shared parser and resolver contract so that a valid citation never halts needs-human because of parser shape gaps.
+As the as-built validation group, I want governing-reference resolution to use the shared parser and resolver contract so that a valid citation is never rejected, and never halts needs-human, because of parser shape gaps.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a REMEDIABLE finding citing `<stem> decision 4` where the APPROVED ADR's Decision section contains decision 4 in any accepted shape, when `resolveAsBuiltGoverningClause` runs, then it returns an adr-kind resolution
-- Given the rewired resolver, when it resolves a decision reference, then the decision id set comes from `parseAdrDecisions` and the reference is matched through the shared reference-resolver contract of adr-2026-08-30
+- Given a REMEDIABLE finding whose reference is `{kind: "adr-decision", stem, decision: 4}` where the APPROVED ADR's Decision section contains decision 4 in any accepted shape, when the as-built structured result is validated, then the reference resolves to an adr-kind resolution
+- Given the as-built reference resolver, when it resolves a structural `{stem, decision}` reference, then the decision id set comes from `parseAdrDecisions` and the reference is matched through the shared reference-resolver contract of adr-2026-08-30
 
 #### Negative Paths
-- Given a citation naming a decision number absent from the parsed id set, when resolution runs, then it fails to resolve and the existing needs-human path reports the unresolvable clause
-- Given a citation into an ADR that is not APPROVED, when resolution runs, then it does not resolve (approval gate unchanged)
-- Given every ADR fixture the pre-change AB-R12 regex resolved, when the rewired resolver runs on it, then it still resolves (no regression)
+- Given a reference naming a decision number absent from the parsed id set, when the structured result is validated, then it is rejected naming the finding's `reference.decision` field, the attempt is scored absent and reruns, and on exhaustion the step halts needs-human naming the as-built step and that field
+- Given a reference into an ADR that is not APPROVED, when the structured result is validated, then it does not resolve and the result is rejected naming the finding's `reference.stem` field (approval gate unchanged)
+- Given every ADR fixture written in an AB-R12 shape, when a structural reference to one of its declared decisions is validated, then it resolves (no regression)
 
 ### Done When
-- [ ] The inline decision-shape regex in `resolveAsBuiltGoverningClause` is deleted; resolution goes through `parseAdrDecisions`
-- [ ] Existing resolver tests (three AB-R12 shapes, emphasis stripping) pass unchanged
-- [ ] A corpus no-silent-loss test runs the old regex and the new parser over every file in `.docs/decisions/` and proves nothing formerly resolvable became unresolvable
+- [ ] As-built structural ADR references resolve only through `parseAdrDecisions` and APPROVED status
+- [ ] Structural reference resolution tests cover the three AB-R12 shapes and emphasis stripping in the cited ADR, plus field-named rejection of an undeclared decision and a non-APPROVED ADR
+- [ ] A corpus no-silent-loss test over every APPROVED ADR in `.docs/decisions/` proves each decision `parseAdrDecisions` reports resolves as a structural reference
 
 ## Story 3: Land gate rejects new or edited APPROVED ADRs with no citable decision
 

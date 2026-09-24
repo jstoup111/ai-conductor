@@ -8,13 +8,13 @@
 
 ## Story: Add `--interactive` flag to conductor CLI
 
-As a developer, I want to invoke `conduct --interactive "feature"` so that every conversational step opens a real Claude REPL instead of print mode, giving me full oversight throughout the run.
+As a developer, I want to invoke `conduct --interactive "feature"` so that every conversational step opens a real Claude REPL instead of print mode, giving me full oversight throughout the run, while native-schema judgement steps (`architecture_review_as_built` and the `build_review` rubric judges) still run one-shot because a schema-constrained result cannot be produced in a REPL.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- Given the conductor is installed, when I run `conduct --interactive "Add login"`, then `RunMode` is set to `'interactive'` and every conversational step invokes the Claude provider with `interactive: true` (no `-p` flag).
+- Given the conductor is installed, when I run `conduct --interactive "Add login"`, then `RunMode` is set to `'interactive'` and every conversational step other than the native-schema judgement steps (`architecture_review_as_built` and the `build_review` rubric judges) invokes the Claude provider with `interactive: true` (no `-p` flag).
 - Given `conduct --interactive` is active, when a step completes normally, then the run continues to the next step (same flow as default mode, but REPL not print).
 - Given no flags are passed, when I run `conduct "Add login"`, then `RunMode` remains `'default'` and behavior is unchanged.
 - Given `--auto` is passed, when I run `conduct --auto "Add login"`, then the CLI rejects it non-zero, naming the daemon as the unattended path (deprecated by #1509; one-shot removed by #1436 — `'auto'` survives only as the daemon's dispatch mode).
@@ -22,7 +22,7 @@ As a developer, I want to invoke `conduct --interactive "feature"` so that every
 #### Negative Paths
 
 - Given both flags are passed, when I run `conduct --auto --interactive "Add login"`, then the CLI exits immediately with a non-zero code and prints a clear error containing `--auto`, `--interactive`, and `mutually exclusive`.
-- Given `conduct --help` is run, when the output is read, then `--interactive` appears with a description explaining it enables REPL mode for every step.
+- Given `conduct --help` is run, when the output is read, then `--interactive` appears with a description explaining it enables REPL mode for conversational steps, with native-schema judgement steps still running one-shot.
 
 ### Done When
 

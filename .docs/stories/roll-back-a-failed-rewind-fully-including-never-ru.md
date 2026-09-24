@@ -22,6 +22,7 @@ As an operator recovering a feature halted part-way through its build, I want a 
 
 - Given that same feature, when clearing the derived records fails after the demotion is applied, then every step that had no recorded status before the rewind has no recorded status after it, and every step that had one is back to its earlier value.
 - Given that same feature, when clearing the derived records fails after the demotion is applied, then each gate verdict the rewind removed for a demoted step is readable again with its original contents.
+- Given that same feature with a demoted as-built step, when clearing the derived records fails after the rewind removed the as-built typed verdict and its rendered report, then both are restored together with their original contents.
 - Given a state store that offers no explicit field-deletion authority and a rewind that demoted steps with no recorded status, when clearing the derived records fails, then the command names the fields it could not restore and exits non-zero.
 
 ### Done When

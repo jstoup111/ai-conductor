@@ -276,15 +276,16 @@ As an operator, I want the as-built review to report when the design itself fall
 
 #### Happy Path
 - Given code that faithfully implements the approved design while all acceptance criteria pass, when the review reports PLAN_GAP, then the gap is noted in the verdict and shipped record and the feature moves on to retro
-- Given a PLAN_GAP where a stated outcome is not delivered, when the report is read, then the run stops for a human as "plan gap"
+- Given a PLAN_GAP where a stated outcome is not delivered, when the typed verdict is read, then the run stops for a human as "plan gap"
+- Given a BLOCKED typed verdict whose findings are all REMEDIABLE, when the gate settles, then it takes the bounded remediation route to BUILD within the gate's remediation lap cap
 
 #### Negative Paths
-- Given a BLOCKED verdict, when the report is read, then the run stops for a human exactly as it does today
-- Given any as-built verdict, when the SHIP steps route, then no "go back to build" is ever issued from this step
-- Given a report with no verdict line, when it is read, then the gate stays unsatisfied
+- Given a BLOCKED typed verdict containing a DESIGN finding, when the gate settles, then the run stops for a human
+- Given any as-built verdict other than an all-REMEDIABLE BLOCKED verdict within the lap cap, when the SHIP steps route, then no "go back to build" is issued from this step
+- Given no typed verdict, or a structured result that fails validation, when the gate is evaluated, then the gate stays unsatisfied
 
 ### Done When
-- [ ] The report reader accepts PLAN_GAP plus a flag for whether the outcome was delivered; there is no as-built → build route in the engine
+- [ ] The typed verdict accepts PLAN_GAP plus a flag for whether the outcome was delivered; the only as-built → build route in the engine is the bounded remediation route for an all-REMEDIABLE BLOCKED verdict
 - [ ] An end-to-end test shows a PLAN_GAP with passing criteria ships with the gap recorded
 
 ## Story 14: I can see how much a plan has grown

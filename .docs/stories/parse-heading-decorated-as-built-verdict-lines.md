@@ -6,68 +6,69 @@ Track: technical
 
 Tier: S
 
-Approved by the operator on 2026-09-06 (delegated). Scope is the as-built review's verdict line: the
-decoration it tolerates, the diagnostics it keeps when no recognized verdict is present, and the
-agreement between every engine reader of that line. The `Outcome delivered:` line is owned by #2175
-and is exercised here only in its already-supported plain form.
+Approved by the operator on 2026-09-06 (delegated). Scope is the as-built verdict: the reviewer's
+formatting of a Markdown verdict line never decides the gate, a reviewer-written report with no typed
+verdict is not a verdict, and every engine consumer of the verdict (gate, halt body, retained shipment
+findings) reads the same typed as-built verdict. The delivered-outcome field is owned by #2175 and is
+exercised here only in its already-supported form.
 
 ## Story 1: Read a decorated verdict line as the verdict it states
 
-As the operator of an autonomous build, I want an as-built review whose verdict carries a recognized
-value to be read as that verdict even when the reviewer decorates the line as a markdown heading, so
+As the operator of an autonomous build, I want an as-built review that states a recognized verdict to
+be read as that verdict regardless of how the reviewer would have formatted a Markdown verdict line, so
 that a complete approving review does not become a needs-human halt over formatting.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- Given an as-built report whose verdict line is written as a markdown heading carrying `APPROVED WITH DRIFT NOTES`, when the as-built outcome is classified, then it is classified as approved rather than as a missing verdict line.
-- Given an as-built report whose verdict line combines a heading prefix, bold markers, a closing heading marker, and a lower-case value, when the verdict line is read, then it yields the same recognized verdict as the undecorated form of that line.
+- Given an as-built dispatch whose structured result carries verdict `APPROVED WITH DRIFT NOTES`, when the as-built outcome is classified from the persisted typed verdict, then it is classified as approved and the rendered report shows that verdict.
+- Given a persisted typed verdict of `APPROVED` and a rendered report whose verdict line has been hand-decorated with a heading prefix, bold markers, and a lower-case value, when the gate is evaluated, then it is classified approved from the typed verdict and the report's formatting has no effect.
 
 #### Negative Paths
 
-- Given an as-built report whose only `Verdict` heading carries no colon and states its value on a later line, when the as-built outcome is classified, then it is still classified invalid with the missing-verdict-line cause.
-- Given an as-built report whose heading-decorated verdict line states a value outside the closed vocabulary, when the as-built outcome is classified, then it is classified invalid with the unrecognized-verdict cause carrying that raw value.
+- Given a worktree holding only a reviewer-written `.pipeline/architecture-review-as-built.md` whose verdict is a heading-decorated line and no typed verdict, when the as-built completion check runs, then the gate is scored `absent` and the step reruns rather than passing or halting on the line's format.
+- Given an as-built structured result whose `verdict` is a value outside the closed vocabulary, when the engine validates it, then it is rejected with a diagnostic naming `verdict` and carrying that raw value, and the attempt is scored `absent` and reruns.
 
 ### Done When
 
-- [ ] The as-built outcome classifier returns the approved outcome for a heading-decorated approving report.
-- [ ] Decorated and undecorated forms of the same recognized verdict produce identical reader results.
-- [ ] The colon-less heading report and the unknown-value heading report keep their existing invalid causes and diagnostics.
+- [ ] The as-built outcome classifier returns the approved outcome for a typed approving verdict.
+- [ ] Hand-decorating the rendered report's verdict line never changes a consumer's outcome.
+- [ ] A Markdown-only heading-decorated report scores `absent`, and an out-of-vocabulary typed verdict is rejected with its field-named diagnostic.
 
 ## Story 2: Keep every reader of the verdict line in agreement
 
-As the operator, I want the halt body and the retained shipment findings to read the verdict line the
-same way the gate does, so that widening the gate cannot silently drop a blocking-findings detail or a
-delivered plan-gap record for the same report.
+As the operator, I want the halt body and the retained shipment findings to read the as-built verdict
+the same way the gate does, so that no consumer can silently drop a blocking-findings detail or a
+delivered plan-gap record for the same review.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- Given a heading-decorated blocked report carrying a valid blocking-findings table, when the as-built halt body is rendered, then it lists the parsed blocking findings instead of an empty detail.
-- Given a heading-decorated delivered plan-gap report whose outcome line is in its plain form, when the retained shipment findings are collected, then the plan-gap finding is recorded exactly as it is for the undecorated report.
+- Given a persisted BLOCKED typed verdict carrying typed findings, when the as-built halt body is rendered, then it lists those findings with their class and governing reference instead of an empty detail.
+- Given a persisted PLAN_GAP typed verdict with `outcomeDelivered` true, when the retained shipment findings are collected, then the plan-gap finding is recorded from that typed verdict, the same one the gate read.
 
 #### Negative Paths
 
-- Given a report carrying no recognizable verdict line, when the halt body is rendered and the retained shipment findings are collected, then the halt body carries no blocking-findings detail and no plan-gap finding is recorded.
+- Given a worktree carrying no typed as-built verdict, even when a reviewer-written Markdown report with a verdict line is present, when the halt body is rendered and the retained shipment findings are collected, then the halt body carries no blocking-findings detail and no plan-gap finding is recorded.
 
 ### Done When
 
-- [ ] A heading-decorated blocked report reaches the operator-facing halt with its blocking findings enumerated.
-- [ ] A heading-decorated delivered plan-gap report yields the same retained finding as its undecorated counterpart.
-- [ ] A report with no recognizable verdict line yields neither a blocking-findings detail nor a retained plan-gap finding.
-- [ ] Exactly one verdict-line reader exists in the engine sources; a search of the engine source tree finds no second regex matching the verdict label.
+- [ ] A BLOCKED typed verdict reaches the operator-facing halt with its typed findings enumerated.
+- [ ] A delivered PLAN_GAP typed verdict yields the retained plan-gap finding through the same reader the gate uses.
+- [ ] A worktree with no typed verdict yields neither a blocking-findings detail nor a retained plan-gap finding.
+- [ ] No engine module reads the as-built verdict line from Markdown; the repository check from #2188 Story 8 enforces it.
 
 ## Negative-category review
 
-Invalid input is the live category and is covered three ways: a heading with no colon, a heading whose
-value is outside the closed vocabulary, and a report with no recognizable verdict line at all — each
-must keep its existing fail-closed diagnostic, because a widened reader that starts accepting these is
-the precise way this change could ship a review that was never approved. Data integrity is covered by
-the agreement criteria: a verdict the gate now accepts must not be invisible to the halt renderer or
-the shipment record. The subject is a pure, synchronous string reader over an already-read artifact,
-so auth and permission failures, timeouts and network errors, concurrent access, resource exhaustion,
-partial failure and rollback, dependency unavailability, cascade deletion, immutability, exception
-hierarchies, and dedup keys have no surface here and are inapplicable. Idempotency is trivially held:
-the reader is a pure function of its input.
+Invalid input is the live category and is covered three ways: a reviewer-written heading-decorated
+report with no typed verdict, a typed verdict whose value is outside the closed vocabulary, and a
+worktree with no typed verdict at all — each must fail closed, because a consumer that starts accepting
+these is the precise way this change could ship a review that was never approved. Data integrity is
+covered by the agreement criteria: a verdict the gate accepts must not be invisible to the halt
+renderer or the shipment record. The subject is a read of one already-persisted typed verdict, so auth
+and permission failures, timeouts and network errors, concurrent access, resource exhaustion, partial
+failure and rollback, dependency unavailability, cascade deletion, immutability, exception hierarchies,
+and dedup keys have no surface here and are inapplicable. Idempotency is trivially held: the read is a
+pure function of the persisted verdict.
