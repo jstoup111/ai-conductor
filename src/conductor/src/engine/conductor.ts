@@ -5209,13 +5209,23 @@ export class Conductor {
       // more than the shared remaining allowance together.
       const sharedGrowthBudget = prdAuditBudget ?? asBuiltBudget;
       if (sharedGrowthBudget && allTasks.length > sharedGrowthBudget.growth.remaining) {
+        const evidenceGate = prdAuditBudget ? 'prd_audit' : 'architecture_review_as_built';
+        const capReason =
+          `shared plan-growth allowance exhausted (${sharedGrowthBudget.growth.added}/` +
+          `${sharedGrowthBudget.growthCap} appended; ${allTasks.length} requested, ` +
+          `${sharedGrowthBudget.growth.remaining} remaining)`;
+        const capEntry = await recordKickbackCapEvidence(this.projectRoot, evidenceGate, {
+          allowance: 'growth',
+          consumed: sharedGrowthBudget.growth.added,
+          limit: sharedGrowthBudget.growthCap,
+          latestReason: capReason,
+        });
         return {
           kind: 'halt',
           haltClass: KICKBACK_CAP_HALT_CLASS,
           detail:
-            `remediation shared plan-growth allowance exhausted (${sharedGrowthBudget.growth.added}/` +
-            `${sharedGrowthBudget.growthCap} appended; ${allTasks.length} requested, ` +
-            `${sharedGrowthBudget.growth.remaining} remaining) before appending fix tasks.` +
+            `remediation ${capReason} before appending fix tasks.\n` +
+            `Kickback halt generation: ${capEntry.capEvidence!.haltGeneration}` +
             // AB-R8 / APPROVED decision 4 + Story 4: a cap terminal names the
             // allowance AND every finding. This exit is shared with prd_audit,
             // so it renders unconditionally — the helper yields '' unless an

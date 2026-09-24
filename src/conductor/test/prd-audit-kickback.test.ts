@@ -171,6 +171,7 @@ async function createPrdAuditRemediationFixture(input: {
   priorGrowthAdded?: number;
   existingTask?: boolean;
   report?: string;
+  beforePlanRemediation?: (root: string) => Promise<void>;
 }) {
   const root = await mkdtemp(join(tmpdir(), 'prd-audit-kickback-'));
   dirs.push(root);
@@ -266,6 +267,7 @@ async function createPrdAuditRemediationFixture(input: {
     config: { prd_audit: { max_remediation_laps: 1, ...input.config } } as never,
   });
 
+  await input.beforePlanRemediation?.(root);
   const outcome = await (conductor as unknown as {
     planRemediation: (
       state: ConductState,
@@ -2015,6 +2017,19 @@ describe('prd_audit kickback', () => {
     expect(fixture.outcome.detail).toContain(`Kickback halt generation: ${evidence?.haltGeneration}`);
   });
 
+  it('records prd_audit growth evidence at the shared validation-group growth exit', async () => {
+    const fixture = await createAsBuiltRemediationCapFixture({
+      withPrdEvidence: true,
+      appendCap: 2,
+    });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+    const evidence = (await readKickbackLedger(fixture.root)).gates.prd_audit.capEvidence;
+    expect(evidence).toMatchObject({ allowance: 'growth', consumed: 0, limit: 2 });
+    expect(fixture.outcome.detail).toContain(`Kickback halt generation: ${evidence?.haltGeneration}`);
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
+  });
+
   it('keeps existing-task remediation outside growth evidence until its lap allowance is exhausted', async () => {
     const admitted = await createPrdAuditRemediationFixture({
       taskCount: 12,
@@ -2035,6 +2050,71 @@ describe('prd_audit kickback', () => {
     const evidence = (await readKickbackLedger(exhausted.root)).gates.prd_audit.capEvidence;
     expect(exhausted.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
     expect(evidence).toMatchObject({ allowance: 'laps', consumed: 1, limit: 1 });
+  });
+
+  it('does not record cap evidence or a budget-raise command when policy refuses plan growth', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'prd-audit-no-growth-allowance-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(planPath, '### Task 1: authored\n### Task 2: authored\n');
+    await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(join(root, '.pipeline/remediation.json'), JSON.stringify({
+          dispositions: [{
+            id: 'arch-gap', disposition: 'build', category: null, rationale: 'Foreign append.',
+            tasks: [{ id: 'rem-arch', title: 'Unbounded architecture task' }],
+          }],
+        }));
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline/conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+      config: { architecture_review_as_built: { remediation: { enabled: false } } } as never,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'as-built blocked',
+      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'halt', detail: expect.stringContaining('no plan-growth allowance') });
+    expect(outcome.detail).not.toContain('kickback-budget raise');
+    expect(Object.values((await readKickbackLedger(root)).gates)).not.toContainEqual(
+      expect.objectContaining({ capEvidence: expect.anything() }),
+    );
+  });
+
+  it('does not append or record cap evidence when the participating gate ledger entry is unreadable', async () => {
+    let root = '';
+    let planPath = '';
+    let plan = '';
+    await expect(createPrdAuditRemediationFixture({
+      taskCount: 12,
+      criteria: ['S2.1'],
+      beforePlanRemediation: async (fixtureRoot) => {
+        root = fixtureRoot;
+        planPath = join(root, '.docs', 'plans', 'feature.md');
+        plan = await readFile(planPath, 'utf8');
+        await writeFile(
+          join(root, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'unreadable' } } }),
+        );
+      },
+    })).rejects.toThrow("kickback ledger gate 'prd_audit' is unreadable");
+
+    await expect(readFile(planPath, 'utf8')).resolves.toBe(plan);
+    const ledger = await readKickbackLedger(root);
+    expect(ledger.gates.prd_audit?.capEvidence).toBeUndefined();
   });
 
   it('honors a raised configurable growth cap before appending every FIXABLE task', async () => {
