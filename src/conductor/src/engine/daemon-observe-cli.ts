@@ -508,10 +508,12 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
     const featureRoot = join(repoPath, '.worktrees', feature.slug);
     const initial = await readGrowth(featureRoot, 0);
     const config = await loadConfig(featureRoot);
-    const cap = prdAuditAppendCap(
+    const configCap = prdAuditAppendCap(
       config.ok ? config.config : ({} as HarnessConfig),
       initial.authored,
     );
+    const ledger = await readKickbackLedger(featureRoot);
+    const cap = ledger.effectiveGrowthCap ?? configCap;
     const growth = await readGrowth(featureRoot, cap);
     const byGate = Object.entries(growth.byGate)
       .map(([gate, count]) => `${gate}: ${count}`)
@@ -521,16 +523,16 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
       `added ${growth.added}${byGate ? ` (${byGate})` : ''}; ` +
       `remaining ${growth.remaining}/${cap}`,
     );
-    const ledger = await readKickbackLedger(featureRoot);
     for (const [gate, entry] of Object.entries(ledger.gates)) {
-      if ((entry.adjustments?.length ?? 0) === 0) continue;
+      if (!entry.capEvidence && (entry.adjustments?.length ?? 0) === 0) continue;
       const limit = gate === 'build_review'
         ? 5
         : gate === 'prd_audit'
           ? (config.ok ? (config.config as HarnessConfig & { prd_audit?: { max_remediation_laps?: number } }).prd_audit?.max_remediation_laps ?? 1 : 1)
           : (config.ok ? (config.config as HarnessConfig & { architecture_review_as_built?: { max_remediation_laps?: number } }).architecture_review_as_built?.max_remediation_laps ?? 1 : 1);
       const view = renderKickbackBudgetView(entry, gate, limit).replace(/\n/g, ' | ');
-      out(`  KICKBACK BUDGET [${feature.slug}]: ${view}`);
+      const allowance = entry.capEvidence ? `Allowance: ${entry.capEvidence.allowance}; ` : '';
+      out(`  KICKBACK BUDGET [${feature.slug}]: ${allowance}${view}`);
     }
   }
 }
