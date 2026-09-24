@@ -83,7 +83,7 @@ As a daemon operator, I want a park-declined attempt to be recorded as an intent
 
 #### Happy Path
 
-- Given a step whose next attempt is declined for a park, When the conductor returns, Then the termination is operator-parked and no step_failed, step_retry, or retry-exhaustion event is emitted after the operator-park boundary; the step_retry that records the drained prior attempt's failure precedes the boundary and is not an event for the declined attempt.
+- Given a step whose next attempt is declined for a park, When the conductor returns, Then the termination is operator-parked and no step_failed, step_retry, or retry-exhaustion event is emitted after the operator-park boundary.
 
 #### Negative Paths
 
