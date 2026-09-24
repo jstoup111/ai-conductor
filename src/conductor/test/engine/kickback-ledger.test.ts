@@ -1,4 +1,4 @@
-// Covers: task:2, task:7, task:8, task:rem-as-built-rem-ab4-1
+// Covers: task:2, task:5, task:7, task:8, task:rem-as-built-rem-ab4-1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -31,6 +31,7 @@ import {
   settleRemediationRound,
   readGrowth,
   readKickbackLedger,
+  readPendingAsBuiltRemediationFindings,
   readSuiteInfrastructureRetries,
   refundBuildReviewKickback,
   stageKickbackBudgetAdjustment,
@@ -68,6 +69,67 @@ describe('kickback-ledger', () => {
 
   it('returns an empty ledger when the ledger file is absent', async () => {
     await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+  });
+
+  it('reads absent and present pending as-built remediation findings', async () => {
+    await expect(readPendingAsBuiltRemediationFindings(dir)).resolves.toEqual({
+      kind: 'ok',
+      findings: [],
+    });
+
+    const findings = [{
+      gate: 'architecture_review_as_built' as const,
+      finding: 'ARCH-1',
+      class: 'REMEDIABLE' as const,
+      governingClause: 'adr-2026-08-25 decision 7',
+      summary: 'repair durable projection',
+      outcome: 'remediated' as const,
+    }, {
+      gate: 'architecture_review_as_built' as const,
+      finding: 'ARCH-2',
+      class: 'REMEDIABLE' as const,
+      governingClause: 'adr-2026-08-25 decision 7',
+      summary: 'bound input projection',
+      outcome: 'remediated' as const,
+    }];
+    await writeKickbackLedger(dir, { version: 1, gates: {}, pendingAsBuiltRemediationFindings: findings });
+
+    await expect(readPendingAsBuiltRemediationFindings(dir)).resolves.toEqual({
+      kind: 'ok',
+      findings,
+    });
+  });
+
+  it('fails closed with the ledger path when pending findings are unreadable', async () => {
+    const ledgerPath = join(dir, '.pipeline', 'kickback-ledger.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(ledgerPath, 'not valid json {');
+
+    await expect(readPendingAsBuiltRemediationFindings(dir)).resolves.toEqual({
+      kind: 'unreadable',
+      reason: expect.stringContaining(ledgerPath),
+    });
+  });
+
+  it('does not change ledger bytes while reading pending as-built remediation findings', async () => {
+    const findings = [{
+      gate: 'architecture_review_as_built' as const,
+      finding: 'ARCH-1',
+      class: 'REMEDIABLE' as const,
+      governingClause: 'adr-2026-08-25 decision 7',
+      summary: 'repair durable projection',
+      outcome: 'remediated' as const,
+    }];
+    await writeKickbackLedger(dir, { version: 1, gates: {}, pendingAsBuiltRemediationFindings: findings });
+    const ledgerPath = join(dir, '.pipeline', 'kickback-ledger.json');
+    const before = await readFile(ledgerPath, 'utf8');
+
+    await expect(readPendingAsBuiltRemediationFindings(dir)).resolves.toEqual({
+      kind: 'ok',
+      findings,
+    });
+
+    await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(before);
   });
 
   it.each([

@@ -231,6 +231,11 @@ export type KickbackLedgerReadResult =
   | { readonly kind: 'ok'; readonly ledger: KickbackLedger }
   | { readonly kind: 'unreadable'; readonly reason: string };
 
+/** Typed, fail-closed read for the as-built remediation seam. */
+export type PendingAsBuiltRemediationFindingsReadResult =
+  | { readonly kind: 'ok'; readonly findings: readonly PendingAsBuiltRemediationFinding[] }
+  | { readonly kind: 'unreadable'; readonly reason: string };
+
 /** Typed mechanical-fault write for enforcement boundaries that fail closed. */
 export type BumpMechanicalFaultsInLedgerResult =
   | { readonly kind: 'ok'; readonly entry: KickbackGateEntry }
@@ -609,6 +614,28 @@ export async function readKickbackLedgerResult(projectRoot: string): Promise<Kic
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
     return { kind: 'unreadable', reason: `kickback ledger is unreadable: ${error instanceof Error ? error.message : String(error)}` };
   }
+}
+
+/**
+ * Read pending as-built remediation findings without mutating the ledger.
+ * Damaged durable state remains unavailable so callers cannot mistake it for
+ * an empty prior-findings set.
+ */
+export async function readPendingAsBuiltRemediationFindings(
+  projectRoot: string,
+): Promise<PendingAsBuiltRemediationFindingsReadResult> {
+  const result = await readKickbackLedgerResult(projectRoot);
+  if (result.kind === 'absent') return { kind: 'ok', findings: [] };
+  if (result.kind === 'unreadable') {
+    return {
+      kind: 'unreadable',
+      reason: `${result.reason} at ${join(projectRoot, KICKBACK_LEDGER_PATH)}`,
+    };
+  }
+  return {
+    kind: 'ok',
+    findings: result.ledger.pendingAsBuiltRemediationFindings ?? [],
+  };
 }
 
 /** Read durable state while retaining valid sibling gates for diagnostics. */
