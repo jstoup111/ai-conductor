@@ -76,7 +76,13 @@ import {
   type BuildReviewEffectiveResolverDeps,
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
-import { extractStoryCriterionIds, listItems, sectionBody, splitStoryBlocks } from './story-criteria.js';
+import {
+  assessAcceptedStoryReadability,
+  extractStoryCriterionIds,
+  listItems,
+  sectionBody,
+  splitStoryBlocks,
+} from './story-criteria.js';
 import { readAsBuiltVerdictLine } from './as-built-verdict-line.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
@@ -4017,10 +4023,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 export const GATE_ONLY_PREDICATES: Partial<
   Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
 > = {
-  // Stories pass when every story has a Happy Path AND a Negative Path(s)
-  // section (each with ≥1 Given/When/Then bullet) and no DRAFT status.
-  // Structural check against the repo convention (### Happy Path / ###
-  // Negative Paths headings, **Status:** marker). See gate-audit-2026-06-23.md.
+  // Stories pass when every story is readable under the shared accepted-story
+  // predicate and the file has no DRAFT status. The predicate keeps the
+  // heading/criterion convention in one place for this gate and land.
   // Scoped to the FEATURE's stories doc (#441): legacy landed stories predate
   // the convention, so a corpus-wide scan is permanently unsatisfiable.
   stories: async (dir, ctx): Promise<CompletionResult> => {
@@ -4036,33 +4041,20 @@ export const GATE_ONLY_PREDICATES: Partial<
         reason: `cannot resolve this feature's stories doc${desc} among ${corpus.length} stories files — expected .docs/stories/<plan-stem>.md; refusing to validate the whole stories corpus (#441)`,
       };
     }
-    const files = [scoped];
-    for (const file of files) {
-      const content = await readFile(file, 'utf-8');
-      const rel = relative(dir, file);
-      if (/^\s*\*\*Status:\*\*\s*DRAFT\b/im.test(content)) {
-        return {
-          done: false,
-          reason: `${rel}: story is DRAFT — must be accepted before planning`,
-        };
-      }
-      for (const block of splitStoryBlocks(content)) {
-        const label = `${rel}${block.id ? ` (Story ${block.id})` : ''}`;
-        const hasHappy = hasPathSection(block.text, 'happy');
-        const hasNegative = hasPathSection(block.text, 'negative');
-        if (!hasHappy || !hasNegative) {
-          const missing =
-            !hasHappy && !hasNegative
-              ? 'happy and negative paths'
-              : !hasHappy
-                ? 'a happy path'
-                : 'a negative path';
-          return {
-            done: false,
-            reason: `${label}: missing ${missing} (each story needs a Happy Path and a Negative Path(s) section with ≥1 Given/When/Then bullet)`,
-          };
-        }
-      }
+    const content = await readFile(scoped, 'utf-8');
+    const rel = relative(dir, scoped);
+    if (/^\s*\*\*Status:\*\*\s*DRAFT\b/im.test(content)) {
+      return {
+        done: false,
+        reason: `${rel}: story is DRAFT — must be accepted before planning`,
+      };
+    }
+    const readability = assessAcceptedStoryReadability(content);
+    if (readability.firstUnreadableStoryId) {
+      return {
+        done: false,
+        reason: `${rel} (Story ${readability.firstUnreadableStoryId}): criteria are unreadable (each story needs readable Given/When/Then criteria under headed Happy Path or Negative Paths sections)`,
+      };
     }
     return { done: true };
   },
