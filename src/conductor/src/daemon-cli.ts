@@ -108,6 +108,7 @@ import { resolveHarnessVersion } from './engine/version-report.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
 import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerUrlRead } from './engine/tracker-client.js';
+import { bindMutationToPullRequest } from './engine/ship-draft-pr.js';
 import { createGithubIntakeAuthorization } from './engine/engineer/intake/github-issues.js';
 import { resolveFeatureRemoteMutation } from './engine/remote-git-operations.js';
 import { createDaemonHaltPrOperations } from './engine/daemon-halt-pr-operations.js';
@@ -1457,7 +1458,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const finalState = await readState(stateFilePath);
     const implementationPrUrl = finalState.ok ? finalState.value.pr_url : undefined;
     const ghRunner = makeProductionGh();
-    const closeIssueMutation = item.sourceRef && implementationPrUrl
+    // The resolved context is bound to the feature branch ref; the `Closes`
+    // edit targets the implementation PR, so rebind to it or the owner gate
+    // refuses the edit as `invalid-target` (#2703).
+    const featureMutation = item.sourceRef && implementationPrUrl
       ? await resolveFeatureRemoteMutation({
         cwd: wt.path,
         slug: item.slug,
@@ -1465,6 +1469,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         git: (args) => finishPublicationGit(args, { cwd: wt.path }),
         gh: ghRunner,
       })
+      : undefined;
+    const closeIssueMutation = featureMutation && implementationPrUrl
+      ? bindMutationToPullRequest(featureMutation, implementationPrUrl)
       : undefined;
     await closeIssueOnImplementationMerge({
       gh: ghRunner,
