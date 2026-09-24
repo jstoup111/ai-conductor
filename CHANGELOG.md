@@ -57,6 +57,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review no longer halts when a lap re-runs on an unchanged snapshot, and the security rubric is no longer offered test-quality fields it must reject. ([implementation PR #2707](https://github.com/jstoup111/ai-conductor/pull/2707)).
 - Spec and implementation PRs again carry their issue link (`Refs`/`Closes`) and mirrored priority labels; handoff now reports a refused post-create write instead of silently dropping it. ([implementation PR #2704](https://github.com/jstoup111/ai-conductor/pull/2704)).
 - Judged gates now retain valid stamped verdicts after unrelated kickbacks instead of re-dispatching. ([implementation PR #2708](https://github.com/jstoup111/ai-conductor/pull/2708)).
+- Operators can park daemon features without later retries consuming their retry budget. ([implementation PR #2669](https://github.com/jstoup111/ai-conductor/pull/2669)).
 
 ## [1.4.0] - 2026-09-19
 
