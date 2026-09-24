@@ -98,6 +98,14 @@ Export one canonical `GhRunner` + one guarded `makeProductionGh`; no semantic in
    `credentials` are meaningful only for `backend: jira`; `github` keeps the `gh` CLI
    and its existing auth.
 
+   > **Amended 2026-09-23 by #158:** "`github` keeps the `gh` CLI and its existing auth"
+   > still holds for reads and for every operator without a bot. An operator may declare an
+   > optional machine-scoped bot credential in user config. Non-read GitHub operations and
+   > remote pushes then run `gh` and `git` with that credential in the child environment, as
+   > adr-2026-09-11-github-operation-ownership D9 specifies. That credential is not the
+   > per-project `tracker.credentials` reference reserved here, which stays Jira-only and must
+   > never hold a token.
+
 Because the GitHub client is constructed unconditionally and needs no config, **#846
 has no build dependency on #845** — the contract is one-directional (#845 must host the
 key shape defined here).
