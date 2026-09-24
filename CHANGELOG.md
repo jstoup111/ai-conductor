@@ -21,6 +21,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Custom lifecycle steps now dispatch their configured skill and can block FINISH until fresh completion evidence is present. ([implementation PR #2653](https://github.com/jstoup111/ai-conductor/pull/2653)).
 - Adds a one-line installer that bootstraps AI Conductor from the documented stable channel. ([implementation PR #2626](https://github.com/jstoup111/ai-conductor/pull/2626)).
 - Self-hosted runs now report live-boundary fingerprint time and file counts in daemon output and event logs. ([implementation PR #2651](https://github.com/jstoup111/ai-conductor/pull/2651)).
+- The mergeable sweep can safely resolve eligible test-only rebase conflicts and clear their resolved remediation labels. ([implementation PR #2646](https://github.com/jstoup111/ai-conductor/pull/2646)).
 
 ### Changed
 
