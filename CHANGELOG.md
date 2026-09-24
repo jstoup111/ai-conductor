@@ -52,6 +52,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The daemon reclaims merged worktrees left behind by a dead run's stale phase marker, reports diverged branches accurately, and logs retained worktrees once instead of as a failure on every sweep. ([implementation PR #2688](https://github.com/jstoup111/ai-conductor/pull/2688)).
 - The daemon no longer opens false shipped-record repair PRs right after a merge, never switches branches in the root checkout, and refuses any repair that would drop data from an existing shipped record. ([implementation PR #2687](https://github.com/jstoup111/ai-conductor/pull/2687)).
 - Finish accepts a fresh satisfied re-judgement after a rebase preserves a gate. ([implementation PR #2689](https://github.com/jstoup111/ai-conductor/pull/2689)).
+- Daemon FINISH no longer halts when the PR-prose pass submits its edit through the guarded `github-operation` command. ([implementation PR #2706](https://github.com/jstoup111/ai-conductor/pull/2706)).
 
 ## [1.4.0] - 2026-09-19
 
