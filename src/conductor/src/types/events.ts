@@ -389,6 +389,12 @@ export type ConductorEvent =
       step: 'coverage_binding';
     }
   | {
+      /** A changed resolved DECIDE input voided completed coverage evidence. */
+      type: 'coverage_binding_invalidated';
+      paths: string[];
+      origin: 'decide-change';
+    }
+  | {
       /** A retired configuration key was accepted as a compatibility no-op. */
       type: 'config_deprecated_key';
       key: string;
