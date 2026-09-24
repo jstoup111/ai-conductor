@@ -7850,7 +7850,7 @@ export class Conductor {
           const parkedMember = await this.runParallelGroupViaCore(step.name, stepCfg.parallel, state);
           if (parkedMember) {
             const parked = await stopAtOperatorParkBoundary(true, {
-              kind: 'attempt', step: step.name, attempt: 1, member: parkedMember,
+              kind: 'attempt', step: step.name, attempt: parkedMember.attempt ?? 1, member: parkedMember.name,
             });
             if (parked) return parked;
           }
@@ -14373,7 +14373,7 @@ export class Conductor {
     groupName: StepName,
     branches: ParallelBranch[],
     state: ConductState,
-  ): Promise<string | undefined> {
+  ): Promise<{ name: string; attempt?: number } | undefined> {
     const branchNames = branches.map((b) => b.name);
     await this.emitExecutionEvent({ type: 'parallel_started', step: groupName, branches: branchNames });
 
@@ -14569,7 +14569,10 @@ export class Conductor {
         branches: branchNames,
       });
     }
-    return groupFailed ? undefined : parkedMember?.name;
+    const parkedOutcome = parkedMemberIndex === -1 ? undefined : outcomes[parkedMemberIndex];
+    return groupFailed || parkedMember === undefined || parkedOutcome?.kind !== 'parked'
+      ? undefined
+      : { name: parkedMember.name, attempt: parkedOutcome.attempt };
   }
 
   /**

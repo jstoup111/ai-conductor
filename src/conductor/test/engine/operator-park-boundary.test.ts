@@ -1323,14 +1323,14 @@ describe('operator park boundary contract', () => {
     }).toEqual({
       result: {
         kind: 'operator-parked',
-        boundary: { kind: 'attempt', step: 'memory', attempt: 1, member: 'parked-member' },
+        boundary: { kind: 'attempt', step: 'memory', attempt: 2, member: 'parked-member' },
       },
       calls: ['parked-member', 'passing-member'],
       failures: [],
       parkBoundaries: [{
         type: 'operator_park_boundary',
         featureSlug: 'operator-park-boundary',
-        boundary: { kind: 'attempt', step: 'memory', attempt: 1, member: 'parked-member' },
+        boundary: { kind: 'attempt', step: 'memory', attempt: 2, member: 'parked-member' },
       }],
       state: { memory: 'in_progress', parked: 'in_progress', passing: 'done' },
     });
