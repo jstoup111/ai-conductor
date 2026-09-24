@@ -67,17 +67,19 @@ function defaultPlan(stem: string): string {
   ].join('\n');
 }
 
-async function expectUnreadableStoriesRefusal(stories: string): Promise<void> {
+async function expectUnreadableStoriesRefusal(stories: string, storyId: string): Promise<void> {
   const worktreePath = await seedSmallLandFixture(stories);
   const before = await git(['rev-parse', 'HEAD'], worktreePath);
 
-  await expect(landSpec(
+  const landing = landSpec(
     { name: 'fixture', canonicalPath: repoPath },
     'readable stories only',
     worktreePath,
     undefined,
     { ownerConfig: {}, gh },
-  )).rejects.toMatchObject({ gate: 'stories-unreadable' });
+  );
+  await expect(landing).rejects.toMatchObject({ gate: 'stories-unreadable' });
+  await expect(landing).rejects.toThrow(`Story ${storyId}`);
 
   expect(await git(['rev-parse', 'HEAD'], worktreePath)).toBe(before);
   await expect(execFile('git', ['show', '--quiet', '--format=', 'HEAD'], { cwd: worktreePath })).resolves.toBeDefined();
@@ -227,7 +229,7 @@ describe('landSpec accepted-story readability gate', () => {
       '- **Given:** the clauses are split across bullets',
       '- **Then:** land refuses the artifact',
       '',
-    ].join('\n'));
+    ].join('\n'), '3');
   });
 
   it('refuses Small zero-criteria stories without requiring a coherence artifact or committing', async () => {
@@ -243,7 +245,7 @@ describe('landSpec accepted-story readability gate', () => {
       '#### Negative Paths',
       '- The failure is described but has no criterion clauses.',
       '',
-    ].join('\n'));
+    ].join('\n'), '1');
   });
 
   it('refuses Story 2 whose Given-only rows omit Then clauses', async () => {
@@ -259,7 +261,7 @@ describe('landSpec accepted-story readability gate', () => {
       '#### Negative Paths',
       '- Given validation finds an incomplete criterion, when it evaluates the story.',
       '',
-    ].join('\n'));
+    ].join('\n'), '2');
   });
 
   it('refuses Story 2 when one Given-only bullet accompanies four readable criteria', async () => {
@@ -278,6 +280,6 @@ describe('landSpec accepted-story readability gate', () => {
       '#### Negative Paths',
       '- Given validation finds invalid input, when it evaluates the story, then land refuses it.',
       '',
-    ].join('\n'));
+    ].join('\n'), '2');
   });
 });
