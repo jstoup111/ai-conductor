@@ -4214,23 +4214,42 @@ export class DefaultStepRunner implements StepRunner {
       const decideSet = await resolveCoverageBindingDecideSet(this.projectDir, this.featureDesc || undefined);
       if (decideSet) {
         const decisionPaths = new Map<string, string>();
+        const adrPathsById = new Map<string, string>();
+        const uncitableAdrIds = new Set<string>();
         const requiredDecisionIds = new Set<string>();
         for (const adrPath of decideSet.adrPaths) {
-          const adr = parseAdrDecisions(await readFile(join(this.projectDir, adrPath), 'utf8'));
-          if (adr.kind !== 'decisions') continue;
           const adrId = basename(adrPath, '.md');
+          adrPathsById.set(adrId, adrPath);
+          let adr;
+          try {
+            adr = parseAdrDecisions(await readFile(join(this.projectDir, adrPath), 'utf8'));
+          } catch (error) {
+            return {
+              success: false,
+              output: `coverage_binding could not read ADR ${adrPath}: ${error instanceof Error ? error.message : String(error)}`,
+            };
+          }
+          if (adr.kind !== 'decisions') {
+            uncitableAdrIds.add(adrId);
+            continue;
+          }
           for (const decisionId of adr.ids) {
             const formatted = formatArchitectureDecisionId(adrId, decisionId);
             requiredDecisionIds.add(formatted);
             decisionPaths.set(formatted, adrPath);
           }
         }
-        const violations = validateArchitectureObligationCoverage(planText, requiredDecisionIds);
+        const violations = validateArchitectureObligationCoverage(planText, requiredDecisionIds)
+          .filter((violation) => ![...uncitableAdrIds].some((adrId) => violation.decisionId.startsWith(`${adrId}#`)));
         if (violations.length > 0) {
           await writeEnvelope('refused', []);
           const detail = violations.map((violation) => {
             const decision = violation.decisionId.match(/#(D\d+)$/)?.[1] ?? violation.decisionId;
-            const adrPath = decisionPaths.get(violation.decisionId) ?? '(unknown ADR path)';
+            const adrId = violation.decisionId.match(/^([^#]+)#D\d+$/)?.[1];
+            const adrPath = decisionPaths.get(violation.decisionId)
+              ?? (adrId === undefined ? undefined : adrPathsById.get(adrId))
+              ?? (adrId === undefined ? undefined : `.docs/decisions/${adrId}.md`)
+              ?? '(unknown ADR path)';
             return `ADR: ${adrPath}\nDecision: ${decision}\nViolation: ${violation.detail}`;
           }).join('\n\n');
           const reason = `coverage_binding refused: architecture obligation coverage does not carry every current ADR decision.\n\n${detail}`;
