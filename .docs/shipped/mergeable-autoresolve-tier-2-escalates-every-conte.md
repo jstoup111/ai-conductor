@@ -4,6 +4,13 @@ spec_hash: c5a35f6f982ac49f33d9897c2fa7a4cec95559bf323c43db1909a62f4f971154
 pr: https://github.com/jstoup111/ai-conductor/pull/2646
 shipped: 2026-09-24
 engine_version: 20260923T231757Z-437f09322025
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-07-12-rebase-evidence-stamp-translation D8"
+    outcome: remediated
+    summary: "The new `rebase_citation_residue` emitter omits required `citingObligationIds`, and its focused test codifies the incomplete event shape."
 ---
 
 ## Cost
