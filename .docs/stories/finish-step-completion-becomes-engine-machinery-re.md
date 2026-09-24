@@ -39,19 +39,26 @@ invocation; no pre-dispatch repair.)*
   evaluates, then the repair does NOT run and the PR's `needs-remediation` label, body
   marker, and draft state are untouched — the redispatch arm and reconciliation sweep
   keep their signals on every non-shipping outcome.
-- Given gh is unavailable (spawn error or non-zero exit on every call), when the repair
-  runs, then it logs a warning, mutates nothing, and the finish step proceeds to the gate
-  (warn-only — a gh outage never crashes or blocks the step).
+- Given gh is unavailable (spawn error or non-zero exit on every call) and the PR has no
+  captured step-owned body region, when the repair runs, then it logs a warning, mutates
+  nothing, and the finish step proceeds to the gate (warn-only — a gh outage never crashes
+  or blocks the step).
+- Given gh is unavailable and the PR has a captured step-owned body region, when the repair
+  runs, then no ready-for-review call is issued and the run halts naming the region's step
+  and the failed read (region verification is fail-closed).
 - Given a never-halted PR (clean title, no `needs-remediation` label), when the repair
-  runs, then no halt-facet mutation is attempted (no unlabel, no retitle, no body edit) —
-  detection stays title-prefix OR label, per adr-2026-07-05.
+  runs, then no halt-facet mutation is attempted (no unlabel, no retitle, no halt-facet body
+  edit) — detection stays title-prefix OR label, per adr-2026-07-05. Restoring a captured
+  step-owned body region is not a halt-facet mutation.
 - Given a clean-titled, unlabeled draft PR (the #199 early-draft shape), when the repair
   runs, then it is NOT classified as a halt PR (no unlabel/retitle), but the recorded PR is
   still flipped ready at finish (ship-readiness), and a verify-after-write re-read confirms
   the flip.
 - Given a facet write succeeds but the verify-after-write re-read still shows the old
   state, when the repair runs, then it retries bounded and, on exhaustion, returns a
-  non-fatal partial outcome that is logged — never thrown.
+  non-fatal partial outcome that is logged — never thrown. A captured step-owned body region
+  whose re-read still differs is the exception: the run halts naming the region's step and
+  the PR stays draft.
 - Given the daemon completes a feature run end-to-end, when the post-run tail executes,
   then it makes NO rehabilitation call — the in-step invocation is the single site
   (`daemon-cli.ts` tail call removed; no double execution).
