@@ -1,5 +1,5 @@
 // Covers: task:12
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, writeFile, access, unlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -134,6 +134,29 @@ describe('ensureRunning: reports the death before reclaiming its stale lock (Tas
     expect(lines).toHaveLength(2);
     expect(lines[0]).toMatch(new RegExp(`^reclaiming lock from dead pid ${deadPid()} \\(exit ledger unreadable: .+\\)$`));
     expect(lines[1]).toBe('respawning daemon');
+  });
+
+  it('writes the reclaim line to stderr before launching when no callback is supplied', async () => {
+    const ensureRunning = requireFn(await load(LOCK_MOD), 'ensureRunning');
+    const at = '2026-09-23T12:00:00.000Z';
+    const lines: string[] = [];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(((line: string) => {
+      lines.push(line.trim());
+      return true;
+    }) as typeof process.stderr.write);
+    await staleOwner();
+    await writeExitEvents({ type: 'daemon_exited', pid: deadPid(), code: null, signal: 'SIGKILL', at });
+
+    try {
+      await ensureRunning(repoPath, { launch: () => lines.push('respawning daemon') });
+    } finally {
+      stderr.mockRestore();
+    }
+
+    expect(lines).toEqual([
+      `reclaiming lock from dead pid ${deadPid()} (killed by SIGKILL at ${at})`,
+      'respawning daemon',
+    ]);
   });
 });
 

@@ -182,6 +182,82 @@ afterEach(async () => {
 });
 
 describe('engineer handoff — branch evidence recording on local-commit/pr-skipped (Task 9)', () => {
+  async function handoffThroughRealEnsureRunning(
+    setup: (branch: string) => Promise<void> | void,
+  ): Promise<{ err: string[]; launches: string[]; timeline: string[] }> {
+    const sourceRef = 'o/reclaim#42';
+    const PR_URL = 'https://github.com/o/reclaim/pull/42';
+    await writeRemoteRegistry();
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef });
+    await ledger.transition('github-issues', sourceRef, 'claimed', {});
+    const worktree = await seedWorktree();
+    const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktree);
+    await setup(branch);
+    const gh = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'create') return { stdout: `Opening pull request...\n${PR_URL}\n` };
+      if (args[0] === 'pr' && args[1] === 'edit') return { stdout: '' };
+      return { stdout: JSON.stringify({}) };
+    };
+    const launches: string[] = [];
+    const timeline: string[] = [];
+    const { err, opts } = captureOpts({
+      gh: gh as any,
+      git: noOpGit,
+      handoffPublication: authorizedPublication(gh as any, branch, 'o/reclaim', 42),
+      intakeResolveActor: async () => ({ resolved: true, id: 'test-owner' }),
+      ensureRunningOpts: { launch: () => { launches.push('launch'); timeline.push('launch'); } },
+    });
+    opts.printErr = (message) => { err.push(message); timeline.push(message); };
+    const kill = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: number | NodeJS.Signals) => {
+      if (pid === 42 && signal === 0) {
+        const error = new Error('ESRCH') as NodeJS.ErrnoException;
+        error.code = 'ESRCH';
+        throw error;
+      }
+    }) as typeof process.kill);
+    try {
+      await dispatchEngineer({ kind: 'handoff', project: 'test-proj', branch, worktree, sourceRef }, opts);
+    } finally {
+      kill.mockRestore();
+    }
+    return { err, launches, timeline };
+  }
+
+  it('prints a SIGKILL reclaim witness before the real ensureRunning launch', async () => {
+    const at = '2026-09-23T12:00:00.000Z';
+    const result = await handoffThroughRealEnsureRunning(async () => {
+      await mkdir(join(repoPath, '.daemon'), { recursive: true });
+      await writeFile(join(repoPath, '.daemon', 'daemon.pid'), JSON.stringify({ pid: 42, uuid: 'dead', startedAt: at }));
+      await writeFile(join(repoPath, '.daemon', 'exit-events.jsonl'), `${JSON.stringify({ type: 'daemon_exited', pid: 42, code: null, signal: 'SIGKILL', at })}\n`);
+    });
+
+    expect(result.err).toContain(`reclaiming lock from dead pid 42 (killed by SIGKILL at ${at})`);
+    expect(result.launches).toEqual(['launch']);
+    expect(result.timeline.indexOf(`reclaiming lock from dead pid 42 (killed by SIGKILL at ${at})`))
+      .toBeLessThan(result.timeline.indexOf('launch'));
+  });
+
+  it('prints an unknown exit cause and still launches through the real handoff path', async () => {
+    const result = await handoffThroughRealEnsureRunning(async () => {
+      await mkdir(join(repoPath, '.daemon'), { recursive: true });
+      await writeFile(join(repoPath, '.daemon', 'daemon.pid'), JSON.stringify({ pid: 42, uuid: 'dead', startedAt: '2026-09-23T12:00:00.000Z' }));
+    });
+
+    expect(result.err).toContain('reclaiming lock from dead pid 42 (exit cause unknown)');
+    expect(result.launches).toEqual(['launch']);
+  });
+
+  it('prints an unreadable exit-ledger note and still launches without throwing', async () => {
+    const result = await handoffThroughRealEnsureRunning(async () => {
+      await mkdir(join(repoPath, '.daemon', 'exit-events.jsonl'), { recursive: true });
+      await writeFile(join(repoPath, '.daemon', 'daemon.pid'), JSON.stringify({ pid: 42, uuid: 'dead', startedAt: '2026-09-23T12:00:00.000Z' }));
+    });
+
+    expect(result.err.join('\n')).toContain('(exit ledger unreadable:');
+    expect(result.launches).toEqual(['launch']);
+  });
+
   it('passes the injected git runner through before creating the remote spec PR', async () => {
     await writeRemoteRegistry();
     const worktree = await seedWorktree();

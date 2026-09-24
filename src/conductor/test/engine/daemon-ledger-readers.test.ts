@@ -3,7 +3,7 @@ import { describe, expect, it, afterEach } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readLastExit, readLastMemorySample } from '../../src/engine/daemon-ledger-readers.js';
+import { readDaemonTimeline, readLastExit, readLastMemorySample } from '../../src/engine/daemon-ledger-readers.js';
 
 const roots: string[] = [];
 
@@ -42,6 +42,30 @@ describe('daemon ledger readers', () => {
 
     await expect(readLastExit(root, 7)).resolves.toEqual({ event: latest, skipped: 0 });
     await expect(readLastExit(root, 9)).resolves.toEqual({ event: null, skipped: 0 });
+  });
+
+  it('selects the newest exit by timestamp when the ledger is physically out of order', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'daemon-ledger-readers-'));
+    roots.push(root);
+    await mkdir(join(root, '.daemon'));
+    const newest = { type: 'daemon_exited', pid: 7, code: 0, signal: null, at: '2026-09-23T12:02:00.000Z' };
+    const older = { type: 'daemon_exited', pid: 7, code: null, signal: 'SIGTERM', at: '2026-09-23T12:01:00.000Z' };
+    await writeFile(join(root, '.daemon', 'exit-events.jsonl'), `${JSON.stringify(newest)}\n${JSON.stringify(older)}\n`, 'utf8');
+
+    await expect(readLastExit(root, 7)).resolves.toEqual({ event: newest, skipped: 0 });
+  });
+
+  it('interleaves both ledgers in timestamp order with a combined skipped count', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'daemon-ledger-readers-'));
+    roots.push(root);
+    await mkdir(join(root, '.daemon'));
+    const exit = { type: 'daemon_exited', pid: 7, code: null, signal: 'SIGKILL', at: '2026-09-23T12:02:00.000Z' };
+    const early = { type: 'daemon_memory_sample', pid: 7, rss: 100, ts: '2026-09-23T12:01:00.000Z' };
+    const late = { type: 'daemon_memory_sample', pid: 7, rss: 200, ts: '2026-09-23T12:03:00.000Z' };
+    await writeFile(join(root, '.daemon', 'exit-events.jsonl'), `not json\n${JSON.stringify(exit)}\n`, 'utf8');
+    await writeFile(join(root, '.daemon', 'events.jsonl'), `${JSON.stringify(late)}\n${JSON.stringify(early)}\n`, 'utf8');
+
+    await expect(readDaemonTimeline(root)).resolves.toEqual({ event: [early, exit, late], skipped: 1 });
   });
 
   it('skips malformed lines while retaining the newest valid event', async () => {

@@ -22,10 +22,11 @@
 //     builds a tmux supervisor.
 
 import { makeTmuxSupervisor } from '../daemon-tmux.js';
+import { resolveDaemonForegroundCommand } from '../daemon-supervisor-cli.js';
 
 /** Minimal launch-only view of the Supervisor — start only, never manage. */
 export interface DaemonStarter {
-  start(repoPath: string): void | Promise<void>;
+  start(repoPath: string, command?: string): void | Promise<void>;
 }
 
 /** Options accepted by launchDaemon. */
@@ -64,5 +65,5 @@ export function launchDaemon(project: string, opts: LaunchDaemonOpts = {}): void
   // Idempotent start: a live session ⇒ no-op (no duplicate daemon). We return the
   // start() result (void/Promise) so the caller can await + swallow errors, but we
   // never hand back a process handle.
-  return supervisor.start(project);
+  return resolveDaemonForegroundCommand(project).then((command) => supervisor.start(project, command));
 }

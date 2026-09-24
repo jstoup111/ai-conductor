@@ -168,7 +168,7 @@ describe('FR-9 — buildDaemonModeOptions (real index.ts dispatch logic)', () =>
     const projectRoot = '/fake/repo/path';
     const sessionNameCalls: string[] = [];
     const hasSessionCalls: string[] = [];
-    const respawnPaneCalls: string[] = [];
+    const respawnPaneCalls: Array<{ name: string; cmd: string | undefined }> = [];
 
     const options = await buildDaemonModeOptions(projectRoot, baseCmd, {
       sessionNameForRepo: (repo: string) => {
@@ -179,10 +179,12 @@ describe('FR-9 — buildDaemonModeOptions (real index.ts dispatch logic)', () =>
         hasSessionCalls.push(name);
         return true;
       },
-      respawnPane: async (name: string) => {
-        respawnPaneCalls.push(name);
+      respawnPane: async (name: string, _run, cmd) => {
+        respawnPaneCalls.push({ name, cmd });
         return { scrollbackPreserved: true };
       },
+      resolveDaemonForegroundCommand: async () => 'NODE_OPTIONS=--max-old-space-size=6144 conduct daemon --continuous',
+      buildDaemonExitWitnessCommand: (command) => `conduct daemon exit-witness --wrapped ${command}`,
     });
 
     expect(sessionNameCalls).toEqual([projectRoot]);
@@ -196,7 +198,11 @@ describe('FR-9 — buildDaemonModeOptions (real index.ts dispatch logic)', () =>
     // the session name resolved above — not just present but disconnected.
     expect(respawnPaneCalls).toEqual([]);
     await options.triggerSelfRestart!();
-    expect(respawnPaneCalls).toEqual(['cc-daemon-fake-abcdef']);
+    expect(respawnPaneCalls).toEqual([{
+      name: 'cc-daemon-fake-abcdef',
+      cmd: expect.stringContaining('daemon exit-witness'),
+    }]);
+    expect(respawnPaneCalls[0].cmd).toContain('--max-old-space-size=6144');
   });
 
   it('omits triggerSelfRestart entirely when hasSession resolves false', async () => {

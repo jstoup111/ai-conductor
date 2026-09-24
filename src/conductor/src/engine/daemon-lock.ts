@@ -724,6 +724,7 @@ export async function ensureRunning(
       const { launchDaemon } = await import('./engineer/daemon-launch.js');
       await launchDaemon(path);
     });
+  const reportReclaim = opts.onReclaim ?? ((message: string) => process.stderr.write(`${message}\n`));
 
   let needsSpawn = false;
 
@@ -776,7 +777,7 @@ export async function ensureRunning(
         : { event: null, skipped: 0 };
       const reclaimResult = await reclaim(repoPath, defaultKill, { transient: true });
       if (reclaimResult.reclaimed) {
-        opts.onReclaim?.(reclaimSummary(owner.pid, exit));
+        reportReclaim(reclaimSummary(owner.pid, exit));
         // Unlink the reclaimed pidfile so the daemon spawns fresh.
         try {
           await unlink(pidfilePath(repoPath));

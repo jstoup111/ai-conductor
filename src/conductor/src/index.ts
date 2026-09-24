@@ -212,7 +212,8 @@ import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { runOverlapScan, renderReport as renderOverlapReport } from './engine/overlap-scan.js';
 import { makeProductionGh } from './engine/pr-labels.js';
-import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
+import { buildDaemonExitWitnessCommand, hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
+import { resolveDaemonForegroundCommand } from './engine/daemon-supervisor-cli.js';
 
 // ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
 
@@ -394,12 +395,16 @@ export async function buildDaemonModeOptions(
     sessionNameForRepo: typeof sessionNameForRepo;
     hasSession: typeof hasSession;
     respawnPane: typeof respawnPane;
-  } = { sessionNameForRepo, hasSession, respawnPane },
+    resolveDaemonForegroundCommand?: typeof resolveDaemonForegroundCommand;
+    buildDaemonExitWitnessCommand?: typeof buildDaemonExitWitnessCommand;
+  } = { sessionNameForRepo, hasSession, respawnPane, resolveDaemonForegroundCommand, buildDaemonExitWitnessCommand },
 ): Promise<DaemonCommandOptions & { projectRoot: string; triggerSelfRestart?: () => Promise<void> }> {
   const sessionName = deps.sessionNameForRepo(projectRoot);
   const triggerSelfRestart = (await deps.hasSession(sessionName))
     ? async () => {
-        await deps.respawnPane(sessionName);
+        const command = await (deps.resolveDaemonForegroundCommand ?? resolveDaemonForegroundCommand)(projectRoot);
+        const witnessCommand = (deps.buildDaemonExitWitnessCommand ?? buildDaemonExitWitnessCommand)(command, projectRoot);
+        await deps.respawnPane(sessionName, undefined, witnessCommand);
       }
     : undefined;
   return {

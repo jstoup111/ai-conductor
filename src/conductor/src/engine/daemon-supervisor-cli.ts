@@ -23,6 +23,20 @@ import type { ProjectRecord } from './registry.js';
 
 type FastForwardOutcome = import('./daemon-backlog.js').FastForwardOutcome;
 
+/** Resolve the configured daemon foreground command for one repository. */
+export async function resolveDaemonForegroundCommand(
+  repo: string,
+  loadDaemonConfig: typeof loadConfig = loadConfig,
+): Promise<string> {
+  const result = await loadDaemonConfig(repo);
+  // A missing config has always allowed daemon management with defaults.
+  // A present invalid config must refuse before any tmux action.
+  if (!result.ok && result.error.type !== 'missing') {
+    throw new Error(result.error.message);
+  }
+  return buildDaemonForegroundCommand(result.ok ? result.config : {});
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Orphaned-process reconciliation (FR-21 negative path, Task 34).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -238,15 +252,8 @@ export async function dispatchDaemonSupervisor(
     });
   const loadDaemonConfig = deps.loadConfig ?? loadConfig;
 
-  const foregroundCommand = async (repo = cwd): Promise<string> => {
-    const result = await loadDaemonConfig(repo);
-    // A missing config has always allowed daemon management with defaults.
-    // A present invalid config must refuse before any tmux action.
-    if (!result.ok && result.error.type !== 'missing') {
-      throw new Error(result.error.message);
-    }
-    return buildDaemonForegroundCommand(result.ok ? result.config : {});
-  };
+  const foregroundCommand = async (repo = cwd): Promise<string> =>
+    resolveDaemonForegroundCommand(repo, loadDaemonConfig);
 
   // Fleet dispatch (FR-3/FR-17/FR-18): pause/resume/restart accept a named subset or
   // `--all` and iterate the registry instead of acting on `cwd` alone. This
