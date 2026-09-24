@@ -76,7 +76,7 @@ import {
   type BuildReviewEffectiveResolverDeps,
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
-import { extractStoryCriterionIds, sectionBody, splitStoryBlocks } from './story-criteria.js';
+import { extractStoryCriterionIds, listItems, sectionBody, splitStoryBlocks } from './story-criteria.js';
 import { readAsBuiltVerdictLine } from './as-built-verdict-line.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
@@ -2047,10 +2047,9 @@ export function extractAuthoritativeStoryCriteria(storiesText: string): string[]
       );
       if (body === null) continue;
       const prefix = `${block.id ? `Story ${block.id} ` : ''}${type}: `;
-      for (const line of body.split('\n')) {
-        const match = line.match(/^\s*(?:[-*+] |\d+[.)] )(.+?)\s*$/);
-        if (!match || !/\bgiven\b/i.test(match[1]) || !/\bthen\b/i.test(match[1])) continue;
-        criteria.push(`${prefix}${match[1]}`);
+      for (const item of listItems(body)) {
+        if (!/\bgiven\b/i.test(item) || !/\bthen\b/i.test(item)) continue;
+        criteria.push(`${prefix}${item}`);
       }
     }
   }
