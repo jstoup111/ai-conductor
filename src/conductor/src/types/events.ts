@@ -404,6 +404,13 @@ export type ConductorEvent =
       origin: 'decide-change';
     }
   | {
+      /** A void exposed a completed task contradicted by current DECIDE coverage. */
+      type: 'coverage_binding_task_reopened';
+      step: 'coverage_binding';
+      taskId: string;
+      digest: string;
+    }
+  | {
       /** A retired configuration key was accepted as a compatibility no-op. */
       type: 'config_deprecated_key';
       key: string;

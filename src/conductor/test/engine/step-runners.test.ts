@@ -114,6 +114,60 @@ async function writeAmendmentCoverageInputs(projectDir: string, featureDesc: str
   return planPath;
 }
 
+function criterionCoherence(criterion = 'The service writes the audit record.'): string {
+  return [
+    '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |',
+    '| --- | --- | --- | --- | --- | --- |',
+    `| criterion | ${criterion} | task-2 | covered | "writes the audit record" | diff-local |`,
+  ].join('\n');
+}
+
+async function writeReopenCoverageInputs(projectDir: string, featureDesc: string, amendment: boolean): Promise<string> {
+  const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+  await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+  await writeFile(planPath, [
+    '### Task 1: Carry amendment', '**Done when:**', '- The service preserves the amended behavior.', '',
+    '### Task 2: Bind criterion', '**Done when:**', '- The service writes the audit record.', '',
+    '### Task 3: Contradicted work', '**Done when:**', '- The service keeps the old behavior.', '',
+  ].join('\n'));
+  await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), criterionCoherence());
+  if (amendment) {
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(
+      join(projectDir, '.docs', 'decisions', `architecture-review-review-${featureDesc}.md`),
+      '> **Amended 2026-09-24 by #11:** The service preserves the amended behavior.\n',
+    );
+  }
+  return planPath;
+}
+
+async function writeTaskStatuses(projectDir: string, completed: readonly string[]): Promise<void> {
+  await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+  await writeFile(join(projectDir, '.pipeline', 'task-status.json'), JSON.stringify({
+    tasks: ['1', '2', '3'].map((id) => ({ id, status: completed.includes(id) ? 'completed' : 'pending' })),
+  }));
+}
+
+async function readTaskStatuses(projectDir: string): Promise<Record<string, string>> {
+  const value = JSON.parse(await readFile(join(projectDir, '.pipeline', 'task-status.json'), 'utf8')) as {
+    tasks: Array<{ id: string; status: string }>;
+  };
+  return Object.fromEntries(value.tasks.map((task) => [task.id, task.status]));
+}
+
+async function writeInvalidatedEnvelope(
+  projectDir: string,
+  featureDesc: string,
+  entries: readonly unknown[],
+  status: 'invalidated' | 'done' = 'invalidated',
+): Promise<void> {
+  await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+  await writeFile(join(projectDir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+    version: 1, slug: featureDesc, runId: 'prior-run', status, entries,
+  }));
+}
+
 function adrWithDecisions(decisionIds: readonly string[]): string {
   return `# ADR\n\n## Decision\n\n${decisionIds.map((id) => `${id}. **Decision ${id}.**`).join('\n')}\n`;
 }
@@ -759,6 +813,130 @@ describe('DefaultStepRunner', () => {
       expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
         status: 'disabled', entries: [{ kind: 'amendment', verdict: 'unjudged' }],
       });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reopens a completed task contradicted by an accepted amendment after a void', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-reopen-'));
+    const featureDesc = 'coverage-binding-amendment-reopen';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string; amendment?: string }> };
+      return {
+        success: true,
+        output: JSON.stringify({ verdicts: claims.map(({ digest, amendment }) => amendment === undefined
+          ? { digest, verdict: 'asserts' }
+          : { digest, verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['3'] }) }),
+        exitCode: 0,
+      };
+    });
+    await writeTaskStatuses(projectDir, ['1', '2', '3']);
+    await writeInvalidatedEnvelope(projectDir, featureDesc, []);
+    const events = new ConductorEventEmitter();
+    const reopened: unknown[] = [];
+    events.on('coverage_binding_task_reopened', (event) => { reopened.push(event); });
+    const before = await readFile(planPath, 'utf8');
+    const runner = new DefaultStepRunner(provider, 'coverage-run-amendment-reopen', projectDir, {
+      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '3': 'pending', '1': 'completed', '2': 'completed' });
+      expect(reopened).toMatchObject([{ type: 'coverage_binding_task_reopened', taskId: '3', digest: expect.stringMatching(/^sha256:/) }]);
+      await expect(readKickbackLedger(projectDir)).resolves.toMatchObject({ gates: { coverage_binding: { laps: 1 } } });
+      expect(await readFile(planPath, 'utf8')).toBe(before);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reopens only completed tasks cited by a criterion digest changed after a void', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-criterion-reopen-'));
+    const featureDesc = 'coverage-binding-criterion-reopen';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, false);
+    await writeTaskStatuses(projectDir, ['1', '2', '3']);
+    const baseline = new DefaultStepRunner(createMockProvider(), 'coverage-run-criterion-baseline', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+    try {
+      await expect(baseline.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      const prior = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
+      await writeInvalidatedEnvelope(projectDir, featureDesc, prior.entries);
+      await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), criterionCoherence('The changed service writes the audit record.'));
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'coverage-run-criterion-reopen', projectDir, {
+        featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+      });
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).not.toHaveBeenCalled();
+      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '2': 'pending', '1': 'completed', '3': 'completed' });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not route reopening through plan work or mutate the plan', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-no-replan-'));
+    const featureDesc = 'coverage-binding-no-replan';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, false);
+    await writeTaskStatuses(projectDir, ['1', '2', '3']);
+    await writeInvalidatedEnvelope(projectDir, featureDesc, [{ digest: 'sha256:old', criterion: 'old', taskIds: ['2'], doneWhen: [[]], verdict: 'not-applicable' }]);
+    const before = await readFile(planPath, 'utf8');
+    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-no-replan', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(await readFile(planPath, 'utf8')).toBe(before);
+      await expect(readFile(join(projectDir, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.not.toContain('"plan"');
+      await expect(readKickbackLedger(projectDir)).resolves.toMatchObject({ gates: { coverage_binding: { laps: 1 } } });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not reopen tasks after a rebase refresh or from a digest-less invalidated baseline', async () => {
+    for (const [name, status, entries] of [
+      ['rebase-refresh', 'done', []],
+      ['digest-less', 'invalidated', []],
+    ] as const) {
+      const projectDir = await mkdtemp(join(tmpdir(), `coverage-binding-${name}-`));
+      const featureDesc = `coverage-binding-${name}`;
+      const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, false);
+      await writeTaskStatuses(projectDir, ['1', '2', '3']);
+      await writeInvalidatedEnvelope(projectDir, featureDesc, entries, status);
+      const runner = new DefaultStepRunner(createMockProvider(), `coverage-run-${name}`, projectDir, {
+        featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+      });
+      try {
+        await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+        await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '2': 'completed' });
+      } finally {
+        await rm(projectDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('records every current criterion and amendment digest when the judge is disabled', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-disabled-digests-'));
+    const featureDesc = 'coverage-binding-disabled-digests';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'coverage-run-disabled-digests', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).not.toHaveBeenCalled();
+      const envelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
+      expect(envelope).toMatchObject({ status: 'disabled', entries: [
+        { digest: expect.stringMatching(/^sha256:/), criterion: 'The service writes the audit record.' },
+        { kind: 'amendment', digest: expect.stringMatching(/^sha256:/), verdict: 'unjudged' },
+      ] });
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }

@@ -59,6 +59,7 @@ import { resolveCoverageBindingDecideSet, type CoverageBindingDecideSet } from '
 import {
   parseAmendmentBatchPayload,
   amendmentClaimDigest,
+  claimDigest,
   parseJudgeBatchPayload,
   readCoverageBindingEnvelope,
   writeCoverageBindingCodeStamp,
@@ -73,6 +74,8 @@ import {
   type CoverageBindingAmendmentClaim,
 } from './coverage-binding-inputs.js';
 import { planCoverageBindingBatches } from './coverage-binding-batches.js';
+import { admitAndRestageRepair } from './repair-restage.js';
+import { resolveTaskIds } from './task-progress.js';
 import { engineContentStamp } from './engine-version-id.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { BUILD_REVIEW_RUBRIC_IDS, fingerprintBuildReviewRubricPolicy, getBuildReviewRubricDescriptor } from './build-review-registry.js';
@@ -4292,12 +4295,63 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
 
+    const coherencePath = join(this.projectDir, '.docs', 'coherence', `${this.featureDesc}.md`);
+    const coherenceText = await readFile(coherencePath, 'utf8').catch(() => null);
+    const criterionClaims = planText === undefined ? [] : assembleCoverageBindingClaims({
+      tier: state.complexity_tier ?? 'M',
+      coherenceText,
+      planText,
+    });
+    const claims = [...criterionClaims, ...amendmentClaims];
+    const previous = await readCoverageBindingEnvelope(this.projectDir, filesystem);
+    const previousDigests = new Set(previous?.entries.map((entry) => entry.digest) ?? []);
+    const completedTaskIds = previous?.status === 'invalidated'
+      ? new Set(await resolveTaskIds(this.projectDir, [...new Set(claims.flatMap((claim) => [...claim.taskIds]))]))
+      : new Set<string>();
+
+    const reopen = async (taskIds: readonly string[], digest: string, instruction: string): Promise<string | undefined> => {
+      if (previous?.status !== 'invalidated') return undefined;
+      const bound = taskIds.filter((taskId) => completedTaskIds.has(taskId));
+      if (bound.length === 0) return undefined;
+      const admitted = await admitAndRestageRepair({
+        projectRoot: this.projectDir,
+        planPath: planPath!,
+        taskIds: bound,
+        findingIds: [digest],
+        sourceAuthority: 'coverage_binding',
+        instruction,
+        gates: ['coverage_binding'],
+      });
+      if (admitted.kind === 'failed') return admitted.detail;
+      for (const taskId of bound) {
+        completedTaskIds.delete(taskId);
+        await this.events?.emit({
+          type: 'coverage_binding_task_reopened', step: 'coverage_binding', taskId, digest,
+        });
+      }
+      return undefined;
+    };
+
+    for (const claim of criterionClaims) {
+      const digest = claimDigest(claim);
+      if (previous?.status === 'invalidated' && previous.entries.length > 0 && !previousDigests.has(digest)) {
+        const detail = await reopen(claim.taskIds, digest, 'Reconcile the completed task with the changed coverage-binding criterion.');
+        if (detail) return { success: false, output: `coverage_binding could not reopen contradicted work: ${detail}` };
+      }
+    }
+
     if (!judgeEnabled) {
-      const entries = amendmentClaims.map((claim) => ({
+      const entries: CoverageBindingEnvelopeEntry[] = [
+        ...criterionClaims.map((claim) => ({
+          digest: claimDigest(claim), criterion: claim.criterion, taskIds: claim.taskIds,
+          doneWhen: claim.doneWhen, verdict: 'not-applicable' as const,
+        })),
+        ...amendmentClaims.map((claim) => ({
         kind: 'amendment' as const,
         digest: amendmentClaimDigest(claim), artifactPath: claim.artifactPath, amendment: claim.amendment,
         taskIds: claim.taskIds, doneWhen: claim.doneWhen, verdict: 'unjudged' as const,
-      }) as unknown as CoverageBindingEnvelopeEntry);
+        }) as unknown as CoverageBindingEnvelopeEntry),
+      ];
       await writeEnvelope('disabled', entries);
       for (const entry of entries) {
         const amendment = entry as unknown as CoverageBindingAmendmentEnvelopeEntry;
@@ -4309,14 +4363,6 @@ export class DefaultStepRunner implements StepRunner {
 
     if (planText === undefined) return { success: false, output: 'coverage_binding could not resolve the feature plan' };
 
-    const coherencePath = join(this.projectDir, '.docs', 'coherence', `${this.featureDesc}.md`);
-    const coherenceText = await readFile(coherencePath, 'utf8').catch(() => null);
-    const claims = [...assembleCoverageBindingClaims({
-      tier: state.complexity_tier ?? 'M',
-      coherenceText,
-      planText,
-    }), ...amendmentClaims];
-    const previous = await readCoverageBindingEnvelope(this.projectDir, filesystem);
     const planned = planCoverageBindingBatches({ claims, previous, batchSize });
     const entries: CoverageBindingEnvelopeEntry[] = [...planned.entries];
     const refused: CoverageBindingEnvelopeEntry[] = [];
@@ -4407,7 +4453,7 @@ export class DefaultStepRunner implements StepRunner {
           result.output,
           batchDigests,
           batch.flatMap(({ claim }) => [...claim.taskIds]),
-          [],
+          [...completedTaskIds],
         );
         if (!parsed.ok) {
           await writeEnvelope('failed', entries);
@@ -4427,6 +4473,15 @@ export class DefaultStepRunner implements StepRunner {
           } as unknown as CoverageBindingEnvelopeEntry;
           if (verdict.verdict === 'not-carried') {
             amendmentMissingObligations.set(digest, verdict.missingObligation);
+          }
+          const detail = await reopen(
+            verdict.contradictsCompleted ?? [],
+            digest,
+            'Reconcile the completed task with the accepted DECIDE amendment contradiction.',
+          );
+          if (detail) {
+            await writeEnvelope('failed', entries);
+            return { success: false, output: `coverage_binding could not reopen contradicted work: ${detail}` };
           }
           entries.push(entry);
           await emitEntry(entry);
