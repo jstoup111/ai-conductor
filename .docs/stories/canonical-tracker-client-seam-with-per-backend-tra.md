@@ -236,7 +236,9 @@ transports against a stable shape without this feature front-running them.
 - Given `src/conductor/package.json`, when the feature lands, then no
   `@modelcontextprotocol` (or other MCP/Jira SDK) dependency was added.
 - Given a project with NO `tracker` key configured, when any engine path runs, then
-  behavior is byte-identical to pre-feature (GitHub via `gh` CLI, existing auth) — no
+  behavior is byte-identical to pre-feature (GitHub via `gh` CLI, existing auth; GitHub
+  writes use a machine-scoped bot credential only when the operator configures one in user
+  config) — no
   new required config, no warning noise.
 
 ### Done When
