@@ -133,6 +133,105 @@ function guardedOperations(
 describe('production FINISH publication composition', () => {
   it.each([
     {
+      label: 'a dated canonical record for an unprefixed feature description',
+      featureDesc: 'foo',
+      planName: '2026-09-24-foo.md',
+      recordName: '2026-09-24-foo.md',
+      record: '---\nslug: 2026-09-24-foo\n---\n',
+      shippedRecord: 'valid',
+      transition: 'record_outcome',
+    },
+    {
+      label: 'an exact canonical record',
+      featureDesc: 'foo',
+      planName: 'foo.md',
+      recordName: 'foo.md',
+      record: '---\nslug: foo\n---\n',
+      shippedRecord: 'valid',
+      transition: 'record_outcome',
+    },
+    {
+      label: 'an absent dated canonical record',
+      featureDesc: 'foo',
+      planName: '2026-09-24-foo.md',
+      shippedRecord: 'missing',
+      transition: 'write_shipped_record',
+    },
+  ] as const)('observes $label through the canonical shipment identity', async (fixture) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-shipped-record-'));
+    let observed: { shippedRecord: string } | undefined;
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/engine/finish-publication.js')>(
+        '../../src/engine/finish-publication.js',
+      );
+      return {
+        ...actual,
+        advanceFinishPublication: vi.fn(async (input: { observe: () => Promise<Parameters<typeof actual.nextFinishPublicationTransition>[0]> }) => {
+          const snapshot = await input.observe();
+          observed = snapshot;
+          return { kind: 'advanced' as const, transition: actual.nextFinishPublicationTransition(snapshot) };
+        }),
+      };
+    });
+
+    try {
+      const pipeline = join(root, '.pipeline');
+      const plans = join(root, '.docs', 'plans');
+      await Promise.all([
+        mkdir(pipeline, { recursive: true }),
+        mkdir(plans, { recursive: true }),
+      ]);
+      await writeFile(join(plans, fixture.planName), 'plan\n');
+      if (fixture.recordName && fixture.record) {
+        const shipped = join(root, '.docs', 'shipped');
+        await mkdir(shipped, { recursive: true });
+        await writeFile(join(shipped, fixture.recordName), fixture.record);
+      }
+      const prUrl = 'https://github.com/acme/widget/pull/1';
+      const title = 'feat: ship foo';
+      const body = 'Reader-facing summary.';
+      const revision = `${prUrl}\u0000${JSON.stringify([title, body])}`;
+      const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
+      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
+        version: 1, records: { [digest]: { kind: 'accepted' } },
+      }));
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'rev-parse'
+          ? { stdout: 'refs/remotes/origin/feat/foo\n' }
+          : commandResult,
+        gh: async (args) => args[0] === 'pr' && args[1] === 'view'
+          ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
+          : commandResult,
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: {
+          feature_desc: fixture.featureDesc,
+          pr_url: prUrl,
+          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto', daemon: true,
+        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+      })).resolves.toEqual({ kind: 'publication_progress', transition: fixture.transition });
+      expect(observed?.shippedRecord).toBe(fixture.shippedRecord);
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
       label: 'satisfied verdicts without step-state keys',
       state: { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState,
       writeVerdicts: async (root: string) => Promise.all([

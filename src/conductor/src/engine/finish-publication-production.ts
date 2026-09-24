@@ -656,10 +656,20 @@ export function createProductionFinishPublicationCoordinator(
             },
           },
           shippedRecord: {
-            observeShippedRecord: async () =>
-              state.feature_desc && await exists(join(deps.projectRoot, '.docs/shipped', `${state.feature_desc}.md`))
-                ? 'present'
-                : 'missing',
+            observeShippedRecord: async () => {
+              if (!state.feature_desc) return 'missing';
+              const planPaths = (await readdir(join(deps.projectRoot, '.docs', 'plans')).catch((error: NodeJS.ErrnoException) => {
+                if (error.code === 'ENOENT') return [];
+                throw error;
+              }))
+                .filter((name) => name.endsWith('.md'))
+                .map((name) => join('.docs', 'plans', name));
+              const resolution = resolveShipmentIdentity(state.feature_desc, planPaths);
+              const recordPath = resolution.kind === 'resolved'
+                ? resolution.identity.recordPath
+                : join('.docs', 'shipped', `${state.feature_desc}.md`);
+              return await exists(join(deps.projectRoot, recordPath)) ? 'present' : 'missing';
+            },
           },
           releaseReadiness: {
             observeReleaseReadiness: async () => {
