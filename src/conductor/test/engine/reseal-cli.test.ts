@@ -1,3 +1,4 @@
+// Covers: task:5
 import { describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -5,6 +6,8 @@ import { join } from 'node:path';
 import { createProgram } from '../../src/cli.js';
 import { detectResealCommand, dispatchResealCommand } from '../../src/engine/reseal-cli.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 
 // argv is process.argv: [node, entry, subcommand, ...arguments].
 const argv = (...arguments_: string[]) => ['node', 'conduct', 'reseal', ...arguments_];
@@ -195,6 +198,114 @@ describe('detectResealCommand', () => {
 });
 
 describe('dispatchResealCommand', () => {
+  it('invalidates completed coverage binding after resealing a changed feature ADR', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-coverage-void-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const adrPath = '.docs/decisions/adr-repair.md';
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', adrPath, '--reason', 'Corrected the governing decision.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(join(worktree, '.pipeline', 'protected-artifact-seal.json'), JSON.stringify({
+        baselineCommit: 'base',
+        protectedArtifacts: [{ path: adrPath, fingerprint: 'sha256:before' }],
+        rebaselines: [], version: 2,
+      }));
+      await writeFile(join(worktree, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+        version: 1, slug: 'repair', runId: 'coverage-run', status: 'done', entries: [],
+      }) + '\n');
+      await writeFile(join(worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({
+        coverage_binding: 'done', build: 'done', last_step: 'build',
+      }) + '\n');
+      await writeVerdict(worktree, 'coverage_binding', {
+        satisfied: true, checkedAt: 1, reason: 'coverage binding complete',
+      });
+      const events = new ConductorEventEmitter();
+      new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events).start();
+
+      await expect(dispatchResealCommand(command, {
+        cwd: root,
+        isInteractive: true,
+        resolveHead: vi.fn().mockResolvedValue('target'),
+        resolveBaseBranch: vi.fn().mockResolvedValue('main'),
+        resolveCoverageBindingDecideSet: vi.fn().mockResolvedValue({ paths: new Set([adrPath]) }),
+        reseal: vi.fn().mockResolvedValue({
+          baselineCommit: 'target',
+          protectedArtifacts: [{ path: adrPath, fingerprint: 'sha256:after' }],
+          rebaselines: [], version: 2,
+        }),
+        events,
+      })).resolves.toBe(0);
+
+      expect(JSON.parse(await readFile(join(worktree, '.pipeline', 'conduct-state.json'), 'utf8'))).toMatchObject({
+        coverage_binding: 'stale',
+      });
+      await expect(readVerdict(worktree, 'coverage_binding')).resolves.toMatchObject({ satisfied: false });
+      expect(JSON.parse(await readFile(join(worktree, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        status: 'invalidated',
+      });
+      expect((await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8')).split('\n').filter(Boolean)
+        .map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            type: 'coverage_binding_invalidated', paths: [adrPath], origin: 'decide-change',
+          }),
+        ]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves coverage binding byte-identical and emits no invalidation when reseal is refused', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-coverage-refusal-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const adrPath = '.docs/decisions/adr-repair.md';
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', adrPath, '--reason', 'Corrected the governing decision.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(join(worktree, '.pipeline', 'protected-artifact-seal.json'), JSON.stringify({
+        baselineCommit: 'base', protectedArtifacts: [{ path: adrPath, fingerprint: 'sha256:before' }],
+        rebaselines: [], version: 2,
+      }));
+      await writeFile(join(worktree, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+        version: 1, slug: 'repair', runId: 'coverage-run', status: 'done', entries: [],
+      }) + '\n');
+      await writeFile(join(worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({ coverage_binding: 'done' }) + '\n');
+      await writeVerdict(worktree, 'coverage_binding', { satisfied: true, checkedAt: 1 });
+      const coveragePaths = [
+        join(worktree, '.pipeline', 'coverage-binding.json'),
+        join(worktree, '.pipeline', 'conduct-state.json'),
+        join(worktree, '.pipeline', 'gates', 'coverage_binding.json'),
+      ];
+      const before = await Promise.all(coveragePaths.map((path) => readFile(path, 'utf8')));
+      const events = new ConductorEventEmitter();
+      new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events).start();
+      const invalidations: unknown[] = [];
+      events.on('coverage_binding_invalidated', (event) => { invalidations.push(event); });
+
+      await expect(dispatchResealCommand(command, {
+        cwd: root,
+        err: vi.fn(),
+        isInteractive: true,
+        resolveCoverageBindingDecideSet: vi.fn(),
+        reseal: vi.fn().mockRejectedValue(new Error('Protected artifact changed: .docs/stories/unlisted.md')),
+        events,
+      })).resolves.toBe(1);
+
+      await expect(Promise.all(coveragePaths.map((path) => readFile(path, 'utf8')))).resolves.toEqual(before);
+      expect(invalidations).toEqual([]);
+      await expect(readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('reseals a known worktree and reports the named paths without starting the pipeline', async () => {
     const command = detectResealCommand(
       argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
