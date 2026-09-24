@@ -5,6 +5,7 @@
 **Deciders:** James Stoup (operator) and conflict-check architecture amendment for
 jstoup111/ai-conductor#1760
 **Supersedes:** `adr-2026-08-29-operator-authorized-kickback-budget-recovery`
+**Amended:** 2026-09-24 by #2185 — D5 added (raise reaches the plan-growth allowance).
 **Carries forward:** that ADR's partial supersession of
 `adr-2026-08-12-cumulative-build-review-convergence-bound` D3 for an explicitly raised feature.
 
@@ -69,6 +70,32 @@ particular: reset preserves an effective raised limit; raise preserves consumed 
 read-modify-write paths share the existing bounded lease; the adjustment is staged around an
 idempotent same-schema external event; the CLI never directly clears the halt; adjustment history
 and the pure budget view remain authoritative; and mechanical-fault state remains separate.
+
+### D5 — Raise grows the allowance the live evidence names, including plan growth
+
+> **Amended 2026-09-24 by #2185:** D4 carries forward the superseded ADR's D2 as amended by #2190,
+> including "Plan-growth allowance is not adjustable by this family (#2119)." That exclusion was a
+> scope deferral while #2119 reworked growth accounting, not a design rejection, and #2119 has
+> shipped. It is lifted as follows; every other carried-forward clause stands.
+>
+> 1. Typed cap evidence (D2) carries the exhausted allowance: `laps` or `growth`. Every
+>    remediation-append cap terminal of adr-2026-08-25-as-built-remediable-findings-bounded-build-route
+>    decision 4 writes it before its `kickback-cap` halt — the per-gate lap cap, the per-gate
+>    plan-growth cap, and the shared plan-growth allowance, which today writes no evidence. For
+>    `growth`, the consumed count is the recorded `added` and the limit is the effective growth cap.
+> 2. `raise --gate G --by N` on `prd_audit` or `architecture_review_as_built` grows the allowance the
+>    live evidence names: `laps` raises the feature-local effective lap cap as today; `growth` raises
+>    a feature-local effective plan-growth cap held in its own kickback-ledger field beside, not
+>    inside, the plan-growth record, so recomputing the growth counts from the plan never drops it,
+>    and a malformed value fails closed (adr-2026-08-31 decision 4) rather than being recomputed. The remediation
+>    budget read honors that cap in place of the config-derived cap of
+>    adr-2026-08-22-prd-audit-stories-authority-and-bounded-kickback decision 5. `added`, `byGate`,
+>    laps, and other gates are unchanged. `reset` stays laps-only and refuses on growth evidence.
+> 3. Authority is unchanged: the same TTY-bound operator command, park, lease, staged adjustment,
+>    authorization event (which records the allowance), resume authorization, and daemon-side clear.
+>    No unattended or automatic grant of either allowance exists.
+> 4. The halt body names the exhausted allowance and the exact recovery command. That text is
+>    diagnostic only; nothing parses it (D2).
 
 ## Amendment
 
