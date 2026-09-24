@@ -7566,7 +7566,10 @@ export class Conductor {
               step.name,
               { ...(await this.completionCtx(state)), preserveProbe: true },
             );
-            if (completion.done) {
+            if (
+              completion.done &&
+              completion.verdictFreshness?.outcome === 'preserved_surface_miss'
+            ) {
               if (completion.verdictFreshness) {
                 await emitTracked({
                   type: 'verdict_freshness',

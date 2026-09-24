@@ -3196,7 +3196,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         const freshMarker =
           ctx.sessionStartedAt === undefined ||
           (typeof marker.observedAt === 'number' && marker.observedAt >= ctx.sessionStartedAt);
-        if (!freshMarker) {
+        if (!freshMarker && !ctx.preserveProbe) {
           await rm(markerPath, { force: true }).catch(() => {});
         } else if (marker.headSha === headSha) {
           return {
@@ -3206,7 +3206,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
               'moved since the recorded FAIL — no new commits means no fix (whitewash guard). ' +
               'Implement and commit the fix, then re-run manual-test',
           };
-        } else {
+        } else if (!ctx.preserveProbe) {
           await rm(markerPath, { force: true }).catch(() => {});
         }
       }
@@ -3218,7 +3218,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // point on the fresh-flip path, but merging is defensive) rather than
     // clobbering fields the guard depends on. Best-effort — never blocks
     // returning done:true.
-    if (headSha) {
+    if (headSha && !ctx.preserveProbe) {
       let existing: ManualTestFailEvidence = {};
       try {
         existing = JSON.parse(await readFile(markerPath, 'utf-8')) as ManualTestFailEvidence;
