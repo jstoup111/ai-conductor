@@ -22,8 +22,10 @@ providers:
   claude: input: 20, output: 6174, cache_read: 427260, cache_creation: 81232, cost_usd: 0.8589, dispatches: 2, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","5f849c3a-9265-4538-af13-d7f6d54e87de","lifecycle-step","finish"]
+state: measured
+active_ms: 4047633
+provider_active_ms: 2456090
+no_provider_active_ms: 1591543
 
 ## Build Review
 laps_to_pass: 1
