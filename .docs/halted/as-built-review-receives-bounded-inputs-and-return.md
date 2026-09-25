@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-25T17:18:42.518Z
 Slug: as-built-review-receives-bounded-inputs-and-return
 Class: needs-human
 Halting step: unknown
