@@ -57,7 +57,7 @@ This plan adds an optional, machine-scoped GitHub bot credential. When a bot is 
 4. Verify GREEN and commit.
 
 **Done when:**
-- `resolveGithubBotCredential` returns `{ kind: 'unconfigured' }` when the user config has no `github_bot` block and `{ kind: 'configured', tokenFile }` naming the configured path when it does, as asserted in `test/engine/github-bot-credential.test.ts`.
+- `resolveGithubBotCredential` returns `{ kind: 'unconfigured' }` when the user config has no `github_bot` block and `{ kind: 'configured', tokenFile }` naming the configured path when it does, as asserted in `test/engine/github-bot-credential.test.ts`; the same test asserts that loading merged config for a user config with no `github_bot` block succeeds without error before the resolver reports `unconfigured`.
 - `readGithubBotToken` returns the trimmed file contents for a readable token file and an `unavailable` result carrying neither the path nor the contents for a missing, unreadable, or empty file.
 - `resolveGithubBotCredential` accepts only the user config read by `readUserConfig` and has no project-config parameter, so neither a project `github_bot` block nor a `tracker.credentials` reference can supply the bot token.
 
