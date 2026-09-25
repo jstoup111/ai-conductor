@@ -147,15 +147,18 @@ describe('resolveProviderCandidates hardening', () => {
     })).toEqual(['codex', 'claude']);
   });
 
-  it('lets a step-scoped allow override the global disallow for that step only', async () => {
+  it('lets a step-scoped allow override a global disallow while other steps retain it', async () => {
     const resolveProviderCandidates = await loadCandidateResolver();
     const configuredProviders = ['claude', 'codex'];
+    const globalSubstitutionPolicy = 'disallow' as const;
 
+    // The resolved policy for this step comes from its explicit allow setting.
     expect(resolveProviderCandidates?.({
       configuredProviders, stepSelection: 'codex', substitutionPolicy: 'allow',
     })).toEqual(['codex', 'claude']);
+    // An otherwise identical step inherits the global disallow setting.
     expect(resolveProviderCandidates?.({
-      configuredProviders, stepSelection: 'codex', substitutionPolicy: 'disallow',
+      configuredProviders, stepSelection: 'codex', substitutionPolicy: globalSubstitutionPolicy,
     })).toEqual(['codex']);
   });
 });
