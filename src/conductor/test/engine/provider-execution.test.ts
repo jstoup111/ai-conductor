@@ -1,4 +1,4 @@
-// Covers: task:2, task:4, task:5, task:7, task:8, task:13, task:14, task:16
+// Covers: task:2, task:3, task:4, task:5, task:7, task:8, task:13, task:14, task:16
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -170,8 +170,8 @@ describe('executeProviderCandidates', () => {
     expect(result.attempts).toEqual(emitted.map(({ type: _type, step: _step, ...attempt }) => attempt));
     expect(emitted).toEqual(expect.arrayContaining([
       expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'suppression-refused' }),
-      expect.objectContaining({ provider: 'claude', invoked: false, skipReason: 'policy-refused' }),
     ]));
+    expect(emitted).toHaveLength(1);
     expect(codexInvoke).not.toHaveBeenCalled();
     expect(claudeInvoke).not.toHaveBeenCalled();
 
@@ -215,6 +215,42 @@ describe('executeProviderCandidates', () => {
     expect(claudeInvoke).not.toHaveBeenCalled();
   });
 
+  it('does not invoke or record a non-selected fallback after the selected provider exhausts usage', async () => {
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false,
+      output: 'Codex usage exhausted.',
+      exitCode: 1,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+    }));
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'Claude must not run.',
+      exitCode: 0,
+    }));
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      preferredProvider: 'codex',
+      config: {
+        provider_substitution: 'disallow',
+        steps: { build: { llm_provider: 'codex' } },
+      },
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke }),
+        runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({ success: false });
+    expect(result.attempts.map(({ provider }) => provider)).toEqual(['codex']);
+    expect(codexInvoke).toHaveBeenCalledOnce();
+    expect(claudeInvoke).not.toHaveBeenCalled();
+  });
+
   it('waits when the disallowed-substitution pinned provider is suppressed', async () => {
     const codexInvoke = vi.fn();
     const claudeInvoke = vi.fn();
@@ -231,13 +267,11 @@ describe('executeProviderCandidates', () => {
 
     expect(result).toMatchObject({ success: false, rateLimited: true, attempts: [
       { provider: 'codex', invoked: false, skipReason: 'suppression-refused' },
-      { provider: 'claude', invoked: false, skipReason: 'policy-refused' },
     ] });
     expect(codexInvoke).not.toHaveBeenCalled();
     expect(claudeInvoke).not.toHaveBeenCalled();
     expect(recorded).toEqual([
       expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'suppression-refused' }),
-      expect.objectContaining({ provider: 'claude', invoked: false, skipReason: 'policy-refused' }),
     ]);
   });
 
