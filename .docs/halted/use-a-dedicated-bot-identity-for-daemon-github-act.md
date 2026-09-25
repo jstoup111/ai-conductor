@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-25T12:04:08.181Z
 Slug: use-a-dedicated-bot-identity-for-daemon-github-act
 Class: needs-human
 Halting step: unknown
