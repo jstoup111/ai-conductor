@@ -1988,6 +1988,7 @@ describe('executeProviderCandidates', () => {
     expect(attempts as unknown as Record<string, unknown>[]).toMatchObject([
       { provider: 'codex', preferredProvider: 'codex', effort: 'high', tier: 'M' },
     ]);
+    expect(attempts[0]).not.toHaveProperty('skipReason');
   });
 
   it('wraps each resolved candidate through safety before fallback advances', async () => {
