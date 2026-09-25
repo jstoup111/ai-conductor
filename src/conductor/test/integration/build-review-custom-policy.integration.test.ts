@@ -164,6 +164,74 @@ describe('custom build-review policy runner', () => {
     ]);
   });
 
+  it('records the unchanged custom-lap input digests as build-review evidence', async () => {
+    const root = await fixture();
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const provider: LLMProvider = {
+      invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })),
+      supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    const runner = new DefaultStepRunner(provider, 'custom-policy-input-digest', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
+      } } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(),
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
+      buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+
+    await expect(runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({ success: true });
+    await expect(readFile(join(root, '.pipeline', 'build-review', 'lap-head', 'input-digest.json'), 'utf8')).resolves.toContain('"before"');
+  });
+
+  it('discards every custom verdict when captured policy material changes during fan-out', async () => {
+    const root = await fixture();
+    const packageRoot = join(root, 'policy-package');
+    const materialPath = join(root, '.pipeline', 'build-review', 'policy-material', 'portable');
+    await mkdir(packageRoot, { recursive: true });
+    await writeFile(join(packageRoot, 'SKILL.md'), '# Original policy\n');
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const invoke = vi.fn(async () => {
+      await writeFile(join(materialPath, 'SKILL.md'), '# Mutated during review\n');
+      return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+    });
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    const events = new ConductorEventEmitter();
+    const failures: unknown[] = [];
+    events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event); });
+    const runner = new DefaultStepRunner(provider, 'custom-policy-input-mutation', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
+      } } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(), events,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
+      buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: packageRoot, canonicalSkillPath: join(packageRoot, 'SKILL.md'), packageRoot, declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => {
+        await mkdir(materialPath, { recursive: true });
+        await writeFile(join(materialPath, 'SKILL.md'), '# Captured policy\n');
+        return { policy, materialPath, definitionPath: join(materialPath, 'SKILL.md'), manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Captured policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` };
+      },
+    });
+
+    const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(result).toMatchObject({ success: false, currentLapMechanicalFault: true });
+    expect(result.output).toContain('review-input-mutated');
+    await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
+    await expect(readFile(join(root, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.toContain('"mechanicalFaults": 1');
+    expect(failures).toEqual([expect.objectContaining({ cause: 'review-input-mutated', changedInputs: ['capturedPolicyMaterial:SKILL.md'] })]);
+  });
+
   it('records declared references, never captured package file bodies, as plugin policy criteria', async () => {
     const root = await fixture();
     const skillBody = `# Portable policy\n\n${'Review every changed handler for the portable policy. '.repeat(400)}`;

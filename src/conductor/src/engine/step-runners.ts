@@ -100,6 +100,7 @@ import {
 import { discoverClaudeReviewPolicies, type ClaudeMetadataCommand, type ClaudeReviewPolicyFilesystem } from './build-review-policy-claude.js';
 import { createCodexAppServerTransport, listCodexInstalledReviewSkills, type CodexAppServerTransport } from './build-review-policy-codex.js';
 import { renderBuildReviewFrozenInputScope } from './build-review-containment.js';
+import { captureBuildReviewInputDigest, diffBuildReviewInputDigests, type BuildReviewInputDigestRoots } from './build-review-input-integrity.js';
 import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
 import {
   coordinateBuildReviewRubrics,
@@ -2353,11 +2354,77 @@ export class DefaultStepRunner implements StepRunner {
       (entry): entry is ResolvedBuildReviewCustomCatalogEntry => entry.kind === 'custom',
     );
     let customResults: Readonly<Record<string, BuildReviewCustomArtifactMember>> | undefined;
+    // The feature checkout is deliberately not among these roots. Custom
+    // candidates judge only the detached source view, and normal engine work
+    // continues to write branch evidence in the live checkout while they run.
+    const customLapEvidenceRoot = join(effectivePipelineDir, 'build-review', lapId);
+    // Branch artifacts are engine outputs, including artifacts left by an
+    // earlier lap. They are deliberately outside the input-evidence subtree:
+    // D5.3 watches only evidence supplied before fan-out, never output the
+    // engine creates while settling a lap.
+    const customLapInputEvidenceRoot = join(customLapEvidenceRoot, 'input-evidence');
+    const inputDigestEvidencePath = join(customLapEvidenceRoot, 'input-digest.json');
+    const materializedSource = inputs.sourceMaterialization?.source;
+    const unavailableInputRoot = (name: string) => join(customLapEvidenceRoot, `.unavailable-${name}`);
+    const baseDigestRoots: BuildReviewInputDigestRoots = {
+      frozenHead: materializedSource?.headPath ?? unavailableInputRoot('head'),
+      frozenBaseline: materializedSource?.baselinePath ?? unavailableInputRoot('baseline'),
+      capturedPolicyMaterial: unavailableInputRoot('policy-material'),
+      installedPolicyPackage: unavailableInputRoot('policy-package'),
+      evidenceRoot: customLapInputEvidenceRoot,
+    };
+    // This is engine evidence, not reviewer evidence. Remove the previous
+    // record before capture so rewriting it cannot invalidate the next lap.
+    await rm(inputDigestEvidencePath, { force: true });
+    const inputDigestCaptures: Array<{ readonly roots: BuildReviewInputDigestRoots; readonly before: Awaited<ReturnType<typeof captureBuildReviewInputDigest>> }> = [{
+      roots: baseDigestRoots,
+      before: await captureBuildReviewInputDigest(baseDigestRoots),
+    }];
+    const capturePolicyInputDigest = async (materialPath: string, packageRoot: string): Promise<void> => {
+      const roots: BuildReviewInputDigestRoots = {
+        ...baseDigestRoots,
+        capturedPolicyMaterial: materialPath,
+        installedPolicyPackage: packageRoot,
+      };
+      inputDigestCaptures.push({ roots, before: await captureBuildReviewInputDigest(roots) });
+    };
+    const finishCustomLapInputDigests = async (): Promise<readonly string[]> => {
+      const records = await Promise.all(inputDigestCaptures.map(async ({ roots, before }) => {
+        const after = await captureBuildReviewInputDigest(roots);
+        return { before, after, changedInputs: await diffBuildReviewInputDigests(before, after) };
+      }));
+      await mkdir(customLapEvidenceRoot, { recursive: true });
+      await writeFile(inputDigestEvidencePath, `${JSON.stringify({ version: 1, records }, null, 2)}\n`, 'utf8');
+      const changedInputs = [...new Set(records.flatMap((record) => record.changedInputs))].sort();
+      return changedInputs;
+    };
+    const mutatedCustomResults = (
+      results: Readonly<Record<string, BuildReviewCustomArtifactMember>>,
+      changedInputs: readonly string[],
+    ): Readonly<Record<string, BuildReviewCustomArtifactMember>> => Object.freeze(Object.fromEntries(Object.entries(results).map(([id, member]) => [id, {
+      ...(member.declaration === undefined && member.descriptor === undefined
+        ? {}
+        : { declaration: member.declaration ?? member.descriptor!.declaration }),
+      result: {
+        kind: 'infrastructure-failure' as const,
+        rubric: id,
+        reason: 'review-input-mutated' as const,
+        detail: `review input changed: ${changedInputs.join(', ')}`,
+      },
+    }]))) as Record<string, BuildReviewCustomArtifactMember>;
+    const emitInputMutationFailures = async (rubrics: readonly string[], changedInputs: readonly string[]): Promise<void> => {
+      await Promise.all(rubrics.map(async (rubric) => this.events?.emit({
+        type: 'build_review_rubric_infrastructure_failure', rubric, lapId,
+        reason: 'review-input-mutated', cause: 'review-input-mutated',
+        excerpt: `review input changed: ${changedInputs.join(', ')}`,
+        changedInputs,
+      })));
+    };
     if (customEntries.length > 0) {
       const outcomes = await runAuxiliaryGroupBranches(
         customEntries.map((entry) => ({ memberId: entry.id, policy: entry })),
         config.maxParallel,
-        async (_id, entry) => this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier),
+        async (_id, entry) => this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, capturePolicyInputDigest),
       );
       if (outcomes.some((outcome) => !outcome.success)) {
         return {
@@ -2370,12 +2437,17 @@ export class DefaultStepRunner implements StepRunner {
         return { success: false, output: 'build_review custom policy produced no durable result' };
       }
       customResults = Object.freeze(Object.fromEntries(members) as Record<string, BuildReviewCustomArtifactMember>);
-      await this.emitBuildReviewCustomMemberResults(lapId, customResults);
       // A custom-only lap still has a complete aggregate.  Do not use one
       // built-in's enabled flag as a proxy for the complete catalog: security
       // (and every future built-in) must share this lap's frozen input and
       // candidate path whenever it is enabled beside a custom policy.
       if (!config.catalog.some((entry) => entry.kind === 'builtin')) {
+        const changedInputs = await finishCustomLapInputDigests();
+        if (changedInputs.length > 0) {
+          customResults = mutatedCustomResults(customResults, changedInputs);
+          await emitInputMutationFailures(Object.keys(customResults), changedInputs);
+        }
+        await this.emitBuildReviewCustomMemberResults(lapId, customResults);
         return this.publishCustomOnlyBuildReview({
           lapId,
           inputs,
@@ -2485,6 +2557,20 @@ export class DefaultStepRunner implements StepRunner {
       };
     }
     const validResults = results as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
+
+    const changedInputs = customEntries.length === 0 ? [] : await finishCustomLapInputDigests();
+    if (changedInputs.length > 0) {
+      customResults = mutatedCustomResults(customResults!, changedInputs);
+      for (const rubric of Object.keys(validResults)) {
+        validResults[rubric] = {
+          kind: 'infrastructure-failure', rubric,
+          reason: 'review-input-mutated',
+          detail: `review input changed: ${changedInputs.join(', ')}`,
+        };
+      }
+      await emitInputMutationFailures([...Object.keys(customResults), ...Object.keys(validResults)], changedInputs);
+    }
+    if (customResults !== undefined) await this.emitBuildReviewCustomMemberResults(lapId, customResults);
 
     // An infrastructure result is not a reviewer decision about the diff.
     // Do not publish it as a fresh FAIL aggregate: completion deliberately
@@ -2631,6 +2717,7 @@ export class DefaultStepRunner implements StepRunner {
     inputs: BuildReviewFrozenInputs,
     lapId: BuildReviewLapId,
     tier: ConductState['complexity_tier'],
+    captureInputDigest?: (materialPath: string, packageRoot: string) => Promise<void>,
   ): Promise<{ readonly id: string; readonly success: boolean; readonly output: string; readonly member?: BuildReviewCustomArtifactMember }> {
     const declaration = {
       version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
@@ -2814,6 +2901,7 @@ export class DefaultStepRunner implements StepRunner {
             output: failure.detail,
           } };
         }
+        await captureInputDigest?.(bundle.materialPath, policy.packageRoot);
         const candidateEngine = await this.resolveBuildReviewEngineIdentity();
         const policyProvenance = {
           inputDigest: inputs.sourceSnapshot.contentDigest,
