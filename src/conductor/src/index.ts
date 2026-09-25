@@ -925,10 +925,18 @@ async function main(): Promise<void> {
         }
       },
     };
-    process.exitCode = await dispatchGithubOperationCommand(githubOperationCmd, {
-      cwd: process.cwd(),
-      confirmation,
-    });
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(process.cwd(), '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      process.exitCode = await dispatchGithubOperationCommand(githubOperationCmd, {
+        cwd: process.cwd(),
+        confirmation,
+        events,
+      });
+    } finally {
+      persister.stop();
+    }
     return;
   }
 
