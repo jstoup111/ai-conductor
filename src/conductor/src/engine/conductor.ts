@@ -1435,6 +1435,8 @@ export interface StepRunResult {
   unretryableInputs?: {
     retryAfterStep: StepName;
   };
+  /** Deterministic as-built input/capability failures never enter retries. */
+  asBuiltFault?: { kind: 'input' | 'capability'; reason: string };
   /** Provider routing identity and ordered candidate-attempt accounting. */
   preferredProvider?: string;
   actualProvider?: string;
@@ -10479,6 +10481,20 @@ export class Conductor {
                 unattributedCount: unattributedResult.unattributedCount,
               });
             }
+          }
+
+          // The as-built projection and native-schema capability are engine
+          // preconditions. A retry cannot make an unreadable input parse or add
+          // a provider capability, so halt before ordinary retry accounting.
+          if (step.name === 'architecture_review_as_built' && result.asBuiltFault) {
+            const reason = result.asBuiltFault.reason;
+            await this.closeOpenExecutions();
+            await this.writeHaltMarker(reason + '\n', 'mechanical');
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
+            await this.emitLoopHalt(reason);
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
           }
 
           // Rate limit: wait deterministically, then retry WITHOUT burning the

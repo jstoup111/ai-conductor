@@ -78,6 +78,7 @@ import {
 } from './build-review-effective.js';
 import { extractStoryCriterionIds, sectionBody, splitStoryBlocks } from './story-criteria.js';
 import { readAsBuiltVerdictLine } from './as-built-verdict-line.js';
+import { asBuiltOutcome, readAsBuiltVerdict, AS_BUILT_VERDICT_PATH } from './as-built-verdict-store.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
 export { readAsBuiltVerdictLine, type AsBuiltVerdictLine } from './as-built-verdict-line.js';
@@ -336,6 +337,7 @@ export const STEP_ARTIFACT_CONTRACTS = {
   manual_test: [{ pattern: '.pipeline/manual-test-results.md', scope: 'run' }],
   prd_audit: [{ pattern: '.pipeline/prd-audit.md', scope: 'run' }],
   architecture_review_as_built: [
+    { pattern: AS_BUILT_VERDICT_PATH, scope: 'run' },
     { pattern: '.pipeline/architecture-review-as-built.md', scope: 'run' },
   ],
   rebase: [],
@@ -3440,6 +3442,67 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // unless the literal word BLOCKED appeared), which let a no-ADR / garbled
   // verdict slip through marked `done` and the loop end without DONE or HALT.
   architecture_review_as_built: async (dir, ctx): Promise<CompletionResult> => {
+    // The JSON envelope is the sole authority. The Markdown report is an
+    // engine-rendered view and deliberately has no completion semantics.
+    const stored = await readAsBuiltVerdict(dir);
+    if (stored.kind === 'absent') {
+      return {
+        done: false,
+        reason: `no ${AS_BUILT_VERDICT_PATH} present — the as-built review must return a typed verdict`,
+        routeClass: 'absent',
+      };
+    }
+    if (stored.kind === 'unreadable') {
+      return { done: false, reason: stored.reason, routeClass: 'absent' };
+    }
+    const artifact = join(dir, AS_BUILT_VERDICT_PATH);
+    if (ctx.attemptRunId !== undefined && stored.value.attemptId !== ctx.attemptRunId) {
+      return {
+        done: false,
+        routeClass: 'absent',
+        retrySignal: 'stale-run-identity',
+        verdictFreshness: { artifact, floorSource: 'run-identity', outcome: 'stale_invalidated', fresh: false },
+        reason: `${AS_BUILT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${ctx.attemptRunId} — scoring 'no fresh verdict'`,
+      };
+    }
+    if (stored.value.codeStamp !== null) {
+      const git = ctx.git ?? makeGitRunner(dir);
+      const validity = await gateVerdictStillValid(
+        { projectRoot: dir, git }, 'architecture_review_as_built', stored.value.codeStamp,
+      );
+      if (validity !== 'preserve') {
+        return {
+          done: false, routeClass: 'absent',
+          reason: `${AS_BUILT_VERDICT_PATH} code stamp ${stored.value.codeStamp} cannot vouch for current as-built inputs`,
+        };
+      }
+    }
+    const outcome = asBuiltOutcome(stored.value.verdict);
+    if (outcome === 'approved' || outcome === 'plan-gap-delivered') {
+      await writeArchitectureReviewAsBuiltCodeStamp(dir, ctx);
+      return {
+        done: true,
+        verdictFreshness: { artifact, floorSource: 'run-identity', outcome: 'rewritten', fresh: true },
+      };
+    }
+    if (outcome === 'plan-gap-undelivered') {
+      const verdict = stored.value.verdict;
+      return { done: false, routeClass: 'named-route', reason: `as-built review found PLAN_GAP and records outcome undelivered — ${verdict.verdict === 'PLAN_GAP' ? verdict.affectedOutcome : 'unknown outcome'}` };
+    }
+    if (outcome === 'blocked-design') {
+      const verdict = stored.value.verdict;
+      return {
+        done: false, routeClass: 'named-route',
+        reason: `as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): ${verdict.verdict === 'BLOCKED' ? verdict.findings.filter((finding) => finding.class === 'DESIGN').map((finding) => finding.id).join(', ') : 'unknown finding'}`,
+      };
+    }
+    return {
+      done: false, routeClass: 'named-route',
+      reason: 'as-built review verdict is BLOCKED and every blocking finding is REMEDIABLE — a repair, not a decision',
+    };
+
+    /* Legacy Markdown reader retained temporarily until Task 23 deletes it. */
+    if (Boolean(false)) {
     const runIdentity = await completionVerdictRunIdentity(
       dir,
       'architecture_review_as_built',
@@ -3488,7 +3551,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (runIdentity.state === 'stale-run-identity') {
       return staleVerdictRunIdentityResult(
         '.pipeline/architecture-review-as-built.md',
-        runIdentity,
+        runIdentity as Extract<VerdictRunIdentity, { state: 'stale-run-identity' }>,
       );
     }
 
@@ -3523,7 +3586,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       if (outcome.kind === 'invalid') {
         return {
           done: false,
-          reason: renderAsBuiltInvalidReason(outcome),
+          reason: renderAsBuiltInvalidReason(outcome as Extract<AsBuiltReviewOutcome, { kind: 'invalid' }>),
           routeClass: 'absent',
         };
       }
@@ -3545,7 +3608,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           done: false,
           reason:
             'as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): ' +
-            outcome.designFindings.map((finding) => `${finding.id} (${finding.clause})`).join(', '),
+            (outcome as Extract<AsBuiltReviewOutcome, { kind: 'blocked-design' }>).designFindings.map((finding) => `${finding.id} (${finding.clause})`).join(', '),
           routeClass: 'named-route',
         };
       }
@@ -3566,6 +3629,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       done: true,
       verdictFreshness,
     };
+    }
   },
 
   // build_review judgement gate: satisfied only by a fresh, valid PASS

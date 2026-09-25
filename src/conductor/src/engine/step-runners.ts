@@ -213,11 +213,14 @@ import {
 import {
   AS_BUILT_VERDICT_SCHEMA,
   renderAsBuiltVerdictShape,
+  resolveAsBuiltReferences,
+  validateAsBuiltVerdict,
 } from './as-built-contract.js';
 import {
   buildAsBuiltProjection,
   renderAsBuiltProjection,
 } from './as-built-projection.js';
+import { persistAsBuiltVerdict } from './as-built-verdict-store.js';
 
 /** A closed coverage-binding payload that cannot be treated as a verdict. */
 export class CoverageBindingPayloadError extends Error {
@@ -1102,6 +1105,18 @@ export class DefaultStepRunner implements StepRunner {
     // both the bounded input projection and the output contract, while the
     // provider-aware executor retains candidate routing and scratch lifecycle.
     if (step === 'architecture_review_as_built' && this.providerRuntimes && branchSessionId === undefined) {
+      const schemaCandidates = this.configuredProviders.filter(
+        (provider) => this.providerRuntimes!.nativeSchemaCapabilityFor(provider)?.nativeOutputSchema === true,
+      );
+      if (schemaCandidates.length === 0) {
+        return {
+          success: false,
+          asBuiltFault: {
+            kind: 'capability',
+            reason: `architecture_review_as_built cannot enforce its native output schema: candidate set [${this.configuredProviders.join(', ')}] has no provider declaring nativeSchemaCapability.nativeOutputSchema. Recovery action: select or update a candidate that declares nativeSchemaCapability.nativeOutputSchema.`,
+          },
+        };
+      }
       const projection = await buildAsBuiltProjection(this.projectDir);
       if (!projection.ok) {
         const { dimension, detail, actual, limit } = projection.fault;
@@ -1111,6 +1126,10 @@ export class DefaultStepRunner implements StepRunner {
         return {
           success: false,
           output: `as-built input projection fault: ${dimension}${bounds}${detail ? `: ${detail}` : ''}`,
+          asBuiltFault: {
+            kind: 'input',
+            reason: `as-built input projection fault: ${dimension}${bounds}${detail ? `: ${detail}` : ''}`,
+          },
         };
       }
       try {
@@ -1129,6 +1148,42 @@ export class DefaultStepRunner implements StepRunner {
         );
         if (result) {
           this.callCount++;
+          // Provider failures retain their existing auth/rate-limit/unresolved-command
+          // routing. Structured-output diagnostics are considered only after those
+          // adapter classifications have had a chance to win.
+          if (!result.success && (result.authFailure || result.rateLimited || result.commandUnresolved)) {
+            return this.toStepRunResult(step, result);
+          }
+          if (result.structuredResultFailure !== undefined || result.finalStructuredResult === undefined) {
+            return {
+              ...this.toStepRunResult(step, result),
+              success: false,
+              output: 'structured-result-missing',
+            };
+          }
+          const validated = validateAsBuiltVerdict(result.finalStructuredResult);
+          if (!validated.ok) {
+            return {
+              ...this.toStepRunResult(step, result),
+              success: false,
+              output: `structured-result-rejected: ${validated.field}: ${validated.requirement}`,
+            };
+          }
+          const references = await resolveAsBuiltReferences(validated.verdict, this.projectDir);
+          if (!references.ok) {
+            return {
+              ...this.toStepRunResult(step, result),
+              success: false,
+              output: `structured-result-rejected: ${references.field}: ${references.requirement}`,
+            };
+          }
+          const head = await this.gitRunner(['rev-parse', 'HEAD']);
+          const codeStamp = head.exitCode === 0 && head.stdout.trim().length > 0 ? head.stdout.trim() : null;
+          await persistAsBuiltVerdict(this.projectDir, references.verdict, {
+            attemptId: opts?.runId ?? this.runId,
+            codeStamp,
+            policy: projection.projection.policy,
+          });
           return this.toStepRunResult(step, result);
         }
       } catch (error) {

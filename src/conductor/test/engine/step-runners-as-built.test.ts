@@ -205,7 +205,14 @@ describe('architecture_review_as_built native-schema dispatch', () => {
     const result = await runner(projectDir, 'claude', provider).run('architecture_review_as_built', { complexity_tier: 'M' });
 
     expect({ result, invokeCalls: invoke.mock.calls.length }).toEqual({
-      result: { success: false, output: 'as-built input projection fault: plan-tasks (actual 5, limit 4)' },
+      result: {
+        success: false,
+        output: 'as-built input projection fault: plan-tasks (actual 5, limit 4)',
+        asBuiltFault: {
+          kind: 'input',
+          reason: 'as-built input projection fault: plan-tasks (actual 5, limit 4)',
+        },
+      },
       invokeCalls: 0,
     });
   });
