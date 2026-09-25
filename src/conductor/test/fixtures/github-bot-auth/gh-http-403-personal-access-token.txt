@@ -1,0 +1,2 @@
+# Captured 2026-09-23 from a GitHub CLI request authenticated by a token without repository access.
+gh: Resource not accessible by personal access token (HTTP 403)

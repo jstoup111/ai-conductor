@@ -1,0 +1,4 @@
+# Captured 2026-09-23 from `git push --force-with-lease` with an out-of-date lease.
+To https://github.com/owner/repository.git
+ ! [rejected]        feature -> feature (stale info)
+error: failed to push some refs to 'https://github.com/owner/repository.git'
