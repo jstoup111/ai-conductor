@@ -7,6 +7,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { inspect } from 'node:util';
 
 const boundary = vi.hoisted(() => ({
   calls: [] as Array<{ file: string; args: string[]; options: Record<string, unknown> }>,
@@ -33,6 +34,17 @@ import { provisionSandboxBuildEnv } from '../../src/engine/self-host/sandbox-bui
 
 const sentinel = 'task-12-bot-token-must-not-escape';
 const savedEnvironment = new Map<string, string | undefined>();
+
+function propagatedErrorText(error: unknown): string {
+  const seen = new Set<unknown>();
+  const visit = (value: unknown): string => {
+    if (value === null || typeof value !== 'object' || seen.has(value)) return String(value ?? '');
+    seen.add(value);
+    const record = value as Record<string, unknown>;
+    return `${String(record.message ?? '')} ${String(record.stderr ?? '')} ${String(record.stdout ?? '')} ${String(record.cmd ?? '')} ${visit(record.cause)}`;
+  };
+  return `${visit(error)} ${inspect(error, { depth: null })}`;
+}
 
 describe('GitHub bot token confinement', () => {
   let root: string;
@@ -89,6 +101,7 @@ describe('GitHub bot token confinement', () => {
     }).catch((error: unknown) => error);
     expect(rejected).toBeInstanceOf(Error);
     expect((rejected as Error).message).not.toContain(sentinel);
+    expect(propagatedErrorText(rejected)).not.toContain(sentinel);
     expect(JSON.stringify(events)).not.toContain(sentinel);
 
     const provider = await provisionProviderHome({
@@ -115,6 +128,12 @@ describe('GitHub bot token confinement', () => {
       expect(push?.args).toEqual(['push', 'origin', 'HEAD:refs/heads/topic']);
       expect(JSON.stringify(push?.args)).not.toContain(sentinel);
       expect(JSON.stringify(push?.args)).not.toMatch(/[^:]:[^@]+@/);
+
+      boundary.failure = Object.assign(new Error(`push failed: ${sentinel}`), { stderr: `fatal ${sentinel}` });
+      const pushFailure = await makeProductionGit()(['push', 'origin', 'HEAD:refs/heads/topic'], {
+        cwd: root, credential: 'write', endpoint: 'https',
+      }).catch((error: unknown) => error);
+      expect(propagatedErrorText(pushFailure)).not.toContain(sentinel);
     } finally {
       await Promise.all([provider.teardown(), build.teardown()]);
     }

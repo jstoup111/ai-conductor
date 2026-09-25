@@ -2189,6 +2189,38 @@ steps:
     });
   });
 
+  describe('github_bot machine credential config', () => {
+    it('accepts github_bot from user and merged sources but rejects it from a project config', () => {
+      for (const source of ['user', 'merged'] as const) {
+        expect(validateConfig({ github_bot: { token_file: '~/bot-token' } }, '/repo', { source }).ok).toBe(true);
+      }
+      const project = validateConfig({ github_bot: { token_file: '~/bot-token' } }, '/repo', { source: 'project' });
+      expect(project.ok).toBe(false);
+      if (!project.ok) {
+        expect(project.error.message).toContain('.ai-conductor/config.yml');
+        expect(project.error.message).toContain('~/.ai-conductor/config.yml');
+      }
+    });
+
+    it('rejects missing or non-string github_bot.token_file', () => {
+      for (const github_bot of [{}, { token_file: 42 }]) {
+        const result = validateConfig({ github_bot });
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.message).toContain('github_bot.token_file');
+      }
+    });
+
+    it('rejects inline github_bot token keys without echoing their value', () => {
+      const sentinel = 'inline-token-must-not-appear';
+      const result = validateConfig({ github_bot: { token: sentinel } });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain('token');
+        expect(result.error.message).not.toContain(sentinel);
+      }
+    });
+  });
+
   describe('retired attribution cutover config keys', () => {
     it('rejects retired cutovers as unknown while retaining audit sample resolution', () => {
       const retiredKeyOutcomes = Object.fromEntries(

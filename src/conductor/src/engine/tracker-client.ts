@@ -389,11 +389,18 @@ export function makeProductionGh(): GhRunner {
     } catch (cause) {
       const field = unsupportedJsonField(cause);
       if (field) {
+        // A bot child may include GH_TOKEN in its diagnostic fields. Do not
+        // retain that raw error graph on a public capability error.
+        if (botToken !== undefined && cause instanceof Error) {
+          throw new GhCapabilityError(field, new Error(cause.message.split(botToken).join('[redacted]')));
+        }
         throw new GhCapabilityError(field, cause);
       }
       if (botToken !== undefined && classifyGhAuthRefusal(cause)) throw new GithubBotAuthRefusalError('auth-refused');
       if (botToken !== undefined && cause instanceof Error) {
-        throw new Error(cause.message.split(botToken).join('[redacted]'), { cause });
+        // Deliberately omit cause: Error.cause is observable through inspect
+        // and would otherwise retain the unredacted child diagnostics.
+        throw new Error(cause.message.split(botToken).join('[redacted]'));
       }
       throw cause;
     }

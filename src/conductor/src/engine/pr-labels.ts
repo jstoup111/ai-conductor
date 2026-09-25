@@ -136,7 +136,9 @@ export function makeProductionGit(): GitRunner {
       return { stdout: String(result.stdout) };
     } catch (error) {
       if (botToken !== undefined && classifyGitPushAuthRefusal(error)) throw new GithubBotAuthRefusalError('auth-refused');
-      if (botToken !== undefined && error instanceof Error) throw new Error(error.message.split(botToken).join('[redacted]'), { cause: error });
+      // Do not retain the raw child as Error.cause: inspect/error reporters
+      // traverse causes and could expose the bot token.
+      if (botToken !== undefined && error instanceof Error) throw new Error(error.message.split(botToken).join('[redacted]'));
       throw error;
     }
   };
