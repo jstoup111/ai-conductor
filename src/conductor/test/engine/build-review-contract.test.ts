@@ -1,6 +1,7 @@
 // Covers: task:1, task:3
 // Covers: task:2
 import { describe, expect, it, vi } from 'vitest';
+import Ajv from 'ajv';
 
 import {
   renderRubricContractShape,
@@ -278,6 +279,34 @@ describe('engine/build-review-contract', () => {
     })).toThrow();
   });
 
+  describe('scopeResolutions per-status required fields', () => {
+    const region = { path: 'test/a.test.ts', startLine: 1, endLine: 2, contentHash: `sha256:${'a'.repeat(64)}`, display: 'test/a.test.ts:1-2' };
+    const validate = new Ajv().compile({
+      ...BUILD_REVIEW_JUDGED_V3_SCHEMA,
+      required: [],
+    });
+    const accepts = (entry: Record<string, unknown>) => validate({ findings: [], scopeResolutions: [entry] });
+    const resolved = { candidateId: 'c1', status: 'resolved', sourceRegion: region, obligationReferences: ['task:1'], associationReason: 'targets task 1' };
+
+    it('accepts a complete entry for each status', () => {
+      expect([
+        accepts(resolved),
+        accepts({ candidateId: 'c1', status: 'out-of-scope', exclusionReason: 'fixture only' }),
+        accepts({ candidateId: 'c1', status: 'indeterminate', missingEvidenceReason: 'hash mismatch' }),
+      ]).toEqual([true, true, true]);
+    });
+
+    it.each([
+      ['resolved without associationReason', (({ associationReason: _a, ...rest }) => rest)(resolved)],
+      ['resolved without sourceRegion', (({ sourceRegion: _s, ...rest }) => rest)(resolved)],
+      ['resolved without obligationReferences', (({ obligationReferences: _o, ...rest }) => rest)(resolved)],
+      ['out-of-scope without exclusionReason', { candidateId: 'c1', status: 'out-of-scope' }],
+      ['indeterminate without missingEvidenceReason', { candidateId: 'c1', status: 'indeterminate' }],
+    ])('rejects %s', (_label, entry) => {
+      expect(accepts(entry)).toBe(false);
+    });
+  });
+
   it('offers test-quality evidence fields only in the testQuality schema', () => {
     // The security parser rejects these fields; a security schema that offers
     // them invites a result the engine must refuse as a mechanical fault.
@@ -318,18 +347,19 @@ describe('engine/build-review-contract', () => {
   describe('schema/parser grammar agreement', () => {
     const sha = `sha256:${'a'.repeat(64)}`;
     const NATIVE_SCHEMA_KEYWORDS = new Set([
-      'type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'oneOf', 'pattern', 'minItems',
+      'type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'oneOf', 'anyOf', 'pattern', 'minItems',
     ]);
 
     function schemaKeywords(schema: unknown, path = '$'): Array<{ path: string; keyword: string; value: unknown }> {
       const source = record(schema);
       const own = Object.entries(source)
-        .filter(([keyword]) => keyword !== 'properties' && keyword !== 'items' && keyword !== 'oneOf')
+        .filter(([keyword]) => keyword !== 'properties' && keyword !== 'items' && keyword !== 'oneOf' && keyword !== 'anyOf')
         .map(([keyword, value]) => ({ path, keyword, value }));
       const nested = [
         ...Object.entries(record(source.properties ?? {})).flatMap(([key, child]) => schemaKeywords(child, `${path}.${key}`)),
         ...(source.items === undefined ? [] : schemaKeywords(source.items, `${path}[]`)),
         ...(Array.isArray(source.oneOf) ? source.oneOf.flatMap((alt, index) => schemaKeywords(alt, `${path}|${index}`)) : []),
+        ...(Array.isArray(source.anyOf) ? source.anyOf.flatMap((alt, index) => schemaKeywords(alt, `${path}|${index}`)) : []),
       ];
       return [...own, ...nested];
     }

@@ -236,36 +236,47 @@ function buildReviewJudgedV3Schema(rubric: BuildReviewRubricId): BuildReviewJudg
   }) as BuildReviewJudgedV3Schema;
 }
 
+const SCOPE_RESOLUTION_FIELD_SCHEMAS = {
+  sourceRegion: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['path', 'startLine', 'endLine', 'contentHash', 'display'],
+    properties: {
+      path: NON_BLANK_STRING,
+      startLine: { type: 'integer' },
+      endLine: { type: 'integer' },
+      contentHash: CONTENT_HASH_STRING,
+      display: NON_BLANK_STRING,
+    },
+  },
+  obligationReferences: NON_EMPTY_NON_BLANK_STRING_ARRAY,
+  associationReason: NON_BLANK_STRING,
+  exclusionReason: NON_BLANK_STRING,
+  missingEvidenceReason: NON_BLANK_STRING,
+} as const;
+
+function scopeResolutionBranch(status: 'resolved' | 'out-of-scope' | 'indeterminate', statusRequired: readonly (keyof typeof SCOPE_RESOLUTION_FIELD_SCHEMAS)[]) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['candidateId', 'status', ...statusRequired],
+    properties: { candidateId: NON_BLANK_STRING, status: { type: 'string', enum: [status] }, ...SCOPE_RESOLUTION_FIELD_SCHEMAS },
+  } as const;
+}
+
 const TEST_QUALITY_EVIDENCE_SCHEMA_PROPERTIES = {
       relocationAudit: { type: 'array', items: { type: 'object', additionalProperties: false, required: [], properties: {} } },
       counterfactualSensitivity: { type: 'string', enum: COUNTERFACTUAL_SENSITIVITY_VOCABULARY },
       scopeResolutions: {
         type: 'array',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['candidateId', 'status'],
-          properties: {
-            candidateId: NON_BLANK_STRING,
-            status: { type: 'string', enum: ['resolved', 'out-of-scope', 'indeterminate'] },
-            sourceRegion: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['path', 'startLine', 'endLine', 'contentHash', 'display'],
-              properties: {
-                path: NON_BLANK_STRING,
-                startLine: { type: 'integer' },
-                endLine: { type: 'integer' },
-                contentHash: CONTENT_HASH_STRING,
-                display: NON_BLANK_STRING,
-              },
-            },
-            obligationReferences: NON_EMPTY_NON_BLANK_STRING_ARRAY,
-            associationReason: NON_BLANK_STRING,
-            exclusionReason: NON_BLANK_STRING,
-            missingEvidenceReason: NON_BLANK_STRING,
-          },
-        },
+        // Per-status branches mirror candidateScopeResolutionProblems exactly.
+        // Nested `anyOf` (not `oneOf`, not at the root) is accepted by both the
+        // Claude and Codex structured-output grammars.
+        items: { anyOf: [
+          scopeResolutionBranch('resolved', ['sourceRegion', 'obligationReferences', 'associationReason']),
+          scopeResolutionBranch('out-of-scope', ['exclusionReason']),
+          scopeResolutionBranch('indeterminate', ['missingEvidenceReason']),
+        ] },
       },
 } as const;
 
