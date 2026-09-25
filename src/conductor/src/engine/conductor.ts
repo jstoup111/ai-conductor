@@ -467,6 +467,7 @@ import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
+import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
 
@@ -1568,6 +1569,8 @@ export interface ComplexityAssessment extends ProviderAttributionMetadata {
 }
 
 export interface StepRunOptions {
+  /** Daemon-start capability observations for custom build-review candidates. */
+  readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>;
   /**
    * Durable PRD widening authority rendered by the engine for an audit
    * reviewer. It is history for judgement only: the reviewer cannot use it to
@@ -1939,6 +1942,8 @@ export interface ConductorOptions {
    * handling falls back to bare sleep (existing behavior).
    */
   rateLimitEpisode?: RateLimitEpisode;
+  /** Frozen daemon-start capability observations for custom build-review candidates. */
+  readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>;
   /**
    * Task 22: Callback to register an in-flight rate-limit wait AbortController
    * with the daemon-level handler. Called when a conductor creates a wait controller
@@ -2691,6 +2696,7 @@ export class Conductor {
    * fallback to bare sleep).
    */
   private rateLimitEpisode: RateLimitEpisode | undefined;
+  private readOnlyReviewCapabilities: Readonly<Record<string, ReadOnlyReviewCapability>> | undefined;
 
   /**
    * Task 22: Optional callback to register in-flight wait AbortControllers with
@@ -3599,6 +3605,7 @@ export class Conductor {
     this.verifyMergedShipment = opts.verifyMergedShipment;
     this.shipmentEvidence = opts.shipmentEvidence;
     this.rateLimitEpisode = opts.rateLimitEpisode;
+    this.readOnlyReviewCapabilities = opts.readOnlyReviewCapabilities;
     this.registerAbortController = opts.registerAbortController;
     this.exitProcess = opts.exitProcess ?? ((code) => process.exit(code));
   }
@@ -6295,6 +6302,9 @@ export class Conductor {
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
+          ...(name === 'build_review' && this.readOnlyReviewCapabilities !== undefined
+            ? { readOnlyReviewCapabilities: this.readOnlyReviewCapabilities }
+            : {}),
         });
       }
       const installed = await this.guardrails.resolveInstalledHarnessRoot();
@@ -6323,6 +6333,9 @@ export class Conductor {
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
+          ...(name === 'build_review' && this.readOnlyReviewCapabilities !== undefined
+            ? { readOnlyReviewCapabilities: this.readOnlyReviewCapabilities }
+            : {}),
         });
       } finally {
         if (hadConfig) process.env.CLAUDE_CONFIG_DIR = priorConfig;
@@ -6495,6 +6508,9 @@ export class Conductor {
         retryReason: retryHint,
         ...identityOption,
         ...executionContextOption,
+        ...(name === 'build_review' && this.readOnlyReviewCapabilities !== undefined
+          ? { readOnlyReviewCapabilities: this.readOnlyReviewCapabilities }
+          : {}),
       });
     } finally {
       if (this.providerExecution) {
