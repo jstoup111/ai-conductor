@@ -46,6 +46,11 @@ import {
   normalizeProviderSelection,
   validateRegisteredProviderSelections,
 } from './engine/provider-selection.js';
+import { resolveBuildReviewConfig } from './engine/resolved-config.js';
+import {
+  probeReadOnlyReviewCapability,
+  type ReadOnlyReviewCapability,
+} from './engine/build-review-read-only-capability.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import {
   emitDeprecatedConfigKeyEvents,
@@ -424,6 +429,51 @@ export async function resolveDaemonProjectRoot(startCwd: string): Promise<string
     throw new Error(resolved.error);
   }
   return resolved.root;
+}
+
+/**
+ * Probe the provider-owned read-only boundary for every enabled custom rubric
+ * before an interactive run can dispatch a step. The result is frozen into the
+ * Conductor, matching the daemon's startup observation.
+ */
+export async function probeInteractiveReadOnlyReviewCapabilities(options: {
+  readonly config?: HarnessConfig;
+  readonly projectRoot: string;
+  readonly events: ConductorEventEmitter;
+  readonly platform?: string;
+  readonly probe?: typeof probeReadOnlyReviewCapability;
+  readonly warn?: (message: string) => void;
+}): Promise<Readonly<Record<string, ReadOnlyReviewCapability>>> {
+  const providers: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of resolveBuildReviewConfig(options.config).catalog) {
+    if (entry.kind !== 'custom') continue;
+    for (const provider of normalizeProviderSelection(entry.policy.llm_provider)) {
+      if (!seen.has(provider)) {
+        seen.add(provider);
+        providers.push(provider);
+      }
+    }
+  }
+
+  const probe = options.probe ?? probeReadOnlyReviewCapability;
+  const warn = options.warn ?? console.warn;
+  return Object.freeze(Object.fromEntries(await Promise.all(providers.map(async (provider) => {
+    const capability = await probe({
+      provider,
+      platform: options.platform ?? process.platform,
+      scratchDir: join(options.projectRoot, '.pipeline', 'read-only-review-probe'),
+      runProcess: async (executable, args) => {
+        const result = await execa(executable, [...args], { reject: false });
+        return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
+      },
+    });
+    await options.events.emit({ type: 'build_review_read_only_capability', ...capability });
+    if (capability.status === 'unavailable') {
+      warn(`⚠ Config warning: Read-only build-review capability unavailable for ${capability.provider} on ${capability.platform}: ${capability.reason}`);
+    }
+    return [provider, capability] as const;
+  }))));
 }
 
 // Harness VERSION lookup for the migration check. Probes the invocation cwd
@@ -1497,6 +1547,9 @@ async function main(): Promise<void> {
   const persister = new EventPersister(eventsLogPath, events);
   persister.start();
   await emitDeprecatedConfigKeyEvents(configResult, events);
+  const readOnlyReviewCapabilities = mode === 'interactive'
+    ? await probeInteractiveReadOnlyReviewCapabilities({ config, projectRoot, events })
+    : undefined;
 
   // Wire AuditTrailWriter: appends friction/positive-evidence records to
   // .pipeline/audit-trail/events.jsonl, rooted at the resolved projectRoot
@@ -1603,6 +1656,7 @@ async function main(): Promise<void> {
     config,
     modelPolicy: compatibilityRuntime.policy,
     providerExecution,
+    ...(readOnlyReviewCapabilities !== undefined ? { readOnlyReviewCapabilities } : {}),
     projectRoot,
     acceptanceRedExec: createProductionAcceptanceRedExec(),
     baseBranch: finishPublicationBaseBranch,
