@@ -24,6 +24,8 @@ export type ReviewMode = 'auto' | 'manual' | 'conditional';
 
 /** One provider key or an ordered provider fallback sequence. */
 export type ProviderSelection = string | string[];
+/** Whether a step may fall back beyond its explicit provider selection. */
+export type ProviderSubstitutionPolicy = 'allow' | 'disallow';
 
 /**
  * Overrides that kick in when the feature's current complexity tier matches.
@@ -68,6 +70,8 @@ export interface ParallelBranch {
 export interface StepConfig {
   /** Provider selection for this step. Unset steps inherit the first run-level entry. */
   llm_provider?: ProviderSelection;
+  /** Overrides the run-level provider substitution policy for this step. */
+  provider_substitution?: ProviderSubstitutionPolicy;
 
   /** Claude model: alias ("haiku"|"sonnet"|"opus"|"fable") or full ID. */
   model?: string;
@@ -489,6 +493,8 @@ export interface HarnessConfig {
    * without an explicit `llm_provider` selection.
    */
   llm_provider?: ProviderSelection;
+  /** Default fallback policy for provider selections in this run. */
+  provider_substitution?: ProviderSubstitutionPolicy;
   /** Plugin selection: which UI renderer to use (defaults to 'terminal'). */
   ui_renderer?: string;
   /** Names of visualizer plugins to start for this run. */

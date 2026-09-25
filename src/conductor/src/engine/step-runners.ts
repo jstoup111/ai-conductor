@@ -1307,6 +1307,7 @@ export class DefaultStepRunner implements StepRunner {
             modelOverride: opts?.modelOverride ?? this.modelOverride,
             effortOverride: opts?.effortOverride ?? this.effortOverride,
             taskAttribution: this.taskAttribution,
+            providerAvailability: this.providerExecutionContext?.providerAvailability,
             withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
             prepareCandidateSelfHost:
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,

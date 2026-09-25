@@ -17,6 +17,9 @@ export interface CreateProviderAvailabilityOptions {
   now: () => number;
 }
 
+/** A clock regression must never stretch a refusal beyond this bounded window. */
+export const MAX_PROVIDER_SUPPRESSION_MS = 6 * 60 * 60 * 1000;
+
 /**
  * Creates a pure, process-local store of self-expiring provider suppressions.
  */
@@ -27,9 +30,10 @@ export function createProviderAvailability({
 
   return {
     suppress(provider: string, untilMs: number): void {
+      const boundedUntil = Math.min(untilMs, now() + MAX_PROVIDER_SUPPRESSION_MS);
       const existingUntil = suppressedUntil.get(provider);
-      if (existingUntil === undefined || untilMs > existingUntil) {
-        suppressedUntil.set(provider, untilMs);
+      if (existingUntil === undefined || boundedUntil > existingUntil) {
+        suppressedUntil.set(provider, boundedUntil);
       }
     },
 

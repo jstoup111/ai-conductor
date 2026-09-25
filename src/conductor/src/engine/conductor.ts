@@ -10504,6 +10504,12 @@ export class Conductor {
             const provider = typeof result.actualProvider === 'string' && result.actualProvider.trim() !== ''
               ? result.actualProvider
               : undefined;
+            // Quota exhaustion is the only rate-limit class that establishes
+            // process-wide provider unavailability. Auth/session recovery
+            // remains eligible for its existing refresh-and-retry path.
+            if (result.usageExhausted === true && provider !== undefined) {
+              this.providerExecution?.providerAvailability?.suppress(provider, deadline);
+            }
             await emitTracked({
               type: 'rate_limit',
               waitSeconds,

@@ -79,7 +79,7 @@ export interface ProviderAttemptMetadata {
   reason?: string;
   fallbackReason?: string;
   /** Why an uninvoked unavailable candidate was skipped. */
-  skipReason?: 'setup-unavailable' | 'cached-unavailable';
+  skipReason?: 'setup-unavailable' | 'cached-unavailable' | 'policy-refused' | 'suppression-refused';
   /** Structured, redacted setup diagnostic for an explicitly skipped candidate. */
   setupCapability?: string;
   setupRecoveryAction?: string;
@@ -323,6 +323,7 @@ export interface ProviderExecutionContext {
   runtimes: ProviderRuntimeSet;
   sessions: ProviderSessionStore;
   config?: HarnessConfig;
+  providerAvailability?: ProviderAvailability;
   modelOverride?: string;
   effortOverride?: EffortLevel;
   /** Task-local telemetry passed through the provider-dispatch boundary. */
@@ -758,6 +759,7 @@ export async function executeProviderCandidates({
   const candidates = resolveProviderCandidates({
     configuredProviders,
     stepSelection,
+    substitutionPolicy: config?.steps?.[step]?.provider_substitution ?? config?.provider_substitution,
   });
   const preferredProvider = candidates[0];
   const attempts: ProviderAttemptMetadata[] = [];
@@ -981,14 +983,26 @@ export async function executeProviderCandidates({
     const supportsNativeSchemaCapability =
       runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
     if (!admitProviderCandidate(candidate, providerAvailability)) {
-      // Refusal telemetry is added at this boundary by the following task.
-      // Until then, declining this candidate must still avoid every dispatch
-      // path, including safety preparation and provider invocation.
+      const refusal: ProviderAttemptMetadata = {
+        provider: providerKey,
+        ...(executionContext ? { executionContext } : {}),
+        outcome: 'unavailable',
+        reason: 'provider-suppressed',
+        skipReason: 'suppression-refused',
+        invoked: false,
+      };
+      attempts.push(refusal);
+      try {
+        await onAttempt?.(step, refusal);
+      } catch (error) {
+        try { await onTelemetryError?.(error, refusal); } catch { /* best effort */ }
+      }
       if (candidates[index + 1] !== undefined) continue;
       return {
         success: false,
-        output: `All configured providers were refused admission for step ${step}.`,
+        output: `All configured providers are suppressed for step ${step}.`,
         exitCode: 1,
+        rateLimited: true,
         preferredProvider,
         attempts,
       };

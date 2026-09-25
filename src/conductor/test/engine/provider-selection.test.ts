@@ -10,6 +10,7 @@ type ValidateRegisteredProviderSelections = (input: {
 type ResolveProviderCandidates = (input: {
   configuredProviders: readonly string[];
   stepSelection?: ProviderSelection;
+  substitutionPolicy?: 'allow' | 'disallow';
 }) => string[];
 
 async function loadRegisteredSelectionValidator(): Promise<
@@ -114,6 +115,16 @@ describe('resolveProviderCandidates hardening', () => {
     };
 
     expect(resolveProviderCandidates?.(inputWithRegistryContext)).toEqual(['codex', 'claude']);
+  });
+
+  it('keeps a globally disallowed fallback scoped away from one permitted step', async () => {
+    const resolveProviderCandidates = await loadCandidateResolver();
+    expect(resolveProviderCandidates?.({
+      configuredProviders: ['claude', 'codex'], stepSelection: 'codex', substitutionPolicy: 'allow',
+    })).toEqual(['codex', 'claude']);
+    expect(resolveProviderCandidates?.({
+      configuredProviders: ['claude', 'codex'], stepSelection: 'codex', substitutionPolicy: 'disallow',
+    })).toEqual(['codex']);
   });
 });
 

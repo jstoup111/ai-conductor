@@ -264,7 +264,7 @@ export interface ProviderAttemptEvent {
   reason?: string;
   fallbackReason?: string;
   /** Present only for an unavailable candidate that was not invoked. */
-  skipReason?: 'setup-unavailable' | 'cached-unavailable';
+  skipReason?: 'setup-unavailable' | 'cached-unavailable' | 'policy-refused' | 'suppression-refused';
   /** Redacted details retained for an explicit setup-unavailable skip. */
   setupCapability?: string;
   setupRecoveryAction?: string;
