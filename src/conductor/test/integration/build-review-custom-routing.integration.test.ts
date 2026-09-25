@@ -181,8 +181,8 @@ describe('custom build-review compatibility routing', () => {
       testSuiteProof: {}, sourceSnapshot: { digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff', planBody: '# Plan', repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [] },
       sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} },
     } as never;
-    await (runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', capabilities: unknown) => Promise<{ success: boolean }> }).runRubricBuildReview(
-      inputs, resolveBuildReviewConfig(config), 'M', {
+    await (runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', executionContext: unknown, capabilities: unknown) => Promise<{ success: boolean }> }).runRubricBuildReview(
+      inputs, resolveBuildReviewConfig(config), 'M', undefined, {
         codex: { provider: 'codex', platform: 'linux', status: 'unavailable', reason: 'sandbox helper is unavailable' },
         claude: { provider: 'claude', platform: 'linux', status: 'available' },
       },

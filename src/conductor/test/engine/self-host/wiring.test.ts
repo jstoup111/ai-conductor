@@ -223,6 +223,8 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
   let statePath: string;
   let events: ConductorEventEmitter;
   let priorConfigDir: string | undefined;
+  let priorClaudeOauthToken: string | undefined;
+  let hadClaudeOauthToken: boolean;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'selfhost-wiring-'));
@@ -231,11 +233,16 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     // Make the "original" env deterministic so no-bleed assertions are exact.
     priorConfigDir = process.env.CLAUDE_CONFIG_DIR;
     delete process.env.CLAUDE_CONFIG_DIR;
+    priorClaudeOauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    hadClaudeOauthToken = 'CLAUDE_CODE_OAUTH_TOKEN' in process.env;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
   });
 
   afterEach(async () => {
     if (priorConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = priorConfigDir;
+    if (hadClaudeOauthToken) process.env.CLAUDE_CODE_OAUTH_TOKEN = priorClaudeOauthToken;
+    else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     await rm(dir, { recursive: true, force: true });
   });
 
