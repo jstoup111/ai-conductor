@@ -117,7 +117,7 @@ export function extractStoryCriterionIds(storiesText: string): string[] {
 /**
  * Assess whether each accepted story has criteria the engine can derive.
  * Every story needs both a headed Happy Path and a headed Negative Paths
- * section, and the Happy Path must hold at least one criterion. Every
+ * section, and each must hold at least one criterion. Every
  * bullet in those sections must have the Given/When/Then shape; silently
  * dropping a malformed bullet would let land seal an unreadable artifact.
  */
@@ -131,7 +131,8 @@ export function assessAcceptedStoryReadability(storiesText: string): AcceptedSto
       && items.every((item) => /\bgiven\b/i.test(item) && /\bwhen\b/i.test(item) && /\bthen\b/i.test(item))
       && happyPath !== null
       && listItems(happyPath).length > 0
-      && negativePaths !== null;
+      && negativePaths !== null
+      && listItems(negativePaths).length > 0;
     return { id: block.id, readable };
   });
 
