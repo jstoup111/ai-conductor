@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createProviderAvailability } from '../../src/engine/provider-availability.js';
+import {
+  createProviderAvailability,
+  MAX_PROVIDER_SUPPRESSION_MS,
+  restoreProviderAvailabilityFromDaemonLedger,
+} from '../../src/engine/provider-availability.js';
 
 describe('provider availability', () => {
   it('re-admits an expired provider and permits the next injected invocation without operator action', () => {
@@ -89,6 +93,34 @@ describe('provider availability', () => {
     expect(availability.isAvailable('claude')).toBe(true);
     // A successful invocation does not write new availability state.
     expect(availability.isAvailable('claude')).toBe(true);
+  });
+
+  it('does not extend a bounded suppression when the clock moves backward', () => {
+    let now = 1_000;
+    const availability = createProviderAvailability({ now: () => now });
+
+    availability.suppress('claude', now + MAX_PROVIDER_SUPPRESSION_MS);
+    now = 999;
+
+    expect(availability.isAvailable('claude')).toBe(true);
+  });
+
+  it('restores only unexpired bounded daemon-origin suppression records', () => {
+    const now = 10_000;
+    const availability = createProviderAvailability({ now: () => now });
+    restoreProviderAvailabilityFromDaemonLedger({
+      availability,
+      now,
+      ledger: [
+        JSON.stringify({ type: 'provider_suppressed', provider: 'claude', deadline: now + 100 }),
+        JSON.stringify({ type: 'provider_suppressed', provider: 'expired', deadline: now }),
+        JSON.stringify({ type: 'provider_suppressed', provider: 'unbounded', deadline: now + MAX_PROVIDER_SUPPRESSION_MS + 1 }),
+      ].join('\n'),
+    });
+
+    expect(availability.isAvailable('claude')).toBe(false);
+    expect(availability.isAvailable('expired')).toBe(true);
+    expect(availability.isAvailable('unbounded')).toBe(true);
   });
 
   it('changes only admission, preserving the resolved candidate order', () => {

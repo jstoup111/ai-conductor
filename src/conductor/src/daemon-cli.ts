@@ -53,7 +53,7 @@ import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
-import { createProviderAvailability } from './engine/provider-availability.js';
+import { createProviderAvailability, restoreProviderAvailabilityFromDaemonLedger } from './engine/provider-availability.js';
 import {
   normalizeProviderSelection,
   validateRegisteredProviderSelections,
@@ -1145,6 +1145,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   });
   const rateLimitEpisode = createRateLimitEpisode();
   const providerAvailability = createProviderAvailability({ now: () => Date.now() });
+  // Replay only daemon-origin records. Feature-forwarded events are deliberately
+  // absent from this ledger, so a restart never relies on a feature worktree.
+  const daemonSuppressionLedger = await readFile(join(projectRoot, '.daemon', 'events.jsonl'), 'utf8').catch(() => '');
+  restoreProviderAvailabilityFromDaemonLedger({
+    availability: providerAvailability, ledger: daemonSuppressionLedger, now: Date.now(),
+  });
   // Task 20: track which parks were episode-caused so the episode-end sweep
   // (runDaemon's active→inactive transition hook) can recover exactly those.
   const episodeHaltTracker = createEpisodeHaltTracker();
@@ -1215,6 +1221,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     sessions: new ProviderSessionStore(),
     config,
     providerAvailability,
+    onProviderSuppressed: (provider, deadline) => events.emit({
+      type: 'provider_suppressed', provider, deadline,
+    }),
     // The per-feature Conductor composes self-host authority around this
     // resolved-candidate boundary; keep it present for every daemon context.
     withCandidateSafety: createCandidateSafetyBoundary(),

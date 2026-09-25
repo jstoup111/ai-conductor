@@ -18,9 +18,9 @@ export function resolveProviderCandidates({
 }): string[] {
   const selectedProviders =
     stepSelection === undefined ? [] : normalizeProviderSelection(stepSelection);
-  if (substitutionPolicy === 'disallow' && selectedProviders.length > 0) {
-    return stableUniqueProviders(selectedProviders);
-  }
+  // Keep policy-forbidden candidates visible to the single admission gate.
+  // The gate records their refusal alongside suppression refusals; pruning
+  // here would make a configured candidate disappear without telemetry.
   return stableUniqueProviders([...selectedProviders, ...configuredProviders]);
 }
 

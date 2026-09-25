@@ -117,14 +117,14 @@ describe('resolveProviderCandidates hardening', () => {
     expect(resolveProviderCandidates?.(inputWithRegistryContext)).toEqual(['codex', 'claude']);
   });
 
-  it('keeps a globally disallowed fallback scoped away from one permitted step', async () => {
+  it('keeps a policy-forbidden fallback in order for the admission gate to refuse', async () => {
     const resolveProviderCandidates = await loadCandidateResolver();
     expect(resolveProviderCandidates?.({
       configuredProviders: ['claude', 'codex'], stepSelection: 'codex', substitutionPolicy: 'allow',
     })).toEqual(['codex', 'claude']);
     expect(resolveProviderCandidates?.({
       configuredProviders: ['claude', 'codex'], stepSelection: 'codex', substitutionPolicy: 'disallow',
-    })).toEqual(['codex']);
+    })).toEqual(['codex', 'claude']);
   });
 });
 

@@ -136,6 +136,62 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('records a policy refusal through the admission gate without invoking the forbidden provider', async () => {
+    const codexInvoke = vi.fn(async () => ({
+      success: false, output: 'codex unavailable', exitCode: 1,
+      providerUnavailable: true, providerUnavailableScope: 'run' as const,
+      providerUnavailableReason: 'codex unavailable',
+    }));
+    const claudeInvoke = vi.fn(async () => ({ success: true, output: 'must not run', exitCode: 0 }));
+    const providerAvailability = { suppress: vi.fn(), isAvailable: vi.fn((provider) => provider === 'codex') };
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      preferredProvider: 'codex',
+      config: { provider_substitution: 'disallow' },
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      providerAvailability,
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result.success).toBe(false);
+    expect(codexInvoke).toHaveBeenCalledOnce();
+    expect(claudeInvoke).not.toHaveBeenCalled();
+    expect(result.attempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: 'claude', invoked: false, skipReason: 'policy-refused' }),
+    ]));
+    expect(providerAvailability.isAvailable).toHaveBeenCalledExactlyOnceWith('codex');
+  });
+
+  it('does not turn an earlier provider failure into a rate limit when the final candidate is suppressed', async () => {
+    const codexInvoke = vi.fn(async () => ({
+      success: false, output: 'codex unavailable', exitCode: 17,
+      providerUnavailable: true, providerUnavailableScope: 'run' as const,
+      providerUnavailableReason: 'codex unavailable',
+    }));
+    const claudeInvoke = vi.fn();
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      providerAvailability: { suppress: vi.fn(), isAvailable: vi.fn((provider) => provider !== 'claude') },
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result.rateLimited).not.toBe(true);
+    expect(result.providerUnavailable).toBe(true);
+    expect(result.output).toContain('All configured providers are unavailable');
+    expect(result.attempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: 'claude', invoked: false, skipReason: 'suppression-refused' }),
+    ]));
+    expect(claudeInvoke).not.toHaveBeenCalled();
+  });
   it('refuses an unavailable candidate before it can reach the provider or perform admission I/O', async () => {
     const invoke = vi.fn(async () => {
       throw new Error('provider invocation must not occur for a refused candidate');

@@ -10509,6 +10509,7 @@ export class Conductor {
             // remains eligible for its existing refresh-and-retry path.
             if (result.usageExhausted === true && provider !== undefined) {
               this.providerExecution?.providerAvailability?.suppress(provider, deadline);
+              await this.providerExecution?.onProviderSuppressed?.(provider, deadline);
             }
             await emitTracked({
               type: 'rate_limit',

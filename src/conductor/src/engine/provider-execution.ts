@@ -12,6 +12,7 @@ import type {
   EffortLevel,
   HarnessConfig,
   ProviderSelection,
+  ProviderSubstitutionPolicy,
 } from '../types/config.js';
 import { resolveProviderCandidates } from './provider-selection.js';
 import type {
@@ -143,9 +144,23 @@ export type ProviderCandidateRung = Omit<ProviderCandidate, 'step'>;
  */
 export function admitProviderCandidate(
   candidate: ProviderCandidate,
-  providerAvailability?: ProviderAvailability,
-): boolean {
-  return providerAvailability?.isAvailable(candidate.providerKey) ?? true;
+  {
+    providerAvailability,
+    substitutionPolicy,
+    selectedProviders,
+  }: {
+    providerAvailability?: ProviderAvailability;
+    substitutionPolicy?: ProviderSubstitutionPolicy;
+    selectedProviders: readonly string[];
+  },
+): 'policy-refused' | 'suppression-refused' | undefined {
+  if (substitutionPolicy === 'disallow' && selectedProviders.length > 0 &&
+    !selectedProviders.includes(candidate.providerKey)) {
+    return 'policy-refused';
+  }
+  return providerAvailability?.isAvailable(candidate.providerKey) === false
+    ? 'suppression-refused'
+    : undefined;
 }
 
 /**
@@ -324,6 +339,8 @@ export interface ProviderExecutionContext {
   sessions: ProviderSessionStore;
   config?: HarnessConfig;
   providerAvailability?: ProviderAvailability;
+  /** Daemon-origin durable projection of a newly opened suppression window. */
+  onProviderSuppressed?: (provider: string, deadline: number) => void | Promise<void>;
   modelOverride?: string;
   effortOverride?: EffortLevel;
   /** Task-local telemetry passed through the provider-dispatch boundary. */
@@ -761,6 +778,10 @@ export async function executeProviderCandidates({
     stepSelection,
     substitutionPolicy: config?.steps?.[step]?.provider_substitution ?? config?.provider_substitution,
   });
+  const substitutionPolicy = config?.steps?.[step]?.provider_substitution ?? config?.provider_substitution;
+  const selectedProviders = stepSelection === undefined
+    ? []
+    : Array.isArray(stepSelection) ? stepSelection : [stepSelection];
   const preferredProvider = candidates[0];
   const attempts: ProviderAttemptMetadata[] = [];
   let everyUnavailableCandidateWasNotStarted = true;
@@ -773,6 +794,7 @@ export async function executeProviderCandidates({
     attribution && 'diagnostic' in attribution ? attribution.diagnostic.code : undefined;
   const setupUnavailableCandidates: ProviderSetupUnavailable[] = [];
   let anyCandidateInvoked = false;
+  let lastUnavailableResult: InvokeResult | undefined;
 
   // A fallback may become the actual candidate only after another provider has
   // failed.  Capture every candidate-local policy baseline before that can
@@ -982,13 +1004,18 @@ export async function executeProviderCandidates({
     const requiresNativeSchemaCapability = candidateOptions.nativeSchema !== undefined;
     const supportsNativeSchemaCapability =
       runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
-    if (!admitProviderCandidate(candidate, providerAvailability)) {
+    const refusalReason = admitProviderCandidate(candidate, {
+      providerAvailability,
+      substitutionPolicy,
+      selectedProviders,
+    });
+    if (refusalReason !== undefined) {
       const refusal: ProviderAttemptMetadata = {
         provider: providerKey,
         ...(executionContext ? { executionContext } : {}),
         outcome: 'unavailable',
-        reason: 'provider-suppressed',
-        skipReason: 'suppression-refused',
+        reason: refusalReason === 'policy-refused' ? 'provider-forbidden' : 'provider-suppressed',
+        skipReason: refusalReason,
         invoked: false,
       };
       attempts.push(refusal);
@@ -998,11 +1025,30 @@ export async function executeProviderCandidates({
         try { await onTelemetryError?.(error, refusal); } catch { /* best effort */ }
       }
       if (candidates[index + 1] !== undefined) continue;
-      return {
+      if (attempts.every(({ skipReason }) => skipReason === 'suppression-refused')) {
+        return {
+          success: false,
+          output: `All configured providers are suppressed for step ${step}.`,
+          exitCode: 1,
+          rateLimited: true,
+          preferredProvider,
+          attempts,
+        };
+      }
+      const diagnostic = attempts
+        .map(({ provider, reason, invoked, skipReason }) =>
+          `${provider} (${reason}${invoked ? '' : `, ${skipReason ?? 'not invoked'}`})`)
+        .join('; ');
+      const priorResult = lastUnavailableResult;
+      const { executionDisposition: _executionDisposition, ...lastResult } = priorResult ?? {
         success: false,
-        output: `All configured providers are suppressed for step ${step}.`,
         exitCode: 1,
-        rateLimited: true,
+      };
+      return {
+        ...lastResult,
+        success: false,
+        output: `All configured providers are unavailable for step ${step}: ${diagnostic}.`,
+        exitCode: lastResult.exitCode ?? 1,
         preferredProvider,
         attempts,
       };
@@ -1106,6 +1152,8 @@ export async function executeProviderCandidates({
         ...(observedIntervals.length ? { observedIntervals } : {}),
       };
     }
+
+    lastUnavailableResult = safeResult;
 
     if (setupUnavailable) {
       setupUnavailableCandidates.push({

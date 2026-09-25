@@ -885,6 +885,12 @@ export type ConductorEvent =
       /** Absolute retry deadline used for the rate-limit wait; absent on historical records. */
       deadline?: number;
     }
+  | {
+      /** Daemon-origin durable record used to restore provider suppression after restart. */
+      type: 'provider_suppressed';
+      provider: string;
+      deadline: number;
+    }
   | { type: 'session_reset'; reason: string }
   | { type: 'credentials_park'; reason: string }
   | {
