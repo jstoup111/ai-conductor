@@ -1394,6 +1394,8 @@ export interface StepRunResult {
   infrastructureFailure?: Pick<CoverageBindingPayloadError, 'name' | 'kind' | 'reason'>;
   /** True only when this build-review lap observed an infrastructure fault. */
   currentLapMechanicalFault?: boolean;
+  /** A custom review had no provider with an available read-only review mode. */
+  buildReviewReadOnlyReviewUnavailable?: true;
   /**
    * Typed only by the FINISH composition boundary. Kept unknown at this edge
    * so malformed adapter results fail closed instead of reaching remediation.
@@ -2039,6 +2041,15 @@ export function renderExhaustedMechanicalBuildReviewHalt(
     `Current lap ${aggregate.lapId}: ${failure.rubric} closed cause ${failure.reason} (${failure.detail}).`,
     `1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap ${aggregate.lapId} --rubric ${failure.rubric} --rationale "<rationale>".`,
     '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
+  ].join('\n');
+}
+
+/** Render the closed recovery for a custom review with no read-only candidate. */
+export function renderReadOnlyReviewUnavailableBuildReviewHalt(detail: string): string {
+  return [
+    'build_review halted: read-only-review-unavailable.',
+    detail,
+    'Install or enable a read-only review mode for one listed provider, or record reduced coverage for this rubric before re-queueing the feature.',
   ].join('\n');
 }
 
@@ -10834,6 +10845,16 @@ export class Conductor {
               lastVerdictHandshakeFailure = handshake.reason;
             }
             failedStepResult = result;
+            if (step.name === 'build_review' && result.buildReviewReadOnlyReviewUnavailable === true) {
+              const reason = renderReadOnlyReviewUnavailableBuildReviewHalt(result.output ?? result.refusal?.reason ?? '');
+              state[step.name] = 'failed';
+              await this.writeHaltMarker(reason + '\n', 'needs-human');
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
+              await this.emitLoopHalt(reason);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
             // Task 10: the mechanical lane publishes a terminal aggregate
             // only after consuming its separate allowance. That aggregate is
             // the operator's diagnostic, not a retryable grader-dispatch

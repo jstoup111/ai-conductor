@@ -2640,6 +2640,15 @@ export class DefaultStepRunner implements StepRunner {
           providerSetupExhaustion: infrastructureFailure.providerSetupExhaustion,
         };
       }
+      if (infrastructureFailure.reason === 'read-only-review-unavailable') {
+        const reason = `build_review ${infrastructureFailure.reason}: ${infrastructureFailure.detail}`;
+        return {
+          success: false,
+          output: reason,
+          refusal: { kind: 'needs-human', reason },
+          buildReviewReadOnlyReviewUnavailable: true,
+        };
+      }
       const hasJudgedFinding = lapResults.some(
         (result) => result.kind === 'judged' && result.findings.length > 0,
       );
@@ -3199,6 +3208,17 @@ export class DefaultStepRunner implements StepRunner {
     }
     await inputs.sourceMaterialization?.settle(entry.id);
     this.callCount++;
+    if (result.providerSetupExhaustion?.candidates.every(
+      (candidate) => candidate.capability === 'read-only-review-mode',
+    )) {
+      coverageFailure = true;
+      failure = {
+        reason: 'read-only-review-unavailable',
+        detail: `All configured providers lack an available read-only review mode: ${result.providerSetupExhaustion.candidates.map(
+          ({ provider, reason }) => `${provider}: ${redactSafetyText(reason)}`,
+        ).join('; ')}`,
+      };
+    }
     const member = result.success ? (() => {
       try { return parseBuildReviewCustomArtifactMember(JSON.parse(result.output)); } catch { return undefined; }
     })() : undefined;
@@ -3263,6 +3283,15 @@ export class DefaultStepRunner implements StepRunner {
     );
     const hasFinding = lapResults.some((result) => result.kind === 'judged' && result.findings.length > 0);
     if (infrastructureFailure && !hasFinding) {
+      if (infrastructureFailure.reason === 'read-only-review-unavailable') {
+        const reason = `build_review ${infrastructureFailure.reason}: ${infrastructureFailure.detail}`;
+        return {
+          success: false,
+          output: reason,
+          refusal: { kind: 'needs-human', reason },
+          buildReviewReadOnlyReviewUnavailable: true,
+        };
+      }
       const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review', {
         rubric: infrastructureFailure.rubric,
         reason: infrastructureFailure.reason,
