@@ -420,4 +420,19 @@ Status: SUPERSEDED by adr-plan-two
       },
     });
   });
+
+  it('fails closed when the sealed stories or a governing ADR cannot be read as authoritative input', async () => {
+    const root = await fixture();
+    await rm(join(root, '.docs', 'stories', 'feature.md'));
+    await expect(buildAsBuiltProjection(root)).resolves.toMatchObject({
+      ok: false, fault: { dimension: 'story-criteria', detail: expect.stringContaining('.docs/stories/feature.md') },
+    });
+
+    const adrRoot = await fixture();
+    await writeFile(join(adrRoot, '.docs', 'decisions', 'adr-plan-one.md'), '# ADR\n\nStatus: APPROVED\n');
+    await expect(buildAsBuiltProjection(adrRoot)).resolves.toMatchObject({
+      ok: false,
+      fault: { dimension: 'governing-adr-decisions', detail: expect.stringContaining('adr-plan-one') },
+    });
+  });
 });

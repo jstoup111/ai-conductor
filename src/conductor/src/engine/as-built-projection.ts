@@ -4,6 +4,7 @@ import { basename, join, relative } from 'node:path';
 
 import { findArtifactFiles, adrApprovalStatus, extractAuthoritativeStoryCriteria, parseAdrDecisions } from './artifacts.js';
 import { resolveAsBuiltPolicy, type AsBuiltPolicy } from './as-built-policy.js';
+import type { ComplexityTier } from '../types/index.js';
 import { splitRow, isSeparatorRow } from './coherence-parse.js';
 import { readPendingAsBuiltRemediationFindings } from './kickback-ledger.js';
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen } from './plan-task-parse.js';
@@ -201,6 +202,7 @@ async function discoverLocalBase(git: GitRunner): Promise<string> {
 export async function buildAsBuiltProjection(
   worktree: string,
   limitOverrides?: Partial<AsBuiltProjectionLimits>,
+  policyInput?: { readonly tier?: ComplexityTier; readonly config?: Parameters<typeof resolveAsBuiltPolicy>[0]['config'] },
 ): Promise<AsBuiltProjectionResult> {
   const limits: AsBuiltProjectionLimits = { ...AS_BUILT_PROJECTION_LIMITS, ...limitOverrides };
   const pending = await readPendingAsBuiltRemediationFindings(worktree);
@@ -235,13 +237,20 @@ export async function buildAsBuiltProjection(
   }
 
   const storiesRepoPath = resolvePlanStoriesPath(repoPath(worktree, planPath), plan);
-  let storyCriteria: string[] = [];
-  if (storiesRepoPath) {
-    try {
-      storyCriteria = extractAuthoritativeStoryCriteria(await readFile(join(worktree, storiesRepoPath), 'utf-8'));
-    } catch {
-      storyCriteria = [];
-    }
+  if (!storiesRepoPath) {
+    return { ok: false, fault: { dimension: 'story-criteria', detail: 'active plan does not resolve a sealed stories artifact' } };
+  }
+  let storyCriteria: string[];
+  try {
+    storyCriteria = extractAuthoritativeStoryCriteria(await readFile(join(worktree, storiesRepoPath), 'utf-8'));
+  } catch (error) {
+    return {
+      ok: false,
+      fault: {
+        dimension: 'story-criteria',
+        detail: `${storiesRepoPath} is unreadable: ${error instanceof Error ? error.message : String(error)}`,
+      },
+    };
   }
 
   const citedStems = planCitedAdrStems(plan);
@@ -258,7 +267,16 @@ export async function buildAsBuiltProjection(
     const approval = adrApprovalStatus(content);
     if (!approval.approved || !/^approved$/i.test(approval.found ?? '')) continue;
     const parsed = parseAdrDecisions(content);
-    const ids = parsed.kind === 'decisions' ? [...parsed.ids].sort((a, b) => Number(a) - Number(b)) : [];
+    if (parsed.kind !== 'decisions') {
+      return {
+        ok: false,
+        fault: {
+          dimension: 'governing-adr-decisions',
+          detail: `${stem} cannot be projected: parseAdrDecisions diagnostic (${parsed.reason}): ${parsed.detail}`,
+        },
+      };
+    }
+    const ids = [...parsed.ids].sort((a, b) => Number(a) - Number(b));
     governingAdrs.push({ stem, decisions: ids.map((id) => ({ id, text: decisionText(content, id) })) });
   }
   governingAdrs.sort((left, right) => left.stem.localeCompare(right.stem));
@@ -282,7 +300,11 @@ export async function buildAsBuiltProjection(
     return projectionLimitFault('governing-adr-decisions', governingAdrDecisionsBytes, limits.governingAdrDecisionsBytes);
   }
 
-  const policy = await resolveAsBuiltPolicy({ projectRoot: worktree, tier: 'M' });
+  const policy = await resolveAsBuiltPolicy({
+    projectRoot: worktree,
+    tier: policyInput?.tier,
+    config: policyInput?.config,
+  });
   const diagrams = (await findArtifactFiles(worktree, 'architecture_diagram')).map((path) => repoPath(worktree, path)).sort();
   const changedFiles = parseNumstat(numstat.stdout);
   const diff = projectDiff(hunks.stdout, limits);

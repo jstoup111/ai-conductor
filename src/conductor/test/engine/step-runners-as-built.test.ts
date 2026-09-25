@@ -216,4 +216,21 @@ describe('architecture_review_as_built native-schema dispatch', () => {
       invokeCalls: 0,
     });
   });
+
+  it('carries byte-identical engine projections across two unchanged dispatches', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'as-built-deterministic-dispatch-'));
+    dirs.push(projectDir);
+    buildProjection.mockResolvedValue({ ok: true, projection });
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'ok', exitCode: 0, finalStructuredResult: approvedVerdict() }));
+    const provider: LLMProvider = { lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true }, invoke };
+    const subject = runner(projectDir, 'claude', provider);
+
+    await subject.run('architecture_review_as_built', { complexity_tier: 'M' });
+    await subject.run('architecture_review_as_built', { complexity_tier: 'M' });
+
+    expect(invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt.match(/AS-BUILT INPUT PROJECTION[\s\S]*/)?.[0])).toEqual([
+      expect.any(String), expect.any(String),
+    ]);
+    expect((invoke.mock.calls[0]?.[0] as InvokeOptions).prompt).toBe((invoke.mock.calls[1]?.[0] as InvokeOptions).prompt);
+  });
 });

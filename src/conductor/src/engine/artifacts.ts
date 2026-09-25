@@ -3467,7 +3467,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       if (validity !== 'preserve') {
         return {
           done: false, routeClass: 'absent',
-          reason: `${AS_BUILT_VERDICT_PATH} code stamp ${stored.value.codeStamp} cannot vouch for current as-built inputs`,
+          reason: `${AS_BUILT_VERDICT_PATH} prior code stamp ${stored.value.codeStamp} cannot vouch for current run identity ${ctx.attemptRunId ?? 'unresolved'} as-built inputs`,
         };
       }
       codeStampStillValid = true;
