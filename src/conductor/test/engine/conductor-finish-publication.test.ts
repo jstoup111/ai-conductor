@@ -18,12 +18,24 @@ import {
 import type { FullSuitePassEvidence } from '../../src/engine/full-suite-evidence.js';
 import { readAllVerdicts, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import * as asBuiltVerdictStore from '../../src/engine/as-built-verdict-store.js';
+import * as gateVerdicts from '../../src/engine/gate-verdicts.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/engine/project-prelude.js')>()),
   currentCommitSha: vi.fn(async () => null),
 }));
+
+vi.mock('../../src/engine/as-built-verdict-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/as-built-verdict-store.js')>();
+  return { ...actual, persistAsBuiltVerdict: vi.fn(actual.persistAsBuiltVerdict) };
+});
+
+vi.mock('../../src/engine/gate-verdicts.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/gate-verdicts.js')>();
+  return { ...actual, writeVerdict: vi.fn(actual.writeVerdict) };
+});
 
 const ROUTED_SENTINEL = new Error('stop after first FINISH publication route');
 
@@ -97,12 +109,25 @@ async function writeGreenShipValidatorEvidence(dir: string): Promise<void> {
   await utimes(join(dir, '.pipeline', 'architecture-review-as-built.md'), fresh, fresh);
 }
 
+const SYNTHETIC_FINISH_EVIDENCE_PATHS = [
+  '.pipeline/prd-audit.md',
+  '.pipeline/architecture-review-as-built.json',
+  '.pipeline/architecture-review-as-built.md',
+] as const;
+
+async function expectNoSyntheticFinishEvidence(dir: string): Promise<void> {
+  for (const path of SYNTHETIC_FINISH_EVIDENCE_PATHS) {
+    await expect(readFile(join(dir, path), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  }
+}
+
 // Covers: task:6, task:9
 describe('Conductor FINISH publication routing', () => {
   let dir: string;
   let statePath: string;
 
   beforeEach(async () => {
+    vi.clearAllMocks();
     dir = await mkdtemp(join(tmpdir(), 'conductor-finish-publication-'));
     statePath = join(dir, 'conduct-state.json');
     const state: Record<string, unknown> = {
@@ -170,6 +195,58 @@ describe('Conductor FINISH publication routing', () => {
     }).run();
 
     expect(advance).toHaveBeenCalledOnce();
+    await expectNoSyntheticFinishEvidence(dir);
+    expect(asBuiltVerdictStore.persistAsBuiltVerdict).not.toHaveBeenCalled();
+    expect(gateVerdicts.writeVerdict).not.toHaveBeenCalledWith(
+      dir,
+      expect.stringMatching(/^(manual_test|prd_audit|architecture_review_as_built)$/),
+      expect.anything(),
+    );
+  });
+
+  it.each([
+    {
+      name: 'validator evidence',
+      write: async () => {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(join(dir, '.pipeline', 'prd-audit.md'), 'synthetic validator evidence\n');
+      },
+    },
+    {
+      name: 'as-built evidence',
+      write: async () => {
+        await persistAsBuiltVerdict(dir, {
+          version: 'v1',
+          verdict: 'APPROVED',
+          reachability: [],
+          driftNotes: [],
+        }, {
+          attemptId: 'synthetic-finish-evidence',
+          codeStamp: null,
+          policy: AS_BUILT_FIXTURE_POLICY,
+        });
+      },
+    },
+  ])('rejects a FINISH coordinator variant that writes synthetic $name before advancing', async ({ write }) => {
+    const advance = vi.fn(async () => {
+      await write();
+      return { kind: 'complete' } as const;
+    });
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+    }).run();
+
+    expect(advance).toHaveBeenCalledOnce();
+    await expect(expectNoSyntheticFinishEvidence(dir)).rejects.toThrow();
   });
 
   it('does not write a synthetic validation key for an auto serial member without a retained sibling', async () => {
