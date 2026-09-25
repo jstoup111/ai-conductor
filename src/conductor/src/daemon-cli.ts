@@ -2862,6 +2862,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'github_operation_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);
       break;
+    case 'github_write_credential_fallback':
+      log(`${dot} ${chalk.yellow('↻')} ${chalk.yellow(`GitHub bot credential fallback: ${event.operation} (${event.reason})`)} `);
+      break;
     case 'step_retry': {
       const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
       const deltaFragment = delta ? ' ' + delta : '';

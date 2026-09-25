@@ -16,10 +16,11 @@ import type { GhRunner, GithubMutationExecutionContext } from './tracker-client.
 import type { GithubOperationRequest } from './github-operations.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
+import { GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 
 /** The only injectable boundary permitted to perform an already-authorized Git write. */
 export interface RemoteGitCommandRunner {
-  (args: string[], options: { readonly cwd: string }): Promise<{ readonly stdout: string }>;
+  (args: string[], options: { readonly cwd: string; readonly credential?: 'operator' | 'write'; readonly endpoint?: 'https' | 'ssh' }): Promise<{ readonly stdout: string }>;
 }
 
 export interface RemoteGitOperationDependencies {
@@ -204,9 +205,25 @@ export async function executeRemoteGit(
   }
 
   try {
-    await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd });
+    await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd, credential: 'write', endpoint: resolution.targets[0].endpoint });
     return { kind: 'executed', targets: resolution.targets };
   } catch (error) {
+    if (error instanceof GithubBotAuthRefusalError) {
+      try {
+        if (dependencies.events !== undefined) {
+          await dependencies.events.emit({
+            type: 'github_write_credential_fallback',
+            operation: resolution.targets[0].operation,
+            target: resolution.targets[0],
+            reason: error.reason,
+          });
+        }
+        await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd, credential: 'operator', endpoint: resolution.targets[0].endpoint });
+        return { kind: 'executed', targets: resolution.targets };
+      } catch (fallbackError) {
+        return { kind: 'failed', error: messageFor(fallbackError), targets: resolution.targets };
+      }
+    }
     return { kind: 'failed', error: messageFor(error), targets: resolution.targets };
   }
 }

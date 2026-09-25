@@ -544,6 +544,8 @@ export interface HarnessConfig {
    * with `daemon-lock.ts`'s lock holder.
    */
   spec_owner?: string;
+  /** Machine-scoped credential used only for authorized GitHub writes. */
+  github_bot?: { token_file: string };
   /**
    * Owner-gate grandfather cutover (FR-10): the ISO-8601 instant before which
    * un-owned specs are grandfathered (built) and on/after which they are

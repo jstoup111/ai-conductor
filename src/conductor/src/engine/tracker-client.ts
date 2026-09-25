@@ -39,6 +39,8 @@ import type {
   GithubMutationAuthorizationDependencies,
 } from './owner-gate/mutation-policy.js';
 import type { MutationProvenanceRequest } from './owner-gate/mutation-provenance.js';
+import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
+import { classifyGhAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 
 const execFileP = promisify(execFileCb);
 const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
@@ -48,7 +50,7 @@ const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
  */
 export type GhRunner = (
   args: string[],
-  opts: { cwd: string; timeout?: number; maxBuffer?: number },
+  opts: { cwd: string; timeout?: number; maxBuffer?: number; credential?: 'operator' | 'write' },
 ) => Promise<{ stdout: string }>;
 
 /**
@@ -301,8 +303,18 @@ export function createGuardedGithubOperationRunner(
         }, options.mutation.dependencies);
         if (decision.kind === 'refused') return decision;
       }
-      const response = await transport(ghArgsFor(request), { cwd: options.cwd });
-      return options.creation?.complete?.(request, response) ?? {};
+      const credential = request.access === 'read' ? 'operator' : 'write';
+      try {
+        const response = await transport(ghArgsFor(request), { cwd: options.cwd, credential });
+        return options.creation?.complete?.(request, response) ?? {};
+      } catch (error) {
+        if (!(error instanceof GithubBotAuthRefusalError)) throw error;
+        if (options.events !== undefined) {
+          await options.events.emit({ type: 'github_write_credential_fallback', operation: request.operation, target: request.target, reason: error.reason });
+        }
+        const response = await transport(ghArgsFor(request), { cwd: options.cwd, credential: 'operator' });
+        return options.creation?.complete?.(request, response) ?? {};
+      }
     },
   };
 }
@@ -347,13 +359,23 @@ export function assertRealExecAllowed(bin: string): void {
 
 /** Construct the real gh runner used in production. */
 export function makeProductionGh(): GhRunner {
-  return async (args: string[], opts: { cwd: string; timeout?: number; maxBuffer?: number }) => {
+  return async (args: string[], opts: { cwd: string; timeout?: number; maxBuffer?: number; credential?: 'operator' | 'write' }) => {
     assertRealExecAllowed('gh');
+    let env: NodeJS.ProcessEnv | undefined;
+    if (opts.credential === 'write') {
+      const credential = await readGithubBotCredential();
+      if (credential.kind === 'configured') {
+        const token = await readGithubBotToken(credential.tokenFile);
+        if (token.kind === 'unavailable') throw new GithubBotAuthRefusalError('token-unavailable');
+        env = { ...process.env, GH_TOKEN: token.token };
+      }
+    }
     try {
       const result = await execFileP('gh', args, {
         cwd: opts.cwd,
         maxBuffer: opts.maxBuffer ?? GH_STDOUT_MAX_BUFFER,
         timeout: opts.timeout,
+        ...(env === undefined ? {} : { env }),
       });
       return { stdout: String(result.stdout) };
     } catch (cause) {
@@ -361,6 +383,7 @@ export function makeProductionGh(): GhRunner {
       if (field) {
         throw new GhCapabilityError(field, cause);
       }
+      if (opts.credential === 'write' && classifyGhAuthRefusal(cause)) throw new GithubBotAuthRefusalError('auth-refused');
       throw cause;
     }
   };

@@ -63,6 +63,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   build_progress: consumer(BUILD_PROGRESS_WATCHER),
   provider_stream: consumer(STEP_RUNNERS),
   spec_owner: consumer('src/conductor/src/engine/owner-gate/identity.ts'),
+  github_bot: consumer('src/conductor/src/engine/github-bot-credential.ts'),
   owner_gate_cutover: consumer(CONDUCTOR),
   attribution_audit_sample_pct: consumer('src/conductor/src/engine/attribution-telemetry.ts'),
   rebase_resolution_attempts: consumer(CONDUCTOR),

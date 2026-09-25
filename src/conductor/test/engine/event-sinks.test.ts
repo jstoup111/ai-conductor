@@ -148,6 +148,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'land_gate_rejected',
   'test_suite_verification',
   'gate_verdict',
+  'github_write_credential_fallback',
   'intake_inbound_sanitized',
   // S7.5: the budget basis on a post-rebase preservation is only observable
   // if it reaches .pipeline/events.jsonl — its sibling rebase_gate_invalidated
@@ -214,6 +215,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
 ] satisfies Array<ConductorEvent['type']>;
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
+  'github_write_credential_fallback',
   'test_suite_verification',
   'build_review_cache_discarded',
   'build_review_rubric_started',

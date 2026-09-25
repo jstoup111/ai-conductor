@@ -339,7 +339,7 @@ export interface GithubOperationRunner {
 
 /** The existing event spine boundary needed to report a denied mutation. */
 export interface GithubOperationEventEmitter {
-  emit(event: Extract<ConductorEvent, { type: 'github_operation_refused' }>): Promise<void>;
+  emit(event: Extract<ConductorEvent, { type: 'github_operation_refused' | 'github_write_credential_fallback' }>): Promise<void>;
 }
 
 export interface GithubOperationExecutionOptions {
