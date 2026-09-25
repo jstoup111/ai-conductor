@@ -569,6 +569,7 @@ describe('build-review domain', () => {
       'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact',
       'identity-mismatch', 'preflight-failed', 'artifact-read-failed', 'artifact-write-failed', 'scope-incomplete',
       'projection-oversized', 'invalid-structured-result', 'native-schema-unsupported',
+      'read-only-review-unavailable',
     ];
 
     expect(mapBuildReviewCoordinatorFailureReason).toMatchObject({
