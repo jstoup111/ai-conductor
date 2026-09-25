@@ -35,7 +35,18 @@ export function createProviderAvailability({
 
     isAvailable(provider: string): boolean {
       const untilMs = suppressedUntil.get(provider);
-      return untilMs === undefined || now() >= untilMs;
+      if (untilMs === undefined) {
+        return true;
+      }
+
+      if (now() < untilMs) {
+        return false;
+      }
+
+      // Expiry is self-contained: once observed, the old window cannot affect
+      // a later exhaustion cycle and no operator-triggered clearing is needed.
+      suppressedUntil.delete(provider);
+      return true;
     },
   };
 }

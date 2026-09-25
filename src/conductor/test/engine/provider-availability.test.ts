@@ -1,18 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createProviderAvailability } from '../../src/engine/provider-availability.js';
 
 describe('provider availability', () => {
-  it('admits an unsuppressed provider and suppresses it until the injected clock reaches its deadline', () => {
+  it('re-admits an expired provider and permits the next injected invocation without operator action', () => {
     let now = 1_000;
     const availability = createProviderAvailability({ now: () => now });
-
-    expect(availability.isAvailable('claude')).toBe(true);
+    const invoke = vi.fn();
 
     availability.suppress('claude', 1_500);
     expect(availability.isAvailable('claude')).toBe(false);
 
-    now = 1_500;
+    now = 1_501;
     expect(availability.isAvailable('claude')).toBe(true);
+    if (availability.isAvailable('claude')) {
+      invoke('claude');
+    }
+
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('claude');
   });
 
   it('keeps the later deadline when an earlier suppression is recorded second', () => {
@@ -28,6 +32,18 @@ describe('provider availability', () => {
     expect(availability.isAvailable('claude')).toBe(true);
   });
 
+  it('re-admits a provider after the bounded default interval when no parsed deadline supplied it', () => {
+    let now = 1_000;
+    const availability = createProviderAvailability({ now: () => now });
+    const boundedDefaultIntervalMs = 60_000;
+
+    availability.suppress('claude', now + boundedDefaultIntervalMs);
+    expect(availability.isAvailable('claude')).toBe(false);
+
+    now += boundedDefaultIntervalMs + 1;
+    expect(availability.isAvailable('claude')).toBe(true);
+  });
+
   it('does not suppress a provider for a deadline at or before the injected clock', () => {
     const availability = createProviderAvailability({ now: () => 1_000 });
 
@@ -38,16 +54,41 @@ describe('provider availability', () => {
     expect(availability.isAvailable('codex')).toBe(true);
   });
 
-  it('never leaves a provider permanently unavailable across repeated suppression and expiry cycles', () => {
+  it('opens a fresh suppression window when a re-admitted provider is exhausted again', () => {
     let now = 1_000;
     const availability = createProviderAvailability({ now: () => now });
 
-    for (const deadline of [1_100, 1_200, 1_300]) {
-      availability.suppress('claude', deadline);
-      expect(availability.isAvailable('claude')).toBe(false);
-      now = deadline;
-      expect(availability.isAvailable('claude')).toBe(true);
-    }
+    availability.suppress('claude', 1_100);
+    now = 1_101;
+    expect(availability.isAvailable('claude')).toBe(true);
+
+    availability.suppress('claude', 1_300);
+    expect(availability.isAvailable('claude')).toBe(false);
+    now = 1_300;
+    expect(availability.isAvailable('claude')).toBe(true);
+  });
+
+  it('admits two evaluations made just after the same elapsed deadline', () => {
+    let now = 1_000;
+    const availability = createProviderAvailability({ now: () => now });
+
+    availability.suppress('claude', 1_100);
+    now = 1_101;
+
+    expect(availability.isAvailable('claude')).toBe(true);
+    expect(availability.isAvailable('claude')).toBe(true);
+  });
+
+  it('keeps a provider ordinarily available to subsequent steps after expiry and success', () => {
+    let now = 1_000;
+    const availability = createProviderAvailability({ now: () => now });
+
+    availability.suppress('claude', 1_100);
+    now = 1_101;
+
+    expect(availability.isAvailable('claude')).toBe(true);
+    // A successful invocation does not write new availability state.
+    expect(availability.isAvailable('claude')).toBe(true);
   });
 
   it('changes only admission, preserving the resolved candidate order', () => {
