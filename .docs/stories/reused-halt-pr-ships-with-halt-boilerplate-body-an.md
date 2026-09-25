@@ -50,8 +50,9 @@ shipped reused PR never carries halt boilerplate.
 - **Given** a recorded PR whose body does not contain the banner and whose title/label carry no
   halt signal (a normal implementation PR, e.g. the #605 shape),
 - **When** the finish repair callback runs,
-- **Then** zero body/title mutation commands are issued for it (`gh pr edit` never called for body
-  or title) — its skill-authored presentation is preserved byte-for-byte.
+- **Then** zero halt-facet body/title mutation commands are issued for it — its skill-authored
+  presentation is preserved byte-for-byte; the only permitted body edit restores a captured
+  step-owned body region to its captured bytes.
 
 ### Negative Path — a skill-authored body with banner residue loses only the banner
 
