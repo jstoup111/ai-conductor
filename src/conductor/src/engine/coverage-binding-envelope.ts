@@ -27,6 +27,16 @@ export interface CoverageBindingAdrLayerDisposition {
   readonly disposition: 'not-applicable';
   readonly adrIds: readonly string[];
 }
+
+/**
+ * Provenance retained when a completed envelope is invalidated. It makes the
+ * old judgement's eligibility explicit without changing the v1 envelope shape
+ * for envelopes written before invalidation provenance existed.
+ */
+export interface CoverageBindingInvalidationPredecessor {
+  readonly status: CoverageBindingEnvelopeStatus;
+  readonly recordedDigests: boolean;
+}
 /** Statuses that are valid completion evidence for the coverage-binding gate. */
 export const COVERAGE_BINDING_COMPLETION_STATUSES: readonly CoverageBindingEnvelopeStatus[] =
   ['disabled', 'done'];
@@ -67,6 +77,8 @@ export interface CoverageBindingEnvelope {
   readonly runId: string;
   readonly status: CoverageBindingEnvelopeStatus;
   readonly entries: readonly CoverageBindingEnvelopeEntry[];
+  /** Present only on envelopes invalidated after provenance tracking began. */
+  readonly predecessor?: CoverageBindingInvalidationPredecessor;
   /** Present when the ADR-obligation layer was deliberately bypassed. */
   readonly adrLayer?: CoverageBindingAdrLayerDisposition;
 }
@@ -108,6 +120,16 @@ function parseAdrLayer(value: unknown): CoverageBindingAdrLayerDisposition | nul
   const candidate = value as Record<string, unknown>;
   return exactKeys(candidate, ['disposition', 'adrIds']) && candidate.disposition === 'not-applicable' && stringList(candidate.adrIds)
     ? { disposition: 'not-applicable', adrIds: candidate.adrIds }
+    : null;
+}
+
+function parsePredecessor(value: unknown): CoverageBindingInvalidationPredecessor | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  return exactKeys(candidate, ['status', 'recordedDigests']) &&
+    (COVERAGE_BINDING_ENVELOPE_STATUSES as readonly unknown[]).includes(candidate.status) &&
+    typeof candidate.recordedDigests === 'boolean'
+    ? { status: candidate.status as CoverageBindingEnvelopeStatus, recordedDigests: candidate.recordedDigests }
     : null;
 }
 
@@ -320,14 +342,16 @@ export function parseCoverageBindingEnvelope(value: unknown): CoverageBindingEnv
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
   const hasAdrLayer = candidate.adrLayer !== undefined;
-  if (!exactKeys(candidate, ['version', 'slug', 'runId', 'status', 'entries', ...(hasAdrLayer ? ['adrLayer'] : [])]) || candidate.version !== ENVELOPE_VERSION ||
+  const hasPredecessor = candidate.predecessor !== undefined;
+  if (!exactKeys(candidate, ['version', 'slug', 'runId', 'status', 'entries', ...(hasAdrLayer ? ['adrLayer'] : []), ...(hasPredecessor ? ['predecessor'] : [])]) || candidate.version !== ENVELOPE_VERSION ||
     !text(candidate.slug) || !text(candidate.runId) || !Array.isArray(candidate.entries) ||
     !(COVERAGE_BINDING_ENVELOPE_STATUSES as readonly unknown[]).includes(candidate.status)) {
     return null;
   }
   const entries = candidate.entries.map(parseEntry);
   const adrLayer = hasAdrLayer ? parseAdrLayer(candidate.adrLayer) : undefined;
-  return entries.some((entry) => entry === null) || adrLayer === null
+  const predecessor = hasPredecessor ? parsePredecessor(candidate.predecessor) : undefined;
+  return entries.some((entry) => entry === null) || adrLayer === null || predecessor === null
     ? null
     : {
       version: ENVELOPE_VERSION,
@@ -336,6 +360,7 @@ export function parseCoverageBindingEnvelope(value: unknown): CoverageBindingEnv
       status: candidate.status as CoverageBindingEnvelopeStatus,
       entries: entries as CoverageBindingEnvelopeEntry[],
       ...(adrLayer === undefined ? {} : { adrLayer }),
+      ...(predecessor === undefined ? {} : { predecessor }),
     };
 }
 
