@@ -1,4 +1,4 @@
-// Covers: task:2, task:4, task:5, task:7, task:13, task:14
+// Covers: task:2, task:4, task:5, task:7, task:8, task:13, task:14
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -26,6 +26,8 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import type { ProviderAttemptEvent } from '../../src/types/events.js';
+import { parseEvents } from '../../src/engine/report-renderer.js';
 import {
   admitProviderCandidate,
   createCandidateSafetyBoundary,
@@ -137,6 +139,23 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('keeps both admission refusal records readable by the existing event reader', () => {
+    const refusalEvents = [
+      {
+        type: 'provider_attempt', step: 'build', provider: 'claude',
+        outcome: 'unavailable', invoked: false, skipReason: 'policy-refused',
+      },
+      {
+        type: 'provider_attempt', step: 'build', provider: 'codex',
+        outcome: 'unavailable', invoked: false, skipReason: 'suppression-refused',
+      },
+    ] satisfies ProviderAttemptEvent[];
+
+    const parsed = parseEvents(refusalEvents.map((event) => JSON.stringify(event)).join('\n'));
+
+    expect(parsed).toEqual(refusalEvents);
+  });
+
   it('keeps policy refusal at the single admission gate', () => {
     const candidate = { step: 'build' as const, providerKey: 'claude', model: 'model', effort: 'medium' as const };
 
@@ -175,6 +194,7 @@ describe('executeProviderCandidates', () => {
   it('waits when the disallowed-substitution pinned provider is suppressed', async () => {
     const codexInvoke = vi.fn();
     const claudeInvoke = vi.fn();
+    const recorded: ProviderAttemptMetadata[] = [];
     const result = await executeProviderCandidates({
       step: 'build', configuredProviders: ['codex', 'claude'], preferredProvider: 'codex',
       config: { provider_substitution: 'disallow' },
@@ -182,6 +202,7 @@ describe('executeProviderCandidates', () => {
       sessions: new ProviderSessionScope(vi.fn()),
       providerAvailability: { suppress: vi.fn(), isAvailable: vi.fn(() => false) },
       options: { prompt: 'build', cwd: '/workspace' },
+      onAttempt: (_step, attempt) => { recorded.push(attempt); },
     });
 
     expect(result).toMatchObject({ success: false, rateLimited: true, attempts: [
@@ -189,6 +210,9 @@ describe('executeProviderCandidates', () => {
     ] });
     expect(codexInvoke).not.toHaveBeenCalled();
     expect(claudeInvoke).not.toHaveBeenCalled();
+    expect(recorded).toEqual([
+      expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'suppression-refused' }),
+    ]);
   });
 
   it('does not turn an earlier provider failure into a rate limit when the final candidate is suppressed', async () => {
