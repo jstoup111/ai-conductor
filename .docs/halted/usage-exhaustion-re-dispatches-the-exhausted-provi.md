@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-25T20:04:26.044Z
 Slug: usage-exhaustion-re-dispatches-the-exhausted-provi
 Class: plan-gap
 Halting step: prd_audit
