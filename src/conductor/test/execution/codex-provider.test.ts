@@ -1238,6 +1238,42 @@ describe('CodexProvider', () => {
     expect(result.tokenUsage).toEqual({ input: 8, cacheRead: 4, output: 7, numTurns: 1 });
   });
 
+  it('uses the read-only sandbox and unchanged child environment for an unattended review', async () => {
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Reviewed.'), exitCode: 0 } as any);
+
+    await provider.invoke({
+      ...baseOptions,
+      interactive: false,
+      readOnlyReview: true,
+    } as InvokeOptions & { readOnlyReview: true });
+    await provider.invoke({ ...baseOptions, interactive: false });
+
+    const [, reviewArgs, reviewOptions] = mockExeca.mock.calls[0];
+    const [, ordinaryArgs, ordinaryOptions] = mockExeca.mock.calls[1];
+    const reviewConfigValues = reviewArgs.flatMap((argument, index) =>
+      argument === '--config' ? [reviewArgs[index + 1]] : [],
+    );
+
+    expect(reviewConfigValues).toEqual(expect.arrayContaining([
+      'sandbox_mode="read-only"',
+      'approval_policy="never"',
+      'shell_environment_policy.ignore_default_excludes=false',
+    ]));
+    expect(reviewConfigValues).not.toEqual(expect.arrayContaining([
+      'sandbox_mode="workspace-write"',
+      'sandbox_workspace_write.network_access=true',
+      'approval_policy="on-request"',
+      'approvals_reviewer="auto_review"',
+    ]));
+    expect(reviewOptions.env).toEqual(ordinaryOptions.env);
+    expect(ordinaryArgs).toEqual(expect.arrayContaining([
+      'sandbox_mode="workspace-write"',
+      'sandbox_workspace_write.network_access=true',
+      'approval_policy="on-request"',
+      'approvals_reviewer="auto_review"',
+    ]));
+  });
+
   it('starts a fresh Codex exec and preserves cwd when handed resume: true', async () => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('Fresh.'), exitCode: 0 } as any);
 
