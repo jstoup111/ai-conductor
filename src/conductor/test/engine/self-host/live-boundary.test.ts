@@ -172,6 +172,75 @@ describe('live self-host boundary', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('ignores the policy-limits fetch stamp but still halts on policy-limits.json itself', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-policy-stamp-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await writeFile(join(provider, 'policy-limits.json'), '{"limits":1}\n');
+    await writeFile(join(provider, 'policy-limits.json.stamp.json'), '{"fetchedAt":1}\n');
+    const verify = (b: Awaited<ReturnType<typeof fingerprintLiveBoundary>>) =>
+      verifyLiveBoundary(b, { contained: false, reason: 'per-step verification' });
+    try {
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await writeFile(join(provider, 'policy-limits.json.stamp.json'), '{"fetchedAt":2}\n');
+      expect(await verify(baseline)).toEqual({ ok: true });
+      await writeFile(join(provider, 'policy-limits.json'), '{"limits":2}\n');
+      const result = await verify(baseline);
+      expect(result.ok).toBe(false);
+      expect(JSON.stringify(result)).toContain('policy-limits.json');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  describe('claude.ai skill-sync round marker', () => {
+    const bucket = '0b7c2f1e-5d3a-4c8e-9f21-6a4d8e0c1b37';
+    const setup = async (label: string) => {
+      const root = await mkdtemp(join(tmpdir(), `live-boundary-synced-${label}-`));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      const synced = join(provider, 'skills', 'synced', bucket);
+      await Promise.all([mkdir(live), mkdir(join(synced, 'review'), { recursive: true }), mkdir(join(provider, 'skills', 'local'), { recursive: true })]);
+      await writeFile(join(synced, 'review', 'SKILL.md'), 'synced skill content\n');
+      await writeFile(join(synced, 'manifest.json'), '{"skills":["review"]}\n');
+      return { root, live, provider, synced };
+    };
+    const verify = (baseline: Awaited<ReturnType<typeof fingerprintLiveBoundary>>) =>
+      verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' });
+
+    it('ignores the marker appearing and disappearing across sync rounds', async () => {
+      const { root, live, provider, synced } = await setup('marker');
+      await writeFile(join(synced, '.last-complete-round'), '');
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await rm(join(synced, '.last-complete-round'));
+      try {
+        expect(await verify(baseline)).toEqual({ ok: true });
+        await writeFile(join(synced, '.last-complete-round'), '1758800000\n');
+        expect(await verify(baseline)).toEqual({ ok: true });
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
+    it('still halts when a synced SKILL.md beside the marker changes', async () => {
+      const { root, live, provider, synced } = await setup('content');
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await writeFile(join(synced, 'review', 'SKILL.md'), 'rewritten by the self-host process\n');
+      try {
+        const result = await verify(baseline);
+        expect(result).toMatchObject({ ok: false });
+        expect(result.reason).toContain('provider state changed during self-host execution');
+        expect(result.reason).toContain(`skills/synced/${bucket}/review/SKILL.md`);
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
+    it('still halts when a marker of the same name appears outside skills/synced', async () => {
+      const { root, live, provider } = await setup('outside');
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await writeFile(join(provider, 'skills', 'local', '.last-complete-round'), '');
+      try {
+        const result = await verify(baseline);
+        expect(result).toMatchObject({ ok: false });
+        expect(result.reason).toContain('skills/local/.last-complete-round');
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+  });
+
   it('names every unproven-containment reason in an unexplained live-checkout halt', async () => {
     const containmentReasons = [
       'containment unavailable: bwrap not found',
