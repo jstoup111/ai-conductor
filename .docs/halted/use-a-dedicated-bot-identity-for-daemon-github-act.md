@@ -3,21 +3,24 @@
 Status: halted
 Slug: use-a-dedicated-bot-identity-for-daemon-github-act
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-use-a-dedicated-bot-identity-for-daemon-github-act
-Head SHA: 991f1d43c890dc4e332612c08ba8c8bfce6a1de0
-Halted at: 2026-09-25T12:21:59.934Z
+Head SHA: 8854264ccb6f61f40c968c3ee79cee2a5fb83314
+Halted at: 2026-09-25T15:45:22.511Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-coverage_binding refused: cited Done when checks do not assert the criterion.
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-5 (Story 6)
 
-Criterion: Story 1 happy: **Given** a user config with no `github_bot` block, **When** the harness loads merged config, **Then** the load succeeds and the resolver reports no bot configured.
-Task ids: 2
-Done when checks: `resolveGithubBotCredential` returns `{ kind: 'unconfigured' }` when the user config has no `github_bot` block and `{ kind: 'configured', tokenFile }` naming the configured path when it does, as asserted in `test/engine/github-bot-credential.test.ts`. | `readGithubBotToken` returns the trimmed file contents for a readable token file and an `unavailable` result carrying neither the path nor the contents for a missing, unreadable, or empty file. | `resolveGithubBotCredential` accepts only the user config read by `readUserConfig` and has no project-config parameter, so neither a project `github_bot` block nor a `tracker.credentials` reference can supply the bot token.
-Missing assertion: The cited checks require the resolver to return unconfigured, but do not explicitly require that loading merged config succeeds when github_bot is absent.
+Blocking findings:
+AB-1 (REMEDIABLE; adr-2026-09-11-github-operation-ownership D9): The daemon autoresolve GitHub wrapper discards the credential option, so guarded mutations remain operator-authenticated.
+AB-2 (REMEDIABLE; adr-2026-09-11-github-operation-ownership D9): The autoresolve and CI-fix push adapter discards credential and endpoint options before `makeGitRunner`, so those pushes cannot use the bot.
+AB-3 (REMEDIABLE; adr-2026-09-11-github-operation-ownership D9): Production roots omit the event emitter while fallback remains enabled, allowing silent operator fallback.
+AB-4 (REMEDIABLE; adr-2026-09-11-github-operation-ownership D9): With no bot configured, ambient operator auth failures are mislabeled as bot refusals and the mutation is repeated.
+AB-5 (DESIGN; Story 6): The sealed credential-only assertion-diff criterion conflicts with the approved endpoint-bearing design.
+AB-6 (REMEDIABLE; adr-2026-09-11-github-operation-ownership D9): D9.7's installed-binary proof is absent; no smoke test covers child `GH_TOKEN` and `gh auth git-credential`.
 ```
