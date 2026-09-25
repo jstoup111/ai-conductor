@@ -2414,11 +2414,70 @@ export class DefaultStepRunner implements StepRunner {
     const inputDigestEvidencePath = join(customLapEvidenceRoot, 'input-digest.json');
     const materializedSource = inputs.sourceMaterialization?.source;
     const unavailableInputRoot = (name: string) => join(customLapEvidenceRoot, `.unavailable-${name}`);
+    // Resolve and copy every policy before the lap begins.  In particular, do
+    // not let one member's invocation establish another member's integrity
+    // baseline.  The captured bundles remain the exact bytes delivered to the
+    // candidates below.
+    const lapPolicies = new Map<string, { readonly policy: InstalledReviewSkill; readonly bundle: CapturedReviewPolicyBundle }>();
+    const lapPolicyCaptureFailures = new Map<string, string>();
+    const captureLapPolicy = async (entry: ResolvedBuildReviewCatalogEntry, skill: string, source?: InstalledReviewSkill['source']) => {
+      const provider = normalizeProviderSelection(entry.policy.llm_provider)[0] ?? this.providerKey;
+      const controller = new AbortController();
+      const deadlineAt = Date.now() + (this.config?.test_suite?.timeout_seconds ?? 300) * 1_000;
+      const timer = setTimeout(() => controller.abort('build-review-candidate-deadline'), Math.max(0, deadlineAt - Date.now()));
+      let catalog: readonly InstalledReviewSkill[];
+      try {
+        catalog = await this.buildReviewPolicyCatalog!({ provider, entry, skill, signal: controller.signal, deadlineAt });
+      } catch (error) {
+        if (controller.signal.aborted) throw new Error('candidate deadline elapsed during policy catalog discovery');
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+      const resolved = resolveInstalledReviewPolicyCatalog({ skill, ...(source === undefined ? {} : { source }) }, catalog);
+      if (resolved.kind === 'failure') {
+        const detail = 'origins' in resolved.failure && resolved.failure.origins !== undefined
+          ? `conflicting installed sources: ${resolved.failure.origins.join(', ')}; choose one source explicitly`
+          : 'message' in resolved.failure ? resolved.failure.message : 'no source was selected';
+        throw new Error(`installed ${skill} policy is unavailable: ${resolved.failure.code}; ${detail}`);
+      }
+      const policy = entry.kind === 'custom'
+        ? { ...resolved.policy, declaredDependencies: [...new Set([...resolved.policy.declaredDependencies, ...entry.resources])] }
+        : resolved.policy;
+      const bundle = await this.buildReviewPolicyCapture(policy, {
+        materialParent: join(this.projectDir, '.pipeline', 'build-review', 'policy-material'),
+      });
+      lapPolicies.set(entry.id, { policy, bundle });
+    };
+    for (const entry of config.catalog) {
+      try {
+        await captureLapPolicy(entry, entry.kind === 'custom' ? entry.skill : getBuildReviewRubricDescriptor(entry.id).skillName,
+          entry.kind === 'custom' ? entry.source as InstalledReviewSkill['source'] | undefined : undefined);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        lapPolicyCaptureFailures.set(entry.id, detail);
+        if (entry.kind === 'custom') {
+          const event = {
+            type: 'build_review_policy_failed' as const, rubric: entry.id, lapId,
+            provider: normalizeProviderSelection(entry.policy.llm_provider)[0] ?? this.providerKey,
+            stage: 'catalog' as const, reason: detail,
+            provenance: { inputDigest: inputs.sourceSnapshot.contentDigest, candidate: {
+              provider: normalizeProviderSelection(entry.policy.llm_provider)[0] ?? this.providerKey,
+              model: entry.policy.model, effort: entry.policy.effort,
+            } },
+          };
+          // Discovery was previously retried by each candidate rung. Preserve
+          // that observable failure accounting even though the capture now
+          // happens once before the fan-out begins.
+          await Promise.all(Array.from({ length: entry.policy.max_retries }, async () => this.events?.emit(event)));
+        }
+      }
+    }
     const baseDigestRoots: BuildReviewInputDigestRoots = {
       frozenHead: materializedSource?.headPath ?? unavailableInputRoot('head'),
       frozenBaseline: materializedSource?.baselinePath ?? unavailableInputRoot('baseline'),
-      capturedPolicyMaterial: unavailableInputRoot('policy-material'),
-      installedPolicyPackage: unavailableInputRoot('policy-package'),
+      capturedPolicyMaterial: [...lapPolicies.values()].map(({ bundle }) => bundle.materialPath),
+      installedPolicyPackage: [...lapPolicies.values()].map(({ policy }) => policy.packageRoot),
       evidenceRoot: customLapInputEvidenceRoot,
     };
     // A replay uses the same head-derived lap id. Its prior branch artifacts
@@ -2426,23 +2485,10 @@ export class DefaultStepRunner implements StepRunner {
     // this lap's directory before capture. Other build-review evidence remains
     // in the digest as an input from a genuinely prior lap.
     await rm(customLapEvidenceRoot, { recursive: true, force: true });
-    const inputDigestCaptures: Array<{ readonly roots: BuildReviewInputDigestRoots; readonly before: Awaited<ReturnType<typeof captureBuildReviewInputDigest>> }> = [{
-      roots: baseDigestRoots,
-      before: await captureBuildReviewInputDigest(baseDigestRoots),
-    }];
-    const capturePolicyInputDigest = async (materialPath: string, packageRoot: string): Promise<void> => {
-      const roots: BuildReviewInputDigestRoots = {
-        ...baseDigestRoots,
-        capturedPolicyMaterial: materialPath,
-        installedPolicyPackage: packageRoot,
-      };
-      inputDigestCaptures.push({ roots, before: await captureBuildReviewInputDigest(roots) });
-    };
+    const inputDigestBefore = await captureBuildReviewInputDigest(baseDigestRoots);
     const finishCustomLapInputDigests = async (): Promise<readonly string[]> => {
-      const records = await Promise.all(inputDigestCaptures.map(async ({ roots, before }) => {
-        const after = await captureBuildReviewInputDigest(roots);
-        return { before, after, changedInputs: await diffBuildReviewInputDigests(before, after) };
-      }));
+      const after = await captureBuildReviewInputDigest(baseDigestRoots);
+      const records = [{ before: inputDigestBefore, after, changedInputs: await diffBuildReviewInputDigests(inputDigestBefore, after) }];
       await mkdir(customLapEvidenceRoot, { recursive: true });
       await writeFile(inputDigestEvidencePath, `${JSON.stringify({ version: 1, records }, null, 2)}\n`, 'utf8');
       const changedInputs = [...new Set(records.flatMap((record) => record.changedInputs))].sort();
@@ -2474,9 +2520,19 @@ export class DefaultStepRunner implements StepRunner {
       const outcomes = await runAuxiliaryGroupBranches(
         customEntries.map((entry) => ({ memberId: entry.id, policy: entry })),
         config.maxParallel,
-        async (_id, entry) => this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, capturePolicyInputDigest, readOnlyReviewCapabilityFor),
+        async (_id, entry) => {
+          const captureFailure = lapPolicyCaptureFailures.get(entry.id);
+          if (captureFailure !== undefined) return {
+            id: entry.id, success: true, output: captureFailure,
+            member: { declaration: { version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill, question: entry.question,
+              ...(entry.source === undefined ? {} : { source: entry.source as 'project' | 'global' | 'plugin' }), resources: entry.resources },
+            result: { kind: 'infrastructure-failure' as const, rubric: entry.id, reason: 'policy-load-failed' as const, detail: captureFailure } },
+          };
+          return this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapPolicies.get(entry.id), readOnlyReviewCapabilityFor);
+        },
       );
       if (outcomes.some((outcome) => !outcome.success)) {
+        await finishCustomLapInputDigests();
         return {
           success: false,
           output: outcomes.filter((outcome) => !outcome.success).map((outcome) => outcome.output).join('\n'),
@@ -2530,7 +2586,7 @@ export class DefaultStepRunner implements StepRunner {
         engineIdentity,
         customEntries.length > 0,
         readOnlyReviewCapabilityFor,
-        capturePolicyInputDigest,
+        lapPolicies,
       ),
       writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
         readFile: async (path) => readFile(path, 'utf-8'),
@@ -2548,12 +2604,15 @@ export class DefaultStepRunner implements StepRunner {
     });
 
     if (coordination.kind === 'gate-disabled') {
+      if (customEntries.length > 0) await finishCustomLapInputDigests();
       return { success: true, output: 'build_review disabled' };
     }
     if (coordination.kind === 'passed') {
+      if (customEntries.length > 0) await finishCustomLapInputDigests();
       return this.publishBuildReviewPass(coordination.reason);
     }
     if (coordination.kind === 'refused') {
+      if (customEntries.length > 0) await finishCustomLapInputDigests();
       return { success: false, output: `build_review refused: ${coordination.reason}` };
     }
 
@@ -2786,7 +2845,7 @@ export class DefaultStepRunner implements StepRunner {
     inputs: BuildReviewFrozenInputs,
     lapId: BuildReviewLapId,
     tier: ConductState['complexity_tier'],
-    captureInputDigest?: (materialPath: string, packageRoot: string) => Promise<void>,
+    capturedPolicy?: { readonly policy: InstalledReviewSkill; readonly bundle: CapturedReviewPolicyBundle },
     readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability>,
   ): Promise<{ readonly id: string; readonly success: boolean; readonly output: string; readonly member?: BuildReviewCustomArtifactMember }> {
     const declaration = {
@@ -2969,25 +3028,14 @@ export class DefaultStepRunner implements StepRunner {
             output: failure.detail,
           } };
         }
-        const policy = {
-          ...resolved.policy,
-          declaredDependencies: [...new Set([...resolved.policy.declaredDependencies, ...entry.resources])],
-        };
-        let bundle: CapturedReviewPolicyBundle;
-        try {
-          bundle = await this.buildReviewPolicyCapture(policy, {
-            materialParent: join(this.projectDir, '.pipeline', 'build-review', 'policy-material'),
-          });
-        } catch (error) {
+        if (capturedPolicy === undefined) {
+          const detail = `Installed build-review policy ${entry.skill} was not captured before fan-out`;
+          failure = { reason: 'policy-load-failed', detail };
           coverageFailure = true;
-          failure = { reason: 'policy-load-failed', detail: `Installed build-review policy ${entry.skill} could not be loaded: ${error instanceof Error ? error.message : String(error)}` };
-          await emitPolicyFailure('capture', failure.detail);
-          return { kind: 'failure' as const, result: {
-            success: false, exitCode: 1,
-            output: failure.detail,
-          } };
+          await emitPolicyFailure('capture', detail);
+          return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: detail } };
         }
-        await captureInputDigest?.(bundle.materialPath, policy.packageRoot);
+        const { policy, bundle } = capturedPolicy;
         const candidateEngine = await this.resolveBuildReviewEngineIdentity();
         const policyProvenance = {
           inputDigest: inputs.sourceSnapshot.contentDigest,
@@ -3460,7 +3508,7 @@ export class DefaultStepRunner implements StepRunner {
     engineIdentity?: BuildReviewCoordinationEngineIdentity,
     customPolicyLap = false,
     readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability>,
-    capturePolicyInputDigest?: (materialPath: string, packageRoot: string) => Promise<void>,
+    lapPolicies?: ReadonlyMap<string, { readonly policy: InstalledReviewSkill; readonly bundle: CapturedReviewPolicyBundle }>,
   ): Promise<unknown> {
     const materialized = inputs?.sourceMaterialization?.contextFor(branch.rubric).source;
     const candidateIdentity = (candidate: { providerKey: string; model: string; effort?: string }, effectiveBundleDigest?: string): BuildReviewCacheSemanticIdentity | undefined => {
@@ -3651,33 +3699,12 @@ export class DefaultStepRunner implements StepRunner {
                     : dispatched.invocation,
                 };
               }
-              // Built-ins use the same candidate-local installed definition
-              // contract as custom policies. The old harness-root digest was
-              // only an approximation of what the provider actually loaded.
-              const builtinEntry = { id: branch.rubric, kind: 'builtin' as const, policy: branch.policy };
-              let builtinPolicy: InstalledReviewSkill;
-              let builtinBundle: CapturedReviewPolicyBundle;
-              try {
-                const catalog = await this.buildReviewPolicyCatalog!({
-                  provider: context.candidate.providerKey,
-                  entry: builtinEntry,
-                  skill: branch.skillName,
-                  ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
-                  ...(context.prepared === undefined ? {} : { preparedExecutable: context.prepared.executable, preparedArgs: context.prepared.args }),
-            ...(context.prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: context.prepared.originalCatalogHome }),
-                  ...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
-                  ...(context.deadlineAt === undefined ? {} : { deadlineAt: context.deadlineAt }),
-                });
-                const resolved = resolveInstalledReviewPolicyCatalog({ skill: branch.skillName }, catalog);
-                if (resolved.kind === 'failure') throw new Error(`installed ${branch.skillName} policy is unavailable: ${resolved.failure.code}`);
-                builtinPolicy = resolved.policy;
-                builtinBundle = await this.buildReviewPolicyCapture(builtinPolicy, {
-                  materialParent: join(this.projectDir, '.pipeline', 'build-review', 'policy-material'),
-                });
-                await capturePolicyInputDigest?.(builtinBundle.materialPath, builtinPolicy.packageRoot);
-              } catch (error) {
-                return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: `build_review candidate policy load failed: ${error instanceof Error ? error.message : String(error)}` } };
-              }
+              // Custom-policy laps use bundles captured for the whole lap
+              // before fan-out, so no candidate can absorb a policy mutation
+              // into a later member's baseline.
+              const capturedBuiltinPolicy = lapPolicies?.get(branch.rubric);
+              if (!capturedBuiltinPolicy) return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: `build_review candidate policy ${branch.skillName} was not captured before fan-out` } };
+              const { bundle: builtinBundle } = capturedBuiltinPolicy;
               let cacheHit = false;
               const dispatched = await dispatchRubricContract({
                 descriptor: getBuildReviewRubricDescriptor(branch.rubric).contract,
