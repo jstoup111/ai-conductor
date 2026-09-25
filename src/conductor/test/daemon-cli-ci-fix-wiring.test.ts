@@ -70,6 +70,15 @@ describe('daemon CI-fix production dispatch callback', () => {
     expect(gh.mock.calls.filter(([args]) => args[0] === 'run')).toHaveLength(2);
   });
 
+  it('forwards the available event emitter to the CI repair publication boundary', async () => {
+    const events = { emit: vi.fn(async () => undefined) };
+    const { dispatch, run } = factory({ events: events as never });
+
+    await dispatch(entry, selected);
+
+    expect(run).toHaveBeenCalledWith(entry, 'repair-branch', expect.any(String), expect.objectContaining({ events }), expect.any(Function));
+  });
+
   it('emits an attributed degraded log-enrichment diagnostic while still dispatching', async () => {
     const diagnostic = vi.fn();
     const { dispatch, runner } = factory({ diagnostic });

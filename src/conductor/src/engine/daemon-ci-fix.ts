@@ -14,6 +14,7 @@ import type { GhRunner, TrackerClient } from './tracker-client.js';
 import type { ResolveWorktreeLiveness } from './autoresolve.js';
 import type { CiRepairDiagnosticReason, CiRepairDiagnosticStage } from '../types/events.js';
 import type { ConductorEvent } from '../types/events.js';
+import type { GithubOperationEventEmitter } from './github-operations.js';
 
 export type CiFixDiagnostic = (input: {
   entry: WatchEntry;
@@ -32,6 +33,7 @@ export interface DaemonCiFixDispatchDeps {
   diagnostic?: CiFixDiagnostic;
   run?: typeof runCiFix;
   fixRunner?: CiFixRunner;
+  events?: GithubOperationEventEmitter;
 }
 
 /** Keep factory diagnostics in the same closed vocabulary as root-bus events. */
@@ -127,6 +129,7 @@ export function createDaemonCiFixDispatch(deps: DaemonCiFixDispatchDeps) {
       fixRunner: deps.fixRunner ?? { run: (opts) => productionCiFixRunner.run({ ...opts, dispatcher: deps.createDispatcher(entry) }) },
       ...(deps.gh ? { gh: deps.gh } : {}),
       liveness: deps.liveness,
+      events: deps.events,
     }, log);
     // A provider boundary can affirmatively refuse before a session starts.
     // Keep that distinct from an unobserved/no-op repair: it is a deferred

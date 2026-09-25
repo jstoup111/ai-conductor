@@ -2340,7 +2340,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           isFeatureInFlight,
           onEvent: (event) => { void events.emit(event); },
           getIssueState: tracker.getIssueState.bind(tracker),
-          requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log }),
+          requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log, events }),
           disposeHaltWatcher,
           teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
           verbose: config?.daemon_verbose ?? false,
@@ -2508,6 +2508,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 // mutation guard resolves against the feature's repository.
                 gh: (args, opts) => makeProductionGh()(args, { ...opts, cwd: entry.repoCwd }),
                 liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
+                events,
                 log,
                 diagnostic: async ({ stage, reason, provider }) => {
                   void events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
