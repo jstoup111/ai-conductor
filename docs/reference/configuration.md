@@ -1221,11 +1221,13 @@ Selecting a custom rubric adopts its skill as a read-only review policy: its cri
 resources inform findings for the declared question, but its standalone workflow and output format do
 not replace the engine's bounded review contract or aggregate verdict.
 
-Custom review is available on Linux only after bubblewrap proves the read-only profile: the frozen
-source and policy material are readable, while the original checkout, engine evidence, and sibling
-review evidence remain protected. If that profile, an admitted declared requirement, or a runtime
-policy requirement is unavailable, the member records an unsupported-policy coverage failure before
-judging; install/enable bubblewrap or adapt the policy to the read-only role, then rerun. Reuse keys
+Custom review runs on every platform in each provider's own read-only review mode (Claude restricted
+mode and the Codex read-only sandbox), in the ordinary provider environment. The host read-only
+capability result is reported at daemon start, interactive config load, and `daemon status` under
+`READ-ONLY REVIEW CAPABILITY`. A candidate without an available read-only mode is skipped; a member
+with none settles `read-only-review-unavailable` and halts `needs-human` immediately without spending
+mechanical allowance, recoverable with `record-reduced-coverage`. Any reviewer-visible input change
+discards the whole lap as retryable `review-input-mutated`. Reuse keys
 include the selected declaration and captured policy digest, frozen input, engine version, and actual
 provider/model/effort, so a fallback provider never borrows a preferred-provider result. Exact
 operator dispositions remain decision stops and are re-read before an effect is applied.

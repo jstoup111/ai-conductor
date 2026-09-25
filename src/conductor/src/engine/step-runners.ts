@@ -768,6 +768,27 @@ export async function dispatchRubricContract<Output>(input: {
   };
 }
 
+/**
+ * A mixed lap has one read-only admission contract.  Preserve the closed
+ * unavailable cause for custom members and their built-in peers alike, while
+ * leaving a ladder that includes any other skip (notably a usage wait) to its
+ * existing precedence path.
+ */
+function readOnlyReviewUnavailableFailure(
+  exhaustion: ProviderExecutionResult['providerSetupExhaustion'] | undefined,
+): { readonly detail: string; readonly platform?: string } | undefined {
+  if (!exhaustion?.candidates.every((candidate) => candidate.capability === 'read-only-review-mode')) return undefined;
+  const platform = exhaustion.candidates
+    .map((candidate) => / on ([^:]+):/.exec(candidate.reason)?.[1])
+    .find((value): value is string => value !== undefined);
+  return {
+    detail: `All configured providers lack an available read-only review mode: ${exhaustion.candidates.map(
+      ({ provider, reason }) => `${provider}: ${redactSafetyText(reason)}`,
+    ).join('; ')}`,
+    ...(platform === undefined ? {} : { platform }),
+  };
+}
+
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
   private sessionStartedInitialized = false;
@@ -2399,11 +2420,12 @@ export class DefaultStepRunner implements StepRunner {
       capturedPolicyMaterial: unavailableInputRoot('policy-material'),
       installedPolicyPackage: unavailableInputRoot('policy-package'),
       evidenceRoot: customLapInputEvidenceRoot,
-      evidenceRootExcludes: ['build-review'],
     };
-    // This is engine evidence, not reviewer evidence. Remove the previous
-    // record before capture so rewriting it cannot invalidate the next lap.
-    await rm(inputDigestEvidencePath, { force: true });
+    // A replay uses the same head-derived lap id. Its prior branch artifacts
+    // are outputs of this lap, not inputs from an earlier lap, so clear only
+    // this lap's directory before capture. Other build-review evidence remains
+    // in the digest as an input from a genuinely prior lap.
+    await rm(customLapEvidenceRoot, { recursive: true, force: true });
     const inputDigestCaptures: Array<{ readonly roots: BuildReviewInputDigestRoots; readonly before: Awaited<ReturnType<typeof captureBuildReviewInputDigest>> }> = [{
       roots: baseDigestRoots,
       before: await captureBuildReviewInputDigest(baseDigestRoots),
@@ -2508,6 +2530,7 @@ export class DefaultStepRunner implements StepRunner {
         engineIdentity,
         customEntries.length > 0,
         readOnlyReviewCapabilityFor,
+        capturePolicyInputDigest,
       ),
       writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
         readFile: async (path) => readFile(path, 'utf-8'),
@@ -2643,13 +2666,6 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
     if (infrastructureFailure) {
-      if (infrastructureFailure.providerSetupExhaustion) {
-        return {
-          success: false,
-          output: `build_review infrastructure failure in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
-          providerSetupExhaustion: infrastructureFailure.providerSetupExhaustion,
-        };
-      }
       if (infrastructureFailure.reason === 'read-only-review-unavailable') {
         const reason = `build_review ${infrastructureFailure.reason}: ${infrastructureFailure.detail}`;
         return {
@@ -2657,6 +2673,13 @@ export class DefaultStepRunner implements StepRunner {
           output: reason,
           refusal: { kind: 'needs-human', reason },
           buildReviewReadOnlyReviewUnavailable: true,
+        };
+      }
+      if (infrastructureFailure.providerSetupExhaustion) {
+        return {
+          success: false,
+          output: `build_review infrastructure failure in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
+          providerSetupExhaustion: infrastructureFailure.providerSetupExhaustion,
         };
       }
       const hasJudgedFinding = lapResults.some(
@@ -3218,24 +3241,18 @@ export class DefaultStepRunner implements StepRunner {
     }
     await inputs.sourceMaterialization?.settle(entry.id);
     this.callCount++;
-    if (result.providerSetupExhaustion?.candidates.every(
-      (candidate) => candidate.capability === 'read-only-review-mode',
-    )) {
+    const readOnlyUnavailable = readOnlyReviewUnavailableFailure(result.providerSetupExhaustion);
+    if (readOnlyUnavailable) {
       coverageFailure = true;
       failure = {
         reason: 'read-only-review-unavailable',
-        detail: `All configured providers lack an available read-only review mode: ${result.providerSetupExhaustion.candidates.map(
-          ({ provider, reason }) => `${provider}: ${redactSafetyText(reason)}`,
-        ).join('; ')}`,
+        detail: readOnlyUnavailable.detail,
       };
-      const platform = result.providerSetupExhaustion.candidates
-        .map((candidate) => / on ([^:]+):/.exec(candidate.reason)?.[1])
-        .find((value): value is string => value !== undefined);
       await this.events?.emit({
         type: 'build_review_rubric_infrastructure_failure', rubric: entry.id, lapId,
         reason: 'read-only-review-unavailable', cause: 'read-only-review-unavailable',
         excerpt: failure.detail,
-        ...(platform === undefined ? {} : { platform }),
+        ...(readOnlyUnavailable.platform === undefined ? {} : { platform: readOnlyUnavailable.platform }),
       });
     }
     const member = result.success ? (() => {
@@ -3443,6 +3460,7 @@ export class DefaultStepRunner implements StepRunner {
     engineIdentity?: BuildReviewCoordinationEngineIdentity,
     customPolicyLap = false,
     readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability>,
+    capturePolicyInputDigest?: (materialPath: string, packageRoot: string) => Promise<void>,
   ): Promise<unknown> {
     const materialized = inputs?.sourceMaterialization?.contextFor(branch.rubric).source;
     const candidateIdentity = (candidate: { providerKey: string; model: string; effort?: string }, effectiveBundleDigest?: string): BuildReviewCacheSemanticIdentity | undefined => {
@@ -3656,6 +3674,7 @@ export class DefaultStepRunner implements StepRunner {
                 builtinBundle = await this.buildReviewPolicyCapture(builtinPolicy, {
                   materialParent: join(this.projectDir, '.pipeline', 'build-review', 'policy-material'),
                 });
+                await capturePolicyInputDigest?.(builtinBundle.materialPath, builtinPolicy.packageRoot);
               } catch (error) {
                 return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: `build_review candidate policy load failed: ${error instanceof Error ? error.message : String(error)}` } };
               }
@@ -3781,6 +3800,20 @@ export class DefaultStepRunner implements StepRunner {
       return { kind: 'cache-write-failed', detail: cacheWriteFailureDetail };
     }
     if (initial.providerSetupExhaustion) {
+      const readOnlyUnavailable = customPolicyLap
+        ? readOnlyReviewUnavailableFailure(initial.providerSetupExhaustion)
+        : undefined;
+      if (readOnlyUnavailable) {
+        await this.events?.emit({
+          type: 'build_review_rubric_infrastructure_failure', rubric: branch.rubric, lapId: projection.lapId,
+          reason: 'read-only-review-unavailable', cause: 'read-only-review-unavailable',
+          excerpt: readOnlyUnavailable.detail,
+          ...(readOnlyUnavailable.platform === undefined ? {} : { platform: readOnlyUnavailable.platform }),
+        });
+        return makeBuildReviewDispatchFailure(readOnlyUnavailable.detail, initial.providerSetupExhaustion, {
+          cause: 'read-only-review-unavailable',
+        });
+      }
       return makeBuildReviewDispatchFailure(
         `All configured providers were unavailable during setup: ${initial.providerSetupExhaustion.candidates.map(
           ({ provider, reason, recoveryAction }) => `${provider}: ${redactSafetyText(reason)} Recovery: ${redactSafetyText(recoveryAction)}`,

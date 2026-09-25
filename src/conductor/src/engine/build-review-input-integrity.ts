@@ -15,8 +15,8 @@ export type BuildReviewInputRootKind = typeof BUILD_REVIEW_INPUT_ROOT_KINDS[numb
 export interface BuildReviewInputDigestRoots {
   readonly frozenHead: string;
   readonly frozenBaseline: string;
-  readonly capturedPolicyMaterial: string;
-  readonly installedPolicyPackage: string;
+  readonly capturedPolicyMaterial: string | readonly string[];
+  readonly installedPolicyPackage: string | readonly string[];
   readonly evidenceRoot: string;
   /** Engine outputs written while the lap settles are never review inputs. */
   readonly evidenceRootExcludes?: readonly string[];
@@ -90,8 +90,8 @@ export async function captureBuildReviewInputDigest(
 ): Promise<BuildReviewInputDigest> {
   const entries: BuildReviewInputDigestEntry[] = [];
   for (const root of BUILD_REVIEW_INPUT_ROOT_KINDS) {
-    const rootPath = roots[root];
-    for (const path of await collectRegularFiles(rootPath, reader)) {
+    const rootPaths = Array.isArray(roots[root]) ? roots[root] : [roots[root]];
+    for (const rootPath of rootPaths) for (const path of await collectRegularFiles(rootPath, reader)) {
       const relativePath = relative(rootPath, path).split('\\').join('/');
       if (root === 'evidenceRoot' && roots.evidenceRootExcludes?.some(
         (prefix) => relativePath === prefix || relativePath.startsWith(`${prefix}/`),

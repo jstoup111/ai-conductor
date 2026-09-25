@@ -796,6 +796,8 @@ export async function coordinateBuildReviewRubrics(
               rubric,
               cacheWriteFailure ? 'cache-write-failed' : failure?.cause === 'native-schema-unsupported'
                 ? 'native-schema-unsupported'
+                : failure?.cause === 'read-only-review-unavailable'
+                ? 'read-only-review-unavailable'
                 : structuredResultWasRejected
                 ? 'invalid-structured-result'
                 : 'invalid-provider-result',
