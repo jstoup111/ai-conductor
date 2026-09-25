@@ -2191,7 +2191,9 @@ steps:
 
   describe('github_bot machine credential config', () => {
     it('accepts github_bot from user and merged sources but rejects it from a project config', () => {
-      for (const source of ['user', 'merged'] as const) {
+      // The default validation path is the user-config path; `merged` is the
+      // post-merge equivalent. There is no separate `user` source literal.
+      for (const source of [undefined, 'merged'] as const) {
         expect(validateConfig({ github_bot: { token_file: '~/bot-token' } }, '/repo', { source }).ok).toBe(true);
       }
       const project = validateConfig({ github_bot: { token_file: '~/bot-token' } }, '/repo', { source: 'project' });
