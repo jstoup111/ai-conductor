@@ -186,6 +186,25 @@ describe('assessAcceptedStoryReadability', () => {
     });
   });
 
+  it('rejects a story whose Happy Path heading holds no criterion', () => {
+    const stories = [
+      '# Stories',
+      '',
+      '## Story 1: no success criterion',
+      '',
+      '### Happy Path',
+      '',
+      '### Negative Paths',
+      '- **Given** a broken thing, **When** it runs, **Then** it fails loudly.',
+      '',
+    ].join('\n');
+
+    expect(assessAcceptedStoryReadability(stories)).toEqual({
+      stories: [{ id: '1', readable: false }],
+      firstUnreadableStoryId: '1',
+    });
+  });
+
   it('reports readable, zero-criteria, and missing-negative-path stories', () => {
     const stories = [
       story('1', ['the condition is satisfied'], ['the condition is refused']),
