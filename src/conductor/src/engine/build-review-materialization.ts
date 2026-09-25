@@ -24,6 +24,29 @@ export interface BuildReviewMaterializedMemberContext {
   readonly source: BuildReviewMaterializedSourceView;
 }
 
+export interface BuildReviewFrozenInputScope {
+  readonly contentDigest: string;
+  readonly mergeBase: string;
+  readonly headSha: string;
+  readonly changes: readonly ({ readonly kind: string; readonly path: string; readonly oldPath?: string })[];
+  readonly view?: { readonly baselinePath: string; readonly headPath: string };
+}
+
+/** Engine-authored description of the same immutable change every lap member inspects. */
+export function renderBuildReviewFrozenInputScope(scope: BuildReviewFrozenInputScope): string {
+  return [
+    `Frozen build-review input ${scope.contentDigest}.`,
+    ...(scope.view === undefined ? [] : [
+      `Reviewed baseline ${scope.mergeBase} (read-only): ${scope.view.baselinePath}`,
+      `Reviewed head ${scope.headSha} (read-only): ${scope.view.headPath}`,
+      'Compare the two trees to inspect the change; a deleted path exists only under the baseline.',
+    ]),
+    'Changed path inventory (git name-status, baseline..head):',
+    ...(scope.changes.length === 0 ? ['(none)'] : scope.changes.map((change) =>
+      change.oldPath === undefined ? `${change.kind} ${change.path}` : `${change.kind} ${change.oldPath} -> ${change.path}`)),
+  ].join('\n');
+}
+
 export interface BuildReviewLapMaterialization {
   readonly source: BuildReviewMaterializedSourceView;
   contextFor(memberId: string): BuildReviewMaterializedMemberContext;

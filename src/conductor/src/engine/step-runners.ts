@@ -100,7 +100,7 @@ import {
 } from './build-review-domain.js';
 import { discoverClaudeReviewPolicies, type ClaudeMetadataCommand, type ClaudeReviewPolicyFilesystem } from './build-review-policy-claude.js';
 import { createCodexAppServerTransport, listCodexInstalledReviewSkills, type CodexAppServerTransport } from './build-review-policy-codex.js';
-import { renderBuildReviewFrozenInputScope } from './build-review-containment.js';
+import { renderBuildReviewFrozenInputScope } from './build-review-materialization.js';
 import { probeReadOnlyReviewCapability, type ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import { captureBuildReviewInputDigest, diffBuildReviewInputDigests, type BuildReviewInputDigestRoots } from './build-review-input-integrity.js';
 import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
