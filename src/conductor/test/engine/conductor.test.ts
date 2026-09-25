@@ -1301,7 +1301,7 @@ describe('engine/conductor', () => {
       });
       const outcome = await (conductor as any).planRemediation(
         { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 }, ALL_STEPS, 'mixed attribution',
-        { source: 'prd_audit', evidence: [
+        { source: 'validation-group', evidence: [
           { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
           { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' },
         ] },

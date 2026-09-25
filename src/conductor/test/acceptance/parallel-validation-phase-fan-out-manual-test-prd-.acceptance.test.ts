@@ -184,6 +184,46 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     });
   }
 
+  async function writeRemediableAsBuiltVerdict(
+    dir: string,
+    runId: string | undefined,
+    id: string,
+    taskId: string,
+    summary: string,
+  ): Promise<void> {
+    await persistAsBuiltVerdict(dir, {
+      version: 'v1',
+      verdict: 'BLOCKED',
+      reachability: [],
+      driftNotes: [],
+      findings: [{
+        id,
+        class: 'REMEDIABLE',
+        reference: { kind: 'plan-task', taskId },
+        summary,
+      }],
+      violations: summary,
+      resolution: 'Apply the approved repair.',
+    }, {
+      attemptId: runId ?? 'test-run',
+      codeStamp: null,
+      policy: AS_BUILT_TEST_POLICY,
+    });
+  }
+
+  async function writeApprovedAsBuiltVerdict(dir: string, runId: string | undefined): Promise<void> {
+    await persistAsBuiltVerdict(dir, {
+      version: 'v1',
+      verdict: 'APPROVED',
+      reachability: [],
+      driftNotes: [],
+    }, {
+      attemptId: runId ?? 'test-run',
+      codeStamp: null,
+      policy: AS_BUILT_TEST_POLICY,
+    });
+  }
+
   function delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -651,17 +691,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               PRD_PASS,
             ].join('\n'));
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              [
-                'Verdict: BLOCKED',
-                '',
-                '## Blocking Findings',
-                '| Finding | Class | Governing clause | Summary |',
-                '| --- | --- | --- | --- |',
-                '| ARCH-1 | REMEDIABLE | Task 1 | Add the missing guard |',
-              ].join('\n'),
-            );
+            await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {
             remediateReasons.push(opts?.retryReason ?? '');
             await writeFile(
@@ -698,7 +728,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       await conductor.run();
 
       expect(remediateReasons).toHaveLength(1);
-      expect(remediateReasons[0]).toContain('.pipeline/architecture-review-as-built.md');
+      expect(remediateReasons[0]).toContain('.pipeline/architecture-review-as-built.json');
       expect(kickbacks).toContainEqual({ from: 'manual_test', to: 'build' });
       expect(asBuiltRestagedBeforeBuild).toBe(true);
       const ledger = JSON.parse(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf8'));
@@ -780,14 +810,9 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               '| FR-1 | MISSING | impl-gap | src/feature.ts:1 | no |',
             ].join('\n'));
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), [
-              'Verdict: BLOCKED',
-              '',
-              '## Blocking Findings',
-              '| Finding | Class | Governing clause | Summary |',
-              '| --- | --- | --- | --- |',
-              '| FR-1 | REMEDIABLE | Task 1 | Repair the same approved behavior |',
-            ].join('\n'));
+            await writeRemediableAsBuiltVerdict(
+              dir, opts?.runId, 'FR-1', '1', 'Repair the same approved behavior',
+            );
           } else if (step === 'remediate') {
             remediationReasons.push(opts?.retryReason ?? '');
             await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify({
@@ -825,7 +850,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       expect(remediationReasons).toHaveLength(1);
       expect(remediationReasons[0]).toContain('.pipeline/prd-audit.md');
-      expect(remediationReasons[0]).toContain('.pipeline/architecture-review-as-built.md');
+      expect(remediationReasons[0]).toContain('.pipeline/architecture-review-as-built.json');
 
       const plan = await readFile(planPath, 'utf8');
       expect(plan).toContain('### Task rem-prd-audit-shared-fix: Implement S1.1');
@@ -901,7 +926,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       ]);
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, opts) => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
@@ -912,12 +937,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               '| S1.1 | FIXABLE | 1 | FR-1 | Missing implementation |',
             ].join('\n'));
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), [
-              'Verdict: BLOCKED', '', '## Blocking Findings',
-              '| Finding | Class | Governing clause | Summary |',
-              '| --- | --- | --- | --- |',
-              '| ARCH-1 | REMEDIABLE | Task 1 | Add the missing guard |',
-            ].join('\n'));
+            await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {
             await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify({
               dispositions: [
@@ -947,7 +967,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       const mixedHalt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
       expect(mixedHalt).toContain('shared plan-growth allowance exhausted');
       expect(mixedHalt).toContain('Blocking findings:');
-      expect(mixedHalt).toContain('ARCH-1 (REMEDIABLE; Task 1): Add the missing guard');
+      expect(mixedHalt).toContain('ARCH-1 (REMEDIABLE; plan task 1): Add the missing guard');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -966,7 +986,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       let remediateCalls = 0;
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, opts) => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
@@ -981,14 +1001,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               '| S1.1 | PASS | — | FR-1 | evidence.ts:1 |',
             ].join('\n'));
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), [
-              'Verdict: BLOCKED',
-              '',
-              '## Blocking Findings',
-              '| Finding | Class | Governing clause | Summary |',
-              '| --- | --- | --- | --- |',
-              '| ARCH-1 | REMEDIABLE | Task 1 | Add the missing guard |',
-            ].join('\n'));
+            await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {
             remediateCalls++;
             await writeFile(
@@ -1046,7 +1059,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       // with its class and governing clause — the same terminal shape as an
       // exceeded lap cap. This assertion previously encoded the defect.
       expect(noOpHalt).toContain('Blocking findings:');
-      expect(noOpHalt).toContain('ARCH-1 (REMEDIABLE; Task 1): Add the missing guard');
+      expect(noOpHalt).toContain('ARCH-1 (REMEDIABLE; plan task 1): Add the missing guard');
       await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('kickback-cap');
       const ledger = JSON.parse(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf8'));
       expect(ledger.gates.architecture_review_as_built.priorVerdict).toBe(true);
@@ -1295,15 +1308,12 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       const dispatched: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, opts) => {
           dispatched.push(step);
           if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_PASS);
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n',
-            );
+            await writeApprovedAsBuiltVerdict(dir, opts?.runId);
           }
           return { success: true } as StepRunResult;
         }),
@@ -1356,7 +1366,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       let remediateDispatches = 0;
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, opts) => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
           } else if (step === 'prd_audit') {
@@ -1373,17 +1383,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               PRD_PASS,
             ].join('\n'));
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              [
-                'Verdict: BLOCKED',
-                '',
-                '## Blocking Findings',
-                '| Finding | Class | Governing clause | Summary |',
-                '| --- | --- | --- | --- |',
-                '| ARCH-1 | REMEDIABLE | Task 1 | Add the missing guard |',
-              ].join('\n'),
-            );
+            await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {
             remediateDispatches++;
           }
@@ -1442,17 +1442,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               PRD_PASS,
             ].join('\n'));
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              [
-                'Verdict: BLOCKED',
-                '',
-                '## Blocking Findings',
-                '| Finding | Class | Governing clause | Summary |',
-                '| --- | --- | --- | --- |',
-                '| ARCH-1 | REMEDIABLE | Task 1 | Add the missing guard |',
-              ].join('\n'),
-            );
+            await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {
             remediateReasons.push(opts?.retryReason ?? '');
             await writeFile(
@@ -1482,7 +1472,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       // ONE /remediate dispatch over the union of review gaps...
       expect(remediateReasons).toHaveLength(1);
-      expect(remediateReasons[0]).toContain('.pipeline/architecture-review-as-built.md');
+      expect(remediateReasons[0]).toContain('.pipeline/architecture-review-as-built.json');
       // ...and ONE merged work order whose BUILD hint carries the deterministic
       // manual-test FAIL rows alongside the remediation guidance (decision 3).
       expect(buildHint).toContain('FAIL');
