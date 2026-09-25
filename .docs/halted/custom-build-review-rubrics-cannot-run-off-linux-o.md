@@ -1,25 +1,25 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-25T12:39:43.380Z
+Status: halted
 Slug: custom-build-review-rubrics-cannot-run-off-linux-o
-Class: needs-human
+Class: kickback-cap
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-custom-build-review-rubrics-cannot-run-off-linux-o
 Head SHA: db863d456e6c29b3b7bffa79034f50ddce2c37d2
-Halted at: 2026-09-25T12:20:10.311Z
+Halted at: 2026-09-25T20:16:06.399Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-coverage_binding refused: cited Done when checks do not assert the criterion.
+Validation group "prd_audit" halted: needs human DECIDE — prd_audit remediation lap cap reached (2/2) before appending fix tasks. Findings: S1.1, S1.2, S1.3, S1.6, S5.6, S6.3.
+Kickback halt generation: 1790367358933-v6vvifdxml
 
-Criterion: Story 1 negative: Given a custom-policy lap on a darwin host fixture whose only candidate is Claude, when the lap runs, then the member is not refused for lack of a Linux read-only boundary.
-Task ids: 3
-Done when checks: an integration test of `dispatchInstalledBuildReviewPolicy` on three non-self-host host fixtures (Linux with nested namespaces refused, Linux unrestricted, darwin without bubblewrap) settles the custom member with a judged result, no member settles `preflight-failed`, and the execa spy records zero bubblewrap spawns; on the darwin-without-bubblewrap fixture no member result text names bubblewrap, a nested sandbox, or a containment probe; and the Linux-unrestricted fixture's custom-member launch (provider, argv, cwd and environment) is asserted equal to the nested-namespaces-refused fixture's launch | the same test asserts the Claude and Codex custom-member launches carry the `readOnlyReview` option and an environment equal to an ordinary step's environment for that candidate, with no engine-overridden HOME, CLAUDE_CONFIG_DIR, CODEX_HOME, TMPDIR or XDG scratch path | a Codex custom-member test asserts no login file is copied and the only engine scratch home passed is `nativeSchemaScratchHome`, which is not the child's CODEX_HOME | a provider-error fixture settles the custom member with cause `provider-error`, and no member result text names bubblewrap, a nested sandbox, or a containment probe | a self-host fixture asserts the custom member launches through the self-host prepared invocation with that invocation's environment overlay intact
-Missing assertion: A check explicitly requiring that the darwin fixture's sole Claude candidate settles without refusal for lack of a Linux read-only boundary.
+Blocking findings:
+AB-1 (REMEDIABLE; adr-2026-09-10-portable-build-review-policy D6): Pre-fan-out policy capture resolves in the ambient preferred-provider context, then executes that bundle for later actual candidates.
+AB-2 (REMEDIABLE; adr-2026-09-10-portable-build-review-policy D5.3): The digest hashes the existing events log and then treats the engine's own in-lap event appends as protected-input mutation.
+AB-3 (REMEDIABLE; adr-2026-09-10-portable-build-review-policy D5.3): The test-quality-empty-scope early-pass path ignores custom verdicts and ignores detected input mutation before publishing PASS.
+AB-4 (REMEDIABLE; adr-2026-09-10-portable-build-review-policy D5.3): Custom members complete before built-in coordination starts instead of sharing the approved concurrent whole-lap fan-out.
 ```
