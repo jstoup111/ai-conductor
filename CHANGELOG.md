@@ -63,6 +63,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Custom build_review rubrics now run on Claude; previously every call was rejected because the output schema had no root type. ([implementation PR #2738](https://github.com/jstoup111/ai-conductor/pull/2738)).
 - Custom build_review rubrics now run on Claude; the output schema no longer uses a top-level oneOf, which the Claude API rejects. ([implementation PR #2739](https://github.com/jstoup111/ai-conductor/pull/2739)).
 - build_review testQuality no longer halts on resolved scopeResolutions entries missing associationReason; the schema and prompt now state each status's required fields. ([implementation PR #2744](https://github.com/jstoup111/ai-conductor/pull/2744)).
+- Self-host builds no longer false-halt when Claude Code's skill sync rewrites its `.last-complete-round` marker or its policy-limits fetch stamp. ([implementation PR #2749](https://github.com/jstoup111/ai-conductor/pull/2749)).
 
 ## [1.4.0] - 2026-09-19
 
