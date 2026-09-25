@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: kickback-budget
+Resolved at: 2026-09-25T18:01:24.168Z
 Slug: usage-exhaustion-re-dispatches-the-exhausted-provi
 Class: kickback-cap
 Halting step: unknown
