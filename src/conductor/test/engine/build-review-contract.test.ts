@@ -281,7 +281,7 @@ describe('engine/build-review-contract', () => {
 
   describe('scopeResolutions per-status required fields', () => {
     const region = { path: 'test/a.test.ts', startLine: 1, endLine: 2, contentHash: `sha256:${'a'.repeat(64)}`, display: 'test/a.test.ts:1-2' };
-    const validate = new Ajv({ strict: false }).compile({
+    const validate = new Ajv().compile({
       ...BUILD_REVIEW_JUDGED_V3_SCHEMA,
       required: [],
     });
