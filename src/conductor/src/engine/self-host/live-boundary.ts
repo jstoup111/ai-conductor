@@ -137,6 +137,7 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'cache',                            // misc read-through caches (issue lists, changelog mirrors, etc.)
   'file-history',                     // per-session snapshots of every file any concurrent session edits
   'paste-cache',                      // per-session scratch for large pasted inputs
+  'skills/synced/**/.last-complete-round', // claude.ai skill-sync round marker; see below
 ];
 
 /**
@@ -222,12 +223,33 @@ function matchesRootPattern(path: string, pattern: string): boolean {
 }
 
 /**
+ * True iff `path` sits anywhere under `prefix` AND its basename is exactly
+ * `basename` — the `<prefix>/**`+`/<basename>` exclusion form (any depth). It excludes ONE
+ * named marker, never the subtree around it.
+ *
+ * Its only user is the `.last-complete-round` entry under `skills/synced`. Claude Code syncs
+ * claude.ai skills into `skills/synced/<bucket-uuid>/` and writes, then deletes,
+ * a `.last-complete-round` marker every sync round. Verified 2026-09-25 as the
+ * sole diff (`1 added / 1 removed: skills/synced/<bucket-uuid>/.last-complete-round`)
+ * behind 9 false halts across the features custom-build-review-rubrics-cannot-run-off-linux-o
+ * and post-plan-decide-amendments-never-reconcile-with-t. The synced skill
+ * content itself (SKILL.md, manifest.json, scripts) stays fingerprinted: a
+ * self-host process rewriting an operator skill is exactly what this surface
+ * exists to catch. Widen this only with the same kind of observed-churn evidence.
+ */
+function matchesNestedBasename(path: string, prefix: string, basename: string): boolean {
+  return path.startsWith(`${prefix}/`) && path.slice(path.lastIndexOf('/') + 1) === basename;
+}
+
+/**
  * True iff `path` (root-relative, POSIX-ish) is an excluded path, sits under one,
- * or matches a root-level `*` pattern. An exclusion entry containing `*` is a
+ * matches a nested-basename marker (see `matchesNestedBasename`), or matches a root-level `*` pattern. An exclusion entry containing `*` is a
  * pattern; every other entry keeps the exact-or-prefix semantics it always had.
  */
 function isExcluded(path: string, exclude: readonly string[]): boolean {
-  return exclude.some(ex => ex.includes('*')
+  return exclude.some(ex => ex.includes('/**/')
+    ? matchesNestedBasename(path, ex.slice(0, ex.indexOf('/**/')), ex.slice(ex.indexOf('/**/') + 4))
+    : ex.includes('*')
     ? matchesRootPattern(path, ex)
     : path === ex || path.startsWith(`${ex}/`));
 }
