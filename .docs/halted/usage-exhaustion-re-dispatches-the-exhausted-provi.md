@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-25T23:57:15.118Z
 Slug: usage-exhaustion-re-dispatches-the-exhausted-provi
 Class: needs-human
 Halting step: prd_audit
