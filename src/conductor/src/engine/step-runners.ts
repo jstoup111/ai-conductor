@@ -2498,7 +2498,15 @@ export class DefaultStepRunner implements StepRunner {
         writeFile,
         rename,
       }, semanticIdentity),
-      dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(branch, projection, tier, executionContext, inputs, engineIdentity),
+      dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(
+        branch,
+        projection,
+        tier,
+        executionContext,
+        inputs,
+        engineIdentity,
+        customEntries.length > 0,
+      ),
       writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
         readFile: async (path) => readFile(path, 'utf-8'),
         mkdir: async (path) => { await mkdir(path, { recursive: true }); },
@@ -3422,6 +3430,7 @@ export class DefaultStepRunner implements StepRunner {
     executionContext?: ExecutionContext,
     inputs?: BuildReviewFrozenInputs,
     engineIdentity?: BuildReviewCoordinationEngineIdentity,
+    customPolicyLap = false,
   ): Promise<unknown> {
     const materialized = inputs?.sourceMaterialization?.contextFor(branch.rubric).source;
     const candidateIdentity = (candidate: { providerKey: string; model: string; effort?: string }, effectiveBundleDigest?: string): BuildReviewCacheSemanticIdentity | undefined => {
@@ -3632,7 +3641,7 @@ export class DefaultStepRunner implements StepRunner {
                   contentDigest: inputs.sourceSnapshot.contentDigest, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha,
                   changes: inputs.sourceSnapshot.sourceChanges ?? [], view: materialized,
                 })}`}`,
-                readOnlyReview: true,
+                ...(customPolicyLap ? { readOnlyReview: true } : {}),
                 interactive: false,
                 },
                 invoke: (options) => context.invoke(options, async (rung, invoke) => {
