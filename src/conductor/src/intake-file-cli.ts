@@ -18,6 +18,9 @@ import { createIntakeFilingOperations, fileIntakeIssue, type FileIntakeIssueOpts
 import { describeRedactions } from './engine/engineer/intake/sanitize.js';
 import { runTrackerRead, type GhRunner } from './engine/tracker-client.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
+import { ConductorEventEmitter } from './ui/events.js';
+import { EventPersister } from './engine/event-persister.js';
+import { join } from 'node:path';
 
 function parseArgs(argv: string[]): FileIntakeIssueOpts | null {
   const opts: Partial<FileIntakeIssueOpts> & { dependsOn: string[] } = { dependsOn: [] };
@@ -104,11 +107,15 @@ async function main(): Promise<void> {
   }
 
   const rl = opts.interactive ? createInterface({ input: process.stdin, output: process.stdout }) : null;
+  let persister: EventPersister | undefined;
   try {
     const gh = makeProductionGh();
     const cwd = '.';
     const repository = await resolveFilingRepository(gh, opts.repo, cwd);
     const resolveActor = makeMachineOwnerResolver(gh, cwd);
+    const events = new ConductorEventEmitter();
+    persister = new EventPersister(join(cwd, '.pipeline', 'events.jsonl'), events);
+    persister.start();
     const result = await fileIntakeIssue({ ...opts, repo: repository }, {
       prompt: rl ? (question: string) => rl.question(`${question} `) : undefined,
       creation: {
@@ -116,7 +123,7 @@ async function main(): Promise<void> {
         operations: createIntakeFilingOperations(gh, cwd, {
           resolveActor,
           intent: { kind: 'explicit-intake', repository },
-        }),
+        }, events),
       },
     });
 
@@ -138,6 +145,7 @@ async function main(): Promise<void> {
     for (const w of result.warnings) console.error(`[intake-file] warning: ${w}`);
     for (const bad of result.badRefs) console.error(`[intake-file] warning: bad --depends-on ref "${bad}"`);
   } finally {
+    persister?.stop();
     rl?.close();
   }
 }

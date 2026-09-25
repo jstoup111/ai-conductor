@@ -468,6 +468,8 @@ export interface DispatchEngineerOpts {
   gh?: (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
   /** Test seam for fresh machine identity used by independently authorized intake writes. */
   intakeResolveActor?: () => Promise<OwnerResolution>;
+  /** Existing event spine for intake mutation fallback telemetry. */
+  events?: GithubOperationEventEmitter;
   /** Machine-level gh capability probe; injectable so entry refusal is testable. */
   probeGhVersion?: () => Promise<GhVersionFloorVerdict>;
   /** Injected git runner (for tests). */
@@ -777,6 +779,7 @@ export function buildIntake(deps: {
   printErr: (s: string) => void;
   missingRegistrationEpisodes?: Set<string>;
   resolveActor?: () => Promise<OwnerResolution>;
+  events?: GithubOperationEventEmitter;
 }): {
   reader: ReturnType<typeof createRegistryReader>;
   ledger: ReturnType<typeof createLedger>;
@@ -800,6 +803,7 @@ export function buildIntake(deps: {
     log: (m: string) => deps.printErr(m),
     missingRegistrationEpisodes: deps.missingRegistrationEpisodes,
     resolveActor: deps.resolveActor,
+    events: deps.events,
   });
   return { reader, ledger, queue, adapter };
 }
@@ -816,10 +820,12 @@ export async function prePollIntake(deps: {
   registryPath?: string;
   gh: NonNullable<DispatchEngineerOpts['gh']>;
   printErr: (s: string) => void;
+  events?: GithubOperationEventEmitter;
 }): Promise<number> {
   const { queue, adapter } = buildIntake({
     ...deps,
     missingRegistrationEpisodes,
+    events: deps.events,
   });
   const envelopes = await adapter.poll();
   for (const e of envelopes) {
@@ -928,6 +934,7 @@ export async function dispatchEngineer(
                 registryPath,
                 gh,
                 printErr,
+                events: opts.events,
               }));
 
       // Outer loop: ONE fresh `claude /composer` session per idea, so each idea
@@ -1197,7 +1204,7 @@ export async function dispatchEngineer(
       if (sourceRef) {
         const engDir = engineerDir ?? resolveEngineerDir({});
         const { ledger, adapter } = buildIntake({
-          engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor,
+          engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor, events: opts.events,
         });
         await reportRouted(
           { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
@@ -1322,7 +1329,7 @@ export async function dispatchEngineer(
         if (sourceRef) {
           const engDir = engineerDir ?? resolveEngineerDir({});
           const { ledger, adapter } = buildIntake({
-            engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor,
+            engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor, events: opts.events,
           });
           await reportDone(
             { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
@@ -1399,7 +1406,7 @@ export async function dispatchEngineer(
     // ledger dedups, so a double-poll enqueues nothing new.
     case 'poll': {
       const engDir = engineerDir ?? resolveEngineerDir({});
-      const { queue, adapter } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
+      const { queue, adapter } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr, events: opts.events });
 
       const envelopes = await adapter.poll();
       for (const e of envelopes) {
@@ -1419,7 +1426,7 @@ export async function dispatchEngineer(
     // and heal stale entries (duplicate envelopes, delivered PRs) transparently.
     case 'claim': {
       const engDir = engineerDir ?? resolveEngineerDir({});
-      const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
+      const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr, events: opts.events });
 
       // Resolve the project-level config (`.ai-conductor/config.yml` at cwd) so an
       // operator's `stale_claim_window_hours` override reaches the reap pass below —
@@ -1538,6 +1545,7 @@ export async function dispatchEngineer(
       if (dispatch.resolvedBy && parsedForget) {
         const tracker = createGithubTrackerClient(gh, {
           intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor }),
+          events: opts.events,
         });
         try {
           await tracker.commentOnIntakeIssue(
@@ -1572,6 +1580,7 @@ export async function dispatchEngineer(
         try {
           const tracker = createGithubTrackerClient(gh, {
             intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor }),
+            events: opts.events,
           });
           await tracker.removeIntakeIssueLabel(
             parsedForget.repo,
@@ -1834,6 +1843,7 @@ export async function dispatchEngineer(
       const operations = createGuardedGithubOperationRunner(gh, {
         cwd,
         intake: createGithubIntakeAuthorization({ gh, cwd, resolveActor }),
+        events: opts.events,
       });
       const result = await runMigration({
         gh,

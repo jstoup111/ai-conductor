@@ -31,6 +31,7 @@ import { parseSourceRef } from '../issue-ref.js';
 import { createGithubIntakeAuthorization } from './github-issues.js';
 import type { InteractiveGithubOperationConfirmation } from '../../github-operation-approval.js';
 import type { OwnerResolution } from '../../owner-gate/identity.js';
+import type { GithubOperationEventEmitter } from '../../github-operations.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,6 +62,8 @@ export interface IntakeBackfillDeps {
   resolveActor?: () => Promise<OwnerResolution>;
   /** Exact interactive approval for an otherwise unauthorized individual write. */
   confirmation?: InteractiveGithubOperationConfirmation;
+  /** Existing event spine for bot credential fallback telemetry. */
+  events?: GithubOperationEventEmitter;
 }
 
 export interface AppliedLabel {
@@ -140,12 +143,13 @@ export async function backfillIntakeLabels(
     resolveActor: deps.resolveActor,
     confirmation: deps.confirmation,
   });
-  const tracker = createGithubTrackerClient(gh, { intake: intakeAuthorization });
+  const tracker = createGithubTrackerClient(gh, { intake: intakeAuthorization, events: deps.events });
   // Label definitions are shared repository state. This runner deliberately
   // has no shared approval, so ensureLabel can never create one as a fallback.
   const guardedRunner = createGuardedGithubOperationRunner(gh, {
     cwd,
     intake: intakeAuthorization,
+    events: deps.events,
   });
 
   const report: BackfillReport = {

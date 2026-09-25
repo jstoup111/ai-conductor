@@ -25,6 +25,7 @@ import { openSpecPr } from '../../src/engine/engineer/handoff.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from '../../src/engine/engineer/intake/file-issue.js';
 import { readMachineOwnerConfig } from '../../src/engine/owner-gate/machine-identity.js';
 import { readGithubBotCredential } from '../../src/engine/github-bot-credential.js';
+import { GithubBotAuthRefusalError } from '../../src/engine/github-bot-auth-refusal.js';
 import { createGuardedGithubOperationRunner, makeProductionGh } from '../../src/engine/tracker-client.js';
 import { makeProductionGit } from '../../src/engine/pr-labels.js';
 
@@ -113,5 +114,39 @@ describe('GitHub bot CLI entry points', () => {
       file: 'gh', args: ['issue', 'create', '-R', 'acme/repo', '--title', 'Entry intake', '--body', 'Entry body'],
       options: expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'bot-entry-token' }) }),
     }));
+  });
+
+  it('emits the intake creation bot refusal before its one operator retry', async () => {
+    const trace: string[] = [];
+    const gh = vi.fn(async (args: string[], options: { credential?: string }) => {
+      trace.push(String(options.credential));
+      if (options.credential === 'write') throw new GithubBotAuthRefusalError('auth-refused');
+      return { stdout: 'https://github.com/acme/repo/issues/2\n' };
+    });
+    const events: unknown[] = [];
+    const emitter = { emit: vi.fn(async (event) => { events.push(event); trace.push('event'); }) };
+    const authority = {
+      resolveActor: async () => ({ resolved: true as const, id: 'pr-labels' }),
+      intent: { kind: 'explicit-intake' as const, repository: 'acme/repo' },
+    };
+    const operations = createIntakeFilingOperations(gh, root, authority, emitter);
+
+    await operations.run({
+      operation: 'issue.create',
+      access: 'create',
+      target: { repository: 'acme/repo', kind: 'repository' },
+      context: { actor: 'pr-labels' },
+      payload: { title: 'Fallback intake', body: 'Body' },
+    });
+
+    expect({ events, trace }).toEqual({
+      events: [{
+        type: 'github_write_credential_fallback',
+        operation: 'issue.create',
+        target: { repository: 'acme/repo', kind: 'repository' },
+        reason: 'auth-refused',
+      }],
+      trace: ['write', 'event', 'operator'],
+    });
   });
 });
