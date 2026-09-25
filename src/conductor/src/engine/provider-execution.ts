@@ -29,6 +29,7 @@ import {
   type ResolvedProviderNativeStepConfig,
 } from './resolved-config.js';
 import type { PrepareModelFallbackOptions } from './model-availability.js';
+import type { ProviderAvailability } from './provider-availability.js';
 import {
   validateTaskAttribution,
   type TaskAttributionDiagnosticCode,
@@ -134,6 +135,18 @@ export interface ProviderCandidate {
 
 /** Identity of one actual model ladder rung; step ownership remains unchanged. */
 export type ProviderCandidateRung = Omit<ProviderCandidate, 'step'>;
+
+/**
+ * The sole pre-dispatch admission seam. Availability is intentionally an
+ * optional in-memory dependency so interactive callers retain current
+ * behavior until a daemon injects the process-scoped store.
+ */
+export function admitProviderCandidate(
+  candidate: ProviderCandidate,
+  providerAvailability?: ProviderAvailability,
+): boolean {
+  return providerAvailability?.isAvailable(candidate.providerKey) ?? true;
+}
 
 /**
  * The only extension point that runs after a real provider candidate has
@@ -280,6 +293,8 @@ export interface ExecuteProviderCandidatesInput {
   auxiliaryMember?: string;
   /** Task-local telemetry to validate before any candidate/session invocation. */
   taskAttribution?: TaskAttributionInput;
+  /** Optional daemon-scoped pre-dispatch admission store. */
+  providerAvailability?: ProviderAvailability;
   onAttempt?: (
     step: StepName,
     attempt: ProviderAttemptMetadata,
@@ -731,6 +746,7 @@ export async function executeProviderCandidates({
   prepareCandidateBaseline,
   auxiliaryMember,
   taskAttribution: attributionInput,
+  providerAvailability,
   onAttempt,
   onTelemetryError,
   withCandidateSafety,
@@ -964,6 +980,19 @@ export async function executeProviderCandidates({
     const requiresNativeSchemaCapability = candidateOptions.nativeSchema !== undefined;
     const supportsNativeSchemaCapability =
       runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
+    if (!admitProviderCandidate(candidate, providerAvailability)) {
+      // Refusal telemetry is added at this boundary by the following task.
+      // Until then, declining this candidate must still avoid every dispatch
+      // path, including safety preparation and provider invocation.
+      if (candidates[index + 1] !== undefined) continue;
+      return {
+        success: false,
+        output: `All configured providers were refused admission for step ${step}.`,
+        exitCode: 1,
+        preferredProvider,
+        attempts,
+      };
+    }
     let result: InvokeResult;
     try {
       result = requiresLifecycleCapability && !supportsLifecycleCapability

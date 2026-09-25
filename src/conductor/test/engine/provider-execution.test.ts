@@ -1,5 +1,6 @@
-// Covers: task:2, task:4, task:5, task:13, task:14
+// Covers: task:2, task:4, task:5, task:7, task:13, task:14
 import { access, mkdtemp, rm } from 'node:fs/promises';
+import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -33,6 +34,11 @@ import {
   type ProviderAttemptMetadata,
 } from '../../src/engine/provider-execution.js';
 import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -130,6 +136,37 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('refuses an unavailable candidate before it can reach the provider or perform admission I/O', async () => {
+    const invoke = vi.fn(async () => {
+      throw new Error('provider invocation must not occur for a refused candidate');
+    });
+    const readFile = vi.mocked(fs.readFile).mockRejectedValue(
+      new Error('admission must not read from disk'),
+    );
+    const providerAvailability = {
+      isAvailable: vi.fn(() => false),
+      suppress: vi.fn(),
+    };
+
+    try {
+      const result = await executeProviderCandidates({
+        step: 'build',
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+        sessions: new ProviderSessionScope(vi.fn()),
+        providerAvailability,
+        options: { prompt: 'build', cwd: '/workspace' },
+      });
+
+      expect(invoke).not.toHaveBeenCalled();
+      expect(readFile).not.toHaveBeenCalled();
+      expect(providerAvailability.isAvailable).toHaveBeenCalledExactlyOnceWith('codex');
+      expect(result.success).toBe(false);
+    } finally {
+      readFile.mockRestore();
+    }
+  });
+
   it.each(['hit', 'rung-hit', 'cancel', 'timeout'] as const)('keeps a prepared %s distinct from cached setup failure without allocating schema scratch', async (outcome) => {
     const worktreeRoot = await mkdtemp(join(tmpdir(), 'prepared-result-'));
     const controller = new AbortController();
