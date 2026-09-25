@@ -707,7 +707,7 @@ describe('integration/rebase-loop', () => {
       const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
       const ran: string[] = [];
       const runner: StepRunner = {
-        run: async (step: string, _state, options) => {
+        run: async (step: string, _state: ConductState, options: StepRunOptions) => {
           ran.push(step);
           return satisfy(step, options);
         },
@@ -1756,7 +1756,6 @@ describe('integration/rebase-loop', () => {
         await advanceBaseCoincidentally([
           { path: '.docs/feature-notes.md', content: '# notes\n' },
         ]);
-        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
