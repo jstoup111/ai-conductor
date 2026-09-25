@@ -1060,11 +1060,18 @@ export async function sweepStaleReviewArtifacts(
   for (const f of await findArtifactFiles(dir, step)) {
     if (await fileIsFreshSinceSession(f, sessionStartedAt)) continue; // fresh → keep
     if (await sweptArtifactStillValid(dir, step, config, artifactResolution, expectedRunId)) continue; // still code-valid → spare
-    try {
-      await rm(f);
-      removed.push(f);
-    } catch {
-      /* best-effort: a concurrent unlink / permission error must not abort the step */
+    // The as-built report is a derived view of the typed verdict. Never leave
+    // either half of that authority/view pair behind after a stale sweep.
+    const targets = step === 'architecture_review_as_built'
+      ? [f, join(dir, AS_BUILT_VERDICT_PATH)]
+      : [f];
+    for (const target of targets) {
+      try {
+        await rm(target);
+        removed.push(target);
+      } catch {
+        /* best-effort: a concurrent unlink / permission error must not abort the step */
+      }
     }
   }
   return removed;
@@ -3482,7 +3489,12 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       await writeArchitectureReviewAsBuiltCodeStamp(dir, ctx);
       return {
         done: true,
-        verdictFreshness: { artifact, floorSource: 'run-identity', outcome: 'rewritten', fresh: true },
+        verdictFreshness: {
+          artifact,
+          floorSource: 'run-identity',
+          outcome: codeStampStillValid ? 'preserved_surface_miss' : 'rewritten',
+          fresh: true,
+        },
       };
     }
     if (outcome === 'plan-gap-undelivered') {

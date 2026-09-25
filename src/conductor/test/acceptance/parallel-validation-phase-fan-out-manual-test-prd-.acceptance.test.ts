@@ -14,6 +14,8 @@ import {
   MANUAL_TEST_CODE_STAMP,
   PRD_AUDIT_CODE_STAMP,
 } from '../../src/engine/artifacts.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -118,6 +120,12 @@ const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
 const AUDIT_HEADER = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n';
 const PRD_PASS = AUDIT_HEADER + '| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
 const PRD_GAP = AUDIT_HEADER + '| FR-2 | MISSING | impl-gap | x.ts:10 | no |\n';
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
 
 describe('parallel validation phase — cross-module acceptance flows (#469)', () => {
   /**
@@ -1058,7 +1066,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       let manualTestCalls = 0;
       let prdAuditCalls = 0;
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') {
             manualTestCalls++;
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
@@ -1066,10 +1074,13 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
             prdAuditCalls++;
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_GAP);
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n',
-            );
+            await persistAsBuiltVerdict(dir, {
+              version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+            }, {
+              attemptId: options?.runId ?? 'test-run',
+              codeStamp: null,
+              policy: AS_BUILT_TEST_POLICY,
+            });
           } else if (step === 'remediate') {
             await writeFile(
               join(dir, '.pipeline/remediation.json'),

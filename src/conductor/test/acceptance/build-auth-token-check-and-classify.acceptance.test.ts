@@ -72,7 +72,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -81,6 +83,12 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 
 const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
 const PRD_PASS = [
   '# PRD Audit',
   '',
@@ -189,7 +197,7 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
 
       let manualTestCalls = 0;
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+        run: vi.fn(async (step: StepName, _state, runOptions?: StepRunOptions): Promise<StepRunResult> => {
           if (step === 'manual_test') {
             manualTestCalls += 1;
             if (manualTestCalls === 1) {
@@ -206,9 +214,9 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
             return { success: true };
           }
           if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
+            await persistAsBuiltVerdict(dir,
+              { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] },
+              { attemptId: runOptions?.runId ?? 'test-run', codeStamp: null, policy: AS_BUILT_TEST_POLICY },
             );
             return { success: true };
           }

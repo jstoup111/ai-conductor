@@ -7,11 +7,15 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 HARNESS_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 CHECKER="$SCRIPT_DIR/check_skill_invocation_policy.sh"
-FIXTURE_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/skill-invocation-policy.XXXXXX")
+# The aggregate verifier's Vitest process provides a run-scoped TMPDIR. Do not
+# silently fall back to /tmp: that bypasses its leak guard if a caller dropped
+# the child environment.
+: "${TMPDIR:?TMPDIR must name the caller-provided temporary root}"
+FIXTURE_ROOT=$(mktemp -d "$TMPDIR/skill-invocation-policy.XXXXXX")
 
 cleanup() {
   case "$FIXTURE_ROOT" in
-    "${TMPDIR:-/tmp}"/skill-invocation-policy.*)
+    "$TMPDIR"/skill-invocation-policy.*)
       rm -rf -- "$FIXTURE_ROOT"
       ;;
     *)

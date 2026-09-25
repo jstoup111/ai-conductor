@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunOptions, StepRunResult } from '../../src/engine/conductor.js';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { applyRebaseVerdicts, type RebaseOutcome } from '../../src/engine/rebase.js';
@@ -16,6 +16,8 @@ import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 const PRD_PASS = [
   '# PRD Audit',
@@ -31,6 +33,22 @@ const PRD_PASS = [
 ].join('\n');
 
 const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
+
+async function writeAsBuiltApproval(dir: string, options?: StepRunOptions): Promise<void> {
+  await persistAsBuiltVerdict(dir, {
+    version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+  }, {
+    attemptId: options?.runId ?? 'test-run',
+    codeStamp: null,
+    policy: AS_BUILT_TEST_POLICY,
+  });
+}
 
 async function seedValidators(
   dir: string,
@@ -78,7 +96,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
 
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           calls.push(step);
           if (step === 'manual_test') {
             throw new Error('validator process exited before writing its verdict');
@@ -87,10 +105,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
           }
           if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
-            );
+            await writeAsBuiltApproval(dir, options);
           }
           return { success: true } as StepRunResult;
         }),
@@ -191,10 +206,10 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const conductor = new Conductor({
         stateFilePath: statePath, stateStore: store, events: emitter, projectRoot: dir,
         mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1, fromStep: 'manual_test', log,
-        stepRunner: { run: vi.fn(async (step: StepName) => {
+        stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') throw new Error('runner died');
           if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
-          if (step === 'architecture_review_as_built') await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+          if (step === 'architecture_review_as_built') await writeAsBuiltApproval(dir, options);
           return { success: true } as StepRunResult;
         }) },
       });
@@ -216,11 +231,11 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const conductor = new Conductor({
         stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
         verifyArtifacts: true, maxRetries: 1, fromStep: 'manual_test',
-        stepRunner: { run: vi.fn(async (step: StepName) => {
+        stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') throw new Error('runner died');
           // `prd_audit` reports dispatch success but deliberately writes no
           // verdict artifact, so its objective gate remains unsatisfied.
-          if (step === 'architecture_review_as_built') await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+          if (step === 'architecture_review_as_built') await writeAsBuiltApproval(dir, options);
           return { success: true } as StepRunResult;
         }) },
       });
@@ -241,13 +256,13 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
     const statePath = join(dir, 'conduct-state.json');
     try {
       await seedValidators(dir, statePath);
-      const runner: StepRunner = { run: vi.fn(async (step: StepName) => {
+      const runner: StepRunner = { run: vi.fn(async (step: StepName, _state, options) => {
         if (step === 'manual_test') {
           await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n');
         }
         if (step === 'prd_audit') throw new Error('sibling crashed');
         if (step === 'architecture_review_as_built') {
-          await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+          await writeAsBuiltApproval(dir, options);
         }
         return { success: true } as StepRunResult;
       }) };
@@ -279,12 +294,12 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const firstRound = new Conductor({
         stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir,
         mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1, fromStep: 'manual_test',
-        stepRunner: { run: vi.fn(async (step: StepName) => {
+        stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           firstRoundCalls.push(step);
           if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           if (step === 'prd_audit') throw new Error('prd audit runner crashed before its verdict');
           if (step === 'architecture_review_as_built') {
-            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+            await writeAsBuiltApproval(dir, options);
           }
           return { success: true } as StepRunResult;
         }) },
@@ -310,7 +325,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       await new Conductor({
         stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir,
         mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1, fromStep: 'prd_audit',
-        stepRunner: { run: vi.fn(async (step: StepName) => {
+        stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           recoveryCalls.push(step);
           if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
           return { success: true } as StepRunResult;
@@ -328,10 +343,10 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const conductor = new Conductor({
         stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
         verifyArtifacts: true, maxRetries: 1, fromStep: 'manual_test',
-        stepRunner: { run: vi.fn(async (step: StepName) => {
+        stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           if (step === 'prd_audit') throw new Error('sibling crashed');
-          if (step === 'architecture_review_as_built') await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+          if (step === 'architecture_review_as_built') await writeAsBuiltApproval(dir, options);
           return { success: true } as StepRunResult;
         }) },
       });
@@ -367,7 +382,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const conductor = new Conductor({
         stateFilePath: statePath, events, projectRoot: dir, mode: 'auto', daemon: true,
         verifyArtifacts: true, maxRetries: 2, fromStep: 'manual_test',
-        stepRunner: { run: vi.fn(async (step: StepName) => {
+        stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           calls.push(step);
           if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           return { success: true } as StepRunResult;
@@ -394,10 +409,10 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       await new Conductor({
         stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
         verifyArtifacts: true, fromStep: 'manual_test',
-        stepRunner: { run: vi.fn(async (step: StepName) => {
+        stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
-          if (step === 'architecture_review_as_built') await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+          if (step === 'architecture_review_as_built') await writeAsBuiltApproval(dir, options);
           return { success: true } as StepRunResult;
         }) },
       }).run();
@@ -450,11 +465,11 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const seeded = await readState(statePath);
       if (!seeded.ok) throw seeded.error;
       const calls: StepName[] = [];
-      const runner: StepRunner = { run: vi.fn(async (step: StepName) => {
+      const runner: StepRunner = { run: vi.fn(async (step: StepName, _state, options) => {
         calls.push(step);
         if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
         if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
-        if (step === 'architecture_review_as_built') await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+        if (step === 'architecture_review_as_built') await writeAsBuiltApproval(dir, options);
         return { success: true } as StepRunResult;
       }) };
       const conductor = new Conductor({
@@ -488,12 +503,12 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const seeded = await readState(statePath);
       if (!seeded.ok) throw seeded.error;
       const calls: StepName[] = [];
-      const runner: StepRunner = { run: vi.fn(async (step: StepName) => {
+      const runner: StepRunner = { run: vi.fn(async (step: StepName, _state, options) => {
         calls.push(step);
         if (step === 'coverage_binding') await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'one-transient-failure-in-a-validation-group-member', runId: 'test-run', status: 'disabled', entries: [] }));
         if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
         if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
-        if (step === 'architecture_review_as_built') await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+        if (step === 'architecture_review_as_built') await writeAsBuiltApproval(dir, options);
         return { success: true } as StepRunResult;
       }) };
       const conductor = new Conductor({

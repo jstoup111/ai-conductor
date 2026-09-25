@@ -14,6 +14,8 @@ import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 const activeGate = vi.hoisted(() => ({ name: 'prd_audit' }));
 vi.mock('../../src/engine/steps.js', async (importOriginal) => {
@@ -35,6 +37,12 @@ type Gate = typeof gates[number];
 const PRD_REPORT = '# PRD Audit\n\n**PRD:** none\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | Evidence |\n|---|---|---|---|\n| S1.1 | PASS | 1 | test |\n\n| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | n/a | test | — |\n';
 const ARCH_REPORT = '# As-Built Review\n\nVerdict: APPROVED\n';
 const MANUAL_REPORT = '# Manual Test Results\n\n## Attempt 1\n\n| Story | Result |\n|---|---|\n| S1 | PASS |\n';
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
 
 describe('acceptance: stale judged-gate pre-dispatch preservation (#2639)', () => {
   let root: string;
@@ -105,7 +113,17 @@ describe('acceptance: stale judged-gate pre-dispatch preservation (#2639)', () =
       await writeFile(file, clean ? PRD_REPORT : PRD_REPORT.replace('| S1.1 | PASS |', '| S1.1 | FIXABLE |'));
       if (stamp) await writeFile(join(root, PRD_AUDIT_CODE_STAMP), JSON.stringify({ codeStamp: baseline }));
     } else if (gate === 'architecture_review_as_built') {
-      await writeFile(file, clean ? ARCH_REPORT : '# As-Built Review\n\nVerdict: BLOCKED\n');
+      await persistAsBuiltVerdict(root, clean
+        ? { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] }
+        : {
+          version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+          findings: [{ id: 'ARCH-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'unclean' }],
+          violations: 'unclean', resolution: 'repair it',
+        }, {
+        attemptId: 'seeded-run',
+        codeStamp: stamp ? baseline : null,
+        policy: AS_BUILT_TEST_POLICY,
+      });
       if (stamp) await writeFile(join(root, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP), JSON.stringify({ codeStamp: baseline }));
     } else if (gate === 'build_review') {
       await writeFile(file, JSON.stringify(aggregate(clean, stamp), null, 2));
@@ -197,8 +215,14 @@ describe('acceptance: stale judged-gate pre-dispatch preservation (#2639)', () =
     expect((await run('prd_audit')).calls).toContain('prd_audit');
   });
 
-  it.each(gates)('dispatches %s with gate code validity disabled', async (gate) => {
+  it.each(gates.filter((gate) => gate !== 'architecture_review_as_built'))('dispatches %s with gate code validity disabled', async (gate) => {
     await seedEvidence(gate);
     expect((await run(gate, { gate_code_validity: { enabled: false } })).calls).toContain(gate);
+  });
+
+  it('preserves a code-valid typed as-built verdict with gate code validity disabled', async () => {
+    await seedEvidence('architecture_review_as_built');
+    expect((await run('architecture_review_as_built', { gate_code_validity: { enabled: false } })).calls)
+      .not.toContain('architecture_review_as_built');
   });
 });

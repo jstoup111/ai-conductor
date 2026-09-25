@@ -68,9 +68,10 @@ import chalk from 'chalk';
 import {
   checkStepCompletion,
   PRD_AUDIT_CODE_STAMP,
-  ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_FAIL_EVIDENCE,
 } from '../../src/engine/artifacts.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
 import { AuditTrailWriter, type AuditRecord } from '../../src/engine/audit-trail.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
@@ -262,6 +263,16 @@ async function writeMdVerdict(
   return path;
 }
 
+async function writeAsBuiltApprovedVerdict(repo: string, codeStamp?: string): Promise<void> {
+  await persistAsBuiltVerdict(repo, {
+    version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+  }, {
+    attemptId: 'test-run',
+    codeStamp: codeStamp ?? null,
+    policy: AS_BUILT_TEST_POLICY,
+  });
+}
+
 /** A "clean PASS" manual-test marker: codeStamp set, no headSha, no failRows. */
 async function writeManualTestVerdict(repo: string, codeStamp?: string): Promise<void> {
   const path = join(repo, '.pipeline/manual-test-results.md');
@@ -275,6 +286,12 @@ async function writeManualTestVerdict(repo: string, codeStamp?: string): Promise
 const PRD_HEADER = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n';
 const PRD_ALIGNED = PRD_HEADER + '| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n';
 const ARCH_APPROVED = '# As-Built Review\n\nVerdict: APPROVED\n';
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
 const MANUAL_TEST_PASS =
   '# Manual Test Results\n\n## Attempt 1 — 2026-07-22T10:00:00Z\n\n' +
   '| Story | Result |\n|---|---|\n| Foo | PASS |\n';
@@ -344,15 +361,7 @@ describe('Story 1: a preserve is reported as preserved_surface_miss, never as a 
   it('a genuinely fresh architecture_review_as_built APPROVED report reports rewritten', async () => {
     const s = await makeRepo();
     await commit(s, { 'src/a.ts': 'a\n' }, 'init');
-    const artifact = await writeMdVerdict(
-      s.repo,
-      '.pipeline/architecture-review-as-built.md',
-      ARCH_APPROVED,
-      undefined,
-      ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
-    );
-    const freshMtime = new Date(Date.now() + 5000);
-    await utimes(artifact, freshMtime, freshMtime);
+    await writeAsBuiltApprovedVerdict(s.repo);
 
     const result = await checkStepCompletion(
       s.repo,
@@ -383,13 +392,7 @@ describe('Story 1: a preserve is reported as preserved_surface_miss, never as a 
 
   it('architecture_review_as_built preserve populates the facet instead of a bare done:true', async () => {
     const { s, baseline } = await featureRepo();
-    await writeMdVerdict(
-      s.repo,
-      '.pipeline/architecture-review-as-built.md',
-      ARCH_APPROVED,
-      baseline,
-      ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
-    );
+    await writeAsBuiltApprovedVerdict(s.repo, baseline);
     await pushForeignCommit(s as Scratch & { origin: string }, { 'foreign.ts': 'foreign1\n' }, 'foreign work');
 
     const result = await checkStepCompletion(s.repo, 'architecture_review_as_built', ctxFor(s.repo));
@@ -397,7 +400,7 @@ describe('Story 1: a preserve is reported as preserved_surface_miss, never as a 
     expect(result.done).toBe(true);
     expect(result.verdictFreshness).toBeDefined();
     expect(outcomeOf(result)).toBe('preserved_surface_miss');
-    expect(result.verdictFreshness?.artifact).toContain('architecture-review-as-built.md');
+    expect(result.verdictFreshness?.artifact).toContain('architecture-review-as-built.json');
   });
 
   it('manual_test preserve populates the facet instead of a bare done:true', async () => {
@@ -445,21 +448,16 @@ describe('Story 2: every rejection reports stale_invalidated, and routing is unc
     expect(outcomeOf(result)).toBe('stale_invalidated');
   });
 
-  it('architecture_review_as_built reports stale_invalidated on the plain mtime floor', async () => {
+  it('architecture_review_as_built rejects a legacy Markdown-only report', async () => {
     const s = await makeRepo();
     await commit(s, { 'src/a.ts': 'a\n' }, 'init');
-    await writeMdVerdict(
-      s.repo,
-      '.pipeline/architecture-review-as-built.md',
-      ARCH_APPROVED,
-      undefined,
-      ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
-    );
+    await writeFile(join(s.repo, '.pipeline/architecture-review-as-built.md'), ARCH_APPROVED);
 
     const result = await checkStepCompletion(s.repo, 'architecture_review_as_built', ctxFor(s.repo));
 
     expect(result.done).toBe(false);
-    expect(outcomeOf(result)).toBe('stale_invalidated');
+    expect(result.routeClass).toBe('absent');
+    expect(outcomeOf(result)).toBeUndefined();
   });
 
   it('reports stale_invalidated even when gate-code-validity is disabled', async () => {
