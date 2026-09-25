@@ -437,6 +437,12 @@ After generating the plan, cross-reference:
 - If any criterion is uncovered, add a task
 - For each row, list the criterion's Then outcomes and confirm the cited task's checks explicitly
   require every one (§3c); widen a check or add one for any outcome that is only implied
+- **Contradiction pass (mandatory):** check every task's Done-when bullets and required behavior
+  against *every* criterion, not only those it cites — negative paths and "only"/"never"/"no"
+  constraints first. If satisfying a task would violate a criterion, or the task's design cannot
+  represent state a criterion depends on, fix the plan before landing or surface it to the operator.
+  Example: Story 6 negative "the only assertion changes are the added credential option" vs a task
+  whose Done-when requires new endpoint assertions — covered, yet contradictory.
 - Present the coverage mapping to the user
 
 Record the mapping in a `## Coverage Check` table. At every tier, use one four-cell

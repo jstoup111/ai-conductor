@@ -243,6 +243,15 @@ excluding the preserved scenario can defeat the promise even when its own task s
 story. Name the exact protected observable and conflicting check; do not infer preservation merely
 from a separate regression-test task. Use §5 if the artifacts do not establish that the paths overlap.
 
+**Criterion-conflict sweep (mandatory).** Coverage rows only pair a task with the criteria it cites.
+For every task, check each Done-when bullet and required behavior against *every* story criterion —
+cited or not, negative paths and "only"/"never"/"no" constraints first. Record `fail` when satisfying
+the task would violate a criterion, or when the task's design cannot represent state a criterion
+depends on (e.g. a void that erases the provenance a later "no reopen" check reads). Example: Story 6
+negative says "the only assertion changes are the added credential option"; Task 8's Done-when
+requires new endpoint assertions — both cannot ship, so amend one before landing or surface it to
+the operator.
+
 When a contradiction is confirmed, amend the artifact during this DECIDE pass — do not
 defer it to BUILD. Follow the accepted-artifact amendment convention the sibling DECIDE
 skills use: add a dated note beside the original assertion, additively, leaving the
