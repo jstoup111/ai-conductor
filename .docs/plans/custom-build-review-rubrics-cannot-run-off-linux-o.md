@@ -127,7 +127,7 @@ ship (architecture review Condition 2).
 5. Commit: "feat(build-review): launch custom members in provider read-only review mode"
 
 **Done when:**
-- an integration test of `dispatchInstalledBuildReviewPolicy` on three non-self-host host fixtures (Linux with nested namespaces refused, Linux unrestricted, darwin without bubblewrap) settles the custom member with a judged result, no member settles `preflight-failed`, and the execa spy records zero bubblewrap spawns
+- an integration test of `dispatchInstalledBuildReviewPolicy` on three non-self-host host fixtures (Linux with nested namespaces refused, Linux unrestricted, darwin without bubblewrap) settles the custom member with a judged result, no member settles `preflight-failed`, and the execa spy records zero bubblewrap spawns; on the darwin-without-bubblewrap fixture no member result text names bubblewrap, a nested sandbox, or a containment probe
 - the same test asserts the Claude and Codex custom-member launches carry the `readOnlyReview` option and an environment equal to an ordinary step's environment for that candidate, with no engine-overridden HOME, CLAUDE_CONFIG_DIR, CODEX_HOME, TMPDIR or XDG scratch path
 - a Codex custom-member test asserts no login file is copied and the only engine scratch home passed is `nativeSchemaScratchHome`, which is not the child's CODEX_HOME
 - a provider-error fixture settles the custom member with cause `provider-error`, and no member result text names bubblewrap, a nested sandbox, or a containment probe
@@ -151,7 +151,7 @@ ship (architecture review Condition 2).
 5. Commit: "feat(build-review): run built-in peers of custom laps in read-only review mode"
 
 **Done when:**
-- an integration test of a mixed custom and built-in lap asserts the built-in peer's launch carries the `readOnlyReview` option and its Claude argv lacks `--dangerously-skip-permissions`
+- an integration test of a mixed custom and built-in lap asserts the built-in peer's launch carries the `readOnlyReview` option and its Claude argv lacks `--dangerously-skip-permissions`, and the built-in peer's Claude argv carries every read-only review flag the custom member's argv carries (`--restricted`, the `--tools` list, the `--allowedTools` rules and `--strict-mcp-config`)
 - the same test asserts the built-in peer's cwd is the lap's frozen head and its prompt carries the frozen input scope
 - a testQuality peer fixture on Claude asserts the launched argv allow rules admit `git show`
 
@@ -233,7 +233,7 @@ ship (architecture review Condition 2).
 - a lap test with a fixture reviewer that modifies a frozen-head file during fan-out settles every member `review-input-mutated` naming that path, publishes no aggregate, increments the mechanical-fault counter by one, and emits `build_review_rubric_infrastructure_failure` with the changed inputs
 - lap tests that modify a frozen-baseline file, a captured policy material file, an installed policy package file, or a pre-existing evidence file each settle `review-input-mutated` naming that input
 - a lap test that writes a new engine branch artifact and changes a tracked feature-checkout file during fan-out publishes its aggregate, and the member results name the lap's captured input identity
-- a lap test at the last mechanical allowance halts `needs-human` with a body naming `review-input-mutated` and the changed inputs, and a lap test with allowance remaining re-runs on a freshly materialized frozen view
+- a lap test at the last mechanical allowance halts `needs-human` with a body naming `review-input-mutated` and the changed inputs, and a lap test with allowance remaining re-runs on a freshly materialized frozen view whose members judge again and settle judged results
 
 **Files likely touched:**
 - src/conductor/src/engine/step-runners.ts — digest capture and discard
@@ -309,8 +309,8 @@ ship (architecture review Condition 2).
 5. Commit: "feat(daemon): report read-only review capability at start"
 
 **Done when:**
-- a runDaemonMode wiring test with a project enabling a custom rubric naming Codex emits one `build_review_read_only_capability` event for Codex before the first feature dispatch
-- a runDaemonMode wiring test with an unavailable Codex result logs the provider, the platform and the reason and still enters the dispatch loop
+- a runDaemonMode wiring test with a project enabling a custom rubric naming Codex emits one `build_review_read_only_capability` event for Codex before the first feature dispatch, and a sibling test with a project enabling a custom rubric naming Claude and a Claude CLI fixture accepting the restricted-mode flags emits one event recording Claude `available`
+- a runDaemonMode wiring test with an unavailable Codex result logs the provider, the platform and the reason and still enters the dispatch loop; with a Codex sandbox helper fixture that cannot start the probe process, the capability event recording Codex `unavailable` and the daemon log line naming the platform and the helper's error are both emitted before the first feature dispatch
 - a runDaemonMode wiring test with no enabled custom rubric records no capability probe spawn and no capability event
 - a wiring test asserts the daemon-scoped capability result reaches the build_review step runner through the Conductor options
 
