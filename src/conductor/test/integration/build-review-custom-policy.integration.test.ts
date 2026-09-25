@@ -201,11 +201,14 @@ describe('custom build-review policy runner', () => {
     const root = await fixture();
     const packageRoot = join(root, 'policy-package');
     const materialPath = join(root, '.pipeline', 'build-review', 'policy-material', 'portable');
+    const preExistingEvidence = join(root, '.pipeline', 'test-suite-evidence.json');
     await mkdir(packageRoot, { recursive: true });
     await writeFile(join(packageRoot, 'SKILL.md'), '# Original policy\n');
+    await writeFile(preExistingEvidence, '{"status":"CURRENT"}\n');
     const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
     const invoke = vi.fn(async () => {
       await writeFile(join(materialPath, 'SKILL.md'), '# Mutated during review\n');
+      await writeFile(preExistingEvidence, '{"status":"MUTATED"}\n');
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
     });
     const provider: LLMProvider = {
@@ -238,7 +241,10 @@ describe('custom build-review policy runner', () => {
     expect(result.output).toContain('review-input-mutated');
     await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
     await expect(readFile(join(root, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.toContain('"mechanicalFaults": 1');
-    expect(failures).toEqual([expect.objectContaining({ cause: 'review-input-mutated', changedInputs: ['capturedPolicyMaterial:SKILL.md'] })]);
+    expect(failures).toEqual([expect.objectContaining({
+      cause: 'review-input-mutated',
+      changedInputs: expect.arrayContaining(['capturedPolicyMaterial:SKILL.md', 'evidenceRoot:test-suite-evidence.json']),
+    })]);
   });
 
   it('records declared references, never captured package file bodies, as plugin policy criteria', async () => {

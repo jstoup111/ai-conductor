@@ -50,6 +50,9 @@ describe('custom build-review convergence', () => {
       baselinePath: join(projectRoot, 'baseline'), headPath: join(projectRoot, 'head'),
     };
     await Promise.all([mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
+    const events = new ConductorEventEmitter();
+    const infrastructureFailures: unknown[] = [];
+    events.on('build_review_rubric_infrastructure_failure', (event) => { infrastructureFailures.push(event); });
     const runner = new DefaultStepRunner(provider, 'read-only-exhaustion', projectRoot, {
       config,
       providerRuntimes: new ProviderRuntimeSet(['codex', 'claude'].map((key) => ({
@@ -59,6 +62,7 @@ describe('custom build-review convergence', () => {
       sessionStore: new ProviderSessionStore(),
       buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`, declaredDependencies: [], availability: 'available' as const }],
       buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+      events,
     });
     const outcome = await (runner as unknown as {
       dispatchInstalledBuildReviewPolicy(entry: unknown, inputs: unknown, lapId: string, tier: 'M', capture?: unknown, capability?: (provider: string) => Promise<unknown>): Promise<{ member?: unknown }>;
@@ -69,6 +73,9 @@ describe('custom build-review convergence', () => {
 
     expect(invoke).not.toHaveBeenCalled();
     expect(outcome.member).toMatchObject({ result: { reason: 'read-only-review-unavailable', detail: expect.stringMatching(/darwin[\s\S]*codex[\s\S]*claude/) } });
+    expect(infrastructureFailures).toEqual([expect.objectContaining({
+      cause: 'read-only-review-unavailable', platform: 'darwin',
+    })]);
   });
 
   it('refuses an all-read-only-unavailable custom lap without charging the mechanical ledger', async () => {

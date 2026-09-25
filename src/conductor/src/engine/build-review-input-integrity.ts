@@ -18,6 +18,8 @@ export interface BuildReviewInputDigestRoots {
   readonly capturedPolicyMaterial: string;
   readonly installedPolicyPackage: string;
   readonly evidenceRoot: string;
+  /** Engine outputs written while the lap settles are never review inputs. */
+  readonly evidenceRootExcludes?: readonly string[];
 }
 
 export interface BuildReviewInputIntegrityFilesystem {
@@ -90,9 +92,13 @@ export async function captureBuildReviewInputDigest(
   for (const root of BUILD_REVIEW_INPUT_ROOT_KINDS) {
     const rootPath = roots[root];
     for (const path of await collectRegularFiles(rootPath, reader)) {
+      const relativePath = relative(rootPath, path).split('\\').join('/');
+      if (root === 'evidenceRoot' && roots.evidenceRootExcludes?.some(
+        (prefix) => relativePath === prefix || relativePath.startsWith(`${prefix}/`),
+      )) continue;
       entries.push({
         root,
-        relativePath: relative(rootPath, path).split('\\').join('/'),
+        relativePath,
         contentHash: contentHash(await reader.readFile(path)),
       });
     }

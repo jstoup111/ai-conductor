@@ -2385,11 +2385,11 @@ export class DefaultStepRunner implements StepRunner {
     // candidates judge only the detached source view, and normal engine work
     // continues to write branch evidence in the live checkout while they run.
     const customLapEvidenceRoot = join(effectivePipelineDir, 'build-review', lapId);
-    // Branch artifacts are engine outputs, including artifacts left by an
-    // earlier lap. They are deliberately outside the input-evidence subtree:
-    // D5.3 watches only evidence supplied before fan-out, never output the
-    // engine creates while settling a lap.
-    const customLapInputEvidenceRoot = join(customLapEvidenceRoot, 'input-evidence');
+    // Evidence supplied by the engine already lives in the pipeline, rather
+    // than in a synthetic per-lap directory.  The digest deliberately ignores
+    // evidence created after capture, so branch artifacts and the digest record
+    // written while the lap settles cannot invalidate their own lap.
+    const customLapInputEvidenceRoot = effectivePipelineDir;
     const inputDigestEvidencePath = join(customLapEvidenceRoot, 'input-digest.json');
     const materializedSource = inputs.sourceMaterialization?.source;
     const unavailableInputRoot = (name: string) => join(customLapEvidenceRoot, `.unavailable-${name}`);
@@ -2399,6 +2399,7 @@ export class DefaultStepRunner implements StepRunner {
       capturedPolicyMaterial: unavailableInputRoot('policy-material'),
       installedPolicyPackage: unavailableInputRoot('policy-package'),
       evidenceRoot: customLapInputEvidenceRoot,
+      evidenceRootExcludes: ['build-review'],
     };
     // This is engine evidence, not reviewer evidence. Remove the previous
     // record before capture so rewriting it cannot invalidate the next lap.
@@ -2506,6 +2507,7 @@ export class DefaultStepRunner implements StepRunner {
         inputs,
         engineIdentity,
         customEntries.length > 0,
+        readOnlyReviewCapabilityFor,
       ),
       writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
         readFile: async (path) => readFile(path, 'utf-8'),
@@ -3226,6 +3228,15 @@ export class DefaultStepRunner implements StepRunner {
           ({ provider, reason }) => `${provider}: ${redactSafetyText(reason)}`,
         ).join('; ')}`,
       };
+      const platform = result.providerSetupExhaustion.candidates
+        .map((candidate) => / on ([^:]+):/.exec(candidate.reason)?.[1])
+        .find((value): value is string => value !== undefined);
+      await this.events?.emit({
+        type: 'build_review_rubric_infrastructure_failure', rubric: entry.id, lapId,
+        reason: 'read-only-review-unavailable', cause: 'read-only-review-unavailable',
+        excerpt: failure.detail,
+        ...(platform === undefined ? {} : { platform }),
+      });
     }
     const member = result.success ? (() => {
       try { return parseBuildReviewCustomArtifactMember(JSON.parse(result.output)); } catch { return undefined; }
@@ -3431,6 +3442,7 @@ export class DefaultStepRunner implements StepRunner {
     inputs?: BuildReviewFrozenInputs,
     engineIdentity?: BuildReviewCoordinationEngineIdentity,
     customPolicyLap = false,
+    readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability>,
   ): Promise<unknown> {
     const materialized = inputs?.sourceMaterialization?.contextFor(branch.rubric).source;
     const candidateIdentity = (candidate: { providerKey: string; model: string; effort?: string }, effectiveBundleDigest?: string): BuildReviewCacheSemanticIdentity | undefined => {
@@ -3581,6 +3593,24 @@ export class DefaultStepRunner implements StepRunner {
               prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${prompt}`,
             }),
             preparedCandidateOperation: async (context) => {
+              // Built-in peers participate in a custom-policy lap's exact
+              // read-only contract.  Resolve through the same memoized
+              // admission seam as custom members so a peer cannot select an
+              // unprobed provider independently.
+              if (customPolicyLap) {
+                const capability = await readOnlyReviewCapabilityFor?.(context.candidate.providerKey);
+                if (capability?.status === 'unavailable') {
+                  const detail = `Provider ${context.candidate.providerKey} read-only review mode is unavailable on ${capability.platform}: ${capability.reason}`;
+                  return {
+                    kind: 'failure' as const,
+                    result: {
+                      success: false, exitCode: 1, providerUnavailable: true,
+                      providerInvocationSkipped: true, readOnlyReviewUnavailable: true,
+                      providerUnavailableReason: detail, output: detail,
+                    },
+                  };
+                }
+              }
               // Direct rubric-dispatch callers retain the historic lifecycle:
               // they have no frozen inputs or run-level engine identity from
               // which a candidate-bound cache key could be derived.
