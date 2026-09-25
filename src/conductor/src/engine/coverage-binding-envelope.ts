@@ -63,6 +63,7 @@ export interface CoverageBindingAmendmentEnvelopeEntry {
   readonly taskIds: readonly string[];
   readonly doneWhen: readonly (readonly string[])[];
   readonly verdict: CoverageBindingAmendmentVerdict;
+  readonly missingObligation?: string;
 }
 
 export type CoverageBindingAmendmentJudgeVerdict =
@@ -137,16 +138,19 @@ function parseEntry(value: unknown): CoverageBindingEnvelopeEntry | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
   if (candidate.kind === 'amendment') {
-    if (!exactKeys(candidate, ['kind', 'digest', 'artifactPath', 'amendment', 'taskIds', 'doneWhen', 'verdict']) ||
+    const hasMissingObligation = candidate.missingObligation !== undefined;
+    if (!exactKeys(candidate, ['kind', 'digest', 'artifactPath', 'amendment', 'taskIds', 'doneWhen', 'verdict', ...(hasMissingObligation ? ['missingObligation'] : [])]) ||
       !text(candidate.digest) || !text(candidate.artifactPath) || !text(candidate.amendment) ||
       !stringList(candidate.taskIds) || !doneWhen(candidate.doneWhen) ||
       !(['carried', 'not-carried', 'no-plan-obligation', 'unjudged'] as const).includes(candidate.verdict as CoverageBindingAmendmentVerdict)) {
       return null;
     }
+    if (candidate.verdict === 'not-carried' ? !text(candidate.missingObligation) : hasMissingObligation) return null;
     return {
       kind: 'amendment', digest: candidate.digest, artifactPath: candidate.artifactPath,
       amendment: candidate.amendment, taskIds: candidate.taskIds, doneWhen: candidate.doneWhen,
       verdict: candidate.verdict as CoverageBindingAmendmentVerdict,
+      ...(candidate.verdict === 'not-carried' ? { missingObligation: candidate.missingObligation as string } : {}),
     } as unknown as CoverageBindingEnvelopeEntry;
   }
   const hasMissingAssertion = candidate.missingAssertion !== undefined;

@@ -31,6 +31,8 @@ import { executeProviderCandidates } from '../../src/engine/provider-execution.j
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { settleRemediationRound } from '../../src/engine/kickback-ledger.js';
+import { remediationLapCapForGate } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
@@ -794,6 +796,31 @@ describe('DefaultStepRunner', () => {
     }
   });
 
+  it('refuses a cached not-carried amendment with its preserved missing obligation without provider dispatch', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-cached-refusal-'));
+    const featureDesc = 'coverage-binding-amendment-cached-refusal';
+    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ digest }) => ({ digest, verdict: 'not-carried', missingObligation: 'X' })) }), exitCode: 0 };
+    });
+    const runner = new DefaultStepRunner(provider, 'coverage-run-amendment-cached-refusal', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: false });
+      (provider.invoke as ReturnType<typeof vi.fn>).mockClear();
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(provider.invoke).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain('Missing obligation: X');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('reuses carried amendment claims and records disabled ones as unjudged without dispatch', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-cache-'));
     const featureDesc = 'coverage-binding-amendment-cache';
@@ -890,6 +917,37 @@ describe('DefaultStepRunner', () => {
       await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
       expect(provider.invoke).not.toHaveBeenCalled();
       await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '2': 'pending', '1': 'completed', '3': 'completed' });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a contradicted-task reopen when coverage_binding has exhausted its default lap cap', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-reopen-cap-'));
+    const featureDesc = 'coverage-binding-reopen-cap';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, false);
+    await writeTaskStatuses(projectDir, ['1', '2', '3']);
+    await writeInvalidatedEnvelope(projectDir, featureDesc, [{ digest: 'sha256:old', criterion: 'old', taskIds: ['2'], doneWhen: [[]], verdict: 'not-applicable' }]);
+    const cap = remediationLapCapForGate('coverage_binding', {} as HarnessConfig);
+    for (let lap = 0; lap < cap; lap++) {
+      await settleRemediationRound(projectDir, `seed-${lap}`, ['coverage_binding']);
+    }
+    const events = new ConductorEventEmitter();
+    const reopened: unknown[] = [];
+    events.on('coverage_binding_task_reopened', (event) => { reopened.push(event); });
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'coverage-run-reopen-cap', projectDir, {
+      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain('gates.coverage_binding');
+      expect(result.output).toContain(String(cap));
+      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '2': 'completed' });
+      await expect(readKickbackLedger(projectDir)).resolves.toMatchObject({ gates: { coverage_binding: { laps: cap } } });
+      expect(reopened).toEqual([]);
+      expect(provider.invoke).not.toHaveBeenCalled();
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
