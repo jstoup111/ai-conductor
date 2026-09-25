@@ -121,9 +121,9 @@ export function makeProductionGit(): GitRunner {
     assertRealExecAllowed('git');
     let env: NodeJS.ProcessEnv | undefined;
     if (opts.credential === 'write') {
-      if (opts.endpoint === 'ssh') throw new GithubBotAuthRefusalError('unsupported-remote-transport');
       const credential = await readGithubBotCredential();
       if (credential.kind === 'configured') {
+        if (opts.endpoint === 'ssh') throw new GithubBotAuthRefusalError('unsupported-remote-transport');
         const token = await readGithubBotToken(credential.tokenFile);
         if (token.kind === 'unavailable') throw new GithubBotAuthRefusalError('token-unavailable');
         env = { ...process.env, GH_TOKEN: token.token, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' };
