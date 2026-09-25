@@ -4301,6 +4301,7 @@ TIER: M`,
       const priorSelectorMarker = process.env[selectorMarkerEnv];
       let checkoutRoot: string | undefined;
       const observedProjections: Array<{ preflight: { classification: string; excerpt: string } }> = [];
+      const observedPrompts: string[] = [];
       try {
         await execa('git', ['init', '-q', '-b', 'main'], { cwd: repository });
         await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repository });
@@ -4335,6 +4336,7 @@ TIER: M`,
           invoke: vi.fn(async (options) => {
             const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!) as typeof observedProjections[number];
             observedProjections.push(projection);
+            observedPrompts.push(options.prompt);
             const scopeContext = JSON.parse(options.prompt.match(/Candidate-resolution authority \(use only these ids, regions, and obligations\):\n(\{[\s\S]*?\})\n\nYour final/)![1]);
             const payload = {
               findings: [],
@@ -4397,6 +4399,9 @@ TIER: M`,
         expect(observedProjections[0]).toMatchObject({ preflight: { classification: 'nonzero-exit' } });
         expect(typeof observedProjections[0].preflight.excerpt).toBe('string');
         expect(queuedMutations).toEqual(['add:queued', 'remove:queued']);
+        // The grader is told each status's validator-required fields, so a
+        // `resolved` copy of the authority cannot omit `associationReason`.
+        expect(observedPrompts[0]).toContain('`resolved` requires `sourceRegion` and `obligationReferences` copied verbatim from that candidate in the authority (a non-empty subset of its obligations, no duplicates) plus a non-blank `associationReason`; `out-of-scope` requires a non-blank `exclusionReason`; `indeterminate` requires a non-blank `missingEvidenceReason`.');
       } finally {
         if (priorSelectorMarker === undefined) delete process.env[selectorMarkerEnv];
         else process.env[selectorMarkerEnv] = priorSelectorMarker;
