@@ -120,20 +120,23 @@ export function makeProductionGit(): GitRunner {
   return async (args: string[], opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }) => {
     assertRealExecAllowed('git');
     let env: NodeJS.ProcessEnv | undefined;
+    let botToken: string | undefined;
     if (opts.credential === 'write') {
       const credential = await readGithubBotCredential();
       if (credential.kind === 'configured') {
         if (opts.endpoint === 'ssh') throw new GithubBotAuthRefusalError('unsupported-remote-transport');
         const token = await readGithubBotToken(credential.tokenFile);
         if (token.kind === 'unavailable') throw new GithubBotAuthRefusalError('token-unavailable');
-        env = { ...process.env, GH_TOKEN: token.token, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' };
+        botToken = token.token;
+        env = { ...process.env, GH_TOKEN: botToken, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' };
       }
     }
     try {
       const result = await execFileP('git', args, { cwd: opts.cwd, maxBuffer: 32 * 1024 * 1024, ...(env === undefined ? {} : { env }) });
       return { stdout: String(result.stdout) };
     } catch (error) {
-      if (opts.credential === 'write' && classifyGitPushAuthRefusal(error)) throw new GithubBotAuthRefusalError('auth-refused');
+      if (botToken !== undefined && classifyGitPushAuthRefusal(error)) throw new GithubBotAuthRefusalError('auth-refused');
+      if (botToken !== undefined && error instanceof Error) throw new Error(error.message.split(botToken).join('[redacted]'), { cause: error });
       throw error;
     }
   };

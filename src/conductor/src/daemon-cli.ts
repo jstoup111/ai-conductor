@@ -2381,8 +2381,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
 
                 // Create a gh runner (wrapper around gh commands)
                 const productionGh = makeProductionGh();
-                const ghRunner = async (args: string[]) =>
-                  productionGh(args, { cwd: entry.repoCwd });
+                const ghRunner = async (args: string[], opts: { credential?: 'operator' | 'write' } = {}) =>
+                  productionGh(args, { cwd: entry.repoCwd, ...opts });
 
                 // Create a suite runner (executes the suite command in the worktree)
                 const runSuite = async (projectRoot: string) => {

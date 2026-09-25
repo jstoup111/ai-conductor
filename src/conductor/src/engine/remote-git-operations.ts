@@ -210,14 +210,14 @@ export async function executeRemoteGit(
   } catch (error) {
     if (error instanceof GithubBotAuthRefusalError) {
       try {
-        if (dependencies.events !== undefined) {
-          await dependencies.events.emit({
-            type: 'github_write_credential_fallback',
-            operation: resolution.targets[0].operation,
-            target: resolution.targets[0],
-            reason: error.reason,
-          });
-        }
+        if (dependencies.events === undefined) throw error;
+        const destination = resolution.targets[0];
+        await dependencies.events.emit({
+          type: 'github_write_credential_fallback',
+          operation: destination.operation,
+          target: { repository: destination.repository, kind: 'remote-ref', ref: destination.ref },
+          reason: error.reason,
+        });
         await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd, credential: 'operator', endpoint: resolution.targets[0].endpoint });
         return { kind: 'executed', targets: resolution.targets };
       } catch (fallbackError) {
