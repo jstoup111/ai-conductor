@@ -9615,7 +9615,7 @@ describe('engine/conductor', () => {
       // manual_test) has resolved.
       let sawPrematureWrite: unknown = 'not-checked';
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'manual_test') {
             await new Promise((r) => setTimeout(r, 30));

@@ -10,11 +10,13 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
 import { readVerdict } from '../../src/engine/gate-verdicts.js';
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunOptions, StepRunResult } from '../../src/engine/conductor.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 const prospectiveMergeFixture = vi.hoisted(() => ({ forceIndeterminate: false }));
 
@@ -63,6 +65,13 @@ const FRONT_DONE_M: ConductState = {
   architecture_diagram: 'skipped',
   architecture_review: 'done',
   acceptance_specs: 'skipped',
+};
+
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
 };
 
 function coverageBindingBatchOutput(
@@ -198,7 +207,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     });
   }
 
-  async function satisfy(step: string): Promise<StepRunResult> {
+  async function satisfy(step: string, options?: StepRunOptions): Promise<StepRunResult> {
     if (step === 'build') {
       await writeFile(
         join(dir, '.pipeline/task-status.json'),
@@ -239,11 +248,13 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
         ].join('\n'),
       );
     } else if (step === 'architecture_review_as_built') {
-      await mkdir(join(dir, '.docs/decisions'), { recursive: true });
-      await writeFile(
-        join(dir, '.pipeline/architecture-review-as-built.md'),
-        '# As-Built Review\n\nVerdict: APPROVED\n',
-      );
+      await persistAsBuiltVerdict(dir, {
+        version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+      }, {
+        attemptId: options?.runId ?? 'test-run',
+        codeStamp: null,
+        policy: AS_BUILT_TEST_POLICY,
+      });
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
       const stateResult = await readState(statePath);
@@ -257,9 +268,9 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
 
   function runCountingRunner(counts: Record<string, number>): StepRunner {
     return {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         counts[step] = (counts[step] ?? 0) + 1;
-        return satisfy(step);
+        return satisfy(step, options);
       },
     };
   }
@@ -278,7 +289,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
         counts[step] = (counts[step] ?? 0) + 1;
         return step === 'coverage_binding'
           ? coverage.run(step, state, options)
-          : satisfy(step);
+          : satisfy(step, options);
       },
     };
   }
@@ -341,7 +352,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     const order: string[] = [];
     let postReplayProofEstablished = false;
     const runner: StepRunner = {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         order.push(step);
         // The ordering observation ends at the first post-replay manual test.
         // Continuing through the rest of the ship tail adds unrelated gates to
@@ -350,7 +361,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
         if (step === 'manual_test' && postReplayProofEstablished) {
           return { success: false, error: 'expected stop after post-replay ordering observation' };
         }
-        return satisfy(step);
+        return satisfy(step, options);
       },
     };
     // Suite proof is bound to the HEAD it was established on, so the replay
