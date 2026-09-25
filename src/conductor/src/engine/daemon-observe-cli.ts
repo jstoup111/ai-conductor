@@ -11,7 +11,7 @@
 // primitives (`isLive`, `readPidRecord`) and the daemon-log readers — they never
 // re-encode the pidfile path or write anything.
 
-import { readFile, stat } from 'node:fs/promises';
+import { open, readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { isLive, readPidRecord, type KillProbe } from './daemon-lock.js';
 import { resolveRegistryPath, readRegistry, type ProjectRecord } from './registry.js';
@@ -37,6 +37,9 @@ import type { HarnessConfig } from '../types/config.js';
 /** Fallback label when a pidfile record has no `engineDir`, or its basename
  * isn't a recognized version id (legacy record, dev/unpublished run, etc.). */
 const VERSION_UNKNOWN = 'version-unknown';
+/** Bound status reads to the recent daemon event tail. Capability events are
+ * emitted once per daemon start, so their latest values remain near the end. */
+const CAPABILITY_EVENT_TAIL_BYTES = 64 * 1024;
 
 /**
  * Derive a version id label from a pidfile's `engineDir` (FR-14). Pure string
@@ -443,6 +446,84 @@ async function renderBlockedSection(repoPath: string, out: (line: string) => voi
   for (const blocked of snapshot.blocked) out(blockedSpecLine(blocked));
 }
 
+type ReadOnlyReviewCapability = {
+  provider: string;
+  platform: string;
+  status: 'available' | 'unavailable';
+  reason?: string;
+};
+
+function readOnlyReviewCapability(event: unknown): ReadOnlyReviewCapability | undefined {
+  if (typeof event !== 'object' || event === null) return undefined;
+  const record = event as Record<string, unknown>;
+  if (
+    record.type !== 'build_review_read_only_capability' ||
+    typeof record.provider !== 'string' ||
+    typeof record.platform !== 'string' ||
+    (record.status !== 'available' && record.status !== 'unavailable')
+  ) return undefined;
+  if (record.status === 'unavailable' && typeof record.reason !== 'string') return undefined;
+  return {
+    provider: record.provider,
+    platform: record.platform,
+    status: record.status,
+    ...(typeof record.reason === 'string' ? { reason: record.reason } : {}),
+  };
+}
+
+/** Read only the recent event tail, retaining the final persisted result per provider. */
+async function readLatestReadOnlyReviewCapabilities(repoPath: string): Promise<ReadOnlyReviewCapability[]> {
+  const path = join(repoPath, '.daemon', 'events.jsonl');
+  let size: number;
+  try {
+    size = (await stat(path)).size;
+  } catch {
+    return [];
+  }
+
+  const offset = Math.max(0, size - CAPABILITY_EVENT_TAIL_BYTES);
+  const buffer = Buffer.alloc(size - offset);
+  let bytesRead: number;
+  try {
+    const handle = await open(path, 'r');
+    try {
+      ({ bytesRead } = await handle.read(buffer, 0, buffer.length, offset));
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return [];
+  }
+
+  const lines = buffer.subarray(0, bytesRead).toString('utf8').split('\n');
+  // The byte tail can begin in the middle of an event; it cannot be parsed as
+  // a complete JSONL record and must not be allowed to affect the result.
+  if (offset > 0) lines.shift();
+  const latestByProvider = new Map<string, ReadOnlyReviewCapability>();
+  for (const line of lines) {
+    if (line.trim() === '') continue;
+    try {
+      const event = readOnlyReviewCapability(JSON.parse(line));
+      if (event) latestByProvider.set(event.provider, event);
+    } catch {
+      // A concurrent append or malformed unrelated event does not make status fail.
+    }
+  }
+  return [...latestByProvider.values()];
+}
+
+async function renderReadOnlyReviewCapabilitySection(repoPath: string, out: (line: string) => void): Promise<void> {
+  const capabilities = await readLatestReadOnlyReviewCapabilities(repoPath);
+  if (capabilities.length === 0) {
+    out('  READ-ONLY REVIEW CAPABILITY: none recorded');
+    return;
+  }
+  for (const capability of capabilities) {
+    const reason = capability.reason === undefined ? '' : `: ${capability.reason}`;
+    out(`  READ-ONLY REVIEW CAPABILITY: ${capability.provider} on ${capability.platform} — ${capability.status}${reason}`);
+  }
+}
+
 /**
  * Render the per-repo GATED section (Task 15, S5 HP-1/HP-2/NP-4/NP-5) by
  * reading `.daemon/gated.json` via `readGatedSnapshot` — read-only, no git/gh
@@ -578,6 +659,7 @@ export async function runDaemonStatus(
     // path-missing repos have no `.daemon/` directory to read from — never
     // attempt the snapshot read for them (AC: "path-missing repo skips the read").
     if (row.liveness !== 'path-missing') {
+      await renderReadOnlyReviewCapabilitySection(record.path, out);
       await renderGatedSection(record.path, out, clock);
       await renderBlockedSection(record.path, out, clock);
       await renderAgreementLine(record.path, out);

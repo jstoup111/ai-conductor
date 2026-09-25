@@ -411,6 +411,56 @@ describe('engine/daemon-observe-cli', () => {
       return p;
     }
 
+    describe('read-only review capability (Task 12)', () => {
+      it('renders the latest persisted capability result for each provider without probing', async () => {
+        const repo = join(root, 'repo-capability');
+        await mkdir(join(repo, '.daemon'), { recursive: true });
+        await writeFile(
+          join(repo, '.daemon', 'events.jsonl'),
+          [
+            { type: 'build_review_read_only_capability', provider: 'codex', platform: 'linux', status: 'available' },
+            { type: 'build_review_read_only_capability', provider: 'claude', platform: 'linux', status: 'unavailable', reason: 'restricted mode flags are unavailable' },
+            { type: 'build_review_read_only_capability', provider: 'codex', platform: 'linux', status: 'unavailable', reason: 'sandbox write was not refused' },
+          ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+          'utf8',
+        );
+        const execFileSpy = vi.spyOn(cp, 'execFile');
+        const execSpy = vi.spyOn(cp, 'exec');
+        const out: string[] = [];
+
+        try {
+          await runDaemonStatus({
+            registryPath: await registry([record('repo-capability', repo)]),
+            out: (line) => out.push(line),
+            hasSessionProbe: () => false,
+          });
+
+          expect(out.join('\n')).toContain('READ-ONLY REVIEW CAPABILITY: codex on linux — unavailable: sandbox write was not refused');
+          expect(out.join('\n')).toContain('READ-ONLY REVIEW CAPABILITY: claude on linux — unavailable: restricted mode flags are unavailable');
+          expect(out.join('\n')).not.toContain('codex on linux — available');
+          expect(execFileSpy).not.toHaveBeenCalled();
+          expect(execSpy).not.toHaveBeenCalled();
+        } finally {
+          execFileSpy.mockRestore();
+          execSpy.mockRestore();
+        }
+      });
+
+      it('states that no read-only review capability has been recorded when the daemon ledger has none', async () => {
+        const repo = join(root, 'repo-no-capability');
+        await mkdir(repo, { recursive: true });
+        const out: string[] = [];
+
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-no-capability', repo)]),
+          out: (line) => out.push(line),
+          hasSessionProbe: () => false,
+        });
+
+        expect(out.join('\n')).toContain('READ-ONLY REVIEW CAPABILITY: none recorded');
+      });
+    });
+
     it('renders a dead pane\'s matching SIGKILL exit cause on its status row', async () => {
       const repo = join(root, 'dead-pane-exit');
       await mkdir(join(repo, '.daemon'), { recursive: true });
@@ -561,9 +611,9 @@ describe('engine/daemon-observe-cli', () => {
       });
       expect(code).toBe(0);
       expect(rows.map((r) => r.liveness)).toEqual(['running', 'stale', 'path-missing']);
-      // One status line per repo, plus GATED and BLOCKED section lines for each
+      // One status line plus capability, GATED, and BLOCKED section lines per repo
       // repo whose path exists (path-missing repos skip snapshot reads entirely).
-      expect(out.length).toBe(7);
+      expect(out.length).toBe(9);
     });
 
     it('prints a friendly message for an empty registry', async () => {
