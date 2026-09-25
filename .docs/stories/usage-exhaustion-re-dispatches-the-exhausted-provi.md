@@ -43,7 +43,7 @@ As an operator reading telemetry, I want every refusal to dispatch a provider to
 
 #### Happy Path
 
-- Given a candidate the policy forbids, when the step resolves candidates, then a `provider_attempt` is recorded for that candidate with `invoked` false and the policy refusal reason.
+- Given a candidate the policy forbids, when the step resolves candidates, then that candidate is excluded from the dispatch list at resolution and no `provider_attempt` is recorded for it.
 - Given a candidate suppressed as usage-exhausted, when the step resolves candidates, then a `provider_attempt` is recorded with `invoked` false and the suppression refusal reason.
 - Given a candidate the gate admits, when it is invoked, then its `provider_attempt` carries `invoked` true and no refusal reason, unchanged from today.
 - Given a candidate refused by the gate, when the step completes, then no provider subprocess was spawned for that candidate.
@@ -51,7 +51,7 @@ As an operator reading telemetry, I want every refusal to dispatch a provider to
 
 #### Negative Paths
 
-- Given a candidate that is both policy-forbidden and suppressed, when the gate refuses it, then exactly one `provider_attempt` is recorded carrying exactly one refusal reason, never two records or a combined reason.
+- Given a candidate that is both policy-forbidden and suppressed, when the step dispatches, then no `provider_attempt` is recorded for it, and a suppressed candidate the policy permits records exactly one `provider_attempt` carrying exactly one refusal reason, never two records or a combined reason.
 - Given telemetry emission for a refusal fails, when the step continues, then the refusal itself still takes effect and the failure is reported through the existing attempt-telemetry error path rather than admitting the candidate.
 - Given a candidate refused by the gate, when its record is inspected, then the refusal reason belongs to the record's closed set and is not free-form text.
 - Given a provider already refused earlier in the same step, when the candidate loop reaches it again, then it is refused again without a subprocess rather than being admitted on a second look.
