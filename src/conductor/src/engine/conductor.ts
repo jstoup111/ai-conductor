@@ -241,7 +241,11 @@ import {
   isVerdictRunIdentityStep,
 } from './artifacts.js';
 import { extractStoryCriterionIds } from './story-criteria.js';
-import { AS_BUILT_VERDICT_PATH, readAsBuiltVerdict } from './as-built-verdict-store.js';
+import {
+  AS_BUILT_REPORT_PATH,
+  AS_BUILT_VERDICT_PATH,
+  readAsBuiltVerdict,
+} from './as-built-verdict-store.js';
 import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
 import { canonicalTaskId } from './autoheal.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
@@ -1789,6 +1793,8 @@ export type ArtifactReviewResult = 'approved' | 'rejected' | 'skip';
  * observed PR title/body prose needs a single quality pass.
  */
 export interface FinishPublicationCoordinator {
+  /** Production coordinators retain the current-HEAD SHIP-evidence fence. */
+  requiresArtifactValidation?: boolean;
   advance(input: {
     state: ConductState;
     mode: RunMode;
@@ -2705,11 +2711,7 @@ export class Conductor {
     const unreadable = await this.reloadPendingAsBuiltRemediationFindings();
     if (unreadable) return unreadable;
     if (this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
-    const [reportPath] = await findArtifactFilesForStep(
-      this.projectRoot,
-      'architecture_review_as_built',
-    );
-    if (!reportPath) return 'as-built verdict artifact is unavailable for recorded-findings projection';
+    const reportPath = join(this.projectRoot, AS_BUILT_REPORT_PATH);
     let reportText: string;
     try {
       reportText = await readFile(reportPath, 'utf8');
@@ -3200,10 +3202,9 @@ export class Conductor {
     // `verifyArtifacts:false` is the intentional mocked-dispatch mode used by
     // focused unit tests. Its success authority is the runner result, so the
     // publication fence must not reintroduce artifact-only validation and
-    // invalidate an otherwise green SHIP round indefinitely. Production
-    // coordinators retain the current-HEAD validation requirement by running
-    // with verifyArtifacts enabled.
-    if (!this.verifyArtifacts) return [];
+    // invalidate an otherwise green SHIP round indefinitely. The production
+    // coordinator declares its current-HEAD validation requirement explicitly.
+    if (!this.verifyArtifacts && this.finishPublication?.requiresArtifactValidation !== true) return [];
 
     const track = await this.resolveTrack(state);
     const membership = resolveGroupMembership(

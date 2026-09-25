@@ -60,6 +60,7 @@ import {
 import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
 
 export interface ProductionFinishPublicationCoordinator {
+  requiresArtifactValidation: true;
   advance(input: {
     state: ConductState;
     mode: RunMode;
@@ -471,6 +472,7 @@ export function createProductionFinishPublicationCoordinator(
   };
 
   return {
+    requiresArtifactValidation: true,
     async advance({ state, mode, daemon, dispatchJudgment, dispatchAuthoring, emit }) {
       const attended = !daemon && (mode === 'default' || mode === 'interactive');
       const requestedOutcome = attended

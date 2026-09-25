@@ -57,8 +57,17 @@ import {
   recordedShipmentFindings,
 } from '../src/engine/shipment-association.js';
 import * as machineIdentity from '../src/engine/owner-gate/machine-identity.js';
+import { persistAsBuiltVerdict } from '../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../src/engine/as-built-policy.js';
 
 const dirs: string[] = [];
+
+const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
 
 function planGapReport(criterion: string, summary = 'The approved plan has no task for this behavior.') {
   return [
@@ -917,7 +926,7 @@ describe('prd_audit kickback', () => {
 
     const calls: StepName[] = [];
     const runner: StepRunner = {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         calls.push(step);
         if (step === 'manual_test') {
           await writeFile(
@@ -951,10 +960,13 @@ describe('prd_audit kickback', () => {
             };
           }
         } else if (step === 'architecture_review_as_built') {
-          await writeFile(
-            join(root, '.pipeline', 'architecture-review-as-built.md'),
-            '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n',
-          );
+          await persistAsBuiltVerdict(root, {
+            version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+          }, {
+            attemptId: options?.runId ?? 'test-run',
+            codeStamp: null,
+            policy: AS_BUILT_FIXTURE_POLICY,
+          });
         }
         return { success: true };
       },
@@ -1400,12 +1412,15 @@ describe('prd_audit kickback', () => {
     const restarted = new Conductor({
       stateFilePath: join(fixture.root, '.pipeline', 'conduct-state.json'),
       stepRunner: {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(fixture.root, '.pipeline', 'architecture-review-as-built.md'),
-              'Verdict: APPROVED\n',
-            );
+            await persistAsBuiltVerdict(fixture.root, {
+              version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+            }, {
+              attemptId: options?.runId ?? 'test-run',
+              codeStamp: null,
+              policy: AS_BUILT_FIXTURE_POLICY,
+            });
           }
           return { success: true };
         },
