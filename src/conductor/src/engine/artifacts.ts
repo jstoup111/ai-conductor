@@ -1008,20 +1008,15 @@ async function sweptArtifactStillValid(
       return (await prdAuditStoryCoverageGap(dir, resolution, undefined, report)) === null;
     }
     if (step === 'architecture_review_as_built') {
-      const raw = await readFile(join(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP), 'utf-8');
-      const marker = JSON.parse(raw) as GateCodeStampMarker;
-      if (!marker.codeStamp) return false;
+      const stored = await readAsBuiltVerdict(dir);
+      if (stored.kind !== 'present' || stored.value.codeStamp === null) return false;
       const validity = await gateVerdictStillValid(
         ctx,
         'architecture_review_as_built',
-        marker.codeStamp,
+        stored.value.codeStamp,
       );
       if (validity !== 'preserve') return false;
-      // Mirrors the predicate's own premise re-check (Task 6).
-      const verdict = parseAsBuiltVerdict(
-        await readFile(join(dir, '.pipeline/architecture-review-as-built.md'), 'utf-8'),
-      );
-      return verdict !== null && /^APPROVED\b/i.test(verdict);
+      return asBuiltOutcome(stored.value.verdict) === 'approved';
     }
   } catch {
     // No sidecar/marker, unreadable, or unparseable — fall through to false

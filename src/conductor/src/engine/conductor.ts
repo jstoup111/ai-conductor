@@ -241,6 +241,7 @@ import {
   isVerdictRunIdentityStep,
 } from './artifacts.js';
 import { extractStoryCriterionIds } from './story-criteria.js';
+import { AS_BUILT_VERDICT_PATH, readAsBuiltVerdict } from './as-built-verdict-store.js';
 import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
 import { canonicalTaskId } from './autoheal.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
@@ -3077,6 +3078,20 @@ export class Conductor {
     ) return undefined;
 
     try {
+      if (step === 'architecture_review_as_built') {
+        const stored = await readAsBuiltVerdict(this.projectRoot);
+        if (stored.kind !== 'present') {
+          return { done: false, routeClass: 'absent', reason: stored.kind === 'absent' ? `${AS_BUILT_VERDICT_PATH} is missing` : stored.reason };
+        }
+        if (expectedRunId !== undefined && stored.value.attemptId !== expectedRunId) {
+          return {
+            done: false, routeClass: 'absent', retrySignal: 'stale-run-identity',
+            verdictFreshness: { artifact: join(this.projectRoot, AS_BUILT_VERDICT_PATH), floorSource: 'run-identity', outcome: 'stale_invalidated', fresh: false },
+            reason: `${AS_BUILT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${expectedRunId}`,
+          };
+        }
+        return undefined;
+      }
       const files = await findArtifactFilesForStep(this.projectRoot, step);
       const identities = await verdictProducedByRun(
         this.projectRoot,
