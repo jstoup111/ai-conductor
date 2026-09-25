@@ -1393,6 +1393,17 @@ else
   assert "test/test_provider_skill_contracts.sh exists" 1
 fi
 
+# ── 14b. As-built Markdown authority ───────────────────────────────────────
+echo ""
+echo -e "${BOLD}14b. As-built Markdown authority${NC}"
+as_built_markdown_authority="${HARNESS_DIR}/test/check_as_built_markdown_authority.sh"
+if [ -x "$as_built_markdown_authority" ]; then
+  "$as_built_markdown_authority"
+  assert "as-built verdict Markdown is derived-only" $?
+else
+  assert "test/check_as_built_markdown_authority.sh exists and is executable" 1
+fi
+
 # ── 15. Root agent-instruction parity ───────────────────────────────────────
 # Claude and Codex must load the same repository contract. Keep the named
 # provider entry points as symlinks to one canonical source so additions cannot

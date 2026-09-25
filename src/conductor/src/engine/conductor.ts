@@ -8983,7 +8983,7 @@ export class Conductor {
                 }
                 evidence.push({
                   gate: 'architecture_review_as_built',
-                  evidenceFile: '.pipeline/architecture-review-as-built.md',
+                  evidenceFile: AS_BUILT_VERDICT_PATH,
                 });
                 const dispatchContext =
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
@@ -9084,7 +9084,7 @@ export class Conductor {
                   state,
                   steps,
                   'Blocking validation-group gaps at .pipeline/prd-audit.md and ' +
-                    '.pipeline/architecture-review-as-built.md. Plan remediation per the ' +
+                    `${AS_BUILT_VERDICT_PATH}. Plan remediation per the ` +
                     '/remediate skill and write .pipeline/remediation.json.',
                   {
                     source: 'validation-group',
@@ -9095,7 +9095,7 @@ export class Conductor {
                         ? []
                         : [{
                             gate: 'architecture_review_as_built' as const,
-                            evidenceFile: '.pipeline/architecture-review-as-built.md',
+                            evidenceFile: AS_BUILT_VERDICT_PATH,
                           }]),
                     ],
                   },
@@ -9241,7 +9241,7 @@ export class Conductor {
                 if (gapMemberNamesForMerge.includes('architecture_review_as_built' as StepName)) {
                   evidence.push({
                     gate: 'architecture_review_as_built',
-                    evidenceFile: '.pipeline/architecture-review-as-built.md',
+                    evidenceFile: AS_BUILT_VERDICT_PATH,
                   });
                 }
                 const dispatchContext =
@@ -9409,7 +9409,7 @@ export class Conductor {
                 if (gapMemberNames.includes('architecture_review_as_built' as StepName)) {
                   evidence.push({
                     gate: 'architecture_review_as_built',
-                    evidenceFile: '.pipeline/architecture-review-as-built.md',
+                    evidenceFile: AS_BUILT_VERDICT_PATH,
                   });
                 }
                 const dispatchContext =
@@ -12981,7 +12981,7 @@ export class Conductor {
                   state,
                   steps,
                   'A blocking prd-audit is at .pipeline/prd-audit.md (an as-built ' +
-                    'review may be at .pipeline/architecture-review-as-built.md). Plan ' +
+                    `review may be at ${AS_BUILT_VERDICT_PATH}). Plan ` +
                     'remediation per the /remediate skill and write ' +
                     '.pipeline/remediation.json.',
                   {
@@ -13202,13 +13202,13 @@ export class Conductor {
                   state,
                   steps,
                   'A blocking as-built architecture review is at ' +
-                    '.pipeline/architecture-review-as-built.md. Plan remediation per the ' +
+                    `${AS_BUILT_VERDICT_PATH}. Plan remediation per the ` +
                     '/remediate skill and write .pipeline/remediation.json.',
                   {
                     source: 'architecture-review-as-built',
                     evidence: [{
                       gate: 'architecture_review_as_built',
-                      evidenceFile: '.pipeline/architecture-review-as-built.md',
+                      evidenceFile: AS_BUILT_VERDICT_PATH,
                     }],
                   },
                 );
@@ -13309,7 +13309,7 @@ export class Conductor {
                       '.pipeline/test-failures.md. Plan remediation per the /remediate ' +
                       'skill and write .pipeline/remediation.json.'
                   : 'A blocking as-built architecture review is at ' +
-                      '.pipeline/architecture-review-as-built.md. Plan remediation per ' +
+                    `${AS_BUILT_VERDICT_PATH}. Plan remediation per ` +
                       'the /remediate skill and write .pipeline/remediation.json.',
                 finishGate
                   ? {
@@ -13320,7 +13320,7 @@ export class Conductor {
                       source: 'as-built architecture review',
                       evidence: [{
                         gate: 'architecture_review_as_built',
-                        evidenceFile: '.pipeline/architecture-review-as-built.md',
+                        evidenceFile: AS_BUILT_VERDICT_PATH,
                       }],
                     },
               );

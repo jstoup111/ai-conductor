@@ -221,7 +221,7 @@ describe('architecture_review_as_built native-schema dispatch', () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'as-built-deterministic-dispatch-'));
     dirs.push(projectDir);
     buildProjection.mockResolvedValue({ ok: true, projection });
-    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'ok', exitCode: 0, finalStructuredResult: approvedVerdict() }));
+    const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({ success: true, output: 'ok', exitCode: 0, finalStructuredResult: approvedVerdict() }));
     const provider: LLMProvider = { lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true }, invoke };
     const subject = runner(projectDir, 'claude', provider);
 

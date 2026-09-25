@@ -476,6 +476,65 @@ expect_audit 'provider audit rejects unscoped interactive Claude command' 1 "$co
 printf '%s\n' 'Claude Code invokes `conduct` as `/conduct`; Codex invokes it as `$conduct`.' > "$contract_fixture"
 expect_audit 'provider audit rejects a compatibility edit that removes the shared gate' 1 "$contract_fixture" 'Shared lifecycle gate'
 
+as_built_skill_prose_audit() {
+  local file=$1
+  local section
+  local pattern
+  local violations=0
+
+  section=$(awk '
+    /^### 12\. As-Built Compliance Gate/ { active = 1; next }
+    active && /^## / { exit }
+    active { print }
+  ' "$file")
+  if [ -z "$section" ]; then
+    printf 'as-built output-format prose rejected: %s is missing section 12\n' "$file"
+    return 1
+  fi
+  for pattern in \
+    '^\\| Finding \\| Class \\| Governing clause \\| Summary \\|$' \
+    'git (diff|log)' \
+    '^Verdict:'; do
+    if printf '%s\n' "$section" | grep -qiE "$pattern"; then
+      printf 'as-built output-format prose rejected: %s matches %s\n' "$file" "$pattern"
+      violations=1
+    fi
+  done
+  [ "$violations" -eq 0 ]
+}
+
+expect_as_built_skill_prose_fixture_failure() {
+  local fixture=$1
+  local expected_pattern=$2
+  local output
+  local status
+  set +e
+  output=$(as_built_skill_prose_audit "$fixture" 2>&1)
+  status=$?
+  set -e
+  if [ "$status" -ne 0 ] && [[ "$output" == *"$fixture"* ]] && [[ "$output" == *"$expected_pattern"* ]]; then
+    pass "as-built prose fixture rejects $(basename "$fixture") naming file and pattern"
+  else
+    fail "as-built prose fixture rejects $(basename "$fixture") naming file and pattern"
+  fi
+}
+
+as_built_skill="$HARNESS_DIR/skills/architecture-review/SKILL.md"
+if as_built_skill_prose_audit "$as_built_skill"; then
+  pass 'as-built output-format audit accepts the shipped section only'
+else
+  fail 'as-built output-format audit accepts the shipped section only'
+fi
+
+as_built_fixture=$(mktemp)
+printf '%s\n' '### 12. As-Built Compliance Gate (`--as-built` mode)' '| Finding | Class | Governing clause | Summary |' > "$as_built_fixture"
+expect_as_built_skill_prose_fixture_failure "$as_built_fixture" '^\\| Finding \\| Class \\| Governing clause \\| Summary \\|$'
+printf '%s\n' '### 12. As-Built Compliance Gate (`--as-built` mode)' 'git diff HEAD~1 -- src' > "$as_built_fixture"
+expect_as_built_skill_prose_fixture_failure "$as_built_fixture" 'git (diff|log)'
+printf '%s\n' '### 12. As-Built Compliance Gate (`--as-built` mode)' 'Verdict: BLOCKED' > "$as_built_fixture"
+expect_as_built_skill_prose_fixture_failure "$as_built_fixture" '^Verdict:'
+rm -f "$as_built_fixture"
+
 build_review_skill_prose_audit() {
   local file=$1
   local pattern
