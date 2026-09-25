@@ -60,7 +60,7 @@ As an operator reading telemetry, I want every refusal to dispatch a provider to
 ### Done When
 
 - [ ] A single admission function is the only caller-visible decision point for both refusal classes, and the candidate loop has no path that invokes a provider bypassing it.
-- [ ] Tests assert `provider_attempt` carries `invoked: false` plus the correct refusal reason for a policy refusal and for a suppression refusal, and `invoked: true` with no reason for an admitted candidate.
+- [ ] Tests assert `provider_attempt` carries `invoked: false` plus the suppression refusal reason for a suppressed candidate, no record for a policy-forbidden candidate excluded at resolution, and `invoked: true` with no reason for an admitted candidate.
 - [ ] A test asserts the process-spawn seam is never reached for a refused candidate.
 - [ ] The admission decision performs no filesystem or ledger read, proven by a test in which the gate is exercised with the I/O seam mocked to fail.
 - [ ] Both new refusal reasons are members of the record's existing closed reason set, with exhaustive handling verified.
