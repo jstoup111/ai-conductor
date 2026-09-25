@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-25T12:39:43.380Z
 Slug: custom-build-review-rubrics-cannot-run-off-linux-o
 Class: needs-human
 Halting step: unknown
