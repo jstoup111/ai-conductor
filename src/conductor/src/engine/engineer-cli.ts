@@ -68,6 +68,7 @@ import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead } from './tracker-client.js';
+import type { GithubOperationEventEmitter } from './github-operations.js';
 import { bindMutationToPullRequest } from './ship-draft-pr.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import {
@@ -599,6 +600,7 @@ export function initialSpecPublication(
   cwd: string,
   gh: NonNullable<DispatchEngineerOpts['gh']>,
   git: GitRunner,
+  events?: GithubOperationEventEmitter,
 ): NonNullable<HandoffDeps['publication']> {
   const repository = target.remote ? parseGhRepo(target.remote)?.toLowerCase() : null;
   if (!repository || !/^[^/\s]+\/[^/\s]+$/.test(repository)) {
@@ -633,12 +635,14 @@ export function initialSpecPublication(
       config: async (args) => git(args, { cwd }),
       runRemoteGit: git,
       mutation,
+      events,
     },
     // The branch provenance authorizes the push only. PR creation is an
     // independently bound repository target; later presentation rebinds the
     // created PR identity rather than reusing this repository context.
     operations: createGuardedGithubOperationRunner(gh, {
       cwd,
+      events,
       mutation: {
         ...mutation,
         provenance: { ...mutation.provenance, target: { repository, kind: 'repository' } },
@@ -648,7 +652,7 @@ export function initialSpecPublication(
     // (#2703); the repository binding above authorizes creation only.
     presentation: (prUrl: string) => {
       const bound = bindMutationToPullRequest(mutation, prUrl);
-      return bound ? createGuardedGithubOperationRunner(gh, { cwd, mutation: bound }) : undefined;
+      return bound ? createGuardedGithubOperationRunner(gh, { cwd, mutation: bound, events }) : undefined;
     },
   };
 }
@@ -1226,9 +1230,14 @@ export async function dispatchEngineer(
       }
 
       let handoffResult: Awaited<ReturnType<typeof openSpecPr>>;
+      // Compose handoff is a separate CLI process, so it owns this canonical
+      // composer ledger for its guarded publication lifetime.
+      const events = new ConductorEventEmitter();
+      const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
       try {
+        persister.start();
         const publication = opts.handoffPublication
-          ?? (target.remote ? initialSpecPublication(target, branch, worktree, gh, git) : undefined);
+          ?? (target.remote ? initialSpecPublication(target, branch, worktree, gh, git, events) : undefined);
         handoffResult = await openSpecPr(target, branch, {
           gitRunner: git,
           runner: async (args, runnerOpts) => {
@@ -1243,6 +1252,7 @@ export async function dispatchEngineer(
           // close — the daemon's implementation PR closes it on merge).
           sourceRef,
           publication,
+          events,
           // Post-create writes are non-fatal; never let a refusal pass silently (#2703).
           log: (msg: string) => printErr(`engineer handoff: ${msg}`),
         });
@@ -1279,8 +1289,9 @@ export async function dispatchEngineer(
             // Continue — handoff still succeeds
           }
         }
-
         return 1;
+      } finally {
+        persister.stop();
       }
 
       if (handoffResult.kind === 'pr-refused') {
