@@ -16,7 +16,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import * as buildReviewCache from '../../src/engine/build-review-cache.js';
 import { assembleBuildReviewAdjudicationContext } from '../../src/engine/build-review-adjudication-context.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
-import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { BUILD_REVIEW_CUSTOM_V1_SCHEMA, parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 
 vi.mock('../../src/engine/build-review-cache.js', async (importOriginal) => {
@@ -137,9 +137,9 @@ describe('custom build-review policy runner', () => {
     if (!firstInvocation?.model || !firstInvocation.effort) throw new Error('expected a prepared provider candidate');
     const preparedCandidate = { provider: providerKey, model: firstInvocation.model, effort: firstInvocation.effort };
     expect(firstInvocation?.prompt).toContain('Portable policy');
-    expect(firstInvocation.nativeSchema).toEqual(expect.objectContaining({
-      oneOf: expect.arrayContaining([expect.objectContaining({ type: 'object' })]),
-    }));
+    // The custom-v1 schema has a flat object root (#2739); the provider must
+    // receive exactly that engine-owned schema.
+    expect(firstInvocation.nativeSchema).toEqual(BUILD_REVIEW_CUSTOM_V1_SCHEMA);
     expect(resolvedEvents).toEqual([expect.objectContaining({
       source, bundleDigest: `sha256-v1:${'a'.repeat(64)}`,
       provenance: expect.objectContaining({
