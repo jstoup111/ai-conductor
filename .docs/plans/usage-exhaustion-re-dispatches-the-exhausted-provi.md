@@ -470,6 +470,50 @@ Sequencing rationale: configuration and the availability module are independent 
 
 **Dependencies:** 15
 
+### Task 21: Wire usage-exhaustion suppression into both GroupCore consumers
+**Story:** 3
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests driving the built-in validation group and a configured parallel group through GroupCore with a member reporting usage exhaustion, authentication failure, and expired session.
+2. Verify tests fail (RED)
+3. Implement by extending the branch-executor dependencies with the availability store and the daemon-origin persistence callback, and opening the window in the GroupCore rate-limit branch exactly as the serial branch in conductor.ts does.
+4. Verify tests pass (GREEN)
+5. Commit with message: "feat(provider): suppress exhausted providers from GroupCore members"
+
+**Done when:**
+- both production GroupCore consumers open the shared suppression window and call the daemon-origin persistence callback when a group member reports usage exhaustion, exactly as the serial rate-limit branch does
+- a usage-exhausted group member's provider is refused without a subprocess in a later or concurrent feature dispatch while its window is unexpired
+- an authentication failure or expired session reported by a group member opens no suppression window and writes no suppression record
+
+**Files likely touched:**
+- src/conductor/src/engine/group-core.ts — extend branch-executor dependencies and the rate-limit branch
+- src/conductor/src/engine/conductor.ts — pass the store and persistence callback at both GroupCore roots
+
+**Dependencies:** 12, 18
+
+### Task 22: Remove the unreachable policy-refusal surface
+**Story:** 2
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests asserting the skip-reason set and the gate's refusal reasons contain no policy member.
+2. Verify tests fail (RED)
+3. Remove the policy-refused reason, its skip-reason member, and the dead gate and executor paths in provider-execution.ts and provider-selection.ts, per ADR D1 as amended 2026-09-25.
+4. Verify tests pass (GREEN)
+5. Commit with message: "refactor(provider): remove unreachable policy-refusal surface"
+
+**Done when:**
+- the policy-refused refusal reason and skip-reason member are removed, and the admission gate carries no substitution-policy branch
+- resolveProviderCandidates remains the sole owner of substitution policy, and a policy-forbidden candidate still emits no provider attempt
+
+**Files likely touched:**
+- src/conductor/src/engine/provider-execution.ts — remove the gate's policy branch and its refusal handling
+- src/conductor/src/engine/provider-selection.ts — keep narrowing as the sole policy owner
+- src/conductor/src/types/events.ts — remove the policy skip-reason member
+
+**Dependencies:** 8
+
 ## Task Dependency Graph
 
 ```text
@@ -484,6 +528,9 @@ Task 5 ──┬─ Task 6 ──┬─ Task 12
          │                                 └─ Task 20
          └─ Task 13 ── Task 14
 Task 10 ── Task 11
+Task 12 ── Task 21
+Task 18 ── Task 21
+Task 8 ── Task 22
 ```
 
 ## Integration Points
@@ -515,12 +562,12 @@ Task 10 ── Task 11
 | Story 2 negative: Given a candidate refused by the gate, when its record is inspected, then the refusal reason belongs to the record's closed set and is not free-form text. | 8 | "the skip-reason set gains the policy-refusal and suppression-refusal members within its existing closed set, so an existing provider attempt reader parses a refusal record without modification" | diff-local |
 | Story 2 negative: Given a provider already refused earlier in the same step, when the candidate loop reaches it again, then it is refused again without a subprocess rather than being admitted on a second look. | 9 | "a provider refused earlier in the same step is refused again when the candidate loop reaches it, without a subprocess" | diff-local |
 | Story 2 negative: Given the gate is consulted for a candidate, when the step runs under a provider configuration that predates this change, then the gate admits every candidate and emits no refusal record. | 9 | "with no policy configured and no suppression in force, the gate admits every candidate and emits no refusal record" | diff-local |
-| Story 3 happy: Given a provider observed usage-exhausted during a step, when a later step in the same run resolves candidates, then that provider is refused without a subprocess while its window is unexpired. | 19 | "a provider suppressed during an earlier step is refused without a subprocess in a later step while its window is unexpired" | diff-local |
+| Story 3 happy: Given a provider observed usage-exhausted during a step, when a later step in the same run resolves candidates, then that provider is refused without a subprocess while its window is unexpired. | 19, 21 | "a usage-exhausted group member's provider is refused without a subprocess in a later or concurrent feature dispatch while its window is unexpired" | diff-local |
 | Story 3 happy: Given a provider suppressed during one feature's run, when a later feature run begins and resolves candidates, then the suppression is still in force, because the store was constructed above the per-feature boundary. | 6 | "a suppression recorded during one feature run is still observed by a later feature run in the same process, asserted across two feature-run boundaries that rebuild the provider runtimes" | diff-local |
 | Story 3 happy: Given a feature run begins, when its provider runtimes and model-availability caches are rebuilt, then the injected availability store is not rebuilt with them. | 6 | "the store is constructed once at daemon startup beside the rate-limit episode and injected into each conductor through the existing injection sites, above the per-feature run boundary" | diff-local |
 | Story 3 happy: Given no availability store is injected, when candidates are resolved, then behavior is today's, with every candidate admitted. | 6 | "an absent store leaves candidate admission and provider attempts identical to pre-change behavior and raises no error" | diff-local |
 | Story 3 happy: Given a provider is suppressed, when a different provider is resolved as a candidate, then the different provider is admitted normally. | 19 | "a different provider remains admitted while one provider is suppressed" | diff-local |
-| Story 3 negative: Given a provider suppressed in one feature run, when a concurrently running feature resolves the same provider, then it is refused there too rather than each feature re-earning the suppression independently. | 19 | "a provider suppressed in one feature run is refused in a concurrently running feature rather than re-earned independently there" | diff-local |
+| Story 3 negative: Given a provider suppressed in one feature run, when a concurrently running feature resolves the same provider, then it is refused there too rather than each feature re-earning the suppression independently. | 19, 21 | "a provider suppressed in one feature run is refused in a concurrently running feature rather than re-earned independently there" | diff-local |
 | Story 3 negative: Given the availability store is absent because the run is interactive rather than daemon-hosted, when a provider is observed exhausted, then the run behaves exactly as it does today and no error is raised for the missing store. | 6 | "an absent store leaves candidate admission and provider attempts identical to pre-change behavior and raises no error" | diff-local |
 | Story 3 negative: Given a suppression is recorded while a second exhaustion of the same provider reports a later deadline, when both are applied, then the later deadline governs rather than the earlier one shortening the window. | 5 | "the later of two competing deadlines for one provider governs its window, asserted by recording an earlier deadline second" | diff-local |
 | Story 3 negative: Given the suppression record cannot be persisted, when the run continues, then in-memory suppression still takes effect for the current daemon process and the persistence failure is surfaced rather than silently dropped. | 18 | "a persistence failure surfaces through the existing error path while in-memory suppression still takes effect for the current process" | diff-local |
@@ -564,7 +611,7 @@ Task 10 ── Task 11
 
 | Decision | Disposition | Task(s) | Evidence |
 | --- | --- | --- | --- |
-| adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability#D1 | task | task-7 | candidate execution consults a single admission function before invoking any candidate, and no candidate path reaches the dispatch seam without it |
+| adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability#D1 | task | task-7, task-22 | the policy-refused refusal reason and skip-reason member are removed, and the admission gate carries no substitution-policy branch |
 | adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability#D2 | task | task-3, task-2, task-1 | resolveProviderCandidates returns only the step selection when the policy disallows substitution and the step declares a selection |
 | adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability#D3 | task | task-8 | the dispatch path passes the step's substitution policy to resolveProviderCandidates so a policy-forbidden candidate is never in the dispatch list and emits no provider attempt |
 | adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability#D4 | task | task-6, task-5 | the store is constructed once at daemon startup beside the rate-limit episode and injected into each conductor through the existing injection sites, above the per-feature run boundary |
