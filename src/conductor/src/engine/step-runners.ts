@@ -3,7 +3,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
 import { basename, dirname, join, relative } from 'node:path';
 import { homedir } from 'node:os';
-import { execa } from 'execa';
 import { fileURLToPath } from 'node:url';
 import type {
   InvokeOptions,
@@ -100,9 +99,7 @@ import {
 } from './build-review-domain.js';
 import { discoverClaudeReviewPolicies, type ClaudeMetadataCommand, type ClaudeReviewPolicyFilesystem } from './build-review-policy-claude.js';
 import { createCodexAppServerTransport, listCodexInstalledReviewSkills, type CodexAppServerTransport } from './build-review-policy-codex.js';
-import { buildReviewFrozenInputPaths, prepareBuildReviewContainment, prepareBuildReviewEvidencePaths, renderBuildReviewFrozenInputScope, writeReviewHostStateSentinel } from './build-review-containment.js';
-import { acquireReviewScratchHome } from './self-host/provider-scratch.js';
-import { copySelectedCodexLogin } from '../execution/codex-self-host-auth.js';
+import { renderBuildReviewFrozenInputScope } from './build-review-containment.js';
 import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
 import {
   coordinateBuildReviewRubrics,
@@ -687,15 +684,6 @@ export function productionBuildReviewPolicyCatalog(
     const original = await discover(originalCatalogHome, { ...env, [homeVariable]: originalCatalogHome }, false);
     return [...prepared, ...original.filter((skill) => skill.source !== 'project' && !preparedKeys.has(key(skill)))];
   };
-}
-
-/** The command a review member launches, so containment proves the mounts that command gets. */
-function reviewLaunchCommand(
-  provider: 'claude' | 'codex',
-  prepared: { readonly executable: string; readonly args: readonly string[] } | undefined,
-): { readonly executable: string; readonly args: readonly string[] } {
-  if (prepared !== undefined) return { executable: prepared.executable, args: prepared.args };
-  return { executable: provider === 'codex' ? process.env.CODEX_EXECUTABLE ?? 'codex' : 'claude', args: [] };
 }
 
 /** Capabilities belong to the prepared provider role, never the policy declaration. */
@@ -3471,34 +3459,6 @@ export class DefaultStepRunner implements StepRunner {
               } catch (error) {
                 return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: `build_review candidate policy load failed: ${error instanceof Error ? error.message : String(error)}` } };
               }
-              const containmentProvider = context.candidate.providerKey === 'claude' || context.candidate.providerKey === 'codex'
-                ? context.candidate.providerKey : undefined;
-              let reviewAccess: InvokeOptions['reviewAccess'];
-              if (materialized && containmentProvider) {
-                const cachedLoginSource = containmentProvider === 'codex' && context.prepared?.env.CODEX_HOME !== undefined && context.prepared.env.CODEX_API_KEY === undefined
-                  ? join(context.prepared.env.CODEX_HOME, 'auth.json')
-                  : undefined;
-                const scratchLease = await acquireReviewScratchHome({
-                  worktreeRoot: this.projectDir, runId: this.runId, attempt: 0, provider: containmentProvider, memberId: branch.rubric,
-                  ...(cachedLoginSource === undefined ? {} : {
-                    seed: async (home) => { await copySelectedCodexLogin({ source: cachedLoginSource, homeDir: join(home, 'codex-home') }); },
-                  }),
-                });
-                context.onTeardown(() => scratchLease.release());
-                const scratch = scratchLease.home;
-                const evidencePaths = await prepareBuildReviewEvidencePaths(this.projectDir);
-                const hostStateProbe = await writeReviewHostStateSentinel();
-          context.onTeardown(() => rm(hostStateProbe, { force: true }));
-                const containment = await prepareBuildReviewContainment({ provider: containmentProvider, launch: reviewLaunchCommand(containmentProvider, context.prepared), paths: {
-                  hostStateProbe,
-                  ...buildReviewFrozenInputPaths(materialized), policyMaterial: builtinBundle.materialPath, originalCheckout: this.projectDir, originalInstallation: builtinPolicy.packageRoot,
-                  ...evidencePaths, scratch,
-                  installationWriteProbe: join(builtinPolicy.packageRoot, '.build-review-write-probe'),
-                  scratchWriteProbe: join(scratch, '.build-review-write-probe'),
-                }, runProcess: async (executable, args) => { const result = await execa(executable, args, { reject: false }); return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr }; } });
-                if (containment.kind === 'unsupported') return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: `build_review cannot establish built-in read-only containment: ${containment.reason}` } };
-                reviewAccess = containment;
-              }
               let cacheHit = false;
               const dispatched = await dispatchRubricContract({
                 descriptor: getBuildReviewRubricDescriptor(branch.rubric).contract,
@@ -3511,7 +3471,7 @@ export class DefaultStepRunner implements StepRunner {
                   contentDigest: inputs.sourceSnapshot.contentDigest, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha,
                   changes: inputs.sourceSnapshot.sourceChanges ?? [], view: materialized,
                 })}`}`,
-                ...(reviewAccess === undefined ? {} : { reviewAccess }),
+                readOnlyReview: true,
                 interactive: false,
                 },
                 invoke: (options) => context.invoke(options, async (rung, invoke) => {

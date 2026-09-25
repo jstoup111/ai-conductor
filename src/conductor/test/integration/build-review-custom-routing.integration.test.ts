@@ -1,4 +1,4 @@
-// Covers: task:33
+// Covers: task:33, task:4
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -10,6 +10,14 @@ import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
+import { ClaudeProvider } from '../../src/execution/claude-provider.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import { Conductor } from '../test-conductor.js';
 
 const roots: string[] = [];
@@ -69,6 +77,64 @@ async function runCompatibilityLap(custom: boolean, verdictShape: 'aggregate' | 
 }
 
 describe('custom build-review compatibility routing', () => {
+  it('launches a built-in peer of a custom lap in Claude read-only mode over the frozen input', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-custom-routing-launch-'));
+    roots.push(root);
+    const config = {
+      llm_provider: 'claude', build_review: {
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true } },
+        custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review the frozen candidate.', source: 'project', llm_provider: 'claude' } },
+      },
+    } as HarnessConfig;
+    const launches: Array<{ executable: string; args: string[]; cwd: string | undefined; prompt: string }> = [];
+    const provider = new ClaudeProvider(undefined, ((executable, args, options) => {
+      const prompt = typeof options.input === 'string' ? options.input : '';
+      launches.push({ executable, args: [...args], cwd: options.cwd, prompt });
+      const result = prompt.includes('portable-policy')
+        ? { kind: 'custom-findings', version: 'v1', findings: [] }
+        : { findings: [] };
+      return Promise.resolve({
+        stdout: JSON.stringify({ type: 'result', result: JSON.stringify(result), structured_output: result }), stderr: '', exitCode: 0, failed: false,
+      }) as never;
+    }) as never);
+    const frozenHead = join(root, '.pipeline', 'frozen', 'head');
+    const frozenBaseline = join(root, '.pipeline', 'frozen', 'baseline');
+    await Promise.all([mkdir(frozenHead, { recursive: true }), mkdir(frozenBaseline, { recursive: true })]);
+    const source = {
+      identity: { snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content', mergeBase: 'base', headSha: 'head' },
+      baselinePath: frozenBaseline, headPath: frozenHead,
+    };
+    const runner = new DefaultStepRunner(provider, 'mixed-routing', root, {
+      featureDesc: 'feature',
+      config,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(),
+      buildReviewEffectiveResolver: async () => ({ ok: true, feature: { version: 'v1', repository: root, feature: 'feature' }, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } }) as never,
+      buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`, declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+    const inputs = {
+      diff: 'diff --git a/src/a.ts b/src/a.ts', planBody: '# Plan', mergeBase: 'base', baseRef: 'origin/main', baseKind: 'remote', trackingRefSha: 'base', remoteHeadSha: 'base', fresh: true,
+      testSuiteProof: {}, sourceSnapshot: { digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff --git a/src/a.ts b/src/a.ts', planBody: '# Plan', repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [] },
+      sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} },
+    } as never;
+    await (runner as unknown as { runRubricBuildReview: (value: unknown, config: unknown, tier: 'M') => Promise<{ success: boolean; output: string }> }).runRubricBuildReview(inputs, resolveBuildReviewConfig(config), 'M');
+    const builtin = launches.find(({ prompt }) => prompt.includes('Build Review Security rubric.'));
+    const custom = launches[0];
+    expect(builtin).toBeDefined();
+    expect(custom).toBeDefined();
+    expect(builtin).toMatchObject({ executable: 'claude', cwd: frozenHead });
+    expect(builtin!.args).toContain('--restricted');
+    expect(builtin!.args).not.toContain('--dangerously-skip-permissions');
+    for (const flag of ['--restricted', '--tools', '--allowedTools', '--strict-mcp-config']) expect(builtin!.args).toContain(flag);
+    expect(builtin!.args).toEqual(expect.arrayContaining(custom!.args.filter((value) => ['--restricted', '--tools', '--allowedTools', '--strict-mcp-config'].includes(value))));
+    for (const flag of ['--tools', '--allowedTools']) {
+      expect(builtin!.args[builtin!.args.indexOf(flag) + 1]).toBe(custom!.args[custom!.args.indexOf(flag) + 1]);
+    }
+    expect(builtin!.prompt).toContain('Frozen build-review input sha256:content');
+    expect(builtin!.prompt).toContain(frozenHead);
+    expect(builtin!.args[builtin!.args.indexOf('--allowedTools') + 1]).toContain('Bash(git show:*)');
+  });
   it('refuses a custom-enabled compatibility lap before raw finding routing', async () => {
     const result = await runCompatibilityLap(true);
     expect(result.halt).toContain('custom-capability error');
