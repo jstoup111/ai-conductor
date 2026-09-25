@@ -562,6 +562,9 @@ ai-conductor kickback-budget raise --feature <slug> --gate <gate> --by <positive
 ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<why this count may restart>"
 ```
 
+When the budget view identifies exhausted **plan growth**, recover it with `raise`: it extends the
+growth allowance. `reset` is for lap evidence only and cannot recover a plan-growth halt.
+
 The daemon clears only a live halt whose gate and generation match that one-use authorization. It
 does so on its next loop iteration, without waiting for a base-branch advance. If the feature was
 already operator-parked, unpark it after the command; otherwise it remains intentionally halted.

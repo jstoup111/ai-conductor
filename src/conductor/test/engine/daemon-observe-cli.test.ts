@@ -866,7 +866,7 @@ describe('engine/daemon-observe-cli', () => {
         return featureRoot;
       }
 
-      it('shows active-feature authored, per-gate, remaining, and cap counts from its durable ledger', async () => {
+      it('uses the effective growth cap and reports growth cap evidence without an adjustment', async () => {
         const repo = join(root, 'repo-plan-growth');
         // The active plan includes the three persisted remediation headings;
         // readGrowth validates authored + added against that total.
@@ -875,7 +875,25 @@ describe('engine/daemon-observe-cli', () => {
           join(featureRoot, '.pipeline', 'kickback-ledger.json'),
           JSON.stringify({
             version: 1,
-            gates: {},
+            effectiveGrowthCap: 12,
+            gates: {
+              prd_audit: {
+                count: 0,
+                cumulative: 0,
+                treeHash: null,
+                lastReason: 'growth exhausted',
+                priorVerdict: false,
+                resolvedBefore: 0,
+                capEvidence: {
+                  gate: 'prd_audit',
+                  allowance: 'growth',
+                  consumed: 3,
+                  limit: 4,
+                  latestReason: 'growth exhausted',
+                  haltGeneration: 'halt-growth-1',
+                },
+              },
+            },
             growth: { authored: 19, added: 3, byGate: { prd_audit: 3 } },
           }),
           'utf8',
@@ -886,11 +904,13 @@ describe('engine/daemon-observe-cli', () => {
         await runDaemonStatus({ registryPath, out: (line) => out.push(line) });
 
         expect(out).toContain(
-          '  PLAN GROWTH [growth-feature]: authored 19; added 3 (prd_audit: 3); remaining 1/4',
+          '  PLAN GROWTH [growth-feature]: authored 19; added 3 (prd_audit: 3); remaining 9/12',
         );
+        expect(out.join('\n')).toContain('KICKBACK BUDGET [growth-feature]:');
+        expect(out.join('\n')).toContain('Allowance: growth');
       });
 
-      it('recomputes legacy ledgers without growth records from the active plan', async () => {
+      it('uses the config-derived growth cap when no effective growth cap exists', async () => {
         const repo = join(root, 'repo-legacy-growth');
         const featureRoot = await writeActivePlan(repo, 'legacy-feature', 19);
         await writeFile(
