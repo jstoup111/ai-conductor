@@ -937,6 +937,42 @@ describe('DefaultStepRunner', () => {
     }
   });
 
+  it.each([
+    ['judge-disabled predecessor', { status: 'disabled', recordedDigests: true }],
+    ['digest-less predecessor', { status: 'done', recordedDigests: false }],
+  ] as const)('does not reopen criterion work after a void with a %s', async (_caseName, predecessor) => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-void-provenance-'));
+    const featureDesc = 'coverage-binding-void-provenance';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
+    await writeTaskStatuses(projectDir, ['1', '2', '3']);
+    await writeFile(join(projectDir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+      version: 1,
+      slug: featureDesc,
+      runId: 'voided-run',
+      status: 'invalidated',
+      predecessor,
+      entries: [{ digest: 'sha256:old', criterion: 'old criterion', taskIds: ['2'], doneWhen: [[]], verdict: 'not-applicable' }],
+    }));
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'coverage-run-void-provenance', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).not.toHaveBeenCalled();
+      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '2': 'completed' });
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        status: 'disabled',
+        entries: [
+          { digest: expect.stringMatching(/^sha256:/), criterion: 'The service writes the audit record.' },
+          { kind: 'amendment', digest: expect.stringMatching(/^sha256:/), verdict: 'unjudged' },
+        ],
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects an amendment contradiction from a digest-less invalidated baseline without reopening work', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-digest-less-amendment-'));
     const featureDesc = 'coverage-binding-digest-less-amendment';

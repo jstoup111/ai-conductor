@@ -4325,6 +4325,12 @@ export class DefaultStepRunner implements StepRunner {
     const previous = await readCoverageBindingEnvelope(this.projectDir, filesystem);
     const previousDigests = new Set(previous?.entries.map((entry) => entry.digest) ?? []);
     const previousReopenEligible = previous?.status === 'invalidated' && previous.entries.length > 0;
+    // Legacy invalidated envelopes have no predecessor and retain their
+    // original reopen behavior. A newly voided disabled or digest-less run is
+    // a fresh baseline, never authority to reopen work by criterion drift.
+    const previousCriterionReopenEligible = previousReopenEligible &&
+      (previous.predecessor === undefined ||
+        (previous.predecessor.status !== 'disabled' && previous.predecessor.recordedDigests));
     const completedTaskIds = previousReopenEligible
       ? new Set(await resolveTaskIds(this.projectDir, [...new Set(claims.flatMap((claim) => [...claim.taskIds]))]))
       : new Set<string>();
@@ -4354,7 +4360,7 @@ export class DefaultStepRunner implements StepRunner {
 
     for (const claim of criterionClaims) {
       const digest = claimDigest(claim);
-      if (previousReopenEligible && !previousDigests.has(digest)) {
+      if (previousCriterionReopenEligible && !previousDigests.has(digest)) {
         const detail = await reopen(claim.taskIds, digest, 'Reconcile the completed task with the changed coverage-binding criterion.');
         if (detail) return { success: false, output: `coverage_binding could not reopen contradicted work: ${detail}` };
       }

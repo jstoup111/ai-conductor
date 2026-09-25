@@ -73,10 +73,13 @@ describe('voidCoverageBindingForDecideChange', () => {
     ]);
   });
 
-  it('invalidates disabled completion evidence for a changed DECIDE path', async () => {
+  it.each([
+    ['judge-disabled', 'disabled', [{ kind: 'criterion', digest: 'sha256:claim', criterion: 'Given a claim', taskIds: ['4'], doneWhen: [['The claim is asserted.']], verdict: 'not-applicable' }], { status: 'disabled', recordedDigests: true }],
+    ['digest-less', 'done', [], { status: 'done', recordedDigests: false }],
+  ] as const)('preserves %s predecessor provenance when invalidating completed evidence', async (_caseName, status, entries, predecessor) => {
     const { events, statePath } = await seed();
     await writeFile(join(projectRoot, '.pipeline/coverage-binding.json'), JSON.stringify({
-      version: 1, slug: 'feature', runId: 'coverage-run', status: 'disabled', entries: [],
+      version: 1, slug: 'feature', runId: 'coverage-run', status, entries,
     }) + '\n');
 
     await voidCoverageBindingForDecideChange({
@@ -89,6 +92,7 @@ describe('voidCoverageBindingForDecideChange', () => {
 
     expect(JSON.parse(await readFile(join(projectRoot, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({
       status: 'invalidated',
+      predecessor,
     });
   });
 

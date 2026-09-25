@@ -81,6 +81,10 @@ export async function voidCoverageBindingForDecideChange(
   await writeCoverageBindingEnvelope(options.projectRoot, {
     ...envelope,
     status: 'invalidated',
+    predecessor: {
+      status: envelope.status,
+      recordedDigests: envelope.entries.length > 0,
+    },
   }, envelopeFilesystem);
   await writeVerdict(options.projectRoot, 'coverage_binding', {
     satisfied: false,
