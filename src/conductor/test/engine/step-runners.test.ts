@@ -845,7 +845,12 @@ describe('DefaultStepRunner', () => {
       };
     });
     await writeTaskStatuses(projectDir, ['1', '2', '3']);
-    await writeInvalidatedEnvelope(projectDir, featureDesc, []);
+    const baseline = new DefaultStepRunner(createMockProvider(), 'coverage-run-amendment-reopen-baseline', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+    await expect(baseline.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+    const prior = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
+    await writeInvalidatedEnvelope(projectDir, featureDesc, prior.entries);
     const events = new ConductorEventEmitter();
     const reopened: unknown[] = [];
     events.on('coverage_binding_task_reopened', (event) => { reopened.push(event); });
@@ -929,6 +934,45 @@ describe('DefaultStepRunner', () => {
       } finally {
         await rm(projectDir, { recursive: true, force: true });
       }
+    }
+  });
+
+  it('rejects an amendment contradiction from a digest-less invalidated baseline without reopening work', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-digest-less-amendment-'));
+    const featureDesc = 'coverage-binding-digest-less-amendment';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
+    let issuedCompletedTaskIds: string[] | undefined;
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims, completedTaskIds } = JSON.parse(body) as { claims: Array<{ digest: string; amendment?: string }>; completedTaskIds?: string[] };
+      if (claims[0]?.amendment !== undefined) issuedCompletedTaskIds = completedTaskIds;
+      return {
+        success: true,
+        output: JSON.stringify({ verdicts: claims.map(({ digest, amendment }) => amendment === undefined
+          ? { digest, verdict: 'asserts' }
+          : { digest, verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['3'] }) }),
+        exitCode: 0,
+      };
+    });
+    await writeTaskStatuses(projectDir, ['1', '2', '3']);
+    await writeInvalidatedEnvelope(projectDir, featureDesc, []);
+    const events = new ConductorEventEmitter();
+    const reopened: unknown[] = [];
+    events.on('coverage_binding_task_reopened', (event) => { reopened.push(event); });
+    const runner = new DefaultStepRunner(provider, 'coverage-run-digest-less-amendment', projectDir, {
+      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
+        success: false,
+        infrastructureFailure: { name: 'CoverageBindingPayloadError', kind: 'coverage-binding-payload' },
+      });
+      expect(issuedCompletedTaskIds).toEqual([]);
+      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '3': 'completed' });
+      expect(reopened).toEqual([]);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
     }
   });
 
