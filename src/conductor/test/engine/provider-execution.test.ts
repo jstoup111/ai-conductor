@@ -1,4 +1,4 @@
-// Covers: task:2, task:4, task:5, task:14
+// Covers: task:2, task:4, task:5, task:13, task:14
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -266,6 +266,72 @@ describe('executeProviderCandidates', () => {
     });
     expect(codexInvoke).not.toHaveBeenCalled();
     expect(claudeInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a custom member setup skip and launches nothing when its provider has no read-only review mode', async () => {
+    const invoke = vi.fn();
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'portable',
+      policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0 },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'review', cwd: '/workspace' },
+      preparedCandidateOperation: async () => ({
+        kind: 'failure',
+        result: {
+          success: false, exitCode: 1, providerUnavailable: true,
+          providerInvocationSkipped: true, readOnlyReviewUnavailable: true,
+          providerUnavailableReason: 'Provider codex read-only review mode is unavailable on linux: provider has no read-only review mode',
+          output: 'Provider codex read-only review mode is unavailable on linux: provider has no read-only review mode',
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      providerSetupExhaustion: { candidates: [{ provider: 'codex', capability: 'read-only-review-mode' }] },
+      attempts: [{ provider: 'codex', invoked: false, skipReason: 'setup-unavailable', setupCapability: 'read-only-review-mode' }],
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('preserves a custom member usage-limit wait after skipping an unavailable read-only candidate', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async () => ({
+      success: false, exitCode: 1, output: 'usage limit reached', rateLimited: true,
+      usageExhausted: true, waitSeconds: 600,
+    }));
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'portable',
+      policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: ['codex', 'claude'], model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0 },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'review', cwd: '/workspace' },
+      preparedCandidateOperation: async (context) => context.candidate.providerKey === 'codex'
+        ? {
+            kind: 'failure',
+            result: {
+              success: false, exitCode: 1, providerUnavailable: true,
+              providerInvocationSkipped: true, readOnlyReviewUnavailable: true,
+              providerUnavailableReason: 'Provider codex read-only review mode is unavailable on linux: sandbox helper is unavailable',
+              output: 'Provider codex read-only review mode is unavailable on linux: sandbox helper is unavailable',
+            },
+          }
+        : { kind: 'judged', result: await context.invoke() },
+    });
+
+    expect(result).toMatchObject({
+      success: false, rateLimited: true, usageExhausted: true, waitSeconds: 600,
+      attempts: [
+        { provider: 'codex', invoked: false, skipReason: 'setup-unavailable', setupCapability: 'read-only-review-mode' },
+        { provider: 'claude', invoked: true },
+      ],
+    });
+    expect(result.providerSetupExhaustion).toBeUndefined();
+    expect(codexInvoke).not.toHaveBeenCalled();
+    expect((result.attempts ?? []).filter((attempt) => attempt.provider === 'codex')).toHaveLength(1);
+    expect((result.attempts ?? []).filter((attempt) => attempt.provider === 'claude')).toHaveLength(1);
+    expect(claudeInvoke).toHaveBeenCalled();
   });
 
   it('does not advance after cleanup or safety failure, but does preserve typed setup exhaustion for auxiliary callers', async () => {
