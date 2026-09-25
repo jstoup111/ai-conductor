@@ -4826,7 +4826,9 @@ export class Conductor {
     const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
       architecture_review_as_built?: { remediation?: { enabled?: boolean } };
     }).architecture_review_as_built?.remediation?.enabled ?? true;
-    const asBuiltRemediation = asBuiltRemediationEnabled && asBuiltEvidenceFile !== undefined;
+    const asBuiltRemediation = asBuiltRemediationEnabled &&
+      asBuiltEvidenceFile !== undefined &&
+      (hintSource.source === 'architecture-review-as-built' || hintSource.source === 'validation-group');
     const asBuiltEvidenceExists = asBuiltRemediation && asBuiltEvidenceFile !== undefined;
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
     const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config);

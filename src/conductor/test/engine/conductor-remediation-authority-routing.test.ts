@@ -19,6 +19,30 @@ import { AcceptedWideningDecisionStore } from '../../src/engine/accepted-widenin
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+
+const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
+
+async function writeBlockedAsBuiltFixture(projectRoot: string, id = 'ARCH-1'): Promise<void> {
+  await persistAsBuiltVerdict(projectRoot, {
+    version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+    findings: [{
+      id, class: 'REMEDIABLE',
+      reference: { kind: 'plan-task', taskId: '1' },
+      summary: 'The approved task needs repair.',
+    }],
+    violations: 'The approved task is incomplete.',
+    resolution: 'Repair task 1.',
+  }, {
+    attemptId: 'fixture-run', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY,
+  });
+}
 
 describe('planRemediation implementation-only authority routing', () => {
   let projectRoot: string;
@@ -484,6 +508,7 @@ describe('planRemediation implementation-only authority routing', () => {
   });
 
   it('halts a taskless unbound as-built remediation instead of routing its target', async () => {
+    await writeBlockedAsBuiltFixture(projectRoot, 'INVENTED-9');
     const runner: StepRunner = {
       run: async () => {
         await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
@@ -511,14 +536,14 @@ describe('planRemediation implementation-only authority routing', () => {
         source: 'architecture-review-as-built',
         evidence: [{
           gate: 'architecture_review_as_built',
-          evidenceFile: '.pipeline/architecture-review-as-built.md',
+          evidenceFile: '.pipeline/architecture-review-as-built.json',
         }],
       },
     );
 
     expect(outcome).toMatchObject({
       kind: 'halt',
-      detail: expect.stringContaining('no admitted remediation gap'),
+      detail: expect.stringContaining('planner findings do not exactly match'),
     });
   });
 

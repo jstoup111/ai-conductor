@@ -719,7 +719,6 @@ describe('engine/artifacts', () => {
         prd_audit: ['.pipeline/prd-audit.md'],
         architecture_review_as_built: [
           '.pipeline/architecture-review-as-built.json',
-          '.pipeline/architecture-review-as-built.md',
         ],
         rebase: [],
         finish: [],
@@ -5199,8 +5198,8 @@ describe('engine/artifacts', () => {
     const freshTs = new Date(SESSION + 60_000); // mtime after session start
 
     it("deletes a gated step's stale .pipeline artifact so it cannot be reused", async () => {
-      await createFile('.pipeline/architecture-review-as-built.md', 'prior-session verdict');
-      await utimes(join(dir, '.pipeline/architecture-review-as-built.md'), stale, stale);
+      await createFile('.pipeline/architecture-review-as-built.json', 'prior-session verdict');
+      await utimes(join(dir, '.pipeline/architecture-review-as-built.json'), stale, stale);
 
       const removed = await sweepStaleReviewArtifacts(dir, 'architecture_review_as_built', SESSION);
 

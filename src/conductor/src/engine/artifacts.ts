@@ -77,7 +77,13 @@ import {
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
 import { extractStoryCriterionIds, sectionBody, splitStoryBlocks } from './story-criteria.js';
-import { asBuiltFindingDetail, asBuiltOutcome, readAsBuiltVerdict, AS_BUILT_VERDICT_PATH } from './as-built-verdict-store.js';
+import {
+  asBuiltFindingDetail,
+  asBuiltOutcome,
+  readAsBuiltVerdict,
+  AS_BUILT_REPORT_PATH,
+  AS_BUILT_VERDICT_PATH,
+} from './as-built-verdict-store.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
 import {
@@ -1060,7 +1066,7 @@ export async function sweepStaleReviewArtifacts(
     // The as-built report is a derived view of the typed verdict. Never leave
     // either half of that authority/view pair behind after a stale sweep.
     const targets = step === 'architecture_review_as_built'
-      ? [f, join(dir, AS_BUILT_VERDICT_PATH)]
+      ? [f, join(dir, AS_BUILT_REPORT_PATH)]
       : [f];
     for (const target of targets) {
       try {
