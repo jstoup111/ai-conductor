@@ -172,6 +172,25 @@ describe('live self-host boundary', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('ignores the policy-limits fetch stamp but still halts on policy-limits.json itself', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-policy-stamp-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await writeFile(join(provider, 'policy-limits.json'), '{"limits":1}\n');
+    await writeFile(join(provider, 'policy-limits.json.stamp.json'), '{"fetchedAt":1}\n');
+    const verify = (b: Awaited<ReturnType<typeof fingerprintLiveBoundary>>) =>
+      verifyLiveBoundary(b, { contained: false, reason: 'per-step verification' });
+    try {
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await writeFile(join(provider, 'policy-limits.json.stamp.json'), '{"fetchedAt":2}\n');
+      expect(await verify(baseline)).toEqual({ ok: true });
+      await writeFile(join(provider, 'policy-limits.json'), '{"limits":2}\n');
+      const result = await verify(baseline);
+      expect(result.ok).toBe(false);
+      expect(JSON.stringify(result)).toContain('policy-limits.json');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   describe('claude.ai skill-sync round marker', () => {
     const bucket = '0b7c2f1e-5d3a-4c8e-9f21-6a4d8e0c1b37';
     const setup = async (label: string) => {

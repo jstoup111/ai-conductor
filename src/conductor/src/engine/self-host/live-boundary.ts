@@ -138,6 +138,12 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'file-history',                     // per-session snapshots of every file any concurrent session edits
   'paste-cache',                      // per-session scratch for large pasted inputs
   'skills/synced/**/.last-complete-round', // claude.ai skill-sync round marker; see below
+  'policy-limits.json.stamp.json',    // fetch stamp the CLI rewrites on its own policy-limits refresh
+                                       // cycle; verified 2026-09-25 as the sole diff ("changed
+                                       // policy-limits.json.stamp.json", 3 occurrences) behind a false
+                                       // halt of custom-build-review-rubrics-cannot-run-off-linux-o.
+                                       // Only the stamp is excluded: `policy-limits.json` itself is
+                                       // policy config and stays fingerprinted.
 ];
 
 /**
