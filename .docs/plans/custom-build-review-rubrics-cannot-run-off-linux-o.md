@@ -127,7 +127,7 @@ ship (architecture review Condition 2).
 5. Commit: "feat(build-review): launch custom members in provider read-only review mode"
 
 **Done when:**
-- an integration test of `dispatchInstalledBuildReviewPolicy` on three non-self-host host fixtures (Linux with nested namespaces refused, Linux unrestricted, darwin without bubblewrap) settles the custom member with a judged result, no member settles `preflight-failed`, and the execa spy records zero bubblewrap spawns; on the darwin-without-bubblewrap fixture no member result text names bubblewrap, a nested sandbox, or a containment probe
+- an integration test of `dispatchInstalledBuildReviewPolicy` on three non-self-host host fixtures (Linux with nested namespaces refused, Linux unrestricted, darwin without bubblewrap) settles the custom member with a judged result, no member settles `preflight-failed`, and the execa spy records zero bubblewrap spawns; on the darwin-without-bubblewrap fixture no member result text names bubblewrap, a nested sandbox, or a containment probe; and the Linux-unrestricted fixture's custom-member launch (provider, argv, cwd and environment) is asserted equal to the nested-namespaces-refused fixture's launch
 - the same test asserts the Claude and Codex custom-member launches carry the `readOnlyReview` option and an environment equal to an ordinary step's environment for that candidate, with no engine-overridden HOME, CLAUDE_CONFIG_DIR, CODEX_HOME, TMPDIR or XDG scratch path
 - a Codex custom-member test asserts no login file is copied and the only engine scratch home passed is `nativeSchemaScratchHome`, which is not the child's CODEX_HOME
 - a provider-error fixture settles the custom member with cause `provider-error`, and no member result text names bubblewrap, a nested sandbox, or a containment probe
@@ -310,7 +310,7 @@ ship (architecture review Condition 2).
 
 **Done when:**
 - a runDaemonMode wiring test with a project enabling a custom rubric naming Codex emits one `build_review_read_only_capability` event for Codex before the first feature dispatch, and a sibling test with a project enabling a custom rubric naming Claude and a Claude CLI fixture accepting the restricted-mode flags emits one event recording Claude `available`
-- a runDaemonMode wiring test with an unavailable Codex result logs the provider, the platform and the reason and still enters the dispatch loop; with a Codex sandbox helper fixture that cannot start the probe process, the capability event recording Codex `unavailable` and the daemon log line naming the platform and the helper's error are both emitted before the first feature dispatch
+- a runDaemonMode wiring test with an unavailable Codex result logs the provider, the platform and the reason and still enters the dispatch loop, and sibling wiring tests with an absent Codex executable and with unrecognized probe output each record Codex `unavailable` naming that reason and still enter the dispatch loop; with a Codex sandbox helper fixture that cannot start the probe process, the capability event recording Codex `unavailable` and the daemon log line naming the platform and the helper's error are both emitted before the first feature dispatch
 - a runDaemonMode wiring test with no enabled custom rubric records no capability probe spawn and no capability event
 - a wiring test asserts the daemon-scoped capability result reaches the build_review step runner through the Conductor options
 
