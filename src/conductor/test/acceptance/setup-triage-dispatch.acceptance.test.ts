@@ -244,6 +244,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
       runtimes: 'createProviderRuntimeSet(registry, runtimeLog)',
       sessions: 'new ProviderSessionStore()',
       config: 'config',
+      providerAvailability: 'providerAvailability',
       onAttempt:
         "(step, { executionContext, ...attempt }) =>\n      eventTarget.emit({\n        type: 'provider_attempt', step, ...attempt,\n        ...(executionContext ? { executionContext } : {}),\n      })",
       warn: '(_message, transition) => eventTarget.emit(transition)',
