@@ -331,6 +331,8 @@ export interface InvokeOptions {
   dangerouslyReuseSession?: boolean;
   interactive?: boolean;
   dangerouslySkipPermissions?: boolean;
+  /** Engine-owned provider read-only profile for build-review members. */
+  readOnlyReview?: boolean;
   stepCooldown?: number;
   sessionName?: string;
   /**

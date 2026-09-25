@@ -36,6 +36,19 @@ import { wrapForContainment } from '../engine/self-host/live-containment.js';
 /** Print-mode sessions must not leave background tasks outstanding (#2599). */
 const FOREGROUND_ONLY_ENV = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } as const;
 
+const READ_ONLY_REVIEW_TOOLS = 'Read,Grep,Glob,Bash';
+const READ_ONLY_REVIEW_ALLOWED_TOOLS = [
+  'Bash(git show:*)',
+  'Bash(git diff:*)',
+  'Bash(git log:*)',
+  'Bash(git ls-tree:*)',
+  'Bash(git ls-files:*)',
+  'Bash(git cat-file:*)',
+  'Bash(git rev-parse:*)',
+  'Bash(git blame:*)',
+  'Bash(git grep:*)',
+].join(',');
+
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
 // Patterns: "rate limit", "429", "overloaded"
 const RATE_LIMIT_RE = /rate limit|429|overloaded/i;
@@ -871,8 +884,17 @@ export class ClaudeProvider implements LLMProvider {
 
     args.push('--session-id', options.sessionId);
 
-    if (options.dangerouslySkipPermissions) {
+    if (options.dangerouslySkipPermissions && !options.readOnlyReview) {
       args.push('--dangerously-skip-permissions');
+    }
+
+    if (options.readOnlyReview) {
+      args.push(
+        '--restricted',
+        '--tools', READ_ONLY_REVIEW_TOOLS,
+        '--allowedTools', READ_ONLY_REVIEW_ALLOWED_TOOLS,
+        '--strict-mcp-config',
+      );
     }
 
     if (options.sessionName) {
