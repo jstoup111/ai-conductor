@@ -876,7 +876,15 @@ export type ConductorEvent =
   | { type: 'tier_skip'; step: StepName; tier: ComplexityTier }
   | { type: 'config_skip'; step: StepName; reason?: string }
   | { type: 'navigation_back'; from: StepName; to: StepName }
-  | { type: 'rate_limit'; waitSeconds: number; reason?: 'usage-exhausted' }
+  | {
+      type: 'rate_limit';
+      waitSeconds: number;
+      reason?: 'usage-exhausted';
+      /** Provider whose attempt reported the rate limit; absent on historical records. */
+      provider?: string;
+      /** Absolute retry deadline used for the rate-limit wait; absent on historical records. */
+      deadline?: number;
+    }
   | { type: 'session_reset'; reason: string }
   | { type: 'credentials_park'; reason: string }
   | {

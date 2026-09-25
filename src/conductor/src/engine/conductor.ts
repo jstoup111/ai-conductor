@@ -10499,6 +10499,8 @@ export class Conductor {
               type: 'rate_limit',
               waitSeconds,
               ...(result.usageExhausted ? { reason: 'usage-exhausted' as const } : {}),
+              ...(result.actualProvider === undefined ? {} : { provider: result.actualProvider }),
+              deadline,
             });
 
             // Enter episode with deadline for coordinated backoff
