@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-25T20:04:26.441Z
 Slug: post-plan-decide-amendments-never-reconcile-with-t
 Class: needs-human
 Halting step: unknown
