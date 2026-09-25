@@ -492,7 +492,7 @@ as_built_skill_prose_audit() {
     return 1
   fi
   for pattern in \
-    '^\\| Finding \\| Class \\| Governing clause \\| Summary \\|$' \
+    '^\| Finding \| Class \| Governing clause \| Summary \|$' \
     'git (diff|log)' \
     '^Verdict:'; do
     if printf '%s\n' "$section" | grep -qiE "$pattern"; then
@@ -528,7 +528,7 @@ fi
 
 as_built_fixture=$(mktemp)
 printf '%s\n' '### 12. As-Built Compliance Gate (`--as-built` mode)' '| Finding | Class | Governing clause | Summary |' > "$as_built_fixture"
-expect_as_built_skill_prose_fixture_failure "$as_built_fixture" '^\\| Finding \\| Class \\| Governing clause \\| Summary \\|$'
+expect_as_built_skill_prose_fixture_failure "$as_built_fixture" '^\| Finding \| Class \| Governing clause \| Summary \|$'
 printf '%s\n' '### 12. As-Built Compliance Gate (`--as-built` mode)' 'git diff HEAD~1 -- src' > "$as_built_fixture"
 expect_as_built_skill_prose_fixture_failure "$as_built_fixture" 'git (diff|log)'
 printf '%s\n' '### 12. As-Built Compliance Gate (`--as-built` mode)' 'Verdict: BLOCKED' > "$as_built_fixture"

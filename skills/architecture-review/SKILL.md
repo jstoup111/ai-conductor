@@ -477,12 +477,10 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
      tests, typecheck, lint, build, the integrity script, or any command that runs project code —
      including `vitest`, `npm test`/`npm run`, `npx`, `node -e` probes over project modules, and
      bash test scripts. Evidence is what the source and committed artifacts say: `file:line`, test
-     names read from test source, `git diff`/`git log` output, and `Scope:` trailers. Reachability
-     is proved by citing the caller chain in the source, never by running it. If a check cannot be
+     names read from test source, source-control evidence, and `Scope:` trailers. Reachability is
+     proved by citing the caller chain in the source, never by running it. If a check cannot be
      judged without running code, grade it from the evidence available and say so in the rationale;
-     never run it. The only files the validator writes are its own outputs —
-     `.pipeline/architecture-review-as-built.md` and its review-required markers. Nothing else is
-     written, staged, or committed.
+     never run it. Nothing is written, staged, or committed.
   2. **Never yield with delegated work outstanding.** The validator MUST NOT end its turn while any
      subagent it spawned has not returned. Collect every digest before grading; if a subagent is
      slow, wait for it — do not summarize partial results and do not report progress in place of a
@@ -496,7 +494,7 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
   pass. This is a code-vs-approved-design pattern match plus the reachability sweep above,
   deliberately cheap.
 
-**Verdict:**
+**Verdict meanings**
 - **APPROVED** — shipped code matches the approved architecture. Proceed to finish.
 - **APPROVED WITH DRIFT NOTES** — minor, non-violating drift (e.g. a diagram is now slightly stale,
   a pattern was extended consistently). Record the drift; proceed. Note it for a follow-up ADR only
