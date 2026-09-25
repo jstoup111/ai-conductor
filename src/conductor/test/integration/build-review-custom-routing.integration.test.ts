@@ -88,7 +88,7 @@ describe('custom build-review compatibility routing', () => {
       },
     } as HarnessConfig;
     const launches: Array<{ executable: string; args: string[]; cwd: string | undefined; prompt: string }> = [];
-    const provider = new ClaudeProvider(undefined, ((executable, args, options) => {
+    const provider = new ClaudeProvider(undefined, ((executable: string, args: readonly string[], options: { readonly input?: string | Uint8Array; readonly cwd?: string }) => {
       const prompt = typeof options.input === 'string' ? options.input : '';
       launches.push({ executable, args: [...args], cwd: options.cwd, prompt });
       const result = prompt.includes('portable-policy')

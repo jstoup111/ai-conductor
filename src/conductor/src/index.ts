@@ -465,7 +465,7 @@ export async function probeInteractiveReadOnlyReviewCapabilities(options: {
       scratchDir: join(options.projectRoot, '.pipeline', 'read-only-review-probe'),
       runProcess: async (executable, args) => {
         const result = await execa(executable, [...args], { reject: false });
-        return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
+        return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
       },
     });
     await options.events.emit({ type: 'build_review_read_only_capability', ...capability });

@@ -10,7 +10,7 @@ describe('interactive read-only review capability config warnings', () => {
   it('warns and emits an unavailable enabled custom-rubric capability before the run', async () => {
     const events = new ConductorEventEmitter();
     const emitted: unknown[] = [];
-    events.on('build_review_read_only_capability', (event) => emitted.push(event));
+    events.on('build_review_read_only_capability', (event) => { emitted.push(event); });
     const warn = vi.fn();
     const probe = vi.fn(async () => ({
       provider: 'codex', platform: 'linux', status: 'unavailable' as const, reason: 'sandbox helper is unavailable',

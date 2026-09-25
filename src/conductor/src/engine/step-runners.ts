@@ -2588,7 +2588,7 @@ export class DefaultStepRunner implements StepRunner {
     const changedInputs = customEntries.length === 0 ? [] : await finishCustomLapInputDigests();
     if (changedInputs.length > 0) {
       customResults = mutatedCustomResults(customResults!, changedInputs);
-      for (const rubric of Object.keys(validResults)) {
+      for (const rubric of Object.keys(validResults) as BuildReviewRubricResult['rubric'][]) {
         validResults[rubric] = {
           kind: 'infrastructure-failure', rubric,
           reason: 'review-input-mutated',
