@@ -9,6 +9,7 @@ import { ProviderRuntimeSet, type ProviderRuntime } from '../src/engine/provider
 import { ProviderSessionStore } from '../src/engine/provider-session.js';
 import { CODEX_MODEL_POLICY, CLAUDE_MODEL_POLICY } from '../src/engine/provider-model-policy.js';
 import { ModelAvailability } from '../src/engine/model-availability.js';
+import { createProviderAvailability } from '../src/engine/provider-availability.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 
 const roots: string[] = [];
@@ -66,11 +67,13 @@ describe('provider admission at the daemon dispatch entry point', () => {
     await mkdir(join(root, '.pipeline'), { recursive: true });
     const codexInvoke = vi.fn();
     const attempts: Array<{ provider: string; skipReason?: string }> = [];
+    const providerAvailability = createProviderAvailability({ now: () => 1_000 });
+    providerAvailability.suppress('codex', 2_000);
     const providerExecution = {
       configuredProviders: ['codex'],
       runtimes: new ProviderRuntimeSet([runtime('codex', codexInvoke)]),
       sessions: new ProviderSessionStore(),
-      providerAvailability: { suppress: vi.fn(), isAvailable: vi.fn(() => false) },
+      providerAvailability,
       onAttempt: (_step: string, attempt: { provider: string; skipReason?: string }) => {
         attempts.push(attempt);
       },
