@@ -139,21 +139,45 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
-  it('keeps both admission refusal records readable by the existing event reader', () => {
-    const refusalEvents = [
-      {
-        type: 'provider_attempt', step: 'build', provider: 'claude',
-        outcome: 'unavailable', invoked: false, skipReason: 'policy-refused',
+  it('keeps dispatch-derived admission refusal records readable by the existing event reader', async () => {
+    const codexInvoke = vi.fn(async () => {
+      throw new Error('refused provider must not reach spawn');
+    });
+    const claudeInvoke = vi.fn(async () => {
+      throw new Error('refused provider must not reach spawn');
+    });
+    const emitted: ProviderAttemptEvent[] = [];
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      preferredProvider: 'codex',
+      config: { provider_substitution: 'disallow' },
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke }),
+        runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      providerAvailability: {
+        suppress: vi.fn(),
+        isAvailable: vi.fn((provider) => provider !== 'codex'),
       },
-      {
-        type: 'provider_attempt', step: 'build', provider: 'codex',
-        outcome: 'unavailable', invoked: false, skipReason: 'suppression-refused',
+      options: { prompt: 'build', cwd: '/workspace' },
+      onAttempt: (step, attempt) => {
+        emitted.push({ type: 'provider_attempt', step, ...attempt });
       },
-    ] satisfies ProviderAttemptEvent[];
+    });
 
-    const parsed = parseEvents(refusalEvents.map((event) => JSON.stringify(event)).join('\n'));
+    expect(result.attempts).toEqual(emitted.map(({ type: _type, step: _step, ...attempt }) => attempt));
+    expect(emitted).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'suppression-refused' }),
+      expect.objectContaining({ provider: 'claude', invoked: false, skipReason: 'policy-refused' }),
+    ]));
+    expect(codexInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).not.toHaveBeenCalled();
 
-    expect(parsed).toEqual(refusalEvents);
+    const parsed = parseEvents(emitted.map((event) => JSON.stringify(event)).join('\n'));
+
+    expect(parsed).toEqual(emitted);
   });
 
   it('keeps policy refusal at the single admission gate', () => {
@@ -207,11 +231,13 @@ describe('executeProviderCandidates', () => {
 
     expect(result).toMatchObject({ success: false, rateLimited: true, attempts: [
       { provider: 'codex', invoked: false, skipReason: 'suppression-refused' },
+      { provider: 'claude', invoked: false, skipReason: 'policy-refused' },
     ] });
     expect(codexInvoke).not.toHaveBeenCalled();
     expect(claudeInvoke).not.toHaveBeenCalled();
     expect(recorded).toEqual([
       expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'suppression-refused' }),
+      expect.objectContaining({ provider: 'claude', invoked: false, skipReason: 'policy-refused' }),
     ]);
   });
 

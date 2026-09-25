@@ -776,7 +776,9 @@ export async function executeProviderCandidates({
   const candidates = resolveProviderCandidates({
     configuredProviders,
     stepSelection,
-    substitutionPolicy: config?.steps?.[step]?.provider_substitution ?? config?.provider_substitution,
+    // Preserve configured fallbacks for the single admission gate, which owns
+    // both refusal and its canonical provider-attempt event.
+    substitutionPolicy: undefined,
   });
   const substitutionPolicy = config?.steps?.[step]?.provider_substitution ?? config?.provider_substitution;
   const selectedProviders = stepSelection === undefined
