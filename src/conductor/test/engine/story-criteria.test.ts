@@ -169,6 +169,23 @@ describe('extractStoryCriterionIds', () => {
 });
 
 describe('assessAcceptedStoryReadability', () => {
+  it('rejects a story with Negative Paths but no Happy Path section', () => {
+    const stories = [
+      '# Stories',
+      '',
+      '## Story 1: negative only',
+      '',
+      '### Negative Paths',
+      '- **Given** a broken thing, **When** it runs, **Then** it fails loudly.',
+      '',
+    ].join('\n');
+
+    expect(assessAcceptedStoryReadability(stories)).toEqual({
+      stories: [{ id: '1', readable: false }],
+      firstUnreadableStoryId: '1',
+    });
+  });
+
   it('reports readable, zero-criteria, and missing-negative-path stories', () => {
     const stories = [
       story('1', ['the condition is satisfied'], ['the condition is refused']),

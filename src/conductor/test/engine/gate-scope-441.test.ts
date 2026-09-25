@@ -108,12 +108,14 @@ describe('stories gate scoping (#441)', () => {
     expect(result.reason).toContain('Story 2');
   });
 
-  it('accepts the legacy shape when the shared readability predicate can derive its criterion', async () => {
+  it('refuses the legacy shape because it has no headed Happy Path section', async () => {
     await writeFile(join(root, `.docs/stories/${FEATURE}.md`), LEGACY_STORIES);
 
     const result = await GATE_ONLY_PREDICATES.stories!(root, { featureDesc: FEATURE });
 
-    expect(result).toEqual({ done: true });
+    expect(result.done).toBe(false);
+    expect(result.reason).toContain(`${FEATURE}.md`);
+    expect(result.reason).toContain('Story 2');
   });
 
   it('unresolvable feature doc fails explicitly instead of scanning the corpus', async () => {
