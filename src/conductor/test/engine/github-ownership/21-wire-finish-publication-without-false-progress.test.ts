@@ -101,7 +101,7 @@ describe('finish publication guarded draft boundary', () => {
 
     await expect(repair(request)).resolves.toBeUndefined();
     expect(git).toHaveBeenCalledWith(['show', `${BRANCH}:.docs/intake/owned.md`], { cwd: '/fixture' });
-    expect(gh).toHaveBeenCalledWith(['pr', 'ready', '42', '-R', REPOSITORY], { cwd: '/fixture' });
+    expect(gh).toHaveBeenCalledWith(['pr', 'ready', '42', '-R', REPOSITORY], { cwd: '/fixture', credential: 'write' });
 
     draft = true;
     machineOwner.id = 'bob';
