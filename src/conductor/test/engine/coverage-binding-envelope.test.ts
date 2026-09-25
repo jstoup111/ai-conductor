@@ -104,6 +104,7 @@ describe('coverage binding envelope', () => {
           taskIds: ['1'],
           doneWhen: [['The execution boundary is implemented.']],
           verdict,
+          ...(verdict === 'not-carried' ? { missingObligation: 'The plan omits the amended obligation.' } : {}),
         })),
         {
           digest: 'sha256:legacy',
@@ -119,6 +120,20 @@ describe('coverage binding envelope', () => {
       ...envelope,
       entries: [...envelope.entries.slice(0, -1), { ...envelope.entries.at(-1)!, kind: 'criterion' }],
     });
+  });
+
+  it.each([
+    ['omits missingObligation for not-carried', 'not-carried', undefined],
+    ['uses an empty missingObligation for not-carried', 'not-carried', ''],
+    ['adds missingObligation to carried', 'carried', 'Unexpected diagnostic.'],
+  ] as const)('rejects an amendment entry that %s', (_name, verdict, missingObligation) => {
+    const entry = {
+      kind: 'amendment', digest: 'sha256:amendment', artifactPath: '.docs/decisions/adr.md',
+      amendment: 'The amended decision changes the execution boundary.', taskIds: ['1'],
+      doneWhen: [['The execution boundary is implemented.']], verdict,
+      ...(missingObligation === undefined ? {} : { missingObligation }),
+    };
+    expect(parseCoverageBindingEnvelope({ version: 1, slug: 'feature', runId: 'run-1', status: 'done', entries: [entry] })).toBeNull();
   });
 
   it('accepts only the closed judge verdict payloads', () => {

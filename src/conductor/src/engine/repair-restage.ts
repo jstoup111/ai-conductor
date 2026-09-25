@@ -18,6 +18,8 @@ export interface AdmitAndRestageRepairInput {
   instruction: string;
   /** Every authority whose remediation lap this admitted effect consumes. */
   gates: readonly string[];
+  /** Optional shared per-gate remediation lap cap. */
+  lapCap?: number;
 }
 
 export type AdmitAndRestageRepairResult =
@@ -27,7 +29,7 @@ export type AdmitAndRestageRepairResult =
     replayed: boolean;
     baseline: { treeHash: string | null; resolvedCount: number };
   }
-  | { kind: 'failed'; detail: string };
+  | { kind: 'failed'; detail: string; capExceeded?: string };
 
 /**
  * Admit an existing-plan repair and reopen only its bound task rows.
@@ -78,7 +80,14 @@ export async function admitAndRestageRepair(
   if (!admission.ok) return { kind: 'failed', detail: `could not persist admission: ${admission.message}` };
 
   try {
-    await settleRemediationRound(input.projectRoot, admission.obligation.id, input.gates);
+    const settlement = await settleRemediationRound(input.projectRoot, admission.obligation.id, input.gates, input.lapCap);
+    if (settlement.capExceeded !== undefined) {
+      return {
+        kind: 'failed',
+        capExceeded: settlement.capExceeded,
+        detail: `gates.${settlement.capExceeded} has exhausted the remediation lap cap (${input.lapCap})`,
+      };
+    }
   } catch (error) {
     return {
       kind: 'failed',

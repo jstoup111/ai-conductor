@@ -19,7 +19,7 @@ import type { StepName, ConductState, ComplexityTier, ExecutionContext, RunMode 
 import { admitBuildReviewCustomSourceRegions } from './build-review-source-region-admission.js';
 import { BuildReviewScopeSource } from './build-review-scope-source.js';
 import type { HarnessConfig, EffortLevel, BuildReviewRubricId } from '../types/config.js';
-import { prdAuditScopeProjection } from './conductor.js';
+import { prdAuditScopeProjection, remediationLapCapForGate } from './conductor.js';
 import type {
   ComplexityAssessment,
   StepRunner,
@@ -4465,7 +4465,7 @@ export class DefaultStepRunner implements StepRunner {
       ? new Set(await resolveTaskIds(this.projectDir, [...new Set(claims.flatMap((claim) => [...claim.taskIds]))]))
       : new Set<string>();
 
-    const reopen = async (taskIds: readonly string[], digest: string, instruction: string): Promise<string | undefined> => {
+    const reopen = async (taskIds: readonly string[], digest: string, instruction: string): Promise<{ detail: string; capExceeded?: string } | undefined> => {
       if (!previousReopenEligible) return undefined;
       const bound = taskIds.filter((taskId) => completedTaskIds.has(taskId));
       if (bound.length === 0) return undefined;
@@ -4477,8 +4477,9 @@ export class DefaultStepRunner implements StepRunner {
         sourceAuthority: 'coverage_binding',
         instruction,
         gates: ['coverage_binding'],
+        lapCap: remediationLapCapForGate('coverage_binding', this.config ?? ({} as HarnessConfig)),
       });
-      if (admitted.kind === 'failed') return admitted.detail;
+      if (admitted.kind === 'failed') return admitted;
       for (const taskId of bound) {
         completedTaskIds.delete(taskId);
         await this.events?.emit({
@@ -4492,7 +4493,12 @@ export class DefaultStepRunner implements StepRunner {
       const digest = claimDigest(claim);
       if (previousCriterionReopenEligible && !previousDigests.has(digest)) {
         const detail = await reopen(claim.taskIds, digest, 'Reconcile the completed task with the changed coverage-binding criterion.');
-        if (detail) return { success: false, output: `coverage_binding could not reopen contradicted work: ${detail}` };
+        if (detail) {
+          const output = `coverage_binding could not reopen contradicted work: ${detail.detail}`;
+          return detail.capExceeded === undefined
+            ? { success: false, output }
+            : { success: false, output, refusal: { kind: 'needs-human', reason: output } };
+        }
       }
     }
 
@@ -4530,7 +4536,6 @@ export class DefaultStepRunner implements StepRunner {
     const planned = planCoverageBindingBatches({ claims, previous, batchSize });
     const entries: CoverageBindingEnvelopeEntry[] = [...planned.entries];
     const refused: CoverageBindingEnvelopeEntry[] = [];
-    const amendmentMissingObligations = new Map<string, string>();
     const resolved = this.resolvedConfigFor('coverage_binding');
     const auxiliaryPolicy: ResolvedBuildReviewRubricPolicy = {
       enabled: true,
@@ -4639,10 +4644,8 @@ export class DefaultStepRunner implements StepRunner {
             taskIds: claim.taskIds,
             doneWhen: claim.doneWhen,
             verdict: verdict.verdict,
+            ...(verdict.verdict === 'not-carried' ? { missingObligation: verdict.missingObligation } : {}),
           } as unknown as CoverageBindingEnvelopeEntry;
-          if (verdict.verdict === 'not-carried') {
-            amendmentMissingObligations.set(digest, verdict.missingObligation);
-          }
           const detail = await reopen(
             verdict.contradictsCompleted ?? [],
             digest,
@@ -4650,7 +4653,10 @@ export class DefaultStepRunner implements StepRunner {
           );
           if (detail) {
             await writeEnvelope('failed', entries);
-            return { success: false, output: `coverage_binding could not reopen contradicted work: ${detail}` };
+            const output = `coverage_binding could not reopen contradicted work: ${detail.detail}`;
+            return detail.capExceeded === undefined
+              ? { success: false, output }
+              : { success: false, output, refusal: { kind: 'needs-human', reason: output } };
           }
           entries.push(entry);
           await emitEntry(entry);
@@ -4686,7 +4692,7 @@ export class DefaultStepRunner implements StepRunner {
       const detail = refused.map((entry) => (entry as { kind?: string }).kind === 'amendment'
         ? (() => {
           const amendment = entry as unknown as CoverageBindingAmendmentEnvelopeEntry;
-          return [`Artifact: ${amendment.artifactPath}`, `Amendment: ${amendment.amendment}`, `Task ids: ${amendment.taskIds.join(', ')}`, `Done when checks: ${amendment.doneWhen.flat().join(' | ')}`, `Missing obligation: ${amendmentMissingObligations.get(amendment.digest) ?? 'not carried'}`].join('\n');
+          return [`Artifact: ${amendment.artifactPath}`, `Amendment: ${amendment.amendment}`, `Task ids: ${amendment.taskIds.join(', ')}`, `Done when checks: ${amendment.doneWhen.flat().join(' | ')}`, `Missing obligation: ${amendment.missingObligation}`].join('\n');
         })()
         : [`Criterion: ${entry.criterion}`, `Task ids: ${entry.taskIds.join(', ')}`, `Done when checks: ${entry.doneWhen.flat().join(' | ')}`, `Missing assertion: ${entry.missingAssertion}`].join('\n')).join('\n\n');
       const reason = `coverage_binding refused: cited Done when checks do not assert the required claim.\n\n${detail}`;

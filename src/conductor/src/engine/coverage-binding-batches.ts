@@ -4,7 +4,6 @@ import {
   type CoverageBindingEnvelope,
   type CoverageBindingEnvelopeEntry,
   type CoverageBindingAmendmentEnvelopeEntry,
-  type CoverageBindingAmendmentVerdict,
   type CoverageBindingEntryVerdict,
 } from './coverage-binding-envelope.js';
 import type { CoverageBindingAmendmentClaim, CoverageBindingClaim } from './coverage-binding-inputs.js';
@@ -66,12 +65,13 @@ function entryFor(
 function amendmentEntryFor(
   claim: CoverageBindingAmendmentClaim,
   digest: string,
-  verdict: CoverageBindingAmendmentVerdict,
+  hit: CoverageBindingAmendmentEnvelopeEntry,
 ): CoverageBindingEnvelopeEntry {
   return {
     kind: 'amendment', digest, artifactPath: claim.artifactPath, amendment: claim.amendment,
     taskIds: claim.taskIds, doneWhen: claim.doneWhen,
-    verdict,
+    verdict: hit.verdict,
+    ...(hit.verdict === 'not-carried' ? { missingObligation: hit.missingObligation } : {}),
   } as unknown as CoverageBindingEnvelopeEntry;
 }
 
@@ -90,7 +90,7 @@ export function planCoverageBindingBatches({
       const digest = amendmentClaimDigest(claim);
       const hit = cached.get(digest) as CoverageBindingAmendmentEnvelopeEntry | undefined;
       if (hit?.kind === 'amendment' && hit.verdict !== 'unjudged') {
-        entries.push(amendmentEntryFor(claim, digest, hit.verdict));
+        entries.push(amendmentEntryFor(claim, digest, hit));
       } else {
         pendingAmendment.push({ claim: { ...claim, criterion: claim.amendment }, claimDigest: digest });
       }

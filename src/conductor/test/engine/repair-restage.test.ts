@@ -94,6 +94,26 @@ describe('admitAndRestageRepair', () => {
       gates: { coverage_binding: { laps: 2 } },
     });
   });
+
+  it('refuses a distinct admission at the supplied coverage-binding lap cap without charging or restaging it', async () => {
+    const shared = {
+      projectRoot: dir, planPath, taskIds: ['1'], sourceAuthority: 'coverage_binding',
+      instruction: 'Reconcile the contradicted task with the approved amendment.',
+      gates: ['coverage_binding'], lapCap: 2,
+    };
+    for (const findingId of ['claim-digest-a', 'claim-digest-b']) {
+      await expect(admitAndRestageRepair({ ...shared, findingIds: [findingId] })).resolves.toMatchObject({ kind: 'restaged' });
+      await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+        tasks: [{ id: '1', status: 'completed' }, { id: '2', status: 'completed' }],
+      }));
+    }
+
+    await expect(admitAndRestageRepair({ ...shared, findingIds: ['claim-digest-c'] })).resolves.toMatchObject({
+      kind: 'failed', detail: expect.stringContaining('gates.coverage_binding'),
+    });
+    await expect(readTaskStatuses(dir)).resolves.toEqual({ '1': 'completed', '2': 'completed' });
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({ gates: { coverage_binding: { laps: 2 } } });
+  });
 });
 
 async function readTaskStatuses(projectRoot: string): Promise<Record<string, string | undefined>> {
