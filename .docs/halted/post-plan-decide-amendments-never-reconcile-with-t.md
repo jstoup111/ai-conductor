@@ -6,8 +6,8 @@ Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-post-plan-decide-amendments-never-reconcile-with-t
-Head SHA: 71f0c318b54861e8bf39e19df6d7a19bc39e50fa
-Halted at: 2026-09-24T16:04:26.185Z
+Head SHA: b34435dc11b6a7ea7052ffa4bce339d4a3fce79f
+Halted at: 2026-09-25T11:46:23.067Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
