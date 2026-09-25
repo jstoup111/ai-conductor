@@ -10,13 +10,23 @@ const boundary = vi.hoisted(() => ({ calls: [] as Array<{ file: string; args: st
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return { ...actual, execFile: vi.fn((file, args: string[], options: Record<string, unknown>, callback) => {
-    boundary.calls.push({ file, args, options }); queueMicrotask(() => callback(null, { stdout: '', stderr: '' })); return {};
+    boundary.calls.push({ file, args, options });
+    const stdout = file === 'gh' && args[0] === 'pr' && args[1] === 'create'
+      ? 'https://github.com/acme/repo/pull/1\n'
+      : file === 'gh' && args[0] === 'issue' && args[1] === 'create'
+        ? 'https://github.com/acme/repo/issues/1\n'
+        : '';
+    queueMicrotask(() => callback(null, stdout, ''));
+    return {};
   }) };
 });
 import { dispatchGithubOperationCommand } from '../../src/engine/github-operations-cli.js';
+import { openSpecPr } from '../../src/engine/engineer/handoff.js';
+import { createIntakeFilingOperations, fileIntakeIssue } from '../../src/engine/engineer/intake/file-issue.js';
 import { readMachineOwnerConfig } from '../../src/engine/owner-gate/machine-identity.js';
 import { readGithubBotCredential } from '../../src/engine/github-bot-credential.js';
 import { createGuardedGithubOperationRunner, makeProductionGh } from '../../src/engine/tracker-client.js';
+import { makeProductionGit } from '../../src/engine/pr-labels.js';
 
 const originalHome = process.env.HOME;
 describe('GitHub bot CLI entry points', () => {
@@ -43,5 +53,65 @@ describe('GitHub bot CLI entry points', () => {
     });
     expect(exit).toBe(0);
     expect(boundary.calls).toContainEqual(expect.objectContaining({ file: 'gh', args: ['issue', 'comment', '1', '-R', 'acme/repo', '--body', 'entry'], options: expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'bot-entry-token' }) }) }));
+  });
+
+  it('runs the engineer handoff PR create and HTTPS push through bot-authenticated children', async () => {
+    const gh = makeProductionGh();
+    const operations = createGuardedGithubOperationRunner(gh, { cwd: root, mutation: {
+      provenance: { repository: 'acme/repo', defaultBranch: 'main', specBranch: 'spec/topic', featureMarker: '.docs/intake/topic.md', publication: 'initial' },
+      dependencies: { resolveMachineOwner: async () => ({ resolved: true as const, id: 'pr-labels' }), provenanceDiscovery: { readCommittedRecords: async () => [{ path: '.docs/intake/topic.md', content: 'Owner: pr-labels\n' }] } },
+    } });
+    const git = makeProductionGit();
+    const rawGh = vi.fn(async (args: string[]) => ({
+      stdout: args.join(' ') === 'pr view spec/topic --json url' ? '{"url":"https://github.com/acme/repo/pull/1"}' : '', stderr: '',
+    }));
+
+    await expect(openSpecPr({ name: 'repo', canonicalPath: root, remote: 'https://github.com/acme/repo.git' }, 'spec/topic', {
+      runner: rawGh,
+      gitRunner: vi.fn(async () => ({ stdout: '' })),
+      ledgerOpts: { engineerDir: root },
+      publication: {
+        repository: 'acme/repo',
+        operations,
+        remote: {
+          cwd: root,
+          config: vi.fn(async () => ({ stdout: 'https://github.com/acme/repo.git\n' })),
+          runRemoteGit: git,
+          mutation: {
+            provenance: { repository: 'acme/repo', defaultBranch: 'main', specBranch: 'spec/topic', featureMarker: '.docs/intake/topic.md', publication: 'initial' },
+            dependencies: { resolveMachineOwner: async () => ({ resolved: true as const, id: 'pr-labels' }), provenanceDiscovery: { readCommittedRecords: async () => [{ path: '.docs/intake/topic.md', content: 'Owner: pr-labels\n' }] } },
+          },
+        },
+      },
+    })).resolves.toEqual({ kind: 'pr-opened', url: 'https://github.com/acme/repo/pull/1' });
+
+    const ghCreate = boundary.calls.find(({ file, args }) => file === 'gh' && args[0] === 'pr' && args[1] === 'create');
+    expect(ghCreate).toEqual(expect.objectContaining({ options: expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'bot-entry-token' }) }) }));
+    const gitPush = boundary.calls.find(({ file, args }) => file === 'git' && args[0] === 'push');
+    expect(gitPush).toEqual(expect.objectContaining({ options: expect.objectContaining({ env: expect.objectContaining({
+      GH_TOKEN: 'bot-entry-token',
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_0: 'credential.https://github.com.helper',
+      GIT_CONFIG_VALUE_0: '',
+      GIT_CONFIG_KEY_1: 'credential.https://github.com.helper',
+      GIT_CONFIG_VALUE_1: '!gh auth git-credential',
+    }) }) }));
+  });
+
+  it('runs intake-file issue creation through a bot-authenticated gh child', async () => {
+    const gh = makeProductionGh();
+    const operations = createIntakeFilingOperations(gh, root, {
+      resolveActor: async () => ({ resolved: true as const, id: 'pr-labels' }),
+      intent: { kind: 'explicit-intake', repository: 'acme/repo' },
+    });
+
+    await fileIntakeIssue({ title: 'Entry intake', body: 'Entry body', size: 'S', priority: 'low', repo: 'acme/repo' }, {
+      creation: { authority: { resolveActor: async () => ({ resolved: true as const, id: 'pr-labels' }), intent: { kind: 'explicit-intake', repository: 'acme/repo' } }, operations },
+    });
+
+    expect(boundary.calls).toContainEqual(expect.objectContaining({
+      file: 'gh', args: ['issue', 'create', '-R', 'acme/repo', '--title', 'Entry intake', '--body', 'Entry body'],
+      options: expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'bot-entry-token' }) }),
+    }));
   });
 });
