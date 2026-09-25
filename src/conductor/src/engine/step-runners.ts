@@ -2872,48 +2872,6 @@ export class DefaultStepRunner implements StepRunner {
           await emitPolicyFailure('preflight', failure.detail);
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         }
-        // The prepared-candidate callback is the only route that can bind a
-        // frozen cwd and proved access profile to this actual provider.
-        let reviewAccess: InvokeOptions['reviewAccess'];
-        if (source) {
-          const cachedLoginSource = provider === 'codex' && context.prepared?.env.CODEX_HOME !== undefined && context.prepared.env.CODEX_API_KEY === undefined
-            ? join(context.prepared.env.CODEX_HOME, 'auth.json')
-            : undefined;
-          const scratchLease = await acquireReviewScratchHome({
-            worktreeRoot: this.projectDir, runId: this.runId, attempt: 0, provider, memberId: entry.id,
-            ...(cachedLoginSource === undefined ? {} : {
-              seed: async (home) => { await copySelectedCodexLogin({ source: cachedLoginSource, homeDir: join(home, 'codex-home') }); },
-            }),
-          });
-          context.onTeardown(() => scratchLease.release());
-          const scratch = scratchLease.home;
-          const evidencePaths = await prepareBuildReviewEvidencePaths(this.projectDir);
-          const hostStateProbe = await writeReviewHostStateSentinel();
-          context.onTeardown(() => rm(hostStateProbe, { force: true }));
-          const containment = await prepareBuildReviewContainment({
-            provider,
-            launch: reviewLaunchCommand(provider, context.prepared),
-            paths: {
-              ...buildReviewFrozenInputPaths(source), policyMaterial: bundle.materialPath,
-              originalCheckout: this.projectDir, originalInstallation: policy.packageRoot,
-              ...evidencePaths, scratch,
-              installationWriteProbe: join(policy.packageRoot, '.build-review-write-probe'),
-              scratchWriteProbe: join(scratch, '.build-review-write-probe'),
-              hostStateProbe,
-            },
-            runProcess: async (executable, args) => {
-              const result = await execa(executable, args, { reject: false });
-              return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
-            },
-          });
-          if (containment.kind === 'unsupported') {
-            coverageFailure = true;
-            failure = { reason: 'preflight-failed', detail: `Installed build-review policy ${entry.skill} cannot establish read-only containment: ${containment.reason}. Recovery: ${containment.recovery}.` };
-            await emitPolicyFailure('containment', containment.reason);
-            return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
-          }
-          reviewAccess = containment;
-        }
         let cacheHit = false;
         const dispatched = await dispatchRubricContract({
           descriptor: entry.contract,
@@ -2925,7 +2883,7 @@ export class DefaultStepRunner implements StepRunner {
             }),
             })}\n\n${renderAuxiliarySkillInvocation(entry.skill, context.candidate.providerKey)}`,
             cwd: source?.headPath ?? this.projectDir,
-            ...(reviewAccess === undefined ? {} : { reviewAccess }),
+            readOnlyReview: true,
           },
           invoke: (options) => context.invoke(options, async (rung, invoke) => {
           const semanticIdentity = semanticIdentityFor(rung.model);

@@ -135,6 +135,7 @@ describe('custom build-review policy runner', () => {
     }));
     const firstInvocation = (invoke.mock.calls as unknown as Array<[Parameters<LLMProvider['invoke']>[0]]>)[0]?.[0];
     if (!firstInvocation?.model || !firstInvocation.effort) throw new Error('expected a prepared provider candidate');
+    expect(firstInvocation.readOnlyReview).toBe(true);
     const preparedCandidate = { provider: providerKey, model: firstInvocation.model, effort: firstInvocation.effort };
     expect(firstInvocation?.prompt).toContain('Portable policy');
     // The custom-v1 schema has a flat object root (#2739); the provider must
