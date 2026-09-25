@@ -597,3 +597,43 @@ Independent roots: 1, 2, 5, 6, 8, 9.
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-ab1-1: src/conductor/src/engine/step-runners.ts:2385-2460 — capture every custom and built-in policy bundle (the captures now at :2967 and :3655) before any member dispatch, and take ONE whole-lap input digest over frozen head, frozen baseline, every captured policy material path and installed package root, and the evidence root before fan-out; remove the per-candidate capturePolicyInputDigest late capture and the `evidenceRootExcludes: ['build-review']` exclusion (pre-existing build-review evidence files are hashed; files created after capture stay ignored per build-review-input-integrity.ts:138, and the lap's own input-digest.json is deleted before capture). Keep Task 7's existing mutation-lap assertions and Task 17's built-in-only no-digest assertion unchanged.
+**Gate:** as-built
+**Rationale:** step-runners.ts:2395 captures placeholder policy roots, custom fan-out starts at :2451 while each real custom bundle is digested only inside its candidate (:2967), built-in bundles captured at :3655 are never digested, and :2401 excludes the pre-existing build-review evidence subtree although build-review-input-integrity.ts:138 already ignores evidence created after capture; approved D5.3 is unchanged and plan Task 7 (capture before fan-out, captured policy material and pre-existing evidence each settle review-input-mutated) admits the fix, so this is conforming implementation drift. Task 7's existing mutation lap tests and Task 17's no-digest-for-built-in-only-laps assertion must survive unchanged.
+**Governing clause:** adr-2026-09-10-portable-build-review-policy D5.3
+**Done when:**
+- adr-2026-09-10-portable-build-review-policy D5.3 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab1-1 is complete.
+
+### Task rem-as-built-rem-ab1-2: src/conductor/test/integration/build-review-custom-policy.integration.test.ts — add RED-first lap tests: a mixed custom+built-in lap whose fixture reviewer modifies a built-in peer's captured policy material file settles every member review-input-mutated naming that path; a fixture that modifies a custom policy file after lap start but before its member dispatches is reported; a modification to a build-review evidence file present at fan-out (from a prior lap) settles review-input-mutated, while a new file written under the lap's build-review evidence root during fan-out still publishes
+**Gate:** as-built
+**Rationale:** step-runners.ts:2395 captures placeholder policy roots, custom fan-out starts at :2451 while each real custom bundle is digested only inside its candidate (:2967), built-in bundles captured at :3655 are never digested, and :2401 excludes the pre-existing build-review evidence subtree although build-review-input-integrity.ts:138 already ignores evidence created after capture; approved D5.3 is unchanged and plan Task 7 (capture before fan-out, captured policy material and pre-existing evidence each settle review-input-mutated) admits the fix, so this is conforming implementation drift. Task 7's existing mutation lap tests and Task 17's no-digest-for-built-in-only-laps assertion must survive unchanged.
+**Governing clause:** adr-2026-09-10-portable-build-review-policy D5.3
+**Done when:**
+- adr-2026-09-10-portable-build-review-policy D5.3 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab1-2 is complete.
+
+### Task rem-as-built-rem-ab2-1: src/conductor/src/engine/step-runners.ts:3599-3782 and :2640-2660 — when every candidate of a built-in peer in a custom-policy lap is skipped as read-only-unavailable, settle that member with the closed cause read-only-review-unavailable (platform + each candidate's reason, zero launches) by reusing the custom-member conversion at :3221 (extract one shared helper used by both paths so they cannot drift), emit build_review_rubric_infrastructure_failure with platform, and route it through the same deterministic needs-human halt (conductor.ts:10779) with the mechanical-fault counter unchanged, checked before the generic providerSetupExhaustion return; a mixed read-only-unavailable + usage-limited ladder still returns the existing usage wait (Task 13)
+**Gate:** as-built
+**Rationale:** Built-in peers of a custom-policy lap check availability at step-runners.ts:3599 but all-candidate exhaustion becomes a cause-less dispatch failure at :3782, classified invalid-provider-result at build-review-coordinator.ts:792 and returned as generic providerSetupExhaustion at step-runners.ts:2646 before the closed-cause branch at :2653; approved D5.5 already requires read-only-review-unavailable for every member and plan Task 14's custom-member conversion (:3221) and conductor.ts:10779 halt are the pattern to extend, so no architectural decision is needed. Task 13's usage-limit-wait precedence and Task 14's custom-member assertions must survive unchanged.
+**Governing clause:** adr-2026-09-10-portable-build-review-policy D5.5
+**Done when:**
+- adr-2026-09-10-portable-build-review-policy D5.5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-1 is complete.
+
+### Task rem-as-built-rem-ab2-2: src/conductor/test/integration/build-review-custom-routing.integration.test.ts — add RED-first mixed-lap tests: a built-in peer whose every candidate is read-only-unavailable settles read-only-review-unavailable naming the platform and candidate reasons with zero provider launches, the lap halts needs-human on first occurrence with the mechanical-fault counter unchanged and a halt body naming platform and providers, and the result is never classified invalid-provider-result or generic setup exhaustion
+**Gate:** as-built
+**Rationale:** Built-in peers of a custom-policy lap check availability at step-runners.ts:3599 but all-candidate exhaustion becomes a cause-less dispatch failure at :3782, classified invalid-provider-result at build-review-coordinator.ts:792 and returned as generic providerSetupExhaustion at step-runners.ts:2646 before the closed-cause branch at :2653; approved D5.5 already requires read-only-review-unavailable for every member and plan Task 14's custom-member conversion (:3221) and conductor.ts:10779 halt are the pattern to extend, so no architectural decision is needed. Task 13's usage-limit-wait precedence and Task 14's custom-member assertions must survive unchanged.
+**Governing clause:** adr-2026-09-10-portable-build-review-policy D5.5
+**Done when:**
+- adr-2026-09-10-portable-build-review-policy D5.5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-2 is complete.
+
+### Task rem-as-built-rem-ab3-1: docs/reference/configuration.md:1224-1231 — replace the bubblewrap paragraph: custom review runs on every platform in each provider's own read-only review mode (Claude restricted mode, Codex read-only sandbox) in the ordinary provider environment; the host read-only capability result is reported at daemon start, interactive config load, and `daemon status` (READ-ONLY REVIEW CAPABILITY); a candidate without an available read-only mode is skipped, and a member with none settles read-only-review-unavailable and halts needs-human at once without spending mechanical allowance, recoverable via record-reduced-coverage; any reviewer-visible input change discards the whole lap as review-input-mutated (retryable). Keep the surrounding reuse-key and operator-disposition sentences unchanged, and sweep the same file plus docs/runbooks/stalled-or-stuck-feature.md for any other bubblewrap/unsupported-policy review-containment recovery text and update it in the same task
+**Gate:** as-built
+**Rationale:** docs/reference/configuration.md:1224 still says custom review is Linux-only after bubblewrap proves containment and recommends installing bubblewrap after an unsupported-policy failure, contradicting approved D5.1/D5.5 (provider-native read-only modes, host capability result) and D12 (current consumer guidance); this is documentation drift under unchanged approved architecture, so build. Found-and-excluded: the feature's own component and sequence diagram drifts are non-blocking drift notes in the as-built report and are left to the next as-built pass rather than tasked here.
+**Governing clause:** adr-2026-09-10-portable-build-review-policy D12
+**Done when:**
+- adr-2026-09-10-portable-build-review-policy D12 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab3-1 is complete.
