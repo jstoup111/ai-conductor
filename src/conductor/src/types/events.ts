@@ -394,6 +394,21 @@ export type ConductorEvent =
       key: string;
       adr: string;
     }
+  /** Provider-owned read-only review capability observed at configuration time. */
+  | {
+      type: 'build_review_read_only_capability';
+      provider: string;
+      platform: string;
+      status: 'available';
+      reason?: never;
+    }
+  | {
+      type: 'build_review_read_only_capability';
+      provider: string;
+      platform: string;
+      status: 'unavailable';
+      reason: string;
+    }
   | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
   | { type: 'self_host_dispatch_admission'; step: StepName; state: 'queued' | 'admitted' | 'cancelled' }
   /** Candidate-local installed custom policy selected for a frozen review lap. */

@@ -31,6 +31,7 @@ export const EVENT_SINKS = {
   coverage_binding_judged: { render: false, persist: true, audit: false, otel: false },
   coverage_binding_disabled: { render: false, persist: true, audit: false, otel: false },
   config_deprecated_key: { render: false, persist: true, audit: false, otel: false },
+  build_review_read_only_capability: { render: true, persist: true, audit: false, otel: false },
   contained_live_checkout_drift: { render: true, persist: true, audit: false, otel: false },
   self_host_containment_verdict: { render: true, persist: true, audit: false, otel: false },
   self_host_boundary_fingerprint: { render: true, persist: true, audit: false, otel: false },

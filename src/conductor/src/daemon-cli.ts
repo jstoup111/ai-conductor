@@ -2758,6 +2758,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'build_review_rubric_started':
       log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} started`);
       break;
+    case 'build_review_read_only_capability': {
+      const reason = event.status === 'unavailable' ? ` — ${event.reason}` : '';
+      log(`${dot} ${event.status === 'unavailable' ? chalk.yellow('⚠') : chalk.green('✓')} build_review read-only capability ${event.status}: ${event.provider} on ${event.platform}${reason}`);
+      break;
+    }
     case 'build_review_policy_resolved': {
       const provenance = event.pluginId === undefined ? event.source : `${event.source}/${event.pluginId}`;
       const candidate = event.provenance === undefined ? event.provider

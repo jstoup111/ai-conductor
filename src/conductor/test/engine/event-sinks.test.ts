@@ -108,6 +108,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'rebase_gate_invalidated',
   'build_review_repair_context',
   'build_review_rubric_started',
+  'build_review_read_only_capability',
   'build_review_policy_resolved',
   'build_review_policy_failed',
   'build_review_rubric_prompt',
@@ -217,6 +218,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'test_suite_verification',
   'build_review_cache_discarded',
   'build_review_rubric_started',
+  'build_review_read_only_capability',
   'build_review_policy_resolved',
   'build_review_policy_failed',
   'build_review_rubric_result',
@@ -393,6 +395,28 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  it('renders and persists read-only review capability results through the event spine', () => {
+    const capability = {
+      type: 'build_review_read_only_capability',
+      provider: 'codex',
+      platform: 'linux',
+      status: 'unavailable',
+      reason: 'probe write was not refused',
+    } satisfies ConductorEvent;
+
+    expect({
+      capability,
+      sinks: EVENT_SINKS.build_review_read_only_capability,
+      rendered: renderedEventTypes().includes(capability.type),
+      persisted: persistedEventTypes().includes(capability.type),
+    }).toEqual({
+      capability,
+      sinks: { render: true, persist: true, audit: false, otel: false },
+      rendered: true,
+      persisted: true,
+    });
+  });
+
   it('persists translated repair boundaries without rendering, audit, or OpenTelemetry', () => {
     const translated = [
       {
