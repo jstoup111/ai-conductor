@@ -348,6 +348,11 @@ function skippedCandidateSetupUnavailable(provider: string, result: InvokeResult
     reason: result.providerUnavailableReason ?? result.output ?? 'Provider is cached as unavailable.',
     recoveryAction: 'Restore the provider availability, then re-queue this feature.',
   };
+  if (result.readOnlyReviewUnavailable === true) return {
+    provider, capability: 'read-only-review-mode',
+    reason: result.providerUnavailableReason ?? result.output ?? 'Provider read-only review mode is unavailable.',
+    recoveryAction: 'Install or update the provider so its read-only review mode is available, then re-queue this feature.',
+  };
   if (result.providerUnavailable === true) return {
     provider, capability: 'synchronous-spawn-permit',
     reason: result.providerUnavailableReason ?? result.output ?? 'Provider lifecycle capability is unavailable.',

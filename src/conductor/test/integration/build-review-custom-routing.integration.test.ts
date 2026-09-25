@@ -1,7 +1,7 @@
 // Covers: task:33, task:4
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
@@ -13,6 +13,7 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
+import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -134,6 +135,64 @@ describe('custom build-review compatibility routing', () => {
     expect(builtin!.prompt).toContain('Frozen build-review input sha256:content');
     expect(builtin!.prompt).toContain(frozenHead);
     expect(builtin!.args[builtin!.args.indexOf('--allowedTools') + 1]).toContain('Bash(git show:*)');
+  });
+
+  it('skips a custom-review candidate without an available read-only mode and falls back to Claude', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-custom-routing-read-only-'));
+    roots.push(root);
+    const config = {
+      llm_provider: 'claude', build_review: {
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false } },
+        custom_rubrics: {
+          portable: {
+            enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project',
+            llm_provider: ['codex', 'claude'],
+          },
+        },
+      },
+    } as HarnessConfig;
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    const attempts: unknown[] = [];
+    const source = {
+      identity: { snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content', mergeBase: 'base', headSha: 'head' },
+      baselinePath: join(root, '.pipeline', 'frozen', 'baseline'), headPath: join(root, '.pipeline', 'frozen', 'head'),
+    };
+    await Promise.all([mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
+    const runner = new DefaultStepRunner(provider, 'read-only-routing', root, {
+      featureDesc: 'feature', config,
+      providerRuntimes: new ProviderRuntimeSet([
+        { key: 'codex', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
+        { key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
+      ]),
+      sessionStore: new ProviderSessionStore(),
+      providerAttempt: async (_step, attempt) => { attempts.push(attempt); },
+      buildReviewEffectiveResolver: async () => ({ ok: true, feature: { version: 'v1', repository: root, feature: 'feature' }, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } }) as never,
+      buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`, declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+    const inputs = {
+      diff: 'diff', planBody: '# Plan', mergeBase: 'base', baseRef: 'origin/main', baseKind: 'remote', trackingRefSha: 'base', remoteHeadSha: 'base', fresh: true,
+      testSuiteProof: {}, sourceSnapshot: { digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff', planBody: '# Plan', repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [] },
+      sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} },
+    } as never;
+    await (runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', capabilities: unknown) => Promise<{ success: boolean }> }).runRubricBuildReview(
+      inputs, resolveBuildReviewConfig(config), 'M', {
+        codex: { provider: 'codex', platform: 'linux', status: 'unavailable', reason: 'sandbox helper is unavailable' },
+        claude: { provider: 'claude', platform: 'linux', status: 'available' },
+      },
+    );
+
+    expect(attempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'setup-unavailable', setupCapability: 'read-only-review-mode' }),
+      expect.objectContaining({ provider: 'claude', invoked: true }),
+    ]));
+    expect(invoke).toHaveBeenCalled();
   });
   it('refuses a custom-enabled compatibility lap before raw finding routing', async () => {
     const result = await runCompatibilityLap(true);

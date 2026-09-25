@@ -232,6 +232,42 @@ describe('executeProviderCandidates', () => {
     expect(claudeInvoke).toHaveBeenCalledTimes(1);
   });
 
+  it('falls through a read-only-review setup skip and records its capability', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async () => ({ success: true, output: 'done', exitCode: 0 }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'build', cwd: '/workspace' },
+      preparedCandidateOperation: async (context) => context.candidate.providerKey === 'codex'
+        ? {
+            kind: 'failure',
+            result: {
+              success: false, exitCode: 1, providerUnavailable: true,
+              providerInvocationSkipped: true, readOnlyReviewUnavailable: true,
+              output: 'Codex read-only review mode is unavailable.',
+            },
+          }
+        : { kind: 'judged', result: await context.invoke() },
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      actualProvider: 'claude',
+      attempts: [
+        {
+          provider: 'codex', invoked: false, skipReason: 'setup-unavailable',
+          setupCapability: 'read-only-review-mode',
+        },
+        { provider: 'claude', invoked: true },
+      ],
+    });
+    expect(codexInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).toHaveBeenCalledTimes(1);
+  });
+
   it('does not advance after cleanup or safety failure, but does preserve typed setup exhaustion for auxiliary callers', async () => {
     const codexInvoke = vi.fn();
     const claudeInvoke = vi.fn(async () => ({ success: true, output: 'must not run', exitCode: 0 }));

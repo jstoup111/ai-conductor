@@ -217,6 +217,8 @@ export interface InvokeResult {
   structuredResultFailure?: 'missing' | 'malformed';
   /** A requested native schema could not be enforced by the selected adapter. */
   nativeSchemaUnsupported?: true;
+  /** Candidate setup established that its provider cannot enforce read-only review. */
+  readOnlyReviewUnavailable?: true;
   /** Engine-observed provider subprocess intervals, separate from provider-reported usage. */
   observedIntervals?: readonly ObservedInterval[];
   rateLimited?: boolean;

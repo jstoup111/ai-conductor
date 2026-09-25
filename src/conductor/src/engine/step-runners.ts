@@ -1,5 +1,6 @@
 import { writeFile, access, readFile, readdir, mkdir, rename, rm, symlink } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
+import { execa } from 'execa';
 import { isUtf8 } from 'node:buffer';
 import { basename, dirname, join, relative } from 'node:path';
 import { homedir } from 'node:os';
@@ -100,6 +101,7 @@ import {
 import { discoverClaudeReviewPolicies, type ClaudeMetadataCommand, type ClaudeReviewPolicyFilesystem } from './build-review-policy-claude.js';
 import { createCodexAppServerTransport, listCodexInstalledReviewSkills, type CodexAppServerTransport } from './build-review-policy-codex.js';
 import { renderBuildReviewFrozenInputScope } from './build-review-containment.js';
+import { probeReadOnlyReviewCapability, type ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import { captureBuildReviewInputDigest, diffBuildReviewInputDigests, type BuildReviewInputDigestRoots } from './build-review-input-integrity.js';
 import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
 import {
@@ -624,6 +626,8 @@ export interface StepRunnerOptions {
   providerLifecycleEpisodeStore?: ProviderLifecycleEpisodeStore;
   /** Shared provider routing state owned by this conductor run. */
   providerExecution?: ProviderExecutionContext;
+  /** Test seam for the provider-owned read-only-review capability probe. */
+  probeReadOnlyReviewCapability?: typeof probeReadOnlyReviewCapability;
   /**
    * Legacy test-fixture compatibility. Heartbeats are telemetry only, so
    * these former watchdog controls have no effect on provider dispatch.
@@ -813,6 +817,7 @@ export class DefaultStepRunner implements StepRunner {
   private providerExecutionContext?: ProviderExecutionContext;
   private withCandidateSafety?: WithCandidateSafety;
   private prepareCandidateSelfHost?: ExecuteProviderCandidatesInput['prepareCandidateSelfHost'];
+  private readOnlyReviewCapabilityProbe: typeof probeReadOnlyReviewCapability;
   private log: (message: string) => void;
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
   private providerLifecycleAttempt = 0;
@@ -888,6 +893,7 @@ export class DefaultStepRunner implements StepRunner {
     this.providerExecutionContext = options?.providerExecution;
     this.withCandidateSafety = options?.providerExecution?.withCandidateSafety;
     this.prepareCandidateSelfHost = options?.providerExecution?.prepareCandidateSelfHost;
+    this.readOnlyReviewCapabilityProbe = options?.probeReadOnlyReviewCapability ?? probeReadOnlyReviewCapability;
     this.providerWarn =
       options?.providerWarn ??
       options?.providerExecution?.warn ??
@@ -966,7 +972,7 @@ export class DefaultStepRunner implements StepRunner {
     // conductor session (see runBuildReview() for the resolveRebaseConflict
     // fresh-uuid/resume:false pattern).
     if (step === 'build_review') {
-      return this.runBuildReview(state.complexity_tier, opts?.executionContext);
+      return this.runBuildReview(state.complexity_tier, opts?.executionContext, opts?.readOnlyReviewCapabilities);
     }
     if (step === 'coverage_binding') {
       return this.runCoverageBinding(state, opts?.executionContext);
@@ -2313,9 +2319,10 @@ export class DefaultStepRunner implements StepRunner {
     config: ReturnType<typeof resolveBuildReviewConfig>,
     tier: ConductState['complexity_tier'],
     executionContext?: ExecutionContext,
+    readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
   ): Promise<StepRunResult> {
     try {
-      return await this.runRubricBuildReviewInner(inputs, config, tier, executionContext);
+      return await this.runRubricBuildReviewInner(inputs, config, tier, executionContext, readOnlyReviewCapabilities);
     } finally {
       // A custom lap owns one source view for every catalog member. Some
       // built-in paths settle before dispatch (for example a deterministic
@@ -2333,6 +2340,7 @@ export class DefaultStepRunner implements StepRunner {
     config: ReturnType<typeof resolveBuildReviewConfig>,
     tier: ConductState['complexity_tier'],
     executionContext?: ExecutionContext,
+    readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
   ): Promise<StepRunResult> {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
@@ -2353,6 +2361,25 @@ export class DefaultStepRunner implements StepRunner {
     const customEntries = config.catalog.filter(
       (entry): entry is ResolvedBuildReviewCustomCatalogEntry => entry.kind === 'custom',
     );
+    const readOnlyReviewCapabilityRequests = new Map<string, Promise<ReadOnlyReviewCapability>>();
+    const readOnlyReviewCapabilityFor = (provider: string): Promise<ReadOnlyReviewCapability> => {
+      const existing = readOnlyReviewCapabilityRequests.get(provider);
+      if (existing) return existing;
+      const request = Promise.resolve(readOnlyReviewCapabilities?.[provider]).then(async (capability) => {
+        if (capability !== undefined) return capability;
+        return this.readOnlyReviewCapabilityProbe({
+          provider,
+          platform: process.platform,
+          scratchDir: join(this.projectDir, '.pipeline', 'read-only-review-probe'),
+          runProcess: async (executable, args) => {
+            const result = await execa(executable, [...args], { reject: false });
+            return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+          },
+        });
+      });
+      readOnlyReviewCapabilityRequests.set(provider, request);
+      return request;
+    };
     let customResults: Readonly<Record<string, BuildReviewCustomArtifactMember>> | undefined;
     // The feature checkout is deliberately not among these roots. Custom
     // candidates judge only the detached source view, and normal engine work
@@ -2424,7 +2451,7 @@ export class DefaultStepRunner implements StepRunner {
       const outcomes = await runAuxiliaryGroupBranches(
         customEntries.map((entry) => ({ memberId: entry.id, policy: entry })),
         config.maxParallel,
-        async (_id, entry) => this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, capturePolicyInputDigest),
+        async (_id, entry) => this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, capturePolicyInputDigest, readOnlyReviewCapabilityFor),
       );
       if (outcomes.some((outcome) => !outcome.success)) {
         return {
@@ -2718,6 +2745,7 @@ export class DefaultStepRunner implements StepRunner {
     lapId: BuildReviewLapId,
     tier: ConductState['complexity_tier'],
     captureInputDigest?: (materialPath: string, packageRoot: string) => Promise<void>,
+    readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability>,
   ): Promise<{ readonly id: string; readonly success: boolean; readonly output: string; readonly member?: BuildReviewCustomArtifactMember }> {
     const declaration = {
       version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
@@ -2785,6 +2813,22 @@ export class DefaultStepRunner implements StepRunner {
       onAttempt: this.providerAttempt, warn: this.providerWarn, options,
       abortSignal: controller.signal, deadlineAt,
       preparedCandidateOperation: async (context) => {
+        const readOnlyReviewCapability = await readOnlyReviewCapabilityFor?.(context.candidate.providerKey);
+        if (readOnlyReviewCapability?.status === 'unavailable') {
+          const detail = `Provider ${context.candidate.providerKey} read-only review mode is unavailable on ${readOnlyReviewCapability.platform}: ${readOnlyReviewCapability.reason}`;
+          return {
+            kind: 'failure' as const,
+            result: {
+              success: false,
+              exitCode: 1,
+              providerUnavailable: true,
+              providerInvocationSkipped: true,
+              readOnlyReviewUnavailable: true,
+              providerUnavailableReason: detail,
+              output: detail,
+            },
+          };
+        }
         const emitPolicyFailure = async (
           stage: 'catalog' | 'capture' | 'preflight' | 'containment' | 'runtime',
           reason: string,
@@ -3992,7 +4036,11 @@ export class DefaultStepRunner implements StepRunner {
     return { success: true, output: `coverage_binding judged ${entries.length} claim(s)` };
   }
 
-  private async runBuildReview(tier?: ConductState['complexity_tier'], executionContext?: ExecutionContext): Promise<StepRunResult> {
+  private async runBuildReview(
+    tier?: ConductState['complexity_tier'],
+    executionContext?: ExecutionContext,
+    readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
+  ): Promise<StepRunResult> {
     // Resolve the plan for THIS feature — never the unscoped `.docs/plans/*.md`
     // sort()[last] guess (#407): with several features in flight the shared plans
     // directory holds many files, and picking the alphabetically-last one graded
@@ -4187,7 +4235,7 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     return withBaseFreshness(withContainmentAdvisory(
-      await this.runRubricBuildReview(inputs, buildReviewConfig, tier, executionContext),
+      await this.runRubricBuildReview(inputs, buildReviewConfig, tier, executionContext, readOnlyReviewCapabilities),
     ));
   }
 
