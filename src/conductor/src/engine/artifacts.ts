@@ -3451,15 +3451,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return { done: false, reason: stored.reason, routeClass: 'absent' };
     }
     const artifact = join(dir, AS_BUILT_VERDICT_PATH);
-    if (ctx.attemptRunId !== undefined && stored.value.attemptId !== ctx.attemptRunId) {
-      return {
-        done: false,
-        routeClass: 'absent',
-        retrySignal: 'stale-run-identity',
-        verdictFreshness: { artifact, floorSource: 'run-identity', outcome: 'stale_invalidated', fresh: false },
-        reason: `${AS_BUILT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${ctx.attemptRunId} — scoring 'no fresh verdict'`,
-      };
-    }
+    let codeStampStillValid = false;
     if (stored.value.codeStamp !== null) {
       const git = ctx.git ?? makeGitRunner(dir);
       const validity = await gateVerdictStillValid(
@@ -3471,6 +3463,19 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           reason: `${AS_BUILT_VERDICT_PATH} code stamp ${stored.value.codeStamp} cannot vouch for current as-built inputs`,
         };
       }
+      codeStampStillValid = true;
+    }
+    // A code-valid clean verdict survives a later dispatch identity. This is
+    // the code-stamp-first preservation rule: a halt/resume must not repeat a
+    // review solely because it minted a new run id.
+    if (!codeStampStillValid && ctx.attemptRunId !== undefined && stored.value.attemptId !== ctx.attemptRunId) {
+      return {
+        done: false,
+        routeClass: 'absent',
+        retrySignal: 'stale-run-identity',
+        verdictFreshness: { artifact, floorSource: 'run-identity', outcome: 'stale_invalidated', fresh: false },
+        reason: `${AS_BUILT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${ctx.attemptRunId} — scoring 'no fresh verdict'`,
+      };
     }
     const outcome = asBuiltOutcome(stored.value.verdict);
     if (outcome === 'approved' || outcome === 'plan-gap-delivered') {

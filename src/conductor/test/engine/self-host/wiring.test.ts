@@ -515,6 +515,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
   });
 
   it('selecting Codex skips Claude-only self-build preparation when release artifacts are disabled', async () => {
+    const priorClaudeToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     await writeState(statePath, preBuildDoneState());
     const { preflightBuildAuthCheck } = await import(
       '../../../src/engine/self-host/build-auth-preflight.js'
@@ -540,7 +541,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     expect(guardrails.provisionSandbox).not.toHaveBeenCalled();
     expect(teardown).not.toHaveBeenCalled();
     expect(seen.find((entry) => entry.step === 'build')?.configDir).toBeUndefined();
-    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(priorClaudeToken);
     expect(guardrails.versionGate).toHaveBeenCalledTimes(1);
     expect(guardrails.releaseGate).not.toHaveBeenCalled();
     expect(seen.find((entry) => entry.step === 'build')).toBeDefined();
