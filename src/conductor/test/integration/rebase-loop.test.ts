@@ -9,8 +9,10 @@ import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { Conductor } from '../test-conductor.js';
-import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunOptions, StepRunResult } from '../../src/engine/conductor.js';
 import type { FullSuiteFailureReason } from '../../src/engine/full-suite-evidence.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import {
@@ -121,6 +123,13 @@ const validShipmentEvidence = async () => ({
   hash: 'verified',
   commit: 'verified',
 });
+
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
 
 describe('integration/rebase-loop', () => {
   let dir: string;
@@ -364,7 +373,7 @@ describe('integration/rebase-loop', () => {
   // Per-step artifact creation so each gate's objective verdict passes (matches
   // gate-loop.test.ts). The not-yet-existing `rebase` step is engine-native, so
   // no artifact is authored for it here.
-  async function satisfy(step: string): Promise<StepRunResult> {
+  async function satisfy(step: string, options?: StepRunOptions): Promise<StepRunResult> {
     if (step === 'build') {
       await writeFile(
         join(dir, '.pipeline/task-status.json'),
@@ -434,14 +443,13 @@ describe('integration/rebase-loop', () => {
     } else if (step === 'architecture_review_as_built') {
       const codeStamp = await git('rev-parse', 'HEAD');
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
-      await writeFile(
-        join(dir, '.pipeline/architecture-review-as-built.md'),
-        '# As-Built Review\n\nVerdict: APPROVED\n\nOutcome delivered: yes\n',
-      );
-      await writeFile(
-        join(dir, '.pipeline/architecture-review-as-built-code-stamp.json'),
-        JSON.stringify({ codeStamp, runId: 'test-run' }),
-      );
+      await persistAsBuiltVerdict(dir, {
+        version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+      }, {
+        attemptId: options?.runId ?? 'test-run',
+        codeStamp,
+        policy: AS_BUILT_TEST_POLICY,
+      });
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
       const stateResult = await readState(statePath);
@@ -457,9 +465,9 @@ describe('integration/rebase-loop', () => {
   // A plain "satisfy every tail step once" runner.
   function passthroughRunner(ran: string[]): StepRunner {
     return {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         ran.push(step);
-        return satisfy(step);
+        return satisfy(step, options);
       },
     };
   }
@@ -478,12 +486,12 @@ describe('integration/rebase-loop', () => {
           if (step === 'build') {
             retryReasons.push(options?.retryReason ?? '');
             await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 2;\n');
-            return satisfy(step);
+            return satisfy(step, options);
           }
           if (step === 'finish') {
             return { success: false, output: 'stop after downstream validation assertion' };
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const kickbacks: string[] = [];
@@ -568,12 +576,12 @@ describe('integration/rebase-loop', () => {
 
         const dispatched: string[] = [];
         const runner: StepRunner = {
-          run: async (step) => {
+          run: async (step, _state, options) => {
             dispatched.push(step);
             if (step === 'finish') {
               return { success: false, output: 'stop after downstream validation assertion' };
             }
-            return satisfy(step);
+            return satisfy(step, options);
           },
         };
         const suiteKickbacks: string[] = [];
@@ -634,9 +642,9 @@ describe('integration/rebase-loop', () => {
           message: `fixture ${reason}`,
         }));
         await conductorWith({
-          run: async (step) => {
+          run: async (step, _state, options) => {
             dispatched.push(step);
-            return satisfy(step);
+            return satisfy(step, options);
           },
         }, 'test_suite', 0, {
           inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
@@ -699,9 +707,9 @@ describe('integration/rebase-loop', () => {
       const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
       const ran: string[] = [];
       const runner: StepRunner = {
-        run: async (step: string) => {
+        run: async (step: string, _state, options) => {
           ran.push(step);
-          return satisfy(step);
+          return satisfy(step, options);
         },
         // Task 15's expected optional capability slot (mirrors
         // `resolveRebaseConflict`) — ignored by today's `runRebaseStep`.
@@ -981,7 +989,7 @@ describe('integration/rebase-loop', () => {
     const kicks: Array<{ from: string; to: string }> = [];
     let buildRuns = 0;
     const runner: StepRunner = {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         ran.push(step);
         if (step === 'build') {
           buildRuns++;
@@ -992,7 +1000,7 @@ describe('integration/rebase-loop', () => {
           await rm(join(dir, '.pipeline/task-status.json'), { force: true });
           return { success: true };
         }
-        return satisfy(step);
+        return satisfy(step, options);
       },
     };
     let completed = false;
@@ -1089,7 +1097,7 @@ describe('integration/rebase-loop', () => {
 
     let resolverCalls = 0;
     await runThroughShipWithRebaseResolver({
-      run: async (step) => satisfy(step),
+      run: async (step, _state, options) => satisfy(step, options),
       resolveRebaseConflict: async () => {
         resolverCalls += 1;
         return {
@@ -1383,9 +1391,9 @@ describe('integration/rebase-loop', () => {
 
     function runCountingRunner(counts: Record<string, number>): StepRunner {
       return {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           counts[step] = (counts[step] ?? 0) + 1;
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
     }
@@ -1501,10 +1509,10 @@ describe('integration/rebase-loop', () => {
 
         const order: string[] = [];
         await runThroughShip({
-          run: async (step) => {
+          run: async (step, _state, options) => {
             order.push(step);
             counts[step] = (counts[step] ?? 0) + 1;
-            return satisfy(step);
+            return satisfy(step, options);
           },
         });
 
@@ -1544,10 +1552,10 @@ describe('integration/rebase-loop', () => {
         const counts: Record<string, number> = {};
         const crash = new Error('process died before finish');
         const dyingRunner: StepRunner = {
-          run: async (step) => {
+          run: async (step, _state, options) => {
             if (step === 'finish') throw crash;
             counts[step] = (counts[step] ?? 0) + 1;
-            return satisfy(step);
+            return satisfy(step, options);
           },
         };
         await runThroughShip(dyingRunner);
@@ -1646,9 +1654,9 @@ describe('integration/rebase-loop', () => {
         // First process: reaches finish on an up-to-date base, then dies.
         const crash = new Error('process died before finish');
         await runThroughShip({
-          run: async (step) => {
+          run: async (step, _state, options) => {
             if (step === 'finish') throw crash;
-            return satisfy(step);
+            return satisfy(step, options);
           },
         });
         await rm(join(dir, '.pipeline/HALT'), { force: true });
@@ -1678,7 +1686,7 @@ describe('integration/rebase-loop', () => {
             : { stdout: '' };
         await new Conductor({
           stateFilePath: statePath,
-          stepRunner: { run: async (step) => { order.push(step); return satisfy(step); } },
+          stepRunner: { run: async (step, _state, options) => { order.push(step); return satisfy(step, options); } },
           events,
           projectRoot: dir,
           daemon: true,
@@ -1719,10 +1727,10 @@ describe('integration/rebase-loop', () => {
         });
 
         await runThroughShip({
-          run: async (step) => {
+          run: async (step, _state, options) => {
             dispatches.push(step);
             counts[step] = (counts[step] ?? 0) + 1;
-            return satisfy(step);
+            return satisfy(step, options);
           },
         });
 
