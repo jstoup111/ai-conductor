@@ -1,7 +1,7 @@
 // Covers: task:1, S5.1, S5.2, S5.3, S5.4
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access as accessPath, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -223,8 +223,10 @@ async function createPrdAuditRemediationFixture(input: {
     } as never);
   }
 
+  const remediateDispatches: string[] = [];
   const runner: StepRunner = {
-    run: async () => {
+    run: async (step: StepName) => {
+      remediateDispatches.push(step);
       await writeFile(
         join(root, '.pipeline', 'remediation.json'),
         JSON.stringify({
@@ -279,7 +281,7 @@ async function createPrdAuditRemediationFixture(input: {
     },
   );
 
-  return { outcome, plan, planPath, root, gateBlocks };
+  return { outcome, plan, planPath, root, gateBlocks, remediateDispatches };
 }
 
 async function createAsBuiltRemediationCapFixture(input: {
@@ -1972,6 +1974,40 @@ describe('prd_audit kickback', () => {
     expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
     expect(fixture.outcome.detail).toContain('S2.5');
     expect(await readFile(fixture.planPath, 'utf8')).toBe(fixture.plan);
+  });
+
+  // #2753: a lap that cannot append must not pay for /remediate, and must not
+  // strand a remediation.json the resumed lap can no longer reuse.
+  it('halts an exhausted prd_audit lap before dispatching remediate, with unchanged halt evidence', async () => {
+    const fixture = await createPrdAuditRemediationFixture({
+      taskCount: 12,
+      criteria: ['S2.5'],
+      priorLaps: 1,
+    });
+
+    expect(fixture.remediateDispatches).toEqual([]);
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+    expect(fixture.outcome.detail).toContain(
+      'prd_audit remediation lap cap reached (1/1) before appending fix tasks. Findings: S2.5.',
+    );
+    expect(fixture.outcome.detail).toMatch(/Kickback halt generation: \d+/);
+    const ledger = await readKickbackLedger(fixture.root);
+    expect(ledger.gates.prd_audit).toMatchObject({
+      capEvidence: expect.objectContaining({ consumed: 1, limit: 1 }),
+    });
+    await expect(accessPath(join(fixture.root, '.pipeline', 'remediation.json'))).rejects.toThrow();
+  });
+
+  it('still dispatches remediate and appends when the prd_audit lap is under the cap', async () => {
+    const fixture = await createPrdAuditRemediationFixture({
+      taskCount: 12,
+      criteria: ['S2.5'],
+      priorLaps: 0,
+    });
+
+    expect(fixture.remediateDispatches).toEqual(['remediate']);
+    expect(fixture.outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(await readFile(fixture.planPath, 'utf8')).toContain('**Criterion:** S2.5');
   });
 
   it('honors a raised configurable growth cap before appending every FIXABLE task', async () => {
