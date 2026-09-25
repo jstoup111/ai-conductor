@@ -19,6 +19,29 @@ import type { SchedulingUnitRef } from '../../src/engine/conductor.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
+type Equal<Left, Right> =
+  (<Value>() => Value extends Left ? 1 : 2) extends
+  (<Value>() => Value extends Right ? 1 : 2)
+    ? (<Value>() => Value extends Right ? 1 : 2) extends
+      (<Value>() => Value extends Left ? 1 : 2) ? true : false
+    : false;
+type Assert<Condition extends true> = Condition;
+type GithubWriteCredentialFallbackEvent = Extract<
+  ConductorEvent,
+  { type: 'github_write_credential_fallback' }
+>;
+type GithubWriteCredentialFallbackEventHasClosedFields = Assert<Equal<
+  keyof GithubWriteCredentialFallbackEvent,
+  'type' | 'operation' | 'target' | 'reason'
+>>;
+type GithubWriteCredentialFallbackReasonIsClosed = Assert<Equal<
+  GithubWriteCredentialFallbackEvent['reason'],
+  'token-unavailable' | 'auth-refused' | 'unsupported-remote-transport'
+>>;
+const githubWriteCredentialFallbackEventContract: GithubWriteCredentialFallbackEventHasClosedFields
+  & GithubWriteCredentialFallbackReasonIsClosed = true;
+void githubWriteCredentialFallbackEventContract;
+
 const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_started',
   'step_completed',
@@ -386,6 +409,36 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  it('persists GitHub bot credential fallback warnings through the shared ledger without secrets', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'github-write-credential-fallback-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const token = 'ghp_sentinel_bot_token';
+    const tokenFile = '/private/credentials/github-bot-token';
+    const event = {
+      type: 'github_write_credential_fallback' as const,
+      operation: 'remote-ref.push' as const,
+      target: { kind: 'remote-ref' as const, repository: 'acme/conductor', ref: 'refs/heads/feature' },
+      reason: 'auth-refused' as const,
+    } satisfies ConductorEvent;
+
+    try {
+      persister.start();
+      await events.emit(event);
+      persister.stop();
+
+      const ledger = await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8');
+      expect(EVENT_SINKS.github_write_credential_fallback).toEqual(EVENT_SINKS.github_operation_refused);
+      expect(JSON.parse(ledger)).toEqual({ ...event, ts: expect.any(String) });
+      expect(ledger).not.toContain(token);
+      expect(ledger).not.toContain(tokenFile);
+      expect(ledger).not.toMatch(/(?:gh|git)\s+(?:api|push|auth)/i);
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('persists translated repair boundaries without rendering, audit, or OpenTelemetry', () => {
     const translated = [
       {
