@@ -1,4 +1,4 @@
-// Covers: task:2, task:4, task:5, task:7, task:8, task:13, task:14
+// Covers: task:2, task:4, task:5, task:7, task:8, task:13, task:14, task:16
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -213,6 +213,29 @@ describe('executeProviderCandidates', () => {
     expect(recorded).toEqual([
       expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'suppression-refused' }),
     ]);
+  });
+
+  it('continues past a suppressed candidate to an admitted candidate without entering the rate-limit path', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async () => ({ success: true, output: 'done', exitCode: 0 }));
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      providerAvailability: { suppress: vi.fn(), isAvailable: vi.fn((provider) => provider !== 'codex') },
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({ success: true, actualProvider: 'claude' });
+    expect(result.rateLimited).not.toBe(true);
+    expect(result.attempts).toEqual([
+      expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'suppression-refused' }),
+      expect.objectContaining({ provider: 'claude', invoked: true, outcome: 'success' }),
+    ]);
+    expect(codexInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).toHaveBeenCalledOnce();
   });
 
   it('does not turn an earlier provider failure into a rate limit when the final candidate is suppressed', async () => {
