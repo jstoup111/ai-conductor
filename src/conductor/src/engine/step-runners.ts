@@ -1496,7 +1496,7 @@ export class DefaultStepRunner implements StepRunner {
           configuredProviders: this.configuredProviders,
           preferredProvider: this.config?.steps?.[request.step]?.llm_provider,
           runtimes: this.providerRuntimes!,
-          sessions: this.sessionStore!.beginBranch(request.step),
+          sessions: request.dispatch?.providerSessions ?? this.sessionStore!.beginBranch(request.step),
           config: this.config,
           tier: request.tier,
           attempt: request.dispatch?.attempt ?? 1,
