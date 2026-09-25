@@ -165,5 +165,5 @@ export function asBuiltOutcome(verdict: AsBuiltVerdict):
 }
 
 export function asBuiltFindingDetail(findings: readonly AsBuiltFinding[]): string {
-  return findings.map((finding) => `${finding.id} [${finding.class}] (${renderReference(finding.reference)}): ${finding.summary}`).join('; ');
+  return findings.map((finding) => `${finding.id} (${finding.class}; ${renderReference(finding.reference)}): ${finding.summary}`).join('; ');
 }

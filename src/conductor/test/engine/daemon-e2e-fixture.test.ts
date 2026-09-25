@@ -18,6 +18,10 @@ import { runDaemon } from '../../src/engine/daemon.js';
 import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { createCodexProviderFake } from '../fixtures/codex-provider-fake.js';
 import { dumpPipelineDiagnostics } from '../fixtures/daemon-e2e-diagnostics.js';
@@ -126,16 +130,16 @@ function createFixtureAgentFake(
     }
 
     if (options.prompt.includes('You are running step: Architecture Review (as-built).')) {
-      mkdirSync(join(worktreeDir, '.pipeline'), { recursive: true });
-      writeFileSync(
-        join(worktreeDir, '.pipeline/architecture-review-as-built.md'),
-        '# As-Built Review\n\nVerdict: APPROVED\n',
-        'utf-8',
-      );
       return {
         success: true,
         output: 'fixture as-built review recorded approval',
         exitCode: 0,
+        finalStructuredResult: {
+          version: 'v1',
+          verdict: 'APPROVED',
+          reachability: [],
+          driftNotes: [],
+        },
       };
     }
 
@@ -319,6 +323,15 @@ describe('daemon E2E fixture', () => {
       );
 
       const fake = createFixtureAgentFake(worktreeDir, { includeBuildReviewProduction: true });
+      const providerRuntimes = new ProviderRuntimeSet([{
+        key: 'codex',
+        provider: fake.provider,
+        lifecycleCapability: { synchronousSpawnPermit: true },
+        nativeSchemaCapability: { nativeOutputSchema: true },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      }]);
       const buildReviewEffectiveResolver = async (_root: string, aggregate: unknown) => {
         const effective = deriveEffectiveBuildReviewVerdict(aggregate);
         return effective
@@ -334,6 +347,9 @@ describe('daemon E2E fixture', () => {
           pipelineDir,
           planPath,
           providerKey: 'codex',
+          providerRuntimes,
+          configuredProviders: ['codex'],
+          sessionStore: new ProviderSessionStore(),
           // The fixture supplies current aggregate evidence, so it can exercise
           // the sole supported build-review branch without running a command.
           config: { build_review: { maxParallel: 1, rubrics: { testQuality: { enabled: true } } } },

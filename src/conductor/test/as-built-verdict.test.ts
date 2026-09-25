@@ -10,6 +10,8 @@ import {
   readAsBuiltVerdictLine,
   renderAsBuiltInvalidReason,
 } from '../src/engine/artifacts.js';
+import { persistAsBuiltVerdict } from '../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../src/engine/as-built-policy.js';
 import { Conductor, type StepRunner } from '../src/engine/conductor.js';
 import { readKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
@@ -29,6 +31,24 @@ async function fixture(): Promise<string> {
 
 async function writeAsBuilt(dir: string, body: string): Promise<void> {
   await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), body);
+}
+
+const FIXTURE_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'fixture' },
+  planGap: { enabled: true, reason: 'fixture' },
+  adrCompliance: { enabled: false, reason: 'fixture' },
+  diagramDrift: { enabled: false, reason: 'fixture' },
+};
+
+async function writeAsBuiltVerdict(
+  dir: string,
+  verdict: Parameters<typeof persistAsBuiltVerdict>[1],
+): Promise<void> {
+  await persistAsBuiltVerdict(dir, verdict, {
+    attemptId: 'fixture-run',
+    codeStamp: null,
+    policy: FIXTURE_POLICY,
+  });
 }
 
 afterEach(async () => {
@@ -503,14 +523,17 @@ describe('as-built verdict gate', () => {
 
   it('accepts a delivered PLAN_GAP as a recorded non-blocking verdict', async () => {
     const dir = await fixture();
-    await writeAsBuilt(dir, 'Verdict: PLAN_GAP\nOutcome delivered: yes\n\n## Recorded Findings\n- Plan is the limit.\n');
+    await writeAsBuiltVerdict(dir, {
+      version: 'v1', verdict: 'PLAN_GAP', reachability: [], driftNotes: [],
+      outcomeDelivered: true, affectedOutcome: 'Plan is the limit.',
+    });
 
     await expect(
       checkStepCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: Date.now() - 1_000 }),
     ).resolves.toMatchObject({ done: true });
   });
 
-  it('returns the missing-verdict-line reason through the as-built completion predicate', async () => {
+  it('does not treat a Markdown-only report as an as-built completion verdict', async () => {
     const dir = await fixture();
     await writeAsBuilt(dir, '## Verdict\n\n**BLOCKED**\n');
 
@@ -518,38 +541,40 @@ describe('as-built verdict gate', () => {
       checkStepCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: Date.now() - 1_000 }),
     ).resolves.toMatchObject({
       done: false,
-      reason: renderAsBuiltInvalidReason({ kind: 'invalid', cause: 'no-verdict-line' }),
+      reason: expect.stringContaining('architecture-review-as-built.json present'),
       routeClass: 'absent',
     });
   });
 
-  it('keeps undelivered PLAN_GAP, blocked-design, and missing verdict reports unsatisfied', async () => {
+  it('keeps undelivered PLAN_GAP and blocked-design typed verdicts unsatisfied', async () => {
     const dir = await fixture();
     const ctx = { sessionStartedAt: Date.now() - 1_000 };
 
-    await writeAsBuilt(dir, 'Verdict: PLAN_GAP\nOutcome delivered: no\n');
+    await writeAsBuiltVerdict(dir, {
+      version: 'v1', verdict: 'PLAN_GAP', reachability: [], driftNotes: [],
+      outcomeDelivered: false, affectedOutcome: 'Plan is incomplete.',
+    });
     await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({ done: false });
 
-    await writeAsBuilt(dir, [
-      'Verdict: BLOCKED',
-      '',
-      '## Blocking Findings',
-      '| Finding | Class | Governing clause | Summary |',
-      '| --- | --- | --- | --- |',
-      '| ARCH-1 | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
-    ].join('\n'));
+    await writeAsBuiltVerdict(dir, {
+      version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{
+        id: 'ARCH-1', class: 'DESIGN',
+        reference: { kind: 'adr-decision', stem: 'adr-2026-08-25-example', decision: 3 },
+        summary: 'Choose an incompatible policy',
+      }],
+      violations: 'The policy is incompatible.',
+      resolution: 'Choose a compatible policy.',
+    });
     await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({
       done: false,
       reason:
-        'as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): ' +
-        'ARCH-1 (adr-2026-08-25-example decision 3)',
+        'as-built review verdict is BLOCKED and needs a human decision — Blocking findings: ' +
+        'ARCH-1 (DESIGN; adr-2026-08-25-example decision 3): Choose an incompatible policy',
     });
-
-    await writeAsBuilt(dir, '# As-built review\n');
-    await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({ done: false });
   });
 
-  it('keeps the unparseable-report reason free of decision and repair wording through the completion predicate', async () => {
+  it('keeps malformed Markdown diagnostic-only; completion requires a typed verdict', async () => {
     const dir = await fixture();
     const ctx = { sessionStartedAt: Date.now() - 1_000 };
     const report = [
@@ -569,25 +594,26 @@ describe('as-built verdict gate', () => {
     const result = await checkStepCompletion(dir, 'architecture_review_as_built', ctx);
     expect(result).toMatchObject({
       done: false,
-      reason: renderAsBuiltInvalidReason(outcome as Extract<typeof outcome, { kind: 'invalid' }>),
+      reason: expect.stringContaining('architecture-review-as-built.json present'),
       routeClass: 'absent',
     });
     const reason = result.done ? '' : result.reason;
-    expect(reason).toContain('malformed header');
+    expect(reason).not.toContain('malformed header');
     expect(reason).not.toContain('human decision');
     expect(reason).not.toContain('a repair');
   });
 
-  it('names a remediable verdict as a repair and names only DESIGN findings in a mixed verdict', async () => {
+  it('names a remediable typed verdict as a repair and preserves all mixed finding details', async () => {
     const dir = await fixture();
     const ctx = { sessionStartedAt: Date.now() - 1_000 };
-    await writeAsBuilt(dir, [
-      'Verdict: BLOCKED', '', '## Blocking Findings',
-      '| Finding | Class | Governing clause | Summary |',
-      '| --- | --- | --- | --- |',
-      '| AB-1 | REMEDIABLE | Task 1 | Fix it |',
-      '| AB-2 | REMEDIABLE | Task 2 | Fix it too |',
-    ].join('\n'));
+    await writeAsBuiltVerdict(dir, {
+      version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [
+        { id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Fix it' },
+        { id: 'AB-2', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Fix it too' },
+      ],
+      violations: 'Repairs are needed.', resolution: 'Repair the implementation.',
+    });
     await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({
       reason: expect.stringContaining('every blocking finding is REMEDIABLE'),
     });
@@ -595,18 +621,22 @@ describe('as-built verdict gate', () => {
       reason: expect.stringContaining('a repair, not a decision'),
     });
 
-    await writeAsBuilt(dir, [
-      'Verdict: BLOCKED', '', '## Blocking Findings',
-      '| Finding | Class | Governing clause | Summary |',
-      '| --- | --- | --- | --- |',
-      '| AB-1 | DESIGN | ADR-example decision 1 | Decide it |',
-      '| AB-2 | REMEDIABLE | Task 2 | Fix it |',
-    ].join('\n'));
+    await writeAsBuiltVerdict(dir, {
+      version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [
+        {
+          id: 'AB-1', class: 'DESIGN',
+          reference: { kind: 'adr-decision', stem: 'adr-example', decision: 1 }, summary: 'Decide it',
+        },
+        { id: 'AB-2', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Fix it' },
+      ],
+      violations: 'A design decision is needed.', resolution: 'Decide the boundary.',
+    });
     await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({
-      reason: expect.stringContaining('AB-1 (ADR-example decision 1)'),
+      reason: expect.stringContaining('AB-1 (DESIGN; adr-example decision 1): Decide it'),
     });
     const result = await checkStepCompletion(dir, 'architecture_review_as_built', ctx);
-    expect(result.done ? '' : result.reason).not.toContain('AB-2');
+    expect(result.done ? '' : result.reason).toContain('AB-2 (REMEDIABLE; plan task 2): Fix it');
   });
 });
 
@@ -773,7 +803,7 @@ describe('as-built SHIP routing', () => {
     expectOneAsBuiltTerminalBefore(invalid, 'loop_halt');
   });
 
-  it('keeps a kill-switch-disabled remediable report as a needs-human halt with one terminal', async () => {
+  it('halts a Markdown-only remediable report before a disabled remediation switch can route it', async () => {
     const observed = await runSerialAsBuiltExit({
       report: REMEDIABLE_REPORT,
       remediationEnabled: false,
@@ -782,7 +812,7 @@ describe('as-built SHIP routing', () => {
     expectOneAsBuiltTerminalBefore(observed, 'loop_halt');
     const halt = observed.find((event) => event.type === 'loop_halt');
     expect(halt).toMatchObject({
-      reason: expect.stringContaining('as-built review verdict is BLOCKED'),
+      reason: expect.stringContaining('architecture-review-as-built.json is missing'),
     });
     expect(observed.some((event) => event.type === 'kickback')).toBe(false);
   });

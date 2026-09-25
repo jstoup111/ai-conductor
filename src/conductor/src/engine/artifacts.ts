@@ -78,7 +78,7 @@ import {
 } from './build-review-effective.js';
 import { extractStoryCriterionIds, sectionBody, splitStoryBlocks } from './story-criteria.js';
 import { readAsBuiltVerdictLine } from './as-built-verdict-line.js';
-import { asBuiltOutcome, readAsBuiltVerdict, AS_BUILT_VERDICT_PATH } from './as-built-verdict-store.js';
+import { asBuiltFindingDetail, asBuiltOutcome, readAsBuiltVerdict, AS_BUILT_VERDICT_PATH } from './as-built-verdict-store.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
 export { readAsBuiltVerdictLine, type AsBuiltVerdictLine } from './as-built-verdict-line.js';
@@ -3493,7 +3493,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       const verdict = stored.value.verdict;
       return {
         done: false, routeClass: 'named-route',
-        reason: `as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): ${verdict.verdict === 'BLOCKED' ? verdict.findings.filter((finding) => finding.class === 'DESIGN').map((finding) => finding.id).join(', ') : 'unknown finding'}`,
+        reason: `as-built review verdict is BLOCKED and needs a human decision — Blocking findings: ${verdict.verdict === 'BLOCKED' ? asBuiltFindingDetail(verdict.findings) : 'unknown finding'}`,
       };
     }
     return {
