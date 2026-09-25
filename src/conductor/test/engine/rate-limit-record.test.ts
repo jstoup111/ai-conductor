@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
-import { EVENT_SINKS } from '../../src/engine/event-sinks.js';
+import { EVENT_SINKS, otelEventTypes } from '../../src/engine/event-sinks.js';
+import type { RateLimitEpisode } from '../../src/engine/rate-limit-episode.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -80,11 +81,67 @@ describe('rate-limit record attribution', () => {
     });
   });
 
+  it('clamps an overlong parsed deadline before entering the episode and recording it', async () => {
+    const startedAt = Date.now();
+    const sleepFn = vi.fn().mockResolvedValue(undefined);
+    const episode = {
+      enter: vi.fn(),
+      clear: vi.fn().mockResolvedValue(undefined),
+    } as unknown as RateLimitEpisode;
+    const persisted = await runAndReadRateLimitRecord({
+      actualProvider: 'claude',
+      deadline: startedAt + 24 * 60 * 60 * 1000,
+      sleepFn,
+      rateLimitEpisode: episode,
+    });
+
+    const boundedDeadline = startedAt + 6 * 60 * 60 * 1000;
+    expect(persisted).toMatchObject({ deadline: boundedDeadline, waitSeconds: 6 * 60 * 60 });
+    expect(episode.enter).toHaveBeenCalledWith(boundedDeadline);
+    expect(episode.clear).toHaveBeenCalledOnce();
+    expect(sleepFn).not.toHaveBeenCalled();
+  });
+
+  it('does not persist a raw account-bearing limit message', async () => {
+    const accountIdentifier = 'acct_9c94da18-986e-44a5-93fb-2e4b85f4bd67';
+    const persisted = await runAndReadRateLimitRecord({
+      actualProvider: 'claude',
+      output: `Usage limit reached for account ${accountIdentifier}`,
+      usageExhausted: true,
+    });
+
+    expect(JSON.stringify(persisted)).not.toContain(accountIdentifier);
+    expect(persisted).toMatchObject({ reason: 'usage-exhausted' });
+  });
+
+  it('omits an unknown provider rather than persisting an empty provider identifier', async () => {
+    const persisted = await runAndReadRateLimitRecord({ actualProvider: '' });
+
+    expect(persisted).not.toHaveProperty('provider');
+  });
+
+  it('leaves a pre-change consumer able to read records carrying optional fields', async () => {
+    const persisted = await runAndReadRateLimitRecord({
+      actualProvider: 'claude',
+      deadline: Date.now() + 45_000,
+    });
+
+    expect(readPreChangeRateLimitRecord(persisted)).toEqual({ type: 'rate_limit', waitSeconds: 45 });
+  });
+
+  it('keeps rate_limit out of the declared OpenTelemetry exporter subscriptions', () => {
+    expect(otelEventTypes()).not.toContain('rate_limit');
+    expect(EVENT_SINKS.rate_limit).toEqual({ render: true, persist: true, audit: false, otel: false });
+  });
+
   async function runAndReadRateLimitRecord(input: {
-    actualProvider: string;
+    actualProvider?: string;
     deadline?: number;
     waitSeconds?: number;
+    output?: string;
+    usageExhausted?: boolean;
     sleepFn?: (ms: number) => Promise<void>;
+    rateLimitEpisode?: RateLimitEpisode;
   }): Promise<Record<string, unknown>> {
     const eventsPath = join(projectRoot, 'events.jsonl');
     const persister = new EventPersister(eventsPath, events);
@@ -100,6 +157,8 @@ describe('rate-limit record attribution', () => {
             actualProvider: input.actualProvider,
             deadline: input.deadline,
             waitSeconds: input.waitSeconds,
+            output: input.output,
+            usageExhausted: input.usageExhausted,
           };
         }
         return { success: true };
@@ -113,6 +172,7 @@ describe('rate-limit record attribution', () => {
         events,
         stepRunner: runner,
         sleepFn: input.sleepFn ?? vi.fn().mockResolvedValue(undefined),
+        rateLimitEpisode: input.rateLimitEpisode,
       }).run();
     } finally {
       persister.stop();
@@ -123,5 +183,9 @@ describe('rate-limit record attribution', () => {
       .find((event) => event.type === 'rate_limit');
     expect(record).toBeDefined();
     return record!;
+  }
+
+  function readPreChangeRateLimitRecord(record: Record<string, unknown>): { type: string; waitSeconds: number } {
+    return { type: String(record.type), waitSeconds: Number(record.waitSeconds) };
   }
 });

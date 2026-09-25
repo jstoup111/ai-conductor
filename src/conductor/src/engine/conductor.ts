@@ -678,6 +678,8 @@ export function isEngineComputedStep(step: StepName): boolean {
 // Anti-ping-pong: a single gate may be re-opened by kickback at most this many
 // times per feature before the loop HALTs for a human.
 const MAX_KICKBACKS_PER_GATE = 2;
+/** Bound message-derived reset deadlines so a malformed provider response cannot wedge a run. */
+const MAX_RATE_LIMIT_DEADLINE_MS = 6 * 60 * 60 * 1000;
 
 /**
  * Identifies the gate evidence that authorized a remediation dispatch. A
@@ -10487,7 +10489,8 @@ export class Conductor {
             // synthetic deadline.
             const rateLimitNow = Date.now();
             // Task 18: Prefer deadline-first (parsed from message) over escalation (waitSeconds)
-            const deadline = result.deadline ?? rateLimitNow + (result.waitSeconds ?? 300) * 1000;
+            const requestedDeadline = result.deadline ?? rateLimitNow + (result.waitSeconds ?? 300) * 1000;
+            const deadline = Math.min(requestedDeadline, rateLimitNow + MAX_RATE_LIMIT_DEADLINE_MS);
             let waitMs = deadline - rateLimitNow;
             // Ensure waitMs is positive (defensive guard against clock skew or past deadlines)
             if (waitMs <= 0) {
@@ -10495,11 +10498,17 @@ export class Conductor {
             }
             const waitSeconds = Math.ceil(waitMs / 1000);
 
+            // Limit-message text can identify an account. The persisted reason is deliberately
+            // closed rather than copying that provider output into the event spine.
+            const reason = result.usageExhausted ? 'usage-exhausted' as const : undefined;
+            const provider = typeof result.actualProvider === 'string' && result.actualProvider.trim() !== ''
+              ? result.actualProvider
+              : undefined;
             await emitTracked({
               type: 'rate_limit',
               waitSeconds,
-              ...(result.usageExhausted ? { reason: 'usage-exhausted' as const } : {}),
-              ...(result.actualProvider === undefined ? {} : { provider: result.actualProvider }),
+              ...(reason === undefined ? {} : { reason }),
+              ...(provider === undefined ? {} : { provider }),
               deadline,
             });
 
