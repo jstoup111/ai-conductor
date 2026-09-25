@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: kickback-budget
+Resolved at: 2026-09-25T20:42:45.684Z
 Slug: custom-build-review-rubrics-cannot-run-off-linux-o
 Class: kickback-cap
 Halting step: unknown
