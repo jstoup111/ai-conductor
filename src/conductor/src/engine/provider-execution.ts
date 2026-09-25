@@ -1025,7 +1025,11 @@ export async function executeProviderCandidates({
         try { await onTelemetryError?.(error, refusal); } catch { /* best effort */ }
       }
       if (candidates[index + 1] !== undefined) continue;
-      if (attempts.every(({ skipReason }) => skipReason === 'suppression-refused')) {
+      const admissionRelevantAttempts = attempts.filter(
+        ({ skipReason }) => skipReason !== 'policy-refused',
+      );
+      if (admissionRelevantAttempts.length > 0 &&
+        admissionRelevantAttempts.every(({ skipReason }) => skipReason === 'suppression-refused')) {
         return {
           success: false,
           output: `All configured providers are suppressed for step ${step}.`,

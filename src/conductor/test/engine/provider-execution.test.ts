@@ -27,6 +27,7 @@ import type { ConductState } from '../../src/types/index.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import {
+  admitProviderCandidate,
   createCandidateSafetyBoundary,
   executeAuxiliaryProviderCandidates,
   executeProviderCandidates,
@@ -136,35 +137,58 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
-  it('records a policy refusal through the admission gate without invoking the forbidden provider', async () => {
-    const codexInvoke = vi.fn(async () => ({
-      success: false, output: 'codex unavailable', exitCode: 1,
-      providerUnavailable: true, providerUnavailableScope: 'run' as const,
-      providerUnavailableReason: 'codex unavailable',
-    }));
-    const claudeInvoke = vi.fn(async () => ({ success: true, output: 'must not run', exitCode: 0 }));
-    const providerAvailability = { suppress: vi.fn(), isAvailable: vi.fn((provider) => provider === 'codex') };
+  it('keeps policy refusal at the single admission gate', () => {
+    const candidate = { step: 'build' as const, providerKey: 'claude', model: 'model', effort: 'medium' as const };
 
+    expect(admitProviderCandidate(candidate, {
+      selectedProviders: ['codex'], substitutionPolicy: 'disallow',
+      providerAvailability: { suppress: vi.fn(), isAvailable: vi.fn(() => true) },
+    })).toBe('policy-refused');
+  });
+
+  it('records one policy refusal when a forbidden candidate is also suppressed', () => {
+    const isAvailable = vi.fn(() => false);
+    const candidate = { step: 'build' as const, providerKey: 'claude', model: 'model', effort: 'medium' as const };
+
+    expect(admitProviderCandidate(candidate, {
+      selectedProviders: ['codex'], substitutionPolicy: 'disallow',
+      providerAvailability: { suppress: vi.fn(), isAvailable },
+    })).toBe('policy-refused');
+    expect(isAvailable).not.toHaveBeenCalled();
+  });
+
+  it('records only the pinned provider when substitution is disallowed', async () => {
+    const codexInvoke = vi.fn(async () => ({ success: true, output: 'done', exitCode: 0 }));
+    const claudeInvoke = vi.fn(async () => ({ success: true, output: 'must not run', exitCode: 0 }));
     const result = await executeProviderCandidates({
-      step: 'build',
-      configuredProviders: ['codex', 'claude'],
-      preferredProvider: 'codex',
+      step: 'build', configuredProviders: ['codex', 'claude'], preferredProvider: 'codex',
       config: { provider_substitution: 'disallow' },
-      runtimes: new ProviderRuntimeSet([
-        runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke }),
-      ]),
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      sessions: new ProviderSessionScope(vi.fn()), options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result.attempts.map(({ provider }) => provider)).toEqual(['codex']);
+    expect(codexInvoke).toHaveBeenCalledOnce();
+    expect(claudeInvoke).not.toHaveBeenCalled();
+  });
+
+  it('waits when the disallowed-substitution pinned provider is suppressed', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn();
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'], preferredProvider: 'codex',
+      config: { provider_substitution: 'disallow' },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
       sessions: new ProviderSessionScope(vi.fn()),
-      providerAvailability,
+      providerAvailability: { suppress: vi.fn(), isAvailable: vi.fn(() => false) },
       options: { prompt: 'build', cwd: '/workspace' },
     });
 
-    expect(result.success).toBe(false);
-    expect(codexInvoke).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ success: false, rateLimited: true, attempts: [
+      { provider: 'codex', invoked: false, skipReason: 'suppression-refused' },
+    ] });
+    expect(codexInvoke).not.toHaveBeenCalled();
     expect(claudeInvoke).not.toHaveBeenCalled();
-    expect(result.attempts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ provider: 'claude', invoked: false, skipReason: 'policy-refused' }),
-    ]));
-    expect(providerAvailability.isAvailable).toHaveBeenCalledExactlyOnceWith('codex');
   });
 
   it('does not turn an earlier provider failure into a rate limit when the final candidate is suppressed', async () => {

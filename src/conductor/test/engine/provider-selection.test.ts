@@ -117,14 +117,46 @@ describe('resolveProviderCandidates hardening', () => {
     expect(resolveProviderCandidates?.(inputWithRegistryContext)).toEqual(['codex', 'claude']);
   });
 
-  it('keeps a policy-forbidden fallback in order for the admission gate to refuse', async () => {
+  it('narrows a selected step only when substitution is disallowed', async () => {
     const resolveProviderCandidates = await loadCandidateResolver();
     expect(resolveProviderCandidates?.({
       configuredProviders: ['claude', 'codex'], stepSelection: 'codex', substitutionPolicy: 'allow',
     })).toEqual(['codex', 'claude']);
     expect(resolveProviderCandidates?.({
       configuredProviders: ['claude', 'codex'], stepSelection: 'codex', substitutionPolicy: 'disallow',
+    })).toEqual(['codex']);
+  });
+
+  it('keeps the global list when a disallowed step has no selection', async () => {
+    const resolveProviderCandidates = await loadCandidateResolver();
+
+    expect(resolveProviderCandidates?.({
+      configuredProviders: ['claude', 'codex'], substitutionPolicy: 'disallow',
+    })).toEqual(['claude', 'codex']);
+  });
+
+  it('applies a step-scoped disallow only to that step', async () => {
+    const resolveProviderCandidates = await loadCandidateResolver();
+    const configuredProviders = ['claude', 'codex'];
+
+    expect(resolveProviderCandidates?.({
+      configuredProviders, stepSelection: 'codex', substitutionPolicy: 'disallow',
+    })).toEqual(['codex']);
+    expect(resolveProviderCandidates?.({
+      configuredProviders, stepSelection: 'codex',
     })).toEqual(['codex', 'claude']);
+  });
+
+  it('lets a step-scoped allow override the global disallow for that step only', async () => {
+    const resolveProviderCandidates = await loadCandidateResolver();
+    const configuredProviders = ['claude', 'codex'];
+
+    expect(resolveProviderCandidates?.({
+      configuredProviders, stepSelection: 'codex', substitutionPolicy: 'allow',
+    })).toEqual(['codex', 'claude']);
+    expect(resolveProviderCandidates?.({
+      configuredProviders, stepSelection: 'codex', substitutionPolicy: 'disallow',
+    })).toEqual(['codex']);
   });
 });
 
