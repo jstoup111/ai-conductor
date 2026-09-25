@@ -70,6 +70,12 @@ const failingEffectiveResolver = async () => ({
   },
 }) as never;
 
+// Direct runner fixtures exercise the custom-policy hand-off, not the
+// provider-owned sandbox probe. Keep that process boundary explicit.
+const availableReadOnlyReviewCapability = async ({ provider, platform }: { provider: string; platform: string }) => ({
+  provider, platform, status: 'available' as const,
+});
+
 describe('custom build-review policy runner', () => {
   it.each([
     ['claude', 'project'], ['claude', 'global'], ['claude', 'plugin'],
@@ -104,6 +110,7 @@ describe('custom build-review policy runner', () => {
       } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: providerKey, provider, policy, builtIn: true, availability: new ModelAvailability(policy.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(),
+      probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
       providerExecution: {
         prepareCandidateSelfHost: async () => ({ executable: `/prepared/${providerKey}`, env: preparedEnv, args: [], teardown: async () => {} }),
       } as never,
@@ -179,6 +186,7 @@ describe('custom build-review policy runner', () => {
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(),
+      probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: passingEffectiveResolver,
       buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],
@@ -214,6 +222,7 @@ describe('custom build-review policy runner', () => {
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(), events,
+      probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: passingEffectiveResolver,
       buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: packageRoot, canonicalSkillPath: join(packageRoot, 'SKILL.md'), packageRoot, declaredDependencies: [], availability: 'available' as const }],
@@ -252,6 +261,7 @@ describe('custom build-review policy runner', () => {
       } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(),
+      probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
       providerExecution: { prepareCandidateSelfHost: async () => ({ executable: '/prepared/claude', env: {}, args: [], teardown: async () => {} }) } as never,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: passingEffectiveResolver,
@@ -325,6 +335,7 @@ describe('custom build-review policy runner', () => {
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(), events,
+      probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: async () => ({ ok: false, reason: 'disposition store unavailable' }) as never,
       buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],
@@ -360,6 +371,7 @@ describe('custom build-review policy runner', () => {
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(), events: new ConductorEventEmitter(),
+      probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: options.resolver as never,
       buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],
@@ -464,6 +476,7 @@ describe('custom build-review policy runner', () => {
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(), events,
+      probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: passingEffectiveResolver,
       buildReviewPolicyCatalog: async () => [
@@ -502,6 +515,7 @@ describe('custom build-review policy runner', () => {
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(),
+      probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
       events,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: passingEffectiveResolver,
@@ -543,6 +557,7 @@ describe('custom build-review policy runner', () => {
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(),
+      probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: failingEffectiveResolver,
       buildReviewPolicyCatalog: async () => [{
@@ -620,6 +635,7 @@ describe('custom build-review policy discovery under candidate authority', () =>
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(),
+      probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
       events,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: failingEffectiveResolver,
