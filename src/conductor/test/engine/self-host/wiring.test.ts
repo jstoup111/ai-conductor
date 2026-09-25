@@ -223,6 +223,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
   let statePath: string;
   let events: ConductorEventEmitter;
   let priorConfigDir: string | undefined;
+  let priorClaudeOauthToken: string | undefined;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'selfhost-wiring-'));
@@ -230,12 +231,15 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     events = new ConductorEventEmitter();
     // Make the "original" env deterministic so no-bleed assertions are exact.
     priorConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    priorClaudeOauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     delete process.env.CLAUDE_CONFIG_DIR;
   });
 
   afterEach(async () => {
     if (priorConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = priorConfigDir;
+    if (priorClaudeOauthToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    else process.env.CLAUDE_CODE_OAUTH_TOKEN = priorClaudeOauthToken;
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -504,7 +508,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     expect(guardrails.provisionSandbox).not.toHaveBeenCalled();
     expect(teardown).not.toHaveBeenCalled();
     expect(seen.find((entry) => entry.step === 'build')?.configDir).toBeUndefined();
-    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(priorClaudeOauthToken);
     expect(guardrails.versionGate).toHaveBeenCalledTimes(1);
     expect(guardrails.releaseGate).not.toHaveBeenCalled();
     expect(seen.find((entry) => entry.step === 'build')).toBeDefined();

@@ -119,7 +119,8 @@ describe('GitHub invocation audit', () => {
       'interface Options { cwd: string }',
       'function createGuardedGithubOperationRunner(transport: GhRunner, options: Options) {',
       '  return { async run(request: unknown) {',
-      '    await transport(ghArgsFor(request), { cwd: options.cwd });',
+      "    const credential = 'write';",
+      '    await transport(ghArgsFor(request), { cwd: options.cwd, credential });',
       '  } };',
       '}',
     ].join('\n');
@@ -136,12 +137,24 @@ describe('GitHub invocation audit', () => {
       "  return transport(['pr', 'create'], { cwd: options.cwd });",
       '}',
     ].join('\n');
+    const writeCredentialBypass = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'interface Options { cwd: string }',
+      'function createGuardedGithubOperationRunner(transport: GhRunner, options: Options) {',
+      '  return { async run(request: unknown) {',
+      "    await transport(ghArgsFor(request), { cwd: options.cwd, credential: 'write' });",
+      '  } };',
+      '}',
+    ].join('\n');
     expect(auditGithubInvocationSource('engine/tracker-client.ts', canonical)).toEqual([]);
     expect(auditGithubInvocationSource('engine/adapter.ts', nameOnlyBypass)).toEqual([
       expect.objectContaining({ line: 3, message: 'direct injected GitHub mutation outside guarded adapter' }),
     ]);
     expect(auditGithubInvocationSource('engine/tracker-client.ts', trackerBypass)).toEqual([
       expect.objectContaining({ line: 4, message: 'direct injected GitHub mutation outside guarded adapter' }),
+    ]);
+    expect(auditGithubInvocationSource('engine/tracker-client.ts', writeCredentialBypass)).toEqual([
+      expect.objectContaining({ line: 5, message: 'unresolvable mutable GitHub command forwarding outside guarded adapter' }),
     ]);
   });
 

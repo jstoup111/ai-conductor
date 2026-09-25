@@ -15,9 +15,9 @@ const cwd = '/fixture/worktree';
 
 function fakeTerminal(): {
   readonly runner: GhRunner;
-  readonly calls: Array<{ readonly args: string[]; readonly opts: { readonly cwd: string } }>;
+  readonly calls: Array<{ readonly args: string[]; readonly opts: { readonly cwd: string; readonly credential?: 'operator' | 'write' } }>;
 } {
-  const calls: Array<{ args: string[]; opts: { cwd: string } }> = [];
+  const calls: Array<{ args: string[]; opts: { cwd: string; credential?: 'operator' | 'write' } }> = [];
   return {
     runner: async (args, opts) => {
       calls.push({ args, opts });
@@ -114,7 +114,7 @@ describe('engine/tracker-client — guarded canonical GitHub execution', () => {
 
     expect(terminal.calls).toEqual([{
       args: ['issue', 'view', '42', '-R', 'acme/foreign'],
-      opts: { cwd },
+      opts: { cwd, credential: 'operator' },
     }]);
   });
 

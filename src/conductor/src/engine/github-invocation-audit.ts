@@ -327,11 +327,16 @@ function isCanonicalGuardedAdapterTransportCall(file: string, node: ts.CallExpre
   if (!ts.isCallExpression(command) || !ts.isIdentifier(command.expression)
     || command.expression.text !== 'ghArgsFor' || command.arguments.length !== 1
     || !ts.isIdentifier(command.arguments[0]) || command.arguments[0].text !== 'request'
-    || !ts.isObjectLiteralExpression(executionOptions) || executionOptions.properties.length !== 1) return false;
-  const cwd = executionOptions.properties[0];
+    || !ts.isObjectLiteralExpression(executionOptions) || executionOptions.properties.length !== 2) return false;
+  const [cwd, credential] = executionOptions.properties;
   return ts.isPropertyAssignment(cwd)
     && cwd.name.getText() === 'cwd'
-    && isPropertyAccess(cwd.initializer, 'options', 'cwd');
+    && isPropertyAccess(cwd.initializer, 'options', 'cwd')
+    && (ts.isShorthandPropertyAssignment(credential)
+      ? credential.name.text === 'credential'
+      : ts.isPropertyAssignment(credential)
+        && credential.name.getText() === 'credential'
+        && text(credential.initializer) === 'operator');
 }
 
 /**

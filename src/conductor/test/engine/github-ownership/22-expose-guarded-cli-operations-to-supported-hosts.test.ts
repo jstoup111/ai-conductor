@@ -63,7 +63,7 @@ describe('github-operation CLI', () => {
 
     expect(exit).toBe(0);
     expect(confirmation.confirm).toHaveBeenCalledOnce();
-    expect(gh).toHaveBeenCalledWith(['label', 'edit', 'priority', '-R', 'acme/widgets', '--color', '123abc'], { cwd: '/fixture' });
+    expect(gh).toHaveBeenCalledWith(['label', 'edit', 'priority', '-R', 'acme/widgets', '--color', '123abc'], { cwd: '/fixture', credential: 'write' });
 
     const noConfirmationWrite = vi.fn();
     const noConfirmationExit = await dispatchGithubOperationCommand({ requestFile: '/request.json' }, {
@@ -200,7 +200,7 @@ describe('github-operation CLI', () => {
       }),
       gh, git, resolveMachineOwner: owner, write: vi.fn(),
     })).resolves.toBe(0);
-    expect(git).toHaveBeenCalledWith(['push', 'origin', 'HEAD:refs/heads/spec/widget'], { cwd: '/fixture' });
+    expect(git).toHaveBeenCalledWith(['push', 'origin', 'HEAD:refs/heads/spec/widget'], { cwd: '/fixture', credential: 'write', endpoint: 'ssh' });
   });
 
   it('permits only an exact interactive initial-publication approval when no feature provenance exists', async () => {
@@ -258,7 +258,7 @@ describe('github-operation CLI', () => {
       resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }), write: vi.fn(),
     })).resolves.toBe(0);
     expect(confirmation.confirm).toHaveBeenCalledOnce();
-    expect(gh).toHaveBeenLastCalledWith(['issue', 'close', '7', '-R', 'acme/widgets'], { cwd: '/fixture' });
+    expect(gh).toHaveBeenLastCalledWith(['issue', 'close', '7', '-R', 'acme/widgets'], { cwd: '/fixture', credential: 'write' });
 
     const refusedGh = vi.fn(async (args: string[]) => {
       if (args[0] === 'issue' && args[1] === 'view') return { stdout: JSON.stringify({ assignees: [] }) };
