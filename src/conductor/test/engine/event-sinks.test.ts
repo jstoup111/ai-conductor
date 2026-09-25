@@ -347,7 +347,16 @@ const invalidStructuredResultFault = {
     problems: [{ field: 'findings', required: 'must be an array', detail: 'findings must be an array' }],
   },
 } satisfies ConductorEvent;
-void [nativeSchemaUnsupportedFault, invalidStructuredResultFault];
+const readOnlyReviewFault = {
+  type: 'build_review_rubric_infrastructure_failure',
+  rubric: 'security',
+  lapId: 'lap-current',
+  reason: 'review-input-mutated',
+  cause: 'review-input-mutated',
+  changedInputs: ['frozen-head/src/file.ts'],
+  platform: 'linux',
+} satisfies ConductorEvent;
+void [nativeSchemaUnsupportedFault, invalidStructuredResultFault, readOnlyReviewFault];
 
 // @ts-expect-error -- retained reclamation reasons are a closed union.
 const reclaimRetentionWithUnlistedReason = { type: 'worktree_reclaim_retained', slug: 'feature', reason: 'operator-maybe' } satisfies ConductorEvent;
@@ -708,6 +717,26 @@ describe('event sink subscriptions', () => {
       const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
         .trim().split('\n').map((line) => JSON.parse(line));
       expect(records).toEqual(faultLap.map((event) => ({ ...event, ts: expect.any(String) })));
+      expect(await readdir(join(projectRoot, '.pipeline'))).toEqual(['events.jsonl']);
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('persists read-only review diagnostics on the existing infrastructure-failure occurrence', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-review-read-only-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+
+    try {
+      persister.start();
+      await events.emit(readOnlyReviewFault);
+      persister.stop();
+
+      const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(records).toEqual([{ ...readOnlyReviewFault, ts: expect.any(String) }]);
       expect(await readdir(join(projectRoot, '.pipeline'))).toEqual(['events.jsonl']);
     } finally {
       persister.stop();

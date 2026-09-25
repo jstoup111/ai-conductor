@@ -496,6 +496,10 @@ export type ConductorEvent =
       /** Present only when the canonical rubric projection exceeded its configured byte bound. */
       measuredBytes?: number;
       limitBytes?: number;
+      /** Paths in the captured review inputs that changed before the lap settled. */
+      changedInputs?: readonly string[];
+      /** Host platform on which a read-only review capability was assessed. */
+      platform?: string;
     }
   /** Valid scope judgment could not resolve a concrete candidate; not a malformed provider result. */
   | {
