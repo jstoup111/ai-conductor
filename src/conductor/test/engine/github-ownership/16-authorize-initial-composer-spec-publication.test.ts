@@ -90,7 +90,7 @@ describe('composer handoff — initial spec publication ownership', () => {
         ref: BRANCH,
       });
       expect(remoteWrites).toHaveBeenCalledWith(
-        ['push', '-u', 'origin', `HEAD:refs/heads/${BRANCH}`], { cwd: '/fixture' },
+        ['push', '-u', 'origin', `HEAD:refs/heads/${BRANCH}`], { cwd: '/fixture', credential: 'write', endpoint: 'ssh' },
       );
       expect(ghCalls).toEqual(expect.arrayContaining([
         expect.arrayContaining(['pr', 'create']),

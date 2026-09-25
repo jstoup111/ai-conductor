@@ -6,6 +6,11 @@
 # `ai-conductor config init`. Settings with a live or example value further down
 # are explained next to that value.
 #
+# Controls: github_bot — an optional machine-user token used for authorized GitHub writes.
+# Allowed: an object containing a token_file string, but only in ~/.ai-conductor/config.yml; project configs reject this key.
+# Default: unset; authorized writes use the operator's ambient GitHub credential.
+# Changing it: points this machine at a private token file; never commit the token or its path to a project config.
+#
 # Controls: defaults — baseline model-routing and retry settings inherited by every step that does not override them.
 # Allowed: an object with only the keys model, effort, max_retries, and escalate; any other key (including by_tier) fails the load.
 # Default: unset; each step then uses its provider policy model and effort, its built-in retry budget, and escalate true.
