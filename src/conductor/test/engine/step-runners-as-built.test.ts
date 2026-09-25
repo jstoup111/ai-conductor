@@ -233,4 +233,18 @@ describe('architecture_review_as_built native-schema dispatch', () => {
     ]);
     expect((invoke.mock.calls[0]?.[0] as InvokeOptions).prompt).toBe((invoke.mock.calls[1]?.[0] as InvokeOptions).prompt);
   });
+
+  it.each([
+    ['successful prose without structured output', { success: true, output: 'Verdict: APPROVED', exitCode: 0 }],
+    ['Codex structured-result failure', { success: false, output: 'missing schema result', exitCode: 1, structuredResultFailure: 'missing' }],
+  ] as const)('rejects %s as structured-result-missing without consulting prose', async (_name, result) => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'as-built-structured-missing-'));
+    dirs.push(projectDir);
+    buildProjection.mockResolvedValue({ ok: true, projection });
+    const invoke = vi.fn(async (): Promise<InvokeResult> => result);
+    const provider: LLMProvider = { lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true }, invoke };
+
+    await expect(runner(projectDir, 'claude', provider).run('architecture_review_as_built', { complexity_tier: 'M' }))
+      .resolves.toMatchObject({ success: false, output: 'structured-result-missing' });
+  });
 });
