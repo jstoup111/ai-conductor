@@ -9,6 +9,7 @@ import {
   type ResealProtectedArtifactSealOptions,
 } from './protected-artifact-seal.js';
 import { AuditTrailWriter } from './audit-trail.js';
+import { EventPersister } from './event-persister.js';
 import { clearMarker } from './daemon-rekick.js';
 import { HALT_CLASS_MARKER, HALT_MARKER, PROTECTED_ARTIFACT_HALT_CLASS } from './halt-marker.js';
 import { makeGitRunner, originDefaultBranch } from './rebase.js';
@@ -169,7 +170,10 @@ export async function dispatchResealCommand(
   }
 
   const events = deps.events ?? new ConductorEventEmitter();
-  if (!deps.events) new AuditTrailWriter(worktree, { throwOnWriteFailure: true }).subscribe(events);
+  if (!deps.events) {
+    new AuditTrailWriter(worktree, { throwOnWriteFailure: true }).subscribe(events);
+    new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events).start();
+  }
   const refuse = async (condition: string): Promise<void> => {
     const path = refusalPath(condition);
     await events.emitOrThrow({

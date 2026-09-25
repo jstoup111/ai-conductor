@@ -73,6 +73,25 @@ describe('voidCoverageBindingForDecideChange', () => {
     ]);
   });
 
+  it('invalidates disabled completion evidence for a changed DECIDE path', async () => {
+    const { events, statePath } = await seed();
+    await writeFile(join(projectRoot, '.pipeline/coverage-binding.json'), JSON.stringify({
+      version: 1, slug: 'feature', runId: 'coverage-run', status: 'disabled', entries: [],
+    }) + '\n');
+
+    await voidCoverageBindingForDecideChange({
+      projectRoot,
+      decideSet: { paths: new Set([adrPath]) },
+      rebaselines: [{ path: adrPath, priorFingerprint: 'sha256:before', newFingerprint: 'sha256:after' }],
+      events,
+      stateStore: createFilesystemConductStateStore(statePath),
+    });
+
+    expect(JSON.parse(await readFile(join(projectRoot, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({
+      status: 'invalidated',
+    });
+  });
+
   it.each([
     ['byte-identical rebaseline', [{ path: adrPath, priorFingerprint: 'sha256:same', newFingerprint: 'sha256:same' }]],
     ['out-of-set rebaseline', [{ path: outsidePath, priorFingerprint: 'sha256:before', newFingerprint: 'sha256:after' }]],

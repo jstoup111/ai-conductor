@@ -417,6 +417,9 @@ describe('DefaultStepRunner', () => {
     try {
       await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
       expect(provider.invoke).toHaveBeenCalledOnce();
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        adrLayer: { disposition: 'not-applicable', adrIds: [] },
+      });
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
@@ -442,7 +445,9 @@ describe('DefaultStepRunner', () => {
     try {
       await expect(runner.run('coverage_binding', { complexity_tier: 'S' })).resolves.toMatchObject({ success: true });
       expect(provider.invoke).not.toHaveBeenCalled();
-      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'done' });
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        status: 'done', adrLayer: { disposition: 'not-applicable', adrIds: [] },
+      });
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
@@ -470,6 +475,9 @@ describe('DefaultStepRunner', () => {
     try {
       await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
       expect(provider.invoke).toHaveBeenCalledOnce();
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        adrLayer: { disposition: 'not-applicable', adrIds: [adrId] },
+      });
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
@@ -823,9 +831,11 @@ describe('DefaultStepRunner', () => {
     const featureDesc = 'coverage-binding-amendment-reopen';
     const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
     const provider = createMockProvider();
+    let issuedCompletedTaskIds: string[] | undefined;
     (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
       const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string; amendment?: string }> };
+      const { claims, completedTaskIds } = JSON.parse(body) as { claims: Array<{ digest: string; amendment?: string }>; completedTaskIds?: string[] };
+      if (claims[0]?.amendment !== undefined) issuedCompletedTaskIds = completedTaskIds;
       return {
         success: true,
         output: JSON.stringify({ verdicts: claims.map(({ digest, amendment }) => amendment === undefined
@@ -845,6 +855,7 @@ describe('DefaultStepRunner', () => {
     });
     try {
       await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(issuedCompletedTaskIds).toEqual(['1', '2', '3']);
       await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '3': 'pending', '1': 'completed', '2': 'completed' });
       expect(reopened).toMatchObject([{ type: 'coverage_binding_task_reopened', taskId: '3', digest: expect.stringMatching(/^sha256:/) }]);
       await expect(readKickbackLedger(projectDir)).resolves.toMatchObject({ gates: { coverage_binding: { laps: 1 } } });
@@ -926,8 +937,13 @@ describe('DefaultStepRunner', () => {
     const featureDesc = 'coverage-binding-disabled-digests';
     const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
     const provider = createMockProvider();
+    const events = new ConductorEventEmitter();
+    const amendmentEvents: unknown[] = [];
+    const criterionEvents: unknown[] = [];
+    events.on('coverage_binding_amendment_judged', (event) => { amendmentEvents.push(event); });
+    events.on('coverage_binding_judged', (event) => { criterionEvents.push(event); });
     const runner = new DefaultStepRunner(provider, 'coverage-run-disabled-digests', projectDir, {
-      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: false } } },
     });
     try {
       await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
@@ -937,6 +953,8 @@ describe('DefaultStepRunner', () => {
         { digest: expect.stringMatching(/^sha256:/), criterion: 'The service writes the audit record.' },
         { kind: 'amendment', digest: expect.stringMatching(/^sha256:/), verdict: 'unjudged' },
       ] });
+      expect(amendmentEvents).toMatchObject([{ type: 'coverage_binding_amendment_judged', verdict: 'unjudged' }]);
+      expect(criterionEvents).toEqual([]);
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }

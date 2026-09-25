@@ -5,6 +5,7 @@ import { ConductorEventEmitter } from '../ui/events.js';
 import type { ConductStateStore } from './conduct-state-store.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import {
+  COVERAGE_BINDING_COMPLETION_STATUSES,
   readCoverageBindingEnvelope,
   writeCoverageBindingEnvelope,
   type CoverageBindingEnvelopeFilesystem,
@@ -61,7 +62,7 @@ export async function voidCoverageBindingForDecideChange(
 
   const envelope = await readCoverageBindingEnvelope(options.projectRoot, envelopeFilesystem);
   const verdict = await readVerdict(options.projectRoot, 'coverage_binding');
-  if (envelope?.status !== 'done' || verdict?.satisfied !== true) return;
+  if (!envelope || !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status) || verdict?.satisfied !== true) return;
 
   const statePath = options.stateFilePath ?? join(options.projectRoot, '.pipeline', 'conduct-state.json');
   const state = await readState(statePath);
