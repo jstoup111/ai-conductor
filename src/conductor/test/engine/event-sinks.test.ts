@@ -168,6 +168,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'coverage_binding_disabled',
   'config_deprecated_key',
   'contained_live_checkout_drift',
+  'provider_suppressed',
   'provider_stream_progress',
   'self_host_dispatch_admission',
   'self_host_containment_verdict',

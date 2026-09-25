@@ -245,6 +245,8 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
       sessions: 'new ProviderSessionStore()',
       config: 'config',
       providerAvailability: 'providerAvailability',
+      onProviderSuppressed:
+        "(provider, deadline) => events.emit({\n      type: 'provider_suppressed', provider, deadline,\n    })",
       onAttempt:
         "(step, { executionContext, ...attempt }) =>\n      eventTarget.emit({\n        type: 'provider_attempt', step, ...attempt,\n        ...(executionContext ? { executionContext } : {}),\n      })",
       warn: '(_message, transition) => eventTarget.emit(transition)',
