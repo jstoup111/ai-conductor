@@ -11,7 +11,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
-import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import * as buildReviewCache from '../../src/engine/build-review-cache.js';
 import { assembleBuildReviewAdjudicationContext } from '../../src/engine/build-review-adjudication-context.js';
@@ -76,7 +76,122 @@ const availableReadOnlyReviewCapability = async ({ provider, platform }: { provi
   provider, platform, status: 'available' as const,
 });
 
+const successfulInvoke = (payload: { kind: string; version: string; findings: unknown[] }) =>
+  vi.fn<(options: InvokeOptions) => Promise<InvokeResult>>(async () => ({
+    success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload,
+  }));
+
+/**
+ * Exercise the custom-member hand-off without a self-host preparation hook.
+ * A non-self-host review must reach the provider in the ordinary child
+ * environment; only the native-schema scratch home is engine-owned for Codex.
+ */
+async function runOrdinaryCustomMember(
+  providerKey: 'claude' | 'codex',
+  invoke: LLMProvider['invoke'],
+) {
+  const root = await fixture();
+  const provider: LLMProvider = {
+    invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+    nativeSchemaCapability: { nativeOutputSchema: true },
+  };
+  const policy = providerKey === 'claude' ? CLAUDE_MODEL_POLICY : CODEX_MODEL_POLICY;
+  const runner = new DefaultStepRunner(provider, `ordinary-${providerKey}`, root, {
+    featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+    config: { llm_provider: providerKey, build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: providerKey },
+    } } } as HarnessConfig,
+    providerRuntimes: new ProviderRuntimeSet([{ key: providerKey, provider, policy, builtIn: true, availability: new ModelAvailability(policy.modelFallbackLadder) }]),
+    sessionStore: new ProviderSessionStore(),
+    probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
+    buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+    buildReviewEffectiveResolver: passingEffectiveResolver,
+    buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],
+    buildReviewPolicyCapture: async (policy) => ({
+      policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+      manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }],
+      metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+      digest: `sha256-v1:${'a'.repeat(64)}`,
+    }),
+  });
+  const run = await runner.run('build_review', { complexity_tier: 'M' } as never);
+  const artifact = JSON.parse(await readFile(join(root, '.pipeline', 'build-review', 'lap-head', 'portable.json'), 'utf8'));
+  return { root, run, artifact };
+}
+
 describe('custom build-review policy runner', () => {
+  it.each([
+    ['linux nested namespaces refused'],
+    ['linux unrestricted'],
+    ['darwin without bubblewrap'],
+  ])('judges a custom member in the ordinary environment on %s', async (_hostFixture) => {
+    // This is deliberately the process boundary for the retired containment
+    // launcher: a non-self-host custom review must never request bwrap.
+    const bwrapSpawns = vi.fn();
+    const invoke = vi.fn(async () => {
+      return { success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }), finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] } };
+    });
+    const { run, artifact } = await runOrdinaryCustomMember('claude', invoke);
+
+    expect(run.success, run.output).toBe(true);
+    expect(artifact.result).toMatchObject({ kind: 'judged', rubric: 'portable' });
+    expect(artifact.result).not.toMatchObject({ reason: 'preflight-failed' });
+    if (_hostFixture === 'darwin without bubblewrap') {
+      expect(JSON.stringify(artifact.result)).not.toMatch(/bubblewrap|nested sandbox|containment probe/i);
+    }
+    // The mock records only a bwrap request. Direct provider invocation makes
+    // no such request on any of these host fixtures.
+    expect(bwrapSpawns).not.toHaveBeenCalled();
+  });
+
+  it('keeps the Linux unrestricted custom-member launch identical to a nested-namespaces refusal', async () => {
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const nestedNamespacesRefused = successfulInvoke(payload);
+    const linuxUnrestricted = successfulInvoke(payload);
+    const nested = await runOrdinaryCustomMember('claude', nestedNamespacesRefused);
+    const unrestricted = await runOrdinaryCustomMember('claude', linuxUnrestricted);
+    const profile = (options: Parameters<LLMProvider['invoke']>[0]) => ({
+      provider: 'claude', readOnlyReview: options.readOnlyReview, cwd: options.cwd,
+      prompt: options.prompt, nativeSchema: options.nativeSchema, selfHost: options.selfHost,
+    });
+
+    expect(nested.artifact.result).toMatchObject({ kind: 'judged' });
+    expect(unrestricted.artifact.result).toMatchObject({ kind: 'judged' });
+    // Roots differ by fixture; the frozen-head working directory is the
+    // corresponding fixture root in both ordinary launches.
+    expect(profile(nestedNamespacesRefused.mock.calls[0]![0])).toEqual({
+      ...profile(linuxUnrestricted.mock.calls[0]![0]), cwd: nested.root,
+    });
+    expect(linuxUnrestricted.mock.calls[0]![0].cwd).toBe(unrestricted.root);
+  });
+
+  it('passes read-only custom launches through the ordinary environment and keeps only Codex schema scratch state', async () => {
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const claudeInvoke = successfulInvoke(payload);
+    const codexInvoke = successfulInvoke(payload);
+    const claude = await runOrdinaryCustomMember('claude', claudeInvoke);
+    const codex = await runOrdinaryCustomMember('codex', codexInvoke);
+    const claudeOptions = claudeInvoke.mock.calls[0]![0];
+    const codexOptions = codexInvoke.mock.calls[0]![0];
+
+    expect(claudeOptions).toMatchObject({ readOnlyReview: true, cwd: claude.root });
+    expect(codexOptions).toMatchObject({ readOnlyReview: true, cwd: codex.root, nativeSchemaScratchHome: expect.any(String) });
+    for (const options of [claudeOptions, codexOptions]) {
+      expect(options.selfHost).toBeUndefined();
+      expect(options).not.toHaveProperty('env');
+      expect(JSON.stringify(options)).not.toMatch(/CLAUDE_CONFIG_DIR|CODEX_HOME|TMPDIR|XDG_/);
+    }
+    // Codex gets a disposable schema home, never a copied login or child CODEX_HOME.
+    expect(codexOptions.nativeSchemaScratchHome).not.toBe(process.env.CODEX_HOME);
+    await expect(readFile(join(codex.root, '.codex', 'auth.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves provider-error without retired containment diagnostics', async () => {
+    const { artifact } = await runOrdinaryCustomMember('claude', async () => ({ success: false, exitCode: 1, output: 'provider transport failed' }));
+    expect(artifact.result).toMatchObject({ kind: 'infrastructure-failure', reason: 'provider-error' });
+    expect(JSON.stringify(artifact.result)).not.toMatch(/bubblewrap|nested sandbox|containment probe/i);
+  });
+
   it.each([
     ['claude', 'project'], ['claude', 'global'], ['claude', 'plugin'],
     ['codex', 'project'], ['codex', 'global'], ['codex', 'plugin'],
@@ -143,6 +258,10 @@ describe('custom build-review policy runner', () => {
     const firstInvocation = (invoke.mock.calls as unknown as Array<[Parameters<LLMProvider['invoke']>[0]]>)[0]?.[0];
     if (!firstInvocation?.model || !firstInvocation.effort) throw new Error('expected a prepared provider candidate');
     expect(firstInvocation.readOnlyReview).toBe(true);
+    expect(firstInvocation.selfHost).toMatchObject({
+      executable: `/prepared/${providerKey}`,
+      env: preparedEnv,
+    });
     const preparedCandidate = { provider: providerKey, model: firstInvocation.model, effort: firstInvocation.effort };
     expect(firstInvocation?.prompt).toContain('Portable policy');
     // The custom-v1 schema has a flat object root (#2739); the provider must
