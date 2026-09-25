@@ -366,6 +366,57 @@ describe('custom build-review policy runner', () => {
     })]);
   });
 
+  it('discards a mixed lap when a built-in peer policy captured before fan-out changes', async () => {
+    const root = await fixture();
+    const materialRoot = join(root, '.pipeline', 'build-review', 'policy-material');
+    const packageRoot = join(root, 'policy-package');
+    let securityMaterialPath: string | undefined;
+    await mkdir(packageRoot, { recursive: true });
+    await writeFile(join(packageRoot, 'SKILL.md'), '# Installed policy\n');
+    const customPayload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const provider: LLMProvider = {
+      invoke: vi.fn(async (options) => {
+        if (securityMaterialPath === undefined) throw new Error('security policy was not captured before fan-out');
+        await writeFile(join(securityMaterialPath, 'SKILL.md'), '# Mutated built-in policy\n');
+        const builtin = options.prompt.includes('Build Review Security rubric.');
+        const payload = builtin ? { findings: [] } : customPayload;
+        return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+      }),
+      supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    const events = new ConductorEventEmitter();
+    const failures: unknown[] = [];
+    events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event); });
+    const runner = new DefaultStepRunner(provider, 'mixed-policy-input-mutation', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(), events,
+      config: { llm_provider: 'claude', build_review: {
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true } },
+        custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' } },
+      } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(), probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
+      buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: packageRoot, canonicalSkillPath: join(packageRoot, 'SKILL.md'), packageRoot, declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => {
+        const materialPath = join(materialRoot, policy.semanticName);
+        if (policy.semanticName.includes('security')) securityMaterialPath = materialPath;
+        await mkdir(materialPath, { recursive: true });
+        await writeFile(join(materialPath, 'SKILL.md'), '# Captured policy\n');
+        return { policy, materialPath, definitionPath: join(materialPath, 'SKILL.md'), manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Captured policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${policy.semanticName.padEnd(64, 'a').slice(0, 64)}` };
+      },
+    });
+
+    await expect(runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({ success: false, currentLapMechanicalFault: true });
+    expect(failures).toHaveLength(3);
+    expect(failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rubric: 'portable', cause: 'review-input-mutated', changedInputs: expect.arrayContaining([expect.stringContaining('build-review-security/SKILL.md')]) }),
+      expect.objectContaining({ rubric: 'security', cause: 'review-input-mutated', changedInputs: expect.arrayContaining([expect.stringContaining('build-review-security/SKILL.md')]) }),
+    ]));
+    await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
+  });
+
   it('halts needs-human without an aggregate when review-input-mutated exhausts the mechanical allowance', async () => {
     const root = await fixture();
     vi.mocked(buildReviewCache.readBuildReviewCacheEntry)

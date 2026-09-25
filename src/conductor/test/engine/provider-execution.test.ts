@@ -219,7 +219,7 @@ describe('executeProviderCandidates', () => {
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
     const result = await executeProviderCandidates({
       step: 'build', configuredProviders: ['codex', 'claude'],
-      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke, lifecycleCapability: { synchronousSpawnPermit: true } }), runtime('claude', { invoke: claudeInvoke, lifecycleCapability: { synchronousSpawnPermit: true } })]),
       sessions: new ProviderSessionScope(vi.fn()),
       prepareCandidateSelfHost: async (candidate) => {
         if (candidate.providerKey === 'codex') throw new ProviderSetupUnavailableError({ provider: 'codex', reason: 'missing setup', recoveryAction: 'install' });
@@ -273,7 +273,7 @@ describe('executeProviderCandidates', () => {
     const result = await executeAuxiliaryProviderCandidates({
       step: 'build_review', memberId: 'portable',
       policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0 },
-      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke, lifecycleCapability: { synchronousSpawnPermit: true } })]),
       sessions: new ProviderSessionScope(vi.fn()),
       options: { prompt: 'review', cwd: '/workspace' },
       preparedCandidateOperation: async () => ({
@@ -304,7 +304,7 @@ describe('executeProviderCandidates', () => {
     const result = await executeAuxiliaryProviderCandidates({
       step: 'build_review', memberId: 'portable',
       policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: ['codex', 'claude'], model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0 },
-      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke, lifecycleCapability: { synchronousSpawnPermit: true } }), runtime('claude', { invoke: claudeInvoke, lifecycleCapability: { synchronousSpawnPermit: true } })]),
       sessions: new ProviderSessionScope(vi.fn()),
       options: { prompt: 'review', cwd: '/workspace' },
       preparedCandidateOperation: async (context) => context.candidate.providerKey === 'codex'
