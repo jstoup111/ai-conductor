@@ -1,3 +1,4 @@
+// Covers: task:8
 import { describe, expect, it, vi } from 'vitest';
 
 import { GithubBotAuthRefusalError } from '../../src/engine/github-bot-auth-refusal.js';
@@ -60,12 +61,13 @@ describe('remote Git bot fallback', () => {
   });
 
   it('returns failed without an operator attempt when fallback event delivery fails', async () => {
-    const runRemoteGit = vi.fn(async () => { throw new GithubBotAuthRefusalError('auth-refused'); });
+    const refusal = new GithubBotAuthRefusalError('auth-refused');
+    const runRemoteGit = vi.fn(async () => { throw refusal; });
     const events = { emit: vi.fn(async () => { throw new Error('sink unavailable'); }) };
 
     await expect(executeRemoteGit(args, {
       cwd: '/fixture', config: config('https'), runRemoteGit, mutation: mutation(), events,
-    })).resolves.toMatchObject({ kind: 'failed', error: 'sink unavailable' });
+    })).resolves.toMatchObject({ kind: 'failed', error: refusal.message });
 
     expect(events.emit).toHaveBeenCalledOnce();
     expect(runRemoteGit).toHaveBeenCalledOnce();
