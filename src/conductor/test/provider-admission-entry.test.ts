@@ -1,15 +1,17 @@
+// Covers: task:20
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makeRunFeature } from '../src/engine/daemon-runner.js';
-import { executeProviderCandidates } from '../src/engine/provider-execution.js';
+import { executeProviderCandidates, type ProviderAttemptMetadata } from '../src/engine/provider-execution.js';
 import { ProviderRuntimeSet, type ProviderRuntime } from '../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../src/engine/provider-session.js';
 import { CODEX_MODEL_POLICY, CLAUDE_MODEL_POLICY } from '../src/engine/provider-model-policy.js';
 import { ModelAvailability } from '../src/engine/model-availability.js';
 import { createProviderAvailability } from '../src/engine/provider-availability.js';
+import type { StepName } from '../src/types/index.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 
 const roots: string[] = [];
@@ -61,29 +63,35 @@ describe('provider admission at the daemon dispatch entry point', () => {
     expect(claudeInvoke).not.toHaveBeenCalled();
   });
 
-  it('records a suppressed provider without spawning it through a later daemon dispatch', async () => {
+  it('emits one suppression refusal only for a pinned provider through a later daemon dispatch', async () => {
     const root = await mkdtemp(join(tmpdir(), 'provider-admission-entry-'));
     roots.push(root);
     await mkdir(join(root, '.pipeline'), { recursive: true });
     const codexInvoke = vi.fn();
-    const attempts: Array<{ provider: string; skipReason?: string }> = [];
+    const claudeInvoke = vi.fn();
     const providerAvailability = createProviderAvailability({ now: () => 1_000 });
     providerAvailability.suppress('codex', 2_000);
+    const events = new ConductorEventEmitter();
+    const emittedAttempts: ProviderAttemptMetadata[] = [];
+    events.on('provider_attempt', (event) => {
+      if (event.type === 'provider_attempt') emittedAttempts.push(event);
+    });
     const providerExecution = {
-      configuredProviders: ['codex'],
-      runtimes: new ProviderRuntimeSet([runtime('codex', codexInvoke)]),
+      configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', codexInvoke), runtime('claude', claudeInvoke)]),
       sessions: new ProviderSessionStore(),
+      config: { provider_substitution: 'disallow' as const },
       providerAvailability,
-      onAttempt: (_step: string, attempt: { provider: string; skipReason?: string }) => {
-        attempts.push(attempt);
+      onAttempt: async (step: StepName, attempt: ProviderAttemptMetadata) => {
+        await events.emit({ type: 'provider_attempt', step, ...attempt });
       },
     };
-    const events = new ConductorEventEmitter();
     const run = makeRunFeature({
       createWorktree: async () => ({ path: root, branch: 'feature' }),
       runConductor: async (_worktree, _item, execution) => {
         await executeProviderCandidates({
           step: 'build', configuredProviders: execution!.configuredProviders,
+          preferredProvider: 'codex', config: execution!.config,
           runtimes: execution!.runtimes, sessions: execution!.sessions,
           providerAvailability: execution!.providerAvailability, onAttempt: execution!.onAttempt,
           options: { prompt: 'build', cwd: root },
@@ -96,9 +104,8 @@ describe('provider admission at the daemon dispatch entry point', () => {
 
     await run({ slug: 'later-step' });
 
-    expect(attempts).toEqual([expect.objectContaining({
-      provider: 'codex', invoked: false, skipReason: 'suppression-refused',
-    })]);
+    expect(emittedAttempts).toEqual([expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'suppression-refused' })]);
     expect(codexInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).not.toHaveBeenCalled();
   });
 });
