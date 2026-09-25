@@ -2676,7 +2676,7 @@ export class DefaultStepRunner implements StepRunner {
             currentLapMechanicalFault: true,
           };
         }
-        if (infrastructureFailure.reason === 'invalid-structured-result' || infrastructureFailure.reason === 'native-schema-unsupported') {
+        if (infrastructureFailure.reason === 'invalid-structured-result' || infrastructureFailure.reason === 'native-schema-unsupported' || infrastructureFailure.reason === 'review-input-mutated') {
           const reason = `build_review mechanical fault allowance exhausted for ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`;
           return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
         }
@@ -3328,7 +3328,7 @@ export class DefaultStepRunner implements StepRunner {
       // semantic coverage merely because their bounded retry allowance is
       // exhausted.  Match the mixed-rubric settlement: stop dispatching,
       // publish no aggregate, and leave the operator the named recovery.
-      if (infrastructureFailure.reason === 'invalid-structured-result' || infrastructureFailure.reason === 'native-schema-unsupported') {
+      if (infrastructureFailure.reason === 'invalid-structured-result' || infrastructureFailure.reason === 'native-schema-unsupported' || infrastructureFailure.reason === 'review-input-mutated') {
         const reason = `build_review mechanical fault allowance exhausted for ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`;
         return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
       }
