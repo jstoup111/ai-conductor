@@ -17,6 +17,8 @@ import {
 } from '../../src/engine/finish-publication.js';
 import type { FullSuitePassEvidence } from '../../src/engine/full-suite-evidence.js';
 import { readAllVerdicts, writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/engine/project-prelude.js')>()),
@@ -51,6 +53,13 @@ const PASS_EVIDENCE: FullSuitePassEvidence = {
   stderr: '',
 };
 
+const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'fixture' },
+  planGap: { enabled: true, reason: 'fixture' },
+  adrCompliance: { enabled: false, reason: 'fixture' },
+  diagramDrift: { enabled: false, reason: 'fixture' },
+};
+
 async function writeGreenShipValidatorEvidence(dir: string): Promise<void> {
   await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
   await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
@@ -73,7 +82,16 @@ async function writeGreenShipValidatorEvidence(dir: string): Promise<void> {
     join(dir, '.pipeline', 'prd-audit.md'),
     '**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | Evidence |\n| --- | --- | --- | --- |\n| S1.1 | PASS | 1 | finish evidence |\n\n| FR | Verdict | Gap-class | Evidence | Accepted? |\n| --- | --- | --- | --- | --- |\n| FR-1 | ALIGNED | n/a | finish evidence | — |\n',
   );
-  await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), '# As-Built Review\n\nVerdict: APPROVED\n');
+  await persistAsBuiltVerdict(dir, {
+    version: 'v1',
+    verdict: 'APPROVED',
+    reachability: [],
+    driftNotes: [],
+  }, {
+    attemptId: 'fixture-run',
+    codeStamp: null,
+    policy: AS_BUILT_FIXTURE_POLICY,
+  });
   const fresh = new Date(Date.now() + 60_000);
   await utimes(join(dir, '.pipeline', 'prd-audit.md'), fresh, fresh);
   await utimes(join(dir, '.pipeline', 'architecture-review-as-built.md'), fresh, fresh);
@@ -135,6 +153,23 @@ describe('Conductor FINISH publication routing', () => {
     if (!after.ok) throw after.error;
     expect(after.value.prd_audit).toBe('done');
     expect((after.value as Record<string, unknown>).validation__prd_audit).toBeUndefined();
+  });
+
+  it('lets a mocked daemon FINISH use its runner result without synthetic validator evidence', async () => {
+    const advance = vi.fn(async () => ({ kind: 'complete' } as const));
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+    }).run();
+
+    expect(advance).toHaveBeenCalledOnce();
   });
 
   it('does not write a synthetic validation key for an auto serial member without a retained sibling', async () => {
@@ -447,8 +482,17 @@ describe('Conductor FINISH publication routing', () => {
       complexity_tier: 'M', track: 'product', architecture_review: 'done',
       manual_test: 'stale', prd_audit: 'stale', architecture_review_as_built: 'done',
     });
+    await persistAsBuiltVerdict(dir, {
+      version: 'v1',
+      verdict: 'APPROVED',
+      reachability: [],
+      driftNotes: [],
+    }, {
+      attemptId: 'fixture-run',
+      codeStamp: null,
+      policy: AS_BUILT_FIXTURE_POLICY,
+    });
     const architectureEvidence = join(dir, '.pipeline', 'architecture-review-as-built.md');
-    await writeFile(architectureEvidence, '# As-Built Review\n\nVerdict: APPROVED\n');
     const freshMtime = new Date(Date.now() + 5_000);
     await utimes(architectureEvidence, freshMtime, freshMtime);
     await writeVerdict(dir, 'architecture_review_as_built', { satisfied: true, checkedAt: 1 });
