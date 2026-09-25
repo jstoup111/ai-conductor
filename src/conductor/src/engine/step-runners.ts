@@ -65,6 +65,7 @@ import {
   writeCoverageBindingCodeStamp,
   writeCoverageBindingEnvelope,
   type CoverageBindingAmendmentEnvelopeEntry,
+  type CoverageBindingAdrLayerDisposition,
   type CoverageBindingEnvelopeEntry,
   type CoverageBindingEnvelopeFilesystem,
 } from './coverage-binding-envelope.js';
@@ -88,6 +89,15 @@ import {
   type BuildReviewInputOptions,
   type BuildReviewRepairProvenance,
 } from './build-review-inputs.js';
+
+function isCoverageBindingAmendmentEntry(
+  entry: unknown,
+): entry is CoverageBindingAmendmentEnvelopeEntry {
+  return typeof entry === 'object' && entry !== null &&
+    (entry as { kind?: unknown }).kind === 'amendment' &&
+    typeof (entry as { artifactPath?: unknown }).artifactPath === 'string' &&
+    typeof (entry as { amendment?: unknown }).amendment === 'string';
+}
 import {
   composeContainmentAdvisoryOutput,
   runContainmentFloor,
@@ -4183,6 +4193,7 @@ export class DefaultStepRunner implements StepRunner {
       writeFile,
       rename,
     };
+    let adrLayer: CoverageBindingAdrLayerDisposition | undefined;
     const writeEnvelope = async (
       status: 'disabled' | 'done' | 'failed' | 'partial' | 'refused',
       entries: readonly CoverageBindingEnvelopeEntry[],
@@ -4193,6 +4204,7 @@ export class DefaultStepRunner implements StepRunner {
         runId: this.runId,
         status,
         entries,
+        ...(adrLayer === undefined ? {} : { adrLayer }),
       }, filesystem);
       // Rebase preservation needs to know which HEAD this run judged. Without
       // a resolvable HEAD there is no stamp, and preservation stays refused.
@@ -4226,7 +4238,11 @@ export class DefaultStepRunner implements StepRunner {
     // Tier S and legacy plans without obligation bookkeeping have no ADR layer.
     // This preserves their existing judge behavior while still evaluating every
     // citable decision before the judge's configured exit on M/L plans.
-    if (planText !== undefined && state.complexity_tier !== 'S' && /^##\s+Architecture Obligation Coverage\s*$/im.test(planText)) {
+    const hasArchitectureObligationSection = planText !== undefined && /^##\s+Architecture Obligation Coverage\s*$/im.test(planText);
+    if (planText !== undefined && (state.complexity_tier === 'S' || !hasArchitectureObligationSection)) {
+      adrLayer = { disposition: 'not-applicable', adrIds: [] };
+    }
+    if (planText !== undefined && state.complexity_tier !== 'S' && hasArchitectureObligationSection) {
       const resolvedDecideSet = await resolveDecideSet();
       if (resolvedDecideSet) {
         const decisionPaths = new Map<string, string>();
@@ -4254,6 +4270,9 @@ export class DefaultStepRunner implements StepRunner {
             requiredDecisionIds.add(formatted);
             decisionPaths.set(formatted, adrPath);
           }
+        }
+        if (uncitableAdrIds.size > 0) {
+          adrLayer = { disposition: 'not-applicable', adrIds: [...uncitableAdrIds].sort() };
         }
         const violations = validateArchitectureObligationCoverage(planText, requiredDecisionIds)
           .filter((violation) => ![...uncitableAdrIds].some((adrId) => violation.decisionId.startsWith(`${adrId}#`)));
@@ -4353,8 +4372,16 @@ export class DefaultStepRunner implements StepRunner {
         }) as unknown as CoverageBindingEnvelopeEntry),
       ];
       await writeEnvelope('disabled', entries);
-      for (const entry of entries) {
-        const amendment = entry as unknown as CoverageBindingAmendmentEnvelopeEntry;
+      for (const claim of amendmentClaims) {
+        const amendment = {
+          kind: 'amendment' as const,
+          digest: amendmentClaimDigest(claim),
+          artifactPath: claim.artifactPath,
+          amendment: claim.amendment,
+          taskIds: claim.taskIds,
+          doneWhen: claim.doneWhen,
+          verdict: 'unjudged' as const,
+        };
         await this.events?.emit({ type: 'coverage_binding_amendment_judged', step: 'coverage_binding', verdict: amendment.verdict, digest: amendment.digest, artifactPath: amendment.artifactPath, taskIds: [...amendment.taskIds] });
       }
       await this.events?.emit({ type: 'coverage_binding_disabled', step: 'coverage_binding' });
@@ -4379,12 +4406,13 @@ export class DefaultStepRunner implements StepRunner {
       escalate: resolved.escalate,
       min_confidence: 0,
     };
-    const emitEntry = async (entry: CoverageBindingEnvelopeEntry) => {
-      if ((entry as { kind?: string }).kind === 'amendment') {
-        const amendment = entry as unknown as CoverageBindingAmendmentEnvelopeEntry;
+    const emitEntry = async (entry: unknown) => {
+      if (isCoverageBindingAmendmentEntry(entry)) {
+        const amendment = entry;
         await this.events?.emit({ type: 'coverage_binding_amendment_judged', step: 'coverage_binding', verdict: amendment.verdict, digest: amendment.digest, artifactPath: amendment.artifactPath, taskIds: [...amendment.taskIds] });
       } else {
-        await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest: entry.digest, taskIds: [...entry.taskIds] });
+        const criterion = entry as CoverageBindingEnvelopeEntry;
+        await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: criterion.verdict, digest: criterion.digest, taskIds: [...criterion.taskIds] });
       }
     };
     for (const entry of entries) {
@@ -4400,7 +4428,10 @@ export class DefaultStepRunner implements StepRunner {
         ? [
           'Judge each supplied DECIDE amendment independently against only the plan tasks and their Done when checks. Do not read files, inspect a diff, or use any transcript.',
           'Return exactly one JSON object with a verdicts array containing one verdict for every supplied digest. A verdict is carried with non-empty issued taskIds, not-carried with non-empty missingObligation, or no-plan-obligation; contradictsCompleted is optional and may name only issued completed task ids.',
-          JSON.stringify({ claims: batch.map(({ claim, claimDigest: digest }) => ({ digest, artifactPath: claim.artifactPath, amendment: claim.amendment, taskIds: claim.taskIds, doneWhen: claim.doneWhen })) }),
+          JSON.stringify({
+            claims: batch.map(({ claim, claimDigest: digest }) => ({ digest, artifactPath: claim.artifactPath, amendment: claim.amendment, taskIds: claim.taskIds, doneWhen: claim.doneWhen })),
+            completedTaskIds: [...completedTaskIds],
+          }),
         ].join('\n\n')
         : [
           'Judge each supplied claim independently against only its cited Done when checks. Do not read files, inspect a diff, or use any transcript.',

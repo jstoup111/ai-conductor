@@ -81,6 +81,7 @@ import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
 import { voidCoverageBindingForDecideChange } from '../../src/engine/coverage-binding-void.js';
+import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { rewindState } from '../../src/engine/rewind.js';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import {
@@ -1504,6 +1505,63 @@ describe('engine/conductor', () => {
     );
 
     expect(state.coverage_binding).toBe('done');
+  });
+
+  // Covers: task:5
+  it('dispatches BUILD without voiding coverage binding for a seal-reported plan self-amendment', async () => {
+    const actualExeca = (await vi.importActual<typeof import('execa')>('execa')).execa;
+    vi.mocked(execa).mockImplementation(actualExeca as unknown as typeof execa);
+    try {
+      const planPath = join(dir, '.docs', 'plans', 'feature.md');
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(planPath, 'approved plan\n');
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'test: seal approved plan'], { cwd: dir });
+      await createProtectedArtifactSeal({
+        projectRoot: dir,
+        baselineCommit: (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout,
+      });
+      await writeFile(planPath, 'self-amended plan\n');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+        version: 1, slug: 'feature', runId: 'coverage-run', status: 'done', entries: [],
+      }));
+      const state: ConductState = { feature_desc: 'feature', complexity_tier: 'M' };
+      for (const step of ALL_STEPS) {
+        if (step.name === 'build') break;
+        state[step.name] = 'done';
+      }
+      state.coverage_binding = 'done';
+      await writeState(statePath, state);
+      const dispatched: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step) => {
+          dispatched.push(step);
+          return { success: false, output: 'expected test boundary' };
+        }),
+      };
+
+      await new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'build',
+        mode: 'auto',
+        verifyArtifacts: false,
+        maxRetries: 1,
+      }).run();
+
+      expect(dispatched).toContain('build');
+      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'done' });
+    } finally {
+      vi.mocked(execa).mockImplementation(() =>
+        Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
+      );
+    }
   });
 
   // Covers: task:6
