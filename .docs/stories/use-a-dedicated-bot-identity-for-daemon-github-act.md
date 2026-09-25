@@ -153,8 +153,8 @@ today.
 
 #### Negative Paths
 - **Given** no bot is configured and a write fails with a 401, **When** the failure is classified, **Then** no operator retry happens and the caller sees today's failure unchanged.
-- **Given** no bot is configured, **When** the existing guarded-runner, pr-labels, handoff, and push test suites run, **Then** they pass and the only assertion changes in this feature's diff are the added `credential` option on runner calls.
+- **Given** no bot is configured, **When** the existing guarded-runner, pr-labels, handoff, and push test suites run, **Then** they pass and the only assertion changes in this feature's diff are the added `credential` option on runner calls and the added destination `endpoint` on push calls.
 
 ### Done When
-- [ ] The existing guarded-runner and remote-git adapter tests pass; the only assertion changes are the added `credential` runner option.
+- [ ] The existing guarded-runner and remote-git adapter tests pass; the only assertion changes are the added `credential` runner option and the push destination `endpoint`.
 - [ ] A test asserts that an unconfigured bot produces no token injection and no fallback event on both a write and a push.

@@ -266,13 +266,13 @@ This plan adds an optional, machine-scoped GitHub bot credential. When a bot is 
 
 **Steps:**
 1. Write tests in `test/engine/github-bot-unconfigured.test.ts` with a user config that has no `github_bot` block. Run a guarded `feature-write`, an authorized push, and a write whose `gh` fake fails with the Task 3 verbatim 401 fixture.
-2. Verify these pass. Confirm that any assertion this feature's diff changes in the existing suites listed in Done when differs only by the added `credential` runner option.
+2. Verify these pass. Confirm that any assertion this feature's diff changes in the existing suites listed in Done when differs only by the added `credential` runner option or the added push destination `endpoint`.
 3. Commit.
 
 **Done when:**
 - With no `github_bot` in user config, a guarded `feature-write` and an authorized push reach the mocked process boundary with exactly the options passed before this feature (no `env` for `gh`, no injected `GH_TOKEN` or `GIT_CONFIG_*` for `git`) and emit no `github_write_credential_fallback` event, as asserted in `test/engine/github-bot-unconfigured.test.ts`.
 - With no bot configured, a `gh` 401 on a write is returned to the caller unchanged with no operator retry.
-- The existing `test/engine/tracker-client.test.ts`, `test/engine/pr-labels.test.ts`, `test/engine/ship-draft-pr.test.ts`, and `test/engine/github-ownership/` suites pass, and every assertion changed in this feature's diff differs only by the added `credential` runner option.
+- The existing `test/engine/tracker-client.test.ts`, `test/engine/pr-labels.test.ts`, `test/engine/ship-draft-pr.test.ts`, and `test/engine/github-ownership/` suites pass, and every assertion changed in this feature's diff differs only by the added `credential` runner option or the added push destination `endpoint`.
 
 **Files:** src/conductor/test/engine/github-bot-unconfigured.test.ts
 
@@ -360,7 +360,7 @@ Task 14 <- Task 4, Task 7
 | Story 5 negative: **Given** a bot is configured, **When** a push runs, **Then** the remote URL passed to `git` contains no embedded credential. | 7, 12 | "The spawned push argv contains no sentinel and no `user:token@` remote URL form" | diff-local |
 | Story 6 happy: **Given** no `github_bot` block in user config, **When** any guarded GitHub write or authorized push runs, **Then** the `gh` or `git` child environment is identical to what the harness passes today, and no fallback warning is emitted. | 13 | "emit no `github_write_credential_fallback` event" | diff-local |
 | Story 6 negative: **Given** no bot is configured and a write fails with a 401, **When** the failure is classified, **Then** no operator retry happens and the caller sees today's failure unchanged. | 13 | "a `gh` 401 on a write is returned to the caller unchanged with no operator retry" | diff-local |
-| Story 6 negative: **Given** no bot is configured, **When** the existing guarded-runner, pr-labels, handoff, and push test suites run, **Then** they pass and the only assertion changes in this feature's diff are the added `credential` option on runner calls. | 13 | "every assertion changed in this feature's diff differs only by the added `credential` runner option" | diff-local |
+| Story 6 negative: **Given** no bot is configured, **When** the existing guarded-runner, pr-labels, handoff, and push test suites run, **Then** they pass and the only assertion changes in this feature's diff are the added `credential` option on runner calls and the added destination `endpoint` on push calls. | 13 | "every assertion changed in this feature's diff differs only by the added `credential` runner option or the added push destination `endpoint`" | diff-local |
 
 ## Architecture Obligation Coverage
 
