@@ -141,10 +141,49 @@ describe('listCodexInstalledReviewSkills', () => {
     ]));
   });
 
-  it('spawns the app server with the candidate prepared environment and executable only', async () => {
-    const stdin = Object.assign(new EventEmitter(), { write: vi.fn() });
+  function appServerChild(initializeError?: object) {
     const stdout = new EventEmitter();
+    const written: { id?: string; method: string; params?: unknown }[] = [];
+    const stdin = Object.assign(new EventEmitter(), {
+      write: vi.fn((line: string) => {
+        const message = JSON.parse(line) as { id?: string; method: string; params?: unknown };
+        written.push(message);
+        if (message.id === undefined) return true;
+        const reply = message.method === 'initialize' && initializeError
+          ? { id: message.id, error: initializeError }
+          : { id: message.id, result: message.method === 'initialize' ? {} : { method: message.method } };
+        queueMicrotask(() => stdout.emit('data', `${JSON.stringify(reply)}\n`));
+        return true;
+      }),
+    });
     const child = Object.assign(new EventEmitter(), { stdin, stdout, kill: vi.fn() });
+    return { child, written };
+  }
+
+  it('completes the initialize handshake before any catalog request', async () => {
+    const { child, written } = appServerChild();
+    const transport = createCodexAppServerTransport('codex', vi.fn(() => child) as never);
+
+    const session = await transport.open({ cwd: '/candidate', home: '/prepared/home', env: {} });
+    await expect(session.request('skills/list', { cwds: ['/candidate'] })).resolves.toEqual({ method: 'skills/list' });
+
+    expect(written.map((message) => message.method)).toEqual(['initialize', 'initialized', 'skills/list']);
+    expect(written[0]!.params).toEqual(expect.objectContaining({ clientInfo: expect.objectContaining({ name: 'ai-conductor' }) }));
+    expect(written[1]!.id).toBeUndefined();
+    await session.close();
+  });
+
+  it('closes the app server and fails open when initialize is rejected', async () => {
+    const { child, written } = appServerChild({ code: -32600, message: 'Not initialized' });
+    const transport = createCodexAppServerTransport('codex', vi.fn(() => child) as never);
+
+    await expect(transport.open({ cwd: '/candidate', home: '/prepared/home', env: {} })).rejects.toThrow(/Not initialized/);
+    expect(child.kill).toHaveBeenCalled();
+    expect(written.map((message) => message.method)).toEqual(['initialize']);
+  });
+
+  it('spawns the app server with the candidate prepared environment and executable only', async () => {
+    const { child } = appServerChild();
     let spawnOptions: { readonly cwd: string; readonly env: NodeJS.ProcessEnv } | undefined;
     const launch = vi.fn((_executable: string, _args: readonly string[], options: { readonly cwd: string; readonly env: NodeJS.ProcessEnv }) => {
       spawnOptions = options;
