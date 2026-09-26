@@ -27,6 +27,16 @@ type PiJsonEvent = {
   };
 };
 
+type PiInvokeOptions = InvokeOptions & { abortSignal?: AbortSignal };
+
+function abortedInvocationResult(): InvokeResult {
+  return {
+    success: false,
+    output: 'Pi invocation aborted.',
+    exitCode: 1,
+  };
+}
+
 function terminalAssistantText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -90,12 +100,14 @@ export class PiProvider implements LLMProvider {
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     options = enforceFreshSessionOptions(options, 'pi');
+    const abortSignal = (options as PiInvokeOptions).abortSignal;
+    if (abortSignal?.aborted) return abortedInvocationResult();
     const permit = validateSpawnPermit(options.spawnPermit);
     if (!permit.permitted) {
       throw new Error(`Pi process spawn denied: ${permit.reason}`);
     }
 
-    const result = await this.subprocessFactory(this.executable, ['-p', '--no-session', '--mode', 'json'], {
+    const subprocess = this.subprocessFactory(this.executable, ['-p', '--no-session', '--mode', 'json'], {
       reject: false,
       input: options.prompt,
       stdin: 'pipe',
@@ -103,6 +115,19 @@ export class PiProvider implements LLMProvider {
       stderr: 'pipe',
       cwd: options.cwd,
     });
+    let aborted = false;
+    const abort = () => {
+      aborted = true;
+      (subprocess as typeof subprocess & { kill?: () => void }).kill?.();
+    };
+    abortSignal?.addEventListener('abort', abort, { once: true });
+    let result: Awaited<typeof subprocess>;
+    try {
+      result = await subprocess;
+    } finally {
+      abortSignal?.removeEventListener('abort', abort);
+    }
+    if (aborted || abortSignal?.aborted) return abortedInvocationResult();
     const exitCode = result.exitCode ?? 1;
     const stdout = typeof result.stdout === 'string' ? result.stdout : '';
     const stderr = typeof result.stderr === 'string' ? result.stderr : '';

@@ -1,4 +1,4 @@
-// Covers: task:15, task:16
+// Covers: task:15, task:16, task:17
 import { readFile } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
@@ -130,5 +130,32 @@ describe('PiProvider', () => {
       exitCode: 0,
       output: expect.stringContaining('missing terminal assistant message'),
     });
+  });
+
+  it('kills a running Pi subprocess on abort without reporting a provider failure signal', async () => {
+    const controller = new AbortController();
+    let resolveProcess: (result: ExecaResult) => void;
+    const process = Object.assign(
+      new Promise<ExecaResult>((resolve) => { resolveProcess = resolve; }),
+      {
+        kill: vi.fn(() => resolveProcess({ stdout: '', stderr: '', exitCode: 1 } as ExecaResult)),
+      },
+    );
+    spawn.mockImplementationOnce(() => process as ReturnType<PiSubprocessFactory>);
+
+    const invocation = provider.invoke({
+      ...invokeOptions,
+      abortSignal: controller.signal,
+    } as InvokeOptions & { abortSignal: AbortSignal });
+    controller.abort();
+
+    const result = await invocation;
+
+    expect(process.kill).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ success: false, output: 'Pi invocation aborted.', exitCode: 1 });
+    expect(result).not.toHaveProperty('providerUnavailable');
+    expect(result).not.toHaveProperty('modelUnavailable');
+    expect(result).not.toHaveProperty('authFailure');
+    expect(result).not.toHaveProperty('rateLimited');
   });
 });
