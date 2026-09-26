@@ -5,7 +5,7 @@ import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
-} from '../engine/provider-model-policy.js';
+} from '../engine/provider-model-policy-defaults.js';
 
 /** Provider-specific behavior that must be declared rather than inferred. */
 export type ProviderCapability =
@@ -46,14 +46,23 @@ export interface BuiltInProviderDescriptor {
   readonly capabilities: ProviderCapabilityFlags;
 }
 
+type BuiltInProviderTable = readonly [
+  BuiltInProviderDescriptor & { readonly id: 'claude' },
+  BuiltInProviderDescriptor & { readonly id: 'codex' },
+];
+
 /**
  * The built-in provider source of truth.  New built-ins belong here before a
  * consumer can select or branch on them.
  */
-export const BUILT_IN_PROVIDERS = [
+export const BUILT_IN_PROVIDERS: BuiltInProviderTable = [
   {
     id: 'claude',
-    createAdapter: () => new ClaudeProvider(),
+    createAdapter: (): LLMProvider => new ClaudeProvider(
+      undefined,
+      undefined,
+      resolveProviderExecutable('claude'),
+    ),
     defaultExecutable: 'claude',
     executableOverrideEnv: 'CLAUDE_EXECUTABLE',
     versionArgv: ['--version'],
@@ -74,9 +83,9 @@ export const BUILT_IN_PROVIDERS = [
   },
   {
     id: 'codex',
-    createAdapter: (options = {}) => new CodexProvider(
+    createAdapter: (options = {}): LLMProvider => new CodexProvider(
       undefined,
-      undefined,
+      resolveProviderExecutable('codex'),
       undefined,
       undefined,
       options.codexDoctorTimeoutMs,
@@ -98,7 +107,7 @@ export const BUILT_IN_PROVIDERS = [
       nativeSchema: true,
     },
   },
-] as const satisfies readonly BuiltInProviderDescriptor[];
+] as const;
 
 export type BuiltInProviderId = (typeof BUILT_IN_PROVIDERS)[number]['id'];
 

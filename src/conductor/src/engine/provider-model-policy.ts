@@ -1,182 +1,24 @@
-import type { EffortLevel, TierOverride } from '../types/config.js';
-import type { ComplexityTier, StepName } from '../types/steps.js';
+import { BUILT_IN_PROVIDERS } from '../execution/provider-catalog.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+  deepFreezePolicy,
+  type ProviderModelPolicy,
+} from './provider-model-policy-defaults.js';
 
-type ReadonlyTierOverrides = Readonly<
-  Partial<
-    Record<
-      StepName,
-      Readonly<Partial<Record<ComplexityTier, Readonly<TierOverride>>>>
-    >
-  >
->;
-
-export interface ProviderModelPolicy {
-  readonly stepModels: Readonly<Record<StepName, string>>;
-  readonly stepEfforts: Readonly<Record<StepName, EffortLevel>>;
-  readonly stepTierOverrides: ReadonlyTierOverrides;
-  readonly effortOrder: readonly EffortLevel[];
-  readonly modelEscalationOrder: readonly string[];
-  readonly modelFallbackLadder: readonly string[];
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const child of Object.values(value as Record<string, unknown>)) {
-      deepFreeze(child);
-    }
-  }
-  return value;
-}
-
-const CLAUDE_STEP_MODELS: Record<StepName, string> = {
-  bootstrap: 'sonnet',
-  memory: 'haiku',
-  assess: 'sonnet',
-  explore: 'opus',
-  prd: 'opus',
-  complexity: 'sonnet',
-  stories: 'sonnet',
-  conflict_check: 'opus',
-  plan: 'opus',
-  coherence_check: 'sonnet',
-  architecture_diagram: 'sonnet',
-  architecture_review: 'opus',
-  worktree: 'haiku',
-  coverage_binding: 'sonnet',
-  acceptance_specs: 'opus',
-  build: 'sonnet',
-  build_review: 'opus',
-  test_suite: 'sonnet',
-  manual_test: 'sonnet',
-  prd_audit: 'opus',
-  architecture_review_as_built: 'opus',
-  rebase: 'opus',
-  finish: 'sonnet',
-  remediate: 'opus',
-  attribution_verify: 'opus',
+export {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+  type ProviderModelPolicy,
 };
 
-const CODEX_STEP_MODELS: Record<StepName, string> = {
-  bootstrap: 'gpt-5.6-terra',
-  memory: 'gpt-5.6-luna',
-  assess: 'gpt-5.6-terra',
-  explore: 'gpt-5.6-sol',
-  prd: 'gpt-5.6-sol',
-  complexity: 'gpt-5.6-terra',
-  stories: 'gpt-5.6-terra',
-  conflict_check: 'gpt-5.6-terra',
-  plan: 'gpt-5.6-sol',
-  coherence_check: 'gpt-5.6-terra',
-  architecture_diagram: 'gpt-5.6-terra',
-  architecture_review: 'gpt-5.6-sol',
-  worktree: 'gpt-5.6-luna',
-  coverage_binding: 'gpt-5.6-terra',
-  acceptance_specs: 'gpt-5.6-sol',
-  build: 'gpt-5.6-terra',
-  build_review: 'gpt-5.6-sol',
-  test_suite: 'gpt-5.6-terra',
-  manual_test: 'gpt-5.6-terra',
-  prd_audit: 'gpt-5.6-sol',
-  architecture_review_as_built: 'gpt-5.6-sol',
-  rebase: 'gpt-5.6-terra',
-  finish: 'gpt-5.6-terra',
-  remediate: 'gpt-5.6-sol',
-  attribution_verify: 'gpt-5.6-sol',
-};
+export const BUILT_IN_PROVIDER_MODEL_POLICIES: Readonly<Record<string, ProviderModelPolicy>> =
+  Object.freeze(Object.fromEntries(
+    BUILT_IN_PROVIDERS.map((provider) => [provider.id, provider.modelPolicy]),
+  ));
 
-const STEP_EFFORTS: Record<StepName, EffortLevel> = {
-  bootstrap: 'low',
-  memory: 'low',
-  assess: 'high',
-  explore: 'high',
-  prd: 'high',
-  complexity: 'low',
-  stories: 'medium',
-  conflict_check: 'medium',
-  plan: 'high',
-  coherence_check: 'medium',
-  architecture_diagram: 'medium',
-  architecture_review: 'high',
-  worktree: 'low',
-  coverage_binding: 'low',
-  acceptance_specs: 'medium',
-  build: 'medium',
-  build_review: 'high',
-  test_suite: 'low',
-  manual_test: 'medium',
-  prd_audit: 'high',
-  architecture_review_as_built: 'high',
-  rebase: 'high',
-  finish: 'medium',
-  remediate: 'medium',
-  attribution_verify: 'high',
-};
-
-const COMMON_TIER_OVERRIDES: ReadonlyTierOverrides = {
-  stories: {
-    S: { effort: 'low' },
-    L: { effort: 'high' },
-  },
-  explore: {
-    S: { effort: 'low' },
-  },
-  plan: {
-    S: { effort: 'medium', max_retries: 3 },
-  },
-  acceptance_specs: {
-    L: { effort: 'high' },
-  },
-  build: {
-    S: { max_retries: 3 },
-    L: { effort: 'high' },
-  },
-};
-
-export const CLAUDE_MODEL_POLICY: ProviderModelPolicy = deepFreeze({
-  stepModels: CLAUDE_STEP_MODELS,
-  stepEfforts: STEP_EFFORTS,
-  stepTierOverrides: {
-    ...COMMON_TIER_OVERRIDES,
-    plan: {
-      ...COMMON_TIER_OVERRIDES.plan,
-      L: { effort: 'xhigh', model: 'opus' },
-    },
-    conflict_check: { L: { model: 'opus' } },
-  },
-  effortOrder: ['low', 'medium', 'high', 'xhigh', 'max'],
-  modelEscalationOrder: ['haiku', 'sonnet', 'opus', 'fable'],
-  modelFallbackLadder: ['fable', 'opus', 'sonnet'],
-});
-
-export const CODEX_MODEL_POLICY: ProviderModelPolicy = deepFreeze({
-  stepModels: CODEX_STEP_MODELS,
-  stepEfforts: STEP_EFFORTS,
-  stepTierOverrides: {
-    ...COMMON_TIER_OVERRIDES,
-    plan: {
-      ...COMMON_TIER_OVERRIDES.plan,
-      L: { effort: 'xhigh', model: 'gpt-5.6-sol' },
-    },
-    conflict_check: { L: { model: 'gpt-5.6-sol' } },
-  },
-  effortOrder: ['low', 'medium', 'high', 'xhigh', 'max'],
-  modelEscalationOrder: ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'],
-  modelFallbackLadder: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
-});
-
-const BUILT_IN_PROVIDER_MODEL_POLICIES: Readonly<
-  Record<string, ProviderModelPolicy>
-> = Object.freeze({
-  claude: CLAUDE_MODEL_POLICY,
-  codex: CODEX_MODEL_POLICY,
-});
-
-const BUILT_IN_PROVIDER_OPT_IN_MODEL_IDS: Readonly<
-  Record<string, readonly string[]>
-> = deepFreeze({
-  codex: ['gpt-6-astra'],
-});
+const BUILT_IN_PROVIDER_OPT_IN_MODEL_IDS: Readonly<Record<string, readonly string[]>> =
+  deepFreezePolicy({ codex: ['gpt-6-astra'] });
 
 export function hasBuiltInProviderModelPolicy(providerKey: string): boolean {
   return Object.hasOwn(BUILT_IN_PROVIDER_MODEL_POLICIES, providerKey);
@@ -196,27 +38,18 @@ export function resolveProviderModelPolicy(
   return CLAUDE_MODEL_POLICY;
 }
 
-/**
- * Providers that report a per-dispatch dollar figure themselves, so their
- * models need no rate card. Claude Code returns `total_cost_usd` on every
- * dispatch; that provider-reported number always outranks a harness estimate.
- */
-const COST_SELF_REPORTING_PROVIDERS: ReadonlySet<string> = new Set(['claude']);
+/** Providers reporting per-dispatch dollars need no rate-card estimate. */
+export const COST_SELF_REPORTING_PROVIDERS: ReadonlySet<string> = new Set(
+  BUILT_IN_PROVIDERS
+    .filter((provider) => provider.capabilities.costSelfReporting === true)
+    .map((provider) => provider.id),
+);
 
-/**
- * Every model id a built-in policy can route a dispatch to for a provider that
- * does NOT report cost: step defaults, tier overrides, both ladders, and
- * supported opt-in models. This is the set a token-price rate card must cover
- * — a model reachable only by escalation or fallback but absent from the card
- * silently leaves its dispatches cost-unmetered.
- */
 export function rateCardModelIds(): string[] {
   const ids = new Set<string>();
   for (const [provider, policy] of Object.entries(BUILT_IN_PROVIDER_MODEL_POLICIES)) {
     if (COST_SELF_REPORTING_PROVIDERS.has(provider)) continue;
-    for (const model of BUILT_IN_PROVIDER_OPT_IN_MODEL_IDS[provider] ?? []) {
-      ids.add(model);
-    }
+    for (const model of BUILT_IN_PROVIDER_OPT_IN_MODEL_IDS[provider] ?? []) ids.add(model);
     for (const model of Object.values(policy.stepModels)) ids.add(model);
     for (const model of policy.modelEscalationOrder) ids.add(model);
     for (const model of policy.modelFallbackLadder) ids.add(model);

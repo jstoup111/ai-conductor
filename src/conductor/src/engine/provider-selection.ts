@@ -1,9 +1,10 @@
 import type { HarnessConfig, ProviderSelection } from '../types/config.js';
+import { DEFAULT_PROVIDER } from '../execution/provider-catalog.js';
 
 export function normalizeProviderSelection(
   selection: ProviderSelection | undefined,
 ): string[] {
-  if (selection === undefined) return ['claude'];
+  if (selection === undefined) return [DEFAULT_PROVIDER];
   return Array.isArray(selection) ? [...selection] : [selection];
 }
 

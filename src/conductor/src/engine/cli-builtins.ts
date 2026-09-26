@@ -3,6 +3,7 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import type { TerminalRendererOptions } from '../ui/terminal-renderer.js';
 import { registerBuiltins } from './plugin-loader.js';
 import type { PluginRegistry } from './plugin-registry.js';
+import type { BuiltInProviderId } from '../execution/provider-catalog.js';
 
 /** CLI composition seam: keep the resolved doctor timeout isolated to Codex registration. */
 export function registerCliBuiltins(
@@ -10,11 +11,14 @@ export function registerCliBuiltins(
   events: ConductorEventEmitter,
   config: HarnessConfig | undefined,
   rendererOpts?: TerminalRendererOptions,
+  installed?: ReadonlySet<BuiltInProviderId>,
 ) {
   return registerBuiltins(
     registry,
     events,
     rendererOpts,
     config?.codex_doctor_timeout_seconds,
+    undefined,
+    installed,
   );
 }

@@ -14,10 +14,10 @@ import type {
 } from '../types/config.js';
 import { getStepDefinition } from './steps.js';
 import {
-  CLAUDE_MODEL_POLICY,
   resolveProviderModelPolicy,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
+import { DEFAULT_PROVIDER, providerDescriptor } from '../execution/provider-catalog.js';
 import { escalateAttempt } from './escalation.js';
 import { normalizeProviderSelection } from './provider-selection.js';
 import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
@@ -30,8 +30,10 @@ import type { BuildReviewFrozenInputScope } from './build-review-materialization
 // Legacy aliases retained for existing consumers. New resolution accepts a
 // provider policy explicitly, so these never participate in provider-aware
 // resolution.
-export const DEFAULT_STEP_MODELS = CLAUDE_MODEL_POLICY.stepModels;
-export const DEFAULT_STEP_EFFORT = CLAUDE_MODEL_POLICY.stepEfforts;
+const DEFAULT_PROVIDER_MODEL_POLICY = providerDescriptor(DEFAULT_PROVIDER).modelPolicy;
+
+export const DEFAULT_STEP_MODELS = DEFAULT_PROVIDER_MODEL_POLICY.stepModels;
+export const DEFAULT_STEP_EFFORT = DEFAULT_PROVIDER_MODEL_POLICY.stepEfforts;
 
 export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   bootstrap: 1,
@@ -96,7 +98,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   attribution_verify: 'auto', // automated verification of commit attribution metadata
 };
 
-export const DEFAULT_STEP_TIER_OVERRIDES = CLAUDE_MODEL_POLICY.stepTierOverrides;
+export const DEFAULT_STEP_TIER_OVERRIDES = DEFAULT_PROVIDER_MODEL_POLICY.stepTierOverrides;
 
 export const FALLBACK_MODEL = 'sonnet';
 export const FALLBACK_EFFORT: EffortLevel = 'medium';
@@ -233,7 +235,7 @@ export function resolveStepConfig(
   const hasExplicitPolicy = policyOrConfig !== undefined && 'stepModels' in policyOrConfig;
   const policy = hasExplicitPolicy
     ? policyOrConfig as ProviderModelPolicy
-    : CLAUDE_MODEL_POLICY;
+    : DEFAULT_PROVIDER_MODEL_POLICY;
   const config = hasExplicitPolicy
     ? configOrOptions as HarnessConfig | undefined
     : policyOrConfig as HarnessConfig | undefined;
@@ -827,13 +829,13 @@ function freezeRubricPolicy(
 
 export function resolveBuildReviewConfig(
   config?: HarnessConfig,
-  policy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
+  policy: ProviderModelPolicy = DEFAULT_PROVIDER_MODEL_POLICY,
   options: ResolveOptions = {},
 ): ResolvedBuildReviewConfig {
   const block = config?.build_review;
   const outerStepConfig = config?.steps?.build_review;
-  const inheritedProviderSelection = outerStepConfig?.llm_provider ?? config?.llm_provider ?? 'claude';
-  const inheritedPrimaryProvider = normalizeProviderSelection(inheritedProviderSelection)[0] ?? 'claude';
+  const inheritedProviderSelection = outerStepConfig?.llm_provider ?? config?.llm_provider ?? DEFAULT_PROVIDER;
+  const inheritedPrimaryProvider = normalizeProviderSelection(inheritedProviderSelection)[0] ?? DEFAULT_PROVIDER;
   const inheritedPolicy = outerStepConfig?.llm_provider === undefined && config?.llm_provider === undefined
     ? policy
     : resolveProviderModelPolicy(inheritedPrimaryProvider);
