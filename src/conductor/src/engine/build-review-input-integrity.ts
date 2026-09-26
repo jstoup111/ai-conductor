@@ -41,11 +41,11 @@ export const BUILD_REVIEW_INPUT_ROOT_KINDS = [
 export type BuildReviewInputRootKind = typeof BUILD_REVIEW_INPUT_ROOT_KINDS[number];
 
 export interface BuildReviewInputDigestRoots {
-  readonly frozenHead: string;
-  readonly frozenBaseline: string;
+  readonly frozenHead: string | readonly string[];
+  readonly frozenBaseline: string | readonly string[];
   readonly capturedPolicyMaterial: string | readonly string[];
   readonly installedPolicyPackage: string | readonly string[];
-  readonly evidenceRoot: string;
+  readonly evidenceRoot: string | readonly string[];
   /** Engine outputs written while the lap settles are never review inputs. */
   readonly evidenceRootExcludes?: readonly string[];
 }

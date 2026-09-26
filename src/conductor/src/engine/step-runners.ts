@@ -102,7 +102,8 @@ import { discoverClaudeReviewPolicies, type ClaudeMetadataCommand, type ClaudeRe
 import { createCodexAppServerTransport, listCodexInstalledReviewSkills, type CodexAppServerTransport } from './build-review-policy-codex.js';
 import { renderBuildReviewFrozenInputScope } from './build-review-materialization.js';
 import { probeReadOnlyReviewCapability, type ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
-import { BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES, captureBuildReviewInputDigest, diffBuildReviewInputDigests, type BuildReviewInputDigestRoots } from './build-review-input-integrity.js';
+import { BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES } from './build-review-input-integrity.js';
+import { BuildReviewLapGate } from './build-review-lap-gate.js';
 import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
 import {
   coordinateBuildReviewRubrics,
@@ -789,6 +790,9 @@ function readOnlyReviewUnavailableFailure(
     ...(platform === undefined ? {} : { platform }),
   };
 }
+
+/** Gate placeholder until the built-in coordinator announces its dispatch plan. */
+const BUILTIN_DISPATCH_PLAN_MEMBER = '@builtin-dispatch-plan';
 
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
@@ -2409,71 +2413,46 @@ export class DefaultStepRunner implements StepRunner {
     // candidates judge only the detached source view, and normal engine work
     // continues to write branch evidence in the live checkout while they run.
     const customLapEvidenceRoot = join(effectivePipelineDir, 'build-review', lapId);
-    // Evidence supplied by the engine already lives in the pipeline, rather
-    // than in a synthetic per-lap directory.  The digest deliberately ignores
-    // evidence created after capture, so branch artifacts and the digest record
-    // written while the lap settles cannot invalidate their own lap.
-    const customLapInputEvidenceRoot = effectivePipelineDir;
     const inputDigestEvidencePath = join(customLapEvidenceRoot, 'input-digest.json');
     const materializedSource = inputs.sourceMaterialization?.source;
     const unavailableInputRoot = (name: string) => join(customLapEvidenceRoot, `.unavailable-${name}`);
-    // A built-in peer's captured bytes must exist before custom-member fan-out
-    // establishes the lap baseline. Custom policies remain candidate-local:
-    // their catalog may depend on the prepared provider environment.
-    const lapBuiltinPolicies = new Map<string, { readonly policy: InstalledReviewSkill; readonly bundle: CapturedReviewPolicyBundle }>();
-    for (const entry of config.catalog) {
-      if (entry.kind !== 'builtin') continue;
-      try {
-        const catalog = await this.buildReviewPolicyCatalog!({
-          provider: normalizeProviderSelection(entry.policy.llm_provider)[0] ?? this.providerKey,
-          entry,
-          skill: getBuildReviewRubricDescriptor(entry.id).skillName,
-        });
-        const resolved = resolveInstalledReviewPolicyCatalog({ skill: getBuildReviewRubricDescriptor(entry.id).skillName }, catalog);
-        if (resolved.kind === 'failure') continue;
-        const bundle = await this.buildReviewPolicyCapture(resolved.policy, {
-          materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY),
-        });
-        lapBuiltinPolicies.set(entry.id, { policy: resolved.policy, bundle });
-      } catch {
-        // The candidate-local dispatch below preserves the ordinary failure
-        // classification and deadline accounting for a failed pre-capture.
-      }
+    const customPolicyLap = customEntries.length > 0;
+    const builtinPeers = config.catalog.some((entry) => entry.kind === 'builtin');
+    // adr-2026-09-10 D5.1: a built-in-only lap keeps its unchanged boundary.
+    // Only a lap with an enabled custom member clears its lap directory,
+    // digests its inputs, and gates its reviewers (D5.3).
+    let lapGate: BuildReviewLapGate | undefined;
+    if (customPolicyLap) {
+      // A replay uses the same head-derived lap id. Its prior branch artifacts
+      // are outputs of this lap, not inputs from an earlier lap, so clear only
+      // this lap's directory before capture. Other build-review evidence
+      // remains in the digest as an input from a genuinely prior lap.
+      await rm(customLapEvidenceRoot, { recursive: true, force: true });
+      lapGate = await BuildReviewLapGate.begin({
+        roots: {
+          frozenHead: materializedSource?.headPath ?? unavailableInputRoot('head'),
+          frozenBaseline: materializedSource?.baselinePath ?? unavailableInputRoot('baseline'),
+          // Candidate-local policy bytes register themselves (D6) before the
+          // gate lets any reviewer run.
+          capturedPolicyMaterial: [],
+          installedPolicyPackage: [],
+          // Evidence supplied by the engine already lives in the pipeline.
+          // New evidence and the engine's own in-lap writes never diff.
+          evidenceRoot: effectivePipelineDir,
+          evidenceRootExcludes: BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES,
+        },
+        maxParallel: config.maxParallel,
+        members: [...customEntries.map((entry) => entry.id), ...(builtinPeers ? [BUILTIN_DISPATCH_PLAN_MEMBER] : [])],
+      });
     }
-    const baseDigestRoots: BuildReviewInputDigestRoots = {
-      frozenHead: materializedSource?.headPath ?? unavailableInputRoot('head'),
-      frozenBaseline: materializedSource?.baselinePath ?? unavailableInputRoot('baseline'),
-      capturedPolicyMaterial: [...lapBuiltinPolicies.values()].map(({ bundle }) => bundle.materialPath),
-      installedPolicyPackage: [...lapBuiltinPolicies.values()].map(({ policy }) => policy.packageRoot),
-      evidenceRoot: customLapInputEvidenceRoot,
-      evidenceRootExcludes: BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES,
-    };
-    // A replay uses the same head-derived lap id. Its prior branch artifacts
-    // are outputs of this lap, not inputs from an earlier lap, so clear only
-    // this lap's directory before capture. Other build-review evidence remains
-    // in the digest as an input from a genuinely prior lap.
-    await rm(customLapEvidenceRoot, { recursive: true, force: true });
-    const inputDigestCaptures: Array<{ readonly roots: BuildReviewInputDigestRoots; readonly before: Awaited<ReturnType<typeof captureBuildReviewInputDigest>> }> = [{
-      roots: baseDigestRoots,
-      before: await captureBuildReviewInputDigest(baseDigestRoots),
-    }];
-    const capturePolicyInputDigest = async (materialPath: string, packageRoot: string): Promise<void> => {
-      const roots: BuildReviewInputDigestRoots = {
-        ...baseDigestRoots,
-        capturedPolicyMaterial: materialPath,
-        installedPolicyPackage: packageRoot,
-      };
-      inputDigestCaptures.push({ roots, before: await captureBuildReviewInputDigest(roots) });
-    };
     const finishCustomLapInputDigests = async (): Promise<readonly string[]> => {
-      const records = await Promise.all(inputDigestCaptures.map(async ({ roots, before }) => {
-        const after = await captureBuildReviewInputDigest(roots);
-        return { before, after, changedInputs: await diffBuildReviewInputDigests(before, after) };
-      }));
+      const settlement = await lapGate!.settle();
       await mkdir(customLapEvidenceRoot, { recursive: true });
-      await writeFile(inputDigestEvidencePath, `${JSON.stringify({ version: 1, records }, null, 2)}\n`, 'utf8');
-      const changedInputs = [...new Set(records.flatMap((record) => record.changedInputs))].sort();
-      return changedInputs;
+      await writeFile(inputDigestEvidencePath, `${JSON.stringify({
+        version: 1,
+        records: settlement.records.map(({ before, after, changedInputs }) => ({ before, after, changedInputs })),
+      }, null, 2)}\n`, 'utf8');
+      return settlement.changedInputs;
     };
     const mutatedCustomResults = (
       results: Readonly<Record<string, BuildReviewCustomArtifactMember>>,
@@ -2497,12 +2476,90 @@ export class DefaultStepRunner implements StepRunner {
         changedInputs,
       })));
     };
-    if (customEntries.length > 0) {
-      const outcomes = await runAuxiliaryGroupBranches(
+    // adr-2026-09-10 D5.3: custom members and built-in peers are one
+    // concurrent fan-out over one frozen view. Preparation is unbounded so the
+    // gate can see every member's baseline; reviewer invocations share the
+    // gate's maxParallel bound.
+    const customRun = customPolicyLap
+      ? runAuxiliaryGroupBranches(
         customEntries.map((entry) => ({ memberId: entry.id, policy: entry })),
-        config.maxParallel,
-        async (_id, entry) => this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, capturePolicyInputDigest, readOnlyReviewCapabilityFor),
-      );
+        customEntries.length,
+        async (_id, entry) => {
+          try {
+            return await this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor);
+          } finally {
+            lapGate?.arrive(entry.id);
+          }
+        },
+      )
+      : Promise.resolve([]);
+    const coordinationRun = customPolicyLap && !builtinPeers
+      ? Promise.resolve(undefined)
+      : (async () => {
+        try {
+          return await coordinateBuildReviewRubrics({
+            // A gated peer waits for its siblings without a reviewer slot;
+            // the gate, not the branch scheduler, bounds reviewer parallelism.
+            config: lapGate === undefined ? config : { ...config, maxParallel: Math.max(config.maxParallel, config.catalog.length) },
+            inputs,
+            lapId,
+            engineIdentity,
+            useCandidateCache: true,
+            preflight: async () => this.runTautologyPreflight(inputs),
+            readCache: async (branch, _projection, _policyFingerprint, semanticIdentity) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
+              readFile: async (path) => readFile(path, 'utf-8'), readdir,
+              mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+              writeFile,
+              rename,
+            }, semanticIdentity),
+            ...(lapGate === undefined ? {} : {
+              onDispatchPlan: (rubrics: readonly string[]) => {
+                lapGate!.expect(rubrics);
+                lapGate!.arrive(BUILTIN_DISPATCH_PLAN_MEMBER);
+              },
+            }),
+            dispatchModel: async (branch, projection) => {
+              try {
+                return await this.dispatchBuildReviewRubric(
+                  branch,
+                  projection,
+                  tier,
+                  executionContext,
+                  inputs,
+                  engineIdentity,
+                  customPolicyLap,
+                  readOnlyReviewCapabilityFor,
+                  lapGate,
+                );
+              } finally {
+                lapGate?.arrive(branch.rubric);
+              }
+            },
+            writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
+              readFile: async (path) => readFile(path, 'utf-8'),
+              mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+              writeFile,
+              rename,
+            }),
+            writeCache: async (entry) => writeBuildReviewCacheEntry(this.projectDir, entry, {
+              readFile: async (path) => readFile(path, 'utf-8'),
+              mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+              writeFile,
+              rename,
+            }),
+            emit: async (event) => { await this.events?.emit(event); },
+          });
+        } finally {
+          lapGate?.arrive(BUILTIN_DISPATCH_PLAN_MEMBER);
+        }
+      })();
+    const [customSettled, coordinationSettled] = await Promise.allSettled([customRun, coordinationRun]);
+    if (customSettled.status === 'rejected') throw customSettled.reason;
+    if (coordinationSettled.status === 'rejected') throw coordinationSettled.reason;
+    const outcomes = customSettled.value;
+    const joinedCoordination = coordinationSettled.value;
+
+    if (customPolicyLap) {
       if (outcomes.some((outcome) => !outcome.success)) {
         await finishCustomLapInputDigests();
         return {
@@ -2519,7 +2576,7 @@ export class DefaultStepRunner implements StepRunner {
       // built-in's enabled flag as a proxy for the complete catalog: security
       // (and every future built-in) must share this lap's frozen input and
       // candidate path whenever it is enabled beside a custom policy.
-      if (!config.catalog.some((entry) => entry.kind === 'builtin')) {
+      if (joinedCoordination === undefined) {
         const changedInputs = await finishCustomLapInputDigests();
         if (changedInputs.length > 0) {
           customResults = mutatedCustomResults(customResults, changedInputs);
@@ -2535,46 +2592,7 @@ export class DefaultStepRunner implements StepRunner {
         });
       }
     }
-
-    const coordination = await coordinateBuildReviewRubrics({
-      config,
-      inputs,
-      lapId,
-      engineIdentity,
-      useCandidateCache: true,
-      preflight: async () => this.runTautologyPreflight(inputs),
-      readCache: async (branch, _projection, _policyFingerprint, semanticIdentity) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
-        readFile: async (path) => readFile(path, 'utf-8'), readdir,
-        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
-        writeFile,
-        rename,
-      }, semanticIdentity),
-      dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(
-        branch,
-        projection,
-        tier,
-        executionContext,
-        inputs,
-        engineIdentity,
-        customEntries.length > 0,
-        readOnlyReviewCapabilityFor,
-        capturePolicyInputDigest,
-        lapBuiltinPolicies,
-      ),
-      writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
-        readFile: async (path) => readFile(path, 'utf-8'),
-        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
-        writeFile,
-        rename,
-      }),
-      writeCache: async (entry) => writeBuildReviewCacheEntry(this.projectDir, entry, {
-        readFile: async (path) => readFile(path, 'utf-8'),
-        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
-        writeFile,
-        rename,
-      }),
-      emit: async (event) => { await this.events?.emit(event); },
-    });
+    const coordination = joinedCoordination!;
 
     if (coordination.kind === 'gate-disabled') {
       if (customEntries.length > 0) await finishCustomLapInputDigests();
@@ -2818,7 +2836,7 @@ export class DefaultStepRunner implements StepRunner {
     inputs: BuildReviewFrozenInputs,
     lapId: BuildReviewLapId,
     tier: ConductState['complexity_tier'],
-    captureInputDigest?: (materialPath: string, packageRoot: string) => Promise<void>,
+    lapGate?: BuildReviewLapGate,
     readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability | undefined>,
   ): Promise<{ readonly id: string; readonly success: boolean; readonly output: string; readonly member?: BuildReviewCustomArtifactMember }> {
     const declaration = {
@@ -3017,7 +3035,7 @@ export class DefaultStepRunner implements StepRunner {
           await emitPolicyFailure('capture', detail);
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: detail } };
         }
-        await captureInputDigest?.(bundle.materialPath, policy.packageRoot);
+        await lapGate?.registerPolicy(bundle.materialPath, policy.packageRoot);
         const candidateEngine = await this.resolveBuildReviewEngineIdentity();
         const policyProvenance = {
           inputDigest: inputs.sourceSnapshot.contentDigest,
@@ -3065,7 +3083,10 @@ export class DefaultStepRunner implements StepRunner {
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         }
         let cacheHit = false;
-        const dispatched = await dispatchRubricContract({
+        // D5.3: no reviewer starts until every lap member's baseline exists.
+        await lapGate?.waitForBaseline(entry.id);
+        const dispatchWithinLap = <T>(run: () => Promise<T>): Promise<T> => lapGate === undefined ? run() : lapGate.withReviewerSlot(run);
+        const dispatched = await dispatchWithinLap(() => dispatchRubricContract({
           descriptor: entry.contract,
           options: {
             prompt: `${renderBuildReviewPolicyContract({
@@ -3099,7 +3120,7 @@ export class DefaultStepRunner implements StepRunner {
           }
           return invoke();
           }),
-        });
+        }));
         const invoked = dispatched.invocation;
         if (cacheHit) return { kind: 'hit' as const, result: invoked };
         if (!invoked.success && dispatched.kind !== 'root-rejection') {
@@ -3490,8 +3511,7 @@ export class DefaultStepRunner implements StepRunner {
     engineIdentity?: BuildReviewCoordinationEngineIdentity,
     customPolicyLap = false,
     readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability | undefined>,
-    capturePolicyInputDigest?: (materialPath: string, packageRoot: string) => Promise<void>,
-    lapBuiltinPolicies?: ReadonlyMap<string, { readonly policy: InstalledReviewSkill; readonly bundle: CapturedReviewPolicyBundle }>,
+    lapGate?: BuildReviewLapGate,
   ): Promise<unknown> {
     const materialized = inputs?.sourceMaterialization?.contextFor(branch.rubric).source;
     const candidateIdentity = (candidate: { providerKey: string; model: string; effort?: string }, effectiveBundleDigest?: string): BuildReviewCacheSemanticIdentity | undefined => {
@@ -3686,12 +3706,11 @@ export class DefaultStepRunner implements StepRunner {
               // contract as custom policies. The harness-root digest is only
               // an approximation of what the prepared provider loaded.
               const builtinEntry = { id: branch.rubric, kind: 'builtin' as const, policy: branch.policy };
+              // D6: resolution and capture happen in this actual prepared
+              // candidate; a fallback candidate never reuses another's bytes.
               let builtinPolicy: InstalledReviewSkill;
               let builtinBundle: CapturedReviewPolicyBundle;
-              const capturedBuiltinPolicy = lapBuiltinPolicies?.get(branch.rubric);
-              if (capturedBuiltinPolicy !== undefined) {
-                ({ policy: builtinPolicy, bundle: builtinBundle } = capturedBuiltinPolicy);
-              } else try {
+              try {
                   const catalog = await this.buildReviewPolicyCatalog!({
                     provider: context.candidate.providerKey,
                     entry: builtinEntry,
@@ -3708,12 +3727,15 @@ export class DefaultStepRunner implements StepRunner {
                   builtinBundle = await this.buildReviewPolicyCapture(builtinPolicy, {
                     materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY),
                   });
-                  await capturePolicyInputDigest?.(builtinBundle.materialPath, builtinPolicy.packageRoot);
+                  await lapGate?.registerPolicy(builtinBundle.materialPath, builtinPolicy.packageRoot);
                 } catch (error) {
                   return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: `build_review candidate policy load failed: ${error instanceof Error ? error.message : String(error)}` } };
                 }
               let cacheHit = false;
-              const dispatched = await dispatchRubricContract({
+              // D5.3: a gated peer starts only after every member's baseline.
+              await lapGate?.waitForBaseline(branch.rubric);
+              const dispatchWithinLap = <T>(run: () => Promise<T>): Promise<T> => lapGate === undefined ? run() : lapGate.withReviewerSlot(run);
+              const dispatched = await dispatchWithinLap(() => dispatchRubricContract({
                 descriptor: getBuildReviewRubricDescriptor(branch.rubric).contract,
                 prepareStructured: (value) => stampBuildReviewDispatchedCandidate(value, branch.rubric, projection),
                 options: {
@@ -3747,7 +3769,7 @@ export class DefaultStepRunner implements StepRunner {
                 }
                 return invoke();
                 }),
-              });
+              }));
               const invoked = dispatched.invocation;
               if (cacheHit) {
                 await inputs?.sourceMaterialization?.settle(branch.rubric);

@@ -194,6 +194,73 @@ describe('custom build-review compatibility routing', () => {
     ]));
     expect(invoke).toHaveBeenCalled();
   });
+  it('resolves a falling-back built-in peer policy in its actual prepared candidate', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-custom-routing-builtin-fallback-'));
+    roots.push(root);
+    const config = {
+      llm_provider: 'claude', build_review: {
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: ['codex', 'claude'] } },
+        custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project', llm_provider: 'claude' } },
+      },
+    } as HarnessConfig;
+    const invoke = vi.fn(async (options: { prompt: string }) => {
+      const payload = options.prompt.includes('Build Review Security rubric.') ? { findings: [] } : { kind: 'custom-findings', version: 'v1', findings: [] };
+      return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+    });
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    const catalogCalls: Array<{ provider: string; skill: string; preparedEnv?: NodeJS.ProcessEnv }> = [];
+    const captured: Array<{ skill: string; candidateHome: string | undefined }> = [];
+    const source = {
+      identity: { snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content', mergeBase: 'base', headSha: 'head' },
+      baselinePath: join(root, '.pipeline', 'frozen', 'baseline'), headPath: join(root, '.pipeline', 'frozen', 'head'),
+    };
+    await Promise.all([mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
+    const runner = new DefaultStepRunner(provider, 'builtin-fallback-routing', root, {
+      featureDesc: 'feature', config,
+      providerRuntimes: new ProviderRuntimeSet([
+        { key: 'codex', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
+        { key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
+      ]),
+      sessionStore: new ProviderSessionStore(),
+      providerExecution: {
+        prepareCandidateSelfHost: async (candidate: { providerKey: string }) => ({
+          executable: candidate.providerKey, args: [], env: { CANDIDATE_HOME: `/prepared/${candidate.providerKey}` }, teardown: async () => {},
+        }),
+      } as never,
+      buildReviewEffectiveResolver: async () => ({ ok: true, feature: { version: 'v1', repository: root, feature: 'feature' }, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } }) as never,
+      buildReviewPolicyCatalog: async (request) => {
+        catalogCalls.push({ provider: request.provider, skill: request.skill, ...(request.preparedEnv === undefined ? {} : { preparedEnv: request.preparedEnv }) });
+        return [{ semanticName: request.skill, source: 'project', installationOrigin: `/installed/${request.preparedEnv?.CANDIDATE_HOME ?? 'ambient'}`, canonicalSkillPath: `/installed/${request.skill}/SKILL.md`, packageRoot: `/installed/${request.preparedEnv?.CANDIDATE_HOME ?? 'ambient'}/${request.skill}`, declaredDependencies: [], availability: 'available' as const }];
+      },
+      buildReviewPolicyCapture: async (policy) => {
+        captured.push({ skill: policy.semanticName, candidateHome: policy.packageRoot });
+        return { policy, materialPath: join(root, 'material', policy.semanticName), definitionPath: join(root, 'material', policy.semanticName, 'SKILL.md'), manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` };
+      },
+    });
+    const inputs = {
+      diff: 'diff', planBody: '# Plan', mergeBase: 'base', baseRef: 'origin/main', baseKind: 'remote', trackingRefSha: 'base', remoteHeadSha: 'base', fresh: true,
+      testSuiteProof: {}, sourceSnapshot: { digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff', planBody: '# Plan', repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [] },
+      sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} },
+    } as never;
+    await (runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', executionContext: unknown, capabilities: unknown) => Promise<{ success: boolean }> }).runRubricBuildReview(
+      inputs, resolveBuildReviewConfig(config), 'M', undefined, {
+        codex: { provider: 'codex', platform: 'linux', status: 'unavailable', reason: 'sandbox helper is unavailable' },
+        claude: { provider: 'claude', platform: 'linux', status: 'available' },
+      },
+    );
+
+    const securityCatalogs = catalogCalls.filter(({ skill }) => skill.includes('security'));
+    expect(securityCatalogs).toEqual([{ provider: 'claude', skill: expect.stringContaining('security'), preparedEnv: { CANDIDATE_HOME: '/prepared/claude' } }]);
+    expect(captured.filter(({ skill }) => skill.includes('security'))).toEqual([
+      { skill: expect.stringContaining('security'), candidateHome: expect.stringContaining('/prepared/claude/') },
+    ]);
+    expect(invoke.mock.calls.some(([options]) => options.prompt.includes('Build Review Security rubric.'))).toBe(true);
+  });
+
   it('refuses a custom-enabled compatibility lap before raw finding routing', async () => {
     const result = await runCompatibilityLap(true);
     expect(result.halt).toContain('custom-capability error');

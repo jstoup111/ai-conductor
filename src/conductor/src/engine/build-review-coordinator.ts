@@ -168,6 +168,8 @@ export interface BuildReviewCoordinationInput {
   ) => Promise<BuildReviewBranchArtifact>;
   /** Persist one bounded semantic judgement; skips and failures never reach this effect. */
   readonly writeCache: (entry: BuildReviewCacheEntry) => Promise<void>;
+  /** Announces the rubrics about to dispatch, before any of them is started. */
+  readonly onDispatchPlan?: (rubrics: readonly BuildReviewRubricId[]) => void;
   /** Engine-owned occurrence sink; callers connect this to the shared event emitter. */
   readonly emit?: (event: Extract<ConductorEvent, { type:
     | "build_review_rubric_started"
@@ -764,6 +766,8 @@ export async function coordinateBuildReviewRubrics(
     }
   }
 
+  // A custom-policy lap's integrity gate waits for exactly these members.
+  input.onDispatchPlan?.(misses.map((branch) => branch.rubric));
   const dispatched = await runAuxiliaryGroupBranches(misses.map((branch) => ({ memberId: branch.rubric, policy: branch })), input.config.maxParallel,
     async (rubric, branch) => {
       const projection = projections[rubric];

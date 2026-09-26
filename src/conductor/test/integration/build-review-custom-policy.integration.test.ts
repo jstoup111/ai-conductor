@@ -457,6 +457,98 @@ describe('custom build-review policy runner', () => {
     await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
   });
 
+  it('baselines every member policy before any reviewer runs, even when reviewer slots are serialized', async () => {
+    const root = await fixture();
+    const packages = join(root, 'packages');
+    for (const skill of ['alpha-policy', 'beta-policy']) {
+      await mkdir(join(packages, skill), { recursive: true });
+      await writeFile(join(packages, skill, 'SKILL.md'), `# ${skill}\n`);
+    }
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    let mutated = false;
+    const provider: LLMProvider = {
+      // The first reviewer to run rewrites the other member's installed
+      // policy. With one reviewer slot, the other member has not yet run.
+      invoke: vi.fn(async (options) => {
+        const other = options.prompt.includes('alpha-policy') ? 'beta-policy' : 'alpha-policy';
+        if (!mutated) await writeFile(join(packages, other, 'SKILL.md'), '# Rewritten by a sibling reviewer\n');
+        mutated = true;
+        return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+      }),
+      supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    const events = new ConductorEventEmitter();
+    const failures: Array<{ rubric: string; changedInputs?: string[] }> = [];
+    events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event as never); });
+    const runner = new DefaultStepRunner(provider, 'custom-policy-serialized-baseline', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(), events,
+      config: { llm_provider: 'claude', build_review: { enabled: true, maxParallel: 1, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        alpha: { enabled: true, skill: 'alpha-policy', question: 'Check alpha.', source: 'project', llm_provider: 'claude' },
+        beta: { enabled: true, skill: 'beta-policy', question: 'Check beta.', source: 'project', llm_provider: 'claude' },
+      } } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(), probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
+      buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: join(packages, skill), canonicalSkillPath: join(packages, skill, 'SKILL.md'), packageRoot: join(packages, skill), declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => {
+        const materialPath = join(root, '.pipeline', 'build-review', 'policy-material', policy.semanticName);
+        const bytes = await readFile(join(policy.packageRoot, 'SKILL.md'));
+        await mkdir(materialPath, { recursive: true });
+        await writeFile(join(materialPath, 'SKILL.md'), bytes);
+        return { policy, materialPath, definitionPath: join(materialPath, 'SKILL.md'), manifest: [{ relativePath: 'SKILL.md', bytes }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${createHash('sha256').update(bytes).digest('hex')}` };
+      },
+    });
+
+    const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(result).toMatchObject({ success: false, currentLapMechanicalFault: true });
+    expect(result.output).toContain('review-input-mutated');
+    expect(failures.map(({ rubric }) => rubric).sort()).toEqual(['alpha', 'beta']);
+    expect(failures[0]!.changedInputs).toContain('installedPolicyPackage:SKILL.md');
+  });
+
+  it('starts built-in peers while custom reviewers are still running in one joined lap', async () => {
+    const root = await fixture();
+    let securityInvoked!: () => void;
+    const securityStarted = new Promise<void>((resolve) => { securityInvoked = resolve; });
+    let securityStartedBeforeCustomSettled: boolean | undefined;
+    const customPayload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const provider: LLMProvider = {
+      invoke: vi.fn(async (options) => {
+        if (options.prompt.includes('Build Review Security rubric.')) {
+          securityInvoked();
+          return { success: true, exitCode: 0, output: '{"findings":[]}', finalStructuredResult: { findings: [] } };
+        }
+        // Bounded: a two-stage lap never starts the peer, so stop waiting.
+        let started = false;
+        void securityStarted.then(() => { started = true; });
+        for (let tick = 0; tick < 200 && !started; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+        securityStartedBeforeCustomSettled = started;
+        return { success: true, exitCode: 0, output: JSON.stringify(customPayload), finalStructuredResult: customPayload };
+      }),
+      supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    const runner = new DefaultStepRunner(provider, 'mixed-concurrent-fan-out', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'claude', build_review: {
+        enabled: true, maxParallel: 2, rubrics: { testQuality: { enabled: false }, security: { enabled: true } },
+        custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' } },
+      } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(), probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
+      buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`, declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+
+    const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(result.success, result.output).toBe(true);
+    expect(securityStartedBeforeCustomSettled).toBe(true);
+  });
+
   it('halts needs-human without an aggregate when review-input-mutated exhausts the mechanical allowance', async () => {
     const root = await fixture();
     vi.mocked(buildReviewCache.readBuildReviewCacheEntry)

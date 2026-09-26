@@ -1,5 +1,5 @@
 // Covers: task:17
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -46,7 +46,9 @@ function invocationProfile(launch: Record<string, unknown>) {
 async function runBuiltinLap(providerKey: 'claude' | 'codex', disabledCustom = false) {
   const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-builtin-invariance-'));
   roots.push(root);
-  await mkdir(join(root, '.pipeline'), { recursive: true });
+  await mkdir(join(root, '.pipeline', 'build-review', 'lap-head'), { recursive: true });
+  await writeFile(join(root, '.pipeline', 'build-review', 'lap-head', 'prior-branch.json'), '{}\n');
+  const catalogCalls: Array<Record<string, unknown>> = [];
   const launches: Array<Record<string, unknown>> = [];
   const provider: LLMProvider = {
     invoke: vi.fn(async (options) => {
@@ -72,7 +74,10 @@ async function runBuiltinLap(providerKey: 'claude' | 'codex', disabledCustom = f
     sessionStore: new ProviderSessionStore(),
     buildReviewEffectiveResolver: effectivePass,
     probeReadOnlyReviewCapability: capabilityProbe as never,
-    buildReviewPolicyCatalog: async ({ skill }) => [policyBundle(skill).policy],
+    buildReviewPolicyCatalog: async (request) => {
+      catalogCalls.push({ ...request, launchesBefore: launches.length });
+      return [policyBundle(request.skill).policy];
+    },
     buildReviewPolicyCapture: async (installed) => policyBundle(installed.semanticName) as never,
   });
   const inputs = {
@@ -80,12 +85,12 @@ async function runBuiltinLap(providerKey: 'claude' | 'codex', disabledCustom = f
     testSuiteProof: {}, sourceSnapshot: { digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff', planBody: '# Plan', repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [] },
   } as never;
   const result = await (runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M') => Promise<{ success: boolean; output: string }> }).runRubricBuildReview(inputs, resolveBuildReviewConfig(config), 'M');
-  return { root, launches, result, capabilityProbe };
+  return { root, launches, result, capabilityProbe, catalogCalls };
 }
 
 describe('built-in-only build-review invocation invariance', () => {
   it.each(['claude', 'codex'] as const)('keeps the %s built-in invocation on its literal ordinary profile', async (providerKey) => {
-    const { root, launches, result, capabilityProbe } = await runBuiltinLap(providerKey);
+    const { root, launches, result, capabilityProbe, catalogCalls } = await runBuiltinLap(providerKey);
 
     expect(result.success).toBe(true);
     expect(launches).toHaveLength(1);
@@ -100,6 +105,11 @@ describe('built-in-only build-review invocation invariance', () => {
     expect(capabilityProbe).not.toHaveBeenCalled();
     await expect(readFile(join(root, '.pipeline', 'build-review', 'lap-head', 'input-digest.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(result.output).not.toContain('read-only-review-unavailable');
+    // No lap-level policy pre-capture: the only resolution is the actual
+    // candidate's own, bounded by that candidate's deadline.
+    expect(catalogCalls).toHaveLength(1);
+    expect(catalogCalls[0]).toMatchObject({ provider: providerKey, deadlineAt: expect.any(Number) });
+    await expect(readFile(join(root, '.pipeline', 'build-review', 'lap-head', 'prior-branch.json'), 'utf8')).resolves.toBe('{}\n');
   });
 
   it.each(['claude', 'codex'] as const)('treats a declared but disabled custom rubric as built-in-only for %s', async (providerKey) => {
@@ -109,5 +119,8 @@ describe('built-in-only build-review invocation invariance', () => {
     expect(disabled.result.success).toBe(true);
     expect(disabled.launches.map(invocationProfile)).toEqual(ordinary.launches.map(invocationProfile));
     expect(disabled.capabilityProbe).not.toHaveBeenCalled();
+    expect(disabled.catalogCalls).toEqual([expect.objectContaining({ provider: providerKey, deadlineAt: expect.any(Number) })]);
+    await expect(readFile(join(disabled.root, '.pipeline', 'build-review', 'lap-head', 'prior-branch.json'), 'utf8')).resolves.toBe('{}\n');
+    await expect(readFile(join(disabled.root, '.pipeline', 'build-review', 'lap-head', 'input-digest.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
