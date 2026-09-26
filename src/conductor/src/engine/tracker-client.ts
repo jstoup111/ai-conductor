@@ -712,6 +712,9 @@ async function runTrackerIssueOperation(
       return result;
     } catch (err) {
       runnerError = new GhRunnerError(args, err);
+      // The guarded runner owns warning-first operator fallback (D9); it can
+      // only recognize the typed bot refusal when that refusal is not wrapped.
+      if (err instanceof GithubBotAuthRefusalError) throw err;
       throw runnerError;
     }
   };
