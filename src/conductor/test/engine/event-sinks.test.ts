@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:4, task:6, task:8, task:10, task:15, task:17, task:23
+// Covers: task:1, task:3, task:4, task:6, task:8, task:10, task:11, task:15, task:17, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -27,6 +27,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_refused',
   'step_status_write_refused',
   'github_operation_refused',
+  'provider_discovery',
   'provider_attempt',
   'scratch_cleanup_reclaimed',
   'scratch_cleanup_retained',

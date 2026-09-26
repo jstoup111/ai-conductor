@@ -5,6 +5,11 @@ import {
   type BuiltInProviderId,
   type BuiltInProviderDescriptor,
 } from '../execution/provider-catalog.js';
+import type {
+  ProviderDiscoveryEvent,
+  ProviderDiscoveryFailureReason,
+} from '../types/events.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 import { assertRealExecAllowed } from './tracker-client.js';
 
 const execFile = promisify(execFileCallback);
@@ -13,11 +18,7 @@ export const PROVIDER_VERSION_PROBE_TIMEOUT_MS = 5_000;
 
 const realExecGuardErrors = new WeakSet<object>();
 
-export type ProviderDiscoveryFailureReason =
-  | 'not-found'
-  | 'not-executable'
-  | 'version-failed'
-  | 'timeout';
+export type { ProviderDiscoveryFailureReason } from '../types/events.js';
 
 export interface ProviderVersionProbeResult {
   readonly exitCode: number;
@@ -40,6 +41,8 @@ export interface InstalledProviderDiscovery {
 export interface DiscoverInstalledProvidersOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly runner?: ProviderVersionProbeRunner;
+  /** Boot's existing event spine; omitted for pure discovery callers. */
+  readonly events?: ConductorEventEmitter;
   /** Maximum time to wait for each provider's version probe. */
   readonly timeoutMs?: number;
 }
@@ -151,10 +154,13 @@ export async function discoverInstalledProviders(
     BUILT_IN_PROVIDERS.map((descriptor) => probeProvider(descriptor, env, runner, timeoutMs)),
   );
 
-  return {
+  const discovery: InstalledProviderDiscovery = {
     installed: probes.filter((probe) => probe.installed).map((probe) => probe.id),
     missing: probes.flatMap((probe) => probe.installed
       ? []
       : [{ id: probe.id, reason: probe.reason }]),
   };
+  const event: ProviderDiscoveryEvent = { type: 'provider_discovery', ...discovery };
+  await options.events?.emit(event);
+  return discovery;
 }

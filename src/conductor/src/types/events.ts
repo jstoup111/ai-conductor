@@ -9,7 +9,7 @@ import type {
   ProviderStreamObservation,
   TokenUsage,
 } from '../execution/llm-provider.js';
-import type { ProviderWith } from '../execution/provider-catalog.js';
+import type { BuiltInProviderId, ProviderWith } from '../execution/provider-catalog.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
 import type { SchedulingUnitRef } from './scheduling-unit.js';
 import type { LandGateRejectionIdentifier } from '../engine/engineer/land-spec.js';
@@ -243,6 +243,23 @@ export type ExecutionSubject =
 export type CiRepairDiagnosticStage = 'context' | 'log-enrichment' | 'branch' | 'readiness' | 'execution' | 'guard' | 'verification' | 'publication';
 export type CiRepairDiagnosticReason = 'auth' | 'permission' | 'timeout' | 'api' | 'capability' | 'malformed-context' | 'missing-context' | 'missing-branch' | 'log-unavailable' | 'context-truncated' | 'provider-unavailable' | 'readiness-degraded' | 'flag-invalid' | 'spawn-env' | 'unknown' | 'guard-refused' | 'verification-failed' | 'publication-refused' | 'verified-publication';
 export type CiRepairDiagnosticDisposition = 'deferred' | 'degraded' | 'failed' | 'published';
+
+/** Closed reasons reported by the boot-time built-in provider probe. */
+export type ProviderDiscoveryFailureReason =
+  | 'not-found'
+  | 'not-executable'
+  | 'version-failed'
+  | 'timeout';
+
+/** The installed and unavailable built-in providers observed during one boot. */
+export interface ProviderDiscoveryEvent {
+  type: 'provider_discovery';
+  installed: BuiltInProviderId[];
+  missing: Array<{
+    id: BuiltInProviderId;
+    reason: ProviderDiscoveryFailureReason;
+  }>;
+}
 
 /** One provider candidate result or lifecycle transition within a step attempt. */
 export interface ProviderAttemptEvent {
@@ -725,6 +742,7 @@ export type ConductorEvent =
       intent: string;
     }
   | GithubOperationRefusedEvent
+  | ProviderDiscoveryEvent
   | ProviderAttemptEvent
   | ProviderStreamProgressEvent
   | {

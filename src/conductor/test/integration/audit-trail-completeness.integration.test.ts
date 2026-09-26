@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:6
+// Covers: task:1, task:4, task:6, task:11
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Every executed step leaves positive evidence —
 // including non-verdict steps" (Story 3,
@@ -115,6 +115,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // Ownership refusals remain durable in the event ledger and terminal, but
   // are deliberately outside the audit-trail friction vocabulary.
   github_operation_refused: 'not-audited-by-design',
+  provider_discovery: 'not-audited-by-design',
   provider_attempt: 'not-audited-by-design',
   provider_stream_progress: 'not-audited-by-design',
   scratch_cleanup_reclaimed: 'not-audited-by-design',
@@ -366,6 +367,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     operation: 'issue.comment.create',
     reason: 'other-owner',
     remedy: 'ask-resource-owner',
+  },
+  provider_discovery: {
+    type: 'provider_discovery',
+    installed: ['claude', 'codex'],
+    missing: [{ id: 'pi', reason: 'not-found' }],
   },
   provider_attempt: {
     type: 'provider_attempt',

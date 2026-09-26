@@ -82,6 +82,7 @@ export const EVENT_SINKS = {
   // Ownership denials remain visible and durable through the one event spine;
   // the event excludes payloads and request bodies by construction.
   github_operation_refused: { render: true, persist: true, audit: false, otel: false },
+  provider_discovery: { render: false, persist: true, audit: false, otel: false },
   provider_attempt: { render: true, persist: true, audit: false, otel: true },
   // Per-interval progress would flood .daemon/daemon.log; daemon status reads the ledger directly.
   provider_stream_progress: { render: false, persist: true, audit: false, otel: false },
