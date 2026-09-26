@@ -1,3 +1,4 @@
+// Covers: task:20
 import { describe, expect, it, vi } from 'vitest';
 import {
   SMOKE_CAPABILITIES,
@@ -13,6 +14,7 @@ import { LIVE_E2E_PROVIDERS } from '../src/engine/live-e2e-providers.js';
 const acceptedCredentialedCapabilities: readonly SmokeCapability[] = [
   'credentialed:claude',
   'credentialed:codex',
+  'credentialed:pi',
 ];
 
 // @ts-expect-error SmokeCapability is a closed union, not an arbitrary string.
@@ -22,7 +24,7 @@ void acceptedCredentialedCapabilities;
 void rejectedSmokeCapability;
 
 function withDescriptorCredentialEnvVar(
-  providerId: 'claude' | 'codex',
+  providerId: 'claude' | 'codex' | 'pi',
   credentialEnvVar: string,
   run: () => void,
 ): void {
@@ -48,6 +50,7 @@ describe('smoke capability declarations', () => {
       'toolchain',
       'credentialed:claude',
       'credentialed:codex',
+      'credentialed:pi',
     ]);
   });
 
@@ -56,6 +59,27 @@ describe('smoke capability declarations', () => {
       hasCommand: () => false,
       environment: {},
     })).toEqual({ outcome: 'skipped', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' });
+  });
+
+  // Covers: task:20
+  it('skips the Pi live leg by its named credential without invoking it', async () => {
+    const runVitest = vi.fn();
+    const emit = vi.fn();
+    const file = 'test/engine/daemon-e2e-live-pi.smoke.test.ts';
+
+    await runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => [{ file, source: "const smokeCapability = 'credentialed:pi';" }],
+      runVitest,
+      mode: 'advisory',
+      hasCommand: () => true,
+      environment: {},
+      emit,
+    });
+
+    expect(runVitest).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith(
+      `smoke ledger: ${file} [credentialed:pi] skipped (unmet: PI_API_KEY)`,
+    );
   });
 
   it('resolves each credentialed provider against its descriptor-owned advisory credential variable', () => {
@@ -77,6 +101,17 @@ describe('smoke capability declarations', () => {
         {
           hasCommand: () => true,
           environment: { TEST_CODEX_ADVISORY_CREDENTIAL: 'token' },
+        },
+      )).toEqual({ outcome: 'ran' });
+    });
+
+    withDescriptorCredentialEnvVar('pi', 'TEST_PI_ADVISORY_CREDENTIAL', () => {
+      expect(resolveAdvisorySmokeFile(
+        'test/engine/daemon-e2e-live-pi.smoke.test.ts',
+        'credentialed:pi',
+        {
+          hasCommand: () => true,
+          environment: { TEST_PI_ADVISORY_CREDENTIAL: 'token' },
         },
       )).toEqual({ outcome: 'ran' });
     });
@@ -114,6 +149,17 @@ describe('smoke capability declarations', () => {
         {
           hasCommand: () => true,
           environment: { TEST_CODEX_GATE_CREDENTIAL: 'token' },
+        },
+      )).toEqual({ outcome: 'ran' });
+    });
+
+    withDescriptorCredentialEnvVar('pi', 'TEST_PI_GATE_CREDENTIAL', () => {
+      expect(resolveGateSmokeFile(
+        'test/engine/daemon-e2e-live-pi.smoke.test.ts',
+        'credentialed:pi',
+        {
+          hasCommand: () => true,
+          environment: { TEST_PI_GATE_CREDENTIAL: 'token' },
         },
       )).toEqual({ outcome: 'ran' });
     });

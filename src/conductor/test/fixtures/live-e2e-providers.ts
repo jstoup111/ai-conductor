@@ -1,3 +1,4 @@
+// Covers: task:20
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -5,6 +6,7 @@ import { join } from 'node:path';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
 import type { AuthenticationSource, LLMProvider } from '../../src/execution/llm-provider.js';
+import type { SelfHostProviderId } from '../../src/engine/self-host/provider-home.js';
 import {
   LIVE_E2E_PROVIDERS as LIVE_E2E_PROVIDER_MANIFEST,
   type LiveE2EProviderManifestEntry,
@@ -22,6 +24,14 @@ export interface LiveE2EProviderDescriptor extends LiveE2EProviderManifestEntry 
   readonly resolveAuthenticationSource: (provider: LLMProvider) => Promise<LiveE2EAuthenticationSource>;
   readonly assertCredentialAvailable: (credential: string | undefined) => void;
 }
+
+type SelfHostLiveE2EProviderManifestEntry = LiveE2EProviderManifestEntry & {
+  readonly id: SelfHostProviderId;
+};
+
+const SELF_HOST_LIVE_E2E_PROVIDER_MANIFEST = LIVE_E2E_PROVIDER_MANIFEST.filter(
+  (descriptor): descriptor is SelfHostLiveE2EProviderManifestEntry => descriptor.id !== 'pi',
+);
 
 const LIVE_E2E_PROVIDER_EXECUTION_AUGMENTATIONS = {
   claude: {
@@ -56,9 +66,10 @@ const LIVE_E2E_PROVIDER_EXECUTION_AUGMENTATIONS = {
       );
     },
   },
-} as const satisfies Record<LiveE2EProviderManifestEntry['id'], Omit<LiveE2EProviderDescriptor, keyof LiveE2EProviderManifestEntry>>;
+} as const satisfies Record<SelfHostProviderId, Omit<LiveE2EProviderDescriptor, keyof LiveE2EProviderManifestEntry>>;
 
-export const LIVE_E2E_PROVIDERS: readonly LiveE2EProviderDescriptor[] = LIVE_E2E_PROVIDER_MANIFEST.map(
+/** Full-daemon legs need self-host capability; Pi's minimal leg is intentionally standalone. */
+export const LIVE_E2E_PROVIDERS: readonly LiveE2EProviderDescriptor[] = SELF_HOST_LIVE_E2E_PROVIDER_MANIFEST.map(
   (descriptor) => ({
     ...descriptor,
     ...LIVE_E2E_PROVIDER_EXECUTION_AUGMENTATIONS[descriptor.id],
