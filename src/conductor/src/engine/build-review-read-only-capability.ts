@@ -1,4 +1,5 @@
 import { mkdir } from 'node:fs/promises';
+import { CLAUDE_PROVIDER, CODEX_PROVIDER, resolveProviderExecutable } from '../execution/provider-catalog.js';
 
 /** Process boundary for the provider-owned read-only review capability probe. */
 export type ReadOnlyReviewCapabilityProcess = (
@@ -57,7 +58,7 @@ function processFailureReason(error: unknown, executable: string): string {
 }
 
 function exitedReason(provider: string, exitCode: number, stderr: string): string {
-  return `${provider} ${provider === 'codex' ? 'sandbox' : 'help'} exited ${exitCode}${stderr.trim() ? `: ${stderr.trim()}` : ''}`;
+  return `${provider} ${provider === CODEX_PROVIDER ? 'sandbox' : 'help'} exited ${exitCode}${stderr.trim() ? `: ${stderr.trim()}` : ''}`;
 }
 
 async function probeCodex(options: ProbeReadOnlyReviewCapabilityOptions): Promise<ReadOnlyReviewCapability> {
@@ -70,14 +71,14 @@ async function probeCodex(options: ProbeReadOnlyReviewCapabilityOptions): Promis
   }
   let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
   try {
-    result = await options.runProcess('codex', [
+    result = await options.runProcess(resolveProviderExecutable(CODEX_PROVIDER), [
       'sandbox', '-P', ':read-only', '--', '/bin/sh', '-c', CODEX_READ_ONLY_PROBE,
       'read-only-review-probe', `${options.scratchDir}/write-probe`, options.scratchDir,
     ]);
   } catch (error) {
-    return unavailable(options, processFailureReason(error, 'codex'));
+    return unavailable(options, processFailureReason(error, CODEX_PROVIDER));
   }
-  if (result.exitCode !== 0) return unavailable(options, exitedReason('codex', result.exitCode, result.stderr));
+  if (result.exitCode !== 0) return unavailable(options, exitedReason(CODEX_PROVIDER, result.exitCode, result.stderr));
 
   const observations = result.stdout.trim() === '' ? [] : result.stdout.trim().split(/\s+/);
   if (
@@ -98,11 +99,11 @@ async function probeCodex(options: ProbeReadOnlyReviewCapabilityOptions): Promis
 async function probeClaude(options: ProbeReadOnlyReviewCapabilityOptions): Promise<ReadOnlyReviewCapability> {
   let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
   try {
-    result = await options.runProcess('claude', ['--help']);
+    result = await options.runProcess(resolveProviderExecutable(CLAUDE_PROVIDER), ['--help']);
   } catch (error) {
-    return unavailable(options, processFailureReason(error, 'claude'));
+    return unavailable(options, processFailureReason(error, CLAUDE_PROVIDER));
   }
-  if (result.exitCode !== 0) return unavailable(options, exitedReason('claude', result.exitCode, result.stderr));
+  if (result.exitCode !== 0) return unavailable(options, exitedReason(CLAUDE_PROVIDER, result.exitCode, result.stderr));
 
   const missing = CLAUDE_READ_ONLY_FLAGS.find((flag) => !result.stdout.includes(flag));
   return missing === undefined
@@ -117,7 +118,7 @@ async function probeClaude(options: ProbeReadOnlyReviewCapabilityOptions): Promi
 export async function probeReadOnlyReviewCapability(
   options: ProbeReadOnlyReviewCapabilityOptions,
 ): Promise<ReadOnlyReviewCapability> {
-  if (options.provider === 'codex') return probeCodex(options);
-  if (options.provider === 'claude') return probeClaude(options);
+  if (options.provider === CODEX_PROVIDER) return probeCodex(options);
+  if (options.provider === CLAUDE_PROVIDER) return probeClaude(options);
   return unavailable(options, 'provider has no read-only review mode');
 }

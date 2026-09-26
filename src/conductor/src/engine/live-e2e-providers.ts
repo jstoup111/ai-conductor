@@ -1,5 +1,9 @@
 import {
   BUILT_IN_PROVIDERS,
+  CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
+  PI_PROVIDER,
+  providerDescriptor,
   type BuiltInProviderId,
 } from '../execution/provider-catalog.js';
 
@@ -16,23 +20,23 @@ type LiveE2EProviderDetails = Omit<LiveE2EProviderManifestEntry, 'id'>;
 
 /** Live smoke facts are exhaustive over the provider catalog, even when none is installed. */
 const LIVE_E2E_PROVIDER_DETAILS = {
-  claude: {
-    binaryName: 'claude',
+  [CLAUDE_PROVIDER]: {
+    binaryName: providerDescriptor(CLAUDE_PROVIDER).defaultExecutable,
     credentialEnvVar: 'CLAUDE_CODE_OAUTH_TOKEN',
-    selfHostExecutable: 'claude',
-    providerKey: 'claude',
+    selfHostExecutable: providerDescriptor(CLAUDE_PROVIDER).defaultExecutable,
+    providerKey: CLAUDE_PROVIDER,
   },
-  codex: {
-    binaryName: 'codex',
+  [CODEX_PROVIDER]: {
+    binaryName: providerDescriptor(CODEX_PROVIDER).defaultExecutable,
     credentialEnvVar: 'CODEX_API_KEY',
-    selfHostExecutable: 'codex',
-    providerKey: 'codex',
+    selfHostExecutable: providerDescriptor(CODEX_PROVIDER).defaultExecutable,
+    providerKey: CODEX_PROVIDER,
   },
-  pi: {
-    binaryName: 'pi',
+  [PI_PROVIDER]: {
+    binaryName: providerDescriptor(PI_PROVIDER).defaultExecutable,
     credentialEnvVar: 'PI_API_KEY',
-    selfHostExecutable: 'pi',
-    providerKey: 'pi',
+    selfHostExecutable: providerDescriptor(PI_PROVIDER).defaultExecutable,
+    providerKey: PI_PROVIDER,
   },
 } as const satisfies Record<BuiltInProviderId, LiveE2EProviderDetails>;
 

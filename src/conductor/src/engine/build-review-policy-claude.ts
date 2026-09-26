@@ -8,6 +8,7 @@ import {
   ReviewPolicyCatalogError,
   type ReviewPolicyCatalogFailureCode,
 } from './build-review-policy-resolver.js';
+import { CLAUDE_PROVIDER, resolveProviderExecutable } from '../execution/provider-catalog.js';
 
 /** The prepared candidate context in which Claude discovery is allowed to run. */
 export interface ClaudeReviewPolicyCandidate {
@@ -63,7 +64,7 @@ export interface DiscoverClaudeReviewPoliciesOptions {
 
 export class ClaudeReviewPolicyCatalogError extends ReviewPolicyCatalogError {
   constructor(message: string, code: ReviewPolicyCatalogFailureCode = 'malformed') {
-    super('claude', code, message);
+    super(CLAUDE_PROVIDER, code, message);
   }
 }
 
@@ -352,7 +353,7 @@ export async function discoverClaudeReviewPolicies(
     abortIfNeeded(candidate.signal);
     const filesystem = options.filesystem ?? realFilesystem;
     const command = options.command ?? realCommand;
-    const commandResult = await command('claude', ['plugin', 'list', '--json'], {
+    const commandResult = await command(resolveProviderExecutable(CLAUDE_PROVIDER), ['plugin', 'list', '--json'], {
       cwd: candidate.cwd,
       env: candidate.env,
       ...(candidate.signal === undefined ? {} : { signal: candidate.signal }),

@@ -27,7 +27,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scrubTmuxEnvironment } from '../../execution/child-environment.js';
-import { resolveProviderExecutable } from '../../execution/provider-catalog.js';
+import { CLAUDE_PROVIDER, resolveProviderExecutable } from '../../execution/provider-catalog.js';
 
 /** The trivial prompt sent to the CLI — cheap, deterministic, no side effects. */
 const LIVENESS_PROMPT = 'reply with ok';
@@ -102,7 +102,7 @@ export async function verifyTokenLiveness(
   try {
     configDir = await mkdtemp(join(options.baseDir ?? tmpdir(), 'harness-token-liveness-'));
 
-    const argv = [resolveProviderExecutable('claude'), '-p', LIVENESS_PROMPT, '--output-format', 'json', '--model', LIVENESS_MODEL];
+    const argv = [resolveProviderExecutable(CLAUDE_PROVIDER), '-p', LIVENESS_PROMPT, '--output-format', 'json', '--model', LIVENESS_MODEL];
 
     // Token passed via env only — never argv, never logged.
     const env: NodeJS.ProcessEnv = scrubTmuxEnvironment({

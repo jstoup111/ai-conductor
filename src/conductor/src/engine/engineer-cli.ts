@@ -75,7 +75,7 @@ import {
   probeGhVersion,
   type GhVersionFloorVerdict,
 } from './gh-version-floor.js';
-import { resolveProviderExecutable } from '../execution/provider-catalog.js';
+import { CLAUDE_PROVIDER, resolveProviderExecutable } from '../execution/provider-catalog.js';
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
@@ -543,7 +543,7 @@ export function engineerLaunchArgs(env: NodeJS.ProcessEnv = process.env, idea?: 
  */
 function launchClaudeEngineer(cwd: string, idea?: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(resolveProviderExecutable('claude'), engineerLaunchArgs(process.env, idea), { stdio: 'inherit', cwd });
+    const child = spawn(resolveProviderExecutable(CLAUDE_PROVIDER), engineerLaunchArgs(process.env, idea), { stdio: 'inherit', cwd });
     child.on('error', reject);
     child.on('exit', (code) => resolve(code ?? 0));
   });

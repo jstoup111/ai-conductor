@@ -103,6 +103,8 @@ import { formatProviderCapabilityGapMessages } from './provider-execution.js';
 import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
 import {
   BUILT_IN_PROVIDERS,
+  CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
   findBuiltInProviderDescriptor,
   providerDisplayName,
   requireProviderCapability,
@@ -6285,7 +6287,7 @@ export class Conductor {
     // candidate-local invocation env instead and remain eligible for a pool.
     if (
       !this.providerExecution &&
-      preferredBuildProvider !== 'codex' &&
+      preferredBuildProvider !== CODEX_PROVIDER &&
       this.effectiveDaemonConcurrency > 1
     ) {
       return {
@@ -6308,7 +6310,7 @@ export class Conductor {
     // check if daemon-token mode is configured and the token file is readable.
     // If missing or unreadable, HALT with mint instructions. For api-key mode, skip.
     // Never consumes the retry budget.
-    if (preferredBuildProvider !== 'codex') {
+    if (preferredBuildProvider !== CODEX_PROVIDER) {
       const buildAuthPreflight = await checkBuildAuth(
         sh.buildAuthMode,
         sh.buildAuthTokenPath,
@@ -6352,7 +6354,7 @@ export class Conductor {
     // path below; this retains the existing isolated behavior for that narrow
     // test/extension surface.
     if (!this.providerExecution) {
-      if (preferredBuildProvider === 'codex') {
+      if (preferredBuildProvider === CODEX_PROVIDER) {
         return this.stepRunner.run(name, state, {
           retryReason: retryHint,
           ...identityOption,
@@ -6632,7 +6634,7 @@ export class Conductor {
     // instead of the fabricated blocker parking finished work.
     const claimAudit = auditEnvironmentBlockerClaims(withNotices.output, {
       provider: candidate.providerKey,
-      writeFenceInstalled: candidate.providerKey === 'claude',
+      writeFenceInstalled: candidate.providerKey === CLAUDE_PROVIDER,
     });
     if (claimAudit.message === null) return withNotices;
     return {

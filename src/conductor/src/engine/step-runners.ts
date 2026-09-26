@@ -14,6 +14,7 @@ import type {
 } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import {
+  DEFAULT_PROVIDER,
   requireProviderCapability,
   type BuiltInProviderId,
   type ProviderWith,
@@ -910,7 +911,7 @@ export class DefaultStepRunner implements StepRunner {
     this.coverageBindingFilesystem = options?.coverageBindingFilesystem;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
-    this.providerKey = options?.providerKey ?? 'claude';
+    this.providerKey = options?.providerKey ?? DEFAULT_PROVIDER;
     this.providerRuntimes =
       options?.providerRuntimes ?? options?.providerExecution?.runtimes;
     this.configuredProviders =
@@ -4234,7 +4235,7 @@ export class DefaultStepRunner implements StepRunner {
     const auxiliaryPolicy: ResolvedBuildReviewRubricPolicy = {
       enabled: true,
       max_projection_bytes: DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
-      llm_provider: this.config?.steps?.coverage_binding?.llm_provider ?? this.config?.llm_provider ?? 'claude',
+      llm_provider: this.config?.steps?.coverage_binding?.llm_provider ?? this.config?.llm_provider ?? DEFAULT_PROVIDER,
       model: resolved.model,
       effort: resolved.effort,
       model_fallback_ladder: this.modelPolicy.modelFallbackLadder,

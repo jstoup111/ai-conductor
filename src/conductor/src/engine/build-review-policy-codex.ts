@@ -6,6 +6,7 @@ import {
   ReviewPolicyCatalogError,
   type ReviewPolicyCatalogFailureCode,
 } from './build-review-policy-resolver.js';
+import { CODEX_PROVIDER, resolveProviderExecutable } from '../execution/provider-catalog.js';
 
 export interface CodexPreparedCatalogEnvironment {
   readonly cwd: string;
@@ -68,7 +69,7 @@ export interface CodexAppServerTransport {
  * The catalog adapter remains the owner of validation; this transport only
  * provides request/response framing and closes the child with its candidate.
  */
-export function createCodexAppServerTransport(executable = 'codex', launch: typeof spawn = spawn): CodexAppServerTransport {
+export function createCodexAppServerTransport(executable = resolveProviderExecutable(CODEX_PROVIDER), launch: typeof spawn = spawn): CodexAppServerTransport {
   return {
     async open(environment) {
       const child = launch(environment.executable ?? executable, [...(environment.executableArgs ?? []), 'app-server'], {
@@ -134,7 +135,7 @@ function catalogError(
   code: ReviewPolicyCatalogFailureCode,
   message: string,
 ): ReviewPolicyCatalogError {
-  return new ReviewPolicyCatalogError('codex', code, message);
+  return new ReviewPolicyCatalogError(CODEX_PROVIDER, code, message);
 }
 
 function abortIfNeeded(signal: AbortSignal | undefined): void {
