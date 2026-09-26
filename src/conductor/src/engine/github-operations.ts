@@ -388,6 +388,13 @@ export function formatGithubOperationRefusal(
   return `GitHub operation refused: ${event.operation} on ${formatGithubOperationTarget(event.target)} (${event.reason}); remedy: ${event.remedy}`;
 }
 
+/** Secret-safe rendering of a warned operator-credential fallback: operation, target, reason only. */
+export function formatGithubCredentialFallback(
+  event: Extract<ConductorEvent, { type: 'github_write_credential_fallback' }>,
+): string {
+  return `GitHub bot credential fallback: ${event.operation} on ${formatGithubOperationTarget(event.target)} (${event.reason})`;
+}
+
 /**
  * Deliver refusal telemetry through the sole GitHub-operation event variant.
  * Both GitHub and remote-Git guards call this so their reason/remedy vocabulary

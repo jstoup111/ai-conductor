@@ -15,7 +15,7 @@ import { formatProgressDelta, formatRetryCounter, displayBuildPosition } from '.
 import { formatFeatureUsageTotal } from '../execution/provider-diagnostics.js';
 import { renderedEventTypes } from '../engine/event-sinks.js';
 import { resolveExecutionIdentity } from '../engine/execution-identity.js';
-import { formatGithubOperationRefusal } from '../engine/github-operations.js';
+import { formatGithubCredentialFallback, formatGithubOperationRefusal } from '../engine/github-operations.js';
 
 export interface TerminalRendererOptions {
   stateFilePath: string;
@@ -196,7 +196,7 @@ export class TerminalRenderer implements UIRenderer {
         break;
 
       case 'github_write_credential_fallback':
-        this.region.log(chalk.yellow(`  ↻ GitHub bot credential fallback: ${event.operation} (${event.reason})`));
+        this.region.log(chalk.yellow(`  ↻ ${formatGithubCredentialFallback(event)}`));
         break;
 
       case 'step_retry': {

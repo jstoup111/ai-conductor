@@ -69,7 +69,7 @@ import { forwardedFeatureOf, isForwardedFromFeature, startDaemonEventPersistence
 import { heapDumpOptionsFromConfig, startDaemonMemorySampler } from './engine/daemon-memory.js';
 import { renderedEventTypes } from './engine/event-sinks.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
-import { formatGithubOperationRefusal } from './engine/github-operations.js';
+import { formatGithubCredentialFallback, formatGithubOperationRefusal } from './engine/github-operations.js';
 import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
@@ -2864,7 +2864,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);
       break;
     case 'github_write_credential_fallback':
-      log(`${dot} ${chalk.yellow('↻')} ${chalk.yellow(`GitHub bot credential fallback: ${event.operation} (${event.reason})`)} `);
+      log(`${dot} ${chalk.yellow('↻')} ${chalk.yellow(formatGithubCredentialFallback(event))}`);
       break;
     case 'step_retry': {
       const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
