@@ -15,6 +15,7 @@ import {
   type BuildReviewCustomFindingIdentity,
 } from './build-review-finding-identity.js';
 import type { BuildReviewFrozenInputScope } from './build-review-materialization.js';
+import type { ProviderWith } from '../execution/provider-catalog.js';
 
 /** One engine-owned contract shared by every resolved custom-v1 rubric. */
 export const BUILD_REVIEW_CUSTOM_V1_CONTRACT = Object.freeze({
@@ -55,11 +56,11 @@ export type ReviewPolicyCatalogFailureCode =
 
 /** A discovery failure is policy loading, never provider/model unavailability. */
 export class ReviewPolicyCatalogError extends Error {
-  readonly provider: 'codex' | 'claude';
+  readonly provider: ProviderWith<'reviewPolicyCatalog'>['id'];
   readonly code: ReviewPolicyCatalogFailureCode;
 
   constructor(
-    provider: 'codex' | 'claude',
+    provider: ProviderWith<'reviewPolicyCatalog'>['id'],
     code: ReviewPolicyCatalogFailureCode,
     message: string,
   ) {
@@ -72,7 +73,7 @@ export class ReviewPolicyCatalogError extends Error {
 
 export interface ReviewPolicyCatalogLoadFailure {
   readonly code: 'policy-load';
-  readonly provider: 'codex' | 'claude';
+  readonly provider: ProviderWith<'reviewPolicyCatalog'>['id'];
   readonly reason: ReviewPolicyCatalogFailureCode;
   readonly message: string;
 }

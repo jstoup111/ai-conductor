@@ -22,6 +22,9 @@ export type ProviderCapability =
 
 export type ProviderCapabilityFlags = Readonly<Partial<Record<ProviderCapability, boolean>>>;
 
+/** The provider-owned installed-policy discovery mechanism, when supported. */
+export type ReviewPolicyCatalogDiscovery = 'claude-metadata' | 'codex-app-server';
+
 /** Follow-up intakes that own capability-specific provider behavior. */
 export const PROVIDER_CAPABILITY_OWNERS = {
   selfHost: '#1887',
@@ -46,6 +49,8 @@ export interface BuiltInProviderDescriptor {
   readonly defaultHome: string;
   readonly modelPolicy: ProviderModelPolicy;
   readonly capabilities: ProviderCapabilityFlags;
+  /** Registered discovery mechanism for installed build-review policies. */
+  readonly reviewPolicyCatalog?: ReviewPolicyCatalogDiscovery;
 }
 
 const PI_NO_MODEL = '';
@@ -91,6 +96,7 @@ export const BUILT_IN_PROVIDERS = [
       writeFence: true,
       nativeSchema: true,
     } as const satisfies ProviderCapabilityFlags,
+    reviewPolicyCatalog: 'claude-metadata',
   },
   {
     id: 'codex',
@@ -117,6 +123,7 @@ export const BUILT_IN_PROVIDERS = [
       supportsSessionResume: false,
       nativeSchema: true,
     } as const satisfies ProviderCapabilityFlags,
+    reviewPolicyCatalog: 'codex-app-server',
   },
   {
     id: 'pi',
