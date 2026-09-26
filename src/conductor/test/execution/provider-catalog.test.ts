@@ -11,7 +11,7 @@ import {
   type ProviderWith,
 } from '../../src/execution/provider-catalog.js';
 
-const executableOverrides = ['CLAUDE_EXECUTABLE', 'CODEX_EXECUTABLE'] as const;
+const executableOverrides = ['CLAUDE_EXECUTABLE', 'CODEX_EXECUTABLE', 'PI_EXECUTABLE'] as const;
 const originalExecutableOverrides = new Map(
   executableOverrides.map((name) => [name, process.env[name]]),
 );
@@ -26,7 +26,7 @@ afterEach(() => {
 
 describe('built-in provider catalog', () => {
   it('declares the existing built-in provider ids and default provider', () => {
-    expect(BUILT_IN_PROVIDERS.map(({ id }) => id)).toEqual(['claude', 'codex']);
+    expect(BUILT_IN_PROVIDERS.map(({ id }) => id)).toEqual(['claude', 'codex', 'pi']);
     expect(DEFAULT_PROVIDER).toBe('claude');
   });
 
@@ -42,6 +42,12 @@ describe('built-in provider catalog', () => {
       override: 'CODEX_EXECUTABLE',
       overriddenExecutable: '/opt/codex/bin/codex',
       defaultExecutable: 'codex',
+    },
+    {
+      provider: 'pi',
+      override: 'PI_EXECUTABLE',
+      overriddenExecutable: '/opt/pi/bin/pi',
+      defaultExecutable: 'pi',
     },
   ] as const)('resolves $provider executable overrides and defaults', ({
     provider,
