@@ -1157,6 +1157,17 @@ export class DefaultStepRunner implements StepRunner {
           const providerExhausted = result.providerSetupExhaustion !== undefined || (
             result.attempts.length > 0 && result.attempts.every((attempt) => attempt.outcome === 'unavailable')
           );
+          if (!result.success && result.nativeSchemaUnsupported) {
+            const provider = result.actualProvider ?? result.preferredProvider ?? this.configuredProviders[0] ?? 'selected provider';
+            return {
+              ...this.toStepRunResult(step, result),
+              success: false,
+              asBuiltFault: {
+                kind: 'capability',
+                reason: `architecture_review_as_built cannot enforce its native output schema with selected provider [${provider}]: missing nativeSchemaCapability.nativeOutputSchema. Recovery action: select or update ${provider} to declare nativeSchemaCapability.nativeOutputSchema.`,
+              },
+            };
+          }
           if (!result.success && (
             result.authFailure || result.rateLimited || result.commandUnresolved ||
             result.modelUnavailable || providerExhausted

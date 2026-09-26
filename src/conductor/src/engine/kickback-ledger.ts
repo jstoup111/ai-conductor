@@ -12,7 +12,7 @@ import { isBuildReviewCustomInfrastructureFailureReason } from './build-review-a
 import { boundedHeadTailExcerpt } from './build-review-test-quality-preflight.js';
 import { createConductStateLease } from './conduct-state-lease.js';
 import type { ConductStateLeaseFailureKind } from './conduct-state-lease.js';
-import type { AsBuiltGoverningReference } from './as-built-contract.js';
+import { isAsBuiltGoverningReference, type AsBuiltGoverningReference } from './as-built-contract.js';
 
 /** The latest infrastructure failure charged to a build-review rubric lap. */
 export interface KickbackLastMechanicalFault {
@@ -415,7 +415,7 @@ function isPendingAsBuiltRemediationFinding(
     typeof finding.finding === 'string' && finding.finding.trim().length > 0 &&
     finding.class === 'REMEDIABLE' &&
     typeof finding.governingClause === 'string' && finding.governingClause.trim().length > 0 &&
-    (finding.reference === undefined || (typeof finding.reference === 'object' && finding.reference !== null)) &&
+    (finding.reference === undefined || isAsBuiltGoverningReference(finding.reference)) &&
     typeof finding.summary === 'string' && finding.summary.trim().length > 0 &&
     finding.outcome === 'remediated'
   );

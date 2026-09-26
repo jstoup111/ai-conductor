@@ -111,6 +111,35 @@ describe('kickback-ledger', () => {
     });
   });
 
+  it.each([
+    ['an empty object', {}],
+    ['an ADR decision with a non-integer decision or extra key', {
+      kind: 'adr-decision', stem: 'adr-2026-08-25-as-built-remediable-findings-bounded-build-route', decision: 7.5, extra: true,
+    }],
+    ['a plan task with an empty task id', { kind: 'plan-task', taskId: '' }],
+  ])('fails closed with the ledger path when a pending finding has %s as its reference', async (_case, reference) => {
+    const ledgerPath = join(dir, '.pipeline', 'kickback-ledger.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(ledgerPath, JSON.stringify({
+      version: 1,
+      gates: {},
+      pendingAsBuiltRemediationFindings: [{
+        gate: 'architecture_review_as_built',
+        finding: 'ARCH-1',
+        class: 'REMEDIABLE',
+        governingClause: 'adr-2026-08-25 decision 7',
+        reference,
+        summary: 'repair durable projection',
+        outcome: 'remediated',
+      }],
+    }));
+
+    await expect(readPendingAsBuiltRemediationFindings(dir)).resolves.toEqual({
+      kind: 'unreadable',
+      reason: expect.stringContaining(ledgerPath),
+    });
+  });
+
   it('does not change ledger bytes while reading pending as-built remediation findings', async () => {
     const findings = [{
       gate: 'architecture_review_as_built' as const,

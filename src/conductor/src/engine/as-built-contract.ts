@@ -218,6 +218,11 @@ function parseReference(value: unknown, field: string): Parsed<AsBuiltGoverningR
   return rejected(`${field}.kind`, 'one of adr-decision or plan-task is required');
 }
 
+/** Whether a durable reference has exactly one admitted as-built contract shape. */
+export function isAsBuiltGoverningReference(value: unknown): value is AsBuiltGoverningReference {
+  return parseReference(value, 'reference').ok;
+}
+
 function parseFindings(value: unknown): Parsed<readonly AsBuiltFinding[]> {
   if (!Array.isArray(value)) return rejected('findings', 'an array of blocking findings is required');
   const findings: AsBuiltFinding[] = [];
