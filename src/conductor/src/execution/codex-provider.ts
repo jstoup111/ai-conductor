@@ -21,10 +21,10 @@ import {
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
-import { scrubTmuxEnvironment } from './child-environment.js';
+import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
-import { validateSpawnPermit } from '../engine/provider-runtime.js';
+import { validateSpawnPermit } from './spawn-permit.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
 
@@ -234,7 +234,7 @@ export class CodexProvider implements LLMProvider {
 
   constructor(
     private readonly runDoctor: CodexDoctorRunner = defaultCodexDoctorRunner,
-    executable = process.env.CODEX_EXECUTABLE ?? 'codex',
+    executable = 'codex',
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
     private readonly subprocessFactory: CodexSubprocessFactory = execa,
     private readonly doctorTimeoutMs = DEFAULT_CODEX_DOCTOR_TIMEOUT_MS,

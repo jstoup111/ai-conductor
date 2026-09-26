@@ -1,3 +1,5 @@
+import { BUILT_IN_PROVIDERS } from './provider-catalog.js';
+
 /**
  * Child-environment scrubbing shared by every seam that spawns a provider
  * session or a test/verification subprocess on the engine's behalf.
@@ -17,15 +19,9 @@
  * `undefined` value masks it in both the overlay and the extended form.
  */
 
-/** Environment variables tmux uses to resolve an implicit target pane. */
-export const TMUX_ENVIRONMENT_KEYS = ['TMUX', 'TMUX_PANE'] as const;
+export { scrubTmuxEnvironment, TMUX_ENVIRONMENT_KEYS } from './tmux-environment.js';
 
-/**
- * Return a copy of `env` with every tmux target variable masked. Never
- * mutates the input (nor `process.env`).
- */
-export function scrubTmuxEnvironment(env: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const scrubbed: NodeJS.ProcessEnv = { ...env };
-  for (const key of TMUX_ENVIRONMENT_KEYS) scrubbed[key] = undefined;
-  return scrubbed;
-}
+/** Provider-owned namespaces whose review environments must be scrubbed. */
+export const REVIEW_PROVIDER_PREFIXES = BUILT_IN_PROVIDERS.map(
+  (provider) => provider.environmentPrefix,
+);

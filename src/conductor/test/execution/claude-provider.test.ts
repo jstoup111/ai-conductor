@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:4
 // Covers: task:5
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
@@ -28,8 +28,8 @@ const { mockValidateSpawnPermit } = vi.hoisted(() => ({
   mockValidateSpawnPermit: vi.fn((permit, purpose) =>
     permit?.(purpose) ?? { permitted: true as const }),
 }));
-vi.mock('../../src/engine/provider-runtime.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src/engine/provider-runtime.js')>(),
+vi.mock('../../src/execution/spawn-permit.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/execution/spawn-permit.js')>(),
   validateSpawnPermit: mockValidateSpawnPermit,
 }));
 
@@ -94,7 +94,7 @@ describe('ClaudeProvider', () => {
       sessionId: '00000000-0000-4000-8000-000000000001',
       resume: false,
     }));
-    provider = new ClaudeProvider();
+    provider = new ClaudeProvider(undefined, mockExeca as never);
   });
 
   const baseOptions: InvokeOptions = {

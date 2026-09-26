@@ -1,4 +1,5 @@
 import type { StepName } from '../types/index.js';
+import { BUILT_IN_PROVIDERS } from '../execution/provider-catalog.js';
 
 export type SkillInvocationDescriptor =
   | {
@@ -54,7 +55,7 @@ export function renderSkillInvocation(
     throw new Error('Cannot render an engine-native step as a skill invocation');
   }
 
-  const prefix = providerKey === 'codex' ? '$' : '/';
+  const prefix = BUILT_IN_PROVIDERS.find((provider) => provider.id === providerKey)?.invocationPrefix ?? '/';
   return [`${prefix}${descriptor.skillName}`, ...descriptor.arguments].join(' ');
 }
 

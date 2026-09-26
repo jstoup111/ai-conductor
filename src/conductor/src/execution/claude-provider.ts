@@ -20,14 +20,14 @@ import {
   ProviderStreamAssembler,
 } from './provider-stream.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
-import { scrubTmuxEnvironment } from './child-environment.js';
+import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import {
   inferRateLimitWaitSeconds,
   rateLimitDurationUnitAlternation,
   scaleRateLimitDurationSeconds,
 } from './rate-limit-duration.js';
-import { validateSpawnPermit } from '../engine/provider-runtime.js';
+import { validateSpawnPermit } from './spawn-permit.js';
 
 /** Print-mode sessions must not leave background tasks outstanding (#2599). */
 const FOREGROUND_ONLY_ENV = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } as const;
@@ -564,6 +564,7 @@ export class ClaudeProvider implements LLMProvider {
   constructor(
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
     private readonly subprocessFactory: ClaudeSubprocessFactory = execa,
+    private readonly executable = 'claude',
   ) {}
 
   /** Safe selected-auth state for live fixture assertions; never exposes the token. */
@@ -588,7 +589,7 @@ export class ClaudeProvider implements LLMProvider {
     if (!permit.permitted) {
       throw new Error(`Claude process spawn denied: ${permit.reason}`);
     }
-    const subprocess = this.subprocessFactory(selfHost?.executable ?? 'claude', args, {
+    const subprocess = this.subprocessFactory(selfHost?.executable ?? this.executable, args, {
       ...execaOptions,
       // A daemon feature must retain the diagnostic in its scoped/persisted
       // log. Other callers preserve the existing live inherited stdio path.

@@ -55,8 +55,8 @@ const { mockValidateSpawnPermit } = vi.hoisted(() => ({
   mockValidateSpawnPermit: vi.fn((permit, purpose) =>
     permit?.(purpose) ?? { permitted: true as const }),
 }));
-vi.mock('../../src/engine/provider-runtime.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src/engine/provider-runtime.js')>(),
+vi.mock('../../src/execution/spawn-permit.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/execution/spawn-permit.js')>(),
   validateSpawnPermit: mockValidateSpawnPermit,
 }));
 
@@ -137,6 +137,9 @@ describe('CodexProvider', () => {
       vi.fn(async (_command, _args, options) =>
         readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
       ),
+      'codex',
+      undefined,
+      mockExeca as never,
     );
   });
 
