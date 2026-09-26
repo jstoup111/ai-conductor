@@ -7,6 +7,7 @@ export const SMOKE_CAPABILITIES = [
   'toolchain',
   'credentialed:claude',
   'credentialed:codex',
+  'credentialed:pi',
 ] as const;
 
 export type SmokeCapability = (typeof SMOKE_CAPABILITIES)[number];
