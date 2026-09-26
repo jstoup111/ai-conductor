@@ -11,6 +11,70 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-26
+
+### Added
+
+- Daemons now reclaim merged feature worktrees even when they are absent from the mergeable watch registry. ([implementation PR #2574](https://github.com/jstoup111/ai-conductor/pull/2574)).
+- Adds portable installed custom policies to build review across Codex and Claude. ([implementation PR #2523](https://github.com/jstoup111/ai-conductor/pull/2523)).
+- Adds guarded GitHub operations that refuse work outside the feature’s authorized repository ownership. ([implementation PR #2541](https://github.com/jstoup111/ai-conductor/pull/2541)).
+- Custom lifecycle steps now dispatch their configured skill and can block FINISH until fresh completion evidence is present. ([implementation PR #2653](https://github.com/jstoup111/ai-conductor/pull/2653)).
+- Adds a one-line installer that bootstraps AI Conductor from the documented stable channel. ([implementation PR #2626](https://github.com/jstoup111/ai-conductor/pull/2626)).
+- Self-hosted runs now report live-boundary fingerprint time and file counts in daemon output and event logs. ([implementation PR #2651](https://github.com/jstoup111/ai-conductor/pull/2651)).
+- The mergeable sweep can safely resolve eligible test-only rebase conflicts and clear their resolved remediation labels. ([implementation PR #2646](https://github.com/jstoup111/ai-conductor/pull/2646)).
+
+### Changed
+
+- Build reviews receive typed, schema-validated rubric findings from providers. ([implementation PR #2660](https://github.com/jstoup111/ai-conductor/pull/2660)).
+- Custom build-review policies run in provider read-only modes on every supported platform. ([implementation PR #2747](https://github.com/jstoup111/ai-conductor/pull/2747)).
+
+### Fixed
+
+- Daemon runs now classify reachable pending gate blocks as recoverable so they re-dispatch automatically. ([implementation PR #2609](https://github.com/jstoup111/ai-conductor/pull/2609)).
+- Rebases now preserve valid suite evidence and route invalidated verification back through the required gates. ([implementation PR #2555](https://github.com/jstoup111/ai-conductor/pull/2555)).
+- build_review rubric reviewers now run in parallel by default; `build_review.maxParallel` defaults to 4 as documented instead of 1. ([implementation PR #2635](https://github.com/jstoup111/ai-conductor/pull/2635)).
+- build_review's test-quality review sends only candidate-bound scope to the grader, cutting its prompt on large diffs by roughly 80%. ([implementation PR #2641](https://github.com/jstoup111/ai-conductor/pull/2641)).
+- A conflict-resolved rebase now invalidates only the gates its true tree delta affects, instead of re-running every gate. ([implementation PR #2640](https://github.com/jstoup111/ai-conductor/pull/2640)).
+- build_review resolves its rubric policy by name instead of enumerating the skills directory, so the HARNESS.md and ARCHITECTURE.md reference symlinks bin/install places there no longer fail the catalog load. ([implementation PR #2644](https://github.com/jstoup111/ai-conductor/pull/2644)).
+- build_review's testQuality reviewer is told that a candidate's contentHash is the normalized test-title hash, so it no longer marks every pinned region indeterminate after a byte-hash mismatch. ([implementation PR #2645](https://github.com/jstoup111/ai-conductor/pull/2645)).
+- build_review pins each testQuality evidence region in UTF-8 byte offsets (byteRegion) so the reviewer's hash verifies on files containing non-ASCII text instead of marking every candidate indeterminate. ([implementation PR #2647](https://github.com/jstoup111/ai-conductor/pull/2647)).
+- build_review adjudication can defer a finding whose applied repair did not converge, instead of halting the feature on an illegal disposition transition. ([implementation PR #2648](https://github.com/jstoup111/ai-conductor/pull/2648)).
+- bin/update refuses a stable update when the installed release cannot be read from the checkout instead of guessing from the persisted version record. ([implementation PR #2655](https://github.com/jstoup111/ai-conductor/pull/2655)).
+- Plans now assert every outcome of each acceptance criterion, and the coverage_binding judge accepts equivalent phrasing, so coverage_binding stops halting features before BUILD on dropped or reworded outcomes. ([implementation PR #2656](https://github.com/jstoup111/ai-conductor/pull/2656)).
+- Stable-channel update checks now print the installed version and its source on every run, including when already current or offline. ([implementation PR #2658](https://github.com/jstoup111/ai-conductor/pull/2658)).
+- Daemon Claude steps no longer lose subagent work to the CLI's 60-second background-task ceiling; subagents now run to completion inside the step. ([implementation PR #2666](https://github.com/jstoup111/ai-conductor/pull/2666)).
+- OTLP metrics now export with delta temporality so short-lived per-feature histograms (e.g. conductor.step.duration) reach Datadog as distributions; Prometheus OTLP ingest needs --enable-feature=otlp-deltatocumulative. ([implementation PR #2671](https://github.com/jstoup111/ai-conductor/pull/2671)).
+- Self-host daemon finish no longer fails its post-finish release-metadata restore when the guard is composed from conduct state; an intact metadata block needs no rewrite. ([implementation PR #2672](https://github.com/jstoup111/ai-conductor/pull/2672)).
+- SHIP-phase draft PRs once again receive their intake issue's priority labels instead of being refused by the ownership guard as invalid-target. ([implementation PR #2674](https://github.com/jstoup111/ai-conductor/pull/2674)).
+- The daemon now refuses to reclaim dirty worktrees and never force-deletes feature branches. ([implementation PR #2649](https://github.com/jstoup111/ai-conductor/pull/2649)).
+- OTel metrics now actually export with delta temporality, so unchanged series (including feature shipments) are no longer re-sent every minute and stale in-flight gauges clear. ([implementation PR #2685](https://github.com/jstoup111/ai-conductor/pull/2685)).
+- Claude rate-limit recovery recognizes period-qualified limits and waits until their stated reset time. ([implementation PR #2663](https://github.com/jstoup111/ai-conductor/pull/2663)).
+- A feature halted on a failing prd_audit or as-built review no longer re-halts as a false "rebase conflict" after a file-changing rebase. ([implementation PR #2686](https://github.com/jstoup111/ai-conductor/pull/2686)).
+- Fix daemon rebases so completed repair tasks keep their translated boundaries. ([implementation PR #2652](https://github.com/jstoup111/ai-conductor/pull/2652)).
+- The daemon reclaims merged worktrees left behind by a dead run's stale phase marker, reports diverged branches accurately, and logs retained worktrees once instead of as a failure on every sweep. ([implementation PR #2688](https://github.com/jstoup111/ai-conductor/pull/2688)).
+- The daemon no longer opens false shipped-record repair PRs right after a merge, never switches branches in the root checkout, and refuses any repair that would drop data from an existing shipped record. ([implementation PR #2687](https://github.com/jstoup111/ai-conductor/pull/2687)).
+- Finish accepts a fresh satisfied re-judgement after a rebase preserves a gate. ([implementation PR #2689](https://github.com/jstoup111/ai-conductor/pull/2689)).
+- Daemon FINISH no longer halts when the PR-prose pass submits its edit through the guarded `github-operation` command. ([implementation PR #2706](https://github.com/jstoup111/ai-conductor/pull/2706)).
+- build_review no longer halts when a lap re-runs on an unchanged snapshot, and the security rubric is no longer offered test-quality fields it must reject. ([implementation PR #2707](https://github.com/jstoup111/ai-conductor/pull/2707)).
+- Spec and implementation PRs again carry their issue link (`Refs`/`Closes`) and mirrored priority labels; handoff now reports a refused post-create write instead of silently dropping it. ([implementation PR #2704](https://github.com/jstoup111/ai-conductor/pull/2704)).
+- Judged gates now retain valid stamped verdicts after unrelated kickbacks instead of re-dispatching. ([implementation PR #2708](https://github.com/jstoup111/ai-conductor/pull/2708)).
+- Operators can park daemon features without later retries consuming their retry budget. ([implementation PR #2669](https://github.com/jstoup111/ai-conductor/pull/2669)).
+- The continuous daemon caps memory growth, retains diagnostic heap snapshots, and reports witnessed exits. ([implementation PR #2679](https://github.com/jstoup111/ai-conductor/pull/2679)).
+- Daemon gauge metrics (heartbeat, backlog, slots) no longer drop out of Prometheus dashboards during long-running steps. ([implementation PR #2712](https://github.com/jstoup111/ai-conductor/pull/2712)).
+- Custom build_review rubrics now run on Claude; previously every call was rejected because the output schema had no root type. ([implementation PR #2738](https://github.com/jstoup111/ai-conductor/pull/2738)).
+- Custom build_review rubrics now run on Claude; the output schema no longer uses a top-level oneOf, which the Claude API rejects. ([implementation PR #2739](https://github.com/jstoup111/ai-conductor/pull/2739)).
+- build_review testQuality no longer halts on resolved scopeResolutions entries missing associationReason; the schema and prompt now state each status's required fields. ([implementation PR #2744](https://github.com/jstoup111/ai-conductor/pull/2744)).
+- Self-host builds no longer false-halt when Claude Code's skill sync rewrites its `.last-complete-round` marker or its policy-limits fetch stamp. ([implementation PR #2749](https://github.com/jstoup111/ai-conductor/pull/2749)).
+- A prd_audit remediation lap that has reached its cap now halts before dispatching remediate, so no remediate cost is spent and no remediation plan is stranded. ([implementation PR #2755](https://github.com/jstoup111/ai-conductor/pull/2755)).
+- Self-host Codex dispatches no longer fail with ENXIO while an interactive Codex session is open. ([implementation PR #2761](https://github.com/jstoup111/ai-conductor/pull/2761)).
+- A raised prd_audit or as-built lap budget is now honored by validation-group remediation instead of halting needs-human after two rounds. ([implementation PR #2757](https://github.com/jstoup111/ai-conductor/pull/2757)).
+- Daemons now avoid providers whose usage limit has been exhausted during a retry episode. ([implementation PR #2743](https://github.com/jstoup111/ai-conductor/pull/2743)).
+- Custom build_review rubrics routed to Codex now load their review policy instead of failing every lap with "Not initialized". ([implementation PR #2764](https://github.com/jstoup111/ai-conductor/pull/2764)).
+- Codex read-only build reviews can now write their output schema instead of failing because the review checkout is not the feature worktree. ([implementation PR #2766](https://github.com/jstoup111/ai-conductor/pull/2766)).
+- Codex-routed build_review rubrics now send a strict-mode output schema the API accepts, and a failed first reviewer attempt no longer crashes the lap when a fallback candidate retries. ([implementation PR #2767](https://github.com/jstoup111/ai-conductor/pull/2767)).
+- Codex-routed custom build_review rubrics that report no findings as null are now accepted instead of failing every lap. ([implementation PR #2768](https://github.com/jstoup111/ai-conductor/pull/2768)).
+- Custom build_review findings that cite an inclusive line range inside an admitted source region are now accepted instead of failing as malformed. ([implementation PR #2769](https://github.com/jstoup111/ai-conductor/pull/2769)).
+
 ## [1.4.0] - 2026-09-19
 
 ### Added
