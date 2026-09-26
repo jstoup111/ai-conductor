@@ -512,6 +512,39 @@ describe('CodexProvider', () => {
     }
   });
 
+  it('writes an engine-owned schema when the invocation cwd is a checkout other than the scratch owner', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'codex-native-schema-owner-worktree-'));
+    const reviewCheckout = await mkdtemp(join(tmpdir(), 'codex-native-schema-review-checkout-'));
+    const home = join(worktree, '.daemon', 'scratch', 'review-run', '1-codex');
+    const nativeSchema = { type: 'object' };
+    let schemaPath: string | undefined;
+    await mkdir(home, { recursive: true });
+    mockExeca.mockImplementation(async (_file, args) => {
+      const index = args.indexOf('--output-schema');
+      schemaPath = index === -1 ? undefined : args[index + 1];
+      return { stdout: jsonlMessage('{}'), stderr: '', exitCode: 0 } as any;
+    });
+
+    try {
+      await provider.invoke({
+        ...baseOptions,
+        interactive: false,
+        cwd: reviewCheckout,
+        nativeSchema,
+        nativeSchemaScratchHome: home,
+        nativeSchemaScratchRoot: worktree,
+      });
+
+      expect(schemaPath).toBe(join(home, 'output-schema.json'));
+      expect(JSON.parse(await readFile(schemaPath!, 'utf8'))).toEqual(nativeSchema);
+    } finally {
+      await Promise.all([
+        rm(worktree, { recursive: true, force: true }),
+        rm(reviewCheckout, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
   it('keeps tokens from an unpriceable terminal envelope cost-unmetered', async () => {
     const emptyRateCard: RateCard = {
       as_of: '2026-08-25T00:00:00.000Z',

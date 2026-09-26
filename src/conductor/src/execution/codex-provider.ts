@@ -647,7 +647,8 @@ export class CodexProvider implements LLMProvider {
       throw new Error('requested native schema requires an owned Codex scratch home');
     }
     return writeScratchSchema({
-      worktreeRoot: options.cwd ?? process.cwd(),
+      worktreeRoot: (options.nativeSchemaScratchHome === undefined ? undefined : options.nativeSchemaScratchRoot)
+        ?? options.cwd ?? process.cwd(),
       homeDir,
       schema: options.nativeSchema!,
     });

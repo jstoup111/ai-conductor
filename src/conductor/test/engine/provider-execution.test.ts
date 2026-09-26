@@ -1651,6 +1651,31 @@ describe('executeProviderCandidates', () => {
     }
   });
 
+  it('names the owning worktree for a schema scratch home when the invocation runs in another checkout', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-schema-scratch-owner-'));
+    const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
+      success: true, output: 'constrained result', exitCode: 0, finalStructuredResult: { version: 'v1' },
+    }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    try {
+      await executeProviderCandidates({
+        step: 'build_review', configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { nativeSchemaCapability: { nativeOutputSchema: true }, invoke })]),
+        sessions: new ProviderSessionScope(vi.fn().mockReturnValue('stored-session')),
+        runId: 'review-run', attempt: 1,
+        nativeSchemaScratch: { worktreeRoot, repository: 'acme/repo', featureSlug: 'feature' },
+        options: { prompt: 'Review.', cwd: '/read-only/review-snapshot', nativeSchema: { type: 'object' } },
+      });
+      expect(invoke.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+        cwd: '/read-only/review-snapshot',
+        nativeSchemaScratchHome: join(worktreeRoot, '.daemon', 'scratch', 'review-run', '1-codex'),
+        nativeSchemaScratchRoot: worktreeRoot,
+      }));
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
   it('retains an engine-owned native schema when candidate options attempt to clear it', async () => {
     const nativeSchema = { type: 'object', properties: { result: { type: 'string' } } };
     const invoke = vi.fn(async (): Promise<InvokeResult> => ({

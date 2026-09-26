@@ -339,6 +339,12 @@ export interface InvokeOptions {
    */
   nativeSchemaScratchHome?: string;
   /**
+   * Worktree that owns `nativeSchemaScratchHome`. The invocation `cwd` can be
+   * a different checkout (a read-only review snapshot), so confinement checks
+   * the home against its owner rather than against `cwd`.
+   */
+  nativeSchemaScratchRoot?: string;
+  /**
    * Fired on every observed stdout/stderr activity boundary from the spawned
    * provider subprocess (each streamed JSON event line). Used to drive the
    * `.pipeline/step-heartbeat` liveness signal (see `step-heartbeat.ts`) so a
