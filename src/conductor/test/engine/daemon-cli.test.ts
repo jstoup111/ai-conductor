@@ -47,11 +47,13 @@ import type {
   StateMutation,
   StateMutationResult,
 } from '../../src/engine/conduct-state-store.js';
+import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
 const supportedGhVersion = async () => ({
   kind: 'ok' as const,
   version: { major: 2, minor: 73, patch: 0 },
 });
+const providerDiscoveryRunner = allInstalledProviderDiscoveryRunner();
 
 class RecordingConductStateStore implements ConductStateStore<ConductState> {
   readonly calls: Array<{ kind: 'batch'; batch: NamedAtomicStateMutationBatch<ConductState> }> = [];
@@ -108,6 +110,7 @@ describe('daemon termination guidance', () => {
         concurrency: 1,
         baseBranch: 'main',
         ensureFresh: async () => {},
+        providerDiscoveryRunner,
         probeGhVersion: supportedGhVersion,
         runHaltClassMigration: async () => worktreeBase,
         workSource: { discover: async () => [] },
@@ -163,6 +166,7 @@ describe('daemon termination guidance', () => {
         concurrency: 1,
         baseBranch: 'main',
         ensureFresh: async () => {},
+        providerDiscoveryRunner,
         probeGhVersion: supportedGhVersion,
         runHaltClassMigration: async () => worktreeBase,
         workSource: { discover: async () => [] },
@@ -216,6 +220,7 @@ describe('daemon termination guidance', () => {
         concurrency: 1,
         baseBranch: 'main',
         ensureFresh: async () => {},
+        providerDiscoveryRunner,
         probeGhVersion: supportedGhVersion,
         runHaltClassMigration: async () => join(root, '.worktrees'),
         workSource: { discover: async () => [] },
@@ -269,6 +274,7 @@ describe('daemon termination guidance', () => {
         concurrency: 1,
         baseBranch: 'main',
         ensureFresh: async () => {},
+        providerDiscoveryRunner,
         probeGhVersion: supportedGhVersion,
         runHaltClassMigration: async () => join(root, '.worktrees'),
         workSource: { discover: async () => [] },
@@ -845,6 +851,7 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
         concurrency: 1,
         baseBranch: 'main',
         ensureFresh: async () => {},
+        providerDiscoveryRunner,
         probeGhVersion: supportedGhVersion,
         runHaltClassMigration: async () => worktreeBase,
         workSource: { discover: async () => [] },
@@ -897,6 +904,7 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
         concurrency: 2,
         baseBranch: 'main',
         ensureFresh: async () => {},
+        providerDiscoveryRunner,
         probeGhVersion: supportedGhVersion,
         runHaltClassMigration: async () => join(root, '.worktrees'),
         workSource: {
@@ -1014,6 +1022,7 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
       concurrency: 2,
       baseBranch: 'main',
       ensureFresh: async () => {},
+      providerDiscoveryRunner,
       probeGhVersion: supportedGhVersion,
       runHaltClassMigration: async () => join(root, '.worktrees'),
       workSource: {

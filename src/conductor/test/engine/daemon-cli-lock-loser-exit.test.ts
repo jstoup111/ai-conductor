@@ -26,6 +26,7 @@ import { tmpdir } from 'node:os';
 import type { DaemonModeOptions } from '../../src/daemon-cli.js';
 import { getPidfilePath } from '../../src/engine/daemon-lock.js';
 import type { PidRecord } from '../../src/engine/daemon-lock.js';
+import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
 describe('Task 14 — Lock-loser explicit refusal exit (RED phase — new contract)', () => {
   let projectRoot: string;
@@ -67,6 +68,7 @@ describe('Task 14 — Lock-loser explicit refusal exit (RED phase — new contra
       concurrency: 1,
       ensureFresh: async () => {},
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
       exitProcess: fakeExitProcess,
     };
     return { opts, getExitCode: () => exitProcessCode };

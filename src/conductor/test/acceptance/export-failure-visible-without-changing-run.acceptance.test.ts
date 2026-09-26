@@ -69,6 +69,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
 }));
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
+import { allInstalledProviderDiscoveryRunner } from '../engine/boot-test-helpers.js';
 
 const execFile = promisify(execFileCb);
 
@@ -142,6 +143,7 @@ async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
     baseBranch: 'main',
     ensureFresh: async () => {},
     probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+    providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
     watch: false,
     workSource: { discover: async () => [{ slug: 'feature-a' }] },
   });

@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
 describe('Task 4 — selfGuardEnv() helper', () => {
   it('always sets CONDUCT_ENGINE_SELF_GUARD=1, and CONDUCT_ENGINE_SELF_VERSION to the resolved version id (or empty string when unresolved)', async () => {
@@ -66,6 +67,7 @@ describe('Task 4 — runDaemonMode stamps self-guard env before ensureFresh', ()
         concurrency: 1,
         ensureFresh,
         probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
         exitProcess: () => {},
       } as any),
     ).rejects.toThrow('__stop__');

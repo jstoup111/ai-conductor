@@ -24,6 +24,7 @@ vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => ({
 }));
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
+import { allInstalledProviderDiscoveryRunner } from '../engine/boot-test-helpers.js';
 
 interface DaemonOtelScope {
   flush(): Promise<void>;
@@ -378,6 +379,7 @@ describe('daemon-level metrics acceptance', () => {
         return [];
       } },
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
     });
 
     const daemonEvents = (await readFile(join(root, '.daemon', 'events.jsonl'), 'utf8'))

@@ -67,6 +67,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
 
 import { buildInteractiveVisualizers } from '../../src/index.js';
 import { runDaemonMode } from '../../src/daemon-cli.js';
+import { allInstalledProviderDiscoveryRunner } from '../engine/boot-test-helpers.js';
 import { otelEventTypes } from '../../src/engine/event-sinks.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -204,7 +205,7 @@ async function throughDaemonDispatch(events: ConductorEvent[], filteredType?: Co
   buildExporters
     .mockReturnValueOnce({ spanExporter: exporter, metricExporter })
     .mockReturnValueOnce({ spanExporter: exporter, metricExporter });
-  await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }) });
+  await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), providerDiscoveryRunner: allInstalledProviderDiscoveryRunner() });
   return signals(exporter, metricExporter);
 }
 
@@ -235,7 +236,7 @@ async function runDaemonExportScenario(metricExporter: PushMetricExporter): Prom
   await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true }); await mkdir(join(repo, '.ai-conductor'), { recursive: true });
   await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n');
   buildExporters.mockReturnValue({ spanExporter: new InMemorySpanExporter(), metricExporter });
-  await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }) });
+  await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), providerDiscoveryRunner: allInstalledProviderDiscoveryRunner() });
   const [rawFeatureEvents, rawDaemonEvents] = await Promise.all([
     readFile(join(fixture.worktreePath, '.pipeline/events.jsonl'), 'utf8'),
     readFile(join(repo, '.daemon/events.jsonl'), 'utf8'),

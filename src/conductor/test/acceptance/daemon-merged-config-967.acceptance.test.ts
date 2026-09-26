@@ -49,17 +49,9 @@ import { runDaemonMode } from '../../src/daemon-cli.js';
 import { daemonLogPath } from '../../src/engine/daemon-log.js';
 import { buildDaemonForegroundCommand } from '../../src/engine/daemon-tmux.js';
 import { detectDaemonCommand, detectDaemonSupervisorCommand } from '../../src/engine/daemon-command.js';
-import type { InvokeOptions } from '../../src/execution/llm-provider.js';
-import type { CodexProvider } from '../../src/execution/codex-provider.js';
+import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 import type { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import type { HarnessConfig } from '../../src/types/index.js';
-import type { Options } from 'execa';
-
-vi.mock('execa', () => ({ execa: vi.fn() }));
-import { execa } from 'execa';
-
-type ExecaLongCall = (file: string, args: readonly string[], options?: Options) => ReturnType<typeof execa>;
-const mockExeca = vi.mocked(execa as unknown as ExecaLongCall);
 
 const registeredProviderRoots = vi.hoisted(() => [] as PluginRegistry[]);
 const daemonResolvedConfigs = vi.hoisted(() => [] as HarnessConfig[]);
@@ -95,7 +87,6 @@ afterEach(async () => {
   else process.env.HOME = originalHome;
   registeredProviderRoots.splice(0);
   daemonResolvedConfigs.splice(0);
-  mockExeca.mockReset();
   await Promise.all(tempDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
@@ -154,6 +145,7 @@ async function launchDaemon(home: string, projectRoot: string): Promise<LaunchRe
       baseBranch: 'main',
       ensureFresh: async () => {},
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: async () => ({ exitCode: 0 }),
       workSource: { discover },
       watch: false,
     });
@@ -185,46 +177,13 @@ describe('#1039 Story 4 — daemon Codex readiness timeout composition', () => {
       '',
     ].join('\n'));
 
+    const codexFactory = vi.spyOn(providerDescriptor('codex'), 'createAdapter');
     const result = await launchDaemon(home, project);
 
     expect(result.error).toBeUndefined();
-    mockExeca.mockReset();
     const registry = registeredProviderRoots[0];
     expect(registry).toBeDefined();
-    const codex = registry!.get<CodexProvider>('llm_provider', 'codex');
-    const claude = registry!.get<{ invoke(options: InvokeOptions): Promise<unknown> }>('llm_provider', 'claude');
-    mockExeca
-      .mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          schemaVersion: 1,
-          auth: { selectedMode: 'cached-login', configured: true },
-          transport: { authenticated: true },
-        }),
-        stderr: '',
-        exitCode: 0,
-      } as never)
-      .mockResolvedValueOnce({
-        stdout: JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }),
-        stderr: '',
-        exitCode: 0,
-      } as never)
-      .mockResolvedValueOnce({ stdout: JSON.stringify({ result: 'done' }), stderr: '', exitCode: 0 } as never);
-
-    const invokeOptions: InvokeOptions = {
-      prompt: 'composition probe', sessionId: 'daemon-composition', resume: false, cwd: project,
-    };
-    await codex.invoke(invokeOptions);
-    await claude.invoke(invokeOptions);
-
-    expect(mockExeca.mock.calls.map(([command, args, options]) => ({
-      command,
-      doctor: args.includes('doctor'),
-      timeout: options?.timeout,
-    }))).toEqual([
-      { command: 'codex', doctor: true, timeout: 2_500 },
-      { command: 'codex', doctor: false, timeout: undefined },
-      { command: 'claude', doctor: false, timeout: undefined },
-    ]);
+    expect(codexFactory).toHaveBeenCalledWith({ codexDoctorTimeoutMs: 2_500 });
     expect(daemonResolvedConfigs[0]).toMatchObject({
       codex_doctor_timeout_seconds: 2.5,
       harness_self_host: { auth_park_timeout_minutes: 7 },

@@ -17,6 +17,7 @@ import { ConductorEventEmitter } from '../src/ui/events.js';
 import type { FeatureRunnerDeps, FeatureRunScope } from '../src/engine/daemon-runner.js';
 import type { VisualizerFactoryContext } from '../src/types/plugin.js';
 import type { OtelVisualizerStartContext } from '../src/engine/otel/wire.js';
+import { allInstalledProviderDiscoveryRunner } from './engine/boot-test-helpers.js';
 
 type WireOtelVisualizer = typeof import('../src/engine/otel/wire.js').wireOtelVisualizer;
 type WireDaemonOtel = typeof import('../src/engine/otel/wire.js').wireDaemonOtel;
@@ -236,6 +237,7 @@ async function dispatchWithSessionId(
     watch: false,
     workSource: { discover: async () => [{ slug: 'feature-a' }] },
     probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+    providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
   });
   return { repo, pipelineDir };
 }

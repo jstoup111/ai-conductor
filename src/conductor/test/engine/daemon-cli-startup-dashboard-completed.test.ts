@@ -9,6 +9,7 @@ import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runDaemonMode, type DaemonModeOptions } from '../../src/daemon-cli.js';
+import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 import { daemonLogPath } from '../../src/engine/daemon-log.js';
 
 let workDirs: string[] = [];
@@ -40,6 +41,7 @@ function baseOpts(projectRoot: string, showCompleted?: boolean): DaemonModeOptio
     baseBranch: 'main',
     ensureFresh: async () => {},
     probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+    providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
     workSource: { discover: async () => [] },
     showCompleted,
   };

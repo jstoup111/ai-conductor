@@ -101,6 +101,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
 }));
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
+import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
 const directories: string[] = [];
 
@@ -129,6 +130,7 @@ describe('daemon skipped-to-stale refusal event wiring', () => {
       baseBranch: 'main',
       ensureFresh: async () => {},
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
       watch: false,
       workSource: { discover: async () => [{ slug: 'feature-a' }] },
     });

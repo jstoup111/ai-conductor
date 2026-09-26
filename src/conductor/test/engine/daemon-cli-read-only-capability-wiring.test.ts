@@ -11,6 +11,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import * as daemonCore from '../../src/engine/daemon.js';
 import * as daemonLock from '../../src/engine/daemon-lock.js';
 import { Conductor } from '../test-conductor.js';
+import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
 const roots: string[] = [];
 const testTmpdir = (): string => process.env.TMPDIR ?? '/tmp';
@@ -58,6 +59,7 @@ async function startWithCustomRubric(
   await runDaemonMode({
     projectRoot, concurrency: 1, baseBranch: 'main', ensureFresh: async () => {},
     probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+    providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
     probeReadOnlyReviewCapability: probe,
     runHaltClassMigration: async () => join(projectRoot, '.worktrees'), watch: false,
   });
@@ -107,6 +109,7 @@ describe('Task 10 — daemon read-only review capability wiring', () => {
     await runDaemonMode({
       projectRoot, concurrency: 1, baseBranch: 'main', ensureFresh: async () => {},
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
       probeReadOnlyReviewCapability: probe,
       runHaltClassMigration: async () => join(projectRoot, '.worktrees'), watch: false,
     });

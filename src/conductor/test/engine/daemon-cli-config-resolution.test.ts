@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runDaemonMode } from '../../src/daemon-cli.js';
+import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
 vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../src/engine/ci-fix.js')>();
@@ -94,6 +95,7 @@ describe('runDaemonMode configuration resolution', () => {
         baseBranch: 'main',
         ensureFresh: async () => {},
         probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
         workSource: { discover },
         watch: false,
       });

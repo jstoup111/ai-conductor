@@ -79,6 +79,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
 import { daemonLogPath } from '../../src/engine/daemon-log.js';
+import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
 let dirs: string[] = [];
 
@@ -111,6 +112,7 @@ describe('daemon-mode feature log integration', () => {
         baseBranch: 'main',
         ensureFresh: async () => {},
         probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
         watch: false,
         workSource: { discover: async () => [{ slug: 'feature-a' }] },
       });
