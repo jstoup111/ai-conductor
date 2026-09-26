@@ -697,9 +697,9 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` defines **110 variants** across **109** event types (`self_host_containment_verdict`
+`ConductorEvent` defines **111 variants** across **110** event types (`self_host_containment_verdict`
 declares two variants — `contained: true`/`contained: false` — under one type). `EventPersister`
-subscribes to the **97** event types marked `persist: true` in `event-sinks.ts` and writes only
+subscribes to the **98** event types marked `persist: true` in `event-sinks.ts` and writes only
 those:
 
 `land_gate_rejected`, `contained_live_checkout_drift`, `self_host_containment_verdict`, `self_host_boundary_fingerprint`, `containment_check_unresolved`,
@@ -717,7 +717,7 @@ those:
 `scratch_cleanup_reclaimed`, `scratch_cleanup_retained`, `scratch_cleanup_failed`,
 `feature_usage_total`,
 `provider_fallback`, `session_policy`, `step_retry`, `checkpoint_reached`, `recovery_needed`,
-`gate_blocked`, `tier_skip`, `config_skip`, `navigation_back`, `rate_limit`, `session_reset`,
+`gate_blocked`, `tier_skip`, `config_skip`, `navigation_back`, `rate_limit`, `provider_suppressed`, `session_reset`,
 `credentials_park`, `operator_park_boundary`, `credentials_park_progress`,
 `finish_publication_transition`, `finish_publication_blocked`, `finish_publication_disposition`,
 `feature_complete`, `dashboard_refresh`, `protected_artifact_rebaseline`,
@@ -736,6 +736,10 @@ those:
 rationale, and declared superseded replay SHAs. `rebase_citation_residue` records the corresponding
 preservation-guard excusals. Both persist in the affected feature worktree's event ledger; neither
 is emitted by a finish-time or re-kick rebase, where supersession judgement is unavailable.
+
+`rate_limit` records the bounded wait and, for usage exhaustion, the provider and retry deadline.
+The daemon also writes `provider_suppressed` to its own event ledger. On restart it restores only a
+still-valid bounded suppression, so later feature dispatches do not re-invoke the exhausted provider.
 
 `contained_live_checkout_drift` and `self_host_containment_verdict` are the containment boundary's
 closure events (`live-containment.ts`): the drift event names a concurrent operator's live-checkout
