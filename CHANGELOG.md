@@ -69,6 +69,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Self-host Codex dispatches no longer fail with ENXIO while an interactive Codex session is open. ([implementation PR #2761](https://github.com/jstoup111/ai-conductor/pull/2761)).
 - A raised prd_audit or as-built lap budget is now honored by validation-group remediation instead of halting needs-human after two rounds. ([implementation PR #2757](https://github.com/jstoup111/ai-conductor/pull/2757)).
 - Daemons now avoid providers whose usage limit has been exhausted during a retry episode. ([implementation PR #2743](https://github.com/jstoup111/ai-conductor/pull/2743)).
+- Custom build_review rubrics routed to Codex now load their review policy instead of failing every lap with "Not initialized". ([implementation PR #2764](https://github.com/jstoup111/ai-conductor/pull/2764)).
 
 ## [1.4.0] - 2026-09-19
 
