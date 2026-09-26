@@ -4,6 +4,24 @@ spec_hash: e1588ead3834fe08a82d72d49ebb749e7ebed4d8aaf863d744e5e0872742b558
 pr: https://github.com/jstoup111/ai-conductor/pull/2734
 shipped: 2026-09-26
 engine_version: 20260925T125013Z-084a4eab8370
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/engine/self-host/wiring.test.ts:511 — test now saves/restores CLAUDE_CODE_OAUTH_TOKEN and expects the pre-run value instead of undefined; no story or task covers it"
+    accepted: true
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-11-github-operation-ownership D9"
+    outcome: remediated
+    summary: "Daemon HALT remediation push and PR mutations omit the conductor's canonical emitter, so typed bot-auth refusal cannot reach warning-first operator fallback."
+  - gate: architecture_review_as_built
+    finding: AB-2
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-11-github-operation-ownership D9"
+    outcome: remediated
+    summary: "Halt-record creation and resolution pushes omit `recordRemote.events`, so configured-bot auth refusal cannot reach warning-first operator fallback."
 ---
 
 ## Cost
