@@ -148,7 +148,7 @@ describe('operator park boundary contract', () => {
       "await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });",
       prdWideningReconciliationDispatch,
       buildReviewAdjudicationDispatch,
-      /return(?: await)? this\.stepRunner\.run\(name, state, \{\s*retryReason: retryHint,\s*\.\.\.identityOption,\s*\.\.\.executionContextOption,\s*\.\.\.\(name === 'build_review' && this\.readOnlyReviewCapabilities !== undefined\s*\? \{ readOnlyReviewCapabilities: this\.readOnlyReviewCapabilities \}\s*:\s*\{\}\),\s*\}\);/g,
+      /return(?: await)? this\.stepRunner\.run\(name, state, \{\s*retryReason: retryHint,\s*\.\.\.identityOption,\s*\.\.\.executionContextOption,\s*\.\.\.this\.buildReviewCapabilityOption\(name\),\s*\}\);/g,
       // Configured-group branches run only through runParallelGroupViaCore,
       // whose caller is one of the guarded scheduling-unit entries above.
       /return runGroupBranch\(member, state, \{\s*stepRunner: this\.stepRunner,\s*executionContext,/g,
