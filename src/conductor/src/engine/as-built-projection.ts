@@ -87,30 +87,37 @@ function planCitedAdrStems(plan: string): Set<string> {
 
 function decisionText(content: string, id: string): string {
   const section = content.split(/^##\s+Decision\s*$/im)[1]?.split(/^##\s+/m, 1)[0] ?? '';
-  const lines = section.split('\n');
+  // Same blockquote-aware grammar as parseAdrDecisions: additive amendments
+  // are conventionally written as `> **D6.2 — ...**` blockquotes.
+  const lines = section.split('\n').map((line) => line.replace(/^\s{0,3}>\s?/, ''));
   const declaration = new RegExp(`^\\s*(?:\\*{0,2}${id}\\.\\s+|#{0,6}\\s*\\*{0,2}D${id}(?!\\.)\\b)`);
   const nextDeclaration = /^\s*(?:\*{0,2}\d+\.\s+|#{0,6}\s*\*{0,2}D\d+(?!\.)\b)/;
   const anyAmendment = /^\s*(?:[-*]\s*)?\*{0,2}D\d+\.\d+\b/;
+  const amendedMarker = /^\s*\*{0,2}Amended\b/i;
+  const isBoundary = (line: string): boolean =>
+    nextDeclaration.test(line) || anyAmendment.test(line) || amendedMarker.test(line);
+  const collect = (start: number): string[] => {
+    const block: string[] = [lines[start]!];
+    for (let index = start + 1; index < lines.length && !isBoundary(lines[index]!); index += 1) {
+      block.push(lines[index]!);
+    }
+    return block;
+  };
   const start = lines.findIndex((line) => declaration.test(line));
   if (start === -1) return `Decision ${id}`;
 
-  const decisionLines: string[] = [];
-  for (let index = start; index < lines.length; index += 1) {
-    if (index !== start && (nextDeclaration.test(lines[index]!) || anyAmendment.test(lines[index]!))) break;
-    decisionLines.push(lines[index]!);
-  }
-
-  // Additive decision amendments conventionally follow the numbered decisions,
-  // so retain the amendments for this decision even when they appear after a
-  // later base declaration. They are authoritative decision text, not prose.
-  const amendment = new RegExp(`^\\s*(?:[-*]\\s*)?\\*{0,2}D${id}\\.\\d+\\b`);
-  for (const line of lines) {
-    if (amendment.test(line) && !decisionLines.includes(line)) decisionLines.push(line);
-  }
-
+  const decisionLines = collect(start);
   decisionLines[0] = decisionLines[0]!
     .replace(/^\s*(?:\*{0,2}\d+\.\s+|#{0,6}\s*\*{0,2}D\d+\s*[—:-]?\s*)/, '');
-  return decisionLines.join('\n').replace(/\*\*/g, '').trim();
+
+  // Additive decision amendments conventionally follow the numbered decisions,
+  // so retain each amendment's full multi-line body under its owning decision
+  // even when it appears after a later base declaration.
+  const amendment = new RegExp(`^\\s*(?:[-*]\\s*)?\\*{0,2}D${id}\\.\\d+\\b`);
+  lines.forEach((line, index) => {
+    if (index !== start && amendment.test(line)) decisionLines.push('', ...collect(index));
+  });
+  return decisionLines.join('\n').replace(/\*\*/g, '').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function parseNumstat(text: string): AsBuiltProjection['diff']['changedFiles'] {

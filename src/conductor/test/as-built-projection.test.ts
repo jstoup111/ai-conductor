@@ -234,6 +234,44 @@ D1.1 — Additive amendment for the first decision.
     ]);
   });
 
+  it('projects blockquoted multi-line additive amendments under their owning decisions, not the final base decision', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'decisions', 'adr-plan-one.md'), `# ADR
+
+Status: APPROVED
+
+## Decision
+
+1. First decision.
+
+2. Second decision.
+
+> **Amended 2026-09-23 by #1:** records two amendments.
+>
+> **D1.1 — First amendment heading.** Its body starts here
+> and continues on a second quoted line.
+>
+> - with a quoted list item.
+>
+> **D2.1 — Second amendment heading.** Second body
+> continues here.
+`);
+
+    const result = await buildAsBuiltProjection(root);
+    if (!result.ok) throw new Error('expected a projection with the governing ADR');
+
+    expect(result.projection.governingAdrs.find((adr) => adr.stem === 'adr-plan-one')?.decisions).toEqual([
+      {
+        id: '1',
+        text: 'First decision.\n\nD1.1 — First amendment heading. Its body starts here\nand continues on a second quoted line.\n\n- with a quoted list item.',
+      },
+      {
+        id: '2',
+        text: 'Second decision.\n\nD2.1 — Second amendment heading. Second body\ncontinues here.',
+      },
+    ]);
+  });
+
   it('renders an empty governing ADR set without disabling repository-wide ADR compliance', async () => {
     const root = await fixture({ includeDiffAdr: false });
     await writeFile(join(root, '.docs', 'plans', 'feature.md'), `# Plan
