@@ -2476,6 +2476,28 @@ export class DefaultStepRunner implements StepRunner {
         changedInputs,
       })));
     };
+    const withCustomCacheWriteFailures = (
+      results: Readonly<Record<string, BuildReviewCustomArtifactMember>>,
+      failures: ReadonlyMap<string, unknown>,
+    ): Readonly<Record<string, BuildReviewCustomArtifactMember>> => {
+      if (![...failures.keys()].some((id) => id in results)) return results;
+      return Object.freeze(Object.fromEntries(Object.entries(results).map(([id, member]) => {
+        if (!failures.has(id)) return [id, member];
+        const error = failures.get(id);
+        const skill = customEntries.find((entry) => entry.id === id)?.skill ?? id;
+        return [id, {
+          ...(member.declaration === undefined && member.descriptor === undefined
+            ? {}
+            : { declaration: member.declaration ?? member.descriptor!.declaration }),
+          result: {
+            kind: 'infrastructure-failure' as const,
+            rubric: id,
+            reason: 'artifact-write-failed' as const,
+            detail: `Installed build-review policy ${skill} could not persist its cache: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        }];
+      }))) as Record<string, BuildReviewCustomArtifactMember>;
+    };
     // adr-2026-09-10 D5.3: custom members and built-in peers are one
     // concurrent fan-out over one frozen view. Preparation is unbounded so the
     // gate can see every member's baseline; reviewer invocations share the
@@ -2562,6 +2584,7 @@ export class DefaultStepRunner implements StepRunner {
     if (customPolicyLap) {
       if (outcomes.some((outcome) => !outcome.success)) {
         await finishCustomLapInputDigests();
+        lapGate!.discardCacheWrites();
         return {
           success: false,
           output: outcomes.filter((outcome) => !outcome.success).map((outcome) => outcome.output).join('\n'),
@@ -2569,6 +2592,7 @@ export class DefaultStepRunner implements StepRunner {
       }
       const members = outcomes.map((outcome) => [outcome.id, outcome.member] as const);
       if (members.some((member) => member[1] === undefined)) {
+        lapGate!.discardCacheWrites();
         return { success: false, output: 'build_review custom policy produced no durable result' };
       }
       customResults = Object.freeze(Object.fromEntries(members) as Record<string, BuildReviewCustomArtifactMember>);
@@ -2579,8 +2603,11 @@ export class DefaultStepRunner implements StepRunner {
       if (joinedCoordination === undefined) {
         const changedInputs = await finishCustomLapInputDigests();
         if (changedInputs.length > 0) {
+          lapGate!.discardCacheWrites();
           customResults = mutatedCustomResults(customResults, changedInputs);
           await emitInputMutationFailures(Object.keys(customResults), changedInputs);
+        } else {
+          customResults = withCustomCacheWriteFailures(customResults, await lapGate!.flushCacheWrites());
         }
         await this.emitBuildReviewCustomMemberResults(lapId, customResults);
         return this.publishCustomOnlyBuildReview({
@@ -2595,15 +2622,24 @@ export class DefaultStepRunner implements StepRunner {
     const coordination = joinedCoordination!;
 
     if (coordination.kind === 'gate-disabled') {
-      if (customEntries.length > 0) await finishCustomLapInputDigests();
+      if (customEntries.length > 0) {
+        await finishCustomLapInputDigests();
+        lapGate!.discardCacheWrites();
+      }
       return { success: true, output: 'build_review disabled' };
     }
     if (coordination.kind === 'passed') {
-      if (customEntries.length > 0) await finishCustomLapInputDigests();
+      if (customEntries.length > 0) {
+        await finishCustomLapInputDigests();
+        lapGate!.discardCacheWrites();
+      }
       return this.publishBuildReviewPass(coordination.reason);
     }
     if (coordination.kind === 'refused') {
-      if (customEntries.length > 0) await finishCustomLapInputDigests();
+      if (customEntries.length > 0) {
+        await finishCustomLapInputDigests();
+        lapGate!.discardCacheWrites();
+      }
       return { success: false, output: `build_review refused: ${coordination.reason}` };
     }
 
@@ -2669,7 +2705,21 @@ export class DefaultStepRunner implements StepRunner {
     const validResults = results as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
 
     const changedInputs = customEntries.length === 0 ? [] : await finishCustomLapInputDigests();
+    if (lapGate !== undefined && changedInputs.length === 0) {
+      const cacheWriteFailures = await lapGate.flushCacheWrites();
+      customResults = withCustomCacheWriteFailures(customResults!, cacheWriteFailures);
+      for (const rubric of Object.keys(validResults) as BuildReviewRubricResult['rubric'][]) {
+        if (!cacheWriteFailures.has(rubric)) continue;
+        const error = cacheWriteFailures.get(rubric);
+        validResults[rubric] = {
+          kind: 'infrastructure-failure', rubric,
+          reason: deriveBuildReviewInfrastructureFailureReason({ reason: 'cache-write-failed' }),
+          detail: `build_review ${rubric} cache-write-failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }
     if (changedInputs.length > 0) {
+      lapGate?.discardCacheWrites();
       customResults = mutatedCustomResults(customResults!, changedInputs);
       for (const rubric of Object.keys(validResults) as BuildReviewRubricResult['rubric'][]) {
         validResults[rubric] = {
@@ -3267,13 +3317,16 @@ export class DefaultStepRunner implements StepRunner {
           },
           result: stamped,
         };
-        const cacheWrite = await tryWriteBuildReviewCacheEntry(this.projectDir, {
+        const writeCache = () => tryWriteBuildReviewCacheEntry(this.projectDir, {
             version: 2, rubric: entry.id,
             contractVersion: entry.contract.output.version as BuildReviewCacheSemanticIdentity['contractVersion'],
             projectionVersion: entry.contract.projection.version as BuildReviewCacheSemanticIdentity['projectionVersion'],
             projectionDigest: inputs.sourceSnapshot.contentDigest,
             policyFingerprint, engineIdentity: { engineStamp: candidateEngine.engineStamp, skillDigest: bundle.digest }, semanticIdentity: actualSemanticIdentity, result: member,
           }, { readFile: async (path) => readFile(path, 'utf-8'), mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename });
+        // D5.3: a gated lap's verdict becomes reusable only once the whole-lap
+        // digest settles unchanged; the gate persists it then.
+        const cacheWrite = lapGate === undefined ? await writeCache() : (lapGate.deferCacheWrite(entry.id, writeCache), { ok: true as const });
         if (!cacheWrite.ok) {
           coverageFailure = true;
           failure = { reason: 'artifact-write-failed', detail: `Installed build-review policy ${entry.skill} could not persist its cache: ${cacheWrite.error instanceof Error ? cacheWrite.error.message : String(cacheWrite.error)}` };
@@ -3784,11 +3837,13 @@ export class DefaultStepRunner implements StepRunner {
               if (judged) {
                 const semanticIdentity = candidateIdentity({ ...context.candidate, model: context.invokedModel() ?? context.candidate.model }, builtinBundle.digest);
                 if (!semanticIdentity) return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: 'build_review candidate cache identity is unavailable' } };
-                const cacheWrite = await tryWriteBuildReviewCacheEntry(this.projectDir, {
+                const writeCache = () => tryWriteBuildReviewCacheEntry(this.projectDir, {
                 version: 2, rubric: branch.rubric, contractVersion: projection.contractVersion, projectionVersion: projection.projectionVersion,
                 projectionDigest: projection.digest, policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
                 engineIdentity: { engineStamp: engineIdentity.engineStamp, skillDigest: builtinBundle.digest }, semanticIdentity, result: judged,
                 }, { readFile: async (path) => readFile(path, 'utf-8'), readdir, mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename });
+                // D5.3: withheld until the whole-lap digest settles unchanged.
+                const cacheWrite = lapGate === undefined ? await writeCache() : (lapGate.deferCacheWrite(branch.rubric, writeCache), { ok: true as const });
                 if (!cacheWrite.ok) {
                   cacheWriteFailureDetail = cacheWrite.error instanceof Error ? cacheWrite.error.message : String(cacheWrite.error);
                   await inputs?.sourceMaterialization?.settle(branch.rubric);

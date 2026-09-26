@@ -1,6 +1,6 @@
 // Covers: task:16, task:21, task:26
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -547,6 +547,51 @@ describe('custom build-review policy runner', () => {
     const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
     expect(result.success, result.output).toBe(true);
     expect(securityStartedBeforeCustomSettled).toBe(true);
+  });
+
+  it('leaves no reusable verdict from a mutated mixed lap and re-judges every member next lap', async () => {
+    const root = await fixture();
+    const evidence = join(root, '.pipeline', 'test-suite-evidence.json');
+    await writeFile(evidence, '{"status":"CURRENT"}\n');
+    let mutateNextCustomReview = true;
+    const customPayload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const invoke = vi.fn(async (options: InvokeOptions) => {
+      if (options.prompt.includes('Build Review Security rubric.')) {
+        return { success: true, exitCode: 0, output: '{"findings":[]}', finalStructuredResult: { findings: [] } };
+      }
+      if (mutateNextCustomReview) {
+        mutateNextCustomReview = false;
+        await writeFile(evidence, '{"status":"MUTATED"}\n');
+      }
+      return { success: true, exitCode: 0, output: JSON.stringify(customPayload), finalStructuredResult: customPayload };
+    });
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    const runner = new DefaultStepRunner(provider, 'mixed-policy-mutated-cache', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'claude', build_review: {
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true } },
+        custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' } },
+      } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(), probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
+      buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`, declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+
+    const mutated = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(mutated).toMatchObject({ success: false, currentLapMechanicalFault: true });
+    expect(mutated.output).toContain('review-input-mutated');
+    await expect(readdir(join(root, '.pipeline', 'build-review', 'cache')).catch(() => [])).resolves.toEqual([]);
+    expect(invoke).toHaveBeenCalledTimes(2);
+
+    const rerun = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(rerun.success, rerun.output).toBe(true);
+    expect(invoke).toHaveBeenCalledTimes(4);
   });
 
   it('halts needs-human without an aggregate when review-input-mutated exhausts the mechanical allowance', async () => {
