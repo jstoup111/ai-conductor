@@ -26,6 +26,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Changed
 
 - Build reviews receive typed, schema-validated rubric findings from providers. ([implementation PR #2660](https://github.com/jstoup111/ai-conductor/pull/2660)).
+- Custom build-review policies run in provider read-only modes on every supported platform. ([implementation PR #2747](https://github.com/jstoup111/ai-conductor/pull/2747)).
 
 ### Fixed
 
