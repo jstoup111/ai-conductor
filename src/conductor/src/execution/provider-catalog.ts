@@ -1,6 +1,8 @@
 import { ClaudeProvider } from './claude-provider.js';
 import { CodexProvider } from './codex-provider.js';
+import { PiProvider } from './pi-provider.js';
 import type { LLMProvider } from './llm-provider.js';
+import type { StepName } from '../types/steps.js';
 import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
@@ -49,7 +51,22 @@ export interface BuiltInProviderDescriptor {
 type BuiltInProviderTable = readonly [
   BuiltInProviderDescriptor & { readonly id: 'claude' },
   BuiltInProviderDescriptor & { readonly id: 'codex' },
+  BuiltInProviderDescriptor & { readonly id: 'pi' },
 ];
+
+const PI_NO_MODEL = '';
+
+/** Pi owns its configured default model, so no harness model id is selected. */
+const PI_MODEL_POLICY: ProviderModelPolicy = {
+  stepModels: Object.fromEntries(
+    Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) => [step, PI_NO_MODEL]),
+  ) as Readonly<Record<StepName, string>>,
+  stepEfforts: CLAUDE_MODEL_POLICY.stepEfforts,
+  stepTierOverrides: {},
+  effortOrder: CLAUDE_MODEL_POLICY.effortOrder,
+  modelEscalationOrder: [PI_NO_MODEL],
+  modelFallbackLadder: [PI_NO_MODEL],
+};
 
 /**
  * The built-in provider source of truth.  New built-ins belong here before a
@@ -105,6 +122,21 @@ export const BUILT_IN_PROVIDERS: BuiltInProviderTable = [
       reviewPolicyCatalog: true,
       supportsSessionResume: false,
       nativeSchema: true,
+    },
+  },
+  {
+    id: 'pi',
+    createAdapter: (): LLMProvider => new PiProvider(resolveProviderExecutable('pi')),
+    defaultExecutable: 'pi',
+    executableOverrideEnv: 'PI_EXECUTABLE',
+    versionArgv: ['--version'],
+    invocationPrefix: '',
+    environmentPrefix: 'PI_',
+    homeVariable: 'PI_HOME',
+    defaultHome: '.pi',
+    modelPolicy: PI_MODEL_POLICY,
+    capabilities: {
+      supportsSessionResume: false,
     },
   },
 ] as const;
