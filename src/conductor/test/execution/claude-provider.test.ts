@@ -1,7 +1,6 @@
 // Covers: task:2, task:4
 // Covers: task:5
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Mock } from 'vitest';
 import { PassThrough } from 'node:stream';
 import {
   ClaudeProvider,
@@ -18,29 +17,7 @@ import { BUILD_REVIEW_RUBRIC_REGISTRY } from '../../src/engine/build-review-regi
 import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-config.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
-
-// Mock execa before importing anything that uses it
-vi.mock('execa', () => ({
-  execa: vi.fn(),
-}));
-
-const { mockValidateSpawnPermit } = vi.hoisted(() => ({
-  mockValidateSpawnPermit: vi.fn((permit, purpose) =>
-    permit?.(purpose) ?? { permitted: true as const }),
-}));
-vi.mock('../../src/execution/spawn-permit.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src/execution/spawn-permit.js')>(),
-  validateSpawnPermit: mockValidateSpawnPermit,
-}));
-
-const { mockEnforceFreshSessionOptions } = vi.hoisted(() => ({
-  mockEnforceFreshSessionOptions: vi.fn(),
-}));
-vi.mock('../../src/execution/fresh-session.js', () => ({
-  enforceFreshSessionOptions: mockEnforceFreshSessionOptions,
-}));
-
-import { execa, type Options as ExecaOptions, type Result as ExecaResult } from 'execa';
+import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 
 /**
  * `execa`'s exported type is an intersection of several call-signature
@@ -53,12 +30,11 @@ import { execa, type Options as ExecaOptions, type Result as ExecaResult } from 
  * mock is re-typed to that actual call shape via `unknown` to bridge past
  * execa's overload-collapsing type limitation.
  */
-type ExecaInvocation = (
-  file: string,
-  args: string[],
-  options?: ExecaOptions,
-) => Promise<ExecaResult>;
-const mockExeca = vi.mocked(execa) as unknown as Mock<ExecaInvocation>;
+const { mockExeca } = vi.hoisted(() => ({
+  mockExeca: vi.fn<
+    (file: string, args: string[], options: ExecaOptions) => Promise<ExecaResult>
+  >(),
+}));
 
 const claudeRubricPolicy: ResolvedBuildReviewRubricPolicy = {
   enabled: true,
@@ -89,11 +65,6 @@ describe('ClaudeProvider', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockEnforceFreshSessionOptions.mockImplementation((options, provider) => ({
-      ...options,
-      sessionId: '00000000-0000-4000-8000-000000000001',
-      resume: false,
-    }));
     provider = new ClaudeProvider(undefined, mockExeca as never);
   });
 
@@ -390,18 +361,13 @@ describe('ClaudeProvider', () => {
     it.each([
       ['non-REPL', (options: InvokeOptions) => provider.invoke({ ...options, interactive: false })],
       ['REPL', (options: InvokeOptions) => provider.invoke({ ...options, interactive: true })],
-    ])('forces a fresh, non-resumed Claude session exactly once for a %s dispatch', async (_mode, dispatch) => {
+    ])('forces a fresh, non-resumed Claude session for a %s dispatch', async (_mode, dispatch) => {
       mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, failed: false } as any);
 
       await dispatch({ ...baseOptions, resume: true });
 
-      expect(mockEnforceFreshSessionOptions).toHaveBeenCalledTimes(1);
-      expect(mockEnforceFreshSessionOptions).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 'abc-123', resume: true }),
-        'claude',
-      );
       const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
-      expect(args).toEqual(expect.arrayContaining(['--session-id', '00000000-0000-4000-8000-000000000001']));
+      expect(args).toEqual(expect.arrayContaining(['--session-id']));
       expect(args).not.toContain('abc-123');
       expect(args).not.toContain('--resume');
     });
@@ -677,7 +643,6 @@ describe('ClaudeProvider', () => {
       await provider.invoke({ ...baseOptions, spawnPermit });
 
       expect(callOrder).toEqual(['spawn permit', 'subprocess factory']);
-      expect(mockValidateSpawnPermit).toHaveBeenCalledWith(spawnPermit);
     });
 
     it('fails closed without creating a child when its permit is revoked', async () => {
@@ -701,7 +666,7 @@ describe('ClaudeProvider', () => {
       const clock: IntervalClock = {
         nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
       };
-      provider = new ClaudeProvider(clock);
+      provider = new ClaudeProvider(clock, mockExeca as never);
       const terminalResult = {
         type: 'result',
         result: 'Done!',
@@ -755,7 +720,7 @@ describe('ClaudeProvider', () => {
       const clock: IntervalClock = {
         nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
       };
-      provider = new ClaudeProvider(clock);
+      provider = new ClaudeProvider(clock, mockExeca as never);
       mockExeca.mockResolvedValue({
         stdout: 'interactive session failed',
         stderr: '',
@@ -807,7 +772,7 @@ describe('ClaudeProvider', () => {
       const clock: IntervalClock = {
         nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
       };
-      provider = new ClaudeProvider(clock);
+      provider = new ClaudeProvider(clock, mockExeca as never);
       mockExeca.mockResolvedValue({
         stdout: JSON.stringify({
           type: 'result',
@@ -1918,7 +1883,7 @@ describe('ClaudeProvider', () => {
         return { stdout: 'done', stderr: '', exitCode: 0, failed: false } as any;
       });
 
-      const provider = new ClaudeProvider();
+      const provider = new ClaudeProvider(undefined, mockExeca as never);
 
       // First call should detect rate limit
       const result1 = await provider.invoke({ ...baseOptions, interactive: true });

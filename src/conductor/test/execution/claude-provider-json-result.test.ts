@@ -1,13 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeProvider, parseJsonResult } from '../../src/execution/claude-provider';
+import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 
-vi.mock('execa', () => ({
-  execa: vi.fn(),
+const { mockExeca } = vi.hoisted(() => ({
+  mockExeca: vi.fn<
+    (file: string, args: string[], options: ExecaOptions) => Promise<ExecaResult>
+  >(),
 }));
-
-import { execa } from 'execa';
-
-const mockExeca = vi.mocked(execa);
 
 describe('Claude stream JSON result parsing', () => {
   beforeEach(() => {
@@ -83,7 +82,7 @@ describe('Claude stream JSON result parsing', () => {
     ].join('\n');
     mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 0, failed: false } as any);
 
-    const result = await new ClaudeProvider().invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
+    const result = await new ClaudeProvider(undefined, mockExeca as never).invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
 
     expect(result).toMatchObject({
       success: false,
@@ -99,7 +98,7 @@ describe('Claude stream JSON result parsing', () => {
     });
     mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 0, failed: false } as any);
 
-    const result = await new ClaudeProvider().invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
+    const result = await new ClaudeProvider(undefined, mockExeca as never).invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
 
     expect(result).toMatchObject({ output: 'text without complete usage', tokenUsage: undefined });
   });
@@ -111,7 +110,7 @@ describe('Claude stream JSON result parsing', () => {
     ].join('\n');
     mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 0, failed: false } as any);
 
-    const result = await new ClaudeProvider().invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
+    const result = await new ClaudeProvider(undefined, mockExeca as never).invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
 
     expect(result).toMatchObject({
       success: false,

@@ -30,8 +30,8 @@ function expectScrubbed(env: NodeJS.ProcessEnv | undefined): void {
 }
 
 describe('scrubTmuxEnvironment', () => {
-  it('keeps the established Claude and Codex review environment namespaces', () => {
-    expect(REVIEW_PROVIDER_PREFIXES).toEqual(['CLAUDE_', 'CODEX_']);
+  it('keeps the established Claude, Codex, and Pi review environment namespaces', () => {
+    expect(REVIEW_PROVIDER_PREFIXES).toEqual(['CLAUDE_', 'CODEX_', 'PI_']);
   });
 
   it('masks TMUX and TMUX_PANE without mutating the input or dropping other keys', () => {
