@@ -9,6 +9,10 @@ import { assertRealExecAllowed } from './tracker-client.js';
 
 const execFile = promisify(execFileCallback);
 
+export const PROVIDER_VERSION_PROBE_TIMEOUT_MS = 5_000;
+
+const realExecGuardErrors = new WeakSet<object>();
+
 export type ProviderDiscoveryFailureReason =
   | 'not-found'
   | 'not-executable'
@@ -36,12 +40,17 @@ export interface InstalledProviderDiscovery {
 export interface DiscoverInstalledProvidersOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly runner?: ProviderVersionProbeRunner;
-  /** Reserved for the bounded probe race added with failure classification. */
+  /** Maximum time to wait for each provider's version probe. */
   readonly timeoutMs?: number;
 }
 
 const productionRunner: ProviderVersionProbeRunner = async (executable, argv) => {
-  assertRealExecAllowed(executable);
+  try {
+    assertRealExecAllowed(executable);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null) realExecGuardErrors.add(error);
+    throw error;
+  }
   await execFile(executable, [...argv]);
   return { exitCode: 0 };
 };
@@ -54,9 +63,15 @@ function executableFor(
 }
 
 function discoveryFailureReason(error: unknown): ProviderDiscoveryFailureReason {
-  return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT'
-    ? 'not-found'
-    : 'version-failed';
+  switch ((error as NodeJS.ErrnoException | undefined)?.code) {
+    case 'ENOENT': return 'not-found';
+    case 'EACCES': return 'not-executable';
+    default: return 'version-failed';
+  }
+}
+
+function isRealExecGuardError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && realExecGuardErrors.has(error);
 }
 
 type ProviderProbe =
@@ -67,21 +82,57 @@ type ProviderProbe =
     readonly reason: ProviderDiscoveryFailureReason;
   };
 
+type ProviderProbeOutcome =
+  | { readonly kind: 'completed'; readonly result: ProviderVersionProbeResult }
+  | { readonly kind: 'failed'; readonly error: unknown }
+  | { readonly kind: 'timed-out' };
+
+function classifyProbeOutcome(outcome: ProviderProbeOutcome): {
+  readonly installed: boolean;
+  readonly reason?: ProviderDiscoveryFailureReason;
+} {
+  switch (outcome.kind) {
+    case 'completed':
+      return outcome.result.exitCode === 0
+        ? { installed: true }
+        : { installed: false, reason: 'version-failed' };
+    case 'failed':
+      if (isRealExecGuardError(outcome.error)) throw outcome.error;
+      return { installed: false, reason: discoveryFailureReason(outcome.error) };
+    case 'timed-out':
+      return { installed: false, reason: 'timeout' };
+  }
+}
+
 async function probeProvider(
   descriptor: BuiltInProviderDescriptor,
   env: NodeJS.ProcessEnv,
   runner: ProviderVersionProbeRunner,
+  timeoutMs: number,
 ): Promise<ProviderProbe> {
+  let cancelTimeout: (() => void) | undefined;
+  const attempted = runner(executableFor(descriptor, env), descriptor.versionArgv).then(
+    (result): ProviderProbeOutcome => ({ kind: 'completed', result }),
+    (error: unknown): ProviderProbeOutcome => ({ kind: 'failed', error }),
+  );
+  const timedOut = new Promise<ProviderProbeOutcome>((resolve) => {
+    const timer = setTimeout(() => resolve({ kind: 'timed-out' }), timeoutMs);
+    cancelTimeout = () => clearTimeout(timer);
+  });
+
   try {
-    const result = await runner(executableFor(descriptor, env), descriptor.versionArgv);
-    if (result.exitCode === 0) return { id: descriptor.id as BuiltInProviderId, installed: true };
-    return { id: descriptor.id as BuiltInProviderId, installed: false, reason: 'version-failed' };
-  } catch (error) {
+    const outcome = await Promise.race([attempted, timedOut]);
+    const classification = classifyProbeOutcome(outcome);
+    if (classification.installed) {
+      return { id: descriptor.id as BuiltInProviderId, installed: true };
+    }
     return {
       id: descriptor.id as BuiltInProviderId,
       installed: false,
-      reason: discoveryFailureReason(error),
+      reason: classification.reason!,
     };
+  } finally {
+    cancelTimeout?.();
   }
 }
 
@@ -91,10 +142,13 @@ async function probeProvider(
  * as the provider process they are about to start.
  */
 export async function discoverInstalledProviders(
-  { env = process.env, runner = productionRunner }: DiscoverInstalledProvidersOptions = {},
+  options: DiscoverInstalledProvidersOptions = {},
 ): Promise<InstalledProviderDiscovery> {
+  const env = options.env ?? process.env;
+  const runner = options.runner ?? productionRunner;
+  const timeoutMs = options.timeoutMs ?? PROVIDER_VERSION_PROBE_TIMEOUT_MS;
   const probes = await Promise.all(
-    BUILT_IN_PROVIDERS.map((descriptor) => probeProvider(descriptor, env, runner)),
+    BUILT_IN_PROVIDERS.map((descriptor) => probeProvider(descriptor, env, runner, timeoutMs)),
   );
 
   return {
