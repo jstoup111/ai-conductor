@@ -95,6 +95,8 @@ describe('engine/build-review-materialization', () => {
       await lap!.settle('style');
       await expect(access(custom.source.headPath)).resolves.toBeUndefined();
       await lap!.settle('testQuality');
+      await expect(access(custom.source.headPath)).resolves.toBeUndefined();
+      await lap!.finish?.();
       await expect(access(custom.source.headPath)).rejects.toThrow();
     } finally {
       if (lap) {
