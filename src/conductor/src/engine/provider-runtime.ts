@@ -9,11 +9,14 @@ import type {
 export { validateSpawnPermit } from '../execution/spawn-permit.js';
 import { ModelAvailability } from './model-availability.js';
 import {
-  hasBuiltInProviderModelPolicy,
   resolveProviderModelPolicy,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
 import type { PluginRegistry } from './plugin-registry.js';
+import {
+  findBuiltInProviderDescriptor,
+  supportsProviderCapability,
+} from '../execution/provider-catalog.js';
 
 export interface ProviderRuntime {
   key: string;
@@ -68,10 +71,14 @@ export class ProviderRuntimeSet {
     authentication: AuthenticationReadiness,
   ): (() => Promise<AuthenticationReadiness>) | undefined {
     const runtime = this.runtimes.get(key);
+    const descriptor = runtime?.builtIn
+      ? findBuiltInProviderDescriptor(runtime.key)
+      : undefined;
     if (
       !runtime ||
-      !runtime.builtIn ||
+      !descriptor ||
       runtime.key !== authentication.provider ||
+      !supportsProviderCapability(descriptor, 'readiness') ||
       !runtime.provider.readiness
     ) {
       return undefined;
@@ -103,7 +110,7 @@ export function createProviderRuntimeSet(
         lifecycleCapability: provider.lifecycleCapability,
         nativeSchemaCapability: provider.nativeSchemaCapability,
         policy,
-        builtIn: hasBuiltInProviderModelPolicy(key),
+        builtIn: findBuiltInProviderDescriptor(key) !== undefined,
         availability: new ModelAvailability(policy.modelFallbackLadder, warn),
       };
     }),

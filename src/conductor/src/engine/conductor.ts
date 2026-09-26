@@ -103,7 +103,10 @@ import { formatProviderCapabilityGapMessages } from './provider-execution.js';
 import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
 import {
   BUILT_IN_PROVIDERS,
+  findBuiltInProviderDescriptor,
+  providerDisplayName,
   requireProviderCapability,
+  supportsProviderCapability,
 } from '../execution/provider-catalog.js';
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import { redactSafetyText } from './safety-diagnostics.js';
@@ -3759,13 +3762,21 @@ export class Conductor {
     const shPark = resolveSelfHostConfig(this.config);
 
     const authentication = failed?.authentication;
-    if (authentication?.provider === 'codex') {
+    const readinessDescriptor = authentication === undefined
+      ? undefined
+      : findBuiltInProviderDescriptor(authentication.provider);
+    if (
+      authentication !== undefined &&
+      readinessDescriptor !== undefined &&
+      supportsProviderCapability(readinessDescriptor, 'readiness')
+    ) {
+      const providerName = readinessDescriptor.displayName;
       if (authentication.source === 'api-key') {
         const timeoutMs = shPark.authParkTimeoutMinutes * 60 * 1000;
         const startedAt = Date.now();
         await this.events.emit({
           type: 'credentials_park',
-          reason: 'Codex API key is startup-only — waiting for daemon restart',
+          reason: `${providerName} API key is startup-only — waiting for daemon restart`,
         });
         while (timeoutMs > 0 && Date.now() - startedAt < timeoutMs) {
           await this.sleep(1_000);
@@ -3773,7 +3784,7 @@ export class Conductor {
         return {
           disposition: 'halt',
           haltReason:
-            'Codex API-key authentication is inherited at daemon startup and cannot be refreshed in-process.\n' +
+            `${providerName} API-key authentication is inherited at daemon startup and cannot be refreshed in-process.\n` +
             'Replace CODEX_API_KEY, restart the daemon, then re-queue this feature.',
         };
       }
@@ -3788,12 +3799,12 @@ export class Conductor {
         const timedOutResult = {
           disposition: 'halt' as const,
           haltReason:
-            'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
-            'Refresh the Codex login, then re-queue this feature.',
+            `${providerName} cached-login authentication did not become ready before the auth park timed out.\n` +
+            `Refresh the ${providerName} login, then re-queue this feature.`,
         };
         await this.events.emit({
           type: 'credentials_park',
-          reason: 'Codex cached login unavailable — waiting for a fresh readiness check',
+          reason: `${providerName} cached login unavailable — waiting for a fresh readiness check`,
         });
 
         if (timeoutMs <= 0) {
@@ -3840,7 +3851,7 @@ export class Conductor {
             if (probeFailed) {
               await this.events.emit({
                 type: 'credentials_park_progress',
-                provider: 'codex',
+                provider: authentication.provider,
                 source: authentication.source,
                 readiness: current.state,
                 elapsedSeconds,
@@ -3855,7 +3866,7 @@ export class Conductor {
             } else if (current.state !== 'probe-failed') {
               await this.events.emit({
                 type: 'credentials_park_progress',
-                provider: 'codex',
+                provider: authentication.provider,
                 source: authentication.source,
                 readiness: current.state,
                 elapsedSeconds,
@@ -8555,7 +8566,7 @@ export class Conductor {
               if (outcome.kind !== 'permission-denied') {
                 throw new Error('permission-denied outcome index lost its disposition');
               }
-              const provider = outcome.provider === 'codex' ? 'Codex' : outcome.provider;
+              const provider = providerDisplayName(outcome.provider);
               const source = outcome.authentication?.source;
               const haltReason =
                 `${provider} permission review denied a required action for grouped member "${member.name}"` +
@@ -10714,7 +10725,7 @@ export class Conductor {
             const source = result.authentication?.source;
             const detail = result.output?.trim();
             const haltReason =
-              `${provider === 'codex' ? 'Codex' : provider} permission review denied a required action` +
+              `${providerDisplayName(provider)} permission review denied a required action` +
               (source ? ` using the selected ${source} source` : '') +
               '.\n' +
               'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +

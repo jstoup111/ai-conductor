@@ -1,3 +1,4 @@
+// Covers: task:7
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InvokeOptions,
@@ -224,6 +225,29 @@ describe('ProviderRuntimeSet', () => {
     expect(await codexReadiness?.()).toEqual(ready);
     expect(customReadiness).toBeUndefined();
     expect(custom.readiness).not.toHaveBeenCalled();
+  });
+
+  it('exposes readiness only when the built-in descriptor declares it', async () => {
+    const ready: AuthenticationReadiness = {
+      provider: 'codex',
+      source: 'cached-login',
+      state: 'ready',
+    };
+    const claudeAuthentication = { ...ready, provider: 'claude' } as unknown as AuthenticationReadiness;
+    const claudeReadiness = vi.fn(async () => ready);
+    const codexReadiness = vi.fn(async () => ready);
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'claude', { ...provider(), readiness: claudeReadiness });
+    registry.register('llm_provider', 'codex', { ...provider(), readiness: codexReadiness });
+    registry.markInitialized();
+
+    const runtimes = (await loadRuntimeSetFactory())?.(registry);
+
+    expect({
+      claude: runtimes?.readinessFor('claude', claudeAuthentication),
+      codex: await runtimes?.readinessFor('codex', ready)?.(),
+    }).toEqual({ claude: undefined, codex: ready });
+    expect(claudeReadiness).not.toHaveBeenCalled();
   });
 
   it('constructs every frozen-registry provider with isolated per-run state', async () => {
