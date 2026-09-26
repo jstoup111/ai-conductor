@@ -37,9 +37,9 @@ import type { HarnessConfig } from '../types/config.js';
 /** Fallback label when a pidfile record has no `engineDir`, or its basename
  * isn't a recognized version id (legacy record, dev/unpublished run, etc.). */
 const VERSION_UNKNOWN = 'version-unknown';
-/** Bound status reads to the recent daemon event tail. Capability events are
- * emitted once per daemon start, so their latest values remain near the end. */
-const CAPABILITY_EVENT_TAIL_BYTES = 64 * 1024;
+/** Chunk size for reverse event-log scans.  Capability events are emitted at
+ * startup and can be much older than ordinary daemon telemetry. */
+const CAPABILITY_EVENT_SCAN_CHUNK_BYTES = 64 * 1024;
 
 /**
  * Derive a version id label from a pidfile's `engineDir` (FR-14). Pure string
@@ -471,7 +471,9 @@ function readOnlyReviewCapability(event: unknown): ReadOnlyReviewCapability | un
   };
 }
 
-/** Read only the recent event tail, retaining the final persisted result per provider. */
+/** Scan the whole JSONL ledger backwards, stopping when every seen provider has
+ * its latest capability record.  Chunks may start mid-record, so only complete
+ * lines are parsed. */
 async function readLatestReadOnlyReviewCapabilities(repoPath: string): Promise<ReadOnlyReviewCapability[]> {
   const path = join(repoPath, '.daemon', 'events.jsonl');
   let size: number;
@@ -481,13 +483,30 @@ async function readLatestReadOnlyReviewCapabilities(repoPath: string): Promise<R
     return [];
   }
 
-  const offset = Math.max(0, size - CAPABILITY_EVENT_TAIL_BYTES);
-  const buffer = Buffer.alloc(size - offset);
-  let bytesRead: number;
+  const latestByProvider = new Map<string, ReadOnlyReviewCapability>();
+  let end = size;
+  let suffix = '';
   try {
     const handle = await open(path, 'r');
     try {
-      ({ bytesRead } = await handle.read(buffer, 0, buffer.length, offset));
+      while (end > 0) {
+        const start = Math.max(0, end - CAPABILITY_EVENT_SCAN_CHUNK_BYTES);
+        const buffer = Buffer.alloc(end - start);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+        const text = buffer.subarray(0, bytesRead).toString('utf8') + suffix;
+        const lines = text.split('\n');
+        suffix = start > 0 ? (lines.shift() ?? '') : '';
+        for (const line of lines.reverse()) {
+          if (line.trim() === '') continue;
+          try {
+            const event = readOnlyReviewCapability(JSON.parse(line));
+            if (event && !latestByProvider.has(event.provider)) latestByProvider.set(event.provider, event);
+          } catch {
+            // A concurrent append or malformed unrelated event does not make status fail.
+          }
+        }
+        end = start;
+      }
     } finally {
       await handle.close();
     }
@@ -495,20 +514,6 @@ async function readLatestReadOnlyReviewCapabilities(repoPath: string): Promise<R
     return [];
   }
 
-  const lines = buffer.subarray(0, bytesRead).toString('utf8').split('\n');
-  // The byte tail can begin in the middle of an event; it cannot be parsed as
-  // a complete JSONL record and must not be allowed to affect the result.
-  if (offset > 0) lines.shift();
-  const latestByProvider = new Map<string, ReadOnlyReviewCapability>();
-  for (const line of lines) {
-    if (line.trim() === '') continue;
-    try {
-      const event = readOnlyReviewCapability(JSON.parse(line));
-      if (event) latestByProvider.set(event.provider, event);
-    } catch {
-      // A concurrent append or malformed unrelated event does not make status fail.
-    }
-  }
   return [...latestByProvider.values()];
 }
 

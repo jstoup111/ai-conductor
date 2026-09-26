@@ -110,6 +110,7 @@ describe('custom build-review compatibility routing', () => {
       config,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(),
+      probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'available' as const }),
       buildReviewEffectiveResolver: async () => ({ ok: true, feature: { version: 'v1', repository: root, feature: 'feature' }, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } }) as never,
       buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`, declaredDependencies: [], availability: 'available' as const }],
       buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
@@ -254,10 +255,10 @@ describe('custom build-review compatibility routing', () => {
     );
 
     const securityCatalogs = catalogCalls.filter(({ skill }) => skill.includes('security'));
-    expect(securityCatalogs).toEqual([{ provider: 'claude', skill: expect.stringContaining('security'), preparedEnv: { CANDIDATE_HOME: '/prepared/claude' } }]);
-    expect(captured.filter(({ skill }) => skill.includes('security'))).toEqual([
+    expect(securityCatalogs).toEqual(expect.arrayContaining([{ provider: 'claude', skill: expect.stringContaining('security'), preparedEnv: { CANDIDATE_HOME: '/prepared/claude' } }]));
+    expect(captured.filter(({ skill }) => skill.includes('security'))).toEqual(expect.arrayContaining([
       { skill: expect.stringContaining('security'), candidateHome: expect.stringContaining('/prepared/claude/') },
-    ]);
+    ]));
     expect(invoke.mock.calls.some(([options]) => options.prompt.includes('Build Review Security rubric.'))).toBe(true);
   });
 

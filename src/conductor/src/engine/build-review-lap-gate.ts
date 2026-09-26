@@ -40,12 +40,15 @@ type CacheWriteOutcome = { readonly ok: true } | { readonly ok: false; readonly 
 export class BuildReviewLapGate {
   private readonly pending = new Set<string>();
   private readonly records: BuildReviewLapInputRecord[] = [];
+  private readonly registeredPolicies = new Set<string>();
   private readonly deferredCacheWrites: Array<{ readonly member: string; readonly write: () => Promise<CacheWriteOutcome> }> = [];
   private readonly slotWaiters: Array<() => void> = [];
   private readonly baseline: Promise<void>;
   private openBaseline!: () => void;
   private opened = false;
   private activeReviewers = 0;
+
+  get hasOpened(): boolean { return this.opened; }
 
   private constructor(
     private readonly maxParallel: number,
@@ -82,6 +85,11 @@ export class BuildReviewLapGate {
 
   /** Records a candidate's captured policy bytes and installed package as lap inputs. */
   async registerPolicy(materialPath: string, packageRoot: string): Promise<void> {
+    const key = `${materialPath}\u0000${packageRoot}`;
+    if (this.registeredPolicies.has(key)) return;
+    if (this.opened) {
+      throw new Error('build-review lap policy baseline cannot be registered after the barrier opens');
+    }
     const roots: BuildReviewInputDigestRoots = {
       frozenHead: [],
       frozenBaseline: [],
@@ -90,6 +98,7 @@ export class BuildReviewLapGate {
       evidenceRoot: [],
     };
     this.records.push({ roots, before: await captureBuildReviewInputDigest(roots) });
+    this.registeredPolicies.add(key);
   }
 
   /** Arrives and waits until every member's baseline exists. */

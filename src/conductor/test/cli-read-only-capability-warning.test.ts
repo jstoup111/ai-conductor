@@ -92,4 +92,15 @@ describe('interactive read-only review capability config warnings', () => {
       /readOnlyReviewCapabilities !== undefined \? \{ readOnlyReviewCapabilities \} : \{\}/,
     );
   });
+
+  it('probes and threads capability evidence for default foreground mode', async () => {
+    const source = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
+    const modeGate = source.indexOf("mode === 'interactive'");
+    const probeAt = source.indexOf('const readOnlyReviewCapabilities = await probeInteractiveReadOnlyReviewCapabilities');
+    const conductorAt = source.indexOf('new Conductor({');
+    expect(modeGate).toBe(-1);
+    expect(probeAt).toBeGreaterThan(-1);
+    expect(probeAt).toBeLessThan(conductorAt);
+    expect(source.slice(conductorAt)).toContain('readOnlyReviewCapabilities');
+  });
 });

@@ -2387,9 +2387,10 @@ export class DefaultStepRunner implements StepRunner {
     const customEntries = config.catalog.filter(
       (entry): entry is ResolvedBuildReviewCustomCatalogEntry => entry.kind === 'custom',
     );
-    // Capability probing belongs to daemon startup and interactive config
-    // loading. A runner consumes that frozen observation; it never launches a
-    // probe during a review lap (or in an isolated test fixture).
+    // Production probing belongs to daemon startup and foreground config
+    // loading. A runner consumes that frozen observation; an injected probe is
+    // retained solely for isolated fixtures. Missing evidence is deliberately
+    // refused rather than treated as admission.
     const readOnlyReviewCapabilityRequests = new Map<string, Promise<ReadOnlyReviewCapability | undefined>>();
     const readOnlyReviewCapabilityFor = (provider: string): Promise<ReadOnlyReviewCapability | undefined> => {
       const existing = readOnlyReviewCapabilityRequests.get(provider);
@@ -2946,10 +2947,30 @@ export class DefaultStepRunner implements StepRunner {
       prepareCandidateSelfHost: this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
       onAttempt: this.providerAttempt, warn: this.providerWarn, options,
       abortSignal: controller.signal, deadlineAt,
+      ...(Array.isArray(entry.policy.llm_provider) && entry.policy.llm_provider.length > 1 ? { prepareCandidateBaseline: async ({ candidate, prepared }) => {
+        if (lapGate?.hasOpened) return;
+        const capability = await readOnlyReviewCapabilityFor?.(candidate.providerKey);
+        if (capability?.status !== 'available') return;
+        const catalogProvider = candidate.providerKey === 'claude' || candidate.providerKey === 'codex'
+          ? candidate.providerKey : undefined;
+        if (!catalogProvider) return;
+        const catalog = await this.buildReviewPolicyCatalog!({
+          provider: catalogProvider, entry, skill: entry.skill,
+          ...(prepared === undefined ? {} : { preparedEnv: prepared.env, preparedExecutable: prepared.executable, preparedArgs: prepared.args }),
+          ...(prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: prepared.originalCatalogHome }),
+        });
+        const resolved = resolveInstalledReviewPolicyCatalog({ skill: entry.skill, ...(entry.source === undefined ? {} : { source: entry.source as InstalledReviewSkill['source'] }) }, catalog);
+        if (resolved.kind === 'failure') return;
+        const policy = { ...resolved.policy, declaredDependencies: [...new Set([...resolved.policy.declaredDependencies, ...entry.resources])] };
+        const bundle = await this.buildReviewPolicyCapture(policy, { materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY) });
+        await lapGate?.registerPolicy(bundle.materialPath, policy.packageRoot);
+      } } : {}),
       preparedCandidateOperation: async (context) => {
         const readOnlyReviewCapability = await readOnlyReviewCapabilityFor?.(context.candidate.providerKey);
-        if (readOnlyReviewCapability?.status === 'unavailable') {
-          const detail = `Provider ${context.candidate.providerKey} read-only review mode is unavailable on ${readOnlyReviewCapability.platform}: ${readOnlyReviewCapability.reason}`;
+        if (readOnlyReviewCapability?.status !== 'available') {
+          const platform = readOnlyReviewCapability?.platform ?? process.platform;
+          const reason = readOnlyReviewCapability?.reason ?? 'no read-only review capability observation was recorded';
+          const detail = `Provider ${context.candidate.providerKey} read-only review mode is unavailable on ${platform}: ${reason}`;
           return {
             kind: 'failure' as const,
             result: {
@@ -3706,6 +3727,22 @@ export class DefaultStepRunner implements StepRunner {
               nativeSchema: getBuildReviewRubricDescriptor(branch.rubric).contract.output.jsonSchema,
               prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${prompt}`,
             }),
+            ...(customPolicyLap ? { prepareCandidateBaseline: async ({ candidate, prepared }) => {
+              if (lapGate?.hasOpened) return;
+              if (!customPolicyLap) return;
+              const capability = await readOnlyReviewCapabilityFor?.(candidate.providerKey);
+              if (capability?.status !== 'available') return;
+              const builtinEntry = { id: branch.rubric, kind: 'builtin' as const, policy: branch.policy };
+              const catalog = await this.buildReviewPolicyCatalog!({
+                provider: candidate.providerKey, entry: builtinEntry, skill: branch.skillName,
+                ...(prepared === undefined ? {} : { preparedEnv: prepared.env, preparedExecutable: prepared.executable, preparedArgs: prepared.args }),
+                ...(prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: prepared.originalCatalogHome }),
+              });
+              const resolved = resolveInstalledReviewPolicyCatalog({ skill: branch.skillName }, catalog);
+              if (resolved.kind === 'failure') return;
+              const bundle = await this.buildReviewPolicyCapture(resolved.policy, { materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY) });
+              await lapGate?.registerPolicy(bundle.materialPath, resolved.policy.packageRoot);
+            } } : {}),
             preparedCandidateOperation: async (context) => {
               // Built-in peers participate in a custom-policy lap's exact
               // read-only contract.  Resolve through the same memoized
@@ -3713,8 +3750,10 @@ export class DefaultStepRunner implements StepRunner {
               // unprobed provider independently.
               if (customPolicyLap) {
                 const capability = await readOnlyReviewCapabilityFor?.(context.candidate.providerKey);
-                if (capability?.status === 'unavailable') {
-                  const detail = `Provider ${context.candidate.providerKey} read-only review mode is unavailable on ${capability.platform}: ${capability.reason}`;
+                if (capability?.status !== 'available') {
+                  const platform = capability?.platform ?? process.platform;
+                  const reason = capability?.reason ?? 'no read-only review capability observation was recorded';
+                  const detail = `Provider ${context.candidate.providerKey} read-only review mode is unavailable on ${platform}: ${reason}`;
                   return {
                     kind: 'failure' as const,
                     result: {

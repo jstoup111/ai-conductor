@@ -1547,9 +1547,10 @@ async function main(): Promise<void> {
   const persister = new EventPersister(eventsLogPath, events);
   persister.start();
   await emitDeprecatedConfigKeyEvents(configResult, events);
-  const readOnlyReviewCapabilities = mode === 'interactive'
-    ? await probeInteractiveReadOnlyReviewCapabilities({ config, projectRoot, events })
-    : undefined;
+  // Every foreground mode can reach build_review.  The daemon performs this
+  // once at daemon start; foreground runs establish the same frozen evidence
+  // before constructing their Conductor.
+  const readOnlyReviewCapabilities = await probeInteractiveReadOnlyReviewCapabilities({ config, projectRoot, events });
 
   // Wire AuditTrailWriter: appends friction/positive-evidence records to
   // .pipeline/audit-trail/events.jsonl, rooted at the resolved projectRoot

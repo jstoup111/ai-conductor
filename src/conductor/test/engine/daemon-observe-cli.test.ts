@@ -459,6 +459,19 @@ describe('engine/daemon-observe-cli', () => {
 
         expect(out.join('\n')).toContain('READ-ONLY REVIEW CAPABILITY: none recorded');
       });
+
+      it('finds a startup capability event even after more than 64 KiB of later telemetry', async () => {
+        const repo = join(root, 'repo-old-capability');
+        await mkdir(join(repo, '.daemon'), { recursive: true });
+        await writeFile(
+          join(repo, '.daemon', 'events.jsonl'),
+          `${JSON.stringify({ type: 'build_review_read_only_capability', provider: 'codex', platform: 'linux', status: 'available' })}\n${JSON.stringify({ type: 'unrelated', payload: 'x'.repeat(70 * 1024) })}\n`,
+          'utf8',
+        );
+        const out: string[] = [];
+        await runDaemonStatus({ registryPath: await registry([record('repo-old-capability', repo)]), out: (line) => out.push(line), hasSessionProbe: () => false });
+        expect(out.join('\n')).toContain('READ-ONLY REVIEW CAPABILITY: codex on linux — available');
+      });
     });
 
     it('renders a dead pane\'s matching SIGKILL exit cause on its status row', async () => {
