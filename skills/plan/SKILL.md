@@ -227,7 +227,7 @@ required by at least one check in a cited task, with the same precision the crit
 before BUILD when any outcome is only implied. One check may carry several outcomes; when a task's
 criteria need more than five checks to cover, split the task rather than dropping outcomes.
 
-Three drift shapes account for most `coverage_binding` refusals; check each mapped criterion for them:
+Five drift shapes account for most `coverage_binding` refusals; check each mapped criterion for them:
 
 - **Layer drift.** The check asserts a lower mechanism than the criterion names — two render calls
   where the criterion says two dispatches, a store where it says the resolved candidate list. Assert
@@ -237,6 +237,12 @@ Three drift shapes account for most `coverage_binding` refusals; check each mapp
 - **Inverted configuration.** A criterion combining scopes or settings ("disallowed globally,
   permitted for one step") needs a fixture in exactly that combination, asserting both the
   override and the unaffected remainder. The mirror-image fixture does not cover it.
+- **Dropped identity.** A criterion whose error or record names several things ("naming provider
+  pi, capability selfHost, and the owning intake") needs a check that requires every name. A check
+  that requires two of the three leaves the third unasserted.
+- **Dropped mechanism.** A criterion that says how an outcome is reached ("completes through the real
+  CLI") needs a check that requires that path. A check that asserts only that the step runs, or only
+  its result, does not cover it.
 
 For a preserved/default-mode behavior, make the relevant checks bound any new side effects on that
 path to their intended conditions. For a closed result/state/reason set, ensure the checks can
@@ -443,6 +449,7 @@ After generating the plan, cross-reference:
   represent state a criterion depends on, fix the plan before landing or surface it to the operator.
   Example: Story 6 negative "the only assertion changes are the added credential option" vs a task
   whose Done-when requires new endpoint assertions — covered, yet contradictory.
+- Run the independent coverage judgement (§7a) and resolve every refusal before landing
 - Present the coverage mapping to the user
 
 Record the mapping in a `## Coverage Check` table. At every tier, use one four-cell
@@ -455,6 +462,33 @@ must be taken from one cited task's `Done when` block, and the disposition is
 | Criterion | Task id(s) | Done when quote | Disposition |
 | --- | --- | --- | --- |
 | Story 2 happy: Given …, when …, then … | 4 | "the required completion check" | diff-local |
+
+#### 7a. Independent Coverage Judgement
+
+**GATE: before the plan lands, a fresh subagent judges every criterion row. The plan's author never
+judges its own checks.** The `coverage_binding` step applies this same judgement before BUILD. A
+refusal there halts the feature and needs an amendment and an operator reseal; a refusal here is a
+one-turn fix.
+
+1. Build one claim per criterion row: the exact criterion text and every `Done when` bullet of each
+   cited task, verbatim. Include nothing else — no plan prose, stories, files, or rationale — so the
+   subagent sees exactly what the gate sees. Number the claims.
+2. Dispatch one subagent with fresh context through the selected host's available subagent facility.
+   Instruct it to apply `skills/coverage-binding/SKILL.md` exactly — its judgement policy and its
+   result contract, using the claim numbers as digests — and to read nothing beyond the supplied
+   claims. If the host has no subagent facility, stop and tell the operator; do not judge in the
+   authoring context.
+3. For each `does-not-assert`, change the cited task's checks so they require the stated missing
+   assertion (§3c), and update the row's quote if the quoted bullet changed. Then re-judge only the
+   revised claims, in a new subagent.
+4. Stop after three rounds. A claim still refused is a blocking assumption under the correctness
+   gate: interactive runs present it to the operator and wait; autonomous runs HALT naming the
+   refused criteria. Never land it.
+5. Never overrule a refusal by argument, and never edit a criterion to fit a check. Criteria change
+   only through the stories step.
+
+For M and L plans, `coherence-check` repeats this judgement on its own criterion rows, because those
+rows are what `coverage_binding` judges at those tiers.
 
 **GATE: Every citable decision in each non-deleted land-accepted ADR (`APPROVED` or `SUPERSEDED`) in
 the current spec change set must have exactly one row in `## Architecture Obligation Coverage`.** Use
