@@ -384,9 +384,31 @@ export type ConductorEvent =
       taskIds: string[];
     }
   | {
+      /** One terminal judgement of a DECIDE amendment's plan obligation. */
+      type: 'coverage_binding_amendment_judged';
+      step: 'coverage_binding';
+      verdict: 'carried' | 'not-carried' | 'no-plan-obligation' | 'unjudged';
+      digest: string;
+      artifactPath: string;
+      taskIds: string[];
+    }
+  | {
       /** The default-off coverage-binding judge completed without dispatching. */
       type: 'coverage_binding_disabled';
       step: 'coverage_binding';
+    }
+  | {
+      /** A changed resolved DECIDE input voided completed coverage evidence. */
+      type: 'coverage_binding_invalidated';
+      paths: string[];
+      origin: 'decide-change';
+    }
+  | {
+      /** A void exposed a completed task contradicted by current DECIDE coverage. */
+      type: 'coverage_binding_task_reopened';
+      step: 'coverage_binding';
+      taskId: string;
+      digest: string;
     }
   | {
       /** A retired configuration key was accepted as a compatibility no-op. */

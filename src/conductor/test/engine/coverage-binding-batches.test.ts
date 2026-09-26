@@ -1,8 +1,8 @@
-// Covers: task:4
+// Covers: task:4, task:10
 import { describe, expect, it } from 'vitest';
 
 import { planCoverageBindingBatches } from '../../src/engine/coverage-binding-batches.js';
-import { claimDigest, type CoverageBindingEnvelopeEntry } from '../../src/engine/coverage-binding-envelope.js';
+import { amendmentClaimDigest, claimDigest, type CoverageBindingEnvelopeEntry } from '../../src/engine/coverage-binding-envelope.js';
 
 function claim(index: number) {
   return {
@@ -24,6 +24,16 @@ function cachedEntry(current: ReturnType<typeof claim>): CoverageBindingEnvelope
   };
 }
 
+function amendment(index: number) {
+  return {
+    kind: 'amendment' as const,
+    artifactPath: `.docs/decisions/adr-${index}.md`,
+    amendment: `> **Amended 2026-09-24 by #${index}:** Preserve boundary ${index}.`,
+    taskIds: [String(index)],
+    doneWhen: [[`Check ${index}.`]],
+  };
+}
+
 describe('planCoverageBindingBatches', () => {
   it('chunks pending claims in claim order', () => {
     const claims = Array.from({ length: 20 }, (_, index) => claim(index + 1));
@@ -34,6 +44,23 @@ describe('planCoverageBindingBatches', () => {
       ['Criterion 1', 'Criterion 2', 'Criterion 3', 'Criterion 4', 'Criterion 5', 'Criterion 6', 'Criterion 7', 'Criterion 8'],
       ['Criterion 9', 'Criterion 10', 'Criterion 11', 'Criterion 12', 'Criterion 13', 'Criterion 14', 'Criterion 15', 'Criterion 16'],
       ['Criterion 17', 'Criterion 18', 'Criterion 19', 'Criterion 20'],
+    ]);
+  });
+
+  it('partitions criterion and amendment claims into separate batches', () => {
+    const claims = [claim(1), amendment(2), claim(3), amendment(4)];
+
+    const planned = planCoverageBindingBatches({ claims, previous: null, batchSize: 8 });
+
+    expect(planned.batches.map((batch) => batch.map(({ claim: pending }) => pending.kind ?? 'criterion'))).toEqual([
+      ['criterion', 'criterion'],
+      ['amendment', 'amendment'],
+    ]);
+    expect(planned.batches.flat().map(({ claimDigest: digest }) => digest)).toEqual([
+      claimDigest(claim(1)),
+      claimDigest(claim(3)),
+      amendmentClaimDigest(amendment(2)),
+      amendmentClaimDigest(amendment(4)),
     ]);
   });
 

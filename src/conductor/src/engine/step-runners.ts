@@ -19,7 +19,7 @@ import type { StepName, ConductState, ComplexityTier, ExecutionContext, RunMode 
 import { admitBuildReviewCustomSourceRegions } from './build-review-source-region-admission.js';
 import { BuildReviewScopeSource } from './build-review-scope-source.js';
 import type { HarnessConfig, EffortLevel, BuildReviewRubricId } from '../types/config.js';
-import { prdAuditScopeProjection } from './conductor.js';
+import { prdAuditScopeProjection, remediationLapCapForGate } from './conductor.js';
 import type {
   ComplexityAssessment,
   StepRunner,
@@ -46,20 +46,37 @@ import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFa
 import type { CiRepairDiagnosticReason } from '../types/events.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import {
+  parseAdrDecisions,
   resolveFeaturePlanPath,
   selectFeaturePlan,
   BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
 import {
+  formatArchitectureDecisionId,
+  validateArchitectureObligationCoverage,
+} from './architecture-obligation-coverage.js';
+import { resolveCoverageBindingDecideSet, type CoverageBindingDecideSet } from './coverage-binding-decide-set.js';
+import {
+  parseAmendmentBatchPayload,
+  amendmentClaimDigest,
+  claimDigest,
   parseJudgeBatchPayload,
   readCoverageBindingEnvelope,
   writeCoverageBindingCodeStamp,
   writeCoverageBindingEnvelope,
+  type CoverageBindingAmendmentEnvelopeEntry,
+  type CoverageBindingAdrLayerDisposition,
   type CoverageBindingEnvelopeEntry,
   type CoverageBindingEnvelopeFilesystem,
 } from './coverage-binding-envelope.js';
-import { assembleCoverageBindingClaims } from './coverage-binding-inputs.js';
+import {
+  assembleAmendmentClaims,
+  assembleCoverageBindingClaims,
+  type CoverageBindingAmendmentClaim,
+} from './coverage-binding-inputs.js';
 import { planCoverageBindingBatches } from './coverage-binding-batches.js';
+import { admitAndRestageRepair } from './repair-restage.js';
+import { resolveTaskIds } from './task-progress.js';
 import { engineContentStamp } from './engine-version-id.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { BUILD_REVIEW_RUBRIC_IDS, fingerprintBuildReviewRubricPolicy, getBuildReviewRubricDescriptor } from './build-review-registry.js';
@@ -72,6 +89,15 @@ import {
   type BuildReviewInputOptions,
   type BuildReviewRepairProvenance,
 } from './build-review-inputs.js';
+
+function isCoverageBindingAmendmentEntry(
+  entry: unknown,
+): entry is CoverageBindingAmendmentEnvelopeEntry {
+  return typeof entry === 'object' && entry !== null &&
+    (entry as { kind?: unknown }).kind === 'amendment' &&
+    typeof (entry as { artifactPath?: unknown }).artifactPath === 'string' &&
+    typeof (entry as { amendment?: unknown }).amendment === 'string';
+}
 import {
   composeContainmentAdvisoryOutput,
   runContainmentFloor,
@@ -4171,6 +4197,7 @@ export class DefaultStepRunner implements StepRunner {
       writeFile,
       rename,
     };
+    let adrLayer: CoverageBindingAdrLayerDisposition | undefined;
     const writeEnvelope = async (
       status: 'disabled' | 'done' | 'failed' | 'partial' | 'refused',
       entries: readonly CoverageBindingEnvelopeEntry[],
@@ -4181,6 +4208,7 @@ export class DefaultStepRunner implements StepRunner {
         runId: this.runId,
         status,
         entries,
+        ...(adrLayer === undefined ? {} : { adrLayer }),
       }, filesystem);
       // Rebase preservation needs to know which HEAD this run judged. Without
       // a resolvable HEAD there is no stamp, and preservation stays refused.
@@ -4192,30 +4220,193 @@ export class DefaultStepRunner implements StepRunner {
       .then((result) => (result.exitCode === 0 ? result.stdout.trim() : ''))
       .catch(() => '');
 
-    if (!judgeEnabled) {
-      await writeEnvelope('disabled', []);
-      await this.events?.emit({ type: 'coverage_binding_disabled', step: 'coverage_binding' });
-      return { success: true, output: 'coverage_binding judge disabled' };
-    }
-
     const planPath = this.planPathOverride
       ?? await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
-    if (!planPath) return { success: false, output: 'coverage_binding could not resolve the feature plan' };
-
-    let planText: string;
-    try {
-      planText = await readFile(planPath, 'utf8');
-    } catch (error) {
-      return { success: false, output: `coverage_binding could not read plan: ${error instanceof Error ? error.message : String(error)}` };
+    let planText: string | undefined;
+    if (planPath) {
+      try {
+        planText = await readFile(planPath, 'utf8');
+      } catch (error) {
+        return { success: false, output: `coverage_binding could not read plan: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    } else if (judgeEnabled) {
+      return { success: false, output: 'coverage_binding could not resolve the feature plan' };
     }
+
+    let decideSet: CoverageBindingDecideSet | undefined;
+    const resolveDecideSet = async (): Promise<CoverageBindingDecideSet | undefined> => {
+      decideSet ??= await resolveCoverageBindingDecideSet(this.projectDir, this.featureDesc || undefined);
+      return decideSet;
+    };
+
+    // Tier S and legacy plans without obligation bookkeeping have no ADR layer.
+    // This preserves their existing judge behavior while still evaluating every
+    // citable decision before the judge's configured exit on M/L plans.
+    const hasArchitectureObligationSection = planText !== undefined && /^##\s+Architecture Obligation Coverage\s*$/im.test(planText);
+    if (planText !== undefined && (state.complexity_tier === 'S' || !hasArchitectureObligationSection)) {
+      adrLayer = { disposition: 'not-applicable', adrIds: [] };
+    }
+    if (planText !== undefined && state.complexity_tier !== 'S' && hasArchitectureObligationSection) {
+      const resolvedDecideSet = await resolveDecideSet();
+      if (resolvedDecideSet) {
+        const decisionPaths = new Map<string, string>();
+        const adrPathsById = new Map<string, string>();
+        const uncitableAdrIds = new Set<string>();
+        const requiredDecisionIds = new Set<string>();
+        for (const adrPath of resolvedDecideSet.adrPaths) {
+          const adrId = basename(adrPath, '.md');
+          adrPathsById.set(adrId, adrPath);
+          let adr;
+          try {
+            adr = parseAdrDecisions(await readFile(join(this.projectDir, adrPath), 'utf8'));
+          } catch (error) {
+            return {
+              success: false,
+              output: `coverage_binding could not read ADR ${adrPath}: ${error instanceof Error ? error.message : String(error)}`,
+            };
+          }
+          if (adr.kind !== 'decisions') {
+            uncitableAdrIds.add(adrId);
+            continue;
+          }
+          for (const decisionId of adr.ids) {
+            const formatted = formatArchitectureDecisionId(adrId, decisionId);
+            requiredDecisionIds.add(formatted);
+            decisionPaths.set(formatted, adrPath);
+          }
+        }
+        if (uncitableAdrIds.size > 0) {
+          adrLayer = { disposition: 'not-applicable', adrIds: [...uncitableAdrIds].sort() };
+        }
+        const violations = validateArchitectureObligationCoverage(planText, requiredDecisionIds)
+          .filter((violation) => ![...uncitableAdrIds].some((adrId) => violation.decisionId.startsWith(`${adrId}#`)));
+        if (violations.length > 0) {
+          await writeEnvelope('refused', []);
+          const detail = violations.map((violation) => {
+            const decision = violation.decisionId.match(/#(D\d+)$/)?.[1] ?? violation.decisionId;
+            const adrId = violation.decisionId.match(/^([^#]+)#D\d+$/)?.[1];
+            const adrPath = decisionPaths.get(violation.decisionId)
+              ?? (adrId === undefined ? undefined : adrPathsById.get(adrId))
+              ?? (adrId === undefined ? undefined : `.docs/decisions/${adrId}.md`)
+              ?? '(unknown ADR path)';
+            return `ADR: ${adrPath}\nDecision: ${decision}\nViolation: ${violation.detail}`;
+          }).join('\n\n');
+          const reason = `coverage_binding refused: architecture obligation coverage does not carry every current ADR decision.\n\n${detail}`;
+          return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
+        }
+      }
+    }
+
+    let amendmentClaims: CoverageBindingAmendmentClaim[] = [];
+    if (planText !== undefined) {
+      try {
+        const resolvedDecideSet = await resolveDecideSet();
+        if (!resolvedDecideSet) {
+          amendmentClaims = [];
+        } else {
+          const decideArtifacts = await Promise.all([...resolvedDecideSet.paths]
+            .filter((path) => path.startsWith('.docs/specs/') || /^\.docs\/decisions\/architecture-review-/.test(path) ||
+              (state.complexity_tier !== 'S' && /^\.docs\/decisions\/adr-/.test(path)))
+            .map(async (path) => ({ path, text: await readFile(join(this.projectDir, path), 'utf8') })));
+          amendmentClaims = assembleAmendmentClaims({ planText, decideArtifacts });
+        }
+      } catch (error) {
+        const infrastructureFailure = new CoverageBindingPayloadError(
+          `could not read DECIDE amendment input: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return { success: false, output: infrastructureFailure.message, infrastructureFailure };
+      }
+    }
+
     const coherencePath = join(this.projectDir, '.docs', 'coherence', `${this.featureDesc}.md`);
     const coherenceText = await readFile(coherencePath, 'utf8').catch(() => null);
-    const claims = assembleCoverageBindingClaims({
+    const criterionClaims = planText === undefined ? [] : assembleCoverageBindingClaims({
       tier: state.complexity_tier ?? 'M',
       coherenceText,
       planText,
     });
+    const claims = [...criterionClaims, ...amendmentClaims];
     const previous = await readCoverageBindingEnvelope(this.projectDir, filesystem);
+    const previousDigests = new Set(previous?.entries.map((entry) => entry.digest) ?? []);
+    const previousReopenEligible = previous?.status === 'invalidated' && previous.entries.length > 0;
+    // Legacy invalidated envelopes have no predecessor and retain their
+    // original reopen behavior. A newly voided disabled or digest-less run is
+    // a fresh baseline, never authority to reopen work by criterion drift.
+    const previousCriterionReopenEligible = previousReopenEligible &&
+      (previous.predecessor === undefined ||
+        (previous.predecessor.status !== 'disabled' && previous.predecessor.recordedDigests));
+    const completedTaskIds = previousReopenEligible
+      ? new Set(await resolveTaskIds(this.projectDir, [...new Set(claims.flatMap((claim) => [...claim.taskIds]))]))
+      : new Set<string>();
+
+    const reopen = async (taskIds: readonly string[], digest: string, instruction: string): Promise<{ detail: string; capExceeded?: string } | undefined> => {
+      if (!previousReopenEligible) return undefined;
+      const bound = taskIds.filter((taskId) => completedTaskIds.has(taskId));
+      if (bound.length === 0) return undefined;
+      const admitted = await admitAndRestageRepair({
+        projectRoot: this.projectDir,
+        planPath: planPath!,
+        taskIds: bound,
+        findingIds: [digest],
+        sourceAuthority: 'coverage_binding',
+        instruction,
+        gates: ['coverage_binding'],
+        lapCap: remediationLapCapForGate('coverage_binding', this.config ?? ({} as HarnessConfig)),
+      });
+      if (admitted.kind === 'failed') return admitted;
+      for (const taskId of bound) {
+        completedTaskIds.delete(taskId);
+        await this.events?.emit({
+          type: 'coverage_binding_task_reopened', step: 'coverage_binding', taskId, digest,
+        });
+      }
+      return undefined;
+    };
+
+    for (const claim of criterionClaims) {
+      const digest = claimDigest(claim);
+      if (previousCriterionReopenEligible && !previousDigests.has(digest)) {
+        const detail = await reopen(claim.taskIds, digest, 'Reconcile the completed task with the changed coverage-binding criterion.');
+        if (detail) {
+          const output = `coverage_binding could not reopen contradicted work: ${detail.detail}`;
+          return detail.capExceeded === undefined
+            ? { success: false, output }
+            : { success: false, output, refusal: { kind: 'needs-human', reason: output } };
+        }
+      }
+    }
+
+    if (!judgeEnabled) {
+      const entries: CoverageBindingEnvelopeEntry[] = [
+        ...criterionClaims.map((claim) => ({
+          digest: claimDigest(claim), criterion: claim.criterion, taskIds: claim.taskIds,
+          doneWhen: claim.doneWhen, verdict: 'not-applicable' as const,
+        })),
+        ...amendmentClaims.map((claim) => ({
+        kind: 'amendment' as const,
+        digest: amendmentClaimDigest(claim), artifactPath: claim.artifactPath, amendment: claim.amendment,
+        taskIds: claim.taskIds, doneWhen: claim.doneWhen, verdict: 'unjudged' as const,
+        }) as unknown as CoverageBindingEnvelopeEntry),
+      ];
+      await writeEnvelope('disabled', entries);
+      for (const claim of amendmentClaims) {
+        const amendment = {
+          kind: 'amendment' as const,
+          digest: amendmentClaimDigest(claim),
+          artifactPath: claim.artifactPath,
+          amendment: claim.amendment,
+          taskIds: claim.taskIds,
+          doneWhen: claim.doneWhen,
+          verdict: 'unjudged' as const,
+        };
+        await this.events?.emit({ type: 'coverage_binding_amendment_judged', step: 'coverage_binding', verdict: amendment.verdict, digest: amendment.digest, artifactPath: amendment.artifactPath, taskIds: [...amendment.taskIds] });
+      }
+      await this.events?.emit({ type: 'coverage_binding_disabled', step: 'coverage_binding' });
+      return { success: true, output: 'coverage_binding judge disabled' };
+    }
+
+    if (planText === undefined) return { success: false, output: 'coverage_binding could not resolve the feature plan' };
+
     const planned = planCoverageBindingBatches({ claims, previous, batchSize });
     const entries: CoverageBindingEnvelopeEntry[] = [...planned.entries];
     const refused: CoverageBindingEnvelopeEntry[] = [];
@@ -4231,24 +4422,38 @@ export class DefaultStepRunner implements StepRunner {
       escalate: resolved.escalate,
       min_confidence: 0,
     };
+    const emitEntry = async (entry: unknown) => {
+      if (isCoverageBindingAmendmentEntry(entry)) {
+        const amendment = entry;
+        await this.events?.emit({ type: 'coverage_binding_amendment_judged', step: 'coverage_binding', verdict: amendment.verdict, digest: amendment.digest, artifactPath: amendment.artifactPath, taskIds: [...amendment.taskIds] });
+      } else {
+        const criterion = entry as CoverageBindingEnvelopeEntry;
+        await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: criterion.verdict, digest: criterion.digest, taskIds: [...criterion.taskIds] });
+      }
+    };
     for (const entry of entries) {
-      await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest: entry.digest, taskIds: [...entry.taskIds] });
-      if (entry.verdict === 'does-not-assert') refused.push(entry);
+      await emitEntry(entry);
+      if (entry.verdict === 'does-not-assert' || (entry as { verdict: string }).verdict === 'not-carried') refused.push(entry);
     }
     await writeEnvelope('partial', entries);
     for (const [batchIndex, batch] of planned.batches.entries()) {
       const batchDigests = batch.map(({ claimDigest: digest }) => digest);
       const memberId = batchDigests[0]!;
-      const prompt = [
-        'Judge each supplied claim independently against only its cited Done when checks. Do not read files, inspect a diff, or use any transcript.',
-        'Return exactly one JSON object with a verdicts array containing one verdict for every supplied digest.',
-        JSON.stringify({ claims: batch.map(({ claim, claimDigest: digest }) => ({
-          digest,
-          criterion: claim.criterion,
-          taskIds: claim.taskIds,
-          doneWhen: claim.doneWhen,
-        })) }),
-      ].join('\n\n');
+      const amendmentBatch = batch[0]?.claim.kind === 'amendment';
+      const prompt = amendmentBatch
+        ? [
+          'Judge each supplied DECIDE amendment independently against only the plan tasks and their Done when checks. Do not read files, inspect a diff, or use any transcript.',
+          'Return exactly one JSON object with a verdicts array containing one verdict for every supplied digest. A verdict is carried with non-empty issued taskIds, not-carried with non-empty missingObligation, or no-plan-obligation; contradictsCompleted is optional and may name only issued completed task ids.',
+          JSON.stringify({
+            claims: batch.map(({ claim, claimDigest: digest }) => ({ digest, artifactPath: claim.artifactPath, amendment: claim.amendment, taskIds: claim.taskIds, doneWhen: claim.doneWhen })),
+            completedTaskIds: [...completedTaskIds],
+          }),
+        ].join('\n\n')
+        : [
+          'Judge each supplied claim independently against only its cited Done when checks. Do not read files, inspect a diff, or use any transcript.',
+          'Return exactly one JSON object with a verdicts array containing one verdict for every supplied digest.',
+          JSON.stringify({ claims: batch.map(({ claim, claimDigest: digest }) => ({ digest, criterion: claim.criterion, taskIds: claim.taskIds, doneWhen: claim.doneWhen })) }),
+        ].join('\n\n');
       let result: { success: boolean; output?: string; providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'] };
       if (this.providerRuntimes && this.sessionStore) {
         const dispatched = await this.dispatchProviderWithLifecycleSupervision(
@@ -4291,42 +4496,80 @@ export class DefaultStepRunner implements StepRunner {
           ...(result.providerSetupExhaustion ? { providerSetupExhaustion: result.providerSetupExhaustion } : {}),
         };
       }
-      const parsed = parseJudgeBatchPayload(result.output, batchDigests);
-      if (!parsed.ok) {
-        await writeEnvelope('failed', entries);
-        const infrastructureFailure = new CoverageBindingPayloadError(parsed.reason);
-        return {
-          success: false,
-          output: infrastructureFailure.message,
-          infrastructureFailure,
-        };
-      }
-      for (const { claim, claimDigest: digest } of batch) {
-        const verdict = parsed.verdicts.get(digest)!;
-        const entry: CoverageBindingEnvelopeEntry = {
-          digest,
-          criterion: claim.criterion,
-          taskIds: claim.taskIds,
-          doneWhen: claim.doneWhen,
-          verdict: verdict.verdict,
-          ...(verdict.missingAssertion === undefined ? {} : { missingAssertion: verdict.missingAssertion }),
-        };
-        entries.push(entry);
-        await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest, taskIds: [...entry.taskIds] });
-        if (entry.verdict === 'does-not-assert') refused.push(entry);
+      if (amendmentBatch) {
+        const parsed = parseAmendmentBatchPayload(
+          result.output,
+          batchDigests,
+          batch.flatMap(({ claim }) => [...claim.taskIds]),
+          [...completedTaskIds],
+        );
+        if (!parsed.ok) {
+          await writeEnvelope('failed', entries);
+          const infrastructureFailure = new CoverageBindingPayloadError(parsed.reason);
+          return { success: false, output: infrastructureFailure.message, infrastructureFailure };
+        }
+        for (const { claim, claimDigest: digest } of batch) {
+          const verdict = parsed.verdicts.get(digest)!;
+          const entry = {
+            kind: 'amendment' as const,
+            digest,
+            artifactPath: claim.artifactPath!,
+            amendment: claim.amendment!,
+            taskIds: claim.taskIds,
+            doneWhen: claim.doneWhen,
+            verdict: verdict.verdict,
+            ...(verdict.verdict === 'not-carried' ? { missingObligation: verdict.missingObligation } : {}),
+          } as unknown as CoverageBindingEnvelopeEntry;
+          const detail = await reopen(
+            verdict.contradictsCompleted ?? [],
+            digest,
+            'Reconcile the completed task with the accepted DECIDE amendment contradiction.',
+          );
+          if (detail) {
+            await writeEnvelope('failed', entries);
+            const output = `coverage_binding could not reopen contradicted work: ${detail.detail}`;
+            return detail.capExceeded === undefined
+              ? { success: false, output }
+              : { success: false, output, refusal: { kind: 'needs-human', reason: output } };
+          }
+          entries.push(entry);
+          await emitEntry(entry);
+          if ((entry as { verdict: string }).verdict === 'not-carried') refused.push(entry);
+        }
+      } else {
+        const parsed = parseJudgeBatchPayload(result.output, batchDigests);
+        if (!parsed.ok) {
+          await writeEnvelope('failed', entries);
+          const infrastructureFailure = new CoverageBindingPayloadError(parsed.reason);
+          return { success: false, output: infrastructureFailure.message, infrastructureFailure };
+        }
+        for (const { claim, claimDigest: digest } of batch) {
+          const verdict = parsed.verdicts.get(digest)!;
+          const entry: CoverageBindingEnvelopeEntry = {
+            digest,
+            criterion: claim.criterion,
+            taskIds: claim.taskIds,
+            doneWhen: claim.doneWhen,
+            verdict: verdict.verdict,
+            ...(verdict.missingAssertion === undefined ? {} : { missingAssertion: verdict.missingAssertion }),
+          };
+          entries.push(entry);
+          await emitEntry(entry);
+          if (entry.verdict === 'does-not-assert') refused.push(entry);
+        }
       }
       await writeEnvelope('partial', entries);
     }
 
     if (refused.length > 0) {
       await writeEnvelope('refused', entries);
-      const detail = refused.map((entry) => [
-        `Criterion: ${entry.criterion}`,
-        `Task ids: ${entry.taskIds.join(', ')}`,
-        `Done when checks: ${entry.doneWhen.flat().join(' | ')}`,
-        `Missing assertion: ${entry.missingAssertion}`,
-      ].join('\n')).join('\n\n');
-      const reason = `coverage_binding refused: cited Done when checks do not assert the criterion.\n\n${detail}`;
+      const detail = refused.map((entry) => (entry as { kind?: string }).kind === 'amendment'
+        ? (() => {
+          const amendment = entry as unknown as CoverageBindingAmendmentEnvelopeEntry;
+          return [`Artifact: ${amendment.artifactPath}`, `Amendment: ${amendment.amendment}`, `Task ids: ${amendment.taskIds.join(', ')}`, `Done when checks: ${amendment.doneWhen.flat().join(' | ')}`, `Missing obligation: ${amendment.missingObligation}`].join('\n');
+        })()
+        : [`Criterion: ${entry.criterion}`, `Task ids: ${entry.taskIds.join(', ')}`, `Done when checks: ${entry.doneWhen.flat().join(' | ')}`, `Missing assertion: ${entry.missingAssertion}`].join('\n')).join('\n\n');
+      const reason = `coverage_binding refused: cited Done when checks do not assert the required claim.\n\n${detail}`;
       return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
     }
     await writeEnvelope('done', entries);

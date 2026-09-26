@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:12, task:17
+// Covers: task:1, task:3, task:7, task:8, task:10, task:11, task:12, task:17
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
@@ -31,6 +31,8 @@ import { executeProviderCandidates } from '../../src/engine/provider-execution.j
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { settleRemediationRound } from '../../src/engine/kickback-ledger.js';
+import { remediationLapCapForGate } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
@@ -100,6 +102,82 @@ function coverageBindingBatchOutput(options: InvokeOptions, verdict: 'asserts' |
       ? { digest, verdict }
       : { digest, verdict, missingAssertion: 'No check requires emission.' }),
   });
+}
+
+async function writeAmendmentCoverageInputs(projectDir: string, featureDesc: string): Promise<string> {
+  const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+  await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+  await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+  await writeFile(planPath, '### Task 1: Carry amendment\n**Done when:**\n- The service preserves the amended behavior.\n');
+  await writeFile(
+    join(projectDir, '.docs', 'decisions', `architecture-review-review-${featureDesc}.md`),
+    '> **Amended 2026-09-24 by #11:** The service preserves the amended behavior.\n',
+  );
+  return planPath;
+}
+
+function criterionCoherence(criterion = 'The service writes the audit record.'): string {
+  return [
+    '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |',
+    '| --- | --- | --- | --- | --- | --- |',
+    `| criterion | ${criterion} | task-2 | covered | "writes the audit record" | diff-local |`,
+  ].join('\n');
+}
+
+async function writeReopenCoverageInputs(projectDir: string, featureDesc: string, amendment: boolean): Promise<string> {
+  const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+  await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+  await writeFile(planPath, [
+    '### Task 1: Carry amendment', '**Done when:**', '- The service preserves the amended behavior.', '',
+    '### Task 2: Bind criterion', '**Done when:**', '- The service writes the audit record.', '',
+    '### Task 3: Contradicted work', '**Done when:**', '- The service keeps the old behavior.', '',
+  ].join('\n'));
+  await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), criterionCoherence());
+  if (amendment) {
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(
+      join(projectDir, '.docs', 'decisions', `architecture-review-review-${featureDesc}.md`),
+      '> **Amended 2026-09-24 by #11:** The service preserves the amended behavior.\n',
+    );
+  }
+  return planPath;
+}
+
+async function writeTaskStatuses(projectDir: string, completed: readonly string[]): Promise<void> {
+  await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+  await writeFile(join(projectDir, '.pipeline', 'task-status.json'), JSON.stringify({
+    tasks: ['1', '2', '3'].map((id) => ({ id, status: completed.includes(id) ? 'completed' : 'pending' })),
+  }));
+}
+
+async function readTaskStatuses(projectDir: string): Promise<Record<string, string>> {
+  const value = JSON.parse(await readFile(join(projectDir, '.pipeline', 'task-status.json'), 'utf8')) as {
+    tasks: Array<{ id: string; status: string }>;
+  };
+  return Object.fromEntries(value.tasks.map((task) => [task.id, task.status]));
+}
+
+async function writeInvalidatedEnvelope(
+  projectDir: string,
+  featureDesc: string,
+  entries: readonly unknown[],
+  status: 'invalidated' | 'done' = 'invalidated',
+): Promise<void> {
+  await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+  await writeFile(join(projectDir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+    version: 1, slug: featureDesc, runId: 'prior-run', status, entries,
+  }));
+}
+
+function adrWithDecisions(decisionIds: readonly string[]): string {
+  return `# ADR\n\n## Decision\n\n${decisionIds.map((id) => `${id}. **Decision ${id}.**`).join('\n')}\n`;
+}
+
+function obligationRows(adrId: string, decisionIds: readonly string[]): string {
+  return decisionIds.map((id) =>
+    `| ${adrId}#D${id} | existing | none | Decision ${id} remains in force. |`,
+  ).join('\n');
 }
 
 describe('DefaultStepRunner', () => {
@@ -240,6 +318,270 @@ describe('DefaultStepRunner', () => {
     }
   });
 
+  it('proceeds to judged claims when every DECIDE-set ADR decision has an obligation row', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-adr-obligations-pass-'));
+    const featureDesc = 'coverage-binding-adr-obligations-pass';
+    const adrId = 'adr-coverage-binding-obligations';
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
+      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
+    }));
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(join(projectDir, '.docs', 'decisions', `${adrId}.md`), adrWithDecisions(['1', '2', '3']));
+    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n${obligationRows(adrId, ['1', '2', '3'])}\n`);
+    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n`);
+    const runner = new DefaultStepRunner(provider, 'coverage-run-adr-pass', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an amended ADR decision with no coverage row before dispatching the judge', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-adr-obligations-missing-'));
+    const featureDesc = 'coverage-binding-adr-obligations-missing';
+    const adrId = 'adr-coverage-binding-amended';
+    const adrPath = `.docs/decisions/${adrId}.md`;
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    const provider = createMockProvider();
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(projectDir, adrPath), adrWithDecisions(['1', '2', '3', '4']));
+    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n${obligationRows(adrId, ['1', '2', '3'])}\n`);
+    const runner = new DefaultStepRunner(provider, 'coverage-run-adr-missing', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({
+        success: false,
+        refusal: { kind: 'needs-human' },
+      });
+      expect(result.output).toContain(adrPath);
+      expect(result.output).toContain('D4');
+      expect(result.output).toContain('no coverage row');
+      expect(provider.invoke).not.toHaveBeenCalled();
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('runs the ADR-obligation layer while the coverage-binding judge is disabled', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-adr-disabled-missing-'));
+    const featureDesc = 'coverage-binding-adr-disabled-missing';
+    const adrId = 'adr-coverage-binding-disabled';
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    const provider = createMockProvider();
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(projectDir, '.docs', 'decisions', `${adrId}.md`), adrWithDecisions(['1', '2', '3', '4']));
+    await writeFile(planPath, `## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n${obligationRows(adrId, ['1', '2', '3'])}\n`);
+    const runner = new DefaultStepRunner(provider, 'coverage-run-adr-disabled', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
+        success: false,
+        refusal: { kind: 'needs-human', reason: expect.stringContaining(`${adrId}#D4`) },
+      });
+      expect(provider.invoke).not.toHaveBeenCalled();
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the existing judge path when a legacy plan has no architecture obligation section', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-no-obligation-section-'));
+    const featureDesc = 'coverage-binding-no-obligation-section';
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
+      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
+    }));
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(planPath, '### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n');
+    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n');
+    const runner = new DefaultStepRunner(provider, 'coverage-run-no-obligation-section', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).toHaveBeenCalledOnce();
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        adrLayer: { disposition: 'not-applicable', adrIds: [] },
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('tolerates the ADR layer at tier S without reading a cited ADR', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-tier-s-obligations-'));
+    const featureDesc = 'coverage-binding-tier-s-obligations';
+    const adrId = 'adr-tier-s-unreadable';
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
+      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
+    }));
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | existing | none | Decision remains in force. |\n`);
+    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n');
+    const runner = new DefaultStepRunner(provider, 'coverage-run-tier-s-obligations', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'S' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).not.toHaveBeenCalled();
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        status: 'done', adrLayer: { disposition: 'not-applicable', adrIds: [] },
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('tolerates a cited ADR with no citable decision', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-uncitable-adr-'));
+    const featureDesc = 'coverage-binding-uncitable-adr';
+    const adrId = 'adr-uncitable';
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => ({
+      success: true, output: coverageBindingBatchOutput(options), exitCode: 0,
+    }));
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(join(projectDir, '.docs', 'decisions', `${adrId}.md`), '# ADR\n\nNo Decision section is available.\n');
+    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | existing | none | Decision remains in force. |\n`);
+    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n');
+    const runner = new DefaultStepRunner(provider, 'coverage-run-uncitable-adr', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).toHaveBeenCalledOnce();
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        adrLayer: { disposition: 'not-applicable', adrIds: [adrId] },
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a malformed coverage row with its ADR path and decision', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-malformed-obligation-'));
+    const featureDesc = 'coverage-binding-malformed-obligation';
+    const adrId = 'adr-malformed-obligation';
+    const adrPath = `.docs/decisions/${adrId}.md`;
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(projectDir, adrPath), adrWithDecisions(['1']));
+    await writeFile(planPath, `## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | existing | none |\n`);
+    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-malformed-obligation', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain(adrPath);
+      expect(result.output).toContain('D1');
+      expect(result.output).toContain('expected 4');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses ungrounded obligation evidence with its ADR path and decision', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-ungrounded-obligation-'));
+    const featureDesc = 'coverage-binding-ungrounded-obligation';
+    const adrId = 'adr-ungrounded-obligation';
+    const adrPath = `.docs/decisions/${adrId}.md`;
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(projectDir, adrPath), adrWithDecisions(['1']));
+    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n\n## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | task | task-1 | The missing evidence. |\n`);
+    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-ungrounded-obligation', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain(adrPath);
+      expect(result.output).toContain('D1');
+      expect(result.output).toContain('evidence is absent');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an invented decision with the cited ADR path', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-invented-obligation-'));
+    const featureDesc = 'coverage-binding-invented-obligation';
+    const adrId = 'adr-invented-obligation';
+    const adrPath = `.docs/decisions/${adrId}.md`;
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    await mkdir(join(projectDir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(projectDir, adrPath), adrWithDecisions(['1']));
+    await writeFile(planPath, `## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n${obligationRows(adrId, ['1'])}\n| ${adrId}#D99 | existing | none | Invented decision. |\n`);
+    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-invented-obligation', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain(adrPath);
+      expect(result.output).toContain('D99');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns an infrastructure failure for an unreadable DECIDE-set ADR without an envelope', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-unreadable-adr-'));
+    const featureDesc = 'coverage-binding-unreadable-adr';
+    const adrId = 'adr-unreadable';
+    const adrPath = `.docs/decisions/${adrId}.md`;
+    const planPath = join(projectDir, '.docs', 'plans', `${featureDesc}.md`);
+    await mkdir(join(projectDir, '.docs', 'plans'), { recursive: true });
+    await writeFile(planPath, `## Architecture Obligation Coverage\n\n| Decision | Disposition | Task(s) | Evidence |\n| --- | --- | --- | --- |\n| ${adrId}#D1 | existing | none | Decision remains in force. |\n`);
+    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-unreadable-adr', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({ success: false });
+      expect(result).not.toHaveProperty('refusal');
+      expect(result.output).toContain(adrPath);
+      await expect(access(join(projectDir, '.pipeline', 'coverage-binding.json'))).rejects.toThrow();
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('judges each applicable coverage claim in a fresh one-shot session and caches its digest', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-enabled-'));
     const planPath = join(projectDir, 'plan.md');
@@ -344,6 +686,40 @@ describe('DefaultStepRunner', () => {
     }
   });
 
+  it('rejects an amendment-shaped batch atomically before recording a verdict or reopening work', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-invalid-amendment-payload-'));
+    const planPath = join(projectDir, 'plan.md');
+    const featureDesc = 'coverage-binding-invalid-amendment-payload';
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+      return {
+        success: true,
+        output: JSON.stringify({ verdicts: [{ digest: claims[0]!.digest, verdict: 'carried', taskIds: ['foreign-task'] }] }),
+        exitCode: 0,
+      };
+    });
+    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(planPath, `### Task 1: Bind the claim\n**Done when:**\n- The service emits an audit record.\n`);
+    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits an audit record | task-1 | covered | "emits an audit record" | diff-local |\n`);
+    const runner = new DefaultStepRunner(provider, 'coverage-run-invalid-amendment-payload', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
+        success: false,
+        infrastructureFailure: { name: 'CoverageBindingPayloadError', kind: 'coverage-binding-payload' },
+      });
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        status: 'failed', entries: [],
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('returns a needs-human refusal with the bound checks for a does-not-assert verdict', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-refusal-'));
     const planPath = join(projectDir, 'plan.md');
@@ -363,6 +739,360 @@ describe('DefaultStepRunner', () => {
         success: false,
         refusal: { kind: 'needs-human', reason: expect.stringContaining('The service writes an audit record.') },
       });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { verdict: 'carried', payload: { verdict: 'carried', taskIds: ['1'] } },
+    { verdict: 'no-plan-obligation', payload: { verdict: 'no-plan-obligation' } },
+  ] as const)('completes amendment claims judged $verdict and emits their dedicated event', async ({ verdict, payload }) => {
+    const projectDir = await mkdtemp(join(tmpdir(), `coverage-binding-amendment-${verdict}-`));
+    const featureDesc = `coverage-binding-amendment-${verdict}`;
+    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ digest }) => ({ digest, ...payload })) }), exitCode: 0 };
+    });
+    const events = new ConductorEventEmitter();
+    const observed: unknown[] = [];
+    events.on('coverage_binding_amendment_judged', (event) => { observed.push(event); });
+    const runner = new DefaultStepRunner(provider, `coverage-run-amendment-${verdict}`, projectDir, {
+      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(observed).toMatchObject([{ type: 'coverage_binding_amendment_judged', verdict }]);
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'done', entries: [{ kind: 'amendment', verdict }] });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a not-carried amendment with its artifact, text, and missing obligation', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-refusal-'));
+    const featureDesc = 'coverage-binding-amendment-refusal';
+    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ digest }) => ({ digest, verdict: 'not-carried', missingObligation: 'Add a preservation task.' })) }), exitCode: 0 };
+    });
+    const runner = new DefaultStepRunner(provider, 'coverage-run-amendment-refusal', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain('.docs/decisions/architecture-review-review-coverage-binding-amendment-refusal.md');
+      expect(result.output).toContain('The service preserves the amended behavior.');
+      expect(result.output).toContain('Add a preservation task.');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a cached not-carried amendment with its preserved missing obligation without provider dispatch', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-cached-refusal-'));
+    const featureDesc = 'coverage-binding-amendment-cached-refusal';
+    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ digest }) => ({ digest, verdict: 'not-carried', missingObligation: 'X' })) }), exitCode: 0 };
+    });
+    const runner = new DefaultStepRunner(provider, 'coverage-run-amendment-cached-refusal', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: false });
+      (provider.invoke as ReturnType<typeof vi.fn>).mockClear();
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(provider.invoke).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain('Missing obligation: X');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses carried amendment claims and records disabled ones as unjudged without dispatch', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-cache-'));
+    const featureDesc = 'coverage-binding-amendment-cache';
+    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ digest }) => ({ digest, verdict: 'carried', taskIds: ['1'] })) }), exitCode: 0 };
+    });
+    const enabled = new DefaultStepRunner(provider, 'coverage-run-amendment-cache', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    try {
+      await expect(enabled.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      await expect(enabled.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).toHaveBeenCalledOnce();
+
+      const disabledProvider = createMockProvider();
+      const disabled = new DefaultStepRunner(disabledProvider, 'coverage-run-amendment-disabled', projectDir, {
+        featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+      });
+      await expect(disabled.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(disabledProvider.invoke).not.toHaveBeenCalled();
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        status: 'disabled', entries: [{ kind: 'amendment', verdict: 'unjudged' }],
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reopens a completed task contradicted by an accepted amendment after a void', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-reopen-'));
+    const featureDesc = 'coverage-binding-amendment-reopen';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
+    const provider = createMockProvider();
+    let issuedCompletedTaskIds: string[] | undefined;
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims, completedTaskIds } = JSON.parse(body) as { claims: Array<{ digest: string; amendment?: string }>; completedTaskIds?: string[] };
+      if (claims[0]?.amendment !== undefined) issuedCompletedTaskIds = completedTaskIds;
+      return {
+        success: true,
+        output: JSON.stringify({ verdicts: claims.map(({ digest, amendment }) => amendment === undefined
+          ? { digest, verdict: 'asserts' }
+          : { digest, verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['3'] }) }),
+        exitCode: 0,
+      };
+    });
+    await writeTaskStatuses(projectDir, ['1', '2', '3']);
+    const baseline = new DefaultStepRunner(createMockProvider(), 'coverage-run-amendment-reopen-baseline', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+    await expect(baseline.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+    const prior = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
+    await writeInvalidatedEnvelope(projectDir, featureDesc, prior.entries);
+    const events = new ConductorEventEmitter();
+    const reopened: unknown[] = [];
+    events.on('coverage_binding_task_reopened', (event) => { reopened.push(event); });
+    const before = await readFile(planPath, 'utf8');
+    const runner = new DefaultStepRunner(provider, 'coverage-run-amendment-reopen', projectDir, {
+      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(issuedCompletedTaskIds).toEqual(['1', '2', '3']);
+      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '3': 'pending', '1': 'completed', '2': 'completed' });
+      expect(reopened).toMatchObject([{ type: 'coverage_binding_task_reopened', taskId: '3', digest: expect.stringMatching(/^sha256:/) }]);
+      await expect(readKickbackLedger(projectDir)).resolves.toMatchObject({ gates: { coverage_binding: { laps: 1 } } });
+      expect(await readFile(planPath, 'utf8')).toBe(before);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reopens only completed tasks cited by a criterion digest changed after a void', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-criterion-reopen-'));
+    const featureDesc = 'coverage-binding-criterion-reopen';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, false);
+    await writeTaskStatuses(projectDir, ['1', '2', '3']);
+    const baseline = new DefaultStepRunner(createMockProvider(), 'coverage-run-criterion-baseline', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+    try {
+      await expect(baseline.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      const prior = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
+      await writeInvalidatedEnvelope(projectDir, featureDesc, prior.entries);
+      await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), criterionCoherence('The changed service writes the audit record.'));
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'coverage-run-criterion-reopen', projectDir, {
+        featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+      });
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).not.toHaveBeenCalled();
+      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '2': 'pending', '1': 'completed', '3': 'completed' });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a contradicted-task reopen when coverage_binding has exhausted its default lap cap', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-reopen-cap-'));
+    const featureDesc = 'coverage-binding-reopen-cap';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, false);
+    await writeTaskStatuses(projectDir, ['1', '2', '3']);
+    await writeInvalidatedEnvelope(projectDir, featureDesc, [{ digest: 'sha256:old', criterion: 'old', taskIds: ['2'], doneWhen: [[]], verdict: 'not-applicable' }]);
+    const cap = remediationLapCapForGate('coverage_binding', {} as HarnessConfig);
+    for (let lap = 0; lap < cap; lap++) {
+      await settleRemediationRound(projectDir, `seed-${lap}`, ['coverage_binding']);
+    }
+    const events = new ConductorEventEmitter();
+    const reopened: unknown[] = [];
+    events.on('coverage_binding_task_reopened', (event) => { reopened.push(event); });
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'coverage-run-reopen-cap', projectDir, {
+      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+    try {
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain('gates.coverage_binding');
+      expect(result.output).toContain(String(cap));
+      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '2': 'completed' });
+      await expect(readKickbackLedger(projectDir)).resolves.toMatchObject({ gates: { coverage_binding: { laps: cap } } });
+      expect(reopened).toEqual([]);
+      expect(provider.invoke).not.toHaveBeenCalled();
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not route reopening through plan work or mutate the plan', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-no-replan-'));
+    const featureDesc = 'coverage-binding-no-replan';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, false);
+    await writeTaskStatuses(projectDir, ['1', '2', '3']);
+    await writeInvalidatedEnvelope(projectDir, featureDesc, [{ digest: 'sha256:old', criterion: 'old', taskIds: ['2'], doneWhen: [[]], verdict: 'not-applicable' }]);
+    const before = await readFile(planPath, 'utf8');
+    const runner = new DefaultStepRunner(createMockProvider(), 'coverage-run-no-replan', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(await readFile(planPath, 'utf8')).toBe(before);
+      await expect(readFile(join(projectDir, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.not.toContain('"plan"');
+      await expect(readKickbackLedger(projectDir)).resolves.toMatchObject({ gates: { coverage_binding: { laps: 1 } } });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not reopen tasks after a rebase refresh or from a digest-less invalidated baseline', async () => {
+    for (const [name, status, entries] of [
+      ['rebase-refresh', 'done', []],
+      ['digest-less', 'invalidated', []],
+    ] as const) {
+      const projectDir = await mkdtemp(join(tmpdir(), `coverage-binding-${name}-`));
+      const featureDesc = `coverage-binding-${name}`;
+      const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, false);
+      await writeTaskStatuses(projectDir, ['1', '2', '3']);
+      await writeInvalidatedEnvelope(projectDir, featureDesc, entries, status);
+      const runner = new DefaultStepRunner(createMockProvider(), `coverage-run-${name}`, projectDir, {
+        featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+      });
+      try {
+        await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+        await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '2': 'completed' });
+      } finally {
+        await rm(projectDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it.each([
+    ['judge-disabled predecessor', { status: 'disabled', recordedDigests: true }],
+    ['digest-less predecessor', { status: 'done', recordedDigests: false }],
+  ] as const)('does not reopen criterion work after a void with a %s', async (_caseName, predecessor) => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-void-provenance-'));
+    const featureDesc = 'coverage-binding-void-provenance';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
+    await writeTaskStatuses(projectDir, ['1', '2', '3']);
+    await writeFile(join(projectDir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+      version: 1,
+      slug: featureDesc,
+      runId: 'voided-run',
+      status: 'invalidated',
+      predecessor,
+      entries: [{ digest: 'sha256:old', criterion: 'old criterion', taskIds: ['2'], doneWhen: [[]], verdict: 'not-applicable' }],
+    }));
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'coverage-run-void-provenance', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).not.toHaveBeenCalled();
+      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '2': 'completed' });
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        status: 'disabled',
+        entries: [
+          { digest: expect.stringMatching(/^sha256:/), criterion: 'The service writes the audit record.' },
+          { kind: 'amendment', digest: expect.stringMatching(/^sha256:/), verdict: 'unjudged' },
+        ],
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an amendment contradiction from a digest-less invalidated baseline without reopening work', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-digest-less-amendment-'));
+    const featureDesc = 'coverage-binding-digest-less-amendment';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
+    let issuedCompletedTaskIds: string[] | undefined;
+    const provider = createMockProvider();
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims, completedTaskIds } = JSON.parse(body) as { claims: Array<{ digest: string; amendment?: string }>; completedTaskIds?: string[] };
+      if (claims[0]?.amendment !== undefined) issuedCompletedTaskIds = completedTaskIds;
+      return {
+        success: true,
+        output: JSON.stringify({ verdicts: claims.map(({ digest, amendment }) => amendment === undefined
+          ? { digest, verdict: 'asserts' }
+          : { digest, verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['3'] }) }),
+        exitCode: 0,
+      };
+    });
+    await writeTaskStatuses(projectDir, ['1', '2', '3']);
+    await writeInvalidatedEnvelope(projectDir, featureDesc, []);
+    const events = new ConductorEventEmitter();
+    const reopened: unknown[] = [];
+    events.on('coverage_binding_task_reopened', (event) => { reopened.push(event); });
+    const runner = new DefaultStepRunner(provider, 'coverage-run-digest-less-amendment', projectDir, {
+      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({
+        success: false,
+        infrastructureFailure: { name: 'CoverageBindingPayloadError', kind: 'coverage-binding-payload' },
+      });
+      expect(issuedCompletedTaskIds).toEqual([]);
+      await expect(readTaskStatuses(projectDir)).resolves.toMatchObject({ '3': 'completed' });
+      expect(reopened).toEqual([]);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('records every current criterion and amendment digest when the judge is disabled', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-disabled-digests-'));
+    const featureDesc = 'coverage-binding-disabled-digests';
+    const planPath = await writeReopenCoverageInputs(projectDir, featureDesc, true);
+    const provider = createMockProvider();
+    const events = new ConductorEventEmitter();
+    const amendmentEvents: unknown[] = [];
+    const criterionEvents: unknown[] = [];
+    events.on('coverage_binding_amendment_judged', (event) => { amendmentEvents.push(event); });
+    events.on('coverage_binding_judged', (event) => { criterionEvents.push(event); });
+    const runner = new DefaultStepRunner(provider, 'coverage-run-disabled-digests', projectDir, {
+      featureDesc, planPath, events, config: { coverage_binding: { judge: { enabled: false } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      expect(provider.invoke).not.toHaveBeenCalled();
+      const envelope = JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'));
+      expect(envelope).toMatchObject({ status: 'disabled', entries: [
+        { digest: expect.stringMatching(/^sha256:/), criterion: 'The service writes the audit record.' },
+        { kind: 'amendment', digest: expect.stringMatching(/^sha256:/), verdict: 'unjudged' },
+      ] });
+      expect(amendmentEvents).toMatchObject([{ type: 'coverage_binding_amendment_judged', verdict: 'unjudged' }]);
+      expect(criterionEvents).toEqual([]);
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }

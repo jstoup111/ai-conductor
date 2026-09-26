@@ -452,12 +452,17 @@ export async function settleRemediationRound(
   projectRoot: string,
   receiptId: string,
   gates: readonly string[],
-): Promise<{ settled: boolean }> {
+  lapCap?: number,
+): Promise<{ settled: boolean; capExceeded?: string }> {
   return withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
     if (ledger.settlementReceipts?.[receiptId]) return { settled: false };
     const uniqueGates = [...new Set(gates)];
     for (const gate of uniqueGates) requireReadableGate(ledger, gate);
+    if (lapCap !== undefined) {
+      const capExceeded = uniqueGates.find((gate) => (ledger.gates[gate]?.laps ?? 0) >= lapCap);
+      if (capExceeded !== undefined) return { settled: false, capExceeded };
+    }
     const nextGates = { ...ledger.gates };
     for (const gate of uniqueGates) {
       const current = nextGates[gate] ?? { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 };

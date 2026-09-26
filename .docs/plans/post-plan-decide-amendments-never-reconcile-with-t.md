@@ -335,6 +335,30 @@ Thirteen tasks extend `coverage_binding` so an operator reseal of a changed DECI
 
 **Dependencies:** Task 11, Task 12
 
+### Task 14: Preserve judge-disabled provenance across a void
+**Story:** 4
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/coverage-binding-void.test.ts` and `src/conductor/test/engine/step-runners.test.ts`: voiding a judge-disabled or digest-less envelope keeps that predecessor provenance, and the following `coverage_binding` run reopens no task through a criterion digest while recording every current digest.
+2. Verify tests fail (RED).
+3. Implement: extend the `invalidated` envelope written by `voidCoverageBindingForDecideChange` in `src/conductor/src/engine/coverage-binding-void.ts` with the predecessor's status and a recorded-digests flag (optional field; older envelopes still parse); in `runCoverageBinding` in `src/conductor/src/engine/step-runners.ts`, skip criterion-digest reopen when that preserved provenance is judge-disabled or digest-less.
+4. Verify tests pass (GREEN).
+5. Commit: "fix(coverage-binding): keep judge-disabled provenance across a void"
+
+**Done when:**
+- `voidCoverageBindingForDecideChange` records on the `invalidated` envelope the predecessor envelope's status and whether it carried recorded digests, so a void of a judge-disabled or digest-less envelope keeps that provenance, as asserted by the provenance-preserving void test in `src/conductor/test/engine/coverage-binding-void.test.ts`
+- when the previous envelope status is `invalidated` and its preserved predecessor provenance is judge-disabled or carries no recorded digests, `runCoverageBinding` reopens no task through a criterion digest and writes an envelope recording every current criterion and amendment digest, as asserted by the judge-disabled-predecessor void test in `src/conductor/test/engine/step-runners.test.ts`
+
+**Files:**
+- `src/conductor/src/engine/coverage-binding-void.ts` — preserve predecessor provenance
+- `src/conductor/src/engine/coverage-binding-envelope.ts` — optional provenance field
+- `src/conductor/src/engine/step-runners.ts` — consult provenance before criterion-digest reopen
+- `src/conductor/test/engine/coverage-binding-void.test.ts` — provenance void test
+- `src/conductor/test/engine/step-runners.test.ts` — judge-disabled-predecessor test
+
+**Dependencies:** Task 4, Task 13
+
 ## Task Dependency Graph
 
 ```text
@@ -344,6 +368,7 @@ Thirteen tasks extend `coverage_binding` so an operator reseal of a changed DECI
 3 ──> 7 ──> 8
 3 ──> 9 ──> 10 (also needs 1) ──> 11 (also needs 7) ──> 13
 12 ─────────────────────────────────────────────────────> 13
+4, 13 ──> 14
 ```
 
 ## Integration Points
@@ -351,6 +376,7 @@ Thirteen tasks extend `coverage_binding` so an operator reseal of a changed DECI
 - After Task 5: an operator reseal of a changed DECIDE artifact re-arms `coverage_binding` end to end through `dispatchResealCommand`.
 - After Task 6: the loop proves a void re-runs `coverage_binding` before any build task (architecture review condition C1).
 - After Task 13: a reseal → re-run → reopen round trip works through `runCoverageBinding`.
+- After Task 14: a void of a judge-disabled or digest-less envelope re-runs without a criterion-digest reopen.
 
 ## Coverage Check
 
@@ -387,7 +413,7 @@ Thirteen tasks extend `coverage_binding` so an operator reseal of a changed DECI
 | Story 4 happy: Given a void has been recorded, task 2 is completed, and a criterion claim citing task 2 has a digest absent from the previous envelope's recorded digests, when `coverage_binding` runs, then task 2 is restaged as open without a model call | 13 | "when the previous envelope status is `invalidated` and a criterion claim citing completed task 2 has a digest absent from the previous envelope's recorded digests, task 2 is restaged open with zero provider dispatches, while a completed task cited only by unchanged digests stays completed, as asserted by the criterion-digest reopen test in `src/conductor/test/engine/step-runners.test.ts`" | diff-local |
 | Story 4 happy: Given reopened tasks exist, when the step completes, then the plan file is byte-identical to before the step, the step records no routing to `plan`, and the reopen is charged to `gates.coverage_binding` | 13 | "after reopening, the plan file is byte-identical to before the step, no `plan` routing or kickback is recorded, the reopen lap is charged to `gates.coverage_binding`, and `coverage_binding_task_reopened` is declared in `src/conductor/src/engine/event-sinks.ts`, as asserted by the no-replan test in `src/conductor/test/engine/step-runners.test.ts` and the sink-registry exhaustiveness test" | diff-local |
 | Story 4 negative: Given coverage inputs changed through a rebase refresh and no void was recorded, when `coverage_binding` runs, then no task is reopened | 13 | "when the previous envelope status is not `invalidated`, including a rebase-refresh run, no task is reopened, and when the previous envelope carries no recorded digests no criterion-digest reopen occurs, as asserted by the rebase-refresh and digest-less baseline tests in `src/conductor/test/engine/step-runners.test.ts`" | diff-local |
-| Story 4 negative: Given the previous envelope was written with the judge disabled or predates recorded digests, when `coverage_binding` runs after a void, then no criterion-digest reopen occurs and the new envelope records every current digest | 13 | "when the previous envelope status is not `invalidated`, including a rebase-refresh run, no task is reopened, and when the previous envelope carries no recorded digests no criterion-digest reopen occurs, as asserted by the rebase-refresh and digest-less baseline tests in `src/conductor/test/engine/step-runners.test.ts`" | diff-local |
+| Story 4 negative: Given the previous envelope was written with the judge disabled or predates recorded digests, when `coverage_binding` runs after a void, then no criterion-digest reopen occurs and the new envelope records every current digest | 14 | "when the previous envelope status is `invalidated` and its preserved predecessor provenance is judge-disabled or carries no recorded digests, `runCoverageBinding` reopens no task through a criterion digest and writes an envelope recording every current criterion and amendment digest, as asserted by the judge-disabled-predecessor void test in `src/conductor/test/engine/step-runners.test.ts`" | diff-local |
 | Story 4 negative: Given the judge lists a task id in `contradictsCompleted` that is not among the completed task ids issued in the batch, when the payload is validated, then the whole batch is rejected as an infrastructure failure and no task is reopened | 10 | "`parseAmendmentBatchPayload` rejects the whole batch when `contradictsCompleted` names a task id outside the completed task ids issued in that batch, as asserted by the foreign-contradiction test in `src/conductor/test/engine/coverage-binding-envelope.test.ts`" | diff-local |
 | Story 4 negative: Given a criterion claim whose digest is unchanged from the previous envelope cites a completed task, when `coverage_binding` runs after a void, then that task stays completed | 13 | "when the previous envelope status is `invalidated` and a criterion claim citing completed task 2 has a digest absent from the previous envelope's recorded digests, task 2 is restaged open with zero provider dispatches, while a completed task cited only by unchanged digests stays completed, as asserted by the criterion-digest reopen test in `src/conductor/test/engine/step-runners.test.ts`" | diff-local |
 | Story 4 negative: Given the same reopen is admitted twice for the same plan, claim, and HEAD, when `coverage_binding` re-runs, then the repair obligation is replayed rather than duplicated and the task is restaged once | 12 | "a second admission for the same plan, claim digest, bindings, and HEAD replays the existing obligation, leaves exactly one restage, and charges no second lap, as asserted by the replay test in `src/conductor/test/engine/repair-restage.test.ts`" | diff-local |

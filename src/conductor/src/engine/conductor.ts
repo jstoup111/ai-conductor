@@ -104,6 +104,7 @@ import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import { redactSafetyText } from './safety-diagnostics.js';
 import { createEngineStateStore } from './engine-state-store.js';
 import { createRepairObligationStore } from './repair-obligations.js';
+import { admitAndRestageRepair } from './repair-restage.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
 import type { ParallelBranch } from '../types/config.js';
 import {
@@ -242,7 +243,6 @@ import {
 } from './artifacts.js';
 import { extractStoryCriterionIds } from './story-criteria.js';
 import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
-import { canonicalTaskId } from './autoheal.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
 import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
@@ -314,7 +314,6 @@ import {
   recordRemediationGateLap,
   updateKickbackLedger,
   recordKickbackCapEvidence,
-  settleRemediationRound,
   type KickbackGateEntry,
   type chargeBuildReviewEffectInLedger,
   type PendingAsBuiltRemediationFinding,
@@ -5596,77 +5595,22 @@ export class Conductor {
       // the caller rewinds to the repair target.
       if (resolvedExistingTaskIdsByGapId.size > 0 && planPath) {
         const boundTaskIds = [...new Set([...resolvedExistingTaskIdsByGapId.values()].flat())];
-        // Replay identity is engine-owned route input: source, current evidence
-        // files, canonical gap ids, and canonical bindings. Planner rationale
-        // prose is intentionally excluded.
-        // The current HEAD is part of the identity: a crash replay of the same
-        // admitted effect sees the same HEAD, while a genuinely later repair of
-        // the same finding follows BUILD commits and must mint a new obligation
-        // with a fresh boundary and lap (adr-2026-09-06 D2).
-        const admissionHead = (await currentCommitSha(this.projectRoot)) ?? '';
-        const admissionKey = createHash('sha256').update(JSON.stringify({
-          planPath,
-          source: hintSource.source,
-          evidence: remediationEvidenceSources.map(({ gate, evidenceFile }) => [gate, evidenceFile]),
-          bindings: [...resolvedExistingTaskIdsByGapId.entries()].sort(),
-          head: admissionHead,
-        })).digest('hex');
-        const baseline = {
-          treeHash: await currentTreeHash(this.projectRoot),
-          resolvedCount: await countResolvedTasks(this.projectRoot),
-        };
-        const repairs = createRepairObligationStore(
-          this.projectRoot,
-          join(this.projectRoot, '.pipeline', 'engine-state.json'),
-        );
         const boundFindingIds = [...resolvedExistingTaskIdsByGapId.keys()].sort().join(',');
         // The refusal context every existing-task refusal below carries onto
         // the spine (S7.2): source gate, finding ids, and bound task ids.
         const refusalContext =
           `[${hintSource.source}; findings ${boundFindingIds}; tasks ${boundTaskIds.join(',')}]`;
-        const admission = await repairs.admitOrReplay(admissionKey, {
-          id: `repair-${admissionKey.slice(0, 16)}`,
+        const admission = await admitAndRestageRepair({
+          projectRoot: this.projectRoot,
           planPath,
           taskIds: boundTaskIds,
-          source: {
-            findingId: boundFindingIds,
-            authority: hintSource.source,
-            // The persisted instruction is the same actionable BUILD hint the
-            // initial dispatch receives, so restart recovery can replay the
-            // defect description rather than a generic label (AB-3).
-            instruction: repairInstruction,
-          },
-          baseline: {
-            head: admissionHead,
-            tree: baseline.treeHash ?? '',
-            resolvedTaskIds: [],
-            resolvedCount: baseline.resolvedCount,
-          },
+          findingIds: [...resolvedExistingTaskIdsByGapId.keys()],
+          sourceAuthority: hintSource.source,
+          instruction: repairInstruction,
+          gates: remediationEvidenceSources.map((provenance) => provenance.gate),
         });
-        if (!admission.ok) {
-          const detail =
-            `existing-task remediation ${refusalContext} could not persist admission: ${admission.message}`;
-          await reportRefusal(detail);
-          return { kind: 'halt', haltClass: 'needs-human', detail };
-        }
-        try {
-          await settleRemediationRound(
-            this.projectRoot,
-            admission.obligation.id,
-            remediationEvidenceSources.map((provenance) => provenance.gate),
-          );
-        } catch (error) {
-          const detail =
-            `existing-task remediation ${refusalContext} could not settle its admitted round ` +
-            `${admission.obligation.id}: ${error instanceof Error ? error.message : String(error)}`;
-          await reportRefusal(detail);
-          return { kind: 'halt', haltClass: 'needs-human', detail };
-        }
-        const settled = await repairs.markSettled({ planPath, obligationId: admission.obligation.id });
-        if (!settled.ok) {
-          const detail =
-            `existing-task remediation ${refusalContext} recorded its receipt for ` +
-            `${admission.obligation.id} but could not persist settlement: ${settled.message}`;
+        if (admission.kind === 'failed') {
+          const detail = `existing-task remediation ${refusalContext} ${admission.detail}`;
           await reportRefusal(detail);
           return { kind: 'halt', haltClass: 'needs-human', detail };
         }
@@ -5677,20 +5621,8 @@ export class Conductor {
         for (const provenance of remediationEvidenceSources) {
           this.pendingNoOpBaselines.set(provenance.gate, {
             treeHash: admittedBaseline.tree || null,
-            resolvedCount: admittedBaseline.resolvedCount ?? baseline.resolvedCount,
+            resolvedCount: admittedBaseline.resolvedCount ?? admission.baseline.resolvedCount,
           });
-        }
-        const restage = await restageExistingRemediationTaskStatuses(
-          this.projectRoot,
-          planPath,
-          new Set(boundTaskIds),
-        );
-        if (restage.kind === 'failed') {
-          this.pendingNoOpBaselines.clear();
-          const detail =
-            `existing-task remediation ${refusalContext} could not re-stage task-status.json: ${restage.detail}`;
-          await reportRefusal(detail);
-          return { kind: 'halt', haltClass: 'needs-human', detail };
         }
       }
       // #647 D1: a remediation route into `build` can be a guaranteed no-op
@@ -15509,60 +15441,6 @@ export function earliestRemediationTarget(
 export type ExistingTaskBindingResolution =
   | { kind: 'resolved'; ids: string[] }
   | { kind: 'unresolvable'; id: string };
-
-type ExistingTaskRestageResult =
-  | { kind: 'restaged' }
-  | { kind: 'failed'; detail: string };
-
-/**
- * Reopen the already-authored work selected by an existing-task remediation
- * disposition. The following seedTaskStatus call is deliberately retained as
- * the authoritative re-seed write path; this only changes the statuses that
- * must not survive that re-seed as terminal rows.
- */
-async function restageExistingRemediationTaskStatuses(
-  projectRoot: string,
-  planPath: string,
-  boundIds: ReadonlySet<string>,
-): Promise<ExistingTaskRestageResult> {
-  const statusPath = join(projectRoot, '.pipeline', 'task-status.json');
-  try {
-    const statusFile = JSON.parse(await readFile(statusPath, 'utf8')) as {
-      tasks?: Array<Record<string, unknown>>;
-    };
-    if (!Array.isArray(statusFile.tasks)) {
-      return { kind: 'failed', detail: 'task-status.json has no task rows to re-stage' };
-    }
-
-    const boundCanonicalIds = new Set([...boundIds].map(canonicalTaskId));
-    const stagedCanonicalIds = new Set(statusFile.tasks.flatMap((task) =>
-      typeof task.id === 'string' ? [canonicalTaskId(task.id)] : [],
-    ));
-    const missingIds = [...boundCanonicalIds].filter((id) => !stagedCanonicalIds.has(id));
-    if (missingIds.length > 0) {
-      return {
-        kind: 'failed',
-        detail:
-          `bound id${missingIds.length === 1 ? '' : 's'} ` +
-          `${missingIds.map((id) => `'${id}'`).join(', ')} is absent from task-status.json`,
-      };
-    }
-
-    for (const task of statusFile.tasks) {
-      if (typeof task.id === 'string' && boundCanonicalIds.has(canonicalTaskId(task.id))) {
-        task.status = 'pending';
-      }
-    }
-    await writeFile(statusPath, JSON.stringify(statusFile, null, 2) + '\n');
-    await seedTaskStatus(projectRoot, planPath);
-    return { kind: 'restaged' };
-  } catch (error) {
-    return {
-      kind: 'failed',
-      detail: `task-status.json could not be read or re-staged (${error instanceof Error ? error.message : String(error)})`,
-    };
-  }
-}
 
 /**
  * Resolve an existing-task remediation binding against the active plan. Keep

@@ -1072,6 +1072,12 @@ the daemon log. That approval is bound to the content it was taken against, not 
 artifact again after resealing and it refuses exactly as before, because the sealed fingerprint no
 longer matches. Reseal again only after reviewing the new amendment.
 
+For a changed path in the feature's coverage-binding DECIDE set, a successful reseal also invalidates
+completed coverage evidence. On the next re-kick, coverage binding runs before BUILD. Its amendment
+judgement may reopen a completed task only when the amended obligation contradicts that task; a
+reseal by itself never reopens work. Inspect the emitted coverage-binding events and the refreshed
+`.pipeline/coverage-binding.json` rather than editing task state by hand.
+
 If REKICK encounters this refusal before starting git, the HALT begins
 `protected-artifact seal error` and explicitly says no rebase is active. Do not use the rebase
 resolver or run `git rebase --continue`; review and rotate the seal as above, then clear the HALT
