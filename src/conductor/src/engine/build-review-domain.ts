@@ -321,8 +321,9 @@ export const MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH = 512;
  * so they remain parser-enforced and are named by the rejection diagnosis.
  * The root is one flat object: Claude's tool `input_schema` requires a root
  * `type` and rejects `oneOf`/`anyOf`/`allOf` at the top level. Which fields
- * each `kind` requires (`version` + `findings` for custom-findings,
- * `requirement` for unsupported-policy) is therefore parser-enforced.
+ * each `kind` requires (`version` for custom-findings, `requirement` for
+ * unsupported-policy) is therefore parser-enforced. Custom findings omitted
+ * or represented as null normalize to an empty array before validation.
  */
 export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
   type: 'object',
@@ -679,9 +680,15 @@ function customFinding(value: unknown): BuildReviewCustomFinding | undefined {
 const CUSTOM_REVIEWER_ENVELOPE_FIELDS = new Set(['rubric', 'lapId']);
 
 function reviewerOwnedCustomPayload(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(
+  const payload = Object.fromEntries(
     Object.entries(value).filter(([field]) => !CUSTOM_REVIEWER_ENVELOPE_FIELDS.has(field)),
   );
+  // The flat native schema leaves findings optional for unsupported-policy.
+  // Codex represents that optionality with null, which its adapter strips.
+  // For custom-findings, both empty representations mean no reported concerns;
+  // version, non-null findings, and all finding contents remain validated below.
+  if (payload.kind === 'custom-findings' && payload.findings == null) payload.findings = [];
+  return payload;
 }
 
 /**

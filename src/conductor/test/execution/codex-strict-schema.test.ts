@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUILD_REVIEW_CUSTOM_V1_SCHEMA, BUILD_REVIEW_JUDGED_V3_SCHEMAS } from '../../src/engine/build-review-domain.js';
+import { BUILD_REVIEW_CUSTOM_V1_SCHEMA, BUILD_REVIEW_JUDGED_V3_SCHEMAS, parseBuildReviewCustomReviewerPayload } from '../../src/engine/build-review-domain.js';
 import { fromCodexStrictResult, toCodexStrictSchema } from '../../src/execution/codex-strict-schema.js';
 
 type Json = Record<string, unknown>;
@@ -66,5 +66,45 @@ describe('fromCodexStrictResult', () => {
         sourceRegions: [{ path: 'internal/httpapi/average.go', startLine: 12, endLine: 12, contentHash: 'sha256:abc', display: 'avg' }],
       }],
     });
+  });
+});
+
+describe('custom-v1 strict result parsing', () => {
+  it.each([null, undefined, []])('accepts empty findings represented as %j after Codex normalization', (findings) => {
+    const result = fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, {
+      kind: 'custom-findings', version: 'v1', findings, requirement: null,
+    });
+    expect(parseBuildReviewCustomReviewerPayload(result)).toEqual({ kind: 'custom-findings', version: 'v1', findings: [] });
+  });
+
+  it('accepts direct null findings while retaining the closed payload grammar', () => {
+    const payload = { kind: 'custom-findings', version: 'v1', findings: null };
+    expect(parseBuildReviewCustomReviewerPayload(payload)).toEqual({ ...payload, findings: [] });
+    expect(parseBuildReviewCustomReviewerPayload({ ...payload, unexpected: true })).toBeUndefined();
+  });
+
+  it.each([null, undefined, 'v2'])('still rejects invalid version %j', (version) => {
+    const result = fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, {
+      kind: 'custom-findings', version, findings: null, requirement: null,
+    });
+    expect(parseBuildReviewCustomReviewerPayload(result)).toBeUndefined();
+  });
+
+  it.each([{}, '', [null], Array(65).fill({})])('still rejects malformed or oversized findings %j', (findings) => {
+    expect(parseBuildReviewCustomReviewerPayload({ kind: 'custom-findings', version: 'v1', findings })).toBeUndefined();
+  });
+
+  it('preserves unsupported-policy without inventing findings', () => {
+    const result = fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, {
+      kind: 'unsupported-policy', version: null, findings: null, requirement: 'Needs network access',
+    });
+    expect(parseBuildReviewCustomReviewerPayload(result)).toEqual({ kind: 'unsupported-policy', requirement: 'Needs network access' });
+  });
+
+  it.each(Object.entries(BUILD_REVIEW_JUDGED_V3_SCHEMAS))('keeps %s judged findings required and non-nullable', (_rubric, schema) => {
+    const strict = toCodexStrictSchema(schema) as Json;
+    expect((strict.properties as Json).findings).toMatchObject({ type: 'array' });
+    expect((strict.properties as Json).findings).not.toHaveProperty('anyOf');
+    expect(fromCodexStrictResult(schema, { findings: null })).toEqual({ findings: null });
   });
 });
