@@ -1152,9 +1152,15 @@ export class DefaultStepRunner implements StepRunner {
         if (result) {
           this.callCount++;
           // Provider failures retain their existing auth/rate-limit/unresolved-command
-          // routing. Structured-output diagnostics are considered only after those
-          // adapter classifications have had a chance to win.
-          if (!result.success && (result.authFailure || result.rateLimited || result.commandUnresolved)) {
+          // and availability routing. Structured-output diagnostics are considered
+          // only after those adapter classifications have had a chance to win.
+          const providerExhausted = result.providerSetupExhaustion !== undefined || (
+            result.attempts.length > 0 && result.attempts.every((attempt) => attempt.outcome === 'unavailable')
+          );
+          if (!result.success && (
+            result.authFailure || result.rateLimited || result.commandUnresolved ||
+            result.modelUnavailable || providerExhausted
+          )) {
             return this.toStepRunResult(step, result);
           }
           if (result.structuredResultFailure !== undefined || result.finalStructuredResult === undefined) {

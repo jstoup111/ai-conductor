@@ -247,4 +247,27 @@ describe('architecture_review_as_built native-schema dispatch', () => {
     await expect(runner(projectDir, 'claude', provider).run('architecture_review_as_built', { complexity_tier: 'M' }))
       .resolves.toMatchObject({ success: false, output: 'structured-result-missing' });
   });
+
+  it('preserves an exhausted model result instead of classifying it as a missing structured result', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'as-built-model-unavailable-'));
+    dirs.push(projectDir);
+    buildProjection.mockResolvedValue({ ok: true, projection });
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false,
+      output: 'The requested model is unavailable.',
+      exitCode: 1,
+      modelUnavailable: true,
+    }));
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    };
+
+    await expect(runner(projectDir, 'claude', provider).run('architecture_review_as_built', { complexity_tier: 'M' }))
+      .resolves.toMatchObject({
+        success: false,
+        output: expect.stringContaining('All configured providers are unavailable'),
+      });
+  });
 });
