@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, readdir, readFile } from 'node:fs/promises';
+import { lstat, readdir, readFile, readlink } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
 import { AUDIT_TRAIL_DIRECTORY } from './audit-trail.js';
@@ -52,8 +52,9 @@ export interface BuildReviewInputDigestRoots {
 
 export interface BuildReviewInputIntegrityFilesystem {
   readdir(path: string): Promise<readonly string[]>;
-  lstat(path: string): Promise<{ readonly kind: 'file' | 'directory' | 'other' }>;
+  lstat(path: string): Promise<{ readonly kind: 'file' | 'directory' | 'symlink' | 'other' }>;
   readFile(path: string): Promise<Buffer>;
+  readlink(path: string): Promise<string>;
 }
 
 export interface BuildReviewInputDigestEntry {
@@ -72,10 +73,11 @@ const filesystem: BuildReviewInputIntegrityFilesystem = {
   lstat: async (path) => {
     const entry = await lstat(path);
     return {
-      kind: entry.isFile() ? 'file' : entry.isDirectory() ? 'directory' : 'other',
+      kind: entry.isFile() ? 'file' : entry.isDirectory() ? 'directory' : entry.isSymbolicLink() ? 'symlink' : 'other',
     };
   },
   readFile,
+  readlink: async (path) => readlink(path),
 };
 
 function contentHash(content: Buffer): string {
@@ -87,23 +89,23 @@ function isNotFound(error: unknown): boolean {
     || error instanceof Error && error.message.includes('ENOENT');
 }
 
-async function collectRegularFiles(
+async function collectInputEntries(
   current: string,
   reader: BuildReviewInputIntegrityFilesystem,
-): Promise<readonly string[]> {
-  let entry: { readonly kind: 'file' | 'directory' | 'other' };
+): Promise<Array<{ readonly path: string; readonly kind: 'file' | 'symlink' }>> {
+  let entry: { readonly kind: 'file' | 'directory' | 'symlink' | 'other' };
   try {
     entry = await reader.lstat(current);
   } catch (error) {
     if (isNotFound(error)) return [];
     throw error;
   }
-  if (entry.kind === 'file') return [current];
+  if (entry.kind === 'file' || entry.kind === 'symlink') return [{ path: current, kind: entry.kind }];
   if (entry.kind !== 'directory') return [];
 
-  const paths: string[] = [];
+  const paths: Array<{ readonly path: string; readonly kind: 'file' | 'symlink' }> = [];
   for (const name of [...await reader.readdir(current)].sort()) {
-    paths.push(...await collectRegularFiles(join(current, name), reader));
+    paths.push(...await collectInputEntries(join(current, name), reader));
   }
   return paths;
 }
@@ -119,15 +121,19 @@ export async function captureBuildReviewInputDigest(
   const entries: BuildReviewInputDigestEntry[] = [];
   for (const root of BUILD_REVIEW_INPUT_ROOT_KINDS) {
     const rootPaths = Array.isArray(roots[root]) ? roots[root] : [roots[root]];
-    for (const rootPath of rootPaths) for (const path of await collectRegularFiles(rootPath, reader)) {
-      const relativePath = relative(rootPath, path).split('\\').join('/');
+    for (const rootPath of rootPaths) for (const entry of await collectInputEntries(rootPath, reader)) {
+      const relativePath = relative(rootPath, entry.path).split('\\').join('/');
       if (root === 'evidenceRoot' && roots.evidenceRootExcludes?.some(
         (prefix) => relativePath === prefix || relativePath.startsWith(`${prefix}/`),
       )) continue;
       entries.push({
         root,
         relativePath,
-        contentHash: contentHash(await reader.readFile(path)),
+        // A symlink is review input in its own right. Never follow it: link
+        // targets may escape the frozen roots or form cycles.
+        contentHash: contentHash(entry.kind === 'symlink'
+          ? Buffer.from(await reader.readlink(entry.path), 'utf8')
+          : await reader.readFile(entry.path)),
       });
     }
   }

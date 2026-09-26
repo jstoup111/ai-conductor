@@ -8,7 +8,7 @@ import {
   type BuildReviewInputIntegrityFilesystem,
 } from '../../src/engine/build-review-input-integrity.js';
 
-type FileTree = Record<string, string>;
+type FileTree = Record<string, string | { readonly symlink: string }>;
 
 function filesystem(tree: FileTree): BuildReviewInputIntegrityFilesystem {
   return {
@@ -23,14 +23,21 @@ function filesystem(tree: FileTree): BuildReviewInputIntegrityFilesystem {
       return [...names].sort();
     },
     async lstat(path) {
-      if (Object.hasOwn(tree, path)) return { kind: 'file' };
+      const entry = tree[path];
+      if (typeof entry === 'string') return { kind: 'file' };
+      if (entry !== undefined) return { kind: 'symlink' };
       if (Object.keys(tree).some((file) => file.startsWith(`${path}/`))) return { kind: 'directory' };
       throw new Error(`ENOENT: ${path}`);
     },
     async readFile(path) {
       const content = tree[path];
-      if (content === undefined) throw new Error(`ENOENT: ${path}`);
+      if (typeof content !== 'string') throw new Error(`ENOENT: ${path}`);
       return Buffer.from(content, 'utf8');
+    },
+    async readlink(path) {
+      const entry = tree[path];
+      if (entry === undefined || typeof entry === 'string') throw new Error(`ENOENT: ${path}`);
+      return entry.symlink;
     },
   };
 }
@@ -96,6 +103,25 @@ describe('engine/build-review-input-integrity', () => {
     const after = await captureBuildReviewInputDigest(roots(), filesystem(initialTree));
 
     await expect(diffBuildReviewInputDigests(before, after)).resolves.toEqual([]);
+  });
+
+  it.each([
+    ['added', initialTree, { ...initialTree, '/policy-package/policy-link': { symlink: '../shared/SKILL.md' } }, 'installedPolicyPackage:policy-link'],
+    ['removed', { ...initialTree, '/head/source-link': { symlink: '../source.ts' } }, initialTree, 'frozenHead:source-link'],
+    ['retargeted', { ...initialTree, '/policy-package/policy-link': { symlink: '../v1/SKILL.md' } }, { ...initialTree, '/policy-package/policy-link': { symlink: '../v2/SKILL.md' } }, 'installedPolicyPackage:policy-link'],
+  ] as const)('reports a symlink %s under a protected root', async (_change, beforeTree, afterTree, expected) => {
+    const before = await captureBuildReviewInputDigest(roots(), filesystem(beforeTree));
+    const after = await captureBuildReviewInputDigest(roots(), filesystem(afterTree));
+
+    await expect(diffBuildReviewInputDigests(before, after)).resolves.toEqual([expected]);
+  });
+
+  it('captures a self-referential symlink without following its cycle', async () => {
+    const tree = { ...initialTree, '/policy-package/self': { symlink: 'self' } };
+
+    await expect(captureBuildReviewInputDigest(roots(), filesystem(tree))).resolves.toMatchObject({
+      entries: expect.arrayContaining([expect.objectContaining({ root: 'installedPolicyPackage', relativePath: 'self' })]),
+    });
   });
 
   it('excludes the engine-owned in-lap writes while prior-lap build-review evidence stays hashed', async () => {

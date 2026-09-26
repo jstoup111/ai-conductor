@@ -317,6 +317,37 @@ describe('custom build-review policy runner', () => {
     await expect(readFile(join(root, '.pipeline', 'build-review', 'lap-head', 'input-digest.json'), 'utf8')).resolves.toContain('"before"');
   });
 
+  it('keeps a captured-input verdict when a reviewer writes branch evidence and changes the feature checkout', async () => {
+    const root = await fixture();
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const provider: LLMProvider = {
+      invoke: vi.fn(async () => {
+        await writeFile(join(root, 'src', 'a.ts'), 'export const value = 2;\n');
+        return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+      }),
+      supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    const runner = new DefaultStepRunner(provider, 'custom-policy-feature-checkout-write', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
+      } } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(), probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) }, buildReviewEffectiveResolver: passingEffectiveResolver,
+      buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+
+    await expect(runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({ success: true });
+    const artifact = JSON.parse(await readFile(join(root, '.pipeline', 'build-review', 'lap-head', 'portable.json'), 'utf8'));
+    expect(artifact.result.reviewedInput.contentDigest).toMatch(/^sha256:/);
+    expect(artifact.result.reviewedInput.contentDigest).not.toBe(
+      `sha256:${createHash('sha256').update('export const value = 2;\n').digest('hex')}`,
+    );
+    await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain('"portable"');
+  });
+
   it('publishes an unchanged custom lap whose engine events append to a pre-existing event log', async () => {
     const root = await fixture();
     const eventLog = join(root, '.pipeline', 'events.jsonl');

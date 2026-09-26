@@ -110,6 +110,7 @@ describe('custom build-review convergence', () => {
     expect(result.output).toContain('codex');
     expect(result.output).toContain('claude');
     expect((await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults ?? 0).toBe(0);
+    await expect(readFile(join(projectRoot, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain('read-only-review-unavailable');
   });
 
   it('renders the immediate read-only refusal as a needs-human halt', async () => {

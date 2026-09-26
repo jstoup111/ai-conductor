@@ -2477,6 +2477,31 @@ export class DefaultStepRunner implements StepRunner {
         changedInputs,
       })));
     };
+    const settleCustomLapInputMutation = async (
+      results: Readonly<Record<string, BuildReviewCustomArtifactMember>>,
+      changedInputs: readonly string[],
+    ): Promise<Readonly<Record<string, BuildReviewCustomArtifactMember>>> => {
+      lapGate!.discardCacheWrites();
+      const mutated = mutatedCustomResults(results, changedInputs);
+      await emitInputMutationFailures(Object.keys(mutated), changedInputs);
+      return mutated;
+    };
+    const mutationMembersFromOutcomes = (outcomes: readonly { readonly id: string; readonly member?: BuildReviewCustomArtifactMember }[]) =>
+      Object.freeze(Object.fromEntries(customEntries.map((entry) => {
+        const member = outcomes.find((outcome) => outcome.id === entry.id)?.member;
+        return [entry.id, member ?? {
+          declaration: {
+            version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
+            question: entry.question,
+            ...(entry.source === undefined ? {} : { source: entry.source as 'project' | 'global' | 'plugin' }),
+            resources: entry.resources,
+          },
+          result: {
+            kind: 'infrastructure-failure' as const, rubric: entry.id,
+            reason: 'provider-error' as const, detail: 'custom policy did not produce a durable result',
+          },
+        }];
+      }))) as Record<string, BuildReviewCustomArtifactMember>;
     const withCustomCacheWriteFailures = (
       results: Readonly<Record<string, BuildReviewCustomArtifactMember>>,
       failures: ReadonlyMap<string, unknown>,
@@ -2578,14 +2603,32 @@ export class DefaultStepRunner implements StepRunner {
         }
       })();
     const [customSettled, coordinationSettled] = await Promise.allSettled([customRun, coordinationRun]);
-    if (customSettled.status === 'rejected') throw customSettled.reason;
-    if (coordinationSettled.status === 'rejected') throw coordinationSettled.reason;
+    if (customSettled.status === 'rejected' || coordinationSettled.status === 'rejected') {
+      if (customPolicyLap) {
+        const changedInputs = await finishCustomLapInputDigests();
+        if (changedInputs.length > 0) {
+          customResults = await settleCustomLapInputMutation(
+            mutationMembersFromOutcomes(customSettled.status === 'fulfilled' ? customSettled.value : []), changedInputs,
+          );
+          await this.emitBuildReviewCustomMemberResults(lapId, customResults);
+          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
+        }
+      }
+      if (customSettled.status === 'rejected') throw customSettled.reason;
+      if (coordinationSettled.status === 'rejected') throw coordinationSettled.reason;
+      throw new Error('build_review fan-out settlement was unexpectedly fulfilled');
+    }
     const outcomes = customSettled.value;
     const joinedCoordination = coordinationSettled.value;
 
     if (customPolicyLap) {
       if (outcomes.some((outcome) => !outcome.success)) {
-        await finishCustomLapInputDigests();
+        const changedInputs = await finishCustomLapInputDigests();
+        if (changedInputs.length > 0) {
+          customResults = await settleCustomLapInputMutation(mutationMembersFromOutcomes(outcomes), changedInputs);
+          await this.emitBuildReviewCustomMemberResults(lapId, customResults);
+          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
+        }
         lapGate!.discardCacheWrites();
         return {
           success: false,
@@ -2594,6 +2637,12 @@ export class DefaultStepRunner implements StepRunner {
       }
       const members = outcomes.map((outcome) => [outcome.id, outcome.member] as const);
       if (members.some((member) => member[1] === undefined)) {
+        const changedInputs = await finishCustomLapInputDigests();
+        if (changedInputs.length > 0) {
+          customResults = await settleCustomLapInputMutation(mutationMembersFromOutcomes(outcomes), changedInputs);
+          await this.emitBuildReviewCustomMemberResults(lapId, customResults);
+          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
+        }
         lapGate!.discardCacheWrites();
         return { success: false, output: 'build_review custom policy produced no durable result' };
       }
@@ -2608,9 +2657,7 @@ export class DefaultStepRunner implements StepRunner {
       if (joinedCoordination === undefined || joinedCoordination.kind !== 'ready') {
         const changedInputs = await finishCustomLapInputDigests();
         if (changedInputs.length > 0) {
-          lapGate!.discardCacheWrites();
-          customResults = mutatedCustomResults(customResults, changedInputs);
-          await emitInputMutationFailures(Object.keys(customResults), changedInputs);
+          customResults = await settleCustomLapInputMutation(customResults, changedInputs);
         } else {
           customResults = withCustomCacheWriteFailures(customResults, await lapGate!.flushCacheWrites());
         }
@@ -2712,8 +2759,7 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
     if (changedInputs.length > 0) {
-      lapGate?.discardCacheWrites();
-      customResults = mutatedCustomResults(customResults!, changedInputs);
+      customResults = await settleCustomLapInputMutation(customResults!, changedInputs);
       for (const rubric of Object.keys(validResults) as BuildReviewRubricResult['rubric'][]) {
         validResults[rubric] = {
           kind: 'infrastructure-failure', rubric,
@@ -2721,7 +2767,7 @@ export class DefaultStepRunner implements StepRunner {
           detail: `review input changed: ${changedInputs.join(', ')}`,
         };
       }
-      await emitInputMutationFailures([...Object.keys(customResults), ...Object.keys(validResults)], changedInputs);
+      await emitInputMutationFailures(Object.keys(validResults), changedInputs);
     }
     if (customResults !== undefined) await this.emitBuildReviewCustomMemberResults(lapId, customResults);
 
@@ -2758,16 +2804,8 @@ export class DefaultStepRunner implements StepRunner {
         };
       }
     }
-    if (infrastructureFailure) {
-      if (infrastructureFailure.reason === 'read-only-review-unavailable') {
-        const reason = `build_review ${infrastructureFailure.reason}: ${infrastructureFailure.detail}`;
-        return {
-          success: false,
-          output: reason,
-          refusal: { kind: 'needs-human', reason },
-          buildReviewReadOnlyReviewUnavailable: true,
-        };
-      }
+    const readOnlyReviewUnavailable = infrastructureFailure?.reason === 'read-only-review-unavailable';
+    if (infrastructureFailure && !readOnlyReviewUnavailable) {
       if (infrastructureFailure.providerSetupExhaustion) {
         return {
           success: false,
@@ -2824,6 +2862,10 @@ export class DefaultStepRunner implements StepRunner {
     });
     if (!publication.ok) {
       return { success: false, output: `build_review aggregate publication failed: ${publication.message}` };
+    }
+    if (readOnlyReviewUnavailable) {
+      const reason = `build_review ${infrastructureFailure!.reason}: ${infrastructureFailure!.detail}`;
+      return { success: false, output: reason, refusal: { kind: 'needs-human', reason }, buildReviewReadOnlyReviewUnavailable: true };
     }
     // adr-2026-08-29 D4.6: the one projection of this lap's sub-floor findings
     // is shared by the visibility event (D4.5) and the durable-history seam below.
@@ -3435,16 +3477,8 @@ export class DefaultStepRunner implements StepRunner {
       result.kind === 'infrastructure-failure',
     );
     const hasFinding = lapResults.some((result) => result.kind === 'judged' && result.findings.length > 0);
-    if (infrastructureFailure && !hasFinding) {
-      if (infrastructureFailure.reason === 'read-only-review-unavailable') {
-        const reason = `build_review ${infrastructureFailure.reason}: ${infrastructureFailure.detail}`;
-        return {
-          success: false,
-          output: reason,
-          refusal: { kind: 'needs-human', reason },
-          buildReviewReadOnlyReviewUnavailable: true,
-        };
-      }
+    const readOnlyReviewUnavailable = infrastructureFailure?.reason === 'read-only-review-unavailable';
+    if (infrastructureFailure && !hasFinding && !readOnlyReviewUnavailable) {
       const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review', {
         rubric: infrastructureFailure.rubric,
         reason: infrastructureFailure.reason,
@@ -3487,6 +3521,10 @@ export class DefaultStepRunner implements StepRunner {
       await rename(temporaryPath, aggregatePath);
     } catch (error) {
       return { success: false, output: `build_review aggregate publication failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    if (readOnlyReviewUnavailable) {
+      const reason = `build_review ${infrastructureFailure!.reason}: ${infrastructureFailure!.detail}`;
+      return { success: false, output: reason, refusal: { kind: 'needs-human', reason }, buildReviewReadOnlyReviewUnavailable: true };
     }
     // adr-2026-08-29 D4.6: one projection feeds both the visibility event and
     // the durable-history seam below.
