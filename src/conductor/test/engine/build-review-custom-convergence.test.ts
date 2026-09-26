@@ -100,7 +100,10 @@ describe('custom build-review convergence', () => {
         },
       },
       currentCustomRubrics: ['portable'],
-      config: resolveBuildReviewConfig({ llm_provider: 'claude', build_review: { enabled: true } } as HarnessConfig, CLAUDE_MODEL_POLICY),
+      config: resolveBuildReviewConfig({ llm_provider: 'claude', build_review: {
+        enabled: true,
+        custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project' } },
+      } } as HarnessConfig, CLAUDE_MODEL_POLICY),
     });
 
     expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });

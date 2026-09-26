@@ -238,7 +238,7 @@ describe('executeProviderCandidates', () => {
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
     const result = await executeProviderCandidates({
       step: 'build', configuredProviders: ['codex', 'claude'],
-      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke, lifecycleCapability: { synchronousSpawnPermit: true } }), runtime('claude', { invoke: claudeInvoke, lifecycleCapability: { synchronousSpawnPermit: true } })]),
       sessions: new ProviderSessionScope(vi.fn()),
       options: { prompt: 'build', cwd: '/workspace' },
       preparedCandidateOperation: async (context) => context.candidate.providerKey === 'codex'
