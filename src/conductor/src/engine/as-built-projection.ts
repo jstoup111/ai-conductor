@@ -252,17 +252,36 @@ export async function buildAsBuiltProjection(
       },
     };
   }
+  if (storyCriteria.length === 0) {
+    return {
+      ok: false,
+      fault: {
+        dimension: 'story-criteria',
+        detail: `${storiesRepoPath} contains no sealed story criteria`,
+      },
+    };
+  }
 
   const citedStems = planCitedAdrStems(plan);
   for (const path of changedAdrPaths.stdout.split('\n').filter(Boolean)) {
     const stem = basename(path, '.md');
     if (stem.startsWith('adr-')) citedStems.add(stem);
   }
-  const adrPaths = await findArtifactFiles(worktree, 'architecture_review');
+  const adrPaths = new Map(
+    (await findArtifactFiles(worktree, 'architecture_review')).map((path) => [basename(path, '.md'), path]),
+  );
   const governingAdrs: AsBuiltProjection['governingAdrs'][number][] = [];
-  for (const path of adrPaths.sort()) {
-    const stem = basename(path, '.md');
-    if (!citedStems.has(stem)) continue;
+  for (const stem of [...citedStems].sort()) {
+    const path = adrPaths.get(stem);
+    if (path === undefined) {
+      return {
+        ok: false,
+        fault: {
+          dimension: 'governing-adr-decisions',
+          detail: `${stem} cannot be projected: ADR file is missing`,
+        },
+      };
+    }
     const content = await readFile(path, 'utf-8');
     const approval = adrApprovalStatus(content);
     if (!approval.approved || !/^approved$/i.test(approval.found ?? '')) continue;
@@ -283,7 +302,19 @@ export async function buildAsBuiltProjection(
 
   const taskBodies = parsePlanTaskBodies(plan);
   const doneWhen = parsePlanTaskDoneWhen(plan);
-  const tasks = [...taskBodies.keys()].sort((a, b) => Number(a) - Number(b)).map((id) => ({ id, doneWhen: doneWhen.get(id) ?? [] }));
+  const taskIds = [...taskBodies.keys()].sort((a, b) => Number(a) - Number(b));
+  for (const id of taskIds) {
+    if (!doneWhen.has(id)) {
+      return {
+        ok: false,
+        fault: {
+          dimension: 'plan-tasks',
+          detail: `Task ${id} has no Done when criteria`,
+        },
+      };
+    }
+  }
+  const tasks = taskIds.map((id) => ({ id, doneWhen: doneWhen.get(id)! }));
   const planTasksBytes = projectionSectionBytes(tasks.flatMap((task) => [`Task ${task.id}`, ...task.doneWhen]));
   if (planTasksBytes > limits.planTasksBytes) return projectionLimitFault('plan-tasks', planTasksBytes, limits.planTasksBytes);
 

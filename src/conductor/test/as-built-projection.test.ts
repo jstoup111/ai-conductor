@@ -237,6 +237,52 @@ Status: SUPERSEDED by adr-plan-two
     expect(result.projection.policy.diagramDrift).toEqual({ enabled: false, reason: 'no diagrams' });
   });
 
+  it('fails closed when a plan task has no Done when criteria', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'plans', 'feature.md'), `# Plan
+
+**Stories:** .docs/stories/feature.md
+
+### Task 1: First
+
+**Done when:**
+- first done condition
+
+### Task 2: Missing criteria
+`);
+
+    await expect(buildAsBuiltProjection(root)).resolves.toEqual({
+      ok: false,
+      fault: { dimension: 'plan-tasks', detail: 'Task 2 has no Done when criteria' },
+    });
+  });
+
+  it('fails closed when the sealed stories artifact has no criteria', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'stories', 'feature.md'), '# Stories\n\n## Story 1: Empty\n');
+
+    await expect(buildAsBuiltProjection(root)).resolves.toEqual({
+      ok: false,
+      fault: {
+        dimension: 'story-criteria',
+        detail: '.docs/stories/feature.md contains no sealed story criteria',
+      },
+    });
+  });
+
+  it('fails closed when a plan-cited governing ADR file is missing', async () => {
+    const root = await fixture();
+    await rm(join(root, '.docs', 'decisions', 'adr-plan-one.md'));
+
+    await expect(buildAsBuiltProjection(root)).resolves.toEqual({
+      ok: false,
+      fault: {
+        dimension: 'governing-adr-decisions',
+        detail: 'adr-plan-one cannot be projected: ADR file is missing',
+      },
+    });
+  });
+
   it('includes pending findings without requiring a ledger', async () => {
     const root = await fixture();
     const absent = await buildAsBuiltProjection(root);
