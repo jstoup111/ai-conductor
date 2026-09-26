@@ -4619,8 +4619,8 @@ export class Conductor {
       const asBuiltEvidenceFile = evidence.find(
         (p) => p.gate === 'architecture_review_as_built',
       )?.evidenceFile;
-      const asBuiltReport = asBuiltEnabled && asBuiltEvidenceFile !== undefined
-        ? await readFile(join(this.projectRoot, asBuiltEvidenceFile), 'utf8').catch(() => undefined)
+      const asBuiltFindings = asBuiltEnabled && asBuiltEvidenceFile !== undefined
+        ? (await readAsBuiltRoutingOutcome(this.projectRoot).catch(() => undefined))?.findings
         : undefined;
       const findingList = [...new Set(fixable.map((finding) => finding.criterion))].join(', ');
       const capReason = `lap cap reached (${budget.priorLaps}/${budget.lapCap})`;
@@ -4634,7 +4634,7 @@ export class Conductor {
         haltClass: KICKBACK_CAP_HALT_CLASS,
         detail: `prd_audit remediation ${capReason} before appending fix tasks. `
           + `Findings: ${findingList}.\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}`
-          + renderAsBuiltBlockedFindingDetail(asBuiltReport),
+          + renderAsBuiltBlockedFindingDetail(asBuiltFindings),
       };
     } catch {
       return undefined;
