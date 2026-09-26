@@ -1,24 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-26T12:01:45.291Z
+Status: halted
 Slug: custom-build-review-rubrics-cannot-run-off-linux-o
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-custom-build-review-rubrics-cannot-run-off-linux-o
-Head SHA: 07bd051a4d196ea985f9122ca8b8069a744ebbf3
-Halted at: 2026-09-26T11:14:39.649Z
+Head SHA: aa7a8a398b0273b31ba5d055ca9caee338214887
+Halted at: 2026-09-26T12:11:59.033Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-2 (adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane D3.2)
-
-Blocking findings:
-AB-1 (REMEDIABLE; Task 10): Ordinary non-self-host build_review dispatch omits the frozen startup capability map, so the runner re-probes and can disagree with startup telemetry.
-AB-2 (DESIGN; adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane D3.2): The branch rewrites already-APPROVED D3.2 without preserving the approved assertion or recording human approval for the replacement text.
+Validation group "prd_audit" halted: branch "architecture_review_as_built" produced no-verdict after 3 attempts ({"type":"thread.started","thread_id":"01a0dd99-1192-7870-8609-49601747d18e"}
+{"type":"turn.started"}
+{"type":"error","message":"Selected model is at capacity. Please try a different model."}
+{"type":"turn.failed","error":{"message":"Selected model is at capacity. Please try a different model."}}).
 ```
