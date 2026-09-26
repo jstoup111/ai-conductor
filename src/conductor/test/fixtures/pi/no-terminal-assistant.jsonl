@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"fixture-session","timestamp":"2026-09-24T00:00:00.000Z","cwd":"/fixture"}
+{"type":"message_update","usage":{"input":12,"output":3,"cacheRead":0,"cacheWrite":0,"totalTokens":15},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"partial output"}}
+{"type":"message_end","message":{"role":"user","content":"request"}}
+{"type":"agent_settled"}
