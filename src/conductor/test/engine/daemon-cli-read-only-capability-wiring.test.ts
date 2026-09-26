@@ -22,6 +22,7 @@ afterEach(async () => {
 async function startWithCustomRubric(
   provider: 'codex' | 'claude',
   capability: ReadOnlyReviewCapability,
+  renderEvents = false,
 ) {
   const projectRoot = await mkdtemp(join(testTmpdir(), 'daemon-read-only-capability-'));
   roots.push(projectRoot);
@@ -36,7 +37,15 @@ async function startWithCustomRubric(
   vi.spyOn(daemonLock, 'holdLock').mockResolvedValue({
     pid: process.pid, uuid: 'read-only-capability', owned: true, release: async () => {}, releaseSync: () => {},
   });
-  vi.spyOn(ConductorEventEmitter.prototype, 'emit').mockImplementation(async (event) => { events.push(event); });
+  if (renderEvents) {
+    const emit = ConductorEventEmitter.prototype.emit;
+    vi.spyOn(ConductorEventEmitter.prototype, 'emit').mockImplementation(async function (this: ConductorEventEmitter, event) {
+      events.push(event);
+      await emit.call(this, event);
+    });
+  } else {
+    vi.spyOn(ConductorEventEmitter.prototype, 'emit').mockImplementation(async (event) => { events.push(event); });
+  }
   vi.spyOn(daemonCore, 'runDaemon').mockImplementation(async () => {
     order.push('dispatch');
     return { processed: [], stoppedReason: 'backlog_drained' };
@@ -69,15 +78,19 @@ describe('Task 10 — daemon read-only review capability wiring', () => {
   });
 
   it('records unavailable Codex with its platform and reason, then still dispatches', async () => {
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: string) => { logs.push(line); });
     const { events, order } = await startWithCustomRubric('codex', {
       provider: 'codex', platform: process.platform, status: 'unavailable', reason: 'sandbox helper could not start',
-    });
+    }, true);
 
     expect(events).toContainEqual({
       type: 'build_review_read_only_capability',
       provider: 'codex', platform: process.platform, status: 'unavailable', reason: 'sandbox helper could not start',
     });
     expect(order).toEqual(['probe', 'dispatch']);
+    expect(logs.join('\n')).toContain('build_review read-only capability unavailable: codex on');
+    expect(logs.join('\n')).toContain('sandbox helper could not start');
   });
 
   it('does not spawn a probe or emit a capability event without an enabled custom rubric', async () => {
