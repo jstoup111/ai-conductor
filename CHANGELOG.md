@@ -71,6 +71,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemons now avoid providers whose usage limit has been exhausted during a retry episode. ([implementation PR #2743](https://github.com/jstoup111/ai-conductor/pull/2743)).
 - Custom build_review rubrics routed to Codex now load their review policy instead of failing every lap with "Not initialized". ([implementation PR #2764](https://github.com/jstoup111/ai-conductor/pull/2764)).
 - Codex read-only build reviews can now write their output schema instead of failing because the review checkout is not the feature worktree. ([implementation PR #2766](https://github.com/jstoup111/ai-conductor/pull/2766)).
+- Codex-routed build_review rubrics now send a strict-mode output schema the API accepts, and a failed first reviewer attempt no longer crashes the lap when a fallback candidate retries. ([implementation PR #2767](https://github.com/jstoup111/ai-conductor/pull/2767)).
 
 ## [1.4.0] - 2026-09-19
 
