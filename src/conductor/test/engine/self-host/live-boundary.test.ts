@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createServer } from 'node:net';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from '../../../src/engine/self-host/live-boundary.js';
 
 const readdirMock = vi.hoisted(() => vi.fn());
@@ -139,6 +140,24 @@ describe('live self-host boundary', () => {
         reason: 'per-step verification',
       })).toEqual({ ok: true });
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('fingerprints a symlinked socket in provider state without reading it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-socket-link-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    const control = join(provider, 'app-server-control');
+    await Promise.all([mkdir(live), mkdir(control, { recursive: true })]);
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(join(root, 'daemon.sock'), resolve));
+    await symlink(join(root, 'daemon.sock'), join(control, 'app-server-control.sock'));
+    try {
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'codex' });
+      expect(baseline.surfaces[1]?.manifest.map((entry) => entry.path)).toContain(join('app-server-control', 'app-server-control.sock'));
+      expect(await verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' })).toEqual({ ok: true });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('ignores a plugin lock marker a concurrent provider process drops into its home', async () => {

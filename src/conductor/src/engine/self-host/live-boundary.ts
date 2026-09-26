@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFile as execFileCb } from 'node:child_process';
-import { readdir, readFile, readlink } from 'node:fs/promises';
+import { readdir, readFile, readlink, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
@@ -260,6 +260,24 @@ function isExcluded(path: string, exclude: readonly string[]): boolean {
     : path === ex || path.startsWith(`${ex}/`));
 }
 
+/**
+ * Content to digest for one walked entry. A socket, FIFO, or device (directly or through a
+ * symlink) is fingerprinted by its kind and link target, never read: reading a socket throws
+ * ENXIO and reading a FIFO blocks. Codex's managed app-server leaves exactly such a link at
+ * `app-server-control/app-server-control.sock` while an operator session is open.
+ */
+async function entryContent(file: string): Promise<Buffer | string> {
+  const info = await stat(file).catch(() => undefined);
+  if (info && !info.isFile() && !info.isDirectory()) {
+    const kind = info.isSocket() ? 'socket' : info.isFIFO() ? 'fifo' : 'device';
+    return `special:${kind}:${await readlink(file).catch(() => '')}`;
+  }
+  return readFile(file).catch(async (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EISDIR' || error.code === 'ENOENT') return readlink(file);
+    throw error;
+  });
+}
+
 async function manifest(
   root: string,
   exclude: readonly string[],
@@ -292,10 +310,7 @@ async function manifest(
   }
   const entries = await Promise.all(files.map(async file => {
     const path = relative(root, file);
-    const bytes = await readFile(file).catch(async (error: NodeJS.ErrnoException) => {
-      if (error.code === 'EISDIR' || error.code === 'ENOENT') return readlink(file);
-      throw error;
-    });
+    const bytes = await entryContent(file);
     return { path, digest: createHash('sha256').update(bytes).digest('hex') };
   }));
   const filteredEntries = entries.filter(entry => !exclude.includes(entry.path)).sort((a, b) => a.path.localeCompare(b.path));
