@@ -1,5 +1,5 @@
 // Covers: task:37, task:14
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -23,6 +23,8 @@ import { Conductor } from '../test-conductor.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
+import { resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
 
 const roots: string[] = [];
 const feature = { version: 'v1' as const, repository: 'acme/conductor', feature: 'custom-convergence' };
@@ -114,6 +116,51 @@ describe('custom build-review convergence', () => {
     expect(result.output).toContain('claude');
     expect((await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults ?? 0).toBe(0);
     await expect(readFile(join(projectRoot, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain('read-only-review-unavailable');
+  });
+
+  // Covers: rem-as-built-rem-ab14-1
+  it('records a real read-only halt and resolves that same rubric through the stored reduced-coverage disposition', async () => {
+    const main = await mkdtemp(join(process.env.TMPDIR!, 'build-review-read-only-roundtrip-'));
+    roots.push(main);
+    const slug = 'read-only-roundtrip';
+    const projectRoot = join(main, '.worktrees', slug);
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    const config = { llm_provider: 'claude', build_review: {
+      enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false } },
+      custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project', llm_provider: 'claude' } },
+    } } as HarnessConfig;
+    let useStoredDisposition = false;
+    const provider: LLMProvider = { lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true }, invoke: async () => {
+      throw new Error('unavailable review candidates must not invoke');
+    } };
+    const runner = new DefaultStepRunner(provider, slug, projectRoot, {
+      config, providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(),
+      buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`, declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+      probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'unavailable' as const, reason: 'fixture unavailable' }),
+      buildReviewEffectiveResolver: async (root, aggregate) => useStoredDisposition
+        ? resolveEffectiveBuildReviewVerdict(root, aggregate, { resolveMainRoot: async () => main, realpath: async (path) => path })
+        : ({ ok: true, feature: { version: 'v1', repository: main, feature: slug }, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } } as never),
+    });
+    const source = { identity: { snapshotDigest: 'sha256:roundtrip', contentDigest: 'sha256:roundtrip-content', mergeBase: 'base', headSha: 'head' }, baselinePath: join(projectRoot, 'baseline'), headPath: join(projectRoot, 'head') };
+    await Promise.all([mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
+    const inputs = { sourceSnapshot: { digest: 'sha256:roundtrip', contentDigest: 'sha256:roundtrip-content', mergeBase: 'base', headSha: 'head', sourceChanges: [] }, sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} } };
+    const resolved = resolveBuildReviewConfig(config, CLAUDE_MODEL_POLICY);
+    const first = await (runner as unknown as { runRubricBuildReview(inputs: unknown, config: unknown, tier: 'M'): Promise<{ success: boolean; output: string }> }).runRubricBuildReview(inputs, resolved, 'M');
+    expect(first).toMatchObject({ success: false, output: expect.stringContaining('read-only-review-unavailable') });
+    await expect(readFile(join(projectRoot, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain('read-only-review-unavailable');
+
+    await expect(dispatchBuildReviewRecordReducedCoverage({ kind: 'record-reduced-coverage', feature: slug, lapId: 'lap-head', rubric: 'portable', rationale: 'No provider can enforce read-only review.' }, {
+      cwd: projectRoot, isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => main, realpath: async (path) => path,
+      readMechanicalFaults: async () => 0, print: vi.fn(), appendEvent: vi.fn(),
+    })).resolves.toBe(0);
+    await expect(readFile(join(projectRoot, '.pipeline', 'build-review-dispositions.json'), 'utf8')).resolves.toContain('read-only-review-unavailable');
+
+    useStoredDisposition = true;
+    const rerun = await (runner as unknown as { runRubricBuildReview(inputs: unknown, config: unknown, tier: 'M'): Promise<{ output: string }> }).runRubricBuildReview(inputs, resolved, 'M');
+    expect(rerun.output).not.toContain('disposition state cannot resolve');
+    await expect(readFile(join(projectRoot, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain('## Reduced build-review coverage');
   });
 
   it('renders the immediate read-only refusal as a needs-human halt', async () => {

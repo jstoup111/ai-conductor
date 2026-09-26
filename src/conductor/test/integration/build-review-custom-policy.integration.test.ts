@@ -53,6 +53,68 @@ function git() {
   };
 }
 
+/** A synthetic Git boundary that creates real detached source-view directories. */
+function materializedGit(root: string) {
+  const head = 'a'.repeat(40);
+  const baseline = 'b'.repeat(40);
+  const paths: { headPath?: string; baselinePath?: string } = {};
+  return {
+    paths,
+    runner: async (args: string[]) => {
+      if (args[0] === 'cat-file') return { exitCode: 0, stdout: '', stderr: '' };
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        const path = args[3]!;
+        await mkdir(path, { recursive: true });
+        await writeFile(join(path, 'frozen.ts'), `export const frozen = ${args[4] === head ? '1' : '0'};\n`);
+        if (args[4] === head) paths.headPath = path;
+        else paths.baselinePath = path;
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'remove') return { exitCode: 0, stdout: '', stderr: '' };
+      if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+      if (args[0] === 'rev-parse') return { exitCode: 0, stdout: `${head}\n`, stderr: '' };
+      if (args[0] === 'merge-base') return { exitCode: 0, stdout: `${baseline}\n`, stderr: '' };
+      if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: 'M\u0000src/a.ts\u0000', stderr: '' };
+      if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/src/a.ts b/src/a.ts\n', stderr: '' };
+      if (args[0] === 'show') return { exitCode: 0, stdout: 'export const value = 0;\n', stderr: '' };
+      return { exitCode: 1, stdout: '', stderr: '' };
+    },
+  };
+}
+
+function materializedPolicyRunner(input: {
+  readonly root: string;
+  readonly invoke: LLMProvider['invoke'];
+  readonly events?: ConductorEventEmitter;
+  readonly mixed?: boolean;
+}) {
+  const materialized = materializedGit(input.root);
+  const provider: LLMProvider = {
+    invoke: input.invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+    nativeSchemaCapability: { nativeOutputSchema: true },
+  };
+  return {
+    materialized,
+    runner: new DefaultStepRunner(provider, 'materialized-custom-policy', input.root, {
+      featureDesc: 'feature', planPath: join(input.root, '.docs', 'plans', 'feature.md'), gitRunner: materialized.runner,
+      config: { llm_provider: 'claude', build_review: {
+        enabled: true,
+        rubrics: { testQuality: { enabled: false }, ...(input.mixed ? { security: { enabled: true } } : {}) },
+        custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' } },
+      } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(), events: input.events, probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
+      buildReviewInputOptions: {
+        inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never),
+        materialization: { projectRoot: input.root, runtimeRoot: join(input.root, 'frozen-runtime') },
+      },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
+      buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`, declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    }),
+  };
+}
+
 const passingEffectiveResolver = async () => ({
   ok: true,
   feature: { version: 'v1', repository: '/repo', feature: 'feature' },
@@ -433,6 +495,110 @@ describe('custom build-review policy runner', () => {
       cause: 'review-input-mutated',
       changedInputs: expect.arrayContaining(['capturedPolicyMaterial:SKILL.md', 'evidenceRoot:test-suite-evidence.json']),
     })]);
+  });
+
+  // Covers: task:7, rem-as-built-rem-ab12-1
+  it('discards a real frozen-head mutation during fan-out without publishing an aggregate', async () => {
+    const root = await fixture();
+    const events = new ConductorEventEmitter();
+    const failures: unknown[] = [];
+    events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event); });
+    let setup!: ReturnType<typeof materializedPolicyRunner>;
+    setup = materializedPolicyRunner({ root, events, invoke: vi.fn(async () => {
+      await writeFile(join(setup.materialized.paths.headPath!, 'frozen.ts'), 'export const frozen = 2;\n');
+      const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+      return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+    }) });
+
+    const result = await setup.runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(result).toMatchObject({ success: false, currentLapMechanicalFault: true });
+    expect(result.output).toContain('frozenHead:frozen.ts');
+    await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
+    await expect(readFile(join(root, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.toContain('"mechanicalFaults": 1');
+    expect(failures).toEqual([expect.objectContaining({ cause: 'review-input-mutated', changedInputs: expect.arrayContaining(['frozenHead:frozen.ts']) })]);
+  });
+
+  // Covers: task:7, rem-as-built-rem-ab1-2
+  it('discards a real frozen-baseline mutation during fan-out', async () => {
+    const root = await fixture();
+    let setup!: ReturnType<typeof materializedPolicyRunner>;
+    setup = materializedPolicyRunner({ root, invoke: vi.fn(async () => {
+      await writeFile(join(setup.materialized.paths.baselinePath!, 'frozen.ts'), 'export const frozen = -1;\n');
+      const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+      return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+    }) });
+
+    const result = await setup.runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(result.output).toContain('frozenBaseline:frozen.ts');
+    await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
+  });
+
+  // Covers: rem-as-built-rem-ab12-1
+  it('gives a mixed failed fan-out mutation precedence and settles its built-in peer', async () => {
+    const root = await fixture();
+    const events = new ConductorEventEmitter();
+    const failures: Array<{ rubric: string; cause?: string; changedInputs?: string[] }> = [];
+    events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event as never); });
+    let mutated = false;
+    let setup!: ReturnType<typeof materializedPolicyRunner>;
+    setup = materializedPolicyRunner({ root, events, mixed: true, invoke: vi.fn(async ({ prompt }) => {
+      if (!mutated) {
+        mutated = true;
+        await writeFile(join(setup.materialized.paths.headPath!, 'frozen.ts'), 'export const frozen = 3;\n');
+      }
+      if (prompt.includes('portable-policy')) return { success: false, exitCode: 1, output: 'provider failed' };
+      return { success: true, exitCode: 0, output: '{"findings":[]}', finalStructuredResult: { findings: [] } };
+    }) });
+
+    const result = await setup.runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(result).toMatchObject({ success: false, currentLapMechanicalFault: true });
+    expect(result.output).toContain('frozenHead:frozen.ts');
+    await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
+    await expect(readFile(join(root, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.toContain('"mechanicalFaults": 1');
+    expect(failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rubric: 'portable', cause: 'review-input-mutated', changedInputs: expect.arrayContaining(['frozenHead:frozen.ts']) }),
+      expect.objectContaining({ rubric: 'security', cause: 'review-input-mutated', changedInputs: expect.arrayContaining(['frozenHead:frozen.ts']) }),
+    ]));
+  });
+
+  // Covers: rem-as-built-rem-ab12-1
+  it('returns the original failed fan-out result when real frozen inputs are unchanged', async () => {
+    const root = await fixture();
+    const setup = materializedPolicyRunner({ root, invoke: vi.fn(async () => ({ success: false, exitCode: 1, output: 'provider failed unchanged' })) });
+
+    await expect(setup.runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({
+      success: false, output: expect.stringContaining('provider-error'), currentLapMechanicalFault: true,
+    });
+  });
+
+  // Covers: rem-as-built-rem-ab1-2
+  it('digests prior-lap evidence but excludes new evidence written under the current lap root', async () => {
+    const root = await fixture();
+    const priorEvidence = join(root, '.pipeline', 'prior-lap-evidence.json');
+    await writeFile(priorEvidence, '{"prior":true}\n');
+    const setup = materializedPolicyRunner({ root, invoke: vi.fn(async () => {
+      await writeFile(priorEvidence, '{"prior":false}\n');
+      const lapRoot = join(root, '.pipeline', 'build-review', `lap-${'a'.repeat(40)}`);
+      await mkdir(lapRoot, { recursive: true });
+      await writeFile(join(lapRoot, 'new-evidence.json'), '{"new":true}\n');
+      const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+      return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+    }) });
+
+    const mutated = await setup.runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(mutated.output).toContain('evidenceRoot:prior-lap-evidence.json');
+    await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
+
+    const freshRoot = await fixture();
+    const unchangedSetup = materializedPolicyRunner({ root: freshRoot, invoke: vi.fn(async () => {
+      const lapRoot = join(freshRoot, '.pipeline', 'build-review', `lap-${'a'.repeat(40)}`);
+      await mkdir(lapRoot, { recursive: true });
+      await writeFile(join(lapRoot, 'new-evidence.json'), '{"new":true}\n');
+      const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+      return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+    }) });
+    await expect(unchangedSetup.runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({ success: true });
+    await expect(readFile(join(freshRoot, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain('"verdict": "PASS"');
   });
 
   it('discards a mixed lap when a built-in peer policy captured before fan-out changes', async () => {

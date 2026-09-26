@@ -2358,6 +2358,7 @@ export class DefaultStepRunner implements StepRunner {
       await Promise.all(config.catalog.map(async (entry) => {
         await inputs.sourceMaterialization?.settle(entry.id);
       }));
+      await inputs.sourceMaterialization?.finish?.();
     }
   }
 
@@ -2387,6 +2388,7 @@ export class DefaultStepRunner implements StepRunner {
     const customEntries = config.catalog.filter(
       (entry): entry is ResolvedBuildReviewCustomCatalogEntry => entry.kind === 'custom',
     );
+    const builtinEntries = config.catalog.filter((entry) => entry.kind === 'builtin');
     // Production probing belongs to daemon startup and foreground config
     // loading. A runner consumes that frozen observation; an injected probe is
     // retained solely for isolated fixtures. Missing evidence is deliberately
@@ -2477,14 +2479,30 @@ export class DefaultStepRunner implements StepRunner {
         changedInputs,
       })));
     };
-    const settleCustomLapInputMutation = async (
-      results: Readonly<Record<string, BuildReviewCustomArtifactMember>>,
+    // A changed shared input invalidates the whole lap, including enabled
+    // built-in peers whose branch did not produce a durable result. Keep this
+    // conversion at the one post-join boundary so rejected, failed, missing,
+    // and complete fan-outs cannot settle different member sets.
+    const settleLapInputMutation = async (
+      custom: Readonly<Record<string, BuildReviewCustomArtifactMember>>,
+      builtin: Readonly<Partial<Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>>>,
       changedInputs: readonly string[],
-    ): Promise<Readonly<Record<string, BuildReviewCustomArtifactMember>>> => {
+    ): Promise<{
+      readonly customResults: Readonly<Record<string, BuildReviewCustomArtifactMember>>;
+      readonly builtinResults: Readonly<Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>>;
+    }> => {
       lapGate!.discardCacheWrites();
-      const mutated = mutatedCustomResults(results, changedInputs);
-      await emitInputMutationFailures(Object.keys(mutated), changedInputs);
-      return mutated;
+      const customResults = mutatedCustomResults(custom, changedInputs);
+      const builtinResults = Object.freeze(Object.fromEntries([...new Set([
+        ...Object.keys(builtin), ...builtinEntries.map((entry) => entry.id),
+      ])].map((rubric) => [rubric, {
+        kind: 'infrastructure-failure' as const,
+        rubric,
+        reason: 'review-input-mutated' as const,
+        detail: `review input changed: ${changedInputs.join(', ')}`,
+      }]))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
+      await emitInputMutationFailures([...Object.keys(customResults), ...Object.keys(builtinResults)], changedInputs);
+      return { customResults, builtinResults };
     };
     const mutationMembersFromOutcomes = (outcomes: readonly { readonly id: string; readonly member?: BuildReviewCustomArtifactMember }[]) =>
       Object.freeze(Object.fromEntries(customEntries.map((entry) => {
@@ -2607,9 +2625,9 @@ export class DefaultStepRunner implements StepRunner {
       if (customPolicyLap) {
         const changedInputs = await finishCustomLapInputDigests();
         if (changedInputs.length > 0) {
-          customResults = await settleCustomLapInputMutation(
-            mutationMembersFromOutcomes(customSettled.status === 'fulfilled' ? customSettled.value : []), changedInputs,
-          );
+          ({ customResults } = await settleLapInputMutation(
+            mutationMembersFromOutcomes(customSettled.status === 'fulfilled' ? customSettled.value : []), {}, changedInputs,
+          ));
           await this.emitBuildReviewCustomMemberResults(lapId, customResults);
           return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
         }
@@ -2625,7 +2643,7 @@ export class DefaultStepRunner implements StepRunner {
       if (outcomes.some((outcome) => !outcome.success)) {
         const changedInputs = await finishCustomLapInputDigests();
         if (changedInputs.length > 0) {
-          customResults = await settleCustomLapInputMutation(mutationMembersFromOutcomes(outcomes), changedInputs);
+          ({ customResults } = await settleLapInputMutation(mutationMembersFromOutcomes(outcomes), {}, changedInputs));
           await this.emitBuildReviewCustomMemberResults(lapId, customResults);
           return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
         }
@@ -2639,7 +2657,7 @@ export class DefaultStepRunner implements StepRunner {
       if (members.some((member) => member[1] === undefined)) {
         const changedInputs = await finishCustomLapInputDigests();
         if (changedInputs.length > 0) {
-          customResults = await settleCustomLapInputMutation(mutationMembersFromOutcomes(outcomes), changedInputs);
+          ({ customResults } = await settleLapInputMutation(mutationMembersFromOutcomes(outcomes), {}, changedInputs));
           await this.emitBuildReviewCustomMemberResults(lapId, customResults);
           return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
         }
@@ -2657,7 +2675,7 @@ export class DefaultStepRunner implements StepRunner {
       if (joinedCoordination === undefined || joinedCoordination.kind !== 'ready') {
         const changedInputs = await finishCustomLapInputDigests();
         if (changedInputs.length > 0) {
-          customResults = await settleCustomLapInputMutation(customResults, changedInputs);
+          ({ customResults } = await settleLapInputMutation(customResults, {}, changedInputs));
         } else {
           customResults = withCustomCacheWriteFailures(customResults, await lapGate!.flushCacheWrites());
         }
@@ -2759,15 +2777,9 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
     if (changedInputs.length > 0) {
-      customResults = await settleCustomLapInputMutation(customResults!, changedInputs);
-      for (const rubric of Object.keys(validResults) as BuildReviewRubricResult['rubric'][]) {
-        validResults[rubric] = {
-          kind: 'infrastructure-failure', rubric,
-          reason: 'review-input-mutated',
-          detail: `review input changed: ${changedInputs.join(', ')}`,
-        };
-      }
-      await emitInputMutationFailures(Object.keys(validResults), changedInputs);
+      const settledMutation = await settleLapInputMutation(customResults!, validResults, changedInputs);
+      customResults = settledMutation.customResults;
+      Object.assign(validResults, settledMutation.builtinResults);
     }
     if (customResults !== undefined) await this.emitBuildReviewCustomMemberResults(lapId, customResults);
 

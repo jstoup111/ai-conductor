@@ -51,6 +51,8 @@ export interface BuildReviewLapMaterialization {
   readonly source: BuildReviewMaterializedSourceView;
   contextFor(memberId: string): BuildReviewMaterializedMemberContext;
   settle(memberId: string): Promise<void>;
+  /** Closes the source view after the lap gate has captured its final digest. */
+  finish?(): Promise<void>;
 }
 
 export interface BuildReviewMaterializationOptions {
@@ -173,7 +175,6 @@ export async function materializeBuildReviewLap(
     baselinePath,
     headPath,
   });
-  const unsettled = new Set(memberIds);
   let cleaned = false;
   const contexts = new Map([...memberIds].map((memberId) => [memberId, Object.freeze({ memberId, source })]));
   return Object.freeze({
@@ -184,7 +185,10 @@ export async function materializeBuildReviewLap(
       return context;
     },
     async settle(memberId: string): Promise<void> {
-      if (!memberIds.has(memberId) || !unsettled.delete(memberId) || unsettled.size !== 0 || cleaned) return;
+      if (!memberIds.has(memberId) || cleaned) return;
+    },
+    async finish(): Promise<void> {
+      if (cleaned) return;
       cleaned = true;
       await cleanup();
     },
