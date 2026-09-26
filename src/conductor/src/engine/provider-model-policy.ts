@@ -41,7 +41,10 @@ export function resolveProviderModelPolicy(
 /** Providers reporting per-dispatch dollars need no rate-card estimate. */
 export const COST_SELF_REPORTING_PROVIDERS: ReadonlySet<string> = new Set(
   BUILT_IN_PROVIDERS
-    .filter((provider) => provider.capabilities.costSelfReporting === true)
+    .filter((provider) =>
+      'costSelfReporting' in provider.capabilities
+      && provider.capabilities.costSelfReporting === true,
+    )
     .map((provider) => provider.id),
 );
 

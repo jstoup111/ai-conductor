@@ -5,6 +5,11 @@ import { join, relative } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
 import { redactSafetyText } from '../safety-diagnostics.js';
+import {
+  requireProviderCapability,
+  type BuiltInProviderId,
+  type ProviderWith,
+} from '../../execution/provider-catalog.js';
 import { type ContainmentVerdict } from './live-containment.js';
 
 const execFile = promisify(execFileCb);
@@ -209,9 +214,9 @@ const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
  * excluding them buys no false-positive relief and would only cost
  * detection.
  */
-function providerStateVolatile(provider: 'claude' | 'codex' | undefined): readonly string[] {
-  if (provider === 'codex') return CODEX_PROVIDER_STATE_VOLATILE;
-  if (provider === 'claude') return CLAUDE_PROVIDER_STATE_VOLATILE;
+function providerStateVolatile(provider: ProviderWith<'selfHost'> | undefined): readonly string[] {
+  if (provider?.environmentPrefix === 'CODEX_') return CODEX_PROVIDER_STATE_VOLATILE;
+  if (provider?.environmentPrefix === 'CLAUDE_') return CLAUDE_PROVIDER_STATE_VOLATILE;
   return [];
 }
 
@@ -323,9 +328,12 @@ async function manifest(
 
 export async function fingerprintLiveBoundary(args: {
   liveCheckout: string; unrelatedProviderState: string;
-  provider?: 'claude' | 'codex'; selectedAuthPaths?: readonly string[];
+  provider?: BuiltInProviderId; selectedAuthPaths?: readonly string[];
 }): Promise<LiveBoundarySnapshot> {
-  const excluded = [...providerStateVolatile(args.provider), ...(args.selectedAuthPaths ?? [])];
+  const provider = args.provider
+    ? requireProviderCapability(args.provider, 'selfHost')
+    : undefined;
+  const excluded = [...providerStateVolatile(provider), ...(args.selectedAuthPaths ?? [])];
   const liveCheckout = await manifest(
     args.liveCheckout,
     LIVE_CHECKOUT_VOLATILE,

@@ -5,11 +5,17 @@
 import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { scrubTmuxEnvironment } from '../../execution/child-environment.js';
+import {
+  requireProviderCapability,
+  type BuiltInProviderId,
+  type ProviderWith,
+} from '../../execution/provider-catalog.js';
 import { redactSafetyText } from '../safety-diagnostics.js';
 import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 
-export type SelfHostProviderId = 'claude' | 'codex';
+export type SelfHostProvider = ProviderWith<'selfHost'>;
+export type SelfHostProviderId = Extract<BuiltInProviderId, SelfHostProvider['id']>;
 
 export interface ProviderHomeFs {
   mkdtemp(prefix: string): Promise<string>;
@@ -48,7 +54,7 @@ export type PrepareSelfHostAuth = (
 ) => Promise<ProviderHomeEnvironment | void>;
 
 export interface ResolvedSelfHostProvider {
-  readonly id: SelfHostProviderId;
+  readonly id: BuiltInProviderId;
   readonly prepareSelfHostAuth?: PrepareSelfHostAuth;
 }
 
@@ -92,10 +98,6 @@ export class ProviderHomeProvisionError extends Error {
   }
 }
 
-const HOME_VARIABLE: Record<SelfHostProviderId, 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME'> = {
-  claude: 'CLAUDE_CONFIG_DIR',
-  codex: 'CODEX_HOME',
-};
 const DEFAULT_WORKTREE_ASSETS = ['skills'] as const;
 
 class ThrowawayProviderHome implements ProviderHome {
@@ -103,6 +105,7 @@ class ThrowawayProviderHome implements ProviderHome {
 
   constructor(
     readonly provider: SelfHostProviderId,
+    private readonly homeVariable: string,
     readonly homeDir: string,
     private readonly parentEnv: NodeJS.ProcessEnv,
     private readonly additions: NodeJS.ProcessEnv,
@@ -117,7 +120,7 @@ class ThrowawayProviderHome implements ProviderHome {
     delete env.CLAUDE_CONFIG_DIR;
     delete env.CODEX_HOME;
     delete env.CLAUDE_CODE_OAUTH_TOKEN;
-    env[HOME_VARIABLE[this.provider]] = this.homeDir;
+    env[this.homeVariable] = this.homeDir;
     return scrubTmuxEnvironment({ ...env, ...this.additions });
   }
 
@@ -141,6 +144,9 @@ export async function provisionProviderHome(
   options: ProvisionProviderHomeOptions,
 ): Promise<ProviderHome> {
   const fs = options.fs ?? realProviderHomeFs;
+  // Refuse before allocating scratch, copying assets, or letting a provider-owned
+  // preparation hook reach its subprocess boundary.
+  const provider = requireProviderCapability(options.provider.id, 'selfHost');
   const usesScratch = options.baseDir === undefined;
   const baseDir = options.baseDir ?? await acquireScratchHome({
     worktreeRoot: options.worktreeRoot,
@@ -148,7 +154,7 @@ export async function provisionProviderHome(
     featureSlug: options.featureSlug,
     runId: options.runId,
     attempt: options.attempt,
-    provider: options.provider.id,
+    provider: provider.id,
   });
   const parentEnv = options.parentEnv ?? process.env;
   const assets = options.worktreeAssets ?? DEFAULT_WORKTREE_ASSETS;
@@ -156,8 +162,8 @@ export async function provisionProviderHome(
 
   try {
     await fs.mkdir(baseDir);
-    homeDir = await fs.mkdtemp(join(baseDir, `self-host-${options.provider.id}-`));
-    const context: ProviderHomeContext = { provider: options.provider.id, homeDir };
+    homeDir = await fs.mkdtemp(join(baseDir, `self-host-${provider.id}-`));
+    const context: ProviderHomeContext = { provider: provider.id, homeDir };
 
     for (const asset of assets) {
       const target = join(options.worktreeRoot, asset);
@@ -187,7 +193,7 @@ export async function provisionProviderHome(
         }
       }
     }
-    if (options.provider.id === 'codex') {
+    if (provider.homeVariable === 'CODEX_HOME') {
       await fs.mkdir(join(homeDir, '.agents'));
       // Link into the already-copied throwaway skills, not the worktree, so
       // this view can't become a second write-through path into the worktree.
@@ -197,7 +203,8 @@ export async function provisionProviderHome(
     const auth = await options.provider.prepareSelfHostAuth?.(context);
     const controls = await options.installEngineControls?.(context);
     return new ThrowawayProviderHome(
-      options.provider.id,
+      provider.id,
+      provider.homeVariable,
       homeDir,
       parentEnv,
       { ...auth?.env, ...controls?.env },
@@ -208,7 +215,7 @@ export async function provisionProviderHome(
           worktreeRoot: options.worktreeRoot,
           runId: options.runId!,
           attempt: options.attempt!,
-          provider: options.provider.id,
+          provider: provider.id,
         }).then(() => {})
         : undefined,
     );
@@ -218,7 +225,7 @@ export async function provisionProviderHome(
           worktreeRoot: options.worktreeRoot,
           runId: options.runId!,
           attempt: options.attempt!,
-          provider: options.provider.id,
+          provider: provider.id,
         });
     } else if (homeDir) {
         await fs.rm(homeDir, { recursive: true, force: true }).catch(() => {});
@@ -226,7 +233,7 @@ export async function provisionProviderHome(
     if (error instanceof ProviderHomeProvisionError) throw error;
     const reason = redactSafetyText(error instanceof Error ? error.message : String(error));
     throw new ProviderHomeProvisionError(
-      `Failed to provision isolated ${options.provider.id} self-host home: ${reason}`,
+      `Failed to provision isolated ${provider.id} self-host home: ${reason}`,
     );
   }
 }

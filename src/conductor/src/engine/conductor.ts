@@ -74,6 +74,7 @@ import type {
   AuthenticationReadiness,
   CodexProbeFailure,
   InvokeResult,
+  SelfHostAuthContext,
   SelfHostInvocation,
   TokenUsage,
 } from '../execution/llm-provider.js';
@@ -100,6 +101,10 @@ import type {
 } from './provider-execution.js';
 import { formatProviderCapabilityGapMessages } from './provider-execution.js';
 import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
+import {
+  BUILT_IN_PROVIDERS,
+  requireProviderCapability,
+} from '../execution/provider-catalog.js';
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import { redactSafetyText } from './safety-diagnostics.js';
 import { createEngineStateStore } from './engine-state-store.js';
@@ -6397,16 +6402,25 @@ export class Conductor {
         // This is a candidate-local setup capability. Check it before opening
         // a live-boundary window or allocating scratch state so fallback has
         // no resource ownership to unwind.
-        if (candidate.providerKey === 'codex') {
+        const descriptor = BUILT_IN_PROVIDERS.find(
+          (provider) => provider.id === candidate.providerKey,
+        );
+        // Plugins retain their own preparation seam. Built-ins must declare
+        // self-host support before they can enter the shared isolation path.
+        if (!descriptor) return priorPreparation?.(candidate, runtime, identity);
+        const provider = requireProviderCapability(descriptor.id, 'selfHost');
+        const providerId = descriptor.id;
+        const usesProviderHome = provider.homeVariable === 'CODEX_HOME';
+        if (usesProviderHome) {
           const missing = !runtime.provider.prepareSelfHostAuth
             || !runtime.provider.resolveSelfHostExecutable
             || !this.guardrails.provisionProviderHome;
           if (missing) {
             throw new ProviderSetupUnavailableError({
-              provider: 'codex',
+              provider: provider.id,
               capability: 'self-host-isolation',
-              reason: 'Codex self-host isolation is unavailable for the resolved provider candidate.',
-              recoveryAction: 'Update Codex and the self-host guardrails to provide isolated-home setup.',
+              reason: `${provider.id} self-host isolation is unavailable for the resolved provider candidate.`,
+              recoveryAction: `Update ${provider.id} and the self-host guardrails to provide isolated-home setup.`,
             });
           }
         }
@@ -6417,15 +6431,13 @@ export class Conductor {
         try {
           const installed = await this.guardrails.resolveInstalledHarnessRoot();
           const liveCheckout = installed.status === 'ok' ? installed.root : this.projectRoot;
-          const codex = candidate.providerKey === 'codex';
-          const providerHome = codex
-            ? process.env.CODEX_HOME ?? join(homedir(), '.codex')
-            : process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+          const providerHome = process.env[provider.homeVariable]
+            ?? join(homedir(), provider.defaultHome);
           const boundary = await fingerprintLiveBoundary({
             liveCheckout,
             unrelatedProviderState: providerHome,
-            provider: codex ? 'codex' : 'claude',
-            selectedAuthPaths: codex ? ['auth.json'] : ['.credentials.json'],
+            provider: providerId,
+            selectedAuthPaths: usesProviderHome ? ['auth.json'] : ['.credentials.json'],
           });
           await this.events.emit({
             type: 'self_host_boundary_fingerprint',
@@ -6494,7 +6506,7 @@ export class Conductor {
           if (!featureSlug || !identity?.runId || identity.attempt === undefined) {
             throw new Error('Candidate self-host provisioning requires repository, featureSlug, runId, and attempt.');
           }
-          if (codex) {
+          if (usesProviderHome) {
             const prepareAuth = runtime.provider.prepareSelfHostAuth;
             const resolveExecutable = runtime.provider.resolveSelfHostExecutable;
             const provisionHome = this.guardrails.provisionProviderHome;
@@ -6503,7 +6515,16 @@ export class Conductor {
             if (!prepareAuth || !resolveExecutable || !provisionHome) throw new Error('Self-host capability changed during preparation.');
             const executable = await resolveExecutable.call(runtime.provider);
             const home = await provisionHome({
-              provider: { id: 'codex', prepareSelfHostAuth: (context) => prepareAuth.call(runtime.provider, { provider: 'codex', homeDir: context.homeDir }) },
+              provider: {
+                id: providerId,
+                prepareSelfHostAuth: (context) => prepareAuth.call(
+                  runtime.provider,
+                  {
+                    provider: candidate.providerKey as SelfHostAuthContext['provider'],
+                    homeDir: context.homeDir,
+                  },
+                ),
+              },
               worktreeRoot: this.projectRoot,
               repository: this.projectRoot,
               featureSlug,
@@ -6513,26 +6534,22 @@ export class Conductor {
             ownershipTransferred = true;
             return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), originalCatalogHome: providerHome, teardown: async () => { try { await verify(); } finally { await home.teardown(); } } });
           }
-          if (candidate.providerKey === 'claude') {
-            const sandbox = await this.guardrails.provisionSandbox({
-              worktreeRoot: this.projectRoot,
-              harnessRoot: liveCheckout,
-              repository: this.projectRoot,
-              featureSlug,
-              runId: identity.runId,
-              attempt: identity.attempt,
-            });
-            ownershipTransferred = true;
-            return prepareInvocation({
-              executable: 'claude',
-              env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
-              args: [],
-              originalCatalogHome: providerHome,
-              teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
-            });
-          }
+          const sandbox = await this.guardrails.provisionSandbox({
+            worktreeRoot: this.projectRoot,
+            harnessRoot: liveCheckout,
+            repository: this.projectRoot,
+            featureSlug,
+            runId: identity.runId,
+            attempt: identity.attempt,
+          });
           ownershipTransferred = true;
-          return priorPreparation?.(candidate, runtime, identity);
+          return prepareInvocation({
+            executable: provider.defaultExecutable,
+            env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
+            args: [],
+            originalCatalogHome: providerHome,
+            teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
+          });
         } finally {
           if (!ownershipTransferred) boundaryWindow?.close();
         }
