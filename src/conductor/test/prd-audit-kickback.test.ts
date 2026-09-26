@@ -25,6 +25,7 @@ vi.mock('../src/engine/owner-gate/machine-identity.js', async (importOriginal) =
 import {
   Conductor,
   remediationLapCapForGate,
+  validationJoinRemediationRoundCap,
   resolveAsBuiltGoverningClause,
   routePrdAuditPlanGaps,
   routePrdAuditOverScope,
@@ -1860,6 +1861,23 @@ describe('prd_audit kickback', () => {
       ),
     ).toBe(2);
     expect(remediationLapCapForGate('manual_test', {} as never, 0)).toBe(0);
+  });
+
+  it('bounds validation-join remediation rounds by the durable raised lap cap, never below the generic cap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'join-round-cap-'));
+    dirs.push(root);
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    expect(await validationJoinRemediationRoundCap(root, {} as never)).toBe(2);
+    await writeKickbackLedger(root, {
+      version: 1,
+      gates: {
+        prd_audit: {
+          count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: false,
+          resolvedBefore: 0, laps: 4, effectiveLapCap: 6,
+        },
+      },
+    } as never);
+    expect(await validationJoinRemediationRoundCap(root, {} as never)).toBe(6);
   });
 
   it('halts a malformed PRD-audit report before remediation can append its task', async () => {

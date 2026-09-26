@@ -737,6 +737,27 @@ export function remediationLapCapForGate(
 }
 
 /**
+ * Round budget for the validation-group join's `/remediate` dispatch. The
+ * process-local round counter must never bind tighter than the durable
+ * per-gate lap caps `planRemediation` enforces from the kickback ledger —
+ * otherwise an operator `kickback-budget raise` is silently ignored and the
+ * join falls through to a generic needs-human halt. It still never drops
+ * below MAX_KICKBACKS_PER_GATE, which bounds routes with no durable lap.
+ */
+export async function validationJoinRemediationRoundCap(
+  projectRoot: string,
+  config: HarnessConfig,
+): Promise<number> {
+  const ledger = await readKickbackLedger(projectRoot).catch(() => undefined);
+  let cap = MAX_KICKBACKS_PER_GATE;
+  for (const gate of ['prd_audit', 'architecture_review_as_built'] as const) {
+    const gateCap = ledger?.gates[gate]?.effectiveLapCap ?? remediationLapCapForGate(gate, config);
+    cap = Math.max(cap, gateCap);
+  }
+  return cap;
+}
+
+/**
  * Authored `Governing clause` cells carry inline markdown. The clause grammar is
  * anchored on a bare identifier, so a habitually backticked stem
  * (`` `adr-x` + Decision 4 ``) failed the match before any ADR lookup ran, and
@@ -9237,7 +9258,10 @@ export class Conductor {
               // make progress — or halt on its own cap/D2 no-op guard —
               // exactly like the serial baseline does when its LLM-routed
               // budget runs out).
-              if (gapMemberNamesForMerge.length > 0 && remediationRounds < MAX_KICKBACKS_PER_GATE) {
+              if (
+                gapMemberNamesForMerge.length > 0 &&
+                remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config)
+              ) {
                 mtMergeHandled = true;
                 const evidence: RemediationGateProvenance[] = [];
                 if (gapMemberNamesForMerge.includes('prd_audit' as StepName)) {
@@ -9371,7 +9395,10 @@ export class Conductor {
             // work order (earliest target across MT + this union, hint
             // concatenation) lands in Task 22; this task only covers the
             // no-manual_test-in-play / manual_test-passed shape.
-            if (!mtMergeHandled && this.daemon && remediationRounds < MAX_KICKBACKS_PER_GATE) {
+            if (
+              !mtMergeHandled && this.daemon &&
+              remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config)
+            ) {
               const gapMemberNames = membership.dispatchable
                 .filter((member, idx) => {
                   if (member.name === 'manual_test') return false;
