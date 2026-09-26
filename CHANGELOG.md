@@ -73,6 +73,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Codex read-only build reviews can now write their output schema instead of failing because the review checkout is not the feature worktree. ([implementation PR #2766](https://github.com/jstoup111/ai-conductor/pull/2766)).
 - Codex-routed build_review rubrics now send a strict-mode output schema the API accepts, and a failed first reviewer attempt no longer crashes the lap when a fallback candidate retries. ([implementation PR #2767](https://github.com/jstoup111/ai-conductor/pull/2767)).
 - Codex-routed custom build_review rubrics that report no findings as null are now accepted instead of failing every lap. ([implementation PR #2768](https://github.com/jstoup111/ai-conductor/pull/2768)).
+- Custom build_review findings that cite an inclusive line range inside an admitted source region are now accepted instead of failing as malformed. ([implementation PR #2769](https://github.com/jstoup111/ai-conductor/pull/2769)).
 
 ## [1.4.0] - 2026-09-19
 
