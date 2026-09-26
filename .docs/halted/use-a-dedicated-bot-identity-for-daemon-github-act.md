@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-26T00:42:35.358Z
 Slug: use-a-dedicated-bot-identity-for-daemon-github-act
 Class: needs-human
 Halting step: prd_audit
