@@ -151,7 +151,7 @@ describe('operator park boundary contract', () => {
       /return(?: await)? this\.stepRunner\.run\(name, state, \{\s*retryReason: retryHint,\s*\.\.\.identityOption,\s*\.\.\.executionContextOption,\s*\.\.\.this\.buildReviewCapabilityOption\(name\),\s*\}\);/g,
       // Configured-group branches run only through runParallelGroupViaCore,
       // whose caller is one of the guarded scheduling-unit entries above.
-      /return runGroupBranch\(member, state, \{\s*stepRunner: this\.stepRunner,\s*executionContext,/g,
+      /return runGroupBranch\(member, state, \{\s*stepRunner: this\.stepRunner,\s*providerAvailability: this\.providerExecution\?\.providerAvailability,\s*onProviderSuppressed: this\.providerExecution\?\.onProviderSuppressed,\s*executionContext,/g,
       "return this.stepRunner.run('finish', state, options);",
       // The two bounded FINISH prose passes. Both are reached only from inside
       // the already-park-guarded FINISH dispatch.
