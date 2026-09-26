@@ -13,6 +13,7 @@ import {
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 import { NEEDS_REMEDIATION_MARKER } from '../../src/engine/pr-labels.js';
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
+import { GithubBotAuthRefusalError } from '../../src/engine/github-bot-auth-refusal.js';
 
 // ── Fake runner factories ─────────────────────────────────────────────────────
 
@@ -369,6 +370,32 @@ describe('FR-7: push step', () => {
 // ── FR-2/4/5: draft PR + needs-remediation label ─────────────────────────────
 
 describe('FR-2/4: draft PR + needs-remediation label', () => {
+  it('emits one credential-fallback event before one operator retry of guarded PR creation', async () => {
+    const { git } = fakeGit(standardGitResps());
+    const responses = standardGhResps();
+    const calls: Array<{ args: string[]; credential?: string }> = [];
+    const gh: GhRunner = async (args, options) => {
+      calls.push({ args, credential: options.credential });
+      if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
+      if (args[0] === 'pr' && args[1] === 'create' && options.credential === 'write') {
+        throw new GithubBotAuthRefusalError('auth-refused');
+      }
+      const response = responses.shift();
+      if (response instanceof Error) throw response;
+      return response ?? { stdout: '' };
+    };
+    const emitted: unknown[] = [];
+    const events = { emit: vi.fn(async (event) => { emitted.push(event); }) };
+
+    await expect(escalateBuildFailure({
+      projectRoot: '/repo', failureReason: 'build exploded', runGit: git, runGh: gh, events: events as never,
+    })).resolves.toEqual({ prUrl: PR_URL });
+
+    expect(emitted).toEqual([expect.objectContaining({ type: 'github_write_credential_fallback', reason: 'auth-refused' })]);
+    expect(calls.filter(({ args }) => args[0] === 'pr' && args[1] === 'create').map(({ credential }) => credential))
+      .toEqual(['write', 'operator']);
+  });
+
   it('creates a draft PR after push', async () => {
     const { git } = fakeGit(standardGitResps());
     const { gh, calls: ghCalls } = fakeGh(standardGhResps());

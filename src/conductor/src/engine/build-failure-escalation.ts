@@ -188,6 +188,7 @@ export async function escalateBuildFailure(
           provenance: { ...mutation.provenance, target: { repository: mutation.provenance.repository, kind: 'repository' } },
         },
       }),
+      events: opts.events,
     }),
   );
 

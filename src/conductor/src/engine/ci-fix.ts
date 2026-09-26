@@ -10,6 +10,7 @@
 import type { TrackerClient } from './tracker-client.js';
 import type { WatchEntry } from './mergeable-sweep.js';
 import type { CiRepairDiagnosticReason } from '../types/events.js';
+import type { GithubOperationEventEmitter } from './github-operations.js';
 import type { PrMergeState } from './pr-labels.js';
 import type { HarnessConfig } from '../types/config.js';
 import {
@@ -519,11 +520,19 @@ export async function runCiFix(
   deps: {
     fixRunner: CiFixRunner;
     verify?: (worktreePath: string) => Promise<number>;
+    /**
+     * Prepares the transient resolver checkout before dispatch. Production
+     * uses the standard worktree preparation; tests may inject a bounded fake
+     * when preparation is outside the behavior under observation.
+     */
+    prepareWorktree?: (worktreePath: string) => Promise<void>;
     liveness?: ResolveWorktreeLiveness;
     /** Production supplies its gh transport; tests may inject proven authority. */
     gh?: GhRunner;
     remoteMutation?: GithubMutationExecutionContext;
     remoteGit?: typeof executeRemoteGit;
+    /** Existing event spine for guarded Git write credential fallback. */
+    events?: GithubOperationEventEmitter;
   },
   logger?: (msg: string) => void,
 ): Promise<CiFixOutcome> {
@@ -653,6 +662,7 @@ export async function runCiFix(
       const pushResult = await pushRefreshedBranch(git, branch, log, {
         remoteGit: deps.remoteGit,
         mutation: remoteMutation,
+        events: deps.events,
       });
       if (!pushResult.pushed) {
         log(`${prUrl}: ci-fix lease push failed: ${pushResult.reason}`);
@@ -662,7 +672,7 @@ export async function runCiFix(
 
       logOutcome(log, prUrl, 'ci-fix-lease-push', 'refreshed');
       return { kind: 'published', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
-    }, undefined, deps.liveness ?? {});
+    }, deps.prepareWorktree, deps.liveness ?? {});
 
     return outcome as CiFixOutcome;
   } catch (err) {

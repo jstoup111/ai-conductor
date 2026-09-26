@@ -1,6 +1,7 @@
 // Covers: task:22
 import { describe, expect, it, vi } from 'vitest';
 import { dispatchGithubOperationCommand, detectGithubOperationCommand } from '../../../src/engine/github-operations-cli.js';
+import { GithubBotAuthRefusalError } from '../../../src/engine/github-bot-auth-refusal.js';
 
 const readRequest = (request: object) => vi.fn().mockResolvedValue(JSON.stringify(request));
 const issueRead = {
@@ -8,6 +9,60 @@ const issueRead = {
 };
 
 describe('github-operation CLI', () => {
+  it.each([
+    {
+      name: 'guarded GitHub runner',
+      request: {
+        operation: 'pull-request.edit', repository: 'acme/widgets',
+        resource: { kind: 'pull-request', number: 7 },
+        context: { actor: 'alice', feature: 'widget' }, payload: { body: 'retry me' },
+      },
+    },
+    {
+      name: 'guarded remote Git runner',
+      request: {
+        operation: 'remote-ref.push', repository: 'acme/widgets',
+        resource: { kind: 'remote-ref', ref: 'refs/heads/spec/widget' },
+        context: { actor: 'alice', feature: 'widget' },
+      },
+    },
+  ])('records one configured-bot refusal before one operator retry through the $name', async ({ request }) => {
+    const sequence: string[] = [];
+    const events = {
+      emit: vi.fn(async (event) => { sequence.push(`event:${event.type}`); }),
+    };
+    const git = vi.fn(async (args: string[], options: { credential?: string }) => {
+      if (args.join(' ') === 'branch --show-current') return { stdout: 'spec/widget\n' };
+      if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
+      if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
+      if (args[0] === 'push') {
+        sequence.push(`remote:${options.credential}`);
+        if (options.credential === 'write') throw new GithubBotAuthRefusalError('auth-refused');
+        return { stdout: '' };
+      }
+      throw new Error(`unexpected git command: ${args.join(' ')}`);
+    });
+    const gh = vi.fn(async (args: string[], options: { credential?: string }) => {
+      if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ number: 7 }) };
+      sequence.push(`github:${options.credential}`);
+      if (options.credential === 'write') throw new GithubBotAuthRefusalError('auth-refused');
+      return { stdout: '' };
+    });
+
+    await expect(dispatchGithubOperationCommand({ requestFile: '/request.json' }, {
+      cwd: '/fixture', readRequest: readRequest(request), gh, git,
+      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }), events, write: vi.fn(),
+    })).resolves.toBe(0);
+
+    expect(events.emit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      type: 'github_write_credential_fallback', operation: request.operation, reason: 'auth-refused',
+    }));
+    expect(sequence).toEqual(request.operation === 'remote-ref.push'
+      ? ['remote:write', 'event:github_write_credential_fallback', 'remote:operator']
+      : ['github:write', 'event:github_write_credential_fallback', 'github:operator']);
+  });
+
   it('serializes executed, refused, failed, and partial guarded results with canonical targets', async () => {
     const cases = [
       { name: 'executed', response: {}, exit: 0, kind: 'executed' },
@@ -63,7 +118,7 @@ describe('github-operation CLI', () => {
 
     expect(exit).toBe(0);
     expect(confirmation.confirm).toHaveBeenCalledOnce();
-    expect(gh).toHaveBeenCalledWith(['label', 'edit', 'priority', '-R', 'acme/widgets', '--color', '123abc'], { cwd: '/fixture' });
+    expect(gh).toHaveBeenCalledWith(['label', 'edit', 'priority', '-R', 'acme/widgets', '--color', '123abc'], { cwd: '/fixture', credential: 'write' });
 
     const noConfirmationWrite = vi.fn();
     const noConfirmationExit = await dispatchGithubOperationCommand({ requestFile: '/request.json' }, {
@@ -200,7 +255,7 @@ describe('github-operation CLI', () => {
       }),
       gh, git, resolveMachineOwner: owner, write: vi.fn(),
     })).resolves.toBe(0);
-    expect(git).toHaveBeenCalledWith(['push', 'origin', 'HEAD:refs/heads/spec/widget'], { cwd: '/fixture' });
+    expect(git).toHaveBeenCalledWith(['push', 'origin', 'HEAD:refs/heads/spec/widget'], { cwd: '/fixture', credential: 'write', endpoint: 'ssh' });
   });
 
   it('permits only an exact interactive initial-publication approval when no feature provenance exists', async () => {
@@ -258,7 +313,7 @@ describe('github-operation CLI', () => {
       resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }), write: vi.fn(),
     })).resolves.toBe(0);
     expect(confirmation.confirm).toHaveBeenCalledOnce();
-    expect(gh).toHaveBeenLastCalledWith(['issue', 'close', '7', '-R', 'acme/widgets'], { cwd: '/fixture' });
+    expect(gh).toHaveBeenLastCalledWith(['issue', 'close', '7', '-R', 'acme/widgets'], { cwd: '/fixture', credential: 'write' });
 
     const refusedGh = vi.fn(async (args: string[]) => {
       if (args[0] === 'issue' && args[1] === 'view') return { stdout: JSON.stringify({ assignees: [] }) };

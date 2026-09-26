@@ -78,7 +78,7 @@ describe('bindMutationToPullRequest (#2703)', () => {
     expect(executed.kind).toBe('executed');
     expect(gh).toHaveBeenCalledWith(
       ['pr', 'edit', String(PR_NUMBER), '-R', REPOSITORY, '--body', 'body\n\nCloses acme/intake#7'],
-      { cwd: '/fixture' },
+      { cwd: '/fixture', credential: 'write' },
     );
   });
 

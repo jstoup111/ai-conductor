@@ -18,6 +18,7 @@ import type {
   GithubOperationRefusalReason,
   GithubOperationTarget,
 } from '../engine/github-operations.js';
+import type { GithubBotAuthRefusalReason } from '../engine/github-bot-auth-refusal.js';
 import type {
   BuildReviewInfrastructureFailureReason,
   BuildReviewJudgedResultRejection,
@@ -57,6 +58,13 @@ export interface GithubOperationRefusedEvent {
   operation: GithubOperationName;
   reason: GithubOperationRefusalReason;
   remedy: GithubOperationRefusalRemedy;
+}
+/** A bot credential was unavailable for an authorized write; the operation retried once as the operator. */
+export interface GithubWriteCredentialFallbackEvent {
+  type: 'github_write_credential_fallback';
+  operation: GithubOperationName;
+  target: GithubOperationTarget;
+  reason: GithubBotAuthRefusalReason;
 }
 
 /** Daemon-lifetime backlog dimensions. Kept closed so metric cardinality is bounded. */
@@ -705,6 +713,7 @@ export type ConductorEvent =
       intent: string;
     }
   | GithubOperationRefusedEvent
+  | GithubWriteCredentialFallbackEvent
   | ProviderAttemptEvent
   | ProviderStreamProgressEvent
   | {

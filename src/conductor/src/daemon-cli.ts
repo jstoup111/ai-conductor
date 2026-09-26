@@ -69,7 +69,7 @@ import { forwardedFeatureOf, isForwardedFromFeature, startDaemonEventPersistence
 import { heapDumpOptionsFromConfig, startDaemonMemorySampler } from './engine/daemon-memory.js';
 import { renderedEventTypes } from './engine/event-sinks.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
-import { formatGithubOperationRefusal } from './engine/github-operations.js';
+import { formatGithubCredentialFallback, formatGithubOperationRefusal } from './engine/github-operations.js';
 import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
@@ -1356,12 +1356,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         baseBranch,
         git: finishPublicationGit,
         gh: finishPublicationGh,
+        events: featureEvents,
         repairPresentation: createProvenanceGuardedFinishPresentationRepair({
           projectRoot: wt.path,
           git: finishPublicationGit,
           gh: finishPublicationGh,
           baseBranch,
           log: featureLog,
+          events: featureEvents,
         }),
         observeReleaseReadiness: createProductionReleaseReadinessObserver({
           projectRoot: wt.path,
@@ -1904,7 +1906,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const watch = opts.watch ?? true;
   const watchHaltCleared = watch !== false
     ? (slug: string, onCleared: () => void) =>
-        makeWatchHaltClearedSeam(worktreeBase)(slug, onCleared)
+        makeWatchHaltClearedSeam(worktreeBase, { recordRemote: { events } })(slug, onCleared)
     : undefined;
 
   const result = await runDaemon(
@@ -2340,7 +2342,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           isFeatureInFlight,
           onEvent: (event) => { void events.emit(event); },
           getIssueState: tracker.getIssueState.bind(tracker),
-          requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log }),
+          requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log, events }),
           disposeHaltWatcher,
           teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
           verbose: config?.daemon_verbose ?? false,
@@ -2381,8 +2383,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
 
                 // Create a gh runner (wrapper around gh commands)
                 const productionGh = makeProductionGh();
-                const ghRunner = async (args: string[]) =>
-                  productionGh(args, { cwd: entry.repoCwd });
+                const ghRunner = async (args: string[], opts: { credential?: 'operator' | 'write' } = {}) =>
+                  productionGh(args, { cwd: entry.repoCwd, ...opts });
 
                 // Create a suite runner (executes the suite command in the worktree)
                 const runSuite = async (projectRoot: string) => {
@@ -2508,6 +2510,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 // mutation guard resolves against the feature's repository.
                 gh: (args, opts) => makeProductionGh()(args, { ...opts, cwd: entry.repoCwd }),
                 liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
+                events,
                 log,
                 diagnostic: async ({ stage, reason, provider }) => {
                   void events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
@@ -2861,6 +2864,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'github_operation_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);
+      break;
+    case 'github_write_credential_fallback':
+      log(`${dot} ${chalk.yellow('↻')} ${chalk.yellow(formatGithubCredentialFallback(event))}`);
       break;
     case 'step_retry': {
       const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);

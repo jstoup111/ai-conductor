@@ -110,7 +110,10 @@ export async function writeHaltMarker(
   try {
     await writeFile(haltClassTempPath, haltClass, 'utf-8');
     await rename(haltClassTempPath, haltClassPath);
-    await writeHaltRecord(projectRoot, body, haltClass, events, recordRemote);
+    await writeHaltRecord(projectRoot, body, haltClass, events, {
+      ...recordRemote,
+      events: recordRemote?.events ?? events,
+    });
     return { status: 'written' };
   } catch (error) {
     await unlink(haltClassTempPath).catch(() => {});

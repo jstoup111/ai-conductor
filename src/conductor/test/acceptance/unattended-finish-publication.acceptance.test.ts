@@ -98,7 +98,7 @@ interface FinishPublicationEffects {
     operations?: GithubOperationRunner;
     remoteGit?: () => Promise<{
       kind: 'executed';
-      targets: readonly [{ operation: 'remote-ref.push'; repository: string; kind: 'remote-ref'; ref: string }];
+      targets: readonly [{ operation: 'remote-ref.push'; repository: string; kind: 'remote-ref'; ref: string; endpoint: 'https' | 'ssh' }];
     }>;
   };
   createShippedRecord: () => Promise<void>;
@@ -150,6 +150,7 @@ function guardedRemoteGit(branch = 'feat/fixture') {
       repository: 'acme/widget',
       kind: 'remote-ref' as const,
       ref: `refs/heads/${branch}`,
+      endpoint: 'https' as const,
     }] as const,
   });
 }

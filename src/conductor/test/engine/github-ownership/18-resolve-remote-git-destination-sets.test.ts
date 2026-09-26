@@ -18,8 +18,8 @@ describe('engine/remote-git-targets — explicit remote destination sets', () =>
       kind: 'resolved',
       remote: 'origin',
       targets: [
-        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/one' },
-        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/two' },
+        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/one', endpoint: 'https' },
+        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/two', endpoint: 'https' },
       ],
     });
     expect(gitConfig).toHaveBeenCalledWith(['remote', 'get-url', '--push', 'origin']);
@@ -34,7 +34,7 @@ describe('engine/remote-git-targets — explicit remote destination sets', () =>
     )).resolves.toEqual({
       kind: 'resolved',
       remote: 'origin',
-      targets: [{ operation: 'remote-ref.delete', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/obsolete' }],
+      targets: [{ operation: 'remote-ref.delete', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/obsolete', endpoint: 'ssh' }],
     });
   });
 

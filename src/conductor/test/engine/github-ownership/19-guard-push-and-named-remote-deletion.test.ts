@@ -157,14 +157,14 @@ describe('engine/remote-git-operations — guarded remote writes', () => {
     await expect(executeRemoteGit(args, { cwd: '/fixture', config, runRemoteGit, mutation })).resolves.toEqual({
       kind: 'executed',
       targets: [
-        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/one' },
-        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/two' },
+        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/one', endpoint: 'ssh' },
+        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/two', endpoint: 'ssh' },
       ],
     });
     expect(mutation.dependencies.resolveMachineOwner).toHaveBeenCalledTimes(2);
     expect(mutation.dependencies.provenanceDiscovery.readCommittedRecords).toHaveBeenCalledTimes(2);
     expect(runRemoteGit).toHaveBeenCalledOnce();
-    expect(runRemoteGit).toHaveBeenCalledWith(args, { cwd: '/fixture' });
+    expect(runRemoteGit).toHaveBeenCalledWith(args, { cwd: '/fixture', credential: 'write', endpoint: 'ssh' });
   });
 
   it('updates only the explicitly requested remote refs in a fixture-owned bare repository', async () => {
@@ -190,8 +190,8 @@ describe('engine/remote-git-operations — guarded remote writes', () => {
     )).resolves.toEqual({
       kind: 'executed',
       targets: [
-        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/one' },
-        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/two' },
+        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/one', endpoint: 'ssh' },
+        { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/two', endpoint: 'ssh' },
       ],
     });
 
@@ -213,7 +213,7 @@ describe('engine/remote-git-operations — guarded remote writes', () => {
     )).resolves.toEqual({
       kind: 'refused',
       reason: 'other-owner',
-      target: { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/two' },
+      target: { operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/two', endpoint: 'ssh' },
     });
     expect(runRemoteGit).not.toHaveBeenCalled();
   });
@@ -226,11 +226,11 @@ describe('engine/remote-git-operations — guarded remote writes', () => {
       { cwd: '/fixture', config: configReader(), runRemoteGit, mutation: mutationContext() },
     )).resolves.toEqual({
       kind: 'executed',
-      targets: [{ operation: 'remote-ref.delete', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/obsolete' }],
+      targets: [{ operation: 'remote-ref.delete', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/obsolete', endpoint: 'ssh' }],
     });
     expect(runRemoteGit).toHaveBeenCalledWith(
       ['push', 'origin', '--delete', 'refs/heads/feature/obsolete'],
-      { cwd: '/fixture' },
+      { cwd: '/fixture', credential: 'write', endpoint: 'ssh' },
     );
   });
 
@@ -251,7 +251,7 @@ describe('engine/remote-git-operations — guarded remote writes', () => {
       },
     )).resolves.toEqual({
       kind: 'executed',
-      targets: [{ operation: 'remote-ref.delete', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/obsolete' }],
+      targets: [{ operation: 'remote-ref.delete', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/obsolete', endpoint: 'ssh' }],
     });
 
     await expect(bareRef(remote, 'refs/heads/feature/obsolete')).rejects.toThrow();
@@ -268,13 +268,13 @@ describe('engine/remote-git-operations — guarded remote writes', () => {
     )).resolves.toEqual({
       kind: 'failed',
       error: 'stale info',
-      targets: [{ operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/owned' }],
+      targets: [{ operation: 'remote-ref.push', repository: 'acme/rocket', kind: 'remote-ref', ref: 'refs/heads/feature/owned', endpoint: 'ssh' }],
     });
     expect(runRemoteGit).toHaveBeenCalledTimes(1);
-    expect(runRemoteGit).toHaveBeenCalledWith(args, { cwd: '/fixture' });
+    expect(runRemoteGit).toHaveBeenCalledWith(args, { cwd: '/fixture', credential: 'write', endpoint: 'ssh' });
     expect(runRemoteGit).not.toHaveBeenCalledWith(
       ['push', '--force', 'origin', 'HEAD:refs/heads/feature/owned'],
-      { cwd: '/fixture' },
+      { cwd: '/fixture', credential: 'write', endpoint: 'ssh' },
     );
   });
 });

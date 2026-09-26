@@ -107,7 +107,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'harness_version', 'defaults', 'phases', 'steps', 'complexity', 'conductor',
     'markdown_viewer', 'mermaid_renderer', 'assess', 'acceptance_spec_globs', 'test_suite',
     'llm_provider', 'ui_renderer', 'visualizers', 'memory_provider', 'otel', 'build_progress',
-    'provider_stream', 'spec_owner', 'owner_gate_cutover', 'attribution_audit_sample_pct',
+    'provider_stream', 'spec_owner', 'github_bot', 'owner_gate_cutover', 'attribution_audit_sample_pct',
     'rebase_resolution_attempts', 'validation_concurrency', 'daemon_concurrency', 'daemon_heap_limit_mb',
     'daemon_heap_dump_threshold_mb', 'daemon_heap_dump_retention', 'harness_self_host',
     'model_fallback_ladder', 'auto_restart_on_stale_engine', 'engine_refresh_min_interval_seconds',
@@ -1023,6 +1023,26 @@ export function validateConfig(
     }
   } else if (obj.spec_owner !== undefined && typeof obj.spec_owner !== 'string') {
     return errVal('spec_owner must be a string');
+  }
+
+  // The bot token location is machine-scoped for the same reason as the
+  // operator identity: a project config must never point collaborators at one
+  // user's credential file.
+  if (opts.source === 'project' && 'github_bot' in obj) {
+    return errVal(
+      `github_bot must not be set in a project config (${projectConfigPath(projectRoot ?? '.')}): ` +
+      'Move github_bot to your user config at ~/.ai-conductor/config.yml.',
+    );
+  }
+  if (obj.github_bot !== undefined) {
+    if (typeof obj.github_bot !== 'object' || obj.github_bot === null || Array.isArray(obj.github_bot)) {
+      return errVal('github_bot must be an object');
+    }
+    const bot = obj.github_bot as Record<string, unknown>;
+    for (const key of Object.keys(bot)) {
+      if (key !== 'token_file') return errVal(`Unknown github_bot key: "${key}"`);
+    }
+    if (typeof bot.token_file !== 'string') return errVal('github_bot.token_file must be a string');
   }
 
   // owner_gate_cutover — the grandfather cutover instant (owner-gate, FR-10).

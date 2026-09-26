@@ -34,9 +34,10 @@ function privateTmux(socket: string): TmuxRunner {
   };
 }
 
-async function eventually<T>(read: () => Promise<T>): Promise<T> {
+async function eventually<T>(read: () => Promise<T>, timeoutMs = 2_000): Promise<T> {
   let error: unknown;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  const attempts = Math.ceil(timeoutMs / 25);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try { return await read(); } catch (caught) { error = caught; }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
@@ -129,8 +130,11 @@ describe('daemon pane exit-witness wrapper', () => {
     try {
       const supervisor = makeTmuxSupervisor(test.run);
       await supervisor.start(test.repo, "NODE_OPTIONS=--max-old-space-size=16 node -e 'const a=[]; while (true) a.push(new Array(1e6).fill(1))'");
-      const records = await eventually(() => exitRecords(test.repo));
-      const log = await eventually(() => readFile(join(test.repo, '.daemon', 'daemon.log'), 'utf8'));
+      // The wrapper can only invoke its TypeScript witness after V8 has
+      // finished aborting the constrained child. Under a busy CI worker that
+      // terminal transition can exceed the ordinary two-second fixture wait.
+      const records = await eventually(() => exitRecords(test.repo), 10_000);
+      const log = await eventually(() => readFile(join(test.repo, '.daemon', 'daemon.log'), 'utf8'), 10_000);
 
       expect(log).toContain('JavaScript heap out of memory');
       expect(records).toHaveLength(1);
