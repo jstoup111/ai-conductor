@@ -1,9 +1,9 @@
 import { writeFile, access, readFile, readdir, mkdir, rename, rm, symlink } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
+import { execa } from 'execa';
 import { isUtf8 } from 'node:buffer';
 import { basename, dirname, join, relative } from 'node:path';
 import { homedir } from 'node:os';
-import { execa } from 'execa';
 import { fileURLToPath } from 'node:url';
 import type {
   InvokeOptions,
@@ -100,9 +100,10 @@ import {
 } from './build-review-domain.js';
 import { discoverClaudeReviewPolicies, type ClaudeMetadataCommand, type ClaudeReviewPolicyFilesystem } from './build-review-policy-claude.js';
 import { createCodexAppServerTransport, listCodexInstalledReviewSkills, type CodexAppServerTransport } from './build-review-policy-codex.js';
-import { buildReviewFrozenInputPaths, prepareBuildReviewContainment, prepareBuildReviewEvidencePaths, renderBuildReviewFrozenInputScope, writeReviewHostStateSentinel } from './build-review-containment.js';
-import { acquireReviewScratchHome } from './self-host/provider-scratch.js';
-import { copySelectedCodexLogin } from '../execution/codex-self-host-auth.js';
+import { renderBuildReviewFrozenInputScope } from './build-review-materialization.js';
+import { probeReadOnlyReviewCapability, type ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
+import { BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES } from './build-review-input-integrity.js';
+import { BuildReviewLapGate } from './build-review-lap-gate.js';
 import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
 import {
   coordinateBuildReviewRubrics,
@@ -117,6 +118,7 @@ import {
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { classifyBuildReviewCacheLookup, readBuildReviewCacheEntry, tryWriteBuildReviewCacheEntry, writeBuildReviewCacheEntry, type BuildReviewCacheSemanticIdentity } from './build-review-cache.js';
 import {
+  BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY,
   parseBuildReviewCustomArtifactMember,
   buildReviewRubricPromptPath,
   readBuildReviewBranchArtifact,
@@ -626,6 +628,8 @@ export interface StepRunnerOptions {
   providerLifecycleEpisodeStore?: ProviderLifecycleEpisodeStore;
   /** Shared provider routing state owned by this conductor run. */
   providerExecution?: ProviderExecutionContext;
+  /** Test seam for a runner invoked outside daemon or interactive setup. */
+  probeReadOnlyReviewCapability?: typeof probeReadOnlyReviewCapability;
   /**
    * Legacy test-fixture compatibility. Heartbeats are telemetry only, so
    * these former watchdog controls have no effect on provider dispatch.
@@ -687,15 +691,6 @@ export function productionBuildReviewPolicyCatalog(
     const original = await discover(originalCatalogHome, { ...env, [homeVariable]: originalCatalogHome }, false);
     return [...prepared, ...original.filter((skill) => skill.source !== 'project' && !preparedKeys.has(key(skill)))];
   };
-}
-
-/** The command a review member launches, so containment proves the mounts that command gets. */
-function reviewLaunchCommand(
-  provider: 'claude' | 'codex',
-  prepared: { readonly executable: string; readonly args: readonly string[] } | undefined,
-): { readonly executable: string; readonly args: readonly string[] } {
-  if (prepared !== undefined) return { executable: prepared.executable, args: prepared.args };
-  return { executable: provider === 'codex' ? process.env.CODEX_EXECUTABLE ?? 'codex' : 'claude', args: [] };
 }
 
 /** Capabilities belong to the prepared provider role, never the policy declaration. */
@@ -775,6 +770,30 @@ export async function dispatchRubricContract<Output>(input: {
   };
 }
 
+/**
+ * A mixed lap has one read-only admission contract.  Preserve the closed
+ * unavailable cause for custom members and their built-in peers alike, while
+ * leaving a ladder that includes any other skip (notably a usage wait) to its
+ * existing precedence path.
+ */
+function readOnlyReviewUnavailableFailure(
+  exhaustion: ProviderExecutionResult['providerSetupExhaustion'] | undefined,
+): { readonly detail: string; readonly platform?: string } | undefined {
+  if (!exhaustion?.candidates.every((candidate) => candidate.capability === 'read-only-review-mode')) return undefined;
+  const platform = exhaustion.candidates
+    .map((candidate) => / on ([^:]+):/.exec(candidate.reason)?.[1])
+    .find((value): value is string => value !== undefined);
+  return {
+    detail: `All configured providers lack an available read-only review mode: ${exhaustion.candidates.map(
+      ({ provider, reason }) => `${provider}: ${redactSafetyText(reason)}`,
+    ).join('; ')}`,
+    ...(platform === undefined ? {} : { platform }),
+  };
+}
+
+/** Gate placeholder until the built-in coordinator announces its dispatch plan. */
+const BUILTIN_DISPATCH_PLAN_MEMBER = '@builtin-dispatch-plan';
+
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
   private sessionStartedInitialized = false;
@@ -824,6 +843,7 @@ export class DefaultStepRunner implements StepRunner {
   private providerExecutionContext?: ProviderExecutionContext;
   private withCandidateSafety?: WithCandidateSafety;
   private prepareCandidateSelfHost?: ExecuteProviderCandidatesInput['prepareCandidateSelfHost'];
+  private readOnlyReviewCapabilityProbe?: typeof probeReadOnlyReviewCapability;
   private log: (message: string) => void;
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
   private providerLifecycleAttempt = 0;
@@ -899,6 +919,7 @@ export class DefaultStepRunner implements StepRunner {
     this.providerExecutionContext = options?.providerExecution;
     this.withCandidateSafety = options?.providerExecution?.withCandidateSafety;
     this.prepareCandidateSelfHost = options?.providerExecution?.prepareCandidateSelfHost;
+    this.readOnlyReviewCapabilityProbe = options?.probeReadOnlyReviewCapability ?? probeReadOnlyReviewCapability;
     this.providerWarn =
       options?.providerWarn ??
       options?.providerExecution?.warn ??
@@ -977,7 +998,7 @@ export class DefaultStepRunner implements StepRunner {
     // conductor session (see runBuildReview() for the resolveRebaseConflict
     // fresh-uuid/resume:false pattern).
     if (step === 'build_review') {
-      return this.runBuildReview(state.complexity_tier, opts?.executionContext);
+      return this.runBuildReview(state.complexity_tier, opts?.executionContext, opts?.readOnlyReviewCapabilities);
     }
     if (step === 'coverage_binding') {
       return this.runCoverageBinding(state, opts?.executionContext);
@@ -2324,9 +2345,10 @@ export class DefaultStepRunner implements StepRunner {
     config: ReturnType<typeof resolveBuildReviewConfig>,
     tier: ConductState['complexity_tier'],
     executionContext?: ExecutionContext,
+    readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
   ): Promise<StepRunResult> {
     try {
-      return await this.runRubricBuildReviewInner(inputs, config, tier, executionContext);
+      return await this.runRubricBuildReviewInner(inputs, config, tier, executionContext, readOnlyReviewCapabilities);
     } finally {
       // A custom lap owns one source view for every catalog member. Some
       // built-in paths settle before dispatch (for example a deterministic
@@ -2336,6 +2358,7 @@ export class DefaultStepRunner implements StepRunner {
       await Promise.all(config.catalog.map(async (entry) => {
         await inputs.sourceMaterialization?.settle(entry.id);
       }));
+      await inputs.sourceMaterialization?.finish?.();
     }
   }
 
@@ -2344,6 +2367,7 @@ export class DefaultStepRunner implements StepRunner {
     config: ReturnType<typeof resolveBuildReviewConfig>,
     tier: ConductState['complexity_tier'],
     executionContext?: ExecutionContext,
+    readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
   ): Promise<StepRunResult> {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
@@ -2364,14 +2388,265 @@ export class DefaultStepRunner implements StepRunner {
     const customEntries = config.catalog.filter(
       (entry): entry is ResolvedBuildReviewCustomCatalogEntry => entry.kind === 'custom',
     );
+    const builtinEntries = config.catalog.filter((entry) => entry.kind === 'builtin');
+    // Consume startup observations first. When a provider was not among the
+    // custom-entry providers probed at startup (for example a built-in peer's
+    // provider), this per-run memoized probe supplies its missing evidence.
+    const readOnlyReviewCapabilityRequests = new Map<string, Promise<ReadOnlyReviewCapability | undefined>>();
+    const readOnlyReviewCapabilityFor = (provider: string): Promise<ReadOnlyReviewCapability | undefined> => {
+      const existing = readOnlyReviewCapabilityRequests.get(provider);
+      if (existing) return existing;
+      const request = readOnlyReviewCapabilities?.[provider] === undefined && this.readOnlyReviewCapabilityProbe !== undefined
+        ? this.readOnlyReviewCapabilityProbe({
+          provider,
+          platform: process.platform,
+          scratchDir: join(this.projectDir, '.pipeline', 'read-only-review-probe'),
+          runProcess: async (executable, args) => {
+            const result = await execa(executable, [...args], { reject: false });
+            return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+          },
+        })
+        : Promise.resolve(readOnlyReviewCapabilities?.[provider]);
+      readOnlyReviewCapabilityRequests.set(provider, request);
+      return request;
+    };
     let customResults: Readonly<Record<string, BuildReviewCustomArtifactMember>> | undefined;
-    if (customEntries.length > 0) {
-      const outcomes = await runAuxiliaryGroupBranches(
+    // The feature checkout is deliberately not among these roots. Custom
+    // candidates judge only the detached source view, and normal engine work
+    // continues to write branch evidence in the live checkout while they run.
+    const customLapEvidenceRoot = join(effectivePipelineDir, 'build-review', lapId);
+    const inputDigestEvidencePath = join(customLapEvidenceRoot, 'input-digest.json');
+    const materializedSource = inputs.sourceMaterialization?.source;
+    const unavailableInputRoot = (name: string) => join(customLapEvidenceRoot, `.unavailable-${name}`);
+    const customPolicyLap = customEntries.length > 0;
+    const builtinPeers = config.catalog.some((entry) => entry.kind === 'builtin');
+    // adr-2026-09-10 D5.1: a built-in-only lap keeps its unchanged boundary.
+    // Only a lap with an enabled custom member clears its lap directory,
+    // digests its inputs, and gates its reviewers (D5.3).
+    let lapGate: BuildReviewLapGate | undefined;
+    if (customPolicyLap) {
+      // A replay uses the same head-derived lap id. Its prior branch artifacts
+      // are outputs of this lap, not inputs from an earlier lap, so clear only
+      // this lap's directory before capture. Other build-review evidence
+      // remains in the digest as an input from a genuinely prior lap.
+      await rm(customLapEvidenceRoot, { recursive: true, force: true });
+      lapGate = await BuildReviewLapGate.begin({
+        roots: {
+          frozenHead: materializedSource?.headPath ?? unavailableInputRoot('head'),
+          frozenBaseline: materializedSource?.baselinePath ?? unavailableInputRoot('baseline'),
+          // Candidate-local policy bytes register themselves (D6) before the
+          // gate lets any reviewer run.
+          capturedPolicyMaterial: [],
+          installedPolicyPackage: [],
+          // Evidence supplied by the engine already lives in the pipeline.
+          // New evidence and the engine's own in-lap writes never diff.
+          evidenceRoot: effectivePipelineDir,
+          evidenceRootExcludes: BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES,
+        },
+        maxParallel: config.maxParallel,
+        members: [...customEntries.map((entry) => entry.id), ...(builtinPeers ? [BUILTIN_DISPATCH_PLAN_MEMBER] : [])],
+      });
+    }
+    const finishCustomLapInputDigests = async (): Promise<readonly string[]> => {
+      const settlement = await lapGate!.settle();
+      await mkdir(customLapEvidenceRoot, { recursive: true });
+      await writeFile(inputDigestEvidencePath, `${JSON.stringify({
+        version: 1,
+        records: settlement.records.map(({ before, after, changedInputs }) => ({ before, after, changedInputs })),
+      }, null, 2)}\n`, 'utf8');
+      return settlement.changedInputs;
+    };
+    const mutatedCustomResults = (
+      results: Readonly<Record<string, BuildReviewCustomArtifactMember>>,
+      changedInputs: readonly string[],
+    ): Readonly<Record<string, BuildReviewCustomArtifactMember>> => Object.freeze(Object.fromEntries(Object.entries(results).map(([id, member]) => [id, {
+      ...(member.declaration === undefined && member.descriptor === undefined
+        ? {}
+        : { declaration: member.declaration ?? member.descriptor!.declaration }),
+      result: {
+        kind: 'infrastructure-failure' as const,
+        rubric: id,
+        reason: 'review-input-mutated' as const,
+        detail: `review input changed: ${changedInputs.join(', ')}`,
+      },
+    }]))) as Record<string, BuildReviewCustomArtifactMember>;
+    const emitInputMutationFailures = async (rubrics: readonly string[], changedInputs: readonly string[]): Promise<void> => {
+      await Promise.all(rubrics.map(async (rubric) => this.events?.emit({
+        type: 'build_review_rubric_infrastructure_failure', rubric, lapId,
+        reason: 'review-input-mutated', cause: 'review-input-mutated',
+        excerpt: `review input changed: ${changedInputs.join(', ')}`,
+        changedInputs,
+      })));
+    };
+    // A changed shared input invalidates the whole lap, including enabled
+    // built-in peers whose branch did not produce a durable result. Keep this
+    // conversion at the one post-join boundary so rejected, failed, missing,
+    // and complete fan-outs cannot settle different member sets.
+    const settleLapInputMutation = async (
+      custom: Readonly<Record<string, BuildReviewCustomArtifactMember>>,
+      builtin: Readonly<Partial<Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>>>,
+      changedInputs: readonly string[],
+    ): Promise<{
+      readonly customResults: Readonly<Record<string, BuildReviewCustomArtifactMember>>;
+      readonly builtinResults: Readonly<Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>>;
+    }> => {
+      lapGate!.discardCacheWrites();
+      const customResults = mutatedCustomResults(custom, changedInputs);
+      const builtinResults = Object.freeze(Object.fromEntries([...new Set([
+        ...Object.keys(builtin), ...builtinEntries.map((entry) => entry.id),
+      ])].map((rubric) => [rubric, {
+        kind: 'infrastructure-failure' as const,
+        rubric,
+        reason: 'review-input-mutated' as const,
+        detail: `review input changed: ${changedInputs.join(', ')}`,
+      }]))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
+      await emitInputMutationFailures([...Object.keys(customResults), ...Object.keys(builtinResults)], changedInputs);
+      return { customResults, builtinResults };
+    };
+    const mutationMembersFromOutcomes = (outcomes: readonly { readonly id: string; readonly member?: BuildReviewCustomArtifactMember }[]) =>
+      Object.freeze(Object.fromEntries(customEntries.map((entry) => {
+        const member = outcomes.find((outcome) => outcome.id === entry.id)?.member;
+        return [entry.id, member ?? {
+          declaration: {
+            version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
+            question: entry.question,
+            ...(entry.source === undefined ? {} : { source: entry.source as 'project' | 'global' | 'plugin' }),
+            resources: entry.resources,
+          },
+          result: {
+            kind: 'infrastructure-failure' as const, rubric: entry.id,
+            reason: 'provider-error' as const, detail: 'custom policy did not produce a durable result',
+          },
+        }];
+      }))) as Record<string, BuildReviewCustomArtifactMember>;
+    const withCustomCacheWriteFailures = (
+      results: Readonly<Record<string, BuildReviewCustomArtifactMember>>,
+      failures: ReadonlyMap<string, unknown>,
+    ): Readonly<Record<string, BuildReviewCustomArtifactMember>> => {
+      if (![...failures.keys()].some((id) => id in results)) return results;
+      return Object.freeze(Object.fromEntries(Object.entries(results).map(([id, member]) => {
+        if (!failures.has(id)) return [id, member];
+        const error = failures.get(id);
+        const skill = customEntries.find((entry) => entry.id === id)?.skill ?? id;
+        return [id, {
+          ...(member.declaration === undefined && member.descriptor === undefined
+            ? {}
+            : { declaration: member.declaration ?? member.descriptor!.declaration }),
+          result: {
+            kind: 'infrastructure-failure' as const,
+            rubric: id,
+            reason: 'artifact-write-failed' as const,
+            detail: `Installed build-review policy ${skill} could not persist its cache: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        }];
+      }))) as Record<string, BuildReviewCustomArtifactMember>;
+    };
+    // adr-2026-09-10 D5.3: custom members and built-in peers are one
+    // concurrent fan-out over one frozen view. Preparation is unbounded so the
+    // gate can see every member's baseline; reviewer invocations share the
+    // gate's maxParallel bound.
+    const customRun = customPolicyLap
+      ? runAuxiliaryGroupBranches(
         customEntries.map((entry) => ({ memberId: entry.id, policy: entry })),
-        config.maxParallel,
-        async (_id, entry) => this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier),
-      );
+        customEntries.length,
+        async (_id, entry) => {
+          try {
+            return await this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor);
+          } finally {
+            lapGate?.arrive(entry.id);
+          }
+        },
+      )
+      : Promise.resolve([]);
+    const coordinationRun = customPolicyLap && !builtinPeers
+      ? Promise.resolve(undefined)
+      : (async () => {
+        try {
+          return await coordinateBuildReviewRubrics({
+            // A gated peer waits for its siblings without a reviewer slot;
+            // the gate, not the branch scheduler, bounds reviewer parallelism.
+            config: lapGate === undefined ? config : { ...config, maxParallel: Math.max(config.maxParallel, config.catalog.length) },
+            inputs,
+            lapId,
+            engineIdentity,
+            useCandidateCache: true,
+            ...(customPolicyLap ? { joinsCustomPolicyLap: true } : {}),
+            preflight: async () => this.runTautologyPreflight(inputs),
+            readCache: async (branch, _projection, _policyFingerprint, semanticIdentity) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
+              readFile: async (path) => readFile(path, 'utf-8'), readdir,
+              mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+              writeFile,
+              rename,
+            }, semanticIdentity),
+            ...(lapGate === undefined ? {} : {
+              onDispatchPlan: (rubrics: readonly string[]) => {
+                lapGate!.expect(rubrics);
+                lapGate!.arrive(BUILTIN_DISPATCH_PLAN_MEMBER);
+              },
+            }),
+            dispatchModel: async (branch, projection) => {
+              try {
+                return await this.dispatchBuildReviewRubric(
+                  branch,
+                  projection,
+                  tier,
+                  executionContext,
+                  inputs,
+                  engineIdentity,
+                  customPolicyLap,
+                  readOnlyReviewCapabilityFor,
+                  lapGate,
+                );
+              } finally {
+                lapGate?.arrive(branch.rubric);
+              }
+            },
+            writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
+              readFile: async (path) => readFile(path, 'utf-8'),
+              mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+              writeFile,
+              rename,
+            }),
+            writeCache: async (entry) => writeBuildReviewCacheEntry(this.projectDir, entry, {
+              readFile: async (path) => readFile(path, 'utf-8'),
+              mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+              writeFile,
+              rename,
+            }),
+            emit: async (event) => { await this.events?.emit(event); },
+          });
+        } finally {
+          lapGate?.arrive(BUILTIN_DISPATCH_PLAN_MEMBER);
+        }
+      })();
+    const [customSettled, coordinationSettled] = await Promise.allSettled([customRun, coordinationRun]);
+    if (customSettled.status === 'rejected' || coordinationSettled.status === 'rejected') {
+      if (customPolicyLap) {
+        const changedInputs = await finishCustomLapInputDigests();
+        if (changedInputs.length > 0) {
+          ({ customResults } = await settleLapInputMutation(
+            mutationMembersFromOutcomes(customSettled.status === 'fulfilled' ? customSettled.value : []), {}, changedInputs,
+          ));
+          await this.emitBuildReviewCustomMemberResults(lapId, customResults);
+          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
+        }
+      }
+      if (customSettled.status === 'rejected') throw customSettled.reason;
+      if (coordinationSettled.status === 'rejected') throw coordinationSettled.reason;
+      throw new Error('build_review fan-out settlement was unexpectedly fulfilled');
+    }
+    const outcomes = customSettled.value;
+    const joinedCoordination = coordinationSettled.value;
+
+    if (customPolicyLap) {
       if (outcomes.some((outcome) => !outcome.success)) {
+        const changedInputs = await finishCustomLapInputDigests();
+        if (changedInputs.length > 0) {
+          ({ customResults } = await settleLapInputMutation(mutationMembersFromOutcomes(outcomes), {}, changedInputs));
+          await this.emitBuildReviewCustomMemberResults(lapId, customResults);
+          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
+        }
+        lapGate!.discardCacheWrites();
         return {
           success: false,
           output: outcomes.filter((outcome) => !outcome.success).map((outcome) => outcome.output).join('\n'),
@@ -2379,15 +2654,31 @@ export class DefaultStepRunner implements StepRunner {
       }
       const members = outcomes.map((outcome) => [outcome.id, outcome.member] as const);
       if (members.some((member) => member[1] === undefined)) {
+        const changedInputs = await finishCustomLapInputDigests();
+        if (changedInputs.length > 0) {
+          ({ customResults } = await settleLapInputMutation(mutationMembersFromOutcomes(outcomes), {}, changedInputs));
+          await this.emitBuildReviewCustomMemberResults(lapId, customResults);
+          return this.publishCustomOnlyBuildReview({ lapId, inputs, customResults, currentCustomRubrics: customEntries.map((entry) => entry.id), config });
+        }
+        lapGate!.discardCacheWrites();
         return { success: false, output: 'build_review custom policy produced no durable result' };
       }
       customResults = Object.freeze(Object.fromEntries(members) as Record<string, BuildReviewCustomArtifactMember>);
-      await this.emitBuildReviewCustomMemberResults(lapId, customResults);
       // A custom-only lap still has a complete aggregate.  Do not use one
       // built-in's enabled flag as a proxy for the complete catalog: security
       // (and every future built-in) must share this lap's frozen input and
       // candidate path whenever it is enabled beside a custom policy.
-      if (!config.catalog.some((entry) => entry.kind === 'builtin')) {
+      // D5.3: a lap whose built-in coordination settled without judging
+      // (disabled gate, nothing dispatchable) is settled by its custom
+      // outcomes and the whole-lap digest, never by a built-in-only result.
+      if (joinedCoordination === undefined || joinedCoordination.kind !== 'ready') {
+        const changedInputs = await finishCustomLapInputDigests();
+        if (changedInputs.length > 0) {
+          ({ customResults } = await settleLapInputMutation(customResults, {}, changedInputs));
+        } else {
+          customResults = withCustomCacheWriteFailures(customResults, await lapGate!.flushCacheWrites());
+        }
+        await this.emitBuildReviewCustomMemberResults(lapId, customResults);
         return this.publishCustomOnlyBuildReview({
           lapId,
           inputs,
@@ -2397,35 +2688,7 @@ export class DefaultStepRunner implements StepRunner {
         });
       }
     }
-
-    const coordination = await coordinateBuildReviewRubrics({
-      config,
-      inputs,
-      lapId,
-      engineIdentity,
-      useCandidateCache: true,
-      preflight: async () => this.runTautologyPreflight(inputs),
-      readCache: async (branch, _projection, _policyFingerprint, semanticIdentity) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
-        readFile: async (path) => readFile(path, 'utf-8'), readdir,
-        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
-        writeFile,
-        rename,
-      }, semanticIdentity),
-      dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(branch, projection, tier, executionContext, inputs, engineIdentity),
-      writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
-        readFile: async (path) => readFile(path, 'utf-8'),
-        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
-        writeFile,
-        rename,
-      }),
-      writeCache: async (entry) => writeBuildReviewCacheEntry(this.projectDir, entry, {
-        readFile: async (path) => readFile(path, 'utf-8'),
-        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
-        writeFile,
-        rename,
-      }),
-      emit: async (event) => { await this.events?.emit(event); },
-    });
+    const coordination = joinedCoordination!;
 
     if (coordination.kind === 'gate-disabled') {
       return { success: true, output: 'build_review disabled' };
@@ -2498,6 +2761,27 @@ export class DefaultStepRunner implements StepRunner {
     }
     const validResults = results as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
 
+    const changedInputs = customEntries.length === 0 ? [] : await finishCustomLapInputDigests();
+    if (lapGate !== undefined && changedInputs.length === 0) {
+      const cacheWriteFailures = await lapGate.flushCacheWrites();
+      customResults = withCustomCacheWriteFailures(customResults!, cacheWriteFailures);
+      for (const rubric of Object.keys(validResults) as BuildReviewRubricResult['rubric'][]) {
+        if (!cacheWriteFailures.has(rubric)) continue;
+        const error = cacheWriteFailures.get(rubric);
+        validResults[rubric] = {
+          kind: 'infrastructure-failure', rubric,
+          reason: deriveBuildReviewInfrastructureFailureReason({ reason: 'cache-write-failed' }),
+          detail: `build_review ${rubric} cache-write-failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }
+    if (changedInputs.length > 0) {
+      const settledMutation = await settleLapInputMutation(customResults!, validResults, changedInputs);
+      customResults = settledMutation.customResults;
+      Object.assign(validResults, settledMutation.builtinResults);
+    }
+    if (customResults !== undefined) await this.emitBuildReviewCustomMemberResults(lapId, customResults);
+
     // An infrastructure result is not a reviewer decision about the diff.
     // Do not publish it as a fresh FAIL aggregate: completion deliberately
     // classifies a missing verdict as `absent`, which re-dispatches this
@@ -2531,7 +2815,8 @@ export class DefaultStepRunner implements StepRunner {
         };
       }
     }
-    if (infrastructureFailure) {
+    const readOnlyReviewUnavailable = infrastructureFailure?.reason === 'read-only-review-unavailable';
+    if (infrastructureFailure && !readOnlyReviewUnavailable) {
       if (infrastructureFailure.providerSetupExhaustion) {
         return {
           success: false,
@@ -2556,7 +2841,7 @@ export class DefaultStepRunner implements StepRunner {
             currentLapMechanicalFault: true,
           };
         }
-        if (infrastructureFailure.reason === 'invalid-structured-result' || infrastructureFailure.reason === 'native-schema-unsupported') {
+        if (infrastructureFailure.reason === 'invalid-structured-result' || infrastructureFailure.reason === 'native-schema-unsupported' || infrastructureFailure.reason === 'review-input-mutated') {
           const reason = `build_review mechanical fault allowance exhausted for ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`;
           return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
         }
@@ -2588,6 +2873,10 @@ export class DefaultStepRunner implements StepRunner {
     });
     if (!publication.ok) {
       return { success: false, output: `build_review aggregate publication failed: ${publication.message}` };
+    }
+    if (readOnlyReviewUnavailable) {
+      const reason = `build_review ${infrastructureFailure!.reason}: ${infrastructureFailure!.detail}`;
+      return { success: false, output: reason, refusal: { kind: 'needs-human', reason }, buildReviewReadOnlyReviewUnavailable: true };
     }
     // adr-2026-08-29 D4.6: the one projection of this lap's sub-floor findings
     // is shared by the visibility event (D4.5) and the durable-history seam below.
@@ -2643,6 +2932,8 @@ export class DefaultStepRunner implements StepRunner {
     inputs: BuildReviewFrozenInputs,
     lapId: BuildReviewLapId,
     tier: ConductState['complexity_tier'],
+    lapGate?: BuildReviewLapGate,
+    readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability | undefined>,
   ): Promise<{ readonly id: string; readonly success: boolean; readonly output: string; readonly member?: BuildReviewCustomArtifactMember }> {
     const declaration = {
       version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
@@ -2709,7 +3000,43 @@ export class DefaultStepRunner implements StepRunner {
       prepareCandidateSelfHost: this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
       onAttempt: this.providerAttempt, warn: this.providerWarn, options,
       abortSignal: controller.signal, deadlineAt,
+      ...(Array.isArray(entry.policy.llm_provider) && entry.policy.llm_provider.length > 1 ? { prepareCandidateBaseline: async ({ candidate, prepared }) => {
+        if (lapGate?.hasOpened) return;
+        const capability = await readOnlyReviewCapabilityFor?.(candidate.providerKey);
+        if (capability?.status !== 'available') return;
+        const catalogProvider = candidate.providerKey === 'claude' || candidate.providerKey === 'codex'
+          ? candidate.providerKey : undefined;
+        if (!catalogProvider) return;
+        const catalog = await this.buildReviewPolicyCatalog!({
+          provider: catalogProvider, entry, skill: entry.skill,
+          ...(prepared === undefined ? {} : { preparedEnv: prepared.env, preparedExecutable: prepared.executable, preparedArgs: prepared.args }),
+          ...(prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: prepared.originalCatalogHome }),
+        });
+        const resolved = resolveInstalledReviewPolicyCatalog({ skill: entry.skill, ...(entry.source === undefined ? {} : { source: entry.source as InstalledReviewSkill['source'] }) }, catalog);
+        if (resolved.kind === 'failure') return;
+        const policy = { ...resolved.policy, declaredDependencies: [...new Set([...resolved.policy.declaredDependencies, ...entry.resources])] };
+        const bundle = await this.buildReviewPolicyCapture(policy, { materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY) });
+        await lapGate?.registerPolicy(bundle.materialPath, policy.packageRoot);
+      } } : {}),
       preparedCandidateOperation: async (context) => {
+        const readOnlyReviewCapability = await readOnlyReviewCapabilityFor?.(context.candidate.providerKey);
+        if (readOnlyReviewCapability?.status !== 'available') {
+          const platform = readOnlyReviewCapability?.platform ?? process.platform;
+          const reason = readOnlyReviewCapability?.reason ?? 'no read-only review capability observation was recorded';
+          const detail = `Provider ${context.candidate.providerKey} read-only review mode is unavailable on ${platform}: ${reason}`;
+          return {
+            kind: 'failure' as const,
+            result: {
+              success: false,
+              exitCode: 1,
+              providerUnavailable: true,
+              providerInvocationSkipped: true,
+              readOnlyReviewUnavailable: true,
+              providerUnavailableReason: detail,
+              output: detail,
+            },
+          };
+        }
         const emitPolicyFailure = async (
           stage: 'catalog' | 'capture' | 'preflight' | 'containment' | 'runtime',
           reason: string,
@@ -2815,17 +3142,16 @@ export class DefaultStepRunner implements StepRunner {
         let bundle: CapturedReviewPolicyBundle;
         try {
           bundle = await this.buildReviewPolicyCapture(policy, {
-            materialParent: join(this.projectDir, '.pipeline', 'build-review', 'policy-material'),
+            materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY),
           });
         } catch (error) {
+          const detail = `Installed build-review policy ${entry.skill} could not be loaded: ${error instanceof Error ? error.message : String(error)}`;
+          failure = { reason: 'policy-load-failed', detail };
           coverageFailure = true;
-          failure = { reason: 'policy-load-failed', detail: `Installed build-review policy ${entry.skill} could not be loaded: ${error instanceof Error ? error.message : String(error)}` };
-          await emitPolicyFailure('capture', failure.detail);
-          return { kind: 'failure' as const, result: {
-            success: false, exitCode: 1,
-            output: failure.detail,
-          } };
+          await emitPolicyFailure('capture', detail);
+          return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: detail } };
         }
+        await lapGate?.registerPolicy(bundle.materialPath, policy.packageRoot);
         const candidateEngine = await this.resolveBuildReviewEngineIdentity();
         const policyProvenance = {
           inputDigest: inputs.sourceSnapshot.contentDigest,
@@ -2872,50 +3198,11 @@ export class DefaultStepRunner implements StepRunner {
           await emitPolicyFailure('preflight', failure.detail);
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         }
-        // The prepared-candidate callback is the only route that can bind a
-        // frozen cwd and proved access profile to this actual provider.
-        let reviewAccess: InvokeOptions['reviewAccess'];
-        if (source) {
-          const cachedLoginSource = provider === 'codex' && context.prepared?.env.CODEX_HOME !== undefined && context.prepared.env.CODEX_API_KEY === undefined
-            ? join(context.prepared.env.CODEX_HOME, 'auth.json')
-            : undefined;
-          const scratchLease = await acquireReviewScratchHome({
-            worktreeRoot: this.projectDir, runId: this.runId, attempt: 0, provider, memberId: entry.id,
-            ...(cachedLoginSource === undefined ? {} : {
-              seed: async (home) => { await copySelectedCodexLogin({ source: cachedLoginSource, homeDir: join(home, 'codex-home') }); },
-            }),
-          });
-          context.onTeardown(() => scratchLease.release());
-          const scratch = scratchLease.home;
-          const evidencePaths = await prepareBuildReviewEvidencePaths(this.projectDir);
-          const hostStateProbe = await writeReviewHostStateSentinel();
-          context.onTeardown(() => rm(hostStateProbe, { force: true }));
-          const containment = await prepareBuildReviewContainment({
-            provider,
-            launch: reviewLaunchCommand(provider, context.prepared),
-            paths: {
-              ...buildReviewFrozenInputPaths(source), policyMaterial: bundle.materialPath,
-              originalCheckout: this.projectDir, originalInstallation: policy.packageRoot,
-              ...evidencePaths, scratch,
-              installationWriteProbe: join(policy.packageRoot, '.build-review-write-probe'),
-              scratchWriteProbe: join(scratch, '.build-review-write-probe'),
-              hostStateProbe,
-            },
-            runProcess: async (executable, args) => {
-              const result = await execa(executable, args, { reject: false });
-              return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
-            },
-          });
-          if (containment.kind === 'unsupported') {
-            coverageFailure = true;
-            failure = { reason: 'preflight-failed', detail: `Installed build-review policy ${entry.skill} cannot establish read-only containment: ${containment.reason}. Recovery: ${containment.recovery}.` };
-            await emitPolicyFailure('containment', containment.reason);
-            return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
-          }
-          reviewAccess = containment;
-        }
         let cacheHit = false;
-        const dispatched = await dispatchRubricContract({
+        // D5.3: no reviewer starts until every lap member's baseline exists.
+        await lapGate?.waitForBaseline(entry.id);
+        const dispatchWithinLap = <T>(run: () => Promise<T>): Promise<T> => lapGate === undefined ? run() : lapGate.withReviewerSlot(run);
+        const dispatched = await dispatchWithinLap(() => dispatchRubricContract({
           descriptor: entry.contract,
           options: {
             prompt: `${renderBuildReviewPolicyContract({
@@ -2925,7 +3212,7 @@ export class DefaultStepRunner implements StepRunner {
             }),
             })}\n\n${renderAuxiliarySkillInvocation(entry.skill, context.candidate.providerKey)}`,
             cwd: source?.headPath ?? this.projectDir,
-            ...(reviewAccess === undefined ? {} : { reviewAccess }),
+            readOnlyReview: true,
           },
           invoke: (options) => context.invoke(options, async (rung, invoke) => {
           const semanticIdentity = semanticIdentityFor(rung.model);
@@ -2949,7 +3236,7 @@ export class DefaultStepRunner implements StepRunner {
           }
           return invoke();
           }),
-        });
+        }));
         const invoked = dispatched.invocation;
         if (cacheHit) return { kind: 'hit' as const, result: invoked };
         if (!invoked.success && dispatched.kind !== 'root-rejection') {
@@ -3096,13 +3383,16 @@ export class DefaultStepRunner implements StepRunner {
           },
           result: stamped,
         };
-        const cacheWrite = await tryWriteBuildReviewCacheEntry(this.projectDir, {
+        const writeCache = () => tryWriteBuildReviewCacheEntry(this.projectDir, {
             version: 2, rubric: entry.id,
             contractVersion: entry.contract.output.version as BuildReviewCacheSemanticIdentity['contractVersion'],
             projectionVersion: entry.contract.projection.version as BuildReviewCacheSemanticIdentity['projectionVersion'],
             projectionDigest: inputs.sourceSnapshot.contentDigest,
             policyFingerprint, engineIdentity: { engineStamp: candidateEngine.engineStamp, skillDigest: bundle.digest }, semanticIdentity: actualSemanticIdentity, result: member,
           }, { readFile: async (path) => readFile(path, 'utf-8'), mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename });
+        // D5.3: a gated lap's verdict becomes reusable only once the whole-lap
+        // digest settles unchanged; the gate persists it then.
+        const cacheWrite = lapGate === undefined ? await writeCache() : (lapGate.deferCacheWrite(entry.id, writeCache), { ok: true as const });
         if (!cacheWrite.ok) {
           coverageFailure = true;
           failure = { reason: 'artifact-write-failed', detail: `Installed build-review policy ${entry.skill} could not persist its cache: ${cacheWrite.error instanceof Error ? cacheWrite.error.message : String(cacheWrite.error)}` };
@@ -3121,6 +3411,20 @@ export class DefaultStepRunner implements StepRunner {
     }
     await inputs.sourceMaterialization?.settle(entry.id);
     this.callCount++;
+    const readOnlyUnavailable = readOnlyReviewUnavailableFailure(result.providerSetupExhaustion);
+    if (readOnlyUnavailable) {
+      coverageFailure = true;
+      failure = {
+        reason: 'read-only-review-unavailable',
+        detail: readOnlyUnavailable.detail,
+      };
+      await this.events?.emit({
+        type: 'build_review_rubric_infrastructure_failure', rubric: entry.id, lapId,
+        reason: 'read-only-review-unavailable', cause: 'read-only-review-unavailable',
+        excerpt: failure.detail,
+        ...(readOnlyUnavailable.platform === undefined ? {} : { platform: readOnlyUnavailable.platform }),
+      });
+    }
     const member = result.success ? (() => {
       try { return parseBuildReviewCustomArtifactMember(JSON.parse(result.output)); } catch { return undefined; }
     })() : undefined;
@@ -3184,7 +3488,8 @@ export class DefaultStepRunner implements StepRunner {
       result.kind === 'infrastructure-failure',
     );
     const hasFinding = lapResults.some((result) => result.kind === 'judged' && result.findings.length > 0);
-    if (infrastructureFailure && !hasFinding) {
+    const readOnlyReviewUnavailable = infrastructureFailure?.reason === 'read-only-review-unavailable';
+    if (infrastructureFailure && !hasFinding && !readOnlyReviewUnavailable) {
       const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review', {
         rubric: infrastructureFailure.rubric,
         reason: infrastructureFailure.reason,
@@ -3202,7 +3507,7 @@ export class DefaultStepRunner implements StepRunner {
       // semantic coverage merely because their bounded retry allowance is
       // exhausted.  Match the mixed-rubric settlement: stop dispatching,
       // publish no aggregate, and leave the operator the named recovery.
-      if (infrastructureFailure.reason === 'invalid-structured-result' || infrastructureFailure.reason === 'native-schema-unsupported') {
+      if (infrastructureFailure.reason === 'invalid-structured-result' || infrastructureFailure.reason === 'native-schema-unsupported' || infrastructureFailure.reason === 'review-input-mutated') {
         const reason = `build_review mechanical fault allowance exhausted for ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`;
         return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
       }
@@ -3227,6 +3532,10 @@ export class DefaultStepRunner implements StepRunner {
       await rename(temporaryPath, aggregatePath);
     } catch (error) {
       return { success: false, output: `build_review aggregate publication failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    if (readOnlyReviewUnavailable) {
+      const reason = `build_review ${infrastructureFailure!.reason}: ${infrastructureFailure!.detail}`;
+      return { success: false, output: reason, refusal: { kind: 'needs-human', reason }, buildReviewReadOnlyReviewUnavailable: true };
     }
     // adr-2026-08-29 D4.6: one projection feeds both the visibility event and
     // the durable-history seam below.
@@ -3315,6 +3624,9 @@ export class DefaultStepRunner implements StepRunner {
     executionContext?: ExecutionContext,
     inputs?: BuildReviewFrozenInputs,
     engineIdentity?: BuildReviewCoordinationEngineIdentity,
+    customPolicyLap = false,
+    readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability | undefined>,
+    lapGate?: BuildReviewLapGate,
   ): Promise<unknown> {
     const materialized = inputs?.sourceMaterialization?.contextFor(branch.rubric).source;
     const candidateIdentity = (candidate: { providerKey: string; model: string; effort?: string }, effectiveBundleDigest?: string): BuildReviewCacheSemanticIdentity | undefined => {
@@ -3464,7 +3776,43 @@ export class DefaultStepRunner implements StepRunner {
               nativeSchema: getBuildReviewRubricDescriptor(branch.rubric).contract.output.jsonSchema,
               prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${prompt}`,
             }),
+            ...(customPolicyLap ? { prepareCandidateBaseline: async ({ candidate, prepared }) => {
+              if (lapGate?.hasOpened) return;
+              if (!customPolicyLap) return;
+              const capability = await readOnlyReviewCapabilityFor?.(candidate.providerKey);
+              if (capability?.status !== 'available') return;
+              const builtinEntry = { id: branch.rubric, kind: 'builtin' as const, policy: branch.policy };
+              const catalog = await this.buildReviewPolicyCatalog!({
+                provider: candidate.providerKey, entry: builtinEntry, skill: branch.skillName,
+                ...(prepared === undefined ? {} : { preparedEnv: prepared.env, preparedExecutable: prepared.executable, preparedArgs: prepared.args }),
+                ...(prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: prepared.originalCatalogHome }),
+              });
+              const resolved = resolveInstalledReviewPolicyCatalog({ skill: branch.skillName }, catalog);
+              if (resolved.kind === 'failure') return;
+              const bundle = await this.buildReviewPolicyCapture(resolved.policy, { materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY) });
+              await lapGate?.registerPolicy(bundle.materialPath, resolved.policy.packageRoot);
+            } } : {}),
             preparedCandidateOperation: async (context) => {
+              // Built-in peers participate in a custom-policy lap's exact
+              // read-only contract.  Resolve through the same memoized
+              // admission seam as custom members so a peer cannot select an
+              // unprobed provider independently.
+              if (customPolicyLap) {
+                const capability = await readOnlyReviewCapabilityFor?.(context.candidate.providerKey);
+                if (capability?.status !== 'available') {
+                  const platform = capability?.platform ?? process.platform;
+                  const reason = capability?.reason ?? 'no read-only review capability observation was recorded';
+                  const detail = `Provider ${context.candidate.providerKey} read-only review mode is unavailable on ${platform}: ${reason}`;
+                  return {
+                    kind: 'failure' as const,
+                    result: {
+                      success: false, exitCode: 1, providerUnavailable: true,
+                      providerInvocationSkipped: true, readOnlyReviewUnavailable: true,
+                      providerUnavailableReason: detail, output: detail,
+                    },
+                  };
+                }
+              }
               // Direct rubric-dispatch callers retain the historic lifecycle:
               // they have no frozen inputs or run-level engine identity from
               // which a candidate-bound cache key could be derived.
@@ -3488,61 +3836,39 @@ export class DefaultStepRunner implements StepRunner {
                 };
               }
               // Built-ins use the same candidate-local installed definition
-              // contract as custom policies. The old harness-root digest was
-              // only an approximation of what the provider actually loaded.
+              // contract as custom policies. The harness-root digest is only
+              // an approximation of what the prepared provider loaded.
               const builtinEntry = { id: branch.rubric, kind: 'builtin' as const, policy: branch.policy };
+              // D6: resolution and capture happen in this actual prepared
+              // candidate; a fallback candidate never reuses another's bytes.
               let builtinPolicy: InstalledReviewSkill;
               let builtinBundle: CapturedReviewPolicyBundle;
               try {
-                const catalog = await this.buildReviewPolicyCatalog!({
-                  provider: context.candidate.providerKey,
-                  entry: builtinEntry,
-                  skill: branch.skillName,
-                  ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
-                  ...(context.prepared === undefined ? {} : { preparedExecutable: context.prepared.executable, preparedArgs: context.prepared.args }),
-            ...(context.prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: context.prepared.originalCatalogHome }),
-                  ...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
-                  ...(context.deadlineAt === undefined ? {} : { deadlineAt: context.deadlineAt }),
-                });
-                const resolved = resolveInstalledReviewPolicyCatalog({ skill: branch.skillName }, catalog);
-                if (resolved.kind === 'failure') throw new Error(`installed ${branch.skillName} policy is unavailable: ${resolved.failure.code}`);
-                builtinPolicy = resolved.policy;
-                builtinBundle = await this.buildReviewPolicyCapture(builtinPolicy, {
-                  materialParent: join(this.projectDir, '.pipeline', 'build-review', 'policy-material'),
-                });
-              } catch (error) {
-                return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: `build_review candidate policy load failed: ${error instanceof Error ? error.message : String(error)}` } };
-              }
-              const containmentProvider = context.candidate.providerKey === 'claude' || context.candidate.providerKey === 'codex'
-                ? context.candidate.providerKey : undefined;
-              let reviewAccess: InvokeOptions['reviewAccess'];
-              if (materialized && containmentProvider) {
-                const cachedLoginSource = containmentProvider === 'codex' && context.prepared?.env.CODEX_HOME !== undefined && context.prepared.env.CODEX_API_KEY === undefined
-                  ? join(context.prepared.env.CODEX_HOME, 'auth.json')
-                  : undefined;
-                const scratchLease = await acquireReviewScratchHome({
-                  worktreeRoot: this.projectDir, runId: this.runId, attempt: 0, provider: containmentProvider, memberId: branch.rubric,
-                  ...(cachedLoginSource === undefined ? {} : {
-                    seed: async (home) => { await copySelectedCodexLogin({ source: cachedLoginSource, homeDir: join(home, 'codex-home') }); },
-                  }),
-                });
-                context.onTeardown(() => scratchLease.release());
-                const scratch = scratchLease.home;
-                const evidencePaths = await prepareBuildReviewEvidencePaths(this.projectDir);
-                const hostStateProbe = await writeReviewHostStateSentinel();
-          context.onTeardown(() => rm(hostStateProbe, { force: true }));
-                const containment = await prepareBuildReviewContainment({ provider: containmentProvider, launch: reviewLaunchCommand(containmentProvider, context.prepared), paths: {
-                  hostStateProbe,
-                  ...buildReviewFrozenInputPaths(materialized), policyMaterial: builtinBundle.materialPath, originalCheckout: this.projectDir, originalInstallation: builtinPolicy.packageRoot,
-                  ...evidencePaths, scratch,
-                  installationWriteProbe: join(builtinPolicy.packageRoot, '.build-review-write-probe'),
-                  scratchWriteProbe: join(scratch, '.build-review-write-probe'),
-                }, runProcess: async (executable, args) => { const result = await execa(executable, args, { reject: false }); return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr }; } });
-                if (containment.kind === 'unsupported') return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: `build_review cannot establish built-in read-only containment: ${containment.reason}` } };
-                reviewAccess = containment;
-              }
+                  const catalog = await this.buildReviewPolicyCatalog!({
+                    provider: context.candidate.providerKey,
+                    entry: builtinEntry,
+                    skill: branch.skillName,
+                    ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
+                    ...(context.prepared === undefined ? {} : { preparedExecutable: context.prepared.executable, preparedArgs: context.prepared.args }),
+                    ...(context.prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: context.prepared.originalCatalogHome }),
+                    ...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
+                    ...(context.deadlineAt === undefined ? {} : { deadlineAt: context.deadlineAt }),
+                  });
+                  const resolved = resolveInstalledReviewPolicyCatalog({ skill: branch.skillName }, catalog);
+                  if (resolved.kind === 'failure') throw new Error(`installed ${branch.skillName} policy is unavailable: ${resolved.failure.code}`);
+                  builtinPolicy = resolved.policy;
+                  builtinBundle = await this.buildReviewPolicyCapture(builtinPolicy, {
+                    materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY),
+                  });
+                  await lapGate?.registerPolicy(builtinBundle.materialPath, builtinPolicy.packageRoot);
+                } catch (error) {
+                  return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: `build_review candidate policy load failed: ${error instanceof Error ? error.message : String(error)}` } };
+                }
               let cacheHit = false;
-              const dispatched = await dispatchRubricContract({
+              // D5.3: a gated peer starts only after every member's baseline.
+              await lapGate?.waitForBaseline(branch.rubric);
+              const dispatchWithinLap = <T>(run: () => Promise<T>): Promise<T> => lapGate === undefined ? run() : lapGate.withReviewerSlot(run);
+              const dispatched = await dispatchWithinLap(() => dispatchRubricContract({
                 descriptor: getBuildReviewRubricDescriptor(branch.rubric).contract,
                 prepareStructured: (value) => stampBuildReviewDispatchedCandidate(value, branch.rubric, projection),
                 options: {
@@ -3553,7 +3879,7 @@ export class DefaultStepRunner implements StepRunner {
                   contentDigest: inputs.sourceSnapshot.contentDigest, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha,
                   changes: inputs.sourceSnapshot.sourceChanges ?? [], view: materialized,
                 })}`}`,
-                ...(reviewAccess === undefined ? {} : { reviewAccess }),
+                ...(customPolicyLap ? { readOnlyReview: true } : {}),
                 interactive: false,
                 },
                 invoke: (options) => context.invoke(options, async (rung, invoke) => {
@@ -3576,7 +3902,7 @@ export class DefaultStepRunner implements StepRunner {
                 }
                 return invoke();
                 }),
-              });
+              }));
               const invoked = dispatched.invocation;
               if (cacheHit) {
                 await inputs?.sourceMaterialization?.settle(branch.rubric);
@@ -3591,11 +3917,13 @@ export class DefaultStepRunner implements StepRunner {
               if (judged) {
                 const semanticIdentity = candidateIdentity({ ...context.candidate, model: context.invokedModel() ?? context.candidate.model }, builtinBundle.digest);
                 if (!semanticIdentity) return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: 'build_review candidate cache identity is unavailable' } };
-                const cacheWrite = await tryWriteBuildReviewCacheEntry(this.projectDir, {
+                const writeCache = () => tryWriteBuildReviewCacheEntry(this.projectDir, {
                 version: 2, rubric: branch.rubric, contractVersion: projection.contractVersion, projectionVersion: projection.projectionVersion,
                 projectionDigest: projection.digest, policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
                 engineIdentity: { engineStamp: engineIdentity.engineStamp, skillDigest: builtinBundle.digest }, semanticIdentity, result: judged,
                 }, { readFile: async (path) => readFile(path, 'utf-8'), readdir, mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename });
+                // D5.3: withheld until the whole-lap digest settles unchanged.
+                const cacheWrite = lapGate === undefined ? await writeCache() : (lapGate.deferCacheWrite(branch.rubric, writeCache), { ok: true as const });
                 if (!cacheWrite.ok) {
                   cacheWriteFailureDetail = cacheWrite.error instanceof Error ? cacheWrite.error.message : String(cacheWrite.error);
                   await inputs?.sourceMaterialization?.settle(branch.rubric);
@@ -3663,6 +3991,20 @@ export class DefaultStepRunner implements StepRunner {
       return { kind: 'cache-write-failed', detail: cacheWriteFailureDetail };
     }
     if (initial.providerSetupExhaustion) {
+      const readOnlyUnavailable = customPolicyLap
+        ? readOnlyReviewUnavailableFailure(initial.providerSetupExhaustion)
+        : undefined;
+      if (readOnlyUnavailable) {
+        await this.events?.emit({
+          type: 'build_review_rubric_infrastructure_failure', rubric: branch.rubric, lapId: projection.lapId,
+          reason: 'read-only-review-unavailable', cause: 'read-only-review-unavailable',
+          excerpt: readOnlyUnavailable.detail,
+          ...(readOnlyUnavailable.platform === undefined ? {} : { platform: readOnlyUnavailable.platform }),
+        });
+        return makeBuildReviewDispatchFailure(readOnlyUnavailable.detail, initial.providerSetupExhaustion, {
+          cause: 'read-only-review-unavailable',
+        });
+      }
       return makeBuildReviewDispatchFailure(
         `All configured providers were unavailable during setup: ${initial.providerSetupExhaustion.candidates.map(
           ({ provider, reason, recoveryAction }) => `${provider}: ${redactSafetyText(reason)} Recovery: ${redactSafetyText(recoveryAction)}`,
@@ -3986,7 +4328,11 @@ export class DefaultStepRunner implements StepRunner {
     return { success: true, output: `coverage_binding judged ${entries.length} claim(s)` };
   }
 
-  private async runBuildReview(tier?: ConductState['complexity_tier'], executionContext?: ExecutionContext): Promise<StepRunResult> {
+  private async runBuildReview(
+    tier?: ConductState['complexity_tier'],
+    executionContext?: ExecutionContext,
+    readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
+  ): Promise<StepRunResult> {
     // Resolve the plan for THIS feature — never the unscoped `.docs/plans/*.md`
     // sort()[last] guess (#407): with several features in flight the shared plans
     // directory holds many files, and picking the alphabetically-last one graded
@@ -4181,7 +4527,7 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     return withBaseFreshness(withContainmentAdvisory(
-      await this.runRubricBuildReview(inputs, buildReviewConfig, tier, executionContext),
+      await this.runRubricBuildReview(inputs, buildReviewConfig, tier, executionContext, readOnlyReviewCapabilities),
     ));
   }
 

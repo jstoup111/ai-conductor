@@ -298,6 +298,9 @@ export async function withFeatureEventPersistence<T>(input: {
   }
 }
 
+/** The feature ledger every persisted event of a worktree is appended to. */
+export const FEATURE_EVENT_LOG_PATH = '.pipeline/events.jsonl';
+
 export function startFeatureEventPersistence(
   worktreePath: string,
   globalEvents: ConductorEventEmitter,
@@ -305,7 +308,7 @@ export function startFeatureEventPersistence(
 ): { events: ConductorEventEmitter; stop: () => void } {
   const featureEvents = new ForwardingEventEmitter(globalEvents, slug ?? basename(worktreePath));
   const persister = new EventPersister(
-    join(worktreePath, '.pipeline', 'events.jsonl'),
+    join(worktreePath, FEATURE_EVENT_LOG_PATH),
     featureEvents,
   );
   persister.start();

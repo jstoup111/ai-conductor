@@ -273,6 +273,9 @@ export interface ExecuteProviderCandidatesInput {
   deadlineAt?: number;
   /** Optional policy/cache operation that runs only after candidate preparation. */
   preparedCandidateOperation?: PreparedCandidateOperation;
+  /** Captures candidate-local immutable inputs for every eligible fallback
+   * before the first candidate is allowed to invoke. */
+  prepareCandidateBaseline?: (context: Pick<PreparedCandidateOperationContext, 'candidate' | 'prepared'>) => Promise<void>;
   /** Attribution label for an auxiliary branch; does not manufacture a StepName. */
   auxiliaryMember?: string;
   /** Task-local telemetry to validate before any candidate/session invocation. */
@@ -347,6 +350,11 @@ function skippedCandidateSetupUnavailable(provider: string, result: InvokeResult
     provider, capability: 'cached-provider-availability',
     reason: result.providerUnavailableReason ?? result.output ?? 'Provider is cached as unavailable.',
     recoveryAction: 'Restore the provider availability, then re-queue this feature.',
+  };
+  if (result.readOnlyReviewUnavailable === true) return {
+    provider, capability: 'read-only-review-mode',
+    reason: result.providerUnavailableReason ?? result.output ?? 'Provider read-only review mode is unavailable.',
+    recoveryAction: 'Install or update the provider so its read-only review mode is available, then re-queue this feature.',
   };
   if (result.providerUnavailable === true) return {
     provider, capability: 'synchronous-spawn-permit',
@@ -720,6 +728,7 @@ export async function executeProviderCandidates({
   abortSignal,
   deadlineAt,
   preparedCandidateOperation,
+  prepareCandidateBaseline,
   auxiliaryMember,
   taskAttribution: attributionInput,
   onAttempt,
@@ -746,6 +755,32 @@ export async function executeProviderCandidates({
     attribution && 'diagnostic' in attribution ? attribution.diagnostic.code : undefined;
   const setupUnavailableCandidates: ProviderSetupUnavailable[] = [];
   let anyCandidateInvoked = false;
+
+  // A fallback may become the actual candidate only after another provider has
+  // failed.  Capture every candidate-local policy baseline before that can
+  // start any reviewer, using the same prepared environment D6 assigns to the
+  // candidate at invocation time.
+  if (prepareCandidateBaseline) {
+    for (const [index, providerKey] of candidates.entries()) {
+      const runtime = runtimes.get(providerKey);
+      const resolved = resolveProviderCandidateNativeConfig({
+        step, candidateIndex: index, preferredProvider, inheritedProvider: configuredProviders[0],
+        runtime, config, tier, attempt, escalate, modelOverride, effortOverride,
+      });
+      const candidate: ProviderCandidate = { step, providerKey, model: resolved.model, effort: resolved.effort };
+      let prepared: SelfHostInvocation | undefined;
+      try {
+        prepared = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index });
+        await prepareCandidateBaseline({ candidate, prepared });
+      } catch (error) {
+        // Normal setup-unavailable candidates will be represented by the real
+        // fallback loop.  Other baseline failures remain authoritative.
+        if (!normalizeProviderSetupUnavailable(error, providerKey)) throw error;
+      } finally {
+        await prepared?.teardown();
+      }
+    }
+  }
 
   for (const [index, providerKey] of candidates.entries()) {
     const runtime = runtimes.get(providerKey);

@@ -14,7 +14,7 @@ import {
   canonicalizeBuildReviewCustomFindingIdentity,
   type BuildReviewCustomFindingIdentity,
 } from './build-review-finding-identity.js';
-import type { BuildReviewFrozenInputScope } from './build-review-containment.js';
+import type { BuildReviewFrozenInputScope } from './build-review-materialization.js';
 
 /** One engine-owned contract shared by every resolved custom-v1 rubric. */
 export const BUILD_REVIEW_CUSTOM_V1_CONTRACT = Object.freeze({

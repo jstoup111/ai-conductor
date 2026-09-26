@@ -5,7 +5,9 @@ import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { stampBuildReviewDispatchedCandidate, validateBuildReviewDispatchedResult } from '../../src/engine/build-review-coordinator.js';
 import {
   buildReviewBranchArtifactPath,
+  isBuildReviewCustomInfrastructureFailureReason,
   parseBuildReviewBranchArtifact,
+  parseBuildReviewCustomArtifactMember,
   readBuildReviewBranchArtifact,
   writeBuildReviewBranchArtifact,
   type BuildReviewArtifactFilesystem,
@@ -118,6 +120,19 @@ const customJudgedResult = {
 } as const;
 
 describe('build-review current-lap branch artifacts', () => {
+  it('accepts the closed read-only review infrastructure causes in custom artifacts', () => {
+    expect(isBuildReviewCustomInfrastructureFailureReason('review-input-mutated')).toBe(true);
+    expect(isBuildReviewCustomInfrastructureFailureReason('read-only-review-unavailable')).toBe(true);
+
+    const member = {
+      result: {
+        kind: 'infrastructure-failure', rubric: 'security', reason: 'review-input-mutated',
+        detail: 'frozen-head/src/file.ts changed during review',
+      },
+    };
+    expect(parseBuildReviewCustomArtifactMember(member)).toEqual(member);
+  });
+
   it('uses a write-disjoint path for every lap', () => {
     expect([
       buildReviewBranchArtifactPath('/feature', lapId, 'testQuality'),

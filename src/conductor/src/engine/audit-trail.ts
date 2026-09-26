@@ -11,6 +11,9 @@ import { auditedEventTypes } from './event-sinks.js';
 import { phaseForStep } from './resolved-config.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
+/** Directory owning the per-worktree audit ledger. */
+export const AUDIT_TRAIL_DIRECTORY = '.pipeline/audit-trail';
+
 /** The source of an audit record: a pipeline step or an interactive operator action. */
 export type AuditRecordOrigin = StepName | 'operator';
 
@@ -93,11 +96,11 @@ export class AuditTrailWriter {
   }
 
   private eventsPath(): string {
-    return join(this.projectRoot, '.pipeline', 'audit-trail', 'events.jsonl');
+    return join(this.projectRoot, AUDIT_TRAIL_DIRECTORY, 'events.jsonl');
   }
 
   record(input: AuditRecordInput): void {
-    const auditDir = join(this.projectRoot, '.pipeline', 'audit-trail');
+    const auditDir = join(this.projectRoot, AUDIT_TRAIL_DIRECTORY);
     const eventsPath = this.eventsPath();
 
     const record: AuditRecord = {

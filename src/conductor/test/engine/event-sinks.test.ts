@@ -108,6 +108,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'rebase_gate_invalidated',
   'build_review_repair_context',
   'build_review_rubric_started',
+  'build_review_read_only_capability',
   'build_review_policy_resolved',
   'build_review_policy_failed',
   'build_review_rubric_prompt',
@@ -217,6 +218,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'test_suite_verification',
   'build_review_cache_discarded',
   'build_review_rubric_started',
+  'build_review_read_only_capability',
   'build_review_policy_resolved',
   'build_review_policy_failed',
   'build_review_rubric_result',
@@ -347,7 +349,16 @@ const invalidStructuredResultFault = {
     problems: [{ field: 'findings', required: 'must be an array', detail: 'findings must be an array' }],
   },
 } satisfies ConductorEvent;
-void [nativeSchemaUnsupportedFault, invalidStructuredResultFault];
+const readOnlyReviewFault = {
+  type: 'build_review_rubric_infrastructure_failure',
+  rubric: 'security',
+  lapId: 'lap-current',
+  reason: 'review-input-mutated',
+  cause: 'review-input-mutated',
+  changedInputs: ['frozen-head/src/file.ts'],
+  platform: 'linux',
+} satisfies ConductorEvent;
+void [nativeSchemaUnsupportedFault, invalidStructuredResultFault, readOnlyReviewFault];
 
 // @ts-expect-error -- retained reclamation reasons are a closed union.
 const reclaimRetentionWithUnlistedReason = { type: 'worktree_reclaim_retained', slug: 'feature', reason: 'operator-maybe' } satisfies ConductorEvent;
@@ -384,6 +395,28 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  it('renders and persists read-only review capability results through the event spine', () => {
+    const capability = {
+      type: 'build_review_read_only_capability',
+      provider: 'codex',
+      platform: 'linux',
+      status: 'unavailable',
+      reason: 'probe write was not refused',
+    } satisfies ConductorEvent;
+
+    expect({
+      capability,
+      sinks: EVENT_SINKS.build_review_read_only_capability,
+      rendered: renderedEventTypes().includes(capability.type),
+      persisted: persistedEventTypes().includes(capability.type),
+    }).toEqual({
+      capability,
+      sinks: { render: true, persist: true, audit: false, otel: false },
+      rendered: true,
+      persisted: true,
+    });
+  });
+
   it('persists translated repair boundaries without rendering, audit, or OpenTelemetry', () => {
     const translated = [
       {
@@ -708,6 +741,26 @@ describe('event sink subscriptions', () => {
       const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
         .trim().split('\n').map((line) => JSON.parse(line));
       expect(records).toEqual(faultLap.map((event) => ({ ...event, ts: expect.any(String) })));
+      expect(await readdir(join(projectRoot, '.pipeline'))).toEqual(['events.jsonl']);
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('persists read-only review diagnostics on the existing infrastructure-failure occurrence', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-review-read-only-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+
+    try {
+      persister.start();
+      await events.emit(readOnlyReviewFault);
+      persister.stop();
+
+      const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(records).toEqual([{ ...readOnlyReviewFault, ts: expect.any(String) }]);
       expect(await readdir(join(projectRoot, '.pipeline'))).toEqual(['events.jsonl']);
     } finally {
       persister.stop();

@@ -25,7 +25,7 @@ import { resolveBuildReviewCustomContract } from './build-review-policy-resolver
 import { resolveBuildReviewContractCatalog, type RubricContractDescriptor } from './build-review-contract.js';
 import type { BuildReviewCustomReviewerPayload } from './build-review-domain.js';
 import type { BuildReviewCustomFindingIdentity } from './build-review-finding-identity.js';
-import type { BuildReviewFrozenInputScope } from './build-review-containment.js';
+import type { BuildReviewFrozenInputScope } from './build-review-materialization.js';
 
 // Legacy aliases retained for existing consumers. New resolution accepts a
 // provider policy explicitly, so these never participate in provider-aware

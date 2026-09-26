@@ -13,7 +13,6 @@ import type {
   SelfHostAuthPreparation,
   TokenUsage,
 } from './llm-provider.js';
-import { reviewAccessRefusal } from './llm-provider.js';
 import { applyRateCard, loadRateCard, type RateCardLoader } from './rate-card.js';
 import {
   epochAnchoredMonotonicClock,
@@ -22,14 +21,12 @@ import {
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
-import { buildReviewChildEnvironment, filterReviewChildEnvironment, scrubTmuxEnvironment } from './child-environment.js';
-import { composeReviewLaunchMounts } from '../engine/build-review-containment.js';
+import { scrubTmuxEnvironment } from './child-environment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
-import { wrapForContainment } from '../engine/self-host/live-containment.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
 // vocabulary. The CLIs report different messages for the same failure class.
@@ -300,8 +297,6 @@ export class CodexProvider implements LLMProvider {
     // session id, but the invariant is enforced uniformly at every adapter
     // entry so no future arg-building change can resurrect reuse.
     options = enforceFreshSessionOptions(options, 'codex');
-    const accessRefusal = reviewAccessRefusal('codex', options.reviewAccess);
-    if (accessRefusal) return accessRefusal;
     const repl = options.interactive === true;
     const jsonOutput = !repl;
     // A real interactive session leaves authorization to the operator. Auto
@@ -331,23 +326,17 @@ export class CodexProvider implements LLMProvider {
       args: [...this.selfHostArgs(options), ...this.buildArgs(options, !repl, schemaFile)],
       env: this.invocationEnv(options, authentication),
     };
-    const launch = options.reviewAccess?.kind === 'ready'
-      ? wrapForContainment(command, composeReviewLaunchMounts(options.reviewAccess.profile, command))
-      : command;
     let streamedTokenUsage: TokenUsage | undefined;
 
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
-      const subprocess = this.spawnCodex(launch.executable, launch.args, {
+      const subprocess = this.spawnCodex(command.executable, command.args, {
         reject: false,
         input: this.composePrompt(options),
         stdin: 'pipe',
         stdout: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
         stderr: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
         cwd: options.cwd,
-        env: launch.env,
-        // D5: the review env is a complete allowlist; execa must not re-merge
-        // the ambient process environment underneath it.
-        ...(options.reviewAccess?.kind === 'ready' ? { extendEnv: false } : {}),
+        env: command.env,
       }, {
         ...options,
         onProviderStream: repl ? undefined : options.streamConsumer?.onProviderStream ?? options.onProviderStream,
@@ -1000,27 +989,35 @@ export class CodexProvider implements LLMProvider {
     if (options.model) args.push('--model', options.model);
     if (options.effort) args.push('--config', `model_reasoning_effort="${options.effort}"`);
     if (unattended) {
-      args.push(
-        '--config', 'sandbox_mode="workspace-write"',
-        // Egress inside the workspace-write sandbox. Without it every network
-        // call — `gh`, `git push`, a registry fetch — must escape the sandbox,
-        // which raises an approval that `auto_review` denies or lets time out
-        // (see CODEX_PERMISSION_DECISION_RE above). That made every
-        // GitHub-touching step unroutable to codex: `finish`, `rebase`, and
-        // `release-disposition` all had to be pinned to claude.
-        //
-        // This is parity, not a loosening: claude dispatches already run with
-        // `dangerouslySkipPermissions: true` (step-runners.ts), i.e. no sandbox
-        // at all. Codex was the only provider paying a confinement cost, and it
-        // paid it as capability loss rather than as safety anyone relied on.
-        //
-        // Both providers should become config-gated and lockable together —
-        // tracked as intake; do not treat this default as settled.
-        '--config', 'sandbox_workspace_write.network_access=true',
-        '--config', 'approval_policy="on-request"',
-        '--config', 'approvals_reviewer="auto_review"',
-        '--config', 'shell_environment_policy.ignore_default_excludes=false',
-      );
+      if (options.readOnlyReview) {
+        args.push(
+          '--config', 'sandbox_mode="read-only"',
+          '--config', 'approval_policy="never"',
+          '--config', 'shell_environment_policy.ignore_default_excludes=false',
+        );
+      } else {
+        args.push(
+          '--config', 'sandbox_mode="workspace-write"',
+          // Egress inside the workspace-write sandbox. Without it every network
+          // call — `gh`, `git push`, a registry fetch — must escape the sandbox,
+          // which raises an approval that `auto_review` denies or lets time out
+          // (see CODEX_PERMISSION_DECISION_RE above). That made every
+          // GitHub-touching step unroutable to codex: `finish`, `rebase`, and
+          // `release-disposition` all had to be pinned to claude.
+          //
+          // This is parity, not a loosening: claude dispatches already run with
+          // `dangerouslySkipPermissions: true` (step-runners.ts), i.e. no sandbox
+          // at all. Codex was the only provider paying a confinement cost, and it
+          // paid it as capability loss rather than as safety anyone relied on.
+          //
+          // Both providers should become config-gated and lockable together —
+          // tracked as intake; do not treat this default as settled.
+          '--config', 'sandbox_workspace_write.network_access=true',
+          '--config', 'approval_policy="on-request"',
+          '--config', 'approvals_reviewer="auto_review"',
+          '--config', 'shell_environment_policy.ignore_default_excludes=false',
+        );
+      }
     }
     if (options.cwd) args.push('--cd', options.cwd);
     if (!options.interactive) args.push('--json');
@@ -1033,9 +1030,6 @@ export class CodexProvider implements LLMProvider {
 
   private invocationEnv(options: InvokeOptions, authentication: SelectedAuthentication): NodeJS.ProcessEnv {
     const auth = authentication.apiKey ? { CODEX_API_KEY: authentication.apiKey } : undefined;
-    const scratch = options.reviewAccess?.kind === 'ready'
-      ? options.reviewAccess.profile.scratch
-      : undefined;
     // Every session env carries the daemon-session marker: any Codex session
     // spawned through this adapter is engine-managed, and the ai-conductor
     // entry guard refuses recursive conductor invocations from inside it
@@ -1043,22 +1037,6 @@ export class CodexProvider implements LLMProvider {
     // can unset it.
     // tmux target variables are masked in the overlay (execa extends
     // process.env underneath it) so the child cannot resolve the daemon's pane.
-    if (scratch !== undefined) {
-      // D5: a contained reviewer gets an allowlisted environment, never the
-      // ambient one — tracker/service credentials and host state are withheld.
-      return buildReviewChildEnvironment('codex', {
-        ...process.env,
-        ...filterReviewChildEnvironment('codex', options.selfHost?.env ?? {}),
-      }, withDaemonSessionMarker({
-        ...auth,
-        HOME: join(scratch, 'home'),
-        CODEX_HOME: join(scratch, 'codex-home'),
-        TMPDIR: join(scratch, 'tmp'),
-        XDG_CONFIG_HOME: join(scratch, 'xdg-config'),
-        XDG_CACHE_HOME: join(scratch, 'xdg-cache'),
-        XDG_DATA_HOME: join(scratch, 'xdg-data'),
-      }));
-    }
     return scrubTmuxEnvironment(withDaemonSessionMarker(
       {
         ...(options.selfHost?.env ?? {}),

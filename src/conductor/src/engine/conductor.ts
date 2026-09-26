@@ -467,6 +467,7 @@ import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
+import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
 
@@ -1393,6 +1394,8 @@ export interface StepRunResult {
   infrastructureFailure?: Pick<CoverageBindingPayloadError, 'name' | 'kind' | 'reason'>;
   /** True only when this build-review lap observed an infrastructure fault. */
   currentLapMechanicalFault?: boolean;
+  /** A custom review had no provider with an available read-only review mode. */
+  buildReviewReadOnlyReviewUnavailable?: true;
   /**
    * Typed only by the FINISH composition boundary. Kept unknown at this edge
    * so malformed adapter results fail closed instead of reaching remediation.
@@ -1568,6 +1571,8 @@ export interface ComplexityAssessment extends ProviderAttributionMetadata {
 }
 
 export interface StepRunOptions {
+  /** Daemon-start capability observations for custom build-review candidates. */
+  readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>;
   /**
    * Durable PRD widening authority rendered by the engine for an audit
    * reviewer. It is history for judgement only: the reviewer cannot use it to
@@ -1939,6 +1944,8 @@ export interface ConductorOptions {
    * handling falls back to bare sleep (existing behavior).
    */
   rateLimitEpisode?: RateLimitEpisode;
+  /** Frozen daemon-start capability observations for custom build-review candidates. */
+  readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>;
   /**
    * Task 22: Callback to register an in-flight rate-limit wait AbortController
    * with the daemon-level handler. Called when a conductor creates a wait controller
@@ -2034,6 +2041,15 @@ export function renderExhaustedMechanicalBuildReviewHalt(
     `Current lap ${aggregate.lapId}: ${failure.rubric} closed cause ${failure.reason} (${failure.detail}).`,
     `1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap ${aggregate.lapId} --rubric ${failure.rubric} --rationale "<rationale>".`,
     '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
+  ].join('\n');
+}
+
+/** Render the closed recovery for a custom review with no read-only candidate. */
+export function renderReadOnlyReviewUnavailableBuildReviewHalt(detail: string): string {
+  return [
+    'build_review halted: read-only-review-unavailable.',
+    detail,
+    'Install or enable a read-only review mode for one listed provider, or record reduced coverage for this rubric before re-queueing the feature.',
   ].join('\n');
 }
 
@@ -2691,6 +2707,7 @@ export class Conductor {
    * fallback to bare sleep).
    */
   private rateLimitEpisode: RateLimitEpisode | undefined;
+  private readOnlyReviewCapabilities: Readonly<Record<string, ReadOnlyReviewCapability>> | undefined;
 
   /**
    * Task 22: Optional callback to register in-flight wait AbortControllers with
@@ -3599,6 +3616,7 @@ export class Conductor {
     this.verifyMergedShipment = opts.verifyMergedShipment;
     this.shipmentEvidence = opts.shipmentEvidence;
     this.rateLimitEpisode = opts.rateLimitEpisode;
+    this.readOnlyReviewCapabilities = opts.readOnlyReviewCapabilities;
     this.registerAbortController = opts.registerAbortController;
     this.exitProcess = opts.exitProcess ?? ((code) => process.exit(code));
   }
@@ -6166,6 +6184,13 @@ export class Conductor {
     );
   }
 
+  /** Preserve the daemon-start capability observation for build-review only. */
+  private buildReviewCapabilityOption(name: StepName): Pick<StepRunOptions, 'readOnlyReviewCapabilities'> {
+    return name === 'build_review' && this.readOnlyReviewCapabilities !== undefined
+      ? { readOnlyReviewCapabilities: this.readOnlyReviewCapabilities }
+      : {};
+  }
+
   /**
    * Dispatch one self-build through candidate-local isolation. Provider
    * selection happens inside the executor, so preparation and boundary
@@ -6295,6 +6320,7 @@ export class Conductor {
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
+          ...this.buildReviewCapabilityOption(name),
         });
       }
       const installed = await this.guardrails.resolveInstalledHarnessRoot();
@@ -6323,6 +6349,7 @@ export class Conductor {
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
+          ...this.buildReviewCapabilityOption(name),
         });
       } finally {
         if (hadConfig) process.env.CLAUDE_CONFIG_DIR = priorConfig;
@@ -6495,6 +6522,7 @@ export class Conductor {
         retryReason: retryHint,
         ...identityOption,
         ...executionContextOption,
+        ...this.buildReviewCapabilityOption(name),
       });
     } finally {
       if (this.providerExecution) {
@@ -10307,6 +10335,7 @@ export class Conductor {
                                 ...(step.name === 'prd_audit' && this.prdWideningReviewContext
                                   ? { prdWideningReviewContext: this.prdWideningReviewContext }
                                   : {}),
+                                ...this.buildReviewCapabilityOption(step.name),
                                 retryReason: retryHint,
                                 attempt,
                                 escalate: resolved.escalate,
@@ -10818,6 +10847,16 @@ export class Conductor {
               lastVerdictHandshakeFailure = handshake.reason;
             }
             failedStepResult = result;
+            if (step.name === 'build_review' && result.buildReviewReadOnlyReviewUnavailable === true) {
+              const reason = renderReadOnlyReviewUnavailableBuildReviewHalt(result.output ?? result.refusal?.reason ?? '');
+              state[step.name] = 'failed';
+              await this.writeHaltMarker(reason + '\n', 'needs-human');
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
+              await this.emitLoopHalt(reason);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
             // Task 10: the mechanical lane publishes a terminal aggregate
             // only after consuming its separate allowance. That aggregate is
             // the operator's diagnostic, not a retryable grader-dispatch

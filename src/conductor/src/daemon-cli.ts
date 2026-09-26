@@ -33,7 +33,12 @@ import {
   resolveDispatchStartTimeoutSeconds,
   resolveSelfHostConfig,
   resolveTeardownTimeoutSeconds,
+  resolveBuildReviewConfig,
 } from './engine/resolved-config.js';
+import {
+  probeReadOnlyReviewCapability,
+  type ReadOnlyReviewCapability,
+} from './engine/build-review-read-only-capability.js';
 import { readDaemonBuildToken } from './engine/self-host/daemon-build-token.js';
 import { buildAuthRemediationMessage } from './engine/self-host/build-auth-message.js';
 import { sweepFeatureWorktreeScratch } from './engine/self-host/provider-scratch.js';
@@ -475,6 +480,8 @@ export interface DaemonModeOptions {
   ensureFresh?: () => Promise<void>;
   /** Machine-level gh capability probe; injectable at the daemon composition boundary. */
   probeGhVersion?: typeof probeGhVersion;
+  /** Provider read-only review capability probe; injectable at daemon startup. */
+  probeReadOnlyReviewCapability?: typeof probeReadOnlyReviewCapability;
   /**
    * Startup migration boundary (tests inject an ordering probe). Production
    * uses runOwnedHaltClassMigration.
@@ -508,6 +515,28 @@ export interface DaemonModeOptions {
    * NEVER includes PROCESSED regardless of this flag.
    */
   showCompleted?: boolean;
+}
+
+/**
+ * Return each provider named by an enabled custom build-review policy, in its
+ * configured candidate order. Startup owns this one daemon-scoped observation
+ * so feature dispatches share a stable capability result.
+ */
+export function collectReadOnlyReviewCapabilityProviders(
+  config?: HarnessConfig,
+): readonly string[] {
+  const providers: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of resolveBuildReviewConfig(config).catalog) {
+    if (entry.kind !== 'custom') continue;
+    for (const provider of normalizeProviderSelection(entry.policy.llm_provider)) {
+      if (!seen.has(provider)) {
+        seen.add(provider);
+        providers.push(provider);
+      }
+    }
+  }
+  return Object.freeze(providers);
 }
 
 interface HaltClassMigrationStartupDeps {
@@ -1157,6 +1186,23 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     async stop() {},
   };
   subscriber.start([daemonLogRenderer]);
+  const readOnlyReviewCapabilityProbe =
+    opts.probeReadOnlyReviewCapability ?? probeReadOnlyReviewCapability;
+  const readOnlyReviewCapabilities = Object.freeze(Object.fromEntries(await Promise.all(
+    collectReadOnlyReviewCapabilityProviders(config).map(async (provider) => {
+      const capability = await readOnlyReviewCapabilityProbe({
+        provider,
+        platform: process.platform,
+        scratchDir: join(projectRoot, '.pipeline', 'read-only-review-probe'),
+        runProcess: async (executable, args) => {
+          const result = await execFile(executable, [...args]);
+          return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+        },
+      });
+      await events.emit({ type: 'build_review_read_only_capability', ...capability });
+      return [provider, capability] as const;
+    }),
+  ))) as Readonly<Record<string, ReadOnlyReviewCapability>>;
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
   const createProviderExecution = (
     eventTarget = events,
@@ -1392,6 +1438,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           featureLog(`operator park marker read failed: ${error.message}`),
         ),
       rateLimitEpisode,
+      readOnlyReviewCapabilities,
       // Task 22: Register in-flight wait AbortControllers with daemon-level handler
       // so process-level SIGTERM can abort all waits across N concurrent conductors.
       registerAbortController: (controller) => allWaitSignals.add(controller),
@@ -2758,6 +2805,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'build_review_rubric_started':
       log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} started`);
       break;
+    case 'build_review_read_only_capability': {
+      const reason = event.status === 'unavailable' ? ` — ${event.reason}` : '';
+      log(`${dot} ${event.status === 'unavailable' ? chalk.yellow('⚠') : chalk.green('✓')} build_review read-only capability ${event.status}: ${event.provider} on ${event.platform}${reason}`);
+      break;
+    }
     case 'build_review_policy_resolved': {
       const provenance = event.pluginId === undefined ? event.source : `${event.source}/${event.pluginId}`;
       const candidate = event.provenance === undefined ? event.provider

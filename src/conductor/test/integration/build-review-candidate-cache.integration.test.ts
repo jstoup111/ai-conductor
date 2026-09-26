@@ -138,6 +138,7 @@ describe('build-review candidate cache runner ordering', () => {
       } as HarnessConfig,
       providerRuntimes,
       sessionStore,
+      probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'available' as const }),
       providerExecution: {
         configuredProviders: ['codex'],
         runtimes: providerRuntimes,
@@ -230,6 +231,7 @@ describe('build-review candidate cache runner ordering', () => {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', llm_provider: ['codex', 'claude'] },
       } } } as HarnessConfig,
       providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(), events,
+      probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'available' as const }),
       providerExecution: { configuredProviders: ['codex', 'claude'], runtimes, sessions: new ProviderSessionStore(), prepareCandidateSelfHost: async () => ({ executable: 'provider', env: {}, args: [], teardown: async () => {} }) },
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: passingEffectiveResolver,
@@ -270,6 +272,7 @@ describe('build-review candidate cache runner ordering', () => {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', source: 'project', llm_provider: 'codex' },
       } } } as HarnessConfig,
       providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(), events,
+      probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'available' as const }),
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: passingEffectiveResolver,
       buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],

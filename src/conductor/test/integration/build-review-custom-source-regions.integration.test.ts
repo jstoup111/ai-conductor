@@ -82,7 +82,11 @@ async function review(region: { path: string; startLine: number; endLine: number
       digest: `sha256-v1:${'a'.repeat(64)}`,
     }),
   });
-  const run = await runner.run('build_review', { complexity_tier: 'M' } as never);
+  const run = await runner.run('build_review', { complexity_tier: 'M' } as never, {
+    readOnlyReviewCapabilities: {
+      codex: { provider: 'codex', platform: process.platform, status: 'available' },
+    },
+  });
   expect(invoke, run.output).toHaveBeenCalled();
   const artifact = JSON.parse(await readFile(join(root, '.pipeline', 'build-review', 'lap-head', 'portable.json'), 'utf8'));
   return { artifact, prompt: (invoke.mock.calls as unknown as Array<[{ prompt: string }]>)[0]![0].prompt };
