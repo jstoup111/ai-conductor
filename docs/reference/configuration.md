@@ -1198,6 +1198,15 @@ opting a project out of the replacement authority.
 config key is the only off switch. When disabled, the step is marked `skipped` and a `config_skip` event
 is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved once per pass.
 
+Each built-in or custom rubric accepts `timeout_seconds`, independently of `test_suite.timeout_seconds`.
+It defaults to 300 seconds, retaining the engine's existing five-minute review budget for projects
+without an override. Set it explicitly for slower model/effort policies; for example,
+`build_review.custom_rubrics.moneySafety.timeout_seconds: 3600` allows an hour. The value must be
+positive and fit a Node timer (1–2147483647 milliseconds). The budget covers candidate preparation,
+catalog discovery, waiting for the lap, and judgment across provider fallback. Discovery is aborted
+on expiry; an already-running provider may finish, but its late judgment is rejected as a timeout
+and its invocation usage is retained. This is an acceptance deadline, not a process kill timeout.
+
 `testQuality` and `security` accept `enabled`, `max_projection_bytes`, `llm_provider`, `model`, `effort`,
 `model_fallback_ladder`, `max_retries`, `escalate`, and `min_confidence`. `max_projection_bytes` is a
 positive integer UTF-8 byte limit for the rubric's canonical projection; it defaults to `1048576` and the

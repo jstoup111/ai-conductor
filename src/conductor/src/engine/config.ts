@@ -129,8 +129,8 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'steps.parallel': ['name', 'skill', 'model', 'effort', 'advisory'],
   'steps.by_tier': ['model', 'effort', 'max_retries'],
   'build_review.adjudication': ['enabled'],
-  'build_review.rubrics': ['enabled', 'max_projection_bytes', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence'],
-  'build_review.custom_rubrics': ['skill', 'question', 'source', 'resources', 'enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence'],
+  'build_review.rubrics': ['timeout_seconds', 'enabled', 'max_projection_bytes', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence'],
+  'build_review.custom_rubrics': ['timeout_seconds', 'skill', 'question', 'source', 'resources', 'enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence'],
   build_review: ['enabled', 'perTaskFloor', 'scopeContainmentEnforced', 'maxParallel', 'adjudication', 'rubrics', 'custom_rubrics'],
   ci_watch: ['enabled', 'cooldownMinutes'],
   kickback_escalation: ['enabled'],
@@ -259,6 +259,11 @@ function validateBuildReviewRubrics(
         message: `${path}.max_projection_bytes must be a positive integer byte count`,
       };
     }
+    if (policy.timeout_seconds !== undefined &&
+      (typeof policy.timeout_seconds !== 'number' || !Number.isFinite(policy.timeout_seconds) ||
+        policy.timeout_seconds * 1_000 < 1 || policy.timeout_seconds * 1_000 > 2_147_483_647)) {
+      return { type: 'validation_error', message: `${path}.timeout_seconds must be a positive number representable by a Node timer` };
+    }
     const providerError = validateProviderSelection(policy.llm_provider, `${path}.llm_provider`);
     if (providerError) return providerError;
     if (policy.model !== undefined && typeof policy.model !== 'string') {
@@ -369,6 +374,11 @@ function validateBuildReviewCustomRubrics(
     }
     if (declaration.enabled !== undefined && typeof declaration.enabled !== 'boolean') {
       return { type: 'validation_error', message: `${path}.enabled must be a boolean` };
+    }
+    if (declaration.timeout_seconds !== undefined &&
+      (typeof declaration.timeout_seconds !== 'number' || !Number.isFinite(declaration.timeout_seconds) ||
+        declaration.timeout_seconds * 1_000 < 1 || declaration.timeout_seconds * 1_000 > 2_147_483_647)) {
+      return { type: 'validation_error', message: `${path}.timeout_seconds must be a positive number representable by a Node timer` };
     }
     const providerError = validateProviderSelection(declaration.llm_provider, `${path}.llm_provider`);
     if (providerError) return providerError;

@@ -1006,20 +1006,26 @@ describe('custom build-review policy runner', () => {
   function customOnlyRunner(root: string, options: {
     readonly findings: readonly unknown[];
     readonly minConfidence?: number;
+    readonly onInvoke?: () => void;
+    readonly timeoutSeconds?: number;
     readonly resolver: (projectRoot: string, aggregate: unknown) => Promise<unknown>;
   }): DefaultStepRunner {
     const payload = { kind: 'custom-findings', version: 'v1', findings: options.findings };
     const provider: LLMProvider = {
-      invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })),
+      invoke: vi.fn(async () => {
+        options.onInvoke?.();
+        return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+      }),
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
       nativeSchemaCapability: { nativeOutputSchema: true },
     };
     return new DefaultStepRunner(provider, 'custom-only-durable-evidence', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', test_suite: { timeout_seconds: 120 }, build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
         portable: {
           enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude',
+          ...(options.timeoutSeconds === undefined ? {} : { timeout_seconds: options.timeoutSeconds }),
           ...(options.minConfidence === undefined ? {} : { min_confidence: options.minConfidence }),
         },
       } } } as HarnessConfig,
@@ -1032,6 +1038,24 @@ describe('custom build-review policy runner', () => {
       buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
     });
   }
+
+  it.each([
+    { elapsed: 131_000, timeoutSeconds: undefined },
+    { elapsed: 2_665_000, timeoutSeconds: 3600 },
+  ])('accepts a completed review beyond the suite timeout: $elapsed ms', async ({ elapsed, timeoutSeconds }) => {
+    const root = await fixture();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const onInvoke = vi.fn(() => { clock.mockReturnValue(1_000 + elapsed); });
+    try {
+      const runner = customOnlyRunner(root, { findings: [], resolver: passingEffectiveResolver, onInvoke, timeoutSeconds });
+      await expect(runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({ success: true });
+      expect(onInvoke).toHaveBeenCalledTimes(1);
+      const aggregate = JSON.parse(await readFile(join(root, '.pipeline', 'build-review.json'), 'utf8'));
+      expect(aggregate.customResults.portable.result).toMatchObject({ kind: 'judged', verdict: 'PASS' });
+    } finally {
+      clock.mockRestore();
+    }
+  });
 
   // adr-2026-08-29 D4.6: a fully suppressed custom-only lap is an effective
   // PASS that never reaches adjudication, so the step itself must write the
@@ -1284,8 +1308,8 @@ describe('custom build-review policy discovery under candidate authority', () =>
     events.on('build_review_policy_failed', (event) => { failures.push(event); });
     const runner = new DefaultStepRunner(provider, 'custom-policy-authority', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'claude', test_suite: { timeout_seconds: timeoutSeconds }, build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
-        portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
+      config: { llm_provider: 'claude', test_suite: { timeout_seconds: 120 }, build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude', timeout_seconds: timeoutSeconds },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(),
@@ -1303,7 +1327,10 @@ describe('custom build-review policy discovery under candidate authority', () =>
   it('arms a production candidate deadline for in-flight discovery and stops before judge or cache work', async () => {
     const catalog = blockingCatalog(() => undefined);
 
-    const { failures, invoke } = await runWithDeadline(catalog);
+    const { failures, invoke } = await runWithDeadline(async (input) => {
+      if (input.deadlineAt! - Date.now() > 1_000) throw new Error('rubric deadline was replaced by suite timeout');
+      return catalog(input);
+    });
 
     expect(catalog).toHaveBeenCalledTimes(1);
     expect(catalog.mock.calls[0]![0]).toMatchObject({ signal: expect.any(AbortSignal), deadlineAt: expect.any(Number) });

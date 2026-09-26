@@ -130,6 +130,7 @@ export function fingerprintBuildReviewRubricPolicy(
   policy: ResolvedBuildReviewRubricPolicy,
 ): string {
   const canonical = JSON.stringify({
+    ...(policy.timeout_seconds === undefined ? {} : { timeout_seconds: policy.timeout_seconds }),
     llm_provider: policy.llm_provider,
     model: policy.model,
     effort: policy.effort,

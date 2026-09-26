@@ -2952,7 +2952,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // provider was skipped and what recovery is available.
       if (!event.invoked) {
         const recovery = event.setupRecoveryAction ? `; recovery: ${event.setupRecoveryAction}` : '';
-        log(`${dot}   ${event.step} skipped ${chalk.cyan(event.provider)} (${event.skipReason ?? 'unavailable'}: ${event.reason ?? 'unavailable'}${recovery})`);
+        log(`${dot}   ${event.step} skipped ${chalk.cyan(event.provider)} (${event.skipReason ?? (event.outcome === 'unavailable' ? 'unavailable' : 'not-invoked')}: ${event.reason ?? 'unavailable'}${recovery})`);
         break;
       }
       const model = event.model ? chalk.dim(` (${event.model})`) : '';

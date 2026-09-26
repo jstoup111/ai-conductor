@@ -381,21 +381,25 @@ function unsupportedNativeSchemaProviderResult(providerKey: string): InvokeResul
   };
 }
 
-function cancelledPreparedCandidateResult(): InvokeResult {
+function cancelledPreparedCandidateResult(invoked?: InvokeResult): InvokeResult {
   return {
     success: false,
-    output: 'Prepared candidate operation cancelled before judgment.',
+    output: invoked ? 'Prepared candidate operation cancelled after provider invocation; judgment discarded.' : 'Prepared candidate operation cancelled before judgment.',
     exitCode: 1,
-    providerInvocationSkipped: true,
+    providerInvocationSkipped: invoked === undefined || invoked.providerInvocationSkipped === true,
+    ...(invoked?.tokenUsage ? { tokenUsage: invoked.tokenUsage } : {}),
+    ...(invoked?.observedIntervals ? { observedIntervals: invoked.observedIntervals } : {}),
   };
 }
 
-function timedOutPreparedCandidateResult(): InvokeResult {
+function timedOutPreparedCandidateResult(invoked?: InvokeResult): InvokeResult {
   return {
     success: false,
-    output: 'Prepared candidate operation timed out before judgment.',
+    output: invoked ? 'Prepared candidate operation timed out after provider invocation; judgment discarded.' : 'Prepared candidate operation timed out before judgment.',
     exitCode: 1,
-    providerInvocationSkipped: true,
+    providerInvocationSkipped: invoked === undefined || invoked.providerInvocationSkipped === true,
+    ...(invoked?.tokenUsage ? { tokenUsage: invoked.tokenUsage } : {}),
+    ...(invoked?.observedIntervals ? { observedIntervals: invoked.observedIntervals } : {}),
   };
 }
 
@@ -919,10 +923,8 @@ export async function executeProviderCandidates({
           if (!setupUnavailable) throw error;
           return { success: false, output: setupUnavailable.reason, exitCode: 1, providerInvocationSkipped: true };
         }
+        if (preparedCandidateDeadlineExpired(deadlineAt)) return timedOutPreparedCandidateResult();
         if (abortSignal?.aborted) return cancelledPreparedCandidateResult();
-        if (preparedCandidateDeadlineExpired(deadlineAt)) {
-          return timedOutPreparedCandidateResult();
-        }
         if (preparedCandidateOperation) {
           const operation = await preparedCandidateOperation({
             candidate,
@@ -936,10 +938,8 @@ export async function executeProviderCandidates({
           // An operation may observe cancellation while resolving a policy or
           // checking a cache. It cannot publish that stale work as a judgment
           // or cache hit after the candidate's authority has ended.
-          if (abortSignal?.aborted) return cancelledPreparedCandidateResult();
-          if (preparedCandidateDeadlineExpired(deadlineAt)) {
-            return timedOutPreparedCandidateResult();
-          }
+          if (preparedCandidateDeadlineExpired(deadlineAt)) return timedOutPreparedCandidateResult(invocation?.result);
+          if (abortSignal?.aborted) return cancelledPreparedCandidateResult(invocation?.result);
           return operation.kind === 'hit'
             ? { ...operation.result, providerInvocationSkipped: true }
             : operation.result;
