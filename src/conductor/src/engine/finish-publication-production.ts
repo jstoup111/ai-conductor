@@ -51,6 +51,7 @@ import {
   appendRecordedShipmentFindings,
   recordedShipmentFindings,
 } from './shipment-association.js';
+import { readAsBuiltVerdict } from './as-built-verdict-store.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 import {
   extractShipmentPlanDeclarations,
@@ -60,6 +61,7 @@ import {
 import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
 
 export interface ProductionFinishPublicationCoordinator {
+  requiresArtifactValidation: true;
   advance(input: {
     state: ConductState;
     mode: RunMode;
@@ -315,11 +317,14 @@ export function createProductionFinishPublicationCoordinator(
 
   const copyRecordedReviewFindingsToShippedRecord = async (slug: string): Promise<void> => {
     const pipeline = join(deps.projectRoot, '.pipeline');
-    const [prdAudit, asBuilt] = await Promise.all([
+    const [prdAudit, asBuiltResult] = await Promise.all([
       readFile(join(pipeline, 'prd-audit.md'), 'utf8').catch(() => undefined),
-      readFile(join(pipeline, 'architecture-review-as-built.md'), 'utf8').catch(() => undefined),
+      readAsBuiltVerdict(deps.projectRoot),
     ]);
-    const findings = recordedShipmentFindings({ prdAudit, asBuilt });
+    const findings = recordedShipmentFindings({
+      prdAudit,
+      asBuilt: asBuiltResult.kind === 'present' ? asBuiltResult.value : undefined,
+    });
     if (findings.length === 0) return;
 
     const relativeRecordPath = join('.docs', 'shipped', `${slug}.md`);
@@ -471,6 +476,7 @@ export function createProductionFinishPublicationCoordinator(
   };
 
   return {
+    requiresArtifactValidation: true,
     async advance({ state, mode, daemon, dispatchJudgment, dispatchAuthoring, emit }) {
       const attended = !daemon && (mode === 'default' || mode === 'interactive');
       const requestedOutcome = attended

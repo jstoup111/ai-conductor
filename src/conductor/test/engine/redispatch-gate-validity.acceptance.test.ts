@@ -63,10 +63,18 @@ import {
 } from '../../src/engine/artifacts.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 const execFile = promisify(execFileCb);
 
 const OLD_MTIME = new Date(2000, 0, 1);
+const APPROVED_AS_BUILT_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'fixture' },
+  planGap: { enabled: true, reason: 'fixture' },
+  adrCompliance: { enabled: false, reason: 'fixture' },
+  diagramDrift: { enabled: false, reason: 'fixture' },
+};
 
 async function fileExists(p: string): Promise<boolean> {
   return access(p).then(
@@ -206,6 +214,20 @@ async function writeMdVerdict(
   }
 }
 
+/** Writes the engine-owned as-built authority; its report is derived only. */
+async function writeAsBuiltApprovedVerdict(
+  repo: string,
+  codeStamp: string,
+  attemptId = 'fixture-run',
+): Promise<void> {
+  await persistAsBuiltVerdict(repo, {
+    version: 'v1',
+    verdict: 'APPROVED',
+    reachability: [],
+    driftNotes: [],
+  }, { attemptId, codeStamp, policy: APPROVED_AS_BUILT_POLICY });
+}
+
 /**
  * Writes a clean manual-test results file (backdated to OLD_MTIME) plus,
  * when a `codeStamp` is given, a "clean PASS" `MANUAL_TEST_FAIL_EVIDENCE`
@@ -325,7 +347,7 @@ describe('feature-runtime gates preserve on a foreign-only delta, re-run on a fe
 
   it('architecture_review_as_built: preserved when the delta only touches a foreign runtime path', async () => {
     const { s, baseline } = await setup();
-    await writeMdVerdict(s.repo, '.pipeline/architecture-review-as-built.md', ARCH_APPROVED, baseline, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP);
+    await writeAsBuiltApprovedVerdict(s.repo, baseline);
     await pushForeignCommit(s as Scratch & { origin: string }, { 'foreign.ts': 'foreign1\n' }, 'unrelated foreign work');
 
     const result = await checkStepCompletion(s.repo, 'architecture_review_as_built', ctxFor(s.repo));
@@ -334,7 +356,7 @@ describe('feature-runtime gates preserve on a foreign-only delta, re-run on a fe
 
   it('architecture_review_as_built: re-runs when the delta touches the feature\'s own runtime source', async () => {
     const { s, baseline } = await setup();
-    await writeMdVerdict(s.repo, '.pipeline/architecture-review-as-built.md', ARCH_APPROVED, baseline, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP);
+    await writeAsBuiltApprovedVerdict(s.repo, baseline);
     await commit(s, { 'featureA.ts': 'f2\n' }, 'feat: change featureA');
 
     const result = await checkStepCompletion(s.repo, 'architecture_review_as_built', ctxFor(s.repo));
@@ -379,8 +401,7 @@ describe('a prior run identity does not condemn a code-valid verdict (adr-2026-0
 
   it('architecture_review_as_built: a halt/resume (new run id) preserves the verdict when only foreign paths changed', async () => {
     const { s, baseline } = await setup();
-    await writeMdVerdict(s.repo, '.pipeline/architecture-review-as-built.md', ARCH_APPROVED, baseline, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP);
-    await stampWithPriorRun(s.repo, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP, baseline);
+    await writeAsBuiltApprovedVerdict(s.repo, baseline, 'run-prior');
     await pushForeignCommit(s as Scratch & { origin: string }, { 'foreign.ts': 'foreign1\n' }, 'unrelated foreign work');
 
     const result = await checkStepCompletion(s.repo, 'architecture_review_as_built', ctxFor(s.repo, { attemptRunId: 'run-current' }));

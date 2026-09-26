@@ -118,6 +118,9 @@ import type {
   ExecuteProviderCandidatesInput,
   ProviderExecutionResult,
 } from '../../src/engine/provider-execution.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltFinding } from '../../src/engine/as-built-contract.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 import type {
   InvokeOptions,
@@ -175,6 +178,72 @@ function failingBuildReviewAggregate(summary: string) {
       },
     },
   });
+}
+
+const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'fixture' },
+  planGap: { enabled: true, reason: 'fixture' },
+  adrCompliance: { enabled: false, reason: 'fixture' },
+  diagramDrift: { enabled: false, reason: 'fixture' },
+};
+
+/**
+ * The as-built report is a derived view. Conductor fixtures must write the
+ * engine-owned verdict and bind it to the dispatch run rather than spoofing
+ * the retired Markdown writer.
+ */
+async function writeAsBuiltFixture(
+  projectRoot: string,
+  runId: string | undefined,
+  verdict: Parameters<typeof persistAsBuiltVerdict>[1],
+): Promise<void> {
+  await persistAsBuiltVerdict(projectRoot, verdict, {
+    attemptId: runId ?? 'fixture-run',
+    codeStamp: null,
+    policy: AS_BUILT_FIXTURE_POLICY,
+  });
+}
+
+function asBuiltApprovedFixture() {
+  return {
+    version: 'v1' as const,
+    verdict: 'APPROVED' as const,
+    reachability: [],
+    driftNotes: [],
+  };
+}
+
+function asBuiltBlockedDesignFixture(id = 'ADR-1', summary = 'ADR-1 violated.') {
+  return {
+    version: 'v1' as const,
+    verdict: 'BLOCKED' as const,
+    reachability: [],
+    driftNotes: [],
+    findings: [{ id, class: 'DESIGN' as const, summary }],
+    violations: summary,
+    resolution: 'A human decision is required.',
+  };
+}
+
+function asBuiltBlockedFixture(findings: readonly AsBuiltFinding[]) {
+  return {
+    version: 'v1' as const,
+    verdict: 'BLOCKED' as const,
+    reachability: [],
+    driftNotes: [],
+    findings,
+    violations: 'The implementation violates the governing requirement.',
+    resolution: 'Apply the required remediation.',
+  };
+}
+
+function asBuiltRemediableFixture(id: string, taskId: string, summary: string) {
+  return asBuiltBlockedFixture([{
+    id,
+    class: 'REMEDIABLE' as const,
+    reference: { kind: 'plan-task' as const, taskId },
+    summary,
+  }]);
 }
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
@@ -578,12 +647,7 @@ describe('engine/conductor', () => {
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: '1', status: 'completed' }],
       }));
-      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
-        'Verdict: BLOCKED', '', '## Blocking Findings', '',
-        '| Finding | Class | Governing clause | Summary |',
-        '| --- | --- | --- | --- |',
-        '| ARCH-1 | REMEDIABLE | Task 1 | Existing work |',
-      ].join('\n'));
+      await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '1', 'Existing work'));
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: { run: async () => {
@@ -604,7 +668,7 @@ describe('engine/conductor', () => {
         { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 },
         ALL_STEPS,
         'unexpected existing-task',
-        { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+        { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
       );
 
       expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
@@ -620,12 +684,7 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
-      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
-        'Verdict: BLOCKED', '', '## Blocking Findings', '',
-        '| Finding | Class | Governing clause | Summary |',
-        '| --- | --- | --- | --- |',
-        '| existing-binding | REMEDIABLE | Task 1 | Existing work |',
-      ].join('\n'));
+      await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('existing-binding', '1', 'Existing work'));
       if (taskStatus !== undefined) {
         await writeFile(join(dir, '.pipeline', 'task-status.json'), taskStatus);
       }
@@ -658,7 +717,7 @@ describe('engine/conductor', () => {
         { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000, build: 'done' },
         ALL_STEPS,
         'test re-stage failure',
-        { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+        { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
       );
 
       expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
@@ -669,12 +728,7 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
-      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
-        'Verdict: BLOCKED', '', '## Blocking Findings', '',
-        '| Finding | Class | Governing clause | Summary |',
-        '| --- | --- | --- | --- |',
-        '| missing-status-binding | REMEDIABLE | Task 1 | Existing work |',
-      ].join('\n'));
+      await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('missing-status-binding', '1', 'Existing work'));
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: '2', status: 'completed' }],
       }));
@@ -704,7 +758,7 @@ describe('engine/conductor', () => {
         { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000, build: 'done' },
         ALL_STEPS,
         'test missing re-stage id',
-        { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+        { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
       );
 
       expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
@@ -751,15 +805,10 @@ describe('engine/conductor', () => {
         gates: {},
         growth: { authored: 8, added: 0, byGate: {} },
       });
-      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
-        'Verdict: BLOCKED',
-        '',
-        '## Blocking Findings',
-        '| Finding | Class | Governing clause | Summary |',
-        '| --- | --- | --- | --- |',
-        '| ARCH-1 | REMEDIABLE | Task 1 | Repair task one |',
-        '| ARCH-2 | REMEDIABLE | Task 2 | Repair task two |',
-      ].join('\n'));
+      await writeAsBuiltFixture(dir, undefined, asBuiltBlockedFixture([
+        { id: 'ARCH-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Repair task one' },
+        { id: 'ARCH-2', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Repair task two' },
+      ]));
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
@@ -791,7 +840,7 @@ describe('engine/conductor', () => {
           source: 'architecture-review-as-built',
           evidence: [{
             gate: 'architecture_review_as_built',
-            evidenceFile: '.pipeline/architecture-review-as-built.md',
+            evidenceFile: '.pipeline/architecture-review-as-built.json',
           }],
         },
       );
@@ -827,6 +876,7 @@ describe('engine/conductor', () => {
         finding: 'ARCH-1',
         class: 'REMEDIABLE',
         governingClause: 'Task 1',
+        reference: { kind: 'plan-task', taskId: '1' },
         summary: 'Repair task one',
         outcome: 'remediated',
       }, {
@@ -834,6 +884,7 @@ describe('engine/conductor', () => {
         finding: 'ARCH-2',
         class: 'REMEDIABLE',
         governingClause: 'Task 2',
+        reference: { kind: 'plan-task', taskId: '2' },
         summary: 'Repair task two',
         outcome: 'remediated',
       }]);
@@ -873,12 +924,7 @@ describe('engine/conductor', () => {
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: '1', status: 'completed' }],
       }));
-      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
-        'Verdict: BLOCKED', '', '## Blocking Findings', '',
-        '| Finding | Class | Governing clause | Summary |',
-        '| --- | --- | --- | --- |',
-        '| ARCH-1 | REMEDIABLE | Task 1 | Repair task one |',
-      ].join('\n'));
+      await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '1', 'Repair task one'));
       await writeKickbackLedger(dir, {
         version: 1,
         gates: {
@@ -921,7 +967,7 @@ describe('engine/conductor', () => {
           source: 'architecture-review-as-built',
           evidence: [{
             gate: 'architecture_review_as_built',
-            evidenceFile: '.pipeline/architecture-review-as-built.md',
+            evidenceFile: '.pipeline/architecture-review-as-built.json',
           }],
         },
       );
@@ -994,12 +1040,7 @@ describe('engine/conductor', () => {
         '|---|---|---|---|---|',
         '| S1.1 | FIXABLE | 1 | FR-1 | x |',
       ].join('\n'));
-      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
-        'Verdict: BLOCKED', '', '## Blocking Findings', '',
-        '| Finding | Class | Governing clause | Summary |',
-        '| --- | --- | --- | --- |',
-        '| ARCH-1 | REMEDIABLE | Task 2 | Repair task two |',
-      ].join('\n'));
+      await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '2', 'Repair task two'));
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: '1', status: 'completed' }, { id: '2', status: 'completed' }],
       }));
@@ -1036,7 +1077,7 @@ describe('engine/conductor', () => {
           source: 'prd_audit',
           evidence: [
             { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
-            { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' },
+            { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' },
           ],
         },
       );
@@ -1068,12 +1109,7 @@ describe('engine/conductor', () => {
         gates: {},
         growth: { authored: 2, added: 0, byGate: {} },
       });
-      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
-        'Verdict: BLOCKED', '', '## Blocking Findings',
-        '| Finding | Class | Governing clause | Summary |',
-        '| --- | --- | --- | --- |',
-        '| ARCH-1 | REMEDIABLE | Task 1 | Repair task one |',
-      ].join('\n'));
+      await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '1', 'Repair task one'));
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
@@ -1105,7 +1141,7 @@ describe('engine/conductor', () => {
           source: 'validation-group',
           evidence: [{
             gate: 'architecture_review_as_built',
-            evidenceFile: '.pipeline/architecture-review-as-built.md',
+            evidenceFile: '.pipeline/architecture-review-as-built.json',
           }],
           consolidatedManualTestFail: true,
         },
@@ -1250,12 +1286,7 @@ describe('engine/conductor', () => {
       await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n');
       await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '2', status: 'completed' }] }));
       await writeFile(join(dir, '.pipeline', 'prd-audit.md'), '# PRD Audit\n\n**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | PRD: | Evidence |\n|---|---|---|---|---|\n| S1.1 | FIXABLE | 1 | FR-1 | x |\n');
-      await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
-        'Verdict: BLOCKED', '', '## Blocking Findings', '',
-        '| Finding | Class | Governing clause | Summary |',
-        '| --- | --- | --- | --- |',
-        '| ARCH-1 | REMEDIABLE | Task 2 | Existing repair |',
-      ].join('\n'));
+      await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '2', 'Existing repair'));
       await writeKickbackLedger(dir, { version: 1, gates: {}, growth: { authored: 8, added: 0, byGate: {} } });
       const conductor = new Conductor({
         stateFilePath: statePath, projectRoot: dir, events,
@@ -1270,9 +1301,9 @@ describe('engine/conductor', () => {
       });
       const outcome = await (conductor as any).planRemediation(
         { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 }, ALL_STEPS, 'mixed attribution',
-        { source: 'prd_audit', evidence: [
+        { source: 'validation-group', evidence: [
           { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
-          { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' },
+          { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' },
         ] },
       );
 
@@ -4250,7 +4281,7 @@ describe('engine/conductor', () => {
       ['prd_audit', '.pipeline/prd-audit.md', PRD_AUDIT_CODE_STAMP],
       [
         'architecture_review_as_built',
-        '.pipeline/architecture-review-as-built.md',
+        '.pipeline/architecture-review-as-built.json',
         ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
       ],
     ] as const)(
@@ -4259,8 +4290,12 @@ describe('engine/conductor', () => {
         await mkdir(join(dir, '.pipeline'), { recursive: true });
         const runId = `task-6-${step}`;
         const dispatchStartedAt = Date.now();
-        await writeFile(join(dir, reportPath), 'fresh verdict report\n');
-        await stampGateRunIdentity(dir, step, runId);
+        if (step === 'architecture_review_as_built') {
+          await writeAsBuiltFixture(dir, runId, asBuiltApprovedFixture());
+        } else {
+          await writeFile(join(dir, reportPath), 'fresh verdict report\n');
+          await stampGateRunIdentity(dir, step, runId);
+        }
         const conductor = new Conductor({
           projectRoot: dir,
           stateFilePath: statePath,
@@ -5221,7 +5256,7 @@ describe('engine/conductor', () => {
     function shipRunner(auditBody: string): { runner: StepRunner; calls: StepName[] } {
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, currentState: ConductState) => {
+        run: vi.fn(async (step: StepName, currentState: ConductState, options?: StepRunOptions) => {
           calls.push(step);
           if (step === 'build') {
             currentState.manual_test = 'skipped';
@@ -5250,11 +5285,7 @@ describe('engine/conductor', () => {
               renderAuditReport(auditBody),
             );
           } else if (step === 'architecture_review_as_built') {
-            await mkdir(join(dir, '.pipeline'), { recursive: true });
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
-            );
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
           return { success: true };
         }),
@@ -5270,7 +5301,7 @@ describe('engine/conductor', () => {
     ): { runner: StepRunner; calls: StepName[] } {
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           calls.push(step);
           if (step === 'build' || step === 'prd_audit') {
             await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -5291,11 +5322,7 @@ describe('engine/conductor', () => {
               '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
             );
           } else if (step === 'architecture_review_as_built') {
-            await mkdir(join(dir, '.pipeline'), { recursive: true });
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
-            );
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           } else if (step === 'remediate') {
             await mkdir(join(dir, '.pipeline'), { recursive: true });
             await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify(plan));
@@ -5672,7 +5699,7 @@ describe('engine/conductor', () => {
       );
     }
 
-    async function satisfyUnrelatedValidation(step: StepName): Promise<void> {
+    async function satisfyUnrelatedValidation(step: StepName, runId?: string): Promise<void> {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       if (step === 'prd_audit') {
         await writeFile(
@@ -5680,10 +5707,7 @@ describe('engine/conductor', () => {
           '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n',
         );
       } else if (step === 'architecture_review_as_built') {
-        await writeFile(
-          join(dir, '.pipeline/architecture-review-as-built.md'),
-          '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
-        );
+        await writeAsBuiltFixture(dir, runId, asBuiltApprovedFixture());
       }
     }
 
@@ -5692,9 +5716,9 @@ describe('engine/conductor', () => {
     function failingManualTestRunner(): { runner: StepRunner; calls: StepName[] } {
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           calls.push(step);
-          await satisfyUnrelatedValidation(step);
+          await satisfyUnrelatedValidation(step, options?.runId);
           if (step === 'build') {
             await mkdir(join(dir, '.pipeline'), { recursive: true });
             await writeFile(
@@ -5758,8 +5782,8 @@ describe('engine/conductor', () => {
       await seedToManualTest();
       let buildAttempt = 0;
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
-          await satisfyUnrelatedValidation(step);
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
+          await satisfyUnrelatedValidation(step, options?.runId);
           if (step === 'build') {
             buildAttempt++;
             // Grow resolved-task count every attempt so
@@ -5844,9 +5868,9 @@ describe('engine/conductor', () => {
       // carries no bug evidence for build. Must HALT, not loop.
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           calls.push(step);
-          await satisfyUnrelatedValidation(step);
+          await satisfyUnrelatedValidation(step, options?.runId);
           return { success: true };
         }),
       };
@@ -6624,7 +6648,7 @@ describe('engine/conductor', () => {
 
       const calls: Array<{ step: StepName; retryReason?: string }> = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
           calls.push({ step, retryReason: opts?.retryReason });
           if (step === 'build') {
             const buildCalls = calls.filter((c) => c.step === 'build').length;
@@ -6689,10 +6713,7 @@ describe('engine/conductor', () => {
               '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n',
             );
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
-            );
+            await writeAsBuiltFixture(dir, opts?.runId, asBuiltApprovedFixture());
           }
           return { success: true } as StepRunResult;
         }),
@@ -7411,16 +7432,9 @@ describe('engine/conductor', () => {
       );
       let asBuiltRestagedBeforeBuild = false;
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           if (step === 'architecture_review_as_built') {
-            await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
-              'Verdict: BLOCKED',
-              '',
-              '## Blocking Findings',
-              '| Finding | Class | Governing clause | Summary |',
-              '| --- | --- | --- | --- |',
-              '| ARCH-1 | REMEDIABLE | Task 1 | Add the missing guard |',
-            ].join('\n'));
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltRemediableFixture('ARCH-1', '1', 'Add the missing guard'));
           }
           if (step === 'build') {
             const current = await readState(statePath);
@@ -7481,18 +7495,13 @@ describe('engine/conductor', () => {
       await writeFile(planPath, originalPlan);
       let asBuiltCalls = 0;
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           if (step === 'architecture_review_as_built') {
             asBuiltCalls++;
-            await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
-              'Verdict: BLOCKED',
-              '',
-              '## Blocking Findings',
-              '| Finding | Class | Governing clause | Summary |',
-              '| --- | --- | --- | --- |',
-              '| ARCH-REMEDIABLE | REMEDIABLE | Task 1 | Add the missing guard |',
-              '| ARCH-DESIGN | DESIGN | ADR-auth decision 2 | Choose the incompatible boundary |',
-            ].join('\n'));
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltBlockedFixture([
+              { id: 'ARCH-REMEDIABLE', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Add the missing guard' },
+              { id: 'ARCH-DESIGN', class: 'DESIGN', reference: { kind: 'adr-decision', stem: 'ADR-auth', decision: 2 }, summary: 'Choose the incompatible boundary' },
+            ]));
           }
           return { success: true };
         }),
@@ -7508,7 +7517,7 @@ describe('engine/conductor', () => {
 
       await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
       const firstHalt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
-      expect(firstHalt).toContain('ARCH-REMEDIABLE (REMEDIABLE; Task 1): Add the missing guard');
+      expect(firstHalt).toContain('ARCH-REMEDIABLE (REMEDIABLE; plan task 1): Add the missing guard');
       expect(firstHalt).toContain(
         'ARCH-DESIGN (DESIGN; ADR-auth decision 2): Choose the incompatible boundary',
       );
@@ -7531,12 +7540,12 @@ describe('engine/conductor', () => {
       await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
     });
 
-    it('keeps a malformed serial as-built BLOCKED report needs-human with its parse fault', async () => {
+    it('keeps a malformed serial typed as-built verdict needs-human with its parse fault', async () => {
       await seedShipTail({ architecture_review_as_built: 'pending' });
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
           if (step === 'architecture_review_as_built') {
-            await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), 'Verdict: BLOCKED\n');
+            await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.json'), '{"invalid":true}\n');
           }
           return { success: true };
         }),
@@ -7552,7 +7561,7 @@ describe('engine/conductor', () => {
 
       await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
       await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
-        'As-built BLOCKED report is missing its Blocking Findings table.',
+        '.pipeline/architecture-review-as-built.json has an invalid persisted envelope',
       );
     });
 
@@ -9205,7 +9214,6 @@ describe('engine/conductor', () => {
     const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
     const PRD_AUDIT_PASS =
       '**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | PRD: | Evidence |\n|---|---|---|---|---|\n| S1.1 | PASS | — | FR-1 | evidence.ts:1 |\n';
-    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
 
     beforeEach(async () => {
       await mkdir(join(dir, '.docs/specs'), { recursive: true });
@@ -9222,7 +9230,7 @@ describe('engine/conductor', () => {
 
     function joinRunner(delays: Partial<Record<StepName, number>>): StepRunner {
       return {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           const delay = delays[step];
           if (delay) await new Promise((r) => setTimeout(r, delay));
           await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -9231,10 +9239,7 @@ describe('engine/conductor', () => {
           } else if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_APPROVED,
-            );
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
           return { success: true };
         }),
@@ -9289,10 +9294,7 @@ describe('engine/conductor', () => {
           if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_APPROVED,
-            );
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
           return { success: true };
         }),
@@ -9334,10 +9336,7 @@ describe('engine/conductor', () => {
           } else if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_APPROVED,
-            );
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
           return { success: true };
         }),
@@ -9577,7 +9576,7 @@ describe('engine/conductor', () => {
       // manual_test) has resolved.
       let sawPrematureWrite: unknown = 'not-checked';
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'manual_test') {
             await new Promise((r) => setTimeout(r, 30));
@@ -9587,10 +9586,7 @@ describe('engine/conductor', () => {
             const mid = await readState(statePath);
             sawPrematureWrite = mid.ok ? (mid.value as Record<string, unknown>)['validation__prd_audit'] : 'unreadable';
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_APPROVED,
-            );
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
           return { success: true };
         }),
@@ -9667,7 +9663,7 @@ describe('engine/conductor', () => {
       let prdAuditDone = false;
       const neverResolve = new Promise<void>(() => {});
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
@@ -9726,7 +9722,7 @@ describe('engine/conductor', () => {
       // manual_test and architecture_review_as_built (still unfinished) must be.
       const dispatched: StepName[] = [];
       const resumedRunner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           dispatched.push(step);
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'manual_test') {
@@ -9735,10 +9731,7 @@ describe('engine/conductor', () => {
               '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
             );
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
-            );
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
           return { success: true };
         }),
@@ -9783,13 +9776,95 @@ describe('engine/conductor', () => {
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
     const PRD_AUDIT_PASS =
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
-    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    it('halts serial and validation-group as-built precondition faults mechanically without retries', async () => {
+      const fakeProvider: LLMProvider = {
+        lifecycleCapability: { synchronousSpawnPermit: true },
+        nativeSchemaCapability: { nativeOutputSchema: true },
+        invoke: vi.fn(),
+      };
+      const runtimes = new ProviderRuntimeSet([{
+        key: 'claude', provider: fakeProvider, lifecycleCapability: { synchronousSpawnPermit: true },
+        nativeSchemaCapability: { nativeOutputSchema: true }, policy: CLAUDE_MODEL_POLICY, builtIn: true,
+        availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]);
+      const asBuiltRunner = new DefaultStepRunner({ invoke: vi.fn() }, 'as-built-fault-test', dir, {
+        mode: 'auto',
+        config: { llm_provider: 'claude', steps: { architecture_review_as_built: { llm_provider: 'claude' } } },
+        configuredProviders: ['claude'],
+        providerRuntimes: runtimes,
+        sessionStore: new ProviderSessionStore(),
+      });
+      const faultReason = 'as-built input projection fault: plan: expected one plan artifact; found 0';
+      const run = vi.fn(async (step: StepName, state: ConductState, options?: StepRunOptions): Promise<StepRunResult> =>
+        step === 'architecture_review_as_built'
+          ? asBuiltRunner.run(step, state, options)
+          : { success: true },
+      );
+      const serialHalts: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') serialHalts.push(event.reason);
+      });
+      const serialState = Object.fromEntries(
+        ALL_STEPS.slice(0, ALL_STEPS.findIndex((step) => step.name === 'finish')).map((step) => [step.name, 'done']),
+      ) as ConductState;
+      await writeState(statePath, {
+        ...serialState,
+        complexity_tier: 'L',
+        build_review: 'skipped',
+        manual_test: 'skipped',
+        prd_audit: 'skipped',
+        architecture_review_as_built: 'pending',
+        rebase: 'skipped',
+      });
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: { run }, events,
+        fromStep: 'architecture_review_as_built', mode: 'interactive', maxRetries: 3,
+        onCheckpoint: async () => 'continue',
+      }).run();
+      expect(run.mock.calls.map(([step]) => step)).toContain('architecture_review_as_built');
+      expect({
+        calls: run.mock.calls.filter(([step]) => step === 'architecture_review_as_built').length,
+        providerCalls: vi.mocked(fakeProvider.invoke).mock.calls.length,
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf8'),
+        halts: serialHalts,
+      }).toEqual({
+        calls: 1, providerCalls: 0, haltClass: 'mechanical', halts: [faultReason],
+      });
+
+      await rm(join(dir, '.pipeline'), { recursive: true, force: true });
+      events = new ConductorEventEmitter();
+      const groupHalts: string[] = [];
+      const retries: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') groupHalts.push(event.reason);
+      });
+      events.on('step_retry', (event) => {
+        if (event.type === 'step_retry') retries.push(event.step);
+      });
+      run.mockClear();
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: { run }, events,
+        fromStep: 'manual_test', mode: 'auto', maxRetries: 3,
+        providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['claude'] },
+      }).run();
+      expect({
+        calls: run.mock.calls.filter(([step]) => step === 'architecture_review_as_built').length,
+        providerCalls: vi.mocked(fakeProvider.invoke).mock.calls.length,
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf8'),
+        retries,
+        halts: groupHalts,
+      }).toEqual({
+        calls: 1, providerCalls: 0, haltClass: 'mechanical', retries: [], halts: [faultReason],
+      });
+    });
 
     it('a branch that never produces a completion marker halts the group without kickback while retaining satisfied siblings', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'manual_test') {
             // Crashes: never produces a completion marker, never succeeds.
@@ -9798,10 +9873,7 @@ describe('engine/conductor', () => {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
             return { success: true };
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_APPROVED,
-            );
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
             return { success: true };
           }
           return { success: true };
@@ -9852,7 +9924,7 @@ describe('engine/conductor', () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'manual_test') {
             // Dispatch itself "succeeds" but the content is a FAIL row.
@@ -9862,10 +9934,7 @@ describe('engine/conductor', () => {
             // Crashes: never produces a completion marker.
             return { success: false, output: 'agent process crashed' };
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_APPROVED,
-            );
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
             return { success: true };
           }
           return { success: true };
@@ -9932,14 +10001,13 @@ describe('engine/conductor', () => {
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
     const PRD_AUDIT_PASS =
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
-    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
 
     // manual_test always FAILs (perpetual bug); build re-satisfies its own
     // gate but never actually fixes anything — every sibling PASSes cleanly.
     function mtOnlyFailingRunner(): { runner: StepRunner; calls: StepName[] } {
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           calls.push(step);
           // Small margin against the freshness check (artifact mtime must
           // postdate session_started_at) — matches the defensive delay
@@ -9956,10 +10024,7 @@ describe('engine/conductor', () => {
           } else if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_APPROVED,
-            );
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
           return { success: true };
         }),
@@ -10090,15 +10155,13 @@ describe('engine/conductor', () => {
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
       '| FR-1 | GAP | missing | evidence.ts:1 | no |\n' +
       '| FR-2 | GAP | missing | evidence.ts:2 | no |\n';
-    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
-
     function mixedFailingRunner(): {
       runner: StepRunner;
       remediateCalls: Array<{ retryReason?: string }>;
     } {
       const remediateCalls: Array<{ retryReason?: string }> = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
           await new Promise((r) => setTimeout(r, 5));
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'build') {
@@ -10111,10 +10174,7 @@ describe('engine/conductor', () => {
           } else if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_BLOCKED,
-            );
+            await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
             await writeFile(
@@ -10204,19 +10264,10 @@ describe('engine/conductor', () => {
         JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
       );
 
-      const mixedReport = [
-        'Verdict: BLOCKED',
-        '',
-        '## Blocking Findings',
-        '| Finding | Class | Governing clause | Summary |',
-        '| --- | --- | --- | --- |',
-        '| ARCH-REMEDIABLE | REMEDIABLE | Task 1 | Add the missing guard |',
-        '| ARCH-DESIGN | DESIGN | ADR-auth decision 2 | Choose the incompatible boundary |',
-      ].join('\n');
       let asBuiltCalls = 0;
       let remediateCalls = 0;
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
@@ -10230,7 +10281,17 @@ describe('engine/conductor', () => {
             ].join('\n'));
           } else if (step === 'architecture_review_as_built') {
             asBuiltCalls++;
-            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), mixedReport);
+            await writeAsBuiltFixture(dir, opts?.runId, {
+              version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+              findings: [
+                {
+                  id: 'ARCH-REMEDIABLE', class: 'REMEDIABLE',
+                  reference: { kind: 'plan-task', taskId: '1' }, summary: 'Add the missing guard',
+                },
+                { id: 'ARCH-DESIGN', class: 'DESIGN', summary: 'Choose the incompatible boundary' },
+              ],
+              violations: 'The boundary is incompatible.', resolution: 'Choose the boundary.',
+            });
           } else if (step === 'remediate') {
             remediateCalls++;
           }
@@ -10253,9 +10314,9 @@ describe('engine/conductor', () => {
 
       await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
       const firstHalt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
-      expect(firstHalt).toContain('ARCH-REMEDIABLE (REMEDIABLE; Task 1): Add the missing guard');
+      expect(firstHalt).toContain('ARCH-REMEDIABLE (REMEDIABLE; plan task 1): Add the missing guard');
       expect(firstHalt).toContain(
-        'ARCH-DESIGN (DESIGN; ADR-auth decision 2): Choose the incompatible boundary',
+        'ARCH-DESIGN (DESIGN; none): Choose the incompatible boundary',
       );
       expect(remediateCalls).toBe(0);
       await expect(readFile(planPath, 'utf8')).resolves.toBe(originalPlan);
@@ -10295,17 +10356,6 @@ describe('engine/conductor', () => {
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
     const PRD_AUDIT_PASS =
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
-    const AS_BUILT_BLOCKED = [
-      '# As-Built Architecture Review',
-      '',
-      'Verdict: BLOCKED',
-      '',
-      '## Blocking Findings',
-      '| Finding | Class | Governing clause | Summary |',
-      '| --- | --- | --- | --- |',
-      '| ADR-1 | DESIGN | ADR-auth decision 1 | ADR-1 violated. |',
-    ].join('\n');
-
     // manual_test FAILs deterministically AND architecture_review_as_built
     // is BLOCKED (its own gate unsatisfied) in the SAME join round — the
     // merged-work-order shape this task covers. The remediate plan routes
@@ -10319,7 +10369,7 @@ describe('engine/conductor', () => {
     } {
       const remediateCalls: Array<{ retryReason?: string }> = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
           await new Promise((r) => setTimeout(r, 5));
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'build' || step === 'acceptance_specs') {
@@ -10332,10 +10382,7 @@ describe('engine/conductor', () => {
           } else if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_BLOCKED,
-            );
+            await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
             await writeFile(
@@ -10443,17 +10490,6 @@ describe('engine/conductor', () => {
     const PRD_AUDIT_GAPS =
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
       '| FR-1 | GAP | missing | evidence.ts:1 | no |\n';
-    const AS_BUILT_BLOCKED = [
-      '# As-Built Architecture Review',
-      '',
-      'Verdict: BLOCKED',
-      '',
-      '## Blocking Findings',
-      '| Finding | Class | Governing clause | Summary |',
-      '| --- | --- | --- | --- |',
-      '| ADR-1 | DESIGN | ADR-auth decision 1 | ADR-1 violated. |',
-    ].join('\n');
-
     it('a halt disposition halts the group even when other gaps in the SAME plan are routable fixes', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -10464,7 +10500,7 @@ describe('engine/conductor', () => {
 
       const remediateCalls: Array<{ retryReason?: string }> = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
           await new Promise((r) => setTimeout(r, 5));
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'build') {
@@ -10477,10 +10513,7 @@ describe('engine/conductor', () => {
           } else if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_BLOCKED,
-            );
+            await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
             await writeFile(
@@ -10549,7 +10582,7 @@ describe('engine/conductor', () => {
       const remediateCalls: Array<{ retryReason?: string }> = [];
       const doneEvents: Array<{ step: string }> = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
           await new Promise((r) => setTimeout(r, 5));
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'build') {
@@ -10566,10 +10599,7 @@ describe('engine/conductor', () => {
             // standing between this test and a false "gate satisfied".
             await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_BLOCKED,
-            );
+            await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
             // Subset plan: only ever addresses prd_audit's FR-1 — the
@@ -10658,18 +10688,6 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
-    const AS_BUILT_BLOCKED = [
-      '# As-Built Architecture Review',
-      '',
-      'Verdict: BLOCKED',
-      '',
-      '## Blocking Findings',
-      '| Finding | Class | Governing clause | Summary |',
-      '| --- | --- | --- | --- |',
-      '| ADR-1 | DESIGN | ADR-auth decision 1 | ADR-1 violated. |',
-    ].join('\n');
-    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
-
     it('readRemediationPlanResult → null plan (unreadable /remediate plan) still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -10680,7 +10698,7 @@ describe('engine/conductor', () => {
 
       const remediateCalls: Array<{ retryReason?: string }> = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
           await new Promise((r) => setTimeout(r, 5));
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'build') {
@@ -10694,10 +10712,7 @@ describe('engine/conductor', () => {
             // APPROVED: a BLOCKED as-built verdict is terminal for the run and
             // would mask the property. The non-MT gap that dispatches
             // /remediate is prd_audit, whose mock writes no report.
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_APPROVED,
-            );
+            await writeAsBuiltFixture(dir, opts?.runId, asBuiltApprovedFixture());
           } else if (step === 'remediate') {
             remediateCalls.push({ retryReason: opts?.retryReason });
             // Deliberately write no (or unreadable) remediation.json — the
@@ -10751,7 +10766,7 @@ describe('engine/conductor', () => {
       let remediateRound = 0;
       const remediateCalls: Array<{ retryReason?: string }> = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
           await new Promise((r) => setTimeout(r, 5));
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'build') {
@@ -10763,10 +10778,7 @@ describe('engine/conductor', () => {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
           } else if (step === 'architecture_review_as_built') {
             // Perpetually BLOCKED — build's mock never actually fixes it.
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_BLOCKED,
-            );
+            await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
             remediateRound++;
             remediateCalls.push({ retryReason: opts?.retryReason });
@@ -10844,13 +10856,11 @@ describe('engine/conductor', () => {
 
     const PRD_AUDIT_PASS =
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
-    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
-
     it('manual_test crashes fast while prd_audit and architecture_review_as_built are still in flight — both siblings run to completion (their markers land on disk) before the group halts, not cancelled mid-flight', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'manual_test') {
             // Fails fast: no delay, never produces a completion marker.
@@ -10863,10 +10873,7 @@ describe('engine/conductor', () => {
           } else if (step === 'architecture_review_as_built') {
             // Slower sibling — must also be allowed to run to completion.
             await new Promise((r) => setTimeout(r, 80));
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              AS_BUILT_APPROVED,
-            );
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
             return { success: true };
           }
           return { success: true };
@@ -10904,7 +10911,7 @@ describe('engine/conductor', () => {
         join(dir, '.pipeline/architecture-review-as-built.md'),
         'utf-8',
       );
-      expect(asBuiltMarker).toBe(AS_BUILT_APPROVED);
+      expect(asBuiltMarker).toContain('Verdict: APPROVED');
 
       // All three members were in fact dispatched — none were skipped or
       // starved by the fast failure.
@@ -15230,7 +15237,7 @@ describe('engine/conductor', () => {
       await writeState(statePath, seed);
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           // Simulate SHIP-phase skills writing their proof artifact during
           // the step. This makes the mtime fresh relative to the conductor's
           // session_started_at (set on Conductor.run() entry).
@@ -15259,10 +15266,7 @@ describe('engine/conductor', () => {
             );
           } else if (step === 'architecture_review_as_built') {
             await _mkdir(join(dir, '.docs/decisions'), { recursive: true });
-            await _wf(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Review\n\nVerdict: APPROVED\n',
-            );
+            await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           } else if (step === 'finish') {
             await _mkdir(join(dir, '.pipeline'), { recursive: true });
             await _wf(join(dir, '.pipeline/finish-choice'), 'keep');

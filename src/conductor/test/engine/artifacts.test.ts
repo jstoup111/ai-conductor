@@ -109,6 +109,26 @@ import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { verdictProducedByRun } from '../../src/engine/gate-code-validity.js';
 import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
 import { HALT_MARKER_RELATIVE } from '../../src/engine/task-progress.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test' },
+  planGap: { enabled: true, reason: 'test' },
+  adrCompliance: { enabled: false, reason: 'test' },
+  diagramDrift: { enabled: false, reason: 'test' },
+};
+
+async function writeApprovedAsBuiltVerdict(
+  directory: string,
+  { attemptId = 'current-run', codeStamp = null }: { attemptId?: string; codeStamp?: string | null } = {},
+): Promise<void> {
+  await persistAsBuiltVerdict(
+    directory,
+    { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] },
+    { attemptId, codeStamp, policy: AS_BUILT_TEST_POLICY },
+  );
+}
 
 describe('engine/artifacts', () => {
   let dir: string;
@@ -697,7 +717,9 @@ describe('engine/artifacts', () => {
          test_suite: ['.pipeline/test-suite-evidence.json'],
         manual_test: ['.pipeline/manual-test-results.md'],
         prd_audit: ['.pipeline/prd-audit.md'],
-        architecture_review_as_built: ['.pipeline/architecture-review-as-built.md'],
+        architecture_review_as_built: [
+          '.pipeline/architecture-review-as-built.json',
+        ],
         rebase: [],
         finish: [],
         remediate: [],
@@ -4325,18 +4347,15 @@ describe('engine/artifacts', () => {
     });
   });
 
-  describe('checkStepCompletion: architecture_review_as_built codeStamp sidecar (gate-code-validity, #817)', () => {
-    const SIDECAR = '.pipeline/architecture-review-as-built-code-stamp.json';
+  describe('checkStepCompletion: architecture_review_as_built typed verdict authority', () => {
+    it('uses the persisted typed verdict, not the rendered report, for completion', async () => {
+      await writeApprovedAsBuiltVerdict(dir);
+      await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), 'Verdict: BLOCKED\n');
 
-    it('on true completion, writes a sidecar carrying codeStamp equal to the current head sha', async () => {
-      await createFile('.pipeline/architecture-review-as-built.md', '# As-Built\n\nVerdict: APPROVED\n');
-      const result = await checkStepCompletion(dir, 'architecture_review_as_built', {
+      await expect(checkStepCompletion(dir, 'architecture_review_as_built', {
         sessionStartedAt: 0,
-        getHeadSha: async () => 'eee555',
-      });
-      expect(result.done).toBe(true);
-      const marker = JSON.parse(await readFile(join(dir, SIDECAR), 'utf-8'));
-      expect(marker.codeStamp).toBe('eee555');
+        attemptRunId: 'current-run',
+      })).resolves.toMatchObject({ done: true });
     });
   });
 
@@ -5179,8 +5198,8 @@ describe('engine/artifacts', () => {
     const freshTs = new Date(SESSION + 60_000); // mtime after session start
 
     it("deletes a gated step's stale .pipeline artifact so it cannot be reused", async () => {
-      await createFile('.pipeline/architecture-review-as-built.md', 'prior-session verdict');
-      await utimes(join(dir, '.pipeline/architecture-review-as-built.md'), stale, stale);
+      await createFile('.pipeline/architecture-review-as-built.json', 'prior-session verdict');
+      await utimes(join(dir, '.pipeline/architecture-review-as-built.json'), stale, stale);
 
       const removed = await sweepStaleReviewArtifacts(dir, 'architecture_review_as_built', SESSION);
 
@@ -6150,31 +6169,13 @@ Task 1 → Task 2
 
     describe('architecture_review_as_built', () => {
       const PATH = '.pipeline/architecture-review-as-built.md';
-      const SIDECAR = '.pipeline/architecture-review-as-built-code-stamp.json';
       const APPROVED = '# As-Built Review\n\nVerdict: APPROVED\n';
 
-      async function writeReport(d: string): Promise<void> {
-        const p = join(d, PATH);
-        await writeFile(p, APPROVED);
-        await utimes(p, OLD_MTIME, OLD_MTIME);
-      }
-
-      async function writeSidecar(
-        d: string,
-        codeStamp: string | undefined,
-        runId?: string,
-      ): Promise<void> {
-        if (codeStamp === undefined) return;
-        await writeFile(join(d, SIDECAR), JSON.stringify({ codeStamp, runId }, null, 2));
-      }
-
-      // Covers: task:9
-      it('preserves a stale-mtime report with a codeStamp sidecar when the surface since the stamp is unchanged', async () => {
+      it('preserves a code-valid typed approval from a prior run when the surface is unchanged', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await writeReport(gdir);
-        await writeSidecar(gdir, baseline, 'current-run');
+        await writeApprovedAsBuiltVerdict(gdir, { codeStamp: baseline, attemptId: 'prior-run' });
 
         const result = await checkStepCompletion(gdir, 'architecture_review_as_built', {
           ...ctxFor(gdir),
@@ -6183,28 +6184,11 @@ Task 1 → Task 2
         expect(result.done).toBe(true);
       });
 
-      // Covers: task:9 — amended 2026-09-06 (adr-2026-08-25 D5): stamp first.
-      it('preserves a code-valid approval report stamped for a prior run (unchanged surface)', async () => {
+      it('scores a code-invalid typed approval absent', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await writeReport(gdir);
-        await writeSidecar(gdir, baseline, 'prior-run');
-
-        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', {
-          ...ctxFor(gdir),
-          attemptRunId: 'current-run',
-        });
-
-        expect(result).toMatchObject({ done: true });
-      });
-
-      it('scores a prior-run approval report absent when its surface changed since the stamp', async () => {
-        gdir = await makeGitDir();
-        await wireOrigin(gdir);
-        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await writeReport(gdir);
-        await writeSidecar(gdir, baseline, 'prior-run');
+        await writeApprovedAsBuiltVerdict(gdir, { codeStamp: baseline, attemptId: 'prior-run' });
         await commitFile(gdir, 'featureA.ts', 'f2\n', 'feat: change featureA');
 
         const result = await checkStepCompletion(gdir, 'architecture_review_as_built', {
@@ -6213,41 +6197,24 @@ Task 1 → Task 2
         });
 
         expect(result).toMatchObject({ done: false });
-        expect(result.reason).toContain('.pipeline/architecture-review-as-built.md');
-        expect(result.reason).toContain('current-run');
-        expect(result.reason).toContain('prior-run');
+        expect(result.reason).toContain('.pipeline/architecture-review-as-built.json');
+        expect(result.reason).toContain('cannot vouch');
       });
 
-      // Covers: task:13
-      it('keeps unstamped reports on legacy mtime semantics', async () => {
+      it('scores a Markdown-only report absent regardless of its mtime', async () => {
         gdir = await makeGitDir();
         await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
         await writeFile(join(gdir, PATH), APPROVED);
-
         await utimes(join(gdir, PATH), OLD_MTIME, OLD_MTIME);
         await expect(checkStepCompletion(gdir, 'architecture_review_as_built', {
-          ...ctxFor(gdir),
-          attemptRunId: 'current-run',
-        })).resolves.toMatchObject({
-          done: false,
-          reason: expect.stringMatching(/not rewritten by this judging session/),
-        });
-
-        await writeFile(join(gdir, PATH), APPROVED);
-        await expect(checkStepCompletion(gdir, 'architecture_review_as_built', {
-          ...ctxFor(gdir),
-          sessionStartedAt: 0,
-          attemptStartedAt: 0,
-          attemptRunId: 'current-run',
-        })).resolves.toMatchObject({ done: true });
+          ...ctxFor(gdir), attemptRunId: 'current-run',
+        })).resolves.toMatchObject({ done: false, routeClass: 'absent' });
       });
 
-      // Covers: task:13
-      it('ignores a mismatched run stamp when gate-code-validity is disabled', async () => {
+      it('keeps run identity checking when gate-code-validity is disabled', async () => {
         gdir = await makeGitDir();
         await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await writeFile(join(gdir, PATH), APPROVED);
-        await writeFile(join(gdir, SIDECAR), JSON.stringify({ runId: 'prior-run' }));
+        await writeApprovedAsBuiltVerdict(gdir, { attemptId: 'prior-run' });
 
         await expect(checkStepCompletion(gdir, 'architecture_review_as_built', {
           ...ctxFor(gdir),
@@ -6255,43 +6222,21 @@ Task 1 → Task 2
           attemptStartedAt: 0,
           attemptRunId: 'current-run',
           config: { gate_code_validity: { enabled: false } },
-        })).resolves.toMatchObject({ done: true });
+        })).resolves.toMatchObject({ done: false, retrySignal: 'stale-run-identity' });
       });
 
-      it('falls through to mtime rejection when the delta touches the feature\'s own runtime source', async () => {
-        gdir = await makeGitDir();
-        await wireOrigin(gdir);
-        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await writeReport(gdir);
-        await writeSidecar(gdir, baseline);
-        await commitFile(gdir, 'featureA.ts', 'f2\n', 'feat: change featureA');
-
-        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', ctxFor(gdir));
-        expect(result.done).toBe(false);
-        expect(result.reason ?? '').toMatch(/not rewritten by this judging session/);
-      });
-
-      it('falls through to mtime rejection (unchanged legacy behavior) when no sidecar/codeStamp is present', async () => {
+      it('reads a typed BLOCKED verdict even when its report is hand-edited to APPROVED', async () => {
         gdir = await makeGitDir();
         await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await writeReport(gdir);
-
-        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', ctxFor(gdir));
-        expect(result.done).toBe(false);
-        expect(result.reason ?? '').toMatch(/not rewritten by this judging session/);
-      });
-
-      it('a fresh-mtime BLOCKED report still blocks regardless of the sidecar codeStamp', async () => {
-        gdir = await makeGitDir();
-        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await persistAsBuiltVerdict(gdir, {
+          version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+          findings: [{ id: 'ARCH-1', class: 'DESIGN', summary: 'A decision is required.' }],
+          violations: 'architecture gap', resolution: 'make a decision',
+        }, { attemptId: 'current-run', codeStamp: null, policy: AS_BUILT_TEST_POLICY });
         await writeFile(
           join(gdir, PATH),
-          '# As-Built Review\n\nVerdict: BLOCKED\n\n## Blocking Findings\n\n' +
-            '| Finding | Class | Governing clause | Summary |\n' +
-            '|---|---|---|---|\n' +
-            '| ARCH-1 | DESIGN | Task 1 | A decision is required. |\n',
+          '# As-Built Review\n\nVerdict: APPROVED\n',
         );
-        await writeSidecar(gdir, baseline);
 
         const result = await checkStepCompletion(gdir, 'architecture_review_as_built', ctxFor(gdir));
         expect(result.done).toBe(false);
@@ -6712,38 +6657,40 @@ Task 1 → Task 2
 
     describe('architecture_review_as_built', () => {
       const PATH = '.pipeline/architecture-review-as-built.md';
-      const SIDECAR = '.pipeline/architecture-review-as-built-code-stamp.json';
       const APPROVED = '# As-Built Review\n\nVerdict: APPROVED\n';
 
-      async function writeStaleReport(d: string): Promise<void> {
+      async function writeStaleReport(d: string, codeStamp: string): Promise<void> {
+        await writeApprovedAsBuiltVerdict(d, { codeStamp });
         const p = join(d, PATH);
-        await writeFile(p, APPROVED);
         await utimes(p, OLD_MTIME, OLD_MTIME);
       }
 
-      it('spares a stale report whose codeStamp sidecar surface is unchanged', async () => {
+      it('spares a stale typed verdict/report pair whose code-stamp surface is unchanged', async () => {
         gdir = await makeGitDir();
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await writeStaleReport(gdir);
-        await writeFile(join(gdir, SIDECAR), JSON.stringify({ codeStamp: baseline }, null, 2));
+        await writeStaleReport(gdir, baseline);
 
         const removed = await sweepStaleReviewArtifacts(gdir, 'architecture_review_as_built', Date.now());
 
         expect(removed).toEqual([]);
-        await expect(readFile(join(gdir, PATH), 'utf-8')).resolves.toBe(APPROVED);
+        await expect(readFile(join(gdir, PATH), 'utf-8')).resolves.toContain('Verdict: APPROVED');
       });
 
-      it('deletes a stale report whose codeStamp sidecar surface HAS changed', async () => {
+      it('deletes a stale typed verdict/report pair whose code-stamp surface has changed', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await writeStaleReport(gdir);
-        await writeFile(join(gdir, SIDECAR), JSON.stringify({ codeStamp: baseline }, null, 2));
+        await writeStaleReport(gdir, baseline);
         await commitFile(gdir, 'featureA.ts', 'f2\n', 'feat: change featureA');
 
         const removed = await sweepStaleReviewArtifacts(gdir, 'architecture_review_as_built', Date.now());
 
-        expect(removed).toEqual([join(gdir, PATH)]);
+        expect(removed).toEqual([
+          join(gdir, '.pipeline/architecture-review-as-built.json'),
+          join(gdir, PATH),
+        ]);
+        await expect(readFile(join(gdir, PATH), 'utf-8')).rejects.toThrow();
+        await expect(readFile(join(gdir, '.pipeline/architecture-review-as-built.json'), 'utf-8')).rejects.toThrow();
       });
     });
 

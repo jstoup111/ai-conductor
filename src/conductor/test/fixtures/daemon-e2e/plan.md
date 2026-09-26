@@ -6,11 +6,17 @@
 
 Prepare the fixture feature for daemon dispatch.
 
+**Done when:**
+- The fixture feature is ready for daemon dispatch.
+
 ### Task 1 — Touch the declared fixture file
 
 Touch the file declared as task evidence.
 
 This prose token `not-a-path` is not a declared corroboration path.
+
+**Done when:**
+- `test/fixtures/daemon-e2e/touched.txt` is touched by Task 1.
 
 **Files:**
 - `test/fixtures/daemon-e2e/touched.txt`

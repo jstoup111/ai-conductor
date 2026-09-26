@@ -210,6 +210,17 @@ import {
   resolveAsBuiltPolicy,
   type AsBuiltPolicyConfig,
 } from './as-built-policy.js';
+import {
+  AS_BUILT_VERDICT_SCHEMA,
+  renderAsBuiltVerdictShape,
+  resolveAsBuiltReferences,
+  validateAsBuiltVerdict,
+} from './as-built-contract.js';
+import {
+  buildAsBuiltProjection,
+  renderAsBuiltProjection,
+} from './as-built-projection.js';
+import { persistAsBuiltVerdict } from './as-built-verdict-store.js';
 
 /** A closed coverage-binding payload that cannot be treated as a verdict. */
 export class CoverageBindingPayloadError extends Error {
@@ -699,7 +710,7 @@ function establishedBuildReviewTools(provider: 'claude' | 'codex'): readonly str
   return provider === 'claude' || provider === 'codex' ? ['git'] : [];
 }
 
-type ProviderAwareSkillOneShotStep = 'complexity' | 'remediate' | 'rebase';
+type ProviderAwareSkillOneShotStep = 'complexity' | 'remediate' | 'rebase' | 'architecture_review_as_built';
 type ProviderAwareFreeFormOneShotStep =
   | 'worktree'
   | 'build'
@@ -1089,6 +1100,120 @@ export class DefaultStepRunner implements StepRunner {
       opts?.prdWideningReviewContext,
     );
 
+    // As-built architecture review is a provider-native, schema-constrained
+    // judgement. It always takes the fresh one-shot branch: the engine owns
+    // both the bounded input projection and the output contract, while the
+    // provider-aware executor retains candidate routing and scratch lifecycle.
+    if (step === 'architecture_review_as_built' && this.providerRuntimes) {
+      const schemaCandidates = this.configuredProviders.filter(
+        (provider) => this.providerRuntimes!.nativeSchemaCapabilityFor(provider)?.nativeOutputSchema === true,
+      );
+      if (schemaCandidates.length === 0) {
+        return {
+          success: false,
+          asBuiltFault: {
+            kind: 'capability',
+            reason: `architecture_review_as_built cannot enforce its native output schema: candidate set [${this.configuredProviders.join(', ')}] has no provider declaring nativeSchemaCapability.nativeOutputSchema. Recovery action: select or update a candidate that declares nativeSchemaCapability.nativeOutputSchema.`,
+          },
+        };
+      }
+      const projection = await buildAsBuiltProjection(this.projectDir, undefined, {
+        tier: state.complexity_tier,
+        config: this.config as import('./as-built-policy.js').AsBuiltPolicyConfig,
+      });
+      if (!projection.ok) {
+        const { dimension, detail, actual, limit } = projection.fault;
+        const bounds = actual === undefined || limit === undefined
+          ? ''
+          : ` (actual ${actual}, limit ${limit})`;
+        return {
+          success: false,
+          output: `as-built input projection fault: ${dimension}${bounds}${detail ? `: ${detail}` : ''}`,
+          asBuiltFault: {
+            kind: 'input',
+            reason: `as-built input projection fault: ${dimension}${bounds}${detail ? `: ${detail}` : ''}`,
+          },
+        };
+      }
+      try {
+        const result = await this.executeProviderAwareSkillOneShot(
+          step,
+          {
+            prompt: `${renderAsBuiltProjection(projection.projection)}\n${renderAsBuiltVerdictShape(AS_BUILT_VERDICT_SCHEMA)}`,
+            systemPrompt,
+            cwd: this.projectDir,
+            dangerouslySkipPermissions: true,
+            interactive: false,
+            nativeSchema: AS_BUILT_VERDICT_SCHEMA,
+          },
+          state.complexity_tier,
+          opts,
+        );
+        if (result) {
+          this.callCount++;
+          // Provider failures retain their existing auth/rate-limit/unresolved-command
+          // and availability routing. Structured-output diagnostics are considered
+          // only after those adapter classifications have had a chance to win.
+          const providerExhausted = result.providerSetupExhaustion !== undefined || (
+            result.attempts.length > 0 && result.attempts.every((attempt) => attempt.outcome === 'unavailable')
+          );
+          if (!result.success && result.nativeSchemaUnsupported) {
+            const provider = result.actualProvider ?? result.preferredProvider ?? this.configuredProviders[0] ?? 'selected provider';
+            return {
+              ...this.toStepRunResult(step, result),
+              success: false,
+              asBuiltFault: {
+                kind: 'capability',
+                reason: `architecture_review_as_built cannot enforce its native output schema with selected provider [${provider}]: missing nativeSchemaCapability.nativeOutputSchema. Recovery action: select or update ${provider} to declare nativeSchemaCapability.nativeOutputSchema.`,
+              },
+            };
+          }
+          if (!result.success && (
+            result.authFailure || result.rateLimited || result.commandUnresolved ||
+            result.modelUnavailable || providerExhausted
+          )) {
+            return this.toStepRunResult(step, result);
+          }
+          if (result.structuredResultFailure !== undefined || result.finalStructuredResult === undefined) {
+            return {
+              ...this.toStepRunResult(step, result),
+              success: false,
+              output: 'structured-result-missing',
+            };
+          }
+          const validated = validateAsBuiltVerdict(result.finalStructuredResult);
+          if (!validated.ok) {
+            return {
+              ...this.toStepRunResult(step, result),
+              success: false,
+              output: `structured-result-rejected: ${validated.field}: ${validated.requirement}`,
+            };
+          }
+          const references = await resolveAsBuiltReferences(validated.verdict, this.projectDir);
+          if (!references.ok) {
+            return {
+              ...this.toStepRunResult(step, result),
+              success: false,
+              output: `structured-result-rejected: ${references.field}: ${references.requirement}`,
+            };
+          }
+          const head = await this.gitRunner(['rev-parse', 'HEAD']);
+          const codeStamp = head.exitCode === 0 && head.stdout.trim().length > 0 ? head.stdout.trim() : null;
+          await persistAsBuiltVerdict(this.projectDir, references.verdict, {
+            attemptId: opts?.runId ?? this.runId,
+            codeStamp,
+            policy: projection.projection.policy,
+          });
+          return this.toStepRunResult(step, result);
+        }
+      } catch (error) {
+        this.callCount++;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.log(`Session for ${step} exited with error: ${errorMessage}`);
+        return { success: false, output: `Session for ${step} exited with error: ${errorMessage}` };
+      }
+    }
+
     // Every dispatch reaches the provider through invoke(). `interactive`
     // selects the REPL; non-REPL collaborative steps still receive the
     // machine envelope and streaming observations.
@@ -1391,7 +1516,7 @@ export class DefaultStepRunner implements StepRunner {
           configuredProviders: this.configuredProviders,
           preferredProvider: this.config?.steps?.[request.step]?.llm_provider,
           runtimes: this.providerRuntimes!,
-          sessions: this.sessionStore!.beginBranch(request.step),
+          sessions: request.dispatch?.providerSessions ?? this.sessionStore!.beginBranch(request.step),
           config: this.config,
           tier: request.tier,
           attempt: request.dispatch?.attempt ?? 1,

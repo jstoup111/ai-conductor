@@ -12,6 +12,7 @@ import { isBuildReviewCustomInfrastructureFailureReason } from './build-review-a
 import { boundedHeadTailExcerpt } from './build-review-test-quality-preflight.js';
 import { createConductStateLease } from './conduct-state-lease.js';
 import type { ConductStateLeaseFailureKind } from './conduct-state-lease.js';
+import { isAsBuiltGoverningReference, type AsBuiltGoverningReference } from './as-built-contract.js';
 
 /** The latest infrastructure failure charged to a build-review rubric lap. */
 export interface KickbackLastMechanicalFault {
@@ -100,6 +101,7 @@ export interface PendingAsBuiltRemediationFinding {
   finding: string;
   class: 'REMEDIABLE';
   governingClause: string;
+  reference?: AsBuiltGoverningReference;
   summary: string;
   outcome: 'remediated';
 }
@@ -229,6 +231,11 @@ export type ChargeBuildReviewEffectResult =
 export type KickbackLedgerReadResult =
   | { readonly kind: 'absent' }
   | { readonly kind: 'ok'; readonly ledger: KickbackLedger }
+  | { readonly kind: 'unreadable'; readonly reason: string };
+
+/** Typed, fail-closed read for the as-built remediation seam. */
+export type PendingAsBuiltRemediationFindingsReadResult =
+  | { readonly kind: 'ok'; readonly findings: readonly PendingAsBuiltRemediationFinding[] }
   | { readonly kind: 'unreadable'; readonly reason: string };
 
 /** Typed mechanical-fault write for enforcement boundaries that fail closed. */
@@ -408,6 +415,7 @@ function isPendingAsBuiltRemediationFinding(
     typeof finding.finding === 'string' && finding.finding.trim().length > 0 &&
     finding.class === 'REMEDIABLE' &&
     typeof finding.governingClause === 'string' && finding.governingClause.trim().length > 0 &&
+    (finding.reference === undefined || isAsBuiltGoverningReference(finding.reference)) &&
     typeof finding.summary === 'string' && finding.summary.trim().length > 0 &&
     finding.outcome === 'remediated'
   );
@@ -609,6 +617,28 @@ export async function readKickbackLedgerResult(projectRoot: string): Promise<Kic
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
     return { kind: 'unreadable', reason: `kickback ledger is unreadable: ${error instanceof Error ? error.message : String(error)}` };
   }
+}
+
+/**
+ * Read pending as-built remediation findings without mutating the ledger.
+ * Damaged durable state remains unavailable so callers cannot mistake it for
+ * an empty prior-findings set.
+ */
+export async function readPendingAsBuiltRemediationFindings(
+  projectRoot: string,
+): Promise<PendingAsBuiltRemediationFindingsReadResult> {
+  const result = await readKickbackLedgerResult(projectRoot);
+  if (result.kind === 'absent') return { kind: 'ok', findings: [] };
+  if (result.kind === 'unreadable') {
+    return {
+      kind: 'unreadable',
+      reason: `${result.reason} at ${join(projectRoot, KICKBACK_LEDGER_PATH)}`,
+    };
+  }
+  return {
+    kind: 'ok',
+    findings: result.ledger.pendingAsBuiltRemediationFindings ?? [],
+  };
 }
 
 /** Read durable state while retaining valid sibling gates for diagnostics. */

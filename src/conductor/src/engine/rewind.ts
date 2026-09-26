@@ -9,6 +9,7 @@ import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { HALT_CLASS_MARKER, HALT_MARKER, writeHaltMarker } from './halt-marker.js';
 import { GATES_DIR } from './gate-verdicts.js';
+import { AS_BUILT_REPORT_PATH, AS_BUILT_VERDICT_PATH } from './as-built-verdict-store.js';
 import { join } from 'node:path';
 import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
 
@@ -151,14 +152,23 @@ async function clearDerivedRecords(
   let haltCleared = false;
   try {
     for (const step of demoted) {
-      const original = join(root, GATES_DIR, `${step}.json`);
-      const stagedPath = join(root, GATES_DIR, `${step}.rewind-clearing`);
-      try {
-        const contents = await readFile(original, 'utf-8');
-        await filesystem.rename(original, stagedPath);
-        staged.push({ original, staged: stagedPath, contents });
-      } catch (error) {
-        if ((error as { code?: unknown }).code !== 'ENOENT') throw error;
+      const records = [
+        { original: join(root, GATES_DIR, `${step}.json`), staged: join(root, GATES_DIR, `${step}.rewind-clearing`) },
+        ...(step === 'architecture_review_as_built'
+          ? [
+              { original: join(root, AS_BUILT_VERDICT_PATH), staged: join(root, `${AS_BUILT_VERDICT_PATH}.rewind-clearing`) },
+              { original: join(root, AS_BUILT_REPORT_PATH), staged: join(root, `${AS_BUILT_REPORT_PATH}.rewind-clearing`) },
+            ]
+          : []),
+      ];
+      for (const record of records) {
+        try {
+          const contents = await readFile(record.original, 'utf-8');
+          await filesystem.rename(record.original, record.staged);
+          staged.push({ ...record, contents });
+        } catch (error) {
+          if ((error as { code?: unknown }).code !== 'ENOENT') throw error;
+        }
       }
     }
     await clearHaltAtomically(root, filesystem);
