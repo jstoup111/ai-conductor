@@ -1,8 +1,24 @@
-import { describe, expect, it, vi } from 'vitest';
+import { execFile } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { probeReadOnlyReviewCapability } from '../../src/engine/build-review-read-only-capability.js';
 
-const scratchDir = '/worktree/.pipeline/read-only-capability';
+const tempRoot = mkdtempSync(join(tmpdir(), 'read-only-capability-'));
+const scratchDir = join(tempRoot, '.pipeline', 'read-only-capability');
+afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
+const execFileAsync = promisify(execFile);
+
+/** Runs only the probe's inner /bin/sh command, standing in for the Codex sandbox boundary. */
+async function runInnerProbeScript(_executable: string, args: readonly string[]) {
+  const inner = args.slice(args.indexOf('--') + 1);
+  const { stdout, stderr } = await execFileAsync(inner[0]!, inner.slice(1));
+  return { exitCode: 0, stdout, stderr };
+}
 
 describe('probeReadOnlyReviewCapability', () => {
   it('proves Codex is available only when its read-only sandbox starts and refuses the probe write', async () => {
@@ -17,7 +33,7 @@ describe('probeReadOnlyReviewCapability', () => {
     })).resolves.toEqual({ provider: 'codex', platform: 'linux', status: 'available' });
     expect(runProcess).toHaveBeenCalledWith('codex', [
       'sandbox', '-P', ':read-only', '--', '/bin/sh', '-c', expect.any(String), 'read-only-review-probe',
-      `${scratchDir}/write-probe`,
+      `${scratchDir}/write-probe`, scratchDir,
     ]);
   });
 
@@ -41,6 +57,36 @@ describe('probeReadOnlyReviewCapability', () => {
     await expect(probeReadOnlyReviewCapability({
       provider: 'codex', platform: 'linux', runProcess, scratchDir,
     })).resolves.toEqual({ provider: 'codex', platform: 'linux', status: 'unavailable', reason });
+  });
+
+  it('creates the probe parent directory before the sandbox runs', async () => {
+    rmSync(scratchDir, { recursive: true, force: true });
+    let parentExisted = false;
+    const runProcess = vi.fn(async () => {
+      parentExisted = existsSync(scratchDir);
+      return { exitCode: 0, stdout: 'sandbox-started\nprobe-write-refused\n', stderr: '' };
+    });
+
+    await expect(probeReadOnlyReviewCapability({
+      provider: 'codex', platform: 'linux', runProcess, scratchDir,
+    })).resolves.toEqual({ provider: 'codex', platform: 'linux', status: 'available' });
+    expect(runProcess).toHaveBeenCalledOnce();
+    expect(parentExisted).toBe(true);
+  });
+
+  it('does not treat a write that failed only for a missing parent as a sandbox refusal', async () => {
+    const missingParent = join(tempRoot, 'removed-before-write');
+    const runProcess = vi.fn(async (executable: string, args: readonly string[]) => {
+      rmSync(missingParent, { recursive: true, force: true });
+      return runInnerProbeScript(executable, args);
+    });
+
+    await expect(probeReadOnlyReviewCapability({
+      provider: 'codex', platform: 'linux', runProcess, scratchDir: missingParent,
+    })).resolves.toEqual({
+      provider: 'codex', platform: 'linux', status: 'unavailable', reason: 'probe directory does not exist',
+    });
+    expect(runProcess).toHaveBeenCalledOnce();
   });
 
   it('proves Claude is available from help listing every read-only review flag without a model call', async () => {

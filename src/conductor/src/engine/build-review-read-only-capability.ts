@@ -1,3 +1,5 @@
+import { mkdir } from 'node:fs/promises';
+
 /** Process boundary for the provider-owned read-only review capability probe. */
 export type ReadOnlyReviewCapabilityProcess = (
   executable: string,
@@ -24,11 +26,12 @@ const CODEX_PROBE_OBSERVATIONS = new Set([
   'sandbox-started',
   'probe-write-refused',
   'probe-write-succeeded',
+  'probe-parent-missing',
 ]);
 
 const CODEX_READ_ONLY_PROBE = [
   'printf "sandbox-started\\n"',
-  'if printf x > "$1" 2>/dev/null; then printf "probe-write-succeeded\\n"; else printf "probe-write-refused\\n"; fi',
+  'if [ ! -d "$2" ]; then printf "probe-parent-missing\\n"; elif printf x > "$1" 2>/dev/null; then printf "probe-write-succeeded\\n"; else printf "probe-write-refused\\n"; fi',
 ].join('; ');
 
 const CLAUDE_READ_ONLY_FLAGS = [
@@ -58,11 +61,18 @@ function exitedReason(provider: string, exitCode: number, stderr: string): strin
 }
 
 async function probeCodex(options: ProbeReadOnlyReviewCapabilityOptions): Promise<ReadOnlyReviewCapability> {
+  // A refused write only proves the sandbox when the probe's parent exists;
+  // otherwise an ordinary missing-path failure would read as a denial (D5.5).
+  try {
+    await mkdir(options.scratchDir, { recursive: true });
+  } catch (error) {
+    return unavailable(options, `probe directory could not be created: ${error instanceof Error ? error.message : String(error)}`);
+  }
   let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
   try {
     result = await options.runProcess('codex', [
       'sandbox', '-P', ':read-only', '--', '/bin/sh', '-c', CODEX_READ_ONLY_PROBE,
-      'read-only-review-probe', `${options.scratchDir}/write-probe`,
+      'read-only-review-probe', `${options.scratchDir}/write-probe`, options.scratchDir,
     ]);
   } catch (error) {
     return unavailable(options, processFailureReason(error, 'codex'));
@@ -79,6 +89,7 @@ async function probeCodex(options: ProbeReadOnlyReviewCapabilityOptions): Promis
   }
   const observed = new Set(observations);
   if (!observed.has('sandbox-started')) return unavailable(options, 'probe did not prove the sandbox started');
+  if (observed.has('probe-parent-missing')) return unavailable(options, 'probe directory does not exist');
   if (observed.has('probe-write-succeeded')) return unavailable(options, 'probe write was not refused');
   if (!observed.has('probe-write-refused')) return unavailable(options, 'probe produced unrecognized output');
   return { provider: options.provider, platform: options.platform, status: 'available' };
