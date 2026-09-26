@@ -1,5 +1,6 @@
 // Covers: task:4
 // Covers: task:5
+import { toCodexStrictSchema } from '../../src/execution/codex-strict-schema.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -297,7 +298,7 @@ describe('CodexProvider', () => {
       });
 
       expect(schemaPath).toBe(join(home, 'output-schema.json'));
-      expect(JSON.parse(schemaContents!)).toEqual(nativeSchema);
+      expect(JSON.parse(schemaContents!)).toEqual(toCodexStrictSchema(nativeSchema));
       expect(result).toMatchObject({
         success: true,
         output: '{"relationship":"same-case"}',
@@ -342,7 +343,7 @@ describe('CodexProvider', () => {
       });
 
       expect(schemaPath).toBe(join(worktree, '.daemon', 'scratch', 'security-schema-run', '1-codex', 'output-schema.json'));
-      expect(JSON.parse(schemaContents!)).toEqual(nativeSchema);
+      expect(JSON.parse(schemaContents!)).toEqual(toCodexStrictSchema(nativeSchema));
       expect(result).toMatchObject({ success: true, output: '{"findings":[]}', finalStructuredResult: { findings: [] } });
       await expect(access(join(worktree, '.daemon', 'scratch', 'security-schema-run', '1-codex'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
@@ -456,7 +457,7 @@ describe('CodexProvider', () => {
 
       expect(result).toMatchObject({ success: false, output: expect.stringContaining(expectedOutput) });
       expect(schemaPath).toBe(join(home, 'output-schema.json'));
-      expect(JSON.parse(await readFile(schemaPath!, 'utf8'))).toEqual(nativeSchema);
+      expect(JSON.parse(await readFile(schemaPath!, 'utf8'))).toEqual(toCodexStrictSchema(nativeSchema));
       await teardown();
       await expect(readFile(schemaPath!, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
@@ -536,12 +537,48 @@ describe('CodexProvider', () => {
       });
 
       expect(schemaPath).toBe(join(home, 'output-schema.json'));
-      expect(JSON.parse(await readFile(schemaPath!, 'utf8'))).toEqual(nativeSchema);
+      expect(JSON.parse(await readFile(schemaPath!, 'utf8'))).toEqual(toCodexStrictSchema(nativeSchema));
     } finally {
       await Promise.all([
         rm(worktree, { recursive: true, force: true }),
         rm(reviewCheckout, { recursive: true, force: true }),
       ]);
+    }
+  });
+
+  it('sends Codex a strict-mode schema and returns the result in the engine schema shape', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'codex-native-schema-strict-worktree-'));
+    const home = join(worktree, '.daemon', 'scratch', 'review-run', '1-codex');
+    const nativeSchema = {
+      type: 'object', additionalProperties: false, required: ['summary'],
+      properties: { summary: { type: 'string' }, confidence: { type: 'integer' } },
+    };
+    let schemaPath: string | undefined;
+    await mkdir(home, { recursive: true });
+    mockExeca.mockImplementation(async (_file, args) => {
+      const index = args.indexOf('--output-schema');
+      schemaPath = index === -1 ? undefined : args[index + 1];
+      return { stdout: jsonlMessage(JSON.stringify({ summary: 'ok', confidence: null })), stderr: '', exitCode: 0 } as any;
+    });
+
+    try {
+      const result = await provider.invoke({
+        ...baseOptions,
+        interactive: false,
+        cwd: worktree,
+        nativeSchema,
+        nativeSchemaScratchHome: home,
+        nativeSchemaScratchRoot: worktree,
+      });
+
+      expect(JSON.parse(await readFile(schemaPath!, 'utf8'))).toEqual({
+        ...nativeSchema,
+        required: ['summary', 'confidence'],
+        properties: { summary: { type: 'string' }, confidence: { anyOf: [{ type: 'integer' }, { type: 'null' }] } },
+      });
+      expect(result.finalStructuredResult).toEqual({ summary: 'ok' });
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
     }
   });
 
