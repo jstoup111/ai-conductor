@@ -656,10 +656,30 @@ export function createProductionFinishPublicationCoordinator(
             },
           },
           shippedRecord: {
-            observeShippedRecord: async () =>
-              state.feature_desc && await exists(join(deps.projectRoot, '.docs/shipped', `${state.feature_desc}.md`))
-                ? 'present'
-                : 'missing',
+            observeShippedRecord: async () => {
+              if (!state.feature_desc) return 'missing';
+              const planPaths = (await readdir(join(deps.projectRoot, '.docs', 'plans')).catch((error: NodeJS.ErrnoException) => {
+                if (error.code === 'ENOENT') return [];
+                throw error;
+              }))
+                .filter((name) => name.endsWith('.md'))
+                .map((name) => join('.docs', 'plans', name));
+              const resolution = resolveShipmentIdentity(state.feature_desc, planPaths);
+              if (resolution.kind === 'ambiguous') return 'malformed';
+              const recordPath = resolution.kind === 'resolved'
+                ? resolution.identity.recordPath
+                : join('.docs', 'shipped', `${state.feature_desc}.md`);
+              const canonicalSlug = resolution.kind === 'resolved'
+                ? resolution.identity.slug
+                : state.feature_desc;
+              const absoluteRecordPath = join(deps.projectRoot, recordPath);
+              if (!await exists(absoluteRecordPath)) return 'missing';
+              const record = await readFile(absoluteRecordPath, 'utf8').catch(() => undefined);
+              if (record === undefined) return 'unavailable';
+              const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(record);
+              const slug = frontmatter && /^slug:\s*(.*?)\s*$/m.exec(frontmatter[1]);
+              return slug?.[1].trim() === canonicalSlug ? 'present' : 'malformed';
+            },
           },
           releaseReadiness: {
             observeReleaseReadiness: async () => {

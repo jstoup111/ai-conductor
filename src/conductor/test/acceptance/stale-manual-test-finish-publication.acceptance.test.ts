@@ -103,7 +103,7 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
     await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
     await writeFile(
       join(root, '.docs', 'shipped', 'stale-manual-test-discovered-at-finish-is-unroutab.md'),
-      'shipped\n',
+      '---\nslug: stale-manual-test-discovered-at-finish-is-unroutab\n---\n',
     );
 
     // The second observed shape arrives at FINISH with a clean PASS already
@@ -141,7 +141,10 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
       ).stdout.trim();
       await commit(
         root,
-        { '.docs/shipped/stale-manual-test-discovered-at-finish-is-unroutab.md': 'shipped\nmaintained\n' },
+        {
+          '.docs/shipped/stale-manual-test-discovered-at-finish-is-unroutab.md':
+            '---\nslug: stale-manual-test-discovered-at-finish-is-unroutab\n---\nmaintained\n',
+        },
         'docs: maintain shipped record',
       );
       const postDocumentationHead = (

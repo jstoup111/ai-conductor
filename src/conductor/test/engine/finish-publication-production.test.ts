@@ -133,6 +133,377 @@ function guardedOperations(
 describe('production FINISH publication composition', () => {
   it.each([
     {
+      label: 'a dated canonical record for an unprefixed feature description',
+      featureDesc: 'foo',
+      planName: '2026-09-24-foo.md',
+      recordName: '2026-09-24-foo.md',
+      record: '---\nslug: 2026-09-24-foo\n---\n',
+      shippedRecord: 'valid',
+      transition: 'record_outcome',
+    },
+    {
+      label: 'an exact canonical record',
+      featureDesc: 'foo',
+      planName: 'foo.md',
+      recordName: 'foo.md',
+      record: '---\nslug: foo\n---\n',
+      shippedRecord: 'valid',
+      transition: 'record_outcome',
+    },
+    {
+      label: 'an absent dated canonical record',
+      featureDesc: 'foo',
+      planName: '2026-09-24-foo.md',
+      shippedRecord: 'missing',
+      transition: 'write_shipped_record',
+    },
+  ] as const)('observes $label through the canonical shipment identity', async (fixture) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-shipped-record-'));
+    let observed: { shippedRecord: string } | undefined;
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/engine/finish-publication.js')>(
+        '../../src/engine/finish-publication.js',
+      );
+      return {
+        ...actual,
+        advanceFinishPublication: vi.fn(async (input: { observe: () => Promise<Parameters<typeof actual.nextFinishPublicationTransition>[0]> }) => {
+          const snapshot = await input.observe();
+          observed = snapshot;
+          return { kind: 'advanced' as const, transition: actual.nextFinishPublicationTransition(snapshot) };
+        }),
+      };
+    });
+
+    try {
+      const pipeline = join(root, '.pipeline');
+      const plans = join(root, '.docs', 'plans');
+      await Promise.all([
+        mkdir(pipeline, { recursive: true }),
+        mkdir(plans, { recursive: true }),
+      ]);
+      await writeFile(join(plans, fixture.planName), 'plan\n');
+      if (fixture.recordName && fixture.record) {
+        const shipped = join(root, '.docs', 'shipped');
+        await mkdir(shipped, { recursive: true });
+        await writeFile(join(shipped, fixture.recordName), fixture.record);
+      }
+      const prUrl = 'https://github.com/acme/widget/pull/1';
+      const title = 'feat: ship foo';
+      const body = 'Reader-facing summary.';
+      const revision = `${prUrl}\u0000${JSON.stringify([title, body])}`;
+      const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
+      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
+        version: 1, records: { [digest]: { kind: 'accepted' } },
+      }));
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'rev-parse'
+          ? { stdout: 'refs/remotes/origin/feat/foo\n' }
+          : commandResult,
+        gh: async (args) => args[0] === 'pr' && args[1] === 'view'
+          ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
+          : commandResult,
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: {
+          feature_desc: fixture.featureDesc,
+          pr_url: prUrl,
+          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto', daemon: true,
+        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+      })).resolves.toEqual({ kind: 'publication_progress', transition: fixture.transition });
+      expect(observed?.shippedRecord).toBe(fixture.shippedRecord);
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['a mismatched slug', '---\nslug: bar\n---\n'],
+    ['no frontmatter block', 'slug: foo\n'],
+    ['frontmatter without a slug', '---\npr: https://github.com/acme/widget/pull/1\n---\n'],
+  ])('refuses $0 without overwriting the shipped record', async (_label, record) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-invalid-shipped-record-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      const plans = join(root, '.docs', 'plans');
+      const shipped = join(root, '.docs', 'shipped');
+      await Promise.all([
+        mkdir(pipeline, { recursive: true }),
+        mkdir(plans, { recursive: true }),
+        mkdir(shipped, { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(join(plans, 'foo.md'), 'plan\n'),
+        writeFile(join(shipped, 'foo.md'), record),
+        writeFile(join(pipeline, 'finish-choice'), 'pr\n'),
+      ]);
+      const recordPath = join(shipped, 'foo.md');
+      const before = await readFile(recordPath, 'utf8');
+      const prUrl = 'https://github.com/acme/widget/pull/2';
+      const title = 'feat: ship foo';
+      const body = 'Reader-facing summary.';
+      const revision = `${prUrl}\u0000${JSON.stringify([title, body])}`;
+      const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
+      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
+        version: 1, records: { [digest]: { kind: 'accepted' } },
+      }));
+      const writeShippedRecord = vi.fn(async () => 0);
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'rev-parse'
+          ? { stdout: 'refs/remotes/origin/feat/foo\n' }
+          : commandResult,
+        gh: async (args) => args[0] === 'pr' && args[1] === 'view'
+          ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
+          : commandResult,
+        writeShippedRecord,
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: {
+          feature_desc: 'foo', pr_url: prUrl,
+          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto', daemon: true,
+        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+      })).resolves.toEqual({ kind: 'human_required', reason: 'invalid_shipped_record' });
+      expect(writeShippedRecord).not.toHaveBeenCalled();
+      await expect(readFile(recordPath, 'utf8')).resolves.toBe(before);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not create a replacement record when the canonical slug matches', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-matching-shipped-record-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await Promise.all([
+        mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+        mkdir(join(root, '.docs', 'shipped'), { recursive: true }),
+        mkdir(pipeline, { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(join(root, '.docs', 'plans', 'foo.md'), 'plan\n'),
+        writeFile(join(root, '.docs', 'shipped', 'foo.md'), '---\nslug: foo\n---\n'),
+        writeFile(join(pipeline, 'finish-choice'), 'pr\n'),
+      ]);
+      const prUrl = 'https://github.com/acme/widget/pull/3';
+      const title = 'feat: ship foo';
+      const body = 'Reader-facing summary.';
+      const revision = `${prUrl}\u0000${JSON.stringify([title, body])}`;
+      const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
+      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
+        version: 1, records: { [digest]: { kind: 'accepted' } },
+      }));
+      const writeShippedRecord = vi.fn(async () => 0);
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'rev-parse'
+          ? { stdout: 'refs/remotes/origin/feat/foo\n' }
+          : commandResult,
+        gh: async (args) => args[0] === 'pr' && args[1] === 'view'
+          ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
+          : commandResult,
+        writeShippedRecord,
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: {
+          feature_desc: 'foo', pr_url: prUrl,
+          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto', daemon: true,
+        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+      })).resolves.not.toMatchObject({ transition: 'write_shipped_record' });
+      expect(writeShippedRecord).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses ambiguous dated plan candidates without guessing a shipped record path', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-ambiguous-shipped-record-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await Promise.all([
+        mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+        mkdir(pipeline, { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(join(root, '.docs', 'plans', '2026-09-01-foo.md'), 'plan\n'),
+        writeFile(join(root, '.docs', 'plans', '2026-09-24-foo.md'), 'plan\n'),
+        writeFile(join(pipeline, 'finish-choice'), 'pr\n'),
+      ]);
+      const prUrl = 'https://github.com/acme/widget/pull/4';
+      const title = 'feat: ship foo';
+      const body = 'Reader-facing summary.';
+      const revision = `${prUrl}\u0000${JSON.stringify([title, body])}`;
+      const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
+      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
+        version: 1, records: { [digest]: { kind: 'accepted' } },
+      }));
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'rev-parse'
+          ? { stdout: 'refs/remotes/origin/feat/foo\n' }
+          : commandResult,
+        gh: async (args) => args[0] === 'pr' && args[1] === 'view'
+          ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
+          : commandResult,
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(coordinator.advance({
+        state: {
+          feature_desc: 'foo', pr_url: prUrl,
+          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto', daemon: true,
+        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+      })).resolves.toEqual({ kind: 'human_required', reason: 'invalid_shipped_record' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('maps an unreadable canonical record to an indeterminate FINISH snapshot', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-unreadable-shipped-record-'));
+    let observed: { shippedRecord: string } | undefined;
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/engine/finish-publication.js')>(
+        '../../src/engine/finish-publication.js',
+      );
+      return {
+        ...actual,
+        advanceFinishPublication: vi.fn(async (input: { observe: () => Promise<Parameters<typeof actual.nextFinishPublicationTransition>[0]> }) => {
+          const snapshot = await input.observe();
+          observed = snapshot;
+          return { kind: 'advanced' as const, transition: actual.nextFinishPublicationTransition(snapshot) };
+        }),
+      };
+    });
+
+    try {
+      await Promise.all([
+        mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+        mkdir(join(root, '.docs', 'shipped', 'foo.md'), { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(join(root, '.docs', 'plans', 'foo.md'), 'plan\n'),
+      ]);
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: root,
+        stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async () => commandResult,
+        gh: async () => commandResult,
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await coordinator.advance({
+        state: { feature_desc: 'foo' } as ConductState,
+        mode: 'auto', daemon: true,
+        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+      });
+      expect(observed?.shippedRecord).toBe('indeterminate');
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a mismatched slug written during post-write verification', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-post-write-mismatch-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      const shipped = join(root, '.docs', 'shipped');
+      await Promise.all([
+        mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+        mkdir(shipped, { recursive: true }),
+        mkdir(pipeline, { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(join(root, '.docs', 'plans', 'foo.md'), 'plan\n'),
+        writeFile(join(pipeline, 'finish-choice'), 'pr\n'),
+      ]);
+      const prUrl = 'https://github.com/acme/widget/pull/5';
+      const title = 'feat: ship foo';
+      const body = 'Reader-facing summary.';
+      const revision = `${prUrl}\u0000${JSON.stringify([title, body])}`;
+      const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
+      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
+        version: 1, records: { [digest]: { kind: 'accepted' } },
+      }));
+      const writeShippedRecord = vi.fn(async () => {
+        await writeFile(join(shipped, 'foo.md'), '---\nslug: bar\n---\n');
+        return 0;
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'rev-parse'
+          ? { stdout: 'refs/remotes/origin/feat/foo\n' }
+          : commandResult,
+        gh: async (args) => args[0] === 'pr' && args[1] === 'view'
+          ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
+          : commandResult,
+        writeShippedRecord,
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      const state = {
+        feature_desc: 'foo', pr_url: prUrl,
+        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+      } as ConductState;
+      const input = {
+        state,
+        mode: 'auto' as const, daemon: true,
+        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+      };
+      await expect(coordinator.advance(input)).resolves.toEqual({
+        kind: 'publication_progress', transition: 'write_shipped_record',
+      });
+      expect(writeShippedRecord).toHaveBeenCalledOnce();
+      await expect(readFile(join(shipped, 'foo.md'), 'utf8')).resolves.toBe('---\nslug: bar\n---\n');
+      await expect(coordinator.advance(input)).resolves.toEqual({
+        kind: 'human_required', reason: 'invalid_shipped_record',
+      });
+      expect(writeShippedRecord).toHaveBeenCalledOnce();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
       label: 'satisfied verdicts without step-state keys',
       state: { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState,
       writeVerdicts: async (root: string) => Promise.all([
@@ -600,7 +971,7 @@ describe('production FINISH publication composition', () => {
       await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
       await mkdir(pipeline);
       await writeFile(join(root, '.docs', 'plans', 'feature.md'), 'plan\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
 
       const prUrl = 'https://github.com/acme/widget/pull/3';
       let body = 'Reader-facing summary.';
@@ -1087,7 +1458,7 @@ describe('production FINISH publication composition', () => {
       await mkdir(pipeline);
       await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
       const prUrl = 'https://github.com/acme/widget/pull/1172';
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
@@ -1177,7 +1548,7 @@ describe('production FINISH publication composition', () => {
       await mkdir(pipeline);
       await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
       const prUrl = 'https://github.com/acme/widget/pull/1172';
       const git = vi.fn(async (args: string[]) => {
         if (args[0] === 'config') return { stdout: 'https://github.com/acme/widget.git\n' };
@@ -1419,7 +1790,7 @@ describe('production FINISH publication composition', () => {
       await mkdir(pipeline);
       await mkdir(shipped, { recursive: true });
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(shipped, 'feature.md'), 'shipped\n');
+      await writeFile(join(shipped, 'feature.md'), '---\nslug: feature\n---\n');
 
       const prUrl = 'https://github.com/acme/widget/pull/1172';
       const state = {
@@ -1491,7 +1862,7 @@ describe('production FINISH publication composition', () => {
       await mkdir(pipeline);
       await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
       const prUrl = 'https://github.com/acme/widget/pull/1172';
       let body = 'Reader-facing summary and validation evidence.';
       const gh = vi.fn(async (args: string[]) => {
@@ -1547,7 +1918,7 @@ describe('production FINISH publication composition', () => {
       await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
       await mkdir(join(root, '.docs', 'plans'), { recursive: true });
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
       await writeFile(join(root, '.docs', 'plans', 'feature.md'), 'plan\n');
       const prUrl = 'https://github.com/acme/widget/pull/1172';
       let body = 'Reader-facing summary.';
@@ -1609,7 +1980,7 @@ describe('production FINISH publication composition', () => {
       await mkdir(pipeline);
       await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
       const prUrl = 'https://github.com/acme/widget/pull/1173';
       const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
       const finding = canonicalizeBuildReviewFindingIdentity({
@@ -1701,7 +2072,7 @@ describe('production FINISH publication composition', () => {
       await mkdir(pipeline);
       await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
       const prUrl = 'https://github.com/acme/widget/pull/1174';
       const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
       const staleBody = [
@@ -1767,7 +2138,7 @@ describe('production FINISH publication composition', () => {
       await mkdir(pipeline);
       await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
       const prUrl = 'https://github.com/acme/widget/pull/1174';
       const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
       const coverage = {
@@ -1988,7 +2359,7 @@ describe('production FINISH publication composition', () => {
       await mkdir(pipeline);
       await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
       const prUrl = 'https://github.com/acme/widget/pull/1172';
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
@@ -2039,7 +2410,7 @@ describe('production FINISH publication composition', () => {
       await mkdir(pipeline);
       await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
       const prUrl = 'https://github.com/acme/widget/pull/1172';
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
@@ -2074,7 +2445,7 @@ describe('production FINISH publication composition', () => {
       await mkdir(pipeline);
       await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
       const prUrl = 'https://github.com/acme/widget/pull/1172';
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
