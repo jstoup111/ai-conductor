@@ -1,5 +1,5 @@
+// Covers: task:3
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { discoverPlugins, registerBuiltins } from '../../src/engine/plugin-loader.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
@@ -30,6 +30,14 @@ const { mockExeca } = vi.hoisted(() => ({
 }));
 
 vi.mock('execa', () => ({ execa: mockExeca }));
+
+let discoverPlugins: typeof import('../../src/engine/plugin-loader.js').discoverPlugins;
+let registerBuiltins: typeof import('../../src/engine/plugin-loader.js').registerBuiltins;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ discoverPlugins, registerBuiltins } = await import('../../src/engine/plugin-loader.js'));
+});
 
 describe('discoverPlugins', () => {
   let registry: PluginRegistry;
@@ -463,6 +471,33 @@ describe('registerBuiltins — memory_provider:local (adr-2026-06-29-memory-prov
 
     expect(provider.name).toBe('local');
     expect(provider.kind).toBe('memory_provider');
+  });
+});
+
+describe('registerBuiltins — built-in provider catalog', () => {
+  it('registers only installed catalog providers and uses the catalog default selection', async () => {
+    const { BUILT_IN_PROVIDERS, DEFAULT_PROVIDER } = await import('../../src/execution/provider-catalog.js');
+    const { normalizeProviderSelection } = await import('../../src/engine/provider-selection.js');
+    const registry = new PluginRegistry();
+    const installed = new Set([BUILT_IN_PROVIDERS[0].id]);
+
+    registerBuiltins(
+      registry,
+      new ConductorEventEmitter(),
+      undefined,
+      undefined,
+      10,
+      installed,
+    );
+    registry.markInitialized();
+
+    expect({
+      registered: registry.list('llm_provider'),
+      defaultSelection: normalizeProviderSelection(undefined),
+    }).toEqual({
+      registered: [...installed],
+      defaultSelection: [DEFAULT_PROVIDER],
+    });
   });
 });
 
