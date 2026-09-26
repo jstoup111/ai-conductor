@@ -919,7 +919,7 @@ export class DefaultStepRunner implements StepRunner {
     this.providerExecutionContext = options?.providerExecution;
     this.withCandidateSafety = options?.providerExecution?.withCandidateSafety;
     this.prepareCandidateSelfHost = options?.providerExecution?.prepareCandidateSelfHost;
-    this.readOnlyReviewCapabilityProbe = options?.probeReadOnlyReviewCapability;
+    this.readOnlyReviewCapabilityProbe = options?.probeReadOnlyReviewCapability ?? probeReadOnlyReviewCapability;
     this.providerWarn =
       options?.providerWarn ??
       options?.providerExecution?.warn ??
@@ -2389,10 +2389,9 @@ export class DefaultStepRunner implements StepRunner {
       (entry): entry is ResolvedBuildReviewCustomCatalogEntry => entry.kind === 'custom',
     );
     const builtinEntries = config.catalog.filter((entry) => entry.kind === 'builtin');
-    // Production probing belongs to daemon startup and foreground config
-    // loading. A runner consumes that frozen observation; an injected probe is
-    // retained solely for isolated fixtures. Missing evidence is deliberately
-    // refused rather than treated as admission.
+    // Consume startup observations first. When a provider was not among the
+    // custom-entry providers probed at startup (for example a built-in peer's
+    // provider), this per-run memoized probe supplies its missing evidence.
     const readOnlyReviewCapabilityRequests = new Map<string, Promise<ReadOnlyReviewCapability | undefined>>();
     const readOnlyReviewCapabilityFor = (provider: string): Promise<ReadOnlyReviewCapability | undefined> => {
       const existing = readOnlyReviewCapabilityRequests.get(provider);

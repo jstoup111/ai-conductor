@@ -1,5 +1,5 @@
 // Covers: task:4, task:13, task:33
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -18,11 +18,15 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { Conductor } from '../test-conductor.js';
 
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 async function runCompatibilityLap(custom: boolean, verdictShape: 'aggregate' | 'scalar' = 'aggregate') {
   const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-custom-routing-'));
@@ -78,6 +82,104 @@ async function runCompatibilityLap(custom: boolean, verdictShape: 'aggregate' | 
 }
 
 describe('custom build-review compatibility routing', () => {
+  it('probes an unthreaded built-in peer provider once and dispatches it in read-only mode', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-custom-routing-unthreaded-peer-'));
+    roots.push(root);
+    const fixtureDir = join(root, 'bin');
+    const probeLog = join(root, 'claude-probe.log');
+    await mkdir(fixtureDir, { recursive: true });
+    await writeFile(join(fixtureDir, 'claude'), `#!/bin/sh\nprintf '%s\\n' \"$*\" >> '${probeLog}'\nprintf '%s\\n' --restricted --tools --allowedTools --strict-mcp-config\n`);
+    await chmod(join(fixtureDir, 'claude'), 0o755);
+    vi.stubEnv('PATH', `${fixtureDir}:${process.env.PATH}`);
+
+    const config = {
+      llm_provider: 'codex', build_review: {
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: 'claude' } },
+        custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project', llm_provider: 'codex' } },
+      },
+    } as HarnessConfig;
+    const invocations: Array<{ prompt: string; readOnlyReview?: boolean }> = [];
+    const provider: LLMProvider = {
+      invoke: vi.fn(async (options: { prompt: string; readOnlyReview?: boolean }) => {
+        invocations.push(options);
+        const payload = options.prompt.includes('Build Review Security rubric.') ? { findings: [] } : { kind: 'custom-findings', version: 'v1', findings: [] };
+        return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+      }),
+      supportsSessionResume: false,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    const source = {
+      identity: { snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content', mergeBase: 'base', headSha: 'head' },
+      baselinePath: join(root, '.pipeline', 'frozen', 'baseline'), headPath: join(root, '.pipeline', 'frozen', 'head'),
+    };
+    await Promise.all([mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
+    const runner = new DefaultStepRunner(provider, 'unthreaded-peer-routing', root, {
+      featureDesc: 'feature', config,
+      providerRuntimes: new ProviderRuntimeSet([
+        { key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) },
+        { key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
+      ]),
+      sessionStore: new ProviderSessionStore(),
+      buildReviewEffectiveResolver: async () => ({ ok: true, feature: { version: 'v1', repository: root, feature: 'feature' }, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } }) as never,
+      buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`, declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+    const inputs = {
+      diff: 'diff', planBody: '# Plan', mergeBase: 'base', baseRef: 'origin/main', baseKind: 'remote', trackingRefSha: 'base', remoteHeadSha: 'base', fresh: true,
+      testSuiteProof: {}, sourceSnapshot: { digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff', planBody: '# Plan', repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [] },
+      sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} },
+    } as never;
+    const result = await (runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', executionContext: unknown, capabilities: unknown) => Promise<{ success: boolean; output: string }> }).runRubricBuildReview(
+      inputs, resolveBuildReviewConfig(config), 'M', undefined, { codex: { provider: 'codex', platform: 'linux', status: 'available' } },
+    );
+
+    await expect((await import('node:fs/promises')).readFile(probeLog, 'utf8')).resolves.toBe('--help\n');
+    expect(invocations).toEqual(expect.arrayContaining([expect.objectContaining({ prompt: expect.stringContaining('Build Review Security rubric.'), readOnlyReview: true })]));
+    expect(result.output).not.toContain('read-only-review-unavailable');
+  });
+
+  it('settles an unthreaded built-in peer as unavailable when its default probe rejects restricted mode', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-custom-routing-unthreaded-peer-unavailable-'));
+    roots.push(root);
+    const fixtureDir = join(root, 'bin');
+    await mkdir(fixtureDir, { recursive: true });
+    await writeFile(join(fixtureDir, 'claude'), "#!/bin/sh\nprintf '%s\\n' '--tools' '--allowedTools' '--strict-mcp-config'\n");
+    await chmod(join(fixtureDir, 'claude'), 0o755);
+    vi.stubEnv('PATH', `${fixtureDir}:${process.env.PATH}`);
+
+    const config = { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: 'claude' } }, custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project', llm_provider: 'codex' } } } } as HarnessConfig;
+    const events = new ConductorEventEmitter();
+    const failures: unknown[] = [];
+    events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event); });
+    const provider: LLMProvider = {
+      invoke: vi.fn(async () => {
+        const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+        return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+      }),
+      supportsSessionResume: false,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    const source = { identity: { snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content', mergeBase: 'base', headSha: 'head' }, baselinePath: join(root, '.pipeline', 'frozen', 'baseline'), headPath: join(root, '.pipeline', 'frozen', 'head') };
+    await Promise.all([mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
+    const runner = new DefaultStepRunner(provider, 'unthreaded-peer-unavailable', root, {
+      featureDesc: 'feature', config,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) }, { key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(), events,
+      buildReviewEffectiveResolver: async () => ({ ok: true, feature: { version: 'v1', repository: root, feature: 'feature' }, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } }) as never,
+      buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`, declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+    const inputs = { diff: 'diff', planBody: '# Plan', mergeBase: 'base', baseRef: 'origin/main', baseKind: 'remote', trackingRefSha: 'base', remoteHeadSha: 'base', fresh: true, testSuiteProof: {}, sourceSnapshot: { digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff', planBody: '# Plan', repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [] }, sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} } } as never;
+    await expect((runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', executionContext: unknown, capabilities: unknown) => Promise<{ success: boolean; output: string }> }).runRubricBuildReview(inputs, resolveBuildReviewConfig(config), 'M', undefined, { codex: { provider: 'codex', platform: 'linux', status: 'available' } })).rejects.toThrow('build-review aggregate');
+
+    expect(provider.invoke).not.toHaveBeenCalledWith(expect.objectContaining({ prompt: expect.stringContaining('Build Review Security rubric.') }));
+    expect(failures).toEqual(expect.arrayContaining([expect.objectContaining({
+      rubric: 'security', cause: 'read-only-review-unavailable', excerpt: expect.stringContaining('Claude help does not list --restricted'),
+    })]));
+  });
+
   it('launches a built-in peer of a custom lap in Claude read-only mode over the frozen input', async () => {
     const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-custom-routing-launch-'));
     roots.push(root);
