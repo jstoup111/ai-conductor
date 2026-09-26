@@ -15,6 +15,11 @@ import {
   type ProviderModelPolicy,
 } from '../engine/provider-model-policy.js';
 import {
+  CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
+  providerDisplayName,
+} from '../execution/provider-catalog.js';
+import {
   STEP_RATIONALE,
   MODEL_FREE_ENGINE_STEPS,
   AUXILIARY_MODEL_TABLE_ROWS,
@@ -328,10 +333,10 @@ export function buildEngineRows(
     return {
       name: stepDisplayName(step),
       executionPath: 'autonomous engine',
-      claudeModel: renderTieredField(claudePolicy, 'Claude', step, 'model'),
-      claudeEffort: renderTieredField(claudePolicy, 'Claude', step, 'effort'),
-      codexModel: renderTieredField(codexPolicy, 'Codex', step, 'model'),
-      codexEffort: renderTieredField(codexPolicy, 'Codex', step, 'effort'),
+      claudeModel: renderTieredField(claudePolicy, providerDisplayName(CLAUDE_PROVIDER), step, 'model'),
+      claudeEffort: renderTieredField(claudePolicy, providerDisplayName(CLAUDE_PROVIDER), step, 'effort'),
+      codexModel: renderTieredField(codexPolicy, providerDisplayName(CODEX_PROVIDER), step, 'model'),
+      codexEffort: renderTieredField(codexPolicy, providerDisplayName(CODEX_PROVIDER), step, 'effort'),
       why: STEP_RATIONALE[step],
     };
   });
