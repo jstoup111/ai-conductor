@@ -1,6 +1,7 @@
 import { relative } from 'node:path';
 
 import type { CapturedReviewPolicyBundle } from './build-review-policy-bundle.js';
+import type { ProviderWith } from '../execution/provider-catalog.js';
 import { renderRubricContractShape, type RubricContractDescriptor } from './build-review-contract.js';
 import { BUILD_REVIEW_CUSTOM_SOURCE_REGION_HASH_RULE } from './build-review-source-region-admission.js';
 
@@ -24,7 +25,7 @@ export type BuildReviewPolicyAction =
 
 /** The explicit, provider-prepared capabilities of the read-only review role. */
 export interface BuildReviewPolicyCapabilityProfile {
-  readonly provider: 'claude' | 'codex';
+  readonly provider: ProviderWith<'readOnlyReview'>;
   readonly admittedActions: readonly BuildReviewPolicyAction[];
   readonly admittedCapabilities: readonly string[];
   readonly admittedTools: readonly string[];
@@ -66,7 +67,7 @@ export interface BuildReviewPolicyIncompatibility {
 export interface BuildReviewPolicyUnsupportedResult {
   readonly kind: 'unsupported-policy';
   readonly stage: 'preflight' | 'runtime';
-  readonly provider: BuildReviewPolicyCapabilityProfile['provider'];
+  readonly provider: BuildReviewPolicyCapabilityProfile['provider']['id'];
   readonly incompatibility: BuildReviewPolicyIncompatibility;
 }
 
@@ -93,7 +94,7 @@ const RECOVERY_FOR_DECLARED_REQUIREMENT = Object.freeze({
 
 function unsupported(
   stage: BuildReviewPolicyUnsupportedResult['stage'],
-  provider: BuildReviewPolicyCapabilityProfile['provider'],
+  provider: BuildReviewPolicyCapabilityProfile['provider']['id'],
   incompatibility: BuildReviewPolicyIncompatibility,
 ): BuildReviewPolicyUnsupportedResult {
   return { kind: 'unsupported-policy', stage, provider, incompatibility };
@@ -131,7 +132,7 @@ export function evaluateBuildReviewPolicyPreflight(
         : declared.kind === 'tool'
           ? declared.tool
           : declared.dependency;
-    return unsupported('preflight', options.profile.provider, {
+  return unsupported('preflight', options.profile.provider.id, {
       kind,
       requirement,
       recovery: RECOVERY_FOR_DECLARED_REQUIREMENT[declared.kind],
@@ -156,7 +157,7 @@ export function parseBuildReviewPolicyRuntimeUnsupportedResponse(
   if (!requirement || requirement.length > 512 || Object.keys(source).some((key) => key !== 'kind' && key !== 'requirement')) {
     return undefined;
   }
-  return unsupported('runtime', provider, {
+  return unsupported('runtime', provider.id, {
     kind: 'runtime-unsupported',
     requirement,
     recovery: 'adapt-policy-to-read-only-review',

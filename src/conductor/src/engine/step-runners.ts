@@ -13,6 +13,12 @@ import type {
   ProviderStreamObservation,
 } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
+import {
+  requireProviderCapability,
+  type BuiltInProviderId,
+  type ProviderWith,
+  type ReviewPolicyCatalogDiscovery,
+} from '../execution/provider-catalog.js';
 import { redactSafetyText } from './safety-diagnostics.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
 import type { StepName, ConductState, ComplexityTier, ExecutionContext, RunMode } from '../types/index.js';
@@ -653,12 +659,16 @@ export function productionBuildReviewPolicyCatalog(
   const codexTransport = deps.codexTransport ?? createCodexAppServerTransport();
   return async ({ provider, skill, preparedEnv, preparedExecutable, preparedArgs, originalCatalogHome, signal }) => {
     const env = preparedEnv ?? process.env;
-    if (provider !== 'claude' && provider !== 'codex') {
-      throw new Error(`Build-review custom policies are unsupported for provider ${provider}`);
-    }
-    const homeVariable = provider === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
-    const discover = (home: string, catalogEnv: NodeJS.ProcessEnv, includeProject: boolean): Promise<readonly InstalledReviewSkill[]> => provider === 'claude'
-      ? discoverClaudeReviewPolicies({
+    const catalogProvider = requireProviderCapability(
+      provider as BuiltInProviderId,
+      'reviewPolicyCatalog',
+    );
+    const discoveries: Readonly<Record<ReviewPolicyCatalogDiscovery, (
+      home: string,
+      catalogEnv: NodeJS.ProcessEnv,
+      includeProject: boolean,
+    ) => Promise<readonly InstalledReviewSkill[]>>> = {
+      'claude-metadata': (home, catalogEnv, includeProject) => discoverClaudeReviewPolicies({
           candidate: {
             cwd: projectDir,
             env: catalogEnv,
@@ -669,16 +679,18 @@ export function productionBuildReviewPolicyCatalog(
           },
           ...(deps.claudeCommand === undefined ? {} : { command: deps.claudeCommand }),
           ...(deps.claudeFilesystem === undefined ? {} : { filesystem: deps.claudeFilesystem }),
-        })
-      : listCodexInstalledReviewSkills(codexTransport, {
+        }),
+      'codex-app-server': (home, catalogEnv) => listCodexInstalledReviewSkills(codexTransport, {
           cwd: projectDir,
           home,
           env: catalogEnv,
           ...(preparedExecutable === undefined ? {} : { executable: preparedExecutable }),
           ...(preparedArgs === undefined ? {} : { executableArgs: preparedArgs }),
           ...(signal === undefined ? {} : { signal }),
-        });
-    const preparedHome = env[homeVariable] ?? join(homedir(), provider === 'claude' ? '.claude' : '.codex');
+        }),
+    };
+    const discover = discoveries[catalogProvider.reviewPolicyCatalog];
+    const preparedHome = env[catalogProvider.homeVariable] ?? join(homedir(), catalogProvider.defaultHome);
     const prepared = await discover(preparedHome, env, true);
     // Self-host preparation replaces the provider home. The operator's
     // installed global and plugin catalogs are reachable only through the
@@ -688,15 +700,15 @@ export function productionBuildReviewPolicyCatalog(
     if (originalCatalogHome === undefined || originalCatalogHome === preparedHome) return prepared;
     const key = (skill: InstalledReviewSkill) => `${skill.source}\0${skill.plugin?.id ?? ''}\0${skill.semanticName}`;
     const preparedKeys = new Set(prepared.map(key));
-    const original = await discover(originalCatalogHome, { ...env, [homeVariable]: originalCatalogHome }, false);
+    const original = await discover(originalCatalogHome, { ...env, [catalogProvider.homeVariable]: originalCatalogHome }, false);
     return [...prepared, ...original.filter((skill) => skill.source !== 'project' && !preparedKeys.has(key(skill)))];
   };
 }
 
 /** Capabilities belong to the prepared provider role, never the policy declaration. */
-function establishedBuildReviewTools(provider: 'claude' | 'codex'): readonly string[] {
+function establishedBuildReviewTools(_provider: ProviderWith<'readOnlyReview'>): readonly string[] {
   // Both supported read-only profiles expose git for frozen-input inspection.
-  return provider === 'claude' || provider === 'codex' ? ['git'] : [];
+  return ['git'];
 }
 
 type ProviderAwareSkillOneShotStep = 'complexity' | 'remediate' | 'rebase';
@@ -3004,11 +3016,12 @@ export class DefaultStepRunner implements StepRunner {
         if (lapGate?.hasOpened) return;
         const capability = await readOnlyReviewCapabilityFor?.(candidate.providerKey);
         if (capability?.status !== 'available') return;
-        const catalogProvider = candidate.providerKey === 'claude' || candidate.providerKey === 'codex'
-          ? candidate.providerKey : undefined;
-        if (!catalogProvider) return;
+        const catalogProvider = requireProviderCapability(
+          candidate.providerKey as BuiltInProviderId,
+          'reviewPolicyCatalog',
+        );
         const catalog = await this.buildReviewPolicyCatalog!({
-          provider: catalogProvider, entry, skill: entry.skill,
+          provider: catalogProvider.id, entry, skill: entry.skill,
           ...(prepared === undefined ? {} : { preparedEnv: prepared.env, preparedExecutable: prepared.executable, preparedArgs: prepared.args }),
           ...(prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: prepared.originalCatalogHome }),
         });
@@ -3019,6 +3032,14 @@ export class DefaultStepRunner implements StepRunner {
         await lapGate?.registerPolicy(bundle.materialPath, policy.packageRoot);
       } } : {}),
       preparedCandidateOperation: async (context) => {
+        const readOnlyReviewProvider = requireProviderCapability(
+          context.candidate.providerKey as BuiltInProviderId,
+          'readOnlyReview',
+        );
+        const catalogProvider = requireProviderCapability(
+          context.candidate.providerKey as BuiltInProviderId,
+          'reviewPolicyCatalog',
+        );
         const readOnlyReviewCapability = await readOnlyReviewCapabilityFor?.(context.candidate.providerKey);
         if (readOnlyReviewCapability?.status !== 'available') {
           const platform = readOnlyReviewCapability?.platform ?? process.platform;
@@ -3048,20 +3069,11 @@ export class DefaultStepRunner implements StepRunner {
             provider: candidate.providerKey, model: candidate.model, effort: candidate.effort ?? 'default',
           } },
         });
-        const catalogProvider = context.candidate.providerKey === 'claude' || context.candidate.providerKey === 'codex'
-          ? context.candidate.providerKey
-          : undefined;
-        if (!catalogProvider) {
-          coverageFailure = true;
-          failure = { reason: 'policy-load-failed', detail: `Installed build-review policy ${entry.skill} has no catalog adapter for provider ${context.candidate.providerKey}` };
-          await emitPolicyFailure('catalog', failure.detail);
-          return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
-        }
         let catalog: readonly InstalledReviewSkill[] | ReviewPolicyCatalogError;
         let releaseDiscoveryAuthority: (() => void) | undefined;
         try {
-          if (context.abortSignal?.aborted) throw new ReviewPolicyCatalogError(catalogProvider, 'cancelled', 'candidate cancelled before policy catalog discovery');
-          if (context.deadlineAt !== undefined && Date.now() >= context.deadlineAt) throw new ReviewPolicyCatalogError(catalogProvider, 'timeout', 'candidate deadline elapsed before policy catalog discovery');
+          if (context.abortSignal?.aborted) throw new ReviewPolicyCatalogError(catalogProvider.id, 'cancelled', 'candidate cancelled before policy catalog discovery');
+          if (context.deadlineAt !== undefined && Date.now() >= context.deadlineAt) throw new ReviewPolicyCatalogError(catalogProvider.id, 'timeout', 'candidate deadline elapsed before policy catalog discovery');
           // One discovery signal: the candidate's cancellation joined with a
           // timer for its deadline, so an in-flight request cannot outlive it.
           const discovery = new AbortController();
@@ -3081,7 +3093,7 @@ export class DefaultStepRunner implements StepRunner {
           };
           context.onTeardown(async () => releaseDiscoveryAuthority?.());
           const request = this.buildReviewPolicyCatalog!({
-            provider: context.candidate.providerKey,
+            provider: catalogProvider.id,
             entry,
             skill: entry.skill,
             ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
@@ -3104,13 +3116,13 @@ export class DefaultStepRunner implements StepRunner {
             // Whatever the host threw on abort, the owning authority names the reason.
             if (!discovery.signal.aborted) throw error;
             throw deadlineElapsed || (context.deadlineAt !== undefined && Date.now() >= context.deadlineAt)
-              ? new ReviewPolicyCatalogError(catalogProvider, 'timeout', 'candidate deadline elapsed during policy catalog discovery')
-              : new ReviewPolicyCatalogError(catalogProvider, 'cancelled', 'candidate cancelled during policy catalog discovery');
+              ? new ReviewPolicyCatalogError(catalogProvider.id, 'timeout', 'candidate deadline elapsed during policy catalog discovery')
+              : new ReviewPolicyCatalogError(catalogProvider.id, 'cancelled', 'candidate cancelled during policy catalog discovery');
           }
         } catch (error) {
           catalog = error instanceof ReviewPolicyCatalogError
             ? error
-            : new ReviewPolicyCatalogError(catalogProvider, 'error', error instanceof Error ? error.message : String(error));
+            : new ReviewPolicyCatalogError(catalogProvider.id, 'error', error instanceof Error ? error.message : String(error));
         } finally {
           releaseDiscoveryAuthority?.();
         }
@@ -3166,21 +3178,12 @@ export class DefaultStepRunner implements StepRunner {
           semanticInputDigest: inputs.sourceSnapshot.contentDigest, executionPolicyFingerprint: fingerprintBuildReviewRubricPolicy(entry.policy),
           engineStamp: candidateEngine.engineStamp, provider: context.candidate.providerKey, model, effort: context.candidate.effort ?? 'default',
         });
-        const provider = context.candidate.providerKey === 'claude' || context.candidate.providerKey === 'codex'
-          ? context.candidate.providerKey
-          : undefined;
-        if (!provider) {
-          coverageFailure = true;
-          failure = { reason: 'preflight-failed', detail: `Installed build-review policy ${entry.skill} has no read-only profile for provider ${context.candidate.providerKey}` };
-          await emitPolicyFailure('preflight', failure.detail);
-          return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
-        }
         const preflight = evaluateBuildReviewPolicyPreflight({
           profile: {
-            provider,
+            provider: readOnlyReviewProvider,
             admittedActions: ['read-frozen-input', 'read-policy-material'],
             admittedCapabilities: ['frozen-input', 'policy-material'],
-            admittedTools: establishedBuildReviewTools(provider),
+            admittedTools: establishedBuildReviewTools(readOnlyReviewProvider),
             // Bundle capture independently establishes the readable package resources.
             admittedDependencies: bundle.manifest.map((file) => file.relativePath),
           },
@@ -3289,7 +3292,7 @@ export class DefaultStepRunner implements StepRunner {
           return settleCustomStructuredRejection(invoked.finalStructuredResult);
         }
         const parsed = dispatched.kind === 'structured' ? dispatched.parsed : undefined;
-        const runtimeUnsupported = parseBuildReviewPolicyRuntimeUnsupportedResponse(parsed, provider);
+        const runtimeUnsupported = parseBuildReviewPolicyRuntimeUnsupportedResponse(parsed, readOnlyReviewProvider);
         if (runtimeUnsupported) {
           const classification = classifyBuildReviewPolicyIncompatibility(runtimeUnsupported);
           if (classification.kind === 'unsupported-policy') {
@@ -3781,9 +3784,13 @@ export class DefaultStepRunner implements StepRunner {
               if (!customPolicyLap) return;
               const capability = await readOnlyReviewCapabilityFor?.(candidate.providerKey);
               if (capability?.status !== 'available') return;
+              const catalogProvider = requireProviderCapability(
+                candidate.providerKey as BuiltInProviderId,
+                'reviewPolicyCatalog',
+              );
               const builtinEntry = { id: branch.rubric, kind: 'builtin' as const, policy: branch.policy };
               const catalog = await this.buildReviewPolicyCatalog!({
-                provider: candidate.providerKey, entry: builtinEntry, skill: branch.skillName,
+                provider: catalogProvider.id, entry: builtinEntry, skill: branch.skillName,
                 ...(prepared === undefined ? {} : { preparedEnv: prepared.env, preparedExecutable: prepared.executable, preparedArgs: prepared.args }),
                 ...(prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: prepared.originalCatalogHome }),
               });
@@ -3798,6 +3805,10 @@ export class DefaultStepRunner implements StepRunner {
               // admission seam as custom members so a peer cannot select an
               // unprobed provider independently.
               if (customPolicyLap) {
+                requireProviderCapability(
+                  context.candidate.providerKey as BuiltInProviderId,
+                  'readOnlyReview',
+                );
                 const capability = await readOnlyReviewCapabilityFor?.(context.candidate.providerKey);
                 if (capability?.status !== 'available') {
                   const platform = capability?.platform ?? process.platform;
@@ -3839,13 +3850,17 @@ export class DefaultStepRunner implements StepRunner {
               // contract as custom policies. The harness-root digest is only
               // an approximation of what the prepared provider loaded.
               const builtinEntry = { id: branch.rubric, kind: 'builtin' as const, policy: branch.policy };
+              const catalogProvider = requireProviderCapability(
+                context.candidate.providerKey as BuiltInProviderId,
+                'reviewPolicyCatalog',
+              );
               // D6: resolution and capture happen in this actual prepared
               // candidate; a fallback candidate never reuses another's bytes.
               let builtinPolicy: InstalledReviewSkill;
               let builtinBundle: CapturedReviewPolicyBundle;
               try {
                   const catalog = await this.buildReviewPolicyCatalog!({
-                    provider: context.candidate.providerKey,
+                    provider: catalogProvider.id,
                     entry: builtinEntry,
                     skill: branch.skillName,
                     ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
