@@ -1404,6 +1404,14 @@ else
   assert "test/check_as_built_markdown_authority.sh exists and is executable" 1
 fi
 
+as_built_markdown_authority_test="${HARNESS_DIR}/test/test_as_built_markdown_authority.sh"
+if [ -x "$as_built_markdown_authority_test" ]; then
+  "$as_built_markdown_authority_test"
+  assert "as-built Markdown authority fixtures fail closed" $?
+else
+  assert "test/test_as_built_markdown_authority.sh exists and is executable" 1
+fi
+
 # ── 15. Root agent-instruction parity ───────────────────────────────────────
 # Claude and Codex must load the same repository contract. Keep the named
 # provider entry points as symlinks to one canonical source so additions cannot

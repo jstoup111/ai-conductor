@@ -1,7 +1,7 @@
 // Covers: task:6, task:7, task:8
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readdir, readFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, readdir, readFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -203,6 +203,35 @@ Status: SUPERSEDED by adr-plan-two
       governingAdrs: before.projection.governingAdrs.filter((adr) => adr.stem !== 'adr-plan-one'),
     });
     expect(renderAsBuiltProjection(result.projection)).not.toContain('adr-plan-one');
+  });
+
+  it('projects a governing decision declaration, its full body, and additive amendments in document order', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'decisions', 'adr-plan-one.md'), `# ADR
+
+Status: APPROVED
+
+## Decision
+
+1. First plan decision declaration.
+Its multi-line body remains part of the decision.
+
+2. Second decision.
+
+D1.1 — Additive amendment for the first decision.
+`);
+
+    const result = await buildAsBuiltProjection(root);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error('expected a projection with the governing ADR');
+
+    expect(result.projection.governingAdrs.find((adr) => adr.stem === 'adr-plan-one')?.decisions).toEqual([
+      {
+        id: '1',
+        text: 'First plan decision declaration.\nIts multi-line body remains part of the decision.\n\nD1.1 — Additive amendment for the first decision.',
+      },
+      { id: '2', text: 'Second decision.' },
+    ]);
   });
 
   it('renders an empty governing ADR set without disabling repository-wide ADR compliance', async () => {
@@ -476,6 +505,24 @@ Status: SUPERSEDED by adr-plan-two
 
     const adrRoot = await fixture();
     await writeFile(join(adrRoot, '.docs', 'decisions', 'adr-plan-one.md'), '# ADR\n\nStatus: APPROVED\n');
+    await expect(buildAsBuiltProjection(adrRoot)).resolves.toMatchObject({
+      ok: false,
+      fault: { dimension: 'governing-adr-decisions', detail: expect.stringContaining('adr-plan-one') },
+    });
+  });
+
+  it('returns named faults when the active plan or governing ADR is unreadable', async () => {
+    const planRoot = await fixture();
+    const planPath = join(planRoot, '.docs', 'plans', 'feature.md');
+    await chmod(planPath, 0o000);
+    await expect(buildAsBuiltProjection(planRoot)).resolves.toMatchObject({
+      ok: false,
+      fault: { dimension: 'plan', detail: expect.stringContaining('.docs/plans/feature.md') },
+    });
+
+    const adrRoot = await fixture();
+    const adrPath = join(adrRoot, '.docs', 'decisions', 'adr-plan-one.md');
+    await chmod(adrPath, 0o000);
     await expect(buildAsBuiltProjection(adrRoot)).resolves.toMatchObject({
       ok: false,
       fault: { dimension: 'governing-adr-decisions', detail: expect.stringContaining('adr-plan-one') },

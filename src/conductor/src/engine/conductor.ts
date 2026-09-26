@@ -116,6 +116,7 @@ import {
   buildParallelFailureEvents,
   type GroupMember,
   type BranchOutcome,
+  type MechanicalFaultOutcome,
   type NoVerdictOutcome,
 } from './group-core.js';
 import { evaluateWhen } from './when-expression.js';
@@ -6071,6 +6072,14 @@ export class Conductor {
     });
   }
 
+  /** Halt a deterministic as-built precondition fault identically in both dispatch paths. */
+  private async haltForAsBuiltFault(state: ConductState, reason: string): Promise<void> {
+    await this.closeOpenExecutions();
+    await this.writeHaltMarker(reason + '\n', 'mechanical');
+    await this.persistPendingStateChanges(state, 'persist conductor transition');
+    await this.emitLoopHalt(reason);
+  }
+
   /** Resolve the strict merged-history verdict for the recorded implementation PR. */
   private async recordedMergedShipment(
     state: ConductState,
@@ -8528,6 +8537,7 @@ export class Conductor {
             const hasGenuineFailure = outcomes.some(
               (outcome) =>
                 outcome.kind === 'no-verdict' ||
+                outcome.kind === 'mechanical-fault' ||
                 outcome.kind === 'permission-denied' ||
                 (outcome.kind === 'verdict' && outcome.verdict !== 'pass'),
             );
@@ -8696,6 +8706,16 @@ export class Conductor {
             };
 
             const allGreen = outcomes.every((_, idx) => memberSatisfiedAtJoin(idx));
+
+            const mechanicalFaultIdx = outcomes.findIndex((outcome) => outcome.kind === 'mechanical-fault');
+            if (mechanicalFaultIdx !== -1) {
+              const mechanicalFault = outcomes[mechanicalFaultIdx] as MechanicalFaultOutcome;
+              await closeSettledMembers(outcomes);
+              await this.haltForAsBuiltFault(state, mechanicalFault.reason);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
 
             // Task 18: a `no-verdict` outcome means a branch exhausted its
             // retries without ever producing a completion marker — an
@@ -10455,10 +10475,7 @@ export class Conductor {
           // a provider capability, so halt before ordinary retry accounting.
           if (step.name === 'architecture_review_as_built' && result.asBuiltFault) {
             const reason = result.asBuiltFault.reason;
-            await this.closeOpenExecutions();
-            await this.writeHaltMarker(reason + '\n', 'mechanical');
-            await this.persistPendingStateChanges(state, 'persist conductor transition');
-            await this.emitLoopHalt(reason);
+            await this.haltForAsBuiltFault(state, reason);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -14722,7 +14739,9 @@ export class Conductor {
       await this.emitExecutionEvent({
         type: 'step_failed',
         step: groupName,
-        error: outcome.kind === 'no-verdict' ? outcome.reason : 'configured group member failed',
+        error: outcome.kind === 'no-verdict' || outcome.kind === 'mechanical-fault'
+          ? outcome.reason
+          : 'configured group member failed',
         retryCount: memberRetryCounts.get(branch.name) ?? 0,
         ...(result?.effort !== undefined ? { effort: result.effort } : {}),
         ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),

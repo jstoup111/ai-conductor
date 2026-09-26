@@ -1104,7 +1104,7 @@ export class DefaultStepRunner implements StepRunner {
     // judgement. It always takes the fresh one-shot branch: the engine owns
     // both the bounded input projection and the output contract, while the
     // provider-aware executor retains candidate routing and scratch lifecycle.
-    if (step === 'architecture_review_as_built' && this.providerRuntimes && branchSessionId === undefined) {
+    if (step === 'architecture_review_as_built' && this.providerRuntimes) {
       const schemaCandidates = this.configuredProviders.filter(
         (provider) => this.providerRuntimes!.nativeSchemaCapabilityFor(provider)?.nativeOutputSchema === true,
       );

@@ -87,11 +87,30 @@ function planCitedAdrStems(plan: string): Set<string> {
 
 function decisionText(content: string, id: string): string {
   const section = content.split(/^##\s+Decision\s*$/im)[1]?.split(/^##\s+/m, 1)[0] ?? '';
-  const line = section.split('\n').find((candidate) =>
-    new RegExp(`^\\s*(?:\\*{0,2}${id}\\.\\s+|#{0,6}\\s*\\*{0,2}D${id}\\b)`).test(candidate),
-  );
-  return (line ?? `Decision ${id}`).replace(/^\s*(?:\*{0,2}\d+\.\s+|#{0,6}\s*\*{0,2}D\d+\s*[—:-]?\s*)/, '')
-    .replace(/\*\*/g, '').trim();
+  const lines = section.split('\n');
+  const declaration = new RegExp(`^\\s*(?:\\*{0,2}${id}\\.\\s+|#{0,6}\\s*\\*{0,2}D${id}(?!\\.)\\b)`);
+  const nextDeclaration = /^\s*(?:\*{0,2}\d+\.\s+|#{0,6}\s*\*{0,2}D\d+(?!\.)\b)/;
+  const anyAmendment = /^\s*(?:[-*]\s*)?\*{0,2}D\d+\.\d+\b/;
+  const start = lines.findIndex((line) => declaration.test(line));
+  if (start === -1) return `Decision ${id}`;
+
+  const decisionLines: string[] = [];
+  for (let index = start; index < lines.length; index += 1) {
+    if (index !== start && (nextDeclaration.test(lines[index]!) || anyAmendment.test(lines[index]!))) break;
+    decisionLines.push(lines[index]!);
+  }
+
+  // Additive decision amendments conventionally follow the numbered decisions,
+  // so retain the amendments for this decision even when they appear after a
+  // later base declaration. They are authoritative decision text, not prose.
+  const amendment = new RegExp(`^\\s*(?:[-*]\\s*)?\\*{0,2}D${id}\\.\\d+\\b`);
+  for (const line of lines) {
+    if (amendment.test(line) && !decisionLines.includes(line)) decisionLines.push(line);
+  }
+
+  decisionLines[0] = decisionLines[0]!
+    .replace(/^\s*(?:\*{0,2}\d+\.\s+|#{0,6}\s*\*{0,2}D\d+\s*[—:-]?\s*)/, '');
+  return decisionLines.join('\n').replace(/\*\*/g, '').trim();
 }
 
 function parseNumstat(text: string): AsBuiltProjection['diff']['changedFiles'] {
@@ -215,7 +234,18 @@ export async function buildAsBuiltProjection(
     return { ok: false, fault: { dimension: 'plan', detail: `expected one plan artifact; found ${planPaths.length}` } };
   }
   const planPath = planPaths[0];
-  const plan = await readFile(planPath, 'utf-8');
+  let plan: string;
+  try {
+    plan = await readFile(planPath, 'utf-8');
+  } catch (error) {
+    return {
+      ok: false,
+      fault: {
+        dimension: 'plan',
+        detail: `${repoPath(worktree, planPath)} is unreadable: ${error instanceof Error ? error.message : String(error)}`,
+      },
+    };
+  }
   const git = makeGitRunner(worktree);
   const base = await resolveBase(git, await discoverLocalBase(git));
   const [baseShaResult, headShaResult] = await Promise.all([git(['rev-parse', base.ref]), git(['rev-parse', 'HEAD'])]);
@@ -282,7 +312,18 @@ export async function buildAsBuiltProjection(
         },
       };
     }
-    const content = await readFile(path, 'utf-8');
+    let content: string;
+    try {
+      content = await readFile(path, 'utf-8');
+    } catch (error) {
+      return {
+        ok: false,
+        fault: {
+          dimension: 'governing-adr-decisions',
+          detail: `${stem} is unreadable: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      };
+    }
     const approval = adrApprovalStatus(content);
     if (!approval.approved || !/^approved$/i.test(approval.found ?? '')) continue;
     const parsed = parseAdrDecisions(content);

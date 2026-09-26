@@ -9777,6 +9777,89 @@ describe('engine/conductor', () => {
     const PRD_AUDIT_PASS =
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
 
+    it('halts serial and validation-group as-built precondition faults mechanically without retries', async () => {
+      const fakeProvider: LLMProvider = {
+        lifecycleCapability: { synchronousSpawnPermit: true },
+        nativeSchemaCapability: { nativeOutputSchema: true },
+        invoke: vi.fn(),
+      };
+      const runtimes = new ProviderRuntimeSet([{
+        key: 'claude', provider: fakeProvider, lifecycleCapability: { synchronousSpawnPermit: true },
+        nativeSchemaCapability: { nativeOutputSchema: true }, policy: CLAUDE_MODEL_POLICY, builtIn: true,
+        availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]);
+      const asBuiltRunner = new DefaultStepRunner({ invoke: vi.fn() }, 'as-built-fault-test', dir, {
+        mode: 'auto',
+        config: { llm_provider: 'claude', steps: { architecture_review_as_built: { llm_provider: 'claude' } } },
+        configuredProviders: ['claude'],
+        providerRuntimes: runtimes,
+        sessionStore: new ProviderSessionStore(),
+      });
+      const faultReason = 'as-built input projection fault: plan: expected one plan artifact; found 0';
+      const run = vi.fn(async (step: StepName, state: ConductState, options?: StepRunOptions): Promise<StepRunResult> =>
+        step === 'architecture_review_as_built'
+          ? asBuiltRunner.run(step, state, options)
+          : { success: true },
+      );
+      const serialHalts: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') serialHalts.push(event.reason);
+      });
+      const serialState = Object.fromEntries(
+        ALL_STEPS.slice(0, ALL_STEPS.findIndex((step) => step.name === 'finish')).map((step) => [step.name, 'done']),
+      ) as ConductState;
+      await writeState(statePath, {
+        ...serialState,
+        complexity_tier: 'L',
+        build_review: 'skipped',
+        manual_test: 'skipped',
+        prd_audit: 'skipped',
+        architecture_review_as_built: 'pending',
+        rebase: 'skipped',
+      });
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: { run }, events,
+        fromStep: 'architecture_review_as_built', mode: 'interactive', maxRetries: 3,
+        onCheckpoint: async () => 'continue',
+      }).run();
+      expect(run.mock.calls.map(([step]) => step)).toContain('architecture_review_as_built');
+      expect({
+        calls: run.mock.calls.filter(([step]) => step === 'architecture_review_as_built').length,
+        providerCalls: vi.mocked(fakeProvider.invoke).mock.calls.length,
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf8'),
+        halts: serialHalts,
+      }).toEqual({
+        calls: 1, providerCalls: 0, haltClass: 'mechanical', halts: [faultReason],
+      });
+
+      await rm(join(dir, '.pipeline'), { recursive: true, force: true });
+      events = new ConductorEventEmitter();
+      const groupHalts: string[] = [];
+      const retries: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') groupHalts.push(event.reason);
+      });
+      events.on('step_retry', (event) => {
+        if (event.type === 'step_retry') retries.push(event.step);
+      });
+      run.mockClear();
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: { run }, events,
+        fromStep: 'manual_test', mode: 'auto', maxRetries: 3,
+        providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['claude'] },
+      }).run();
+      expect({
+        calls: run.mock.calls.filter(([step]) => step === 'architecture_review_as_built').length,
+        providerCalls: vi.mocked(fakeProvider.invoke).mock.calls.length,
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf8'),
+        retries,
+        halts: groupHalts,
+      }).toEqual({
+        calls: 1, providerCalls: 0, haltClass: 'mechanical', retries: [], halts: [faultReason],
+      });
+    });
+
     it('a branch that never produces a completion marker halts the group without kickback while retaining satisfied siblings', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 

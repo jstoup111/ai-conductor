@@ -191,6 +191,52 @@ describe('architecture_review_as_built native-schema dispatch', () => {
     });
   });
 
+  it('persists identical typed verdict content for Claude and Codex structured results', async () => {
+    const claudeDir = await mkdtemp(join(tmpdir(), 'as-built-parity-claude-'));
+    const codexDir = await mkdtemp(join(tmpdir(), 'as-built-parity-codex-'));
+    dirs.push(claudeDir, codexDir);
+    buildProjection.mockResolvedValue({ ok: true, projection });
+    const verdict = approvedVerdict();
+    const claudeInvoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
+      success: true, output: 'review complete', exitCode: 0, finalStructuredResult: verdict,
+    }));
+    const codexInvoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
+      success: true, output: 'review complete', exitCode: 0, finalStructuredResult: verdict,
+    }));
+    const provider = (invoke: typeof claudeInvoke): LLMProvider => ({
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    });
+
+    await runner(claudeDir, 'claude', provider(claudeInvoke)).run(
+      'architecture_review_as_built', { complexity_tier: 'M' }, { runId: 'claude-attempt' },
+    );
+    await runner(codexDir, 'codex', provider(codexInvoke)).run(
+      'architecture_review_as_built', { complexity_tier: 'M' }, { runId: 'codex-attempt' },
+    );
+
+    const withoutAttemptId = (value: Record<string, unknown>) => {
+      const { attemptId: _attemptId, ...content } = value;
+      return content;
+    };
+    const claudePersisted = JSON.parse(await readFile(join(claudeDir, '.pipeline', 'architecture-review-as-built.json'), 'utf8'));
+    const codexPersisted = JSON.parse(await readFile(join(codexDir, '.pipeline', 'architecture-review-as-built.json'), 'utf8'));
+    expect(withoutAttemptId(claudePersisted)).toEqual(withoutAttemptId(codexPersisted));
+
+    const claudeOptions = claudeInvoke.mock.calls[0]?.[0] as InvokeOptions;
+    const codexOptions = codexInvoke.mock.calls[0]?.[0] as InvokeOptions;
+    expect({
+      sameNativeSchema: claudeOptions.nativeSchema === codexOptions.nativeSchema,
+      nativeSchema: claudeOptions.nativeSchema,
+      interactive: [claudeOptions.interactive, codexOptions.interactive],
+    }).toEqual({
+      sameNativeSchema: true,
+      nativeSchema: AS_BUILT_VERDICT_SCHEMA,
+      interactive: [false, false],
+    });
+  });
+
   it('returns a projection fault without invoking a provider', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'as-built-projection-fault-'));
     dirs.push(projectDir);
