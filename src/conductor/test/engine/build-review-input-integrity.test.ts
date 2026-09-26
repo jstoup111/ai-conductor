@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES,
   captureBuildReviewInputDigest,
   diffBuildReviewInputDigests,
   type BuildReviewInputIntegrityFilesystem,
@@ -95,5 +96,30 @@ describe('engine/build-review-input-integrity', () => {
     const after = await captureBuildReviewInputDigest(roots(), filesystem(initialTree));
 
     await expect(diffBuildReviewInputDigests(before, after)).resolves.toEqual([]);
+  });
+
+  it('excludes the engine-owned in-lap writes while prior-lap build-review evidence stays hashed', async () => {
+    const tree: FileTree = {
+      ...initialTree,
+      '/evidence/events.jsonl': '{"type":"before"}\n',
+      '/evidence/audit-trail/events.jsonl': '{"type":"before"}\n',
+      '/evidence/step-heartbeat': '{"ts":"before"}\n',
+      '/evidence/build-review/cache/security.json': 'cached before',
+      '/evidence/build-review/policy-material/portable/SKILL.md': 'captured before',
+      '/evidence/build-review/lap-old/portable.json': 'prior lap evidence',
+    };
+    const excluded = { ...roots(), evidenceRootExcludes: BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES };
+    const before = await captureBuildReviewInputDigest(excluded, filesystem(tree));
+    const after = await captureBuildReviewInputDigest(excluded, filesystem({
+      ...tree,
+      '/evidence/events.jsonl': '{"type":"before"}\n{"type":"build_review_policy_resolved"}\n',
+      '/evidence/audit-trail/events.jsonl': '{"type":"before"}\n{"type":"after"}\n',
+      '/evidence/step-heartbeat': '{"ts":"after"}\n',
+      '/evidence/build-review/cache/security.json': 'cached after',
+      '/evidence/build-review/policy-material/portable/SKILL.md': 'captured again',
+      '/evidence/build-review/lap-old/portable.json': 'rewritten prior lap evidence',
+    }));
+
+    await expect(diffBuildReviewInputDigests(before, after)).resolves.toEqual(['evidenceRoot:build-review/lap-old/portable.json']);
   });
 });

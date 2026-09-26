@@ -13,6 +13,8 @@ import { MAX_POLICY_BUNDLE_BYTES } from './build-review-policy-bundle.js';
 
 const ARTIFACT_VERSION = 2 as const;
 const ARTIFACT_DIRECTORY = '.pipeline/build-review';
+/** Where each candidate's captured policy bundle is copied before judgment. */
+export const BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY = `${ARTIFACT_DIRECTORY}/policy-material`;
 
 type BuildReviewArtifactVersion = 1 | typeof ARTIFACT_VERSION;
 export type BuildReviewArtifactRubric = BuildReviewRubricId | string;

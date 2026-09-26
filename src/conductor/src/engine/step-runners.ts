@@ -102,7 +102,7 @@ import { discoverClaudeReviewPolicies, type ClaudeMetadataCommand, type ClaudeRe
 import { createCodexAppServerTransport, listCodexInstalledReviewSkills, type CodexAppServerTransport } from './build-review-policy-codex.js';
 import { renderBuildReviewFrozenInputScope } from './build-review-materialization.js';
 import { probeReadOnlyReviewCapability, type ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
-import { captureBuildReviewInputDigest, diffBuildReviewInputDigests, type BuildReviewInputDigestRoots } from './build-review-input-integrity.js';
+import { BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES, captureBuildReviewInputDigest, diffBuildReviewInputDigests, type BuildReviewInputDigestRoots } from './build-review-input-integrity.js';
 import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
 import {
   coordinateBuildReviewRubrics,
@@ -117,6 +117,7 @@ import {
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { classifyBuildReviewCacheLookup, readBuildReviewCacheEntry, tryWriteBuildReviewCacheEntry, writeBuildReviewCacheEntry, type BuildReviewCacheSemanticIdentity } from './build-review-cache.js';
 import {
+  BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY,
   parseBuildReviewCustomArtifactMember,
   buildReviewRubricPromptPath,
   readBuildReviewBranchArtifact,
@@ -2431,7 +2432,7 @@ export class DefaultStepRunner implements StepRunner {
         const resolved = resolveInstalledReviewPolicyCatalog({ skill: getBuildReviewRubricDescriptor(entry.id).skillName }, catalog);
         if (resolved.kind === 'failure') continue;
         const bundle = await this.buildReviewPolicyCapture(resolved.policy, {
-          materialParent: join(this.projectDir, '.pipeline', 'build-review', 'policy-material'),
+          materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY),
         });
         lapBuiltinPolicies.set(entry.id, { policy: resolved.policy, bundle });
       } catch {
@@ -2445,6 +2446,7 @@ export class DefaultStepRunner implements StepRunner {
       capturedPolicyMaterial: [...lapBuiltinPolicies.values()].map(({ bundle }) => bundle.materialPath),
       installedPolicyPackage: [...lapBuiltinPolicies.values()].map(({ policy }) => policy.packageRoot),
       evidenceRoot: customLapInputEvidenceRoot,
+      evidenceRootExcludes: BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES,
     };
     // A replay uses the same head-derived lap id. Its prior branch artifacts
     // are outputs of this lap, not inputs from an earlier lap, so clear only
@@ -3006,7 +3008,7 @@ export class DefaultStepRunner implements StepRunner {
         let bundle: CapturedReviewPolicyBundle;
         try {
           bundle = await this.buildReviewPolicyCapture(policy, {
-            materialParent: join(this.projectDir, '.pipeline', 'build-review', 'policy-material'),
+            materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY),
           });
         } catch (error) {
           const detail = `Installed build-review policy ${entry.skill} could not be loaded: ${error instanceof Error ? error.message : String(error)}`;
@@ -3704,7 +3706,7 @@ export class DefaultStepRunner implements StepRunner {
                   if (resolved.kind === 'failure') throw new Error(`installed ${branch.skillName} policy is unavailable: ${resolved.failure.code}`);
                   builtinPolicy = resolved.policy;
                   builtinBundle = await this.buildReviewPolicyCapture(builtinPolicy, {
-                    materialParent: join(this.projectDir, '.pipeline', 'build-review', 'policy-material'),
+                    materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY),
                   });
                   await capturePolicyInputDigest?.(builtinBundle.materialPath, builtinPolicy.packageRoot);
                 } catch (error) {

@@ -2,6 +2,34 @@ import { createHash } from 'node:crypto';
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
+import { AUDIT_TRAIL_DIRECTORY } from './audit-trail.js';
+import { BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY } from './build-review-artifacts.js';
+import { BUILD_REVIEW_CACHE_DIRECTORY } from './build-review-cache.js';
+import { FEATURE_EVENT_LOG_PATH } from './event-persister.js';
+import { STEP_HEARTBEAT_PATH } from './step-heartbeat.js';
+
+const PIPELINE_DIRECTORY = '.pipeline/';
+
+function pipelineRelative(path: string): string {
+  if (!path.startsWith(PIPELINE_DIRECTORY)) throw new Error(`engine-owned lap write is outside the pipeline: ${path}`);
+  return path.slice(PIPELINE_DIRECTORY.length);
+}
+
+/**
+ * Pipeline paths the engine itself appends to or rewrites while a lap runs
+ * (event ledgers, heartbeat, verdict cache, captured policy copies). They are
+ * relative to the pipeline evidence root and derived from their writers' own
+ * path constants, so a lap never invalidates itself through its telemetry.
+ * Captured policy bytes are protected by their own digest root instead.
+ */
+export const BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES: readonly string[] = Object.freeze([
+  FEATURE_EVENT_LOG_PATH,
+  AUDIT_TRAIL_DIRECTORY,
+  STEP_HEARTBEAT_PATH,
+  BUILD_REVIEW_CACHE_DIRECTORY,
+  BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY,
+].map(pipelineRelative));
+
 export const BUILD_REVIEW_INPUT_ROOT_KINDS = [
   'frozenHead',
   'frozenBaseline',
