@@ -116,7 +116,7 @@ it('composes one ordered provider context across the interactive run after regis
       'validateRegisteredProviderSelections',
   );
   const markInitializedCall = calls.find(
-    (call) => call.expression.getText(sourceFile) === 'registry.markInitialized',
+    (call) => call.expression.getText(sourceFile) === 'options.registry.markInitialized',
   );
   const subscriberStart = calls.find(
     (call) => call.expression.getText(sourceFile) === 'subscriber.start',
@@ -176,9 +176,9 @@ it('composes one ordered provider context across the interactive run after regis
     selectedProviderKeyBindings: 0,
     configuredProviderNormalization:
       'normalizeProviderSelection(config?.llm_provider)',
-    validationConfig: 'config: config ?? {}',
+    validationConfig: 'config: options.config ?? {}',
     validationRegistry:
-      "registeredProviders: registry.list('llm_provider')",
+      "registeredProviders: options.registry.list('llm_provider')",
     runtimeRegistry: 'registry',
     contextIsConst: true,
     contextProperties: {
@@ -996,8 +996,8 @@ it('binds every production step-resolution call to the policy owned by its execu
               ts.isVariableDeclaration(defaultDeclaration) &&
               ts.isIdentifier(defaultDeclaration.name) &&
               defaultDeclaration.name.text === 'CLAUDE_MODEL_POLICY' &&
-              defaultDeclaration.getSourceFile().fileName.endsWith(
-                '/engine/provider-model-policy.ts',
+              /\/engine\/provider-model-policy(?:-defaults)?\.ts$/.test(
+                defaultDeclaration.getSourceFile().fileName,
               ),
           );
           return parameter !== undefined && canonicalClaudeDefault === true;

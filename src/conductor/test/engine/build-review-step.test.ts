@@ -685,7 +685,8 @@ describe('build_review structured rubric dispatch', () => {
       nativeSchemaCapability: { nativeOutputSchema: true },
       invoke: capableInvoke,
     };
-    const runner = new DefaultStepRunner(incapable, 'runtime-review', '/fixture', {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-schema-capable-'));
+    const runner = new DefaultStepRunner(incapable, 'runtime-review', projectDir, {
       config: { llm_provider: ['codex', 'claude'] } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([
         { key: 'codex', provider: incapable, lifecycleCapability: incapable.lifecycleCapability, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) },
@@ -696,14 +697,18 @@ describe('build_review structured rubric dispatch', () => {
     });
     const mixedBranch = { ...branch, policy: { ...branch.policy, llm_provider: ['codex', 'claude'] } };
 
-    const result = await (runner as unknown as {
-      dispatchBuildReviewRubric: (value: typeof mixedBranch, reviewProjection: typeof projection) => Promise<unknown>;
-    }).dispatchBuildReviewRubric(mixedBranch, projection);
+    try {
+      const result = await (runner as unknown as {
+        dispatchBuildReviewRubric: (value: typeof mixedBranch, reviewProjection: typeof projection) => Promise<unknown>;
+      }).dispatchBuildReviewRubric(mixedBranch, projection);
 
-    expect(incapableInvoke).not.toHaveBeenCalled();
-    expect(capableInvoke).toHaveBeenCalledOnce();
-    expect(capableInvoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output.jsonSchema);
-    expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
+      expect(incapableInvoke).not.toHaveBeenCalled();
+      expect(capableInvoke).toHaveBeenCalledOnce();
+      expect(capableInvoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output.jsonSchema);
+      expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('keeps an adapter-reported native schema refusal on the native-schema-unsupported lane', async () => {
@@ -718,7 +723,8 @@ describe('build_review structured rubric dispatch', () => {
       nativeSchemaCapability: { nativeOutputSchema: true },
       invoke,
     };
-    const runner = new DefaultStepRunner(provider, 'runtime-review', '/fixture', {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-schema-refusal-'));
+    const runner = new DefaultStepRunner(provider, 'runtime-review', projectDir, {
       config: { llm_provider: ['claude'] } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{
         key: 'claude', provider, lifecycleCapability: provider.lifecycleCapability, nativeSchemaCapability: provider.nativeSchemaCapability,
@@ -728,12 +734,16 @@ describe('build_review structured rubric dispatch', () => {
       configuredProviders: ['claude'],
     });
 
-    const result = await (runner as unknown as {
-      dispatchBuildReviewRubric: (value: typeof branch, reviewProjection: typeof projection) => Promise<unknown>;
-    }).dispatchBuildReviewRubric(branch, projection);
+    try {
+      const result = await (runner as unknown as {
+        dispatchBuildReviewRubric: (value: typeof branch, reviewProjection: typeof projection) => Promise<unknown>;
+      }).dispatchBuildReviewRubric(branch, projection);
 
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({ kind: 'dispatch-failure', cause: 'native-schema-unsupported', detail: 'adapter could not apply the output schema' });
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({ kind: 'dispatch-failure', cause: 'native-schema-unsupported', detail: 'adapter could not apply the output schema' });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('gives a Codex rubric invocation an engine-owned schema scratch home and settles it', async () => {
