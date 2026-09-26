@@ -483,18 +483,32 @@ export async function probeInteractiveReadOnlyReviewCapabilities(options: {
 }
 
 /**
- * The provider-facing CLI boot boundary.  Keep discovery here instead of in
+ * Provider-dispatching command entries in the `main` command table. `inline`
+ * is the foreground `conduct run` path; `daemon` owns its equivalent boot in
+ * daemon-cli. Every other command must remain runnable without a provider CLI.
+ */
+export const CLI_PROVIDER_DISPATCHING_COMMANDS: ReadonlySet<string> = new Set([
+  'inline',
+  'daemon',
+]);
+
+/**
+ * The provider-facing CLI boot boundary. Keep discovery here instead of in
  * `main` so command handlers can opt in only when they can dispatch a provider,
  * while tests replace the process probe without replacing registry wiring.
  */
 export async function bootDispatchingCliProviders(options: {
+  readonly command: string;
   readonly registry: PluginRegistry;
   readonly events: ConductorEventEmitter;
   readonly config: HarnessConfig | undefined;
   readonly rendererOpts: TerminalRendererOptions;
   readonly providerDiscoveryRunner?: ProviderVersionProbeRunner;
-}): Promise<ReturnType<typeof registerCliBuiltins>> {
-  const discovery = await discoverInstalledProviders({
+  readonly discover?: typeof discoverInstalledProviders;
+}): Promise<ReturnType<typeof registerCliBuiltins> | undefined> {
+  if (!CLI_PROVIDER_DISPATCHING_COMMANDS.has(options.command)) return undefined;
+
+  const discovery = await (options.discover ?? discoverInstalledProviders)({
     events: options.events,
     ...(options.providerDiscoveryRunner ? { runner: options.providerDiscoveryRunner } : {}),
   });
@@ -711,6 +725,39 @@ export async function overlapScanCommand(
   return 0;
 }
 
+/**
+ * Dispatch command-table entries that never need a provider before the
+ * provider-aware foreground run bootstraps its registry.
+ */
+export async function dispatchNonDispatchingCliCommand(
+  argv: readonly string[],
+  projectRoot: string,
+  deps: {
+    readonly discoverProviders?: () => Promise<unknown>;
+    readonly dispatchRateCard?: typeof dispatchRateCard;
+    readonly dispatchOverlapScan?: typeof overlapScanCommand;
+    readonly dispatchRender?: typeof dispatchRender;
+  } = {},
+): Promise<number | undefined> {
+  if (CLI_PROVIDER_DISPATCHING_COMMANDS.has(argv[2])) {
+    await deps.discoverProviders?.();
+    return undefined;
+  }
+
+  const renderCmd = detectRenderCommand([...argv]);
+  if (renderCmd) return (deps.dispatchRender ?? dispatchRender)(renderCmd, projectRoot);
+
+  const rateCardCmd = detectRateCardCommand([...argv]);
+  if (rateCardCmd) return (deps.dispatchRateCard ?? dispatchRateCard)(rateCardCmd, projectRoot);
+
+  const overlapScanCmd = detectOverlapScanCommand([...argv]);
+  if (overlapScanCmd) {
+    return (deps.dispatchOverlapScan ?? overlapScanCommand)(overlapScanCmd, { cwd: projectRoot });
+  }
+
+  return undefined;
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -723,6 +770,15 @@ async function main(): Promise<void> {
   if (!daemonSessionVerdict.allowed) {
     console.error(`Error: ${daemonSessionVerdict.message}`);
     process.exitCode = 1;
+    return;
+  }
+
+  const nonDispatchingExitCode = await dispatchNonDispatchingCliCommand(
+    process.argv,
+    process.cwd(),
+  );
+  if (nonDispatchingExitCode !== undefined) {
+    process.exitCode = nonDispatchingExitCode;
     return;
   }
 
@@ -895,25 +951,6 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
-  // Render subcommand (`render-diagrams <file>...`) runs NON-INTERACTIVELY and
-  // exits — it renders the Mermaid blocks in the given Markdown via the
-  // configured mermaid_renderer preset. Best-effort; mirrors the dispatch pattern.
-  const renderCmd = detectRenderCommand(process.argv);
-  if (renderCmd) {
-    const code = await dispatchRender(renderCmd, process.cwd());
-    process.exit(code);
-  }
-
-  // Rate-card subcommand (`rate-card refresh|show`) runs NON-INTERACTIVELY and
-  // exits — maintains the committed per-model token price card the codex
-  // adapter prices its dispatches from. Network fetch lives here, never on the
-  // dispatch path.
-  const rateCardCmd = detectRateCardCommand(process.argv);
-  if (rateCardCmd) {
-    const code = await dispatchRateCard(rateCardCmd, process.cwd());
-    process.exit(code);
-  }
-
   // Shipped-record subcommand (`shipped-record --slug <s> --pr <url|local>`)
   // runs NON-INTERACTIVELY and exits — commits the `.docs/shipped/<slug>.md`
   // dedup record on the current branch (invoked by /finish on the impl branch
@@ -1075,16 +1112,6 @@ async function main(): Promise<void> {
   const haltIssuesCmd = detectHaltIssuesSweepCommand(process.argv);
   if (haltIssuesCmd) {
     const code = await dispatchHaltIssuesSweep(haltIssuesCmd, process.cwd());
-    process.exit(code);
-  }
-
-  // Overlap-scan subcommand (`overlap-scan --files ... --source-ref ...
-  // --base ... --cwd ...`, #523 Task 7) runs NON-INTERACTIVELY and exits —
-  // advisory DECIDE-time scan for unmerged sibling-branch overlap plus open
-  // blockers. Mirrors the evidence/task-cli dispatch pattern; always exits 0.
-  const overlapScanCmd = detectOverlapScanCommand(process.argv);
-  if (overlapScanCmd) {
-    const code = await overlapScanCommand(overlapScanCmd, { cwd: process.cwd() });
     process.exit(code);
   }
 
@@ -1550,11 +1577,15 @@ async function main(): Promise<void> {
   const persister = new EventPersister(eventsLogPath, events);
   persister.start();
   const subscriber = await bootDispatchingCliProviders({
+    command: 'inline',
     registry,
     events,
     config,
     rendererOpts,
   });
+  if (!subscriber) {
+    throw new Error('Provider discovery was not enabled for the inline command');
+  }
 
   // Compose one provider-routing context from the complete frozen registry.
   // The ordered config survives intact; its first entry is only the
