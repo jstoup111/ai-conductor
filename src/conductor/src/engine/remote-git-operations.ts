@@ -219,7 +219,9 @@ export async function executeRemoteGit(
           reason: error.reason,
         });
       } catch {
-        return { kind: 'failed', error: messageFor(error), targets: resolution.targets };
+        // The warning could not be delivered: make no operator attempt and
+        // surface the typed bot-auth refusal to the caller (Story 4, AB-3).
+        throw error;
       }
       try {
         await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd, credential: 'operator', endpoint: resolution.targets[0].endpoint });
