@@ -67,6 +67,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Self-host builds no longer false-halt when Claude Code's skill sync rewrites its `.last-complete-round` marker or its policy-limits fetch stamp. ([implementation PR #2749](https://github.com/jstoup111/ai-conductor/pull/2749)).
 - A prd_audit remediation lap that has reached its cap now halts before dispatching remediate, so no remediate cost is spent and no remediation plan is stranded. ([implementation PR #2755](https://github.com/jstoup111/ai-conductor/pull/2755)).
 - Self-host Codex dispatches no longer fail with ENXIO while an interactive Codex session is open. ([implementation PR #2761](https://github.com/jstoup111/ai-conductor/pull/2761)).
+- A raised prd_audit or as-built lap budget is now honored by validation-group remediation instead of halting needs-human after two rounds. ([implementation PR #2757](https://github.com/jstoup111/ai-conductor/pull/2757)).
 
 ## [1.4.0] - 2026-09-19
 
