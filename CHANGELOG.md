@@ -68,6 +68,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A prd_audit remediation lap that has reached its cap now halts before dispatching remediate, so no remediate cost is spent and no remediation plan is stranded. ([implementation PR #2755](https://github.com/jstoup111/ai-conductor/pull/2755)).
 - Self-host Codex dispatches no longer fail with ENXIO while an interactive Codex session is open. ([implementation PR #2761](https://github.com/jstoup111/ai-conductor/pull/2761)).
 - A raised prd_audit or as-built lap budget is now honored by validation-group remediation instead of halting needs-human after two rounds. ([implementation PR #2757](https://github.com/jstoup111/ai-conductor/pull/2757)).
+- Daemons now avoid providers whose usage limit has been exhausted during a retry episode. ([implementation PR #2743](https://github.com/jstoup111/ai-conductor/pull/2743)).
 
 ## [1.4.0] - 2026-09-19
 
