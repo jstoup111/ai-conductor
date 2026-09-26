@@ -8238,6 +8238,11 @@ export class Conductor {
                     member,
                     `Validation group "${step.name}" branch "${member.name}" produced no-verdict: ${outcome.reason}.`,
                   );
+                } else if (outcome.kind === 'mechanical-fault') {
+                  await closeMemberFailure(
+                    member,
+                    `Validation group "${step.name}" branch "${member.name}" produced mechanical-fault: ${outcome.reason}.`,
+                  );
                 }
               }
             };
@@ -8717,7 +8722,29 @@ export class Conductor {
             const mechanicalFaultIdx = outcomes.findIndex((outcome) => outcome.kind === 'mechanical-fault');
             if (mechanicalFaultIdx !== -1) {
               const mechanicalFault = outcomes[mechanicalFaultIdx] as MechanicalFaultOutcome;
+              const mechanicalFaultMember = membership.dispatchable[mechanicalFaultIdx]!;
               await closeSettledMembers(outcomes);
+              // S6.11: a mechanical fault is a no-verdict branch — apply the
+              // same step-failure handling: the member is recorded failed and
+              // satisfied siblings are retained, with no synthetic gap.
+              try {
+                await this.commitStateChanges(state, `fail ${step.name} validation group`, {
+                  ...Object.fromEntries(
+                    membership.dispatchable.flatMap((member, idx) =>
+                      idx !== mechanicalFaultIdx && memberSatisfiedAtJoin(idx)
+                        ? [[member.name, 'done'], [`${builtinGroup.name}__${member.name}`, 'done']]
+                        : [],
+                    ),
+                  ),
+                  [mechanicalFaultMember.name]: 'failed',
+                  last_step: step.name,
+                });
+              } catch (err) {
+                (this.log ?? console.warn)(
+                  `[conductor] validation-group mechanical-fault halt could not persist member state: ` +
+                    `${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
               await this.haltForAsBuiltFault(state, mechanicalFault.reason);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
