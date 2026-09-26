@@ -27,6 +27,11 @@ import { execa } from 'execa';
 import { dispatchTestSuiteCommand } from './test-suite-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import { makeProductionGh, type GhRunner, type GithubMutationExecutionContext } from './tracker-client.js';
+import {
+  DEFAULT_PROVIDER,
+  providerDescriptor,
+  resolveProviderExecutable,
+} from '../execution/provider-catalog.js';
 
 export const CI_FIX_HINT_MAX_BYTES = 24_576;
 export const CI_FIX_METADATA_MAX_BYTES = 12_288;
@@ -695,7 +700,12 @@ export async function defaultCiFixProbe(): Promise<{
   stderr: string;
 }> {
   try {
-    const result = await execa('claude', ['--version'], { reject: false });
+    const descriptor = providerDescriptor(DEFAULT_PROVIDER);
+    const result = await execa(
+      resolveProviderExecutable(DEFAULT_PROVIDER),
+      [...descriptor.versionArgv],
+      { reject: false },
+    );
     return {
       exitCode: result.exitCode ?? 1,
       stdout: result.stdout ?? '',

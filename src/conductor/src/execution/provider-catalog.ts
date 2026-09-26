@@ -24,6 +24,7 @@ export type ProviderCapabilityFlags = Readonly<Partial<Record<ProviderCapability
 
 /** The provider-owned installed-policy discovery mechanism, when supported. */
 export type ReviewPolicyCatalogDiscovery = 'claude-metadata' | 'codex-app-server';
+export type ProviderDiagnosticEnvelope = 'claude-json' | 'codex-jsonl';
 
 /** Follow-up intakes that own capability-specific provider behavior. */
 export const PROVIDER_CAPABILITY_OWNERS = {
@@ -39,6 +40,8 @@ export interface ProviderFactoryOptions {
 
 export interface BuiltInProviderDescriptor {
   readonly id: string;
+  /** Human-readable name for diagnostics and operator-facing status. */
+  readonly displayName: string;
   readonly createAdapter: (options?: ProviderFactoryOptions) => LLMProvider;
   readonly defaultExecutable: string;
   readonly executableOverrideEnv: string;
@@ -49,6 +52,8 @@ export interface BuiltInProviderDescriptor {
   readonly defaultHome: string;
   readonly modelPolicy: ProviderModelPolicy;
   readonly capabilities: ProviderCapabilityFlags;
+  /** Known machine-envelope formats, ordered by the adapter's native output. */
+  readonly diagnosticEnvelopes: readonly ProviderDiagnosticEnvelope[];
   /** Registered discovery mechanism for installed build-review policies. */
   readonly reviewPolicyCatalog?: ReviewPolicyCatalogDiscovery;
 }
@@ -74,6 +79,7 @@ const PI_MODEL_POLICY: ProviderModelPolicy = {
 export const BUILT_IN_PROVIDERS = [
   {
     id: 'claude',
+    displayName: 'Claude',
     createAdapter: (): LLMProvider => new ClaudeProvider(
       undefined,
       undefined,
@@ -96,10 +102,12 @@ export const BUILT_IN_PROVIDERS = [
       writeFence: true,
       nativeSchema: true,
     } as const satisfies ProviderCapabilityFlags,
+    diagnosticEnvelopes: ['claude-json', 'codex-jsonl'],
     reviewPolicyCatalog: 'claude-metadata',
   },
   {
     id: 'codex',
+    displayName: 'Codex',
     createAdapter: (options = {}): LLMProvider => new CodexProvider(
       undefined,
       resolveProviderExecutable('codex'),
@@ -123,10 +131,12 @@ export const BUILT_IN_PROVIDERS = [
       supportsSessionResume: false,
       nativeSchema: true,
     } as const satisfies ProviderCapabilityFlags,
+    diagnosticEnvelopes: ['codex-jsonl', 'claude-json'],
     reviewPolicyCatalog: 'codex-app-server',
   },
   {
     id: 'pi',
+    displayName: 'Pi',
     createAdapter: (): LLMProvider => new PiProvider(resolveProviderExecutable('pi')),
     defaultExecutable: 'pi',
     executableOverrideEnv: 'PI_EXECUTABLE',
@@ -139,12 +149,29 @@ export const BUILT_IN_PROVIDERS = [
     capabilities: {
       supportsSessionResume: false,
     } as const satisfies ProviderCapabilityFlags,
+    diagnosticEnvelopes: [],
   },
 ] as const satisfies readonly BuiltInProviderDescriptor[];
 
 export type BuiltInProviderId = (typeof BUILT_IN_PROVIDERS)[number]['id'];
 
 export const DEFAULT_PROVIDER: BuiltInProviderId = 'claude';
+
+/** Catalog lookup that keeps plugin callers on their existing generic path. */
+export function findBuiltInProviderDescriptor(
+  id: string,
+): (typeof BUILT_IN_PROVIDERS)[number] | undefined {
+  return BUILT_IN_PROVIDERS.find((candidate) => candidate.id === id);
+}
+
+export function isBuiltInProviderId(id: string): id is BuiltInProviderId {
+  return findBuiltInProviderDescriptor(id) !== undefined;
+}
+
+/** Built-ins have catalog-owned operator labels; plugins retain their key. */
+export function providerDisplayName(id: string): string {
+  return findBuiltInProviderDescriptor(id)?.displayName ?? id;
+}
 
 type ProviderWithCapability<Provider, Capability extends ProviderCapability> = Provider extends {
   readonly capabilities: Readonly<Record<Capability, true>>;
@@ -180,7 +207,7 @@ export function supportsProviderCapability(
 }
 
 export function providerDescriptor(id: BuiltInProviderId): (typeof BUILT_IN_PROVIDERS)[number] {
-  const descriptor = BUILT_IN_PROVIDERS.find((candidate) => candidate.id === id);
+  const descriptor = findBuiltInProviderDescriptor(id);
   if (!descriptor) {
     throw new Error(`Unknown built-in provider: ${id}`);
   }

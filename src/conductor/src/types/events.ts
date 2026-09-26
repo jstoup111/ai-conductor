@@ -9,6 +9,7 @@ import type {
   ProviderStreamObservation,
   TokenUsage,
 } from '../execution/llm-provider.js';
+import type { ProviderWith } from '../execution/provider-catalog.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
 import type { SchedulingUnitRef } from './scheduling-unit.js';
 import type { LandGateRejectionIdentifier } from '../engine/engineer/land-spec.js';
@@ -138,7 +139,7 @@ export type CredentialParkProgressDegradation =
 
 type CredentialParkProgressEventBase = {
   type: 'credentials_park_progress';
-  provider: 'codex';
+  provider: ProviderWith<'readiness'>['id'];
   source: AuthenticationSource;
   elapsedSeconds: number;
 };

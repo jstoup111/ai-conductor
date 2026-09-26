@@ -19,6 +19,11 @@
 // recognize as a machine envelope is returned verbatim, so plain-prose stdout,
 // stderr, crash traces, and future/unknown payload shapes never lose detail.
 
+import {
+  findBuiltInProviderDescriptor,
+  type ProviderDiagnosticEnvelope,
+} from './provider-catalog.js';
+
 /** Telemetry extracted from a recognized provider result envelope. */
 interface EnvelopeSummary {
   /** Human-readable agent text, when the envelope carried one. */
@@ -266,10 +271,15 @@ function formatHeadline(provider: string, summary: EnvelopeSummary): string {
  */
 export function summarizeProviderDiagnostic(provider: string, output: string): string {
   if (output.trim().length === 0) return output;
-  const summary =
-    provider === 'codex'
-      ? (parseCodexEnvelope(output) ?? parseClaudeEnvelope(output))
-      : (parseClaudeEnvelope(output) ?? parseCodexEnvelope(output));
+  const parsers: Record<ProviderDiagnosticEnvelope, (value: string) => EnvelopeSummary | undefined> = {
+    'claude-json': parseClaudeEnvelope,
+    'codex-jsonl': parseCodexEnvelope,
+  };
+  const formats = findBuiltInProviderDescriptor(provider)?.diagnosticEnvelopes
+    ?? ['claude-json', 'codex-jsonl'] satisfies readonly ProviderDiagnosticEnvelope[];
+  const summary = formats
+    .map((format) => parsers[format](output))
+    .find((parsed) => parsed !== undefined);
   if (!summary) return output;
 
   const headline = formatHeadline(provider, summary);

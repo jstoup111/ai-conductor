@@ -45,6 +45,7 @@ import {
   type ProviderSetupExhaustion,
 } from './provider-setup-failure.js';
 import { acquireScratchHome, releaseScratchHome } from './self-host/provider-scratch.js';
+import type { SelfHostProviderId } from './self-host/provider-home.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -837,6 +838,8 @@ export async function executeProviderCandidates({
     let nativeSchemaScratchFailure: unknown;
     let invocationResult: Promise<InvokeResult> | undefined;
     const teardownCallbacks: Array<() => Promise<void>> = [];
+    const supportsNativeSchemaCapability =
+      runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
     const invokeProvider = (
       overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>,
       onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>,
@@ -860,7 +863,7 @@ export async function executeProviderCandidates({
           resolved,
           options: candidateInvocationOptions,
           prepareInvocationOptions: async (rungOptions) => {
-            if (selfHost === undefined && providerKey === 'codex' && rungOptions.nativeSchema !== undefined && nativeSchemaScratch !== undefined) {
+            if (selfHost === undefined && supportsNativeSchemaCapability && rungOptions.nativeSchema !== undefined && nativeSchemaScratch !== undefined) {
               if (schemaScratchHome === undefined) {
                 schemaScratchRunId = runId ?? randomUUID();
                 try {
@@ -868,7 +871,7 @@ export async function executeProviderCandidates({
                     worktreeRoot: nativeSchemaScratch.worktreeRoot,
                     repository: nativeSchemaScratch.repository,
                     featureSlug: nativeSchemaScratch.featureSlug || basename(nativeSchemaScratch.worktreeRoot),
-                    runId: schemaScratchRunId, attempt, provider: 'codex',
+                    runId: schemaScratchRunId, attempt, provider: providerKey as SelfHostProviderId,
                   });
                 } catch (error) {
                   nativeSchemaScratchFailure = error;
@@ -942,7 +945,7 @@ export async function executeProviderCandidates({
               if (schemaScratchHome !== undefined) {
                 const released = await releaseScratchHome({
                   worktreeRoot: nativeSchemaScratch!.worktreeRoot,
-                  runId: schemaScratchRunId!, attempt, provider: 'codex',
+                  runId: schemaScratchRunId!, attempt, provider: providerKey as SelfHostProviderId,
                 });
                 if (released.kind === 'failed') {
                   nativeSchemaScratchFailure = new Error(`native schema scratch teardown failed: ${released.error}`);
@@ -962,8 +965,6 @@ export async function executeProviderCandidates({
     const supportsLifecycleCapability =
       runtimes.lifecycleCapabilityFor(providerKey)?.synchronousSpawnPermit === true;
     const requiresNativeSchemaCapability = candidateOptions.nativeSchema !== undefined;
-    const supportsNativeSchemaCapability =
-      runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
     let result: InvokeResult;
     try {
       result = requiresLifecycleCapability && !supportsLifecycleCapability

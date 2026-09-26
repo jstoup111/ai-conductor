@@ -1,5 +1,6 @@
 import type { ObservedInterval } from './observed-interval.js';
 import type { ProviderSetupExhaustion } from '../engine/provider-setup-failure.js';
+import type { ProviderWith } from './provider-catalog.js';
 
 export interface TokenUsage {
   /**
@@ -102,7 +103,7 @@ export type UnrelatedHealth = 'degraded';
  * output and credential material deliberately have no representation here.
  */
 interface AuthenticationReadinessBase {
-  provider: 'codex';
+  provider: ProviderWith<'readiness'>['id'];
   source: AuthenticationSource;
 }
 
@@ -165,7 +166,7 @@ export interface SelfHostAuthPreparation {
 }
 
 export interface SelfHostAuthContext {
-  provider: 'claude' | 'codex';
+  provider: ProviderWith<'selfHost'>['id'];
   homeDir: string;
 }
 
