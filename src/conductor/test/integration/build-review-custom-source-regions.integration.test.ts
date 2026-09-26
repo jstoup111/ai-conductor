@@ -46,10 +46,10 @@ function git() {
   };
 }
 
-async function review(region: { path: string; startLine: number; endLine: number; contentHash: string }, declaredDependencies: string[] = []) {
+async function review(region: { path: string; startLine: number; endLine: number; contentHash: string }, declaredDependencies: string[] = [], evidenceLocations = [`${region.path}:${region.startLine}`]) {
   const root = await fixture();
   const payload = { kind: 'custom-findings', version: 'v1', findings: [{
-    concernId: 'concern.one', summary: 'A concern.', evidenceLocations: [`${region.path}:${region.startLine}`],
+    concernId: 'concern.one', summary: 'A concern.', evidenceLocations,
     sourceRegions: [{ ...region, display: 'cited region' }],
   }] };
   const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
@@ -93,6 +93,17 @@ async function review(region: { path: string; startLine: number; endLine: number
 }
 
 describe('custom source regions are validated against frozen source bytes', () => {
+  it('persists a Codex finding with an inclusive evidence range as a judged FAIL', async () => {
+    const { artifact } = await review(
+      { path: 'src/a.ts', startLine: 1, endLine: 2, contentHash: sha(HEAD_TEXT) },
+      [], ['src/a.ts:1-2'],
+    );
+    expect(artifact.result).toMatchObject({
+      kind: 'judged', verdict: 'FAIL', candidate: { provider: 'codex' },
+      findings: [{ evidenceLocations: ['src/a.ts:1-2'], identity: { id: expect.stringMatching(/^sha256:/) } }],
+    });
+  });
+
   it('admits a region whose line range and hash match the frozen head blob', async () => {
     const { artifact, prompt } = await review({ path: 'src/a.ts', startLine: 2, endLine: 2, contentHash: sha('export const other = 2;\n') });
     expect(artifact.result).toMatchObject({ kind: 'judged', verdict: 'FAIL', findings: [{ concernId: 'concern.one' }] });
