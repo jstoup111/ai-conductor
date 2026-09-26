@@ -44,14 +44,20 @@ import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
 import {
   normalizeProviderSelection,
+  validateProviderInstallation,
   validateRegisteredProviderSelections,
 } from './engine/provider-selection.js';
+import {
+  discoverInstalledProviders,
+  type ProviderVersionProbeRunner,
+} from './engine/provider-discovery.js';
 import { resolveBuildReviewConfig } from './engine/resolved-config.js';
 import {
   probeReadOnlyReviewCapability,
   type ReadOnlyReviewCapability,
 } from './engine/build-review-read-only-capability.js';
 import { ConductorEventEmitter } from './ui/events.js';
+import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
 import {
   emitDeprecatedConfigKeyEvents,
   loadConfig,
@@ -474,6 +480,38 @@ export async function probeInteractiveReadOnlyReviewCapabilities(options: {
     }
     return [provider, capability] as const;
   }))));
+}
+
+/**
+ * The provider-facing CLI boot boundary.  Keep discovery here instead of in
+ * `main` so command handlers can opt in only when they can dispatch a provider,
+ * while tests replace the process probe without replacing registry wiring.
+ */
+export async function bootDispatchingCliProviders(options: {
+  readonly registry: PluginRegistry;
+  readonly events: ConductorEventEmitter;
+  readonly config: HarnessConfig | undefined;
+  readonly rendererOpts: TerminalRendererOptions;
+  readonly providerDiscoveryRunner?: ProviderVersionProbeRunner;
+}): Promise<ReturnType<typeof registerCliBuiltins>> {
+  const discovery = await discoverInstalledProviders({
+    events: options.events,
+    ...(options.providerDiscoveryRunner ? { runner: options.providerDiscoveryRunner } : {}),
+  });
+  const subscriber = registerCliBuiltins(
+    options.registry,
+    options.events,
+    options.config,
+    options.rendererOpts,
+    new Set(discovery.installed),
+  );
+  options.registry.markInitialized();
+  validateProviderInstallation({ config: options.config ?? {}, discovery });
+  validateRegisteredProviderSelections({
+    config: options.config ?? {},
+    registeredProviders: options.registry.list('llm_provider'),
+  });
+  return subscriber;
 }
 
 // Harness VERSION lookup for the migration check. Probes the invocation cwd
@@ -1506,11 +1544,16 @@ async function main(): Promise<void> {
 
   // Discover and register external plugins, then built-ins
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-  const subscriber = registerCliBuiltins(registry, events, config, rendererOpts);
-  registry.markInitialized();
-  validateRegisteredProviderSelections({
-    config: config ?? {},
-    registeredProviders: registry.list('llm_provider'),
+  // Start persistence before boot discovery so the boot event is retained in
+  // the same ledger as the dispatch it authorizes.
+  const eventsLogPath = join(pipelineDir, 'events.jsonl');
+  const persister = new EventPersister(eventsLogPath, events);
+  persister.start();
+  const subscriber = await bootDispatchingCliProviders({
+    registry,
+    events,
+    config,
+    rendererOpts,
   });
 
   // Compose one provider-routing context from the complete frozen registry.
@@ -1542,10 +1585,6 @@ async function main(): Promise<void> {
   const renderer = registry.get<UIRenderer>('ui_renderer', config?.ui_renderer ?? 'terminal');
   subscriber.start([renderer]);
 
-  // Wire EventPersister: appends every ConductorEvent as a JSON line to .pipeline/events.jsonl
-  const eventsLogPath = join(pipelineDir, 'events.jsonl');
-  const persister = new EventPersister(eventsLogPath, events);
-  persister.start();
   await emitDeprecatedConfigKeyEvents(configResult, events);
   // Every foreground mode can reach build_review.  The daemon performs this
   // once at daemon start; foreground runs establish the same frozen evidence

@@ -55,8 +55,13 @@ import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
 import {
   normalizeProviderSelection,
+  validateProviderInstallation,
   validateRegisteredProviderSelections,
 } from './engine/provider-selection.js';
+import {
+  discoverInstalledProviders,
+  type ProviderVersionProbeRunner,
+} from './engine/provider-discovery.js';
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import {
   Conductor,
@@ -482,6 +487,8 @@ export interface DaemonModeOptions {
   probeGhVersion?: typeof probeGhVersion;
   /** Provider read-only review capability probe; injectable at daemon startup. */
   probeReadOnlyReviewCapability?: typeof probeReadOnlyReviewCapability;
+  /** Injectable process boundary for the provider installation probes at boot. */
+  providerDiscoveryRunner?: ProviderVersionProbeRunner;
   /**
    * Startup migration boundary (tests inject an ordering probe). Production
    * uses runOwnedHaltClassMigration.
@@ -1150,6 +1157,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const globalPluginsDir = join(process.env.HOME || '', '.ai-conductor', 'plugins');
   const projectPluginsDir = join(projectRoot, '.ai-conductor', 'plugins');
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
+  // Discover before registration: unavailable built-ins must never enter the
+  // registry, and configured unavailable ids need their installation diagnosis
+  // before the generic unknown-provider validation below.
+  const providerDiscovery = await discoverInstalledProviders({
+    events,
+    ...(opts.providerDiscoveryRunner ? { runner: opts.providerDiscoveryRunner } : {}),
+  });
   // Feature-scoped renderers are installed in beginFeatureRun (and via
   // createSlugScopedProviderExecution below) with the feature-owned logger.
   // This global subscriber renders anything emitted directly on the
@@ -1167,8 +1181,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     events,
     rendererOpts,
     config?.codex_doctor_timeout_seconds,
+    undefined,
+    new Set(providerDiscovery.installed),
   );
   registry.markInitialized();
+  validateProviderInstallation({
+    config: config ?? {},
+    discovery: providerDiscovery,
+  });
   validateRegisteredProviderSelections({
     config: config ?? {},
     registeredProviders: registry.list('llm_provider'),
