@@ -885,7 +885,11 @@ export async function executeProviderCandidates({
                   throw error;
                 }
               }
-              return { ...rungOptions, nativeSchemaScratchHome: schemaScratchHome };
+              return {
+                ...rungOptions,
+                nativeSchemaScratchHome: schemaScratchHome,
+                nativeSchemaScratchRoot: nativeSchemaScratch.worktreeRoot,
+              };
             }
             return rungOptions;
           },
