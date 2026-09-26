@@ -1356,12 +1356,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         baseBranch,
         git: finishPublicationGit,
         gh: finishPublicationGh,
+        events: featureEvents,
         repairPresentation: createProvenanceGuardedFinishPresentationRepair({
           projectRoot: wt.path,
           git: finishPublicationGit,
           gh: finishPublicationGh,
           baseBranch,
           log: featureLog,
+          events: featureEvents,
         }),
         observeReleaseReadiness: createProductionReleaseReadinessObserver({
           projectRoot: wt.path,

@@ -96,7 +96,7 @@ import { runProjectPrelude } from './engine/project-prelude.js';
 import { discoverPlugins } from './engine/plugin-loader.js';
 import { registerCliBuiltins } from './engine/cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
-import { EventPersister } from './engine/event-persister.js';
+import { EventPersister, startOperatorEventSpine } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { wireInteractiveOtelMetrics, wireOtelVisualizer } from './engine/otel/wire.js';
 import type { OtelVisualizerStartContext } from './engine/otel/wire.js';
@@ -782,7 +782,15 @@ async function main(): Promise<void> {
   // lessons. Dispatched before parseArgs, mirroring registry subcommand pattern.
   const engineerCmd = detectEngineerCommand(process.argv);
   if (engineerCmd) {
-    const code = await dispatchEngineer(engineerCmd);
+    // D9: operator engineer writebacks warn on the canonical spine before any
+    // operator-credential fallback.
+    const spine = startOperatorEventSpine(process.cwd());
+    let code: number;
+    try {
+      code = await dispatchEngineer(engineerCmd, { events: spine.events });
+    } finally {
+      spine.stop();
+    }
     process.exit(code);
   }
 
@@ -925,17 +933,15 @@ async function main(): Promise<void> {
         }
       },
     };
-    const events = new ConductorEventEmitter();
-    const persister = new EventPersister(join(process.cwd(), '.pipeline', 'events.jsonl'), events);
-    persister.start();
+    const spine = startOperatorEventSpine(process.cwd());
     try {
       process.exitCode = await dispatchGithubOperationCommand(githubOperationCmd, {
         cwd: process.cwd(),
         confirmation,
-        events,
+        events: spine.events,
       });
     } finally {
-      persister.stop();
+      spine.stop();
     }
     return;
   }
@@ -994,7 +1000,13 @@ async function main(): Promise<void> {
 
   const haltIssuesCmd = detectHaltIssuesSweepCommand(process.argv);
   if (haltIssuesCmd) {
-    const code = await dispatchHaltIssuesSweep(haltIssuesCmd, process.cwd());
+    const spine = startOperatorEventSpine(process.cwd());
+    let code: number;
+    try {
+      code = await dispatchHaltIssuesSweep(haltIssuesCmd, process.cwd(), { events: spine.events });
+    } finally {
+      spine.stop();
+    }
     process.exit(code);
   }
 
@@ -1047,7 +1059,12 @@ async function main(): Promise<void> {
     // a repository. Returning lets its actionable output flush to piped CLI
     // callers before Node exits naturally.
     if (daemonParkCmd.kind === 'reconcile-parked') {
-      process.exitCode = await dispatchDaemonPark(daemonParkCmd, { cwd: process.cwd() });
+      const spine = startOperatorEventSpine(process.cwd());
+      try {
+        process.exitCode = await dispatchDaemonPark(daemonParkCmd, { cwd: process.cwd(), events: spine.events });
+      } finally {
+        spine.stop();
+      }
       return;
     }
     const resolved = await resolveMainRepoRoot(process.cwd());
@@ -1623,11 +1640,13 @@ async function main(): Promise<void> {
       baseBranch: finishPublicationBaseBranch,
       git: finishPublicationGit,
       gh: finishPublicationGh,
+      events,
       repairPresentation: createProvenanceGuardedFinishPresentationRepair({
         projectRoot,
         git: finishPublicationGit,
         gh: finishPublicationGh,
         baseBranch: finishPublicationBaseBranch,
+        events,
       }),
       observeReleaseReadiness: createProductionReleaseReadinessObserver({
         projectRoot,

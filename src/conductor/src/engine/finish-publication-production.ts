@@ -13,7 +13,7 @@ import type { ConductState, FinishPublicationEvent, RunMode } from '../types/ind
 import type { HarnessConfig } from '../types/config.js';
 import type { StepRunResult } from './conductor.js';
 import { type GhRunner, type GitRunner } from './pr-labels.js';
-import { executeGithubOperation, type GithubOperationRunner } from './github-operations.js';
+import { executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { hasHaltSignal, isEngineFlooredBody } from './halt-pr-rehabilitation.js';
@@ -104,6 +104,8 @@ export interface ProductionFinishPublicationDeps {
   remoteMutation?: GithubMutationExecutionContext;
   /** Test-only terminal remote-Git seam; production uses executeRemoteGit. */
   remoteGit?: typeof executeRemoteGit;
+  /** Canonical event spine; required for D9 warned operator-credential fallback. */
+  events?: GithubOperationEventEmitter;
   /**
    * Production composition owns the ordered presentation repair.  Callers
    * inject the existing halt-rehabilitation/floor/ready composition so this
@@ -518,6 +520,7 @@ export function createProductionFinishPublicationCoordinator(
         featureDesc: state.feature_desc,
         git: deps.git,
         gh: deps.gh,
+        events: deps.events,
       });
       const operations = deps.operations ?? publication?.operations;
       // Publication starts with authority for the branch ref. Every later
@@ -533,6 +536,7 @@ export function createProductionFinishPublicationCoordinator(
           prUrl,
           git: deps.git,
           gh: deps.gh,
+          events: deps.events,
         });
         return retained?.operations;
       };
@@ -727,6 +731,7 @@ export function createProductionFinishPublicationCoordinator(
             remoteMutation: deps.remoteMutation ?? publication?.remoteMutation,
             remoteGit: deps.remoteGit,
             operations,
+            events: deps.events,
             // FINISH runs AFTER the finish-time `rebase` step, which rewrites
             // the feature branch's history — same work, new SHAs. The branch
             // therefore diverges from its own remote by construction, and a

@@ -341,3 +341,15 @@ export function startDaemonEventPersistence(
   for (const type of persistedEventTypes()) events.on(type, handler);
   return { stop: () => { for (const type of persistedEventTypes()) events.off(type, handler); } };
 }
+
+/**
+ * Short-lived operator CLI roots (github-operation, engineer, halt-issues,
+ * reconcile-parked) share one way onto the canonical spine: an emitter
+ * persisted to `<cwd>/.pipeline/events.jsonl`. Call `stop()` before exit.
+ */
+export function startOperatorEventSpine(cwd: string): { events: ConductorEventEmitter; stop: () => void } {
+  const events = new ConductorEventEmitter();
+  const persister = new EventPersister(join(cwd, '.pipeline', 'events.jsonl'), events);
+  persister.start();
+  return { events, stop: () => persister.stop() };
+}

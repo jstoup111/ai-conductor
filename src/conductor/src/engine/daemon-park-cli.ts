@@ -8,6 +8,7 @@
 // no heavy imports in the detector) so index.ts can decide whether to
 // dispatch before the pipeline boots.
 
+import type { GithubOperationEventEmitter } from './github-operations.js';
 import { existsSync, writeSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -129,6 +130,8 @@ export interface DaemonParkDeps {
   readPidRecordDiagnosed?: (repoPath: string) => Promise<PidRecordRead>;
   /** Read-only pid liveness probe; injectable to isolate CLI tests. */
   isLive?: (pid: number) => boolean;
+  /** Canonical event spine; D9 warned operator fallback for the record repair. */
+  events?: GithubOperationEventEmitter;
 }
 
 async function reportParkRunningWork(
@@ -226,6 +229,7 @@ export async function dispatchDaemonPark(
             runGit: deps.runGit,
             runGh: deps.runGh,
             log: out,
+            events: deps.events,
           })(request);
         });
       const configResult = await loadConfig(resolvedRoot);
