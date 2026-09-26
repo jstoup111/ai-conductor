@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.5.0] - 2026-09-25
+## [1.5.0] - 2026-09-26
 
 ### Added
 
@@ -64,6 +64,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Custom build_review rubrics now run on Claude; the output schema no longer uses a top-level oneOf, which the Claude API rejects. ([implementation PR #2739](https://github.com/jstoup111/ai-conductor/pull/2739)).
 - build_review testQuality no longer halts on resolved scopeResolutions entries missing associationReason; the schema and prompt now state each status's required fields. ([implementation PR #2744](https://github.com/jstoup111/ai-conductor/pull/2744)).
 - Self-host builds no longer false-halt when Claude Code's skill sync rewrites its `.last-complete-round` marker or its policy-limits fetch stamp. ([implementation PR #2749](https://github.com/jstoup111/ai-conductor/pull/2749)).
+- A prd_audit remediation lap that has reached its cap now halts before dispatching remediate, so no remediate cost is spent and no remediation plan is stranded. ([implementation PR #2755](https://github.com/jstoup111/ai-conductor/pull/2755)).
 
 ## [1.4.0] - 2026-09-19
 
