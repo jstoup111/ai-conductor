@@ -49,7 +49,8 @@ graph TD
 
     subgraph Engine["Engine authority"]
         VAL["validate + resolve references<br/>(ADR approved + decision exists; plan task exists)"]
-        FAULT["mechanical-fault lane: native-schema-unsupported ·<br/>structured-result-missing · invalid-structured-result · input-over-limit"]
+        FAULT["no-retry mechanical-fault halt (D7.1):<br/>native-schema-unsupported · input-over-limit"]
+        RETRY["structured-output fault: structured-result-missing ·<br/>invalid-structured-result → scored absent,<br/>rerun within retry budget → needs-human on exhaustion"]
         STAMP["stamp run identity (adr-2026-08-25 ship-tail)"]
         STORE["typed verdict artifact (sole authority)"]
         MD["rendered report .md (derived, never read back)"]
@@ -93,9 +94,11 @@ graph TD
     CAP -- yes --> PROV
     PROV --> SR
     SR --> VAL
+    SR -- missing --> RETRY
+    RETRY -- budget remains --> INV
     PARSE --> VAL
     REFS --> VAL
-    VAL -- rejected --> FAULT
+    VAL -- rejected --> RETRY
     VAL -- accepted --> STAMP
     STAMP --> STORE
     STORE --> MD
@@ -175,8 +178,9 @@ sequenceDiagram
   report is rendered from it and is never parsed. The engine, not the reviewer, is the writer, so
   the dispatch-write handshake and the mandatory-overwrite instruction in the skill no longer
   apply. Recorded-findings projection updates the typed store and re-renders.
-- **Mechanical-fault lane** — unsupported capability, missing structured result, invalid field, and
-  over-limit input are mechanical faults, never a substantive verdict.
+- **Mechanical-fault lanes** — none is ever a substantive verdict. Unsupported capability and
+  over-limit input (D7.1 input faults) halt with no retry. A missing or invalid structured result
+  scores absent and reruns within the step's retry budget, halting needs-human only on exhaustion.
 - **Dotted edges** — the skill invocation and the audit are not on the data path. The audit is
   scoped to the as-built section because the skill file also serves the pre-stories and
   drift-check modes.
