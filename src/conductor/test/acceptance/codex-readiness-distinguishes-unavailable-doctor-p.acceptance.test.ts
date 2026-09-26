@@ -18,7 +18,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Options } from 'execa';
 import { CodexProvider, type CodexDoctorRunner } from '../../src/execution/codex-provider.js';
+import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import { BUILT_IN_PROVIDERS } from '../../src/execution/provider-catalog.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
@@ -66,7 +68,17 @@ function doctorResult(stdout: unknown, exitCode = 0) {
 }
 
 function providerWithDoctor(runDoctor: CodexDoctorRunner): CodexProvider {
-  return new CodexProvider(runDoctor);
+  return new CodexProvider(runDoctor, 'codex', undefined, mockExeca as never);
+}
+
+function mockedCodexProvider(options?: { codexDoctorTimeoutMs?: number }): CodexProvider {
+  return new CodexProvider(
+    mockExeca as never,
+    'codex',
+    undefined,
+    mockExeca as never,
+    options?.codexDoctorTimeoutMs,
+  );
 }
 
 type ProbeFailedReadiness = {
@@ -337,6 +349,13 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
       if (!loaded.ok) return;
 
       const registry = new PluginRegistry();
+      const codexDescriptor = BUILT_IN_PROVIDERS.find(({ id }) => id === 'codex');
+      const claudeDescriptor = BUILT_IN_PROVIDERS.find(({ id }) => id === 'claude');
+      if (!codexDescriptor || !claudeDescriptor) throw new Error('built-in provider catalog is incomplete');
+      vi.spyOn(codexDescriptor, 'createAdapter').mockImplementation(mockedCodexProvider);
+      vi.spyOn(claudeDescriptor, 'createAdapter').mockImplementation(
+        () => new ClaudeProvider(undefined, mockExeca as never),
+      );
       registerCliBuiltins(registry, new ConductorEventEmitter(), loaded.config);
       registry.markInitialized();
       const codex = registry.get<CodexProvider>('llm_provider', 'codex');
