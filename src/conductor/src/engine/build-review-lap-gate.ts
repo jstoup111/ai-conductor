@@ -83,13 +83,18 @@ export class BuildReviewLapGate {
     if (this.pending.size === 0) this.open();
   }
 
-  /** Records a candidate's captured policy bytes and installed package as lap inputs. */
+  /**
+   * Records a candidate's captured policy bytes and installed package as lap inputs.
+   *
+   * A fallback candidate or model rung that follows a failed attempt captures
+   * its policy into fresh material after the barrier has opened. Its baseline
+   * is still taken before that candidate's own reviewer starts, and the engine
+   * created the material moments earlier, so it joins the settlement rather
+   * than aborting the lap.
+   */
   async registerPolicy(materialPath: string, packageRoot: string): Promise<void> {
     const key = `${materialPath}\u0000${packageRoot}`;
     if (this.registeredPolicies.has(key)) return;
-    if (this.opened) {
-      throw new Error('build-review lap policy baseline cannot be registered after the barrier opens');
-    }
     const roots: BuildReviewInputDigestRoots = {
       frozenHead: [],
       frozenBaseline: [],

@@ -26,6 +26,7 @@ import { withDaemonSessionMarker } from './daemon-session.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
+import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schema.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
@@ -365,7 +366,10 @@ export class CodexProvider implements LLMProvider {
           this.loadRates(options.cwd ?? process.cwd()),
         )
       : completion.tokenUsage;
-    return { ...completion, tokenUsage, observedIntervals: [interval] };
+    const structured = options.nativeSchema !== undefined && completion.finalStructuredResult !== undefined
+      ? { finalStructuredResult: fromCodexStrictResult(options.nativeSchema, completion.finalStructuredResult) }
+      : {};
+    return { ...completion, ...structured, tokenUsage, observedIntervals: [interval] };
   }
 
   /**
@@ -650,7 +654,7 @@ export class CodexProvider implements LLMProvider {
       worktreeRoot: (options.nativeSchemaScratchHome === undefined ? undefined : options.nativeSchemaScratchRoot)
         ?? options.cwd ?? process.cwd(),
       homeDir,
-      schema: options.nativeSchema!,
+      schema: toCodexStrictSchema(options.nativeSchema!) as Readonly<Record<string, unknown>>,
     });
   }
 
