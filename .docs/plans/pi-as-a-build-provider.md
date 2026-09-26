@@ -622,3 +622,21 @@ Task 21 <- 13
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-s1-2-1: test/execution/claude-provider.test.ts and test/execution/codex-provider.test.ts: point the vi.mock seams at ../../src/execution/spawn-permit.js (validateSpawnPermit) and ../../src/execution/fresh-session.js (enforceFreshSessionOptions), then restore the assertions exactly as they were at merge-base 581eec5e6: expect(mockEnforceFreshSessionOptions).toHaveBeenCalledTimes(1) and toHaveBeenCalledWith(..., 'claude'/'codex'), expect(mockValidateSpawnPermit).toHaveBeenCalledWith(spawnPermit), the exact --session-id value assertion (not arrayContaining(['--session-id'])), and the original '...exactly once for a %s dispatch' test title. Preserves Task 4 Done-when and Story 1 criterion S1.2 coverage. Do not change production code.
+**Gate:** prd-audit
+**Rationale:** The diff removes 5 expect() lines from each of test/execution/claude-provider.test.ts and codex-provider.test.ts (spawn-permit, exactly-once fresh-session, and exact --session-id value assertions), which breaches Story 1 Done-When and Task 4's 'pass with unchanged assertions' bullet. Production still calls both guards (claude-provider.ts:588,665; codex-provider.ts:299,447) via the moved modules src/execution/spawn-permit.ts and src/execution/fresh-session.ts, so only the test mocks need retargeting. Sweep: the other changed claude tests (claude-provider-json-result, -token-usage, -spawn) remove no expect() lines, so they are excluded.
+**Criterion:** S1.2
+**Parent task:** 4
+**Done when:**
+- S1.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s1-2-1 is complete.
+
+### Task rem-prd-audit-rem-s5-7-1: test/engine/provider-execution*.test.ts (the existing candidate-execution suite): add a test that drives the candidate executor with a registered fake Pi runtime whose subprocess never exits, aborts the executor's abortSignal mid-invoke, and asserts that the adapter's invoke options carried that same signal, that the fake subprocess received kill(), and that the result is the aborted, not successful, outcome with no provider failure signal, so the fallback ladder does not advance. Also update test/execution/pi-provider.test.ts:146 to pass abortSignal as a typed InvokeOptions field instead of a cast, keeping its kill and no-signal assertions (Task 17 Done-when coverage) unchanged.
+**Gate:** prd-audit
+**Rationale:** pi-provider.ts:111 reads abortSignal through a local PiInvokeOptions cast. InvokeOptions (llm-provider.ts:287) has no abort field, and the candidate-options merge in provider-execution.ts:817-833 never passes the executor's abortSignal (:735, :925-942) to the adapter. As a result the lifecycle abort that Story 5 criterion S5.7 and Task 17 require never reaches Pi in production. The contract and caller wiring is task rem-ab1-1 under AB-1. This task adds the production-boundary proof that AB-1's resolution asks Task 17 to supply. It also keeps the existing pi-provider.test.ts:135 kill test, rewritten without the cast.
+**Criterion:** S5.7
+**Parent task:** 17
+**Done when:**
+- S5.7 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s5-7-1 is complete.
