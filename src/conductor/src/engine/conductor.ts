@@ -3665,6 +3665,7 @@ export class Conductor {
       const r = await this.escalateBuildFailure({
         projectRoot: this.projectRoot,
         failureReason: reason,
+        events: this.events,
       });
       return r?.prUrl;
     } catch {

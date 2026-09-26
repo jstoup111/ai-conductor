@@ -141,6 +141,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
     gh,
     git: makeGitRunner(cfg.projectRoot),
     resolveMachineOwner: makeMachineOwnerResolver(gh, cfg.projectRoot),
+    events: cfg.events,
   });
   // The dispatcher owns this queue for its lifetime. All linked worktree
   // add/remove operations share cfg.projectRoot's `.git` bookkeeping.

@@ -14,6 +14,7 @@ import {
 } from './task-progress.js';
 import { writeHaltMarker } from './halt-marker.js';
 import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
+import { startOperatorEventSpine } from './event-persister.js';
 
 export interface PlanGapInput {
   index: number;
@@ -346,7 +347,13 @@ async function runTaskPlanGap(
     `Plan gap: task ${id}, Done when check ${planGap.index} cannot be satisfied under the approved plan.\n` +
     `Check: ${check}\n` +
     `Reason: ${reason}\n`;
-  const write = await writeHaltMarker(projectRoot, haltReason, 'plan-gap');
+  const eventSpine = startOperatorEventSpine(projectRoot);
+  let write: Awaited<ReturnType<typeof writeHaltMarker>>;
+  try {
+    write = await writeHaltMarker(projectRoot, haltReason, 'plan-gap', eventSpine.events);
+  } finally {
+    eventSpine.stop();
+  }
   if (write.status !== 'written') {
     console.error(
       `[task-cli] failed to write classified plan-gap HALT for task ${id}: ${write.reason}`,

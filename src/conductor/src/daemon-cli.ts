@@ -1906,7 +1906,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const watch = opts.watch ?? true;
   const watchHaltCleared = watch !== false
     ? (slug: string, onCleared: () => void) =>
-        makeWatchHaltClearedSeam(worktreeBase)(slug, onCleared)
+        makeWatchHaltClearedSeam(worktreeBase, { recordRemote: { events } })(slug, onCleared)
     : undefined;
 
   const result = await runDaemon(
