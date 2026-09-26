@@ -8,10 +8,18 @@ export type PiSubprocessFactory = (
   args: readonly string[],
   options: ExecaOptions,
 ) => Promise<{
+  code?: unknown;
   stdout?: unknown;
   stderr?: unknown;
   exitCode?: number | null;
 }>;
+
+/**
+ * This is the one Pi diagnostic verified against the CLI. Keep it anchored:
+ * similar prose is not sufficient evidence that a model recovery can proceed.
+ */
+export const PI_MODEL_UNAVAILABLE_RE =
+  /^Error: Model "[^"\r\n]+" not found\. Use --list-models to see available models\.$/;
 
 type PiJsonEvent = {
   type?: unknown;
@@ -88,7 +96,7 @@ export function parsePiJsonl(stdout: string): {
   return { output, tokenUsage, hasTerminalAssistantMessage };
 }
 
-/** One-shot Pi adapter. Failure classification belongs to later tasks. */
+/** One-shot Pi adapter. */
 export class PiProvider implements LLMProvider {
   readonly supportsSessionResume = false;
   readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
@@ -133,6 +141,20 @@ export class PiProvider implements LLMProvider {
     const stderr = typeof result.stderr === 'string' ? result.stderr : '';
     const parsed = parsePiJsonl(stdout);
 
+    // Missing-binary classification is anchored to structural process signals.
+    // Never infer provider-wide unavailability from arbitrary stderr prose.
+    if (result.code === 'ENOENT' || exitCode === 127) {
+      const reason = "LLM provider 'pi' not found. Install it or check your PATH.";
+      return {
+        success: false,
+        output: reason,
+        exitCode,
+        providerUnavailable: true,
+        providerUnavailableScope: 'run',
+        providerUnavailableReason: reason,
+      };
+    }
+
     if (exitCode === 0 && !parsed.hasTerminalAssistantMessage) {
       return {
         success: false,
@@ -142,7 +164,16 @@ export class PiProvider implements LLMProvider {
     }
 
     const output = stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
+    // Pi authentication and rate-limit diagnostics do not have a verified,
+    // stable signature yet, so they deliberately remain ordinary step failures.
+    const modelUnavailable = exitCode !== 0 && PI_MODEL_UNAVAILABLE_RE.test(stderr);
 
-    return { success: exitCode === 0, output, exitCode, tokenUsage: exitCode === 0 ? parsed.tokenUsage : undefined };
+    return {
+      success: exitCode === 0,
+      output,
+      exitCode,
+      ...(modelUnavailable ? { modelUnavailable: true } : {}),
+      tokenUsage: exitCode === 0 ? parsed.tokenUsage : undefined,
+    };
   }
 }
