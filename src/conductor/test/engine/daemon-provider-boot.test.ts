@@ -1,10 +1,14 @@
-// Covers: task:13
+// Covers: task:13, task:14
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
-import { bootDispatchingCliProviders } from '../../src/index.js';
+import {
+  CLI_PROVIDER_DISPATCHING_COMMANDS,
+  bootDispatchingCliProviders,
+  dispatchNonDispatchingCliCommand,
+} from '../../src/index.js';
 
 const roots: string[] = [];
 
@@ -56,6 +60,7 @@ describe('runDaemonMode provider discovery at boot', () => {
     const registry = new PluginRegistry();
 
     await bootDispatchingCliProviders({
+      command: 'inline',
       registry,
       events,
       config: { llm_provider: 'claude' },
@@ -74,5 +79,55 @@ describe('runDaemonMode provider discovery at boot', () => {
         missing: [{ id: 'pi', reason: 'not-found' }],
       }],
     });
+  });
+
+  it('keeps provider discovery off non-dispatching CLI command handlers', async () => {
+    const discovery = vi.fn(async () => ({
+      installed: [],
+      missing: [
+        { id: 'claude', reason: 'not-found' },
+        { id: 'codex', reason: 'not-found' },
+        { id: 'pi', reason: 'not-found' },
+      ],
+    }));
+    const dispatchRateCard = vi.fn(async () => 0);
+    const dispatchOverlapScan = vi.fn(async () => 0);
+    const dispatchRender = vi.fn(async () => 0);
+    const commandResults = await Promise.all([
+      dispatchNonDispatchingCliCommand(
+        ['node', 'conduct', 'rate-card', 'refresh'],
+        '/tmp',
+        { discoverProviders: discovery, dispatchRateCard, dispatchOverlapScan, dispatchRender },
+      ),
+      dispatchNonDispatchingCliCommand(
+        ['node', 'conduct', 'overlap-scan', '--files', 'a.ts'],
+        '/tmp',
+        { discoverProviders: discovery, dispatchRateCard, dispatchOverlapScan, dispatchRender },
+      ),
+      dispatchNonDispatchingCliCommand(
+        ['node', 'conduct', 'render-diagrams', 'artifact.md'],
+        '/tmp',
+        { discoverProviders: discovery, dispatchRateCard, dispatchOverlapScan, dispatchRender },
+      ),
+    ]);
+
+    expect({
+      commands: [...CLI_PROVIDER_DISPATCHING_COMMANDS],
+      commandResults,
+      discoveryCalls: discovery.mock.calls.length,
+    }).toEqual({
+      commands: expect.arrayContaining(['inline', 'daemon']),
+      commandResults: [0, 0, 0],
+      discoveryCalls: 0,
+    });
+    expect(dispatchRateCard).toHaveBeenCalledWith({ kind: 'refresh', models: [] }, '/tmp');
+    expect(dispatchOverlapScan).toHaveBeenCalledWith(
+      { kind: 'overlap-scan', files: ['a.ts'] },
+      { cwd: '/tmp' },
+    );
+    expect(dispatchRender).toHaveBeenCalledWith({ kind: 'render', files: ['artifact.md'] }, '/tmp');
+    expect(CLI_PROVIDER_DISPATCHING_COMMANDS).not.toContain('rate-card');
+    expect(CLI_PROVIDER_DISPATCHING_COMMANDS).not.toContain('overlap-scan');
+    expect(CLI_PROVIDER_DISPATCHING_COMMANDS).not.toContain('render-diagrams');
   });
 });
