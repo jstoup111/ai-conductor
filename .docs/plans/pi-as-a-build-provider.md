@@ -126,14 +126,14 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 **Type:** refactor
 
 **Steps:**
-1. Write failing test: in `src/conductor/test/engine/build-review-policy-catalog.test.ts`, assert the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming `reviewPolicyCatalog` and never calls the claude or codex discovery stubs.
+1. Write failing test: in `src/conductor/test/engine/build-review-policy-catalog.test.ts`, assert the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming provider `pi` and `reviewPolicyCatalog` and never calls the claude or codex discovery stubs.
 2. Verify test fails (RED) — the factory throws a generic unsupported-provider error.
 3. Implement: replace the `claude | codex` unions and branches in `build-review-policy-contract.ts`, `build-review-policy-resolver.ts`, the build-review paths of `step-runners.ts`, and the custom-policy read-only review admission check in `provider-execution.ts` with `ProviderWith<readOnlyReview>` / `ProviderWith<reviewPolicyCatalog>` obtained through `requireProviderCapability`, dispatching to the descriptor-registered discovery function.
 4. Verify test passes (GREEN); existing build-review tests for claude and codex pass unchanged.
 5. Commit with message: "refactor(build-review): narrow provider paths by capability"
 
 **Done when:**
-- a test asserts the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming `reviewPolicyCatalog`, and that neither the claude nor the codex policy discovery stub was called
+- a test asserts the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming provider `pi` and `reviewPolicyCatalog`, and that neither the claude nor the codex policy discovery stub was called
 - build-review read-only review and policy modules accept `ProviderWith` capability types, and the existing claude and codex build-review tests pass with unchanged assertions
 
 **Files likely touched:**
@@ -150,14 +150,14 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 **Type:** refactor
 
 **Steps:**
-1. Write failing test: in `src/conductor/test/engine/self-host/provider-home.test.ts`, assert preparing a self-host provider home for pi throws `ProviderCapabilityUnsupportedError` naming `selfHost` and `#1887` before any subprocess spawn stub is called.
+1. Write failing test: in `src/conductor/test/engine/self-host/provider-home.test.ts`, assert preparing a self-host provider home for pi throws `ProviderCapabilityUnsupportedError` naming provider `pi`, `selfHost`, and `#1887` before any subprocess spawn stub is called.
 2. Verify test fails (RED).
 3. Implement: `SelfHostProviderId` becomes `ProviderWith<selfHost>`; `provider-home.ts`, `live-boundary.ts` volatile-state tables, `sandbox-build-env.ts`, `smoke-capability.ts`, and the self-host build-candidate preparation in `conductor.ts` read descriptor fields and obtain the provider through `requireProviderCapability`.
 4. Verify test passes (GREEN); existing self-host tests pass unchanged.
 5. Commit with message: "refactor(self-host): narrow provider paths by capability"
 
 **Done when:**
-- a test asserts preparing a self-host provider home for pi throws `ProviderCapabilityUnsupportedError` naming `selfHost` and `#1887`, and that the subprocess spawn stub was never called
+- a test asserts preparing a self-host provider home for pi throws `ProviderCapabilityUnsupportedError` naming provider `pi`, `selfHost`, and `#1887`, and that the subprocess spawn stub was never called
 - the existing self-host provider-home, live-boundary, and sandbox tests for claude and codex pass with unchanged assertions
 
 **Files likely touched:**
@@ -485,7 +485,7 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 **Done when:**
 - the live-coverage structural test iterates `BUILT_IN_PROVIDERS` together with registered external plugin ids and a test asserts a registered fixture plugin is enumerated
 - a test asserts the live-coverage structural test requires the pi entry and smoke leg while discovery reports no provider installed
-- `live-e2e-providers.ts` is keyed by catalog ids, contains a pi entry, and `daemon-e2e-live-pi.smoke.test.ts` runs a trivial Pi step when credentials are present and live tests are opted in
+- `live-e2e-providers.ts` is keyed by catalog ids, contains a pi entry, and `daemon-e2e-live-pi.smoke.test.ts` runs a trivial Pi step through the real Pi CLI when credentials are present and live tests are opted in, and asserts that step completes
 - a test asserts the Pi smoke leg skips with a named reason when Pi credentials are absent and makes no real Pi call
 
 **Files likely touched:**
@@ -561,8 +561,8 @@ Task 21 <- 13
 | Story 1 negative: Given `CLAUDE_EXECUTABLE` names a path that does not exist, when the engine boots with claude configured, then startup fails with the not-installed error for claude naming reason not-found. | 9 | "a test asserts that when `CLAUDE_EXECUTABLE` names a path that does not exist, claude is reported missing with reason `not-found` and `validateProviderInstallation` then raises `ProviderNotInstalledError` for claude" | diff-local |
 | Story 2 happy: Given claude and codex declare their current capabilities, when self-host, build-review read-only review, and review-policy catalog paths run for them, then behavior is unchanged. | 5, 6 | "build-review read-only review and policy modules accept `ProviderWith` capability types, and the existing claude and codex build-review tests pass with unchanged assertions" | diff-local |
 | Story 2 happy: Given pi is selected for an ordinary build step, when the step dispatches, then no capability refusal occurs. | 15 | "the pi descriptor declares no selfHost, readOnlyReview, reviewPolicyCatalog, writeFence, nativeSchema, costSelfReporting, or readiness capability, and a test asserts an ordinary build step with pi raises no capability refusal" | diff-local |
-| Story 2 negative: Given pi is selected for a path that requires the selfHost capability, when that path is reached, then it fails before spawning with an error naming provider pi, capability selfHost, and the owning intake. | 6 | "a test asserts preparing a self-host provider home for pi throws `ProviderCapabilityUnsupportedError` naming `selfHost` and `#1887`, and that the subprocess spawn stub was never called" | diff-local |
-| Story 2 negative: Given pi is selected for build-review with a custom review policy, when the review-policy catalog path is reached, then it fails naming capability reviewPolicyCatalog instead of falling into the codex or claude branch. | 5 | "a test asserts the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming `reviewPolicyCatalog`, and that neither the claude nor the codex policy discovery stub was called" | diff-local |
+| Story 2 negative: Given pi is selected for a path that requires the selfHost capability, when that path is reached, then it fails before spawning with an error naming provider pi, capability selfHost, and the owning intake. | 6 | "a test asserts preparing a self-host provider home for pi throws `ProviderCapabilityUnsupportedError` naming provider `pi`, `selfHost`, and `#1887`, and that the subprocess spawn stub was never called" | diff-local |
+| Story 2 negative: Given pi is selected for build-review with a custom review policy, when the review-policy catalog path is reached, then it fails naming capability reviewPolicyCatalog instead of falling into the codex or claude branch. | 5 | "a test asserts the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming provider `pi` and `reviewPolicyCatalog`, and that neither the claude nor the codex policy discovery stub was called" | diff-local |
 | Story 2 negative: Given a descriptor omits a capability flag, when any consumer queries it, then the capability is treated as unsupported. | 1 | "a test asserts, for each of readiness, selfHost, readOnlyReview, reviewPolicyCatalog, supportsSessionResume, costSelfReporting, writeFence, and nativeSchema, a descriptor omitting that flag is reported unsupported by the catalog capability query" | diff-local |
 | Story 3 happy: Given claude and codex executables resolve and their version probes exit 0 and pi is absent, when the daemon boots, then claude and codex are registered and pi is not. | 13, 9 | "a test asserts `runDaemonMode` with only claude and codex discovered registers claude and codex as `llm_provider` plugins and does not register pi" | diff-local |
 | Story 3 happy: Given a provider executable override env var is set, when discovery runs, then the override path is probed instead of the PATH lookup. | 9 | "a test asserts that when a descriptor override env var is set, the injected runner receives the override path instead of the PATH lookup result" | diff-local |
@@ -592,9 +592,9 @@ Task 21 <- 13
 | Story 6 negative: Given the Pi executable disappears after boot, when a step spawns Pi, then ENOENT or exit 127 maps to provider-unavailable with run scope. | 18 | "a test asserts ENOENT and exit 127 each yield `providerUnavailable` with `providerUnavailableScope` run" | diff-local |
 | Story 6 negative: Given Pi exits non-zero with stderr matching no confirmed signature, when the adapter classifies it, then the result is an ordinary step failure with no provider signal set. | 18 | "a test asserts a non-zero exit whose stderr matches no anchored signature yields a step failure with no provider signal set" | diff-local |
 | Story 6 negative: Given Pi exits non-zero with auth-failure or rate-limit output, when the adapter classifies it, then the result is an ordinary step failure with no auth-failure or rate-limited signal set, because no Pi auth or rate-limit signature is anchored in this feature. | 18 | "`pi-provider.ts` anchors no auth-failure or rate-limit regex, and a test asserts Pi auth-failure and rate-limit style stderr with a non-zero exit yields a step failure with neither `authFailure` nor `rateLimited` set" | diff-local |
-| Story 7 happy: Given the catalog includes pi, when the live-coverage structural test runs, then it finds a Pi descriptor entry and a Pi live smoke leg. | 20 | "`live-e2e-providers.ts` is keyed by catalog ids, contains a pi entry, and `daemon-e2e-live-pi.smoke.test.ts` runs a trivial Pi step when credentials are present and live tests are opted in" | diff-local |
+| Story 7 happy: Given the catalog includes pi, when the live-coverage structural test runs, then it finds a Pi descriptor entry and a Pi live smoke leg. | 20 | "`live-e2e-providers.ts` is keyed by catalog ids, contains a pi entry, and `daemon-e2e-live-pi.smoke.test.ts` runs a trivial Pi step through the real Pi CLI when credentials are present and live tests are opted in, and asserts that step completes" | diff-local |
 | Story 7 happy: Given an external `llm_provider` plugin is registered, when the live-coverage structural test runs, then that plugin is enumerated alongside the catalog ids. | 20 | "the live-coverage structural test iterates `BUILT_IN_PROVIDERS` together with registered external plugin ids and a test asserts a registered fixture plugin is enumerated" | diff-local |
-| Story 7 happy: Given Pi credentials are present and live tests are opted in, when the Pi smoke leg runs, then a trivial Pi step completes through the real CLI. | 20 | "`live-e2e-providers.ts` is keyed by catalog ids, contains a pi entry, and `daemon-e2e-live-pi.smoke.test.ts` runs a trivial Pi step when credentials are present and live tests are opted in" | diff-local |
+| Story 7 happy: Given Pi credentials are present and live tests are opted in, when the Pi smoke leg runs, then a trivial Pi step completes through the real CLI. | 20 | "`live-e2e-providers.ts` is keyed by catalog ids, contains a pi entry, and `daemon-e2e-live-pi.smoke.test.ts` runs a trivial Pi step through the real Pi CLI when credentials are present and live tests are opted in, and asserts that step completes" | diff-local |
 | Story 7 negative: Given a test machine without Pi installed, when the live-coverage structural test runs, then it still requires the Pi entry because it enumerates the catalog plus registered plugins, not discovered providers. | 20 | "a test asserts the live-coverage structural test requires the pi entry and smoke leg while discovery reports no provider installed" | diff-local |
 | Story 7 negative: Given Pi credentials are absent, when the live smoke suite runs, then the Pi leg is skipped with a named reason and the default suite makes no real Pi call. | 20 | "a test asserts the Pi smoke leg skips with a named reason when Pi credentials are absent and makes no real Pi call" | diff-local |
 
