@@ -12,7 +12,6 @@ import type {
   EffortLevel,
   HarnessConfig,
   ProviderSelection,
-  ProviderSubstitutionPolicy,
 } from '../types/config.js';
 import { resolveProviderCandidates } from './provider-selection.js';
 import type {
@@ -80,7 +79,7 @@ export interface ProviderAttemptMetadata {
   reason?: string;
   fallbackReason?: string;
   /** Why an uninvoked unavailable candidate was skipped. */
-  skipReason?: 'setup-unavailable' | 'cached-unavailable' | 'policy-refused' | 'suppression-refused';
+  skipReason?: 'setup-unavailable' | 'cached-unavailable' | 'suppression-refused';
   /** Structured, redacted setup diagnostic for an explicitly skipped candidate. */
   setupCapability?: string;
   setupRecoveryAction?: string;
@@ -136,32 +135,6 @@ export interface ProviderCandidate {
 
 /** Identity of one actual model ladder rung; step ownership remains unchanged. */
 export type ProviderCandidateRung = Omit<ProviderCandidate, 'step'>;
-
-/**
- * The sole pre-dispatch admission seam. Availability is intentionally an
- * optional in-memory dependency so interactive callers retain current
- * behavior until a daemon injects the process-scoped store.
- */
-export function admitProviderCandidate(
-  candidate: ProviderCandidate,
-  {
-    providerAvailability,
-    substitutionPolicy,
-    selectedProviders,
-  }: {
-    providerAvailability?: ProviderAvailability;
-    substitutionPolicy?: ProviderSubstitutionPolicy;
-    selectedProviders: readonly string[];
-  },
-): 'policy-refused' | 'suppression-refused' | undefined {
-  if (substitutionPolicy === 'disallow' && selectedProviders.length > 0 &&
-    !selectedProviders.includes(candidate.providerKey)) {
-    return 'policy-refused';
-  }
-  return providerAvailability?.isAvailable(candidate.providerKey) === false
-    ? 'suppression-refused'
-    : undefined;
-}
 
 /**
  * The only extension point that runs after a real provider candidate has
@@ -779,9 +752,6 @@ export async function executeProviderCandidates({
     stepSelection,
     substitutionPolicy,
   });
-  const selectedProviders = stepSelection === undefined
-    ? []
-    : Array.isArray(stepSelection) ? stepSelection : [stepSelection];
   const preferredProvider = candidates[0];
   const attempts: ProviderAttemptMetadata[] = [];
   let everyUnavailableCandidateWasNotStarted = true;
@@ -1004,18 +974,13 @@ export async function executeProviderCandidates({
     const requiresNativeSchemaCapability = candidateOptions.nativeSchema !== undefined;
     const supportsNativeSchemaCapability =
       runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
-    const refusalReason = admitProviderCandidate(candidate, {
-      providerAvailability,
-      substitutionPolicy,
-      selectedProviders,
-    });
-    if (refusalReason !== undefined) {
+    if (providerAvailability?.isAvailable(providerKey) === false) {
       const refusal: ProviderAttemptMetadata = {
         provider: providerKey,
         ...(executionContext ? { executionContext } : {}),
         outcome: 'unavailable',
-        reason: refusalReason === 'policy-refused' ? 'provider-forbidden' : 'provider-suppressed',
-        skipReason: refusalReason,
+        reason: 'provider-suppressed',
+        skipReason: 'suppression-refused',
         invoked: false,
       };
       attempts.push(refusal);
@@ -1025,11 +990,8 @@ export async function executeProviderCandidates({
         try { await onTelemetryError?.(error, refusal); } catch { /* best effort */ }
       }
       if (candidates[index + 1] !== undefined) continue;
-      const admissionRelevantAttempts = attempts.filter(
-        ({ skipReason }) => skipReason !== 'policy-refused',
-      );
-      if (admissionRelevantAttempts.length > 0 &&
-        admissionRelevantAttempts.every(({ skipReason }) => skipReason === 'suppression-refused')) {
+      if (attempts.length > 0 &&
+        attempts.every(({ skipReason }) => skipReason === 'suppression-refused')) {
         return {
           success: false,
           output: `All configured providers are suppressed for step ${step}.`,

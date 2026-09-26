@@ -29,7 +29,6 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import type { ProviderAttemptEvent } from '../../src/types/events.js';
 import { parseEvents } from '../../src/engine/report-renderer.js';
 import {
-  admitProviderCandidate,
   createCandidateSafetyBoundary,
   executeAuxiliaryProviderCandidates,
   executeProviderCandidates,
@@ -178,26 +177,6 @@ describe('executeProviderCandidates', () => {
     const parsed = parseEvents(emitted.map((event) => JSON.stringify(event)).join('\n'));
 
     expect(parsed).toEqual(emitted);
-  });
-
-  it('keeps policy refusal at the single admission gate', () => {
-    const candidate = { step: 'build' as const, providerKey: 'claude', model: 'model', effort: 'medium' as const };
-
-    expect(admitProviderCandidate(candidate, {
-      selectedProviders: ['codex'], substitutionPolicy: 'disallow',
-      providerAvailability: { suppress: vi.fn(), isAvailable: vi.fn(() => true) },
-    })).toBe('policy-refused');
-  });
-
-  it('records one policy refusal when a forbidden candidate is also suppressed', () => {
-    const isAvailable = vi.fn(() => false);
-    const candidate = { step: 'build' as const, providerKey: 'claude', model: 'model', effort: 'medium' as const };
-
-    expect(admitProviderCandidate(candidate, {
-      selectedProviders: ['codex'], substitutionPolicy: 'disallow',
-      providerAvailability: { suppress: vi.fn(), isAvailable },
-    })).toBe('policy-refused');
-    expect(isAvailable).not.toHaveBeenCalled();
   });
 
   it('records only the pinned provider when substitution is disallowed', async () => {
