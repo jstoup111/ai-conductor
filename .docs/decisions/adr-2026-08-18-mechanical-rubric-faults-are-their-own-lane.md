@@ -310,8 +310,12 @@ already exists and is reused; additive fields follow `adr-2026-07-26-event-sink-
 > directly to D5's `needs-human` HALT, whose body names the platform. `review-input-mutated` is
 > retryable under D4's bound. Neither provider's read-only mode leaves a write path, so a mutation
 > most likely comes from outside the reviewers (an operator updating the installed policy, or a
-> foreign process touching the lap's private frozen view). The lap publishes no aggregate under D3, and the re-run materializes a fresh frozen
-> view. D6's reduced-coverage record remains the operator's attributed way past either cause;
+> foreign process touching the lap's private frozen view). A `review-input-mutated` lap publishes no
+> aggregate under D3, and the re-run materializes a fresh frozen view. A `read-only-review-unavailable`
+> lap does publish its aggregate before the HALT, carrying the fault on the affected member, because
+> `build-review record-reduced-coverage` reads the current fault from that aggregate; withholding it
+> would leave the operator no way past the HALT. D6's reduced-coverage record remains the operator's
+> attributed way past either cause;
 > nothing here accepts a finding or manufactures a PASS.
 >
 > **D10.2 — Both ride the existing spine.** Each occurrence is emitted on the existing
