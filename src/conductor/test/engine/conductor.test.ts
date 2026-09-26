@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11
+// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:21
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { execFile as execFileCb } from 'child_process';
@@ -8933,6 +8933,46 @@ describe('engine/conductor', () => {
       // unaffected by this task's guard.
       const calledSteps = vi.mocked(runner.run).mock.calls.map((c) => c[0]);
       expect(calledSteps).toContain('manual_test');
+    });
+
+    it('forwards a usage-exhausted built-in validation member into daemon provider suppression', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      const deadline = Date.now() + 60_000;
+      const providerAvailability = { suppress: vi.fn(), isAvailable: () => true };
+      const onProviderSuppressed = vi.fn();
+      const runner: StepRunner = {
+        run: vi.fn()
+          .mockResolvedValueOnce({ success: false, rateLimited: true, usageExhausted: true, actualProvider: 'codex', deadline })
+          .mockResolvedValue({ success: true }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        rateLimitEpisode: {
+          enter: vi.fn(),
+          clear: vi.fn().mockResolvedValue(undefined),
+          active: () => false,
+          nextWaitSeconds: () => 0,
+        },
+        providerExecution: {
+          runtimes: {} as never,
+          sessions: {} as never,
+          configuredProviders: ['codex'],
+          providerAvailability,
+          onProviderSuppressed,
+        },
+      });
+
+      await conductor.run();
+
+      expect({ suppress: providerAvailability.suppress.mock.calls, persisted: onProviderSuppressed.mock.calls }).toEqual({
+        suppress: [['codex', deadline]],
+        persisted: [['codex', deadline]],
+      });
     });
 
     it('width 2 with one skip: parallel_started lists only the dispatchable members, not the skipped phantom', async () => {

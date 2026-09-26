@@ -56,6 +56,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   acceptance_spec_globs: consumer('src/conductor/src/engine/artifacts.ts'),
   test_suite: consumer('src/conductor/src/engine/full-suite-verifier.ts'),
   llm_provider: consumer('src/conductor/src/engine/provider-selection.ts'),
+  provider_substitution: consumer('src/conductor/src/engine/provider-selection.ts'),
   ui_renderer: consumer('src/conductor/src/engine/plugin-loader.ts'),
   visualizers: consumer('src/conductor/src/index.ts'),
   memory_provider: consumer('src/conductor/src/engine/local-memory-provider.ts'),
@@ -116,6 +117,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   // resolution, custom-step registry construction, and the conductor loop each
   // own a different subset. `steps.ts` reads only the custom-step fields.
   'steps.llm_provider': consumer('src/conductor/src/engine/provider-selection.ts'),
+  'steps.provider_substitution': consumer('src/conductor/src/engine/provider-selection.ts'),
   'steps.model': consumer(RESOLVED_CONFIG),
   'steps.effort': consumer(RESOLVED_CONFIG),
   'steps.max_retries': consumer(RESOLVED_CONFIG),

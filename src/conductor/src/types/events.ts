@@ -264,7 +264,7 @@ export interface ProviderAttemptEvent {
   reason?: string;
   fallbackReason?: string;
   /** Present only for an unavailable candidate that was not invoked. */
-  skipReason?: 'setup-unavailable' | 'cached-unavailable';
+  skipReason?: 'setup-unavailable' | 'cached-unavailable' | 'suppression-refused';
   /** Redacted details retained for an explicit setup-unavailable skip. */
   setupCapability?: string;
   setupRecoveryAction?: string;
@@ -876,7 +876,21 @@ export type ConductorEvent =
   | { type: 'tier_skip'; step: StepName; tier: ComplexityTier }
   | { type: 'config_skip'; step: StepName; reason?: string }
   | { type: 'navigation_back'; from: StepName; to: StepName }
-  | { type: 'rate_limit'; waitSeconds: number; reason?: 'usage-exhausted' }
+  | {
+      type: 'rate_limit';
+      waitSeconds: number;
+      reason?: 'usage-exhausted';
+      /** Provider whose attempt reported the rate limit; absent on historical records. */
+      provider?: string;
+      /** Absolute retry deadline used for the rate-limit wait; absent on historical records. */
+      deadline?: number;
+    }
+  | {
+      /** Daemon-origin durable record used to restore provider suppression after restart. */
+      type: 'provider_suppressed';
+      provider: string;
+      deadline: number;
+    }
   | { type: 'session_reset'; reason: string }
   | { type: 'credentials_park'; reason: string }
   | {

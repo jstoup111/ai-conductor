@@ -116,6 +116,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // are deliberately outside the audit-trail friction vocabulary.
   github_operation_refused: 'not-audited-by-design',
   provider_attempt: 'not-audited-by-design',
+  // Daemon-only suppression durability is not an operator-friction record.
+  provider_suppressed: 'not-audited-by-design',
   provider_stream_progress: 'not-audited-by-design',
   scratch_cleanup_reclaimed: 'not-audited-by-design',
   scratch_cleanup_retained: 'not-audited-by-design',
@@ -373,6 +375,9 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     provider: 'claude',
     outcome: 'success',
     invoked: true,
+  },
+  provider_suppressed: {
+    type: 'provider_suppressed', provider: 'claude', deadline: 1,
   },
   provider_stream_progress: {
     type: 'provider_stream_progress',

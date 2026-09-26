@@ -10,6 +10,7 @@ type ValidateRegisteredProviderSelections = (input: {
 type ResolveProviderCandidates = (input: {
   configuredProviders: readonly string[];
   stepSelection?: ProviderSelection;
+  substitutionPolicy?: 'allow' | 'disallow';
 }) => string[];
 
 async function loadRegisteredSelectionValidator(): Promise<
@@ -114,6 +115,51 @@ describe('resolveProviderCandidates hardening', () => {
     };
 
     expect(resolveProviderCandidates?.(inputWithRegistryContext)).toEqual(['codex', 'claude']);
+  });
+
+  it('narrows a selected step only when substitution is disallowed', async () => {
+    const resolveProviderCandidates = await loadCandidateResolver();
+    expect(resolveProviderCandidates?.({
+      configuredProviders: ['claude', 'codex'], stepSelection: 'codex', substitutionPolicy: 'allow',
+    })).toEqual(['codex', 'claude']);
+    expect(resolveProviderCandidates?.({
+      configuredProviders: ['claude', 'codex'], stepSelection: 'codex', substitutionPolicy: 'disallow',
+    })).toEqual(['codex']);
+  });
+
+  it('keeps the global list when a disallowed step has no selection', async () => {
+    const resolveProviderCandidates = await loadCandidateResolver();
+
+    expect(resolveProviderCandidates?.({
+      configuredProviders: ['claude', 'codex'], substitutionPolicy: 'disallow',
+    })).toEqual(['claude', 'codex']);
+  });
+
+  it('applies a step-scoped disallow only to that step', async () => {
+    const resolveProviderCandidates = await loadCandidateResolver();
+    const configuredProviders = ['claude', 'codex'];
+
+    expect(resolveProviderCandidates?.({
+      configuredProviders, stepSelection: 'codex', substitutionPolicy: 'disallow',
+    })).toEqual(['codex']);
+    expect(resolveProviderCandidates?.({
+      configuredProviders, stepSelection: 'codex',
+    })).toEqual(['codex', 'claude']);
+  });
+
+  it('lets a step-scoped allow override a global disallow while other steps retain it', async () => {
+    const resolveProviderCandidates = await loadCandidateResolver();
+    const configuredProviders = ['claude', 'codex'];
+    const globalSubstitutionPolicy = 'disallow' as const;
+
+    // The resolved policy for this step comes from its explicit allow setting.
+    expect(resolveProviderCandidates?.({
+      configuredProviders, stepSelection: 'codex', substitutionPolicy: 'allow',
+    })).toEqual(['codex', 'claude']);
+    // An otherwise identical step inherits the global disallow setting.
+    expect(resolveProviderCandidates?.({
+      configuredProviders, stepSelection: 'codex', substitutionPolicy: globalSubstitutionPolicy,
+    })).toEqual(['codex']);
   });
 });
 

@@ -106,7 +106,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   top: [
     'harness_version', 'defaults', 'phases', 'steps', 'complexity', 'conductor',
     'markdown_viewer', 'mermaid_renderer', 'assess', 'acceptance_spec_globs', 'test_suite',
-    'llm_provider', 'ui_renderer', 'visualizers', 'memory_provider', 'otel', 'build_progress',
+    'llm_provider', 'provider_substitution', 'ui_renderer', 'visualizers', 'memory_provider', 'otel', 'build_progress',
     'provider_stream', 'spec_owner', 'owner_gate_cutover', 'attribution_audit_sample_pct',
     'rebase_resolution_attempts', 'validation_concurrency', 'daemon_concurrency', 'daemon_heap_limit_mb',
     'daemon_heap_dump_threshold_mb', 'daemon_heap_dump_retention', 'harness_self_host',
@@ -121,7 +121,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   ],
   defaults: ['model', 'effort', 'max_retries', 'escalate'],
   phases: ['model', 'effort', 'max_retries', 'escalate', 'by_tier'],
-  steps: ['llm_provider', 'model', 'effort', 'max_retries', 'disable', 'escalate', 'skill', 'hooks', 'by_tier', 'after', 'enforcement', 'completion_artifact', 'gate', 'kickback_target', 'when', 'parallel'],
+  steps: ['llm_provider', 'provider_substitution', 'model', 'effort', 'max_retries', 'disable', 'escalate', 'skill', 'hooks', 'by_tier', 'after', 'enforcement', 'completion_artifact', 'gate', 'kickback_target', 'when', 'parallel'],
   conductor: ['update_channel', 'auto_check', 'current_version', 'last_checked_at'],
   harness_self_host: ['activation', 'version_freeze', 'auth_park_timeout_minutes', 'build_auth', 'sandbox_build_env', 'live_containment', 'version_approval_gate', 'release_artifact_gate'],
   harness_self_host_build_auth: ['mode', 'token_path'],
@@ -582,6 +582,8 @@ export function validateConfig(
 
   const providerSelectionErr = validateProviderSelection(obj.llm_provider, 'llm_provider');
   if (providerSelectionErr) return { ok: false, error: providerSelectionErr };
+  const providerSubstitutionErr = validateProviderSubstitution(obj.provider_substitution, 'provider_substitution');
+  if (providerSubstitutionErr) return { ok: false, error: providerSubstitutionErr };
 
   // defaults
   if (obj.defaults !== undefined) {
@@ -696,6 +698,11 @@ export function validateConfig(
       if (stepProviderSelectionErr) {
         return { ok: false, error: stepProviderSelectionErr };
       }
+      const stepProviderSubstitutionErr = validateProviderSubstitution(
+        cfg.provider_substitution,
+        `steps.${name}.provider_substitution`,
+      );
+      if (stepProviderSubstitutionErr) return { ok: false, error: stepProviderSubstitutionErr };
       if (cfg.effort !== undefined && !VALID_EFFORTS.has(cfg.effort as EffortLevel)) {
         return errVal(`steps.${name}.effort must be low|medium|high|xhigh|max`);
       }
@@ -2925,6 +2932,13 @@ function validateProviderSelection(value: unknown, path: string): ConfigError | 
     seen.add(provider);
   }
   return null;
+}
+
+function validateProviderSubstitution(value: unknown, path: string): ConfigError | null {
+  if (value === undefined) return null;
+  return value === 'allow' || value === 'disallow'
+    ? null
+    : { type: 'validation_error', message: `${path} must be allow|disallow` };
 }
 
 export function satisfiesVersion(installed: string, constraint: string): boolean {

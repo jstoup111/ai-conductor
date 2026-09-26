@@ -29,6 +29,7 @@ import {
   type ResolvedProviderNativeStepConfig,
 } from './resolved-config.js';
 import type { PrepareModelFallbackOptions } from './model-availability.js';
+import type { ProviderAvailability } from './provider-availability.js';
 import {
   validateTaskAttribution,
   type TaskAttributionDiagnosticCode,
@@ -78,7 +79,7 @@ export interface ProviderAttemptMetadata {
   reason?: string;
   fallbackReason?: string;
   /** Why an uninvoked unavailable candidate was skipped. */
-  skipReason?: 'setup-unavailable' | 'cached-unavailable';
+  skipReason?: 'setup-unavailable' | 'cached-unavailable' | 'suppression-refused';
   /** Structured, redacted setup diagnostic for an explicitly skipped candidate. */
   setupCapability?: string;
   setupRecoveryAction?: string;
@@ -280,6 +281,8 @@ export interface ExecuteProviderCandidatesInput {
   auxiliaryMember?: string;
   /** Task-local telemetry to validate before any candidate/session invocation. */
   taskAttribution?: TaskAttributionInput;
+  /** Optional daemon-scoped pre-dispatch admission store. */
+  providerAvailability?: ProviderAvailability;
   onAttempt?: (
     step: StepName,
     attempt: ProviderAttemptMetadata,
@@ -308,6 +311,9 @@ export interface ProviderExecutionContext {
   runtimes: ProviderRuntimeSet;
   sessions: ProviderSessionStore;
   config?: HarnessConfig;
+  providerAvailability?: ProviderAvailability;
+  /** Daemon-origin durable projection of a newly opened suppression window. */
+  onProviderSuppressed?: (provider: string, deadline: number) => void | Promise<void>;
   modelOverride?: string;
   effortOverride?: EffortLevel;
   /** Task-local telemetry passed through the provider-dispatch boundary. */
@@ -731,6 +737,7 @@ export async function executeProviderCandidates({
   prepareCandidateBaseline,
   auxiliaryMember,
   taskAttribution: attributionInput,
+  providerAvailability,
   onAttempt,
   onTelemetryError,
   withCandidateSafety,
@@ -739,9 +746,11 @@ export async function executeProviderCandidates({
   options,
   optionsForCandidate,
 }: ExecuteProviderCandidatesInput): Promise<ProviderExecutionResult> {
+  const substitutionPolicy = config?.steps?.[step]?.provider_substitution ?? config?.provider_substitution;
   const candidates = resolveProviderCandidates({
     configuredProviders,
     stepSelection,
+    substitutionPolicy,
   });
   const preferredProvider = candidates[0];
   const attempts: ProviderAttemptMetadata[] = [];
@@ -755,6 +764,7 @@ export async function executeProviderCandidates({
     attribution && 'diagnostic' in attribution ? attribution.diagnostic.code : undefined;
   const setupUnavailableCandidates: ProviderSetupUnavailable[] = [];
   let anyCandidateInvoked = false;
+  let lastUnavailableResult: InvokeResult | undefined;
 
   // A fallback may become the actual candidate only after another provider has
   // failed.  Capture every candidate-local policy baseline before that can
@@ -964,6 +974,51 @@ export async function executeProviderCandidates({
     const requiresNativeSchemaCapability = candidateOptions.nativeSchema !== undefined;
     const supportsNativeSchemaCapability =
       runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
+    if (providerAvailability?.isAvailable(providerKey) === false) {
+      const refusal: ProviderAttemptMetadata = {
+        provider: providerKey,
+        ...(executionContext ? { executionContext } : {}),
+        outcome: 'unavailable',
+        reason: 'provider-suppressed',
+        skipReason: 'suppression-refused',
+        invoked: false,
+      };
+      attempts.push(refusal);
+      try {
+        await onAttempt?.(step, refusal);
+      } catch (error) {
+        try { await onTelemetryError?.(error, refusal); } catch { /* best effort */ }
+      }
+      if (candidates[index + 1] !== undefined) continue;
+      if (attempts.length > 0 &&
+        attempts.every(({ skipReason }) => skipReason === 'suppression-refused')) {
+        return {
+          success: false,
+          output: `All configured providers are suppressed for step ${step}.`,
+          exitCode: 1,
+          rateLimited: true,
+          preferredProvider,
+          attempts,
+        };
+      }
+      const diagnostic = attempts
+        .map(({ provider, reason, invoked, skipReason }) =>
+          `${provider} (${reason}${invoked ? '' : `, ${skipReason ?? 'not invoked'}`})`)
+        .join('; ');
+      const priorResult = lastUnavailableResult;
+      const { executionDisposition: _executionDisposition, ...lastResult } = priorResult ?? {
+        success: false,
+        exitCode: 1,
+      };
+      return {
+        ...lastResult,
+        success: false,
+        output: `All configured providers are unavailable for step ${step}: ${diagnostic}.`,
+        exitCode: lastResult.exitCode ?? 1,
+        preferredProvider,
+        attempts,
+      };
+    }
     let result: InvokeResult;
     try {
       result = requiresLifecycleCapability && !supportsLifecycleCapability
@@ -1063,6 +1118,8 @@ export async function executeProviderCandidates({
         ...(observedIntervals.length ? { observedIntervals } : {}),
       };
     }
+
+    lastUnavailableResult = safeResult;
 
     if (setupUnavailable) {
       setupUnavailableCandidates.push({

@@ -1307,6 +1307,7 @@ export class DefaultStepRunner implements StepRunner {
             modelOverride: opts?.modelOverride ?? this.modelOverride,
             effortOverride: opts?.effortOverride ?? this.effortOverride,
             taskAttribution: this.taskAttribution,
+            providerAvailability: this.providerExecutionContext?.providerAvailability,
             withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
             prepareCandidateSelfHost:
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
@@ -1405,6 +1406,7 @@ export class DefaultStepRunner implements StepRunner {
           modelOverride: request.dispatch?.modelOverride ?? this.modelOverride,
           effortOverride: request.dispatch?.effortOverride ?? this.effortOverride,
           taskAttribution: this.taskAttribution,
+          providerAvailability: this.providerExecutionContext?.providerAvailability,
           withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
           prepareCandidateSelfHost:
             this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
@@ -2996,6 +2998,7 @@ export class DefaultStepRunner implements StepRunner {
         featureSlug: this.featureDesc || basename(this.projectDir),
       },
       taskAttribution: this.taskAttribution,
+      providerAvailability: this.providerExecutionContext?.providerAvailability,
       withCandidateSafety: this.candidateSafetyFor('build_review')?.wrapper ?? this.withCandidateSafety,
       prepareCandidateSelfHost: this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
       onAttempt: this.providerAttempt, warn: this.providerWarn, options,
@@ -3755,6 +3758,7 @@ export class DefaultStepRunner implements StepRunner {
               featureSlug: this.featureDesc || basename(this.projectDir),
             },
             taskAttribution: this.taskAttribution,
+            providerAvailability: this.providerExecutionContext?.providerAvailability,
             tier,
             withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
             prepareCandidateSelfHost:
@@ -4254,6 +4258,7 @@ export class DefaultStepRunner implements StepRunner {
             step: 'coverage_binding', memberId, policy: auxiliaryPolicy, executionContext,
             runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`coverage-binding:${memberId}`),
             config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
+            providerAvailability: this.providerExecutionContext?.providerAvailability,
             tier: state.complexity_tier,
             withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
             onAttempt: this.providerAttempt, warn: this.providerWarn,

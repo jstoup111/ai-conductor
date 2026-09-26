@@ -656,6 +656,21 @@ registered provider warns and falls back to the Claude policy
 Procedure and trade-offs are in [multiprovider](../guides/multiprovider.md); the per-provider model
 tables are in [models](models.md).
 
+## provider_substitution
+
+Whether an explicitly selected step may append run-level providers as fallbacks. Optional
+`allow` or `disallow`; any other value is a hard validation error naming this key.
+
+When unset or `allow`, a step's `steps.<name>.llm_provider` is followed by the run-level
+`llm_provider` entries, with duplicates removed in first-occurrence order. When `disallow`, an
+explicit step selection is its complete candidate list. A step without its own selection continues
+to use the run-level list.
+
+Set the key at the top level to establish the default for explicit step selections. Set
+`steps.<name>.provider_substitution` to override it for one step. This key does not change
+usage-exhaustion suppression: unavailable candidates are skipped only after the effective candidate
+list is resolved. See [multiprovider](../guides/multiprovider.md#keep-an-explicit-step-selection-exclusive).
+
 ## ui_renderer
 
 Plugin name for the run UI. Optional string, default `terminal` (`src/conductor/src/index.ts:1020-1023`).

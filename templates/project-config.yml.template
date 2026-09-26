@@ -37,6 +37,10 @@
 # Allowed: a non-empty string, or a non-empty array of unique non-empty strings, naming registered providers such as claude or codex.
 # Default: unset; the step inherits the first entry of the top-level llm_provider.
 # Changing it: routes only that step to another provider; an unregistered name stops the run at start.
+# Controls: steps.provider_substitution — whether this step may add configured providers after its own selection; written as steps.<name>.provider_substitution.
+# Allowed: allow or disallow.
+# Default: unset; the step inherits provider_substitution when set, otherwise its own provider selection is combined with configured providers.
+# Changing it: disallow keeps a step's explicit provider selection as its entire candidate list; a step without its own selection still uses the configured provider list.
 # Controls: steps.max_retries — the attempt budget for this one step; written as steps.<name>.max_retries.
 # Allowed: a number.
 # Default: unset; the step uses defaults.max_retries when set, otherwise its built-in budget (fallback 3).
@@ -93,6 +97,10 @@
 # Allowed: a non-empty string, or a non-empty array of unique strings used as a fallback ladder; built-in providers are claude and codex.
 # Default: [claude].
 # Changing it: the first entry becomes the provider for every step without its own steps.<name>.llm_provider; an unregistered name stops the run at start.
+# Controls: provider_substitution — whether an explicitly selected step provider may fall back to configured providers.
+# Allowed: allow or disallow.
+# Default: unset; a step's explicit selection is followed by configured providers, preserving the existing fallback ladder.
+# Changing it: disallow makes every explicitly selected step use only its own provider selection unless that step sets steps.<name>.provider_substitution.
 # Controls: ui_renderer — the plugin that draws the run UI.
 # Allowed: the name of a registered renderer plugin; the built-in one is terminal.
 # Default: terminal.

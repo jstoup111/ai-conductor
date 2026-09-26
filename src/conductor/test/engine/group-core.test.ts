@@ -1,4 +1,4 @@
-// Covers: task:8, task:11
+// Covers: task:8, task:11, task:21
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   makeVerdictOutcome,
@@ -1034,6 +1034,53 @@ describe("group-core: runGroupBranch rate-limit pass-through into shared episode
 
     expect(episode.enterCalls).toEqual([deadline]);
     expect(episode.clearCalls).toBe(1);
+  });
+
+  it("opens and persists a shared suppression window only for a usage-exhausted group member", async () => {
+    const deadline = Date.now() + 60_000;
+    const runner = spyRunner([
+      { success: false, rateLimited: true, usageExhausted: true, actualProvider: "codex", deadline },
+      { success: true },
+    ]);
+    const suppress = vi.fn();
+    const onProviderSuppressed = vi.fn();
+    const providerAvailability = { suppress, isAvailable: () => true };
+    const member: GroupMember = { name: "manual_test", skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    await runGroupBranch(member, fakeState, {
+      stepRunner: runner,
+      rateLimitEpisode: fakeEpisode(),
+      providerAvailability,
+      onProviderSuppressed,
+    }, 1);
+
+    expect({ suppress: suppress.mock.calls, persisted: onProviderSuppressed.mock.calls }).toEqual({
+      suppress: [["codex", deadline]],
+      persisted: [["codex", deadline]],
+    });
+  });
+
+  it("does not open or persist a suppression window for authentication failure or an expired session", async () => {
+    const suppress = vi.fn();
+    const onProviderSuppressed = vi.fn();
+    const providerAvailability = { suppress, isAvailable: () => true };
+    const member: GroupMember = { name: "manual_test", skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    await runGroupBranch(member, fakeState, {
+      stepRunner: spyRunner([{ success: false, authFailure: true, actualProvider: "codex" }]),
+      providerAvailability,
+      onProviderSuppressed,
+    }, 1);
+    await runGroupBranch(member, fakeState, {
+      stepRunner: spyRunner([{ success: false, sessionExpired: true, actualProvider: "codex" }, { success: true }]),
+      providerAvailability,
+      onProviderSuppressed,
+    }, 1);
+
+    expect({ suppress: suppress.mock.calls, persisted: onProviderSuppressed.mock.calls }).toEqual({
+      suppress: [],
+      persisted: [],
+    });
   });
 
   it("a rate-limited branch that never gets an extra attempt beyond max_retries still isn't charged for the rate-limit cycle", async () => {
