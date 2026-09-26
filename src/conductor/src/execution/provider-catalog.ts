@@ -20,6 +20,14 @@ export type ProviderCapability =
 
 export type ProviderCapabilityFlags = Readonly<Partial<Record<ProviderCapability, boolean>>>;
 
+/** Follow-up intakes that own capability-specific provider behavior. */
+export const PROVIDER_CAPABILITY_OWNERS = {
+  selfHost: '#1887',
+  readOnlyReview: '#1886',
+  reviewPolicyCatalog: '#1888',
+  costSelfReporting: '#1889',
+} as const satisfies Partial<Record<ProviderCapability, string>>;
+
 export interface ProviderFactoryOptions {
   readonly codexDoctorTimeoutMs?: number;
 }
@@ -30,6 +38,7 @@ export interface BuiltInProviderDescriptor {
   readonly defaultExecutable: string;
   readonly executableOverrideEnv: string;
   readonly versionArgv: readonly string[];
+  readonly invocationPrefix: string;
   readonly environmentPrefix: string;
   readonly homeVariable: string;
   readonly defaultHome: string;
@@ -48,6 +57,7 @@ export const BUILT_IN_PROVIDERS = [
     defaultExecutable: 'claude',
     executableOverrideEnv: 'CLAUDE_EXECUTABLE',
     versionArgv: ['--version'],
+    invocationPrefix: '/',
     environmentPrefix: 'CLAUDE_',
     homeVariable: 'CLAUDE_CONFIG_DIR',
     defaultHome: '.claude',
@@ -74,6 +84,7 @@ export const BUILT_IN_PROVIDERS = [
     defaultExecutable: 'codex',
     executableOverrideEnv: 'CODEX_EXECUTABLE',
     versionArgv: ['--version'],
+    invocationPrefix: '$',
     environmentPrefix: 'CODEX_',
     homeVariable: 'CODEX_HOME',
     defaultHome: '.codex',
@@ -97,6 +108,20 @@ export type ProviderWith<Capability extends ProviderCapability> = BuiltInProvide
   readonly capabilities: ProviderCapabilityFlags & Readonly<Record<Capability, true>>;
 };
 
+export class ProviderCapabilityUnsupportedError extends Error {
+  constructor(
+    readonly provider: BuiltInProviderId,
+    readonly capability: ProviderCapability,
+    readonly owningIntake: string,
+  ) {
+    super(
+      `Built-in provider ${provider} does not support ${capability}; `
+      + `the capability is owned by intake ${owningIntake}.`,
+    );
+    this.name = 'ProviderCapabilityUnsupportedError';
+  }
+}
+
 /** Capability flags fail closed: an absent or false flag is unsupported. */
 export function supportsProviderCapability(
   provider: Pick<BuiltInProviderDescriptor, 'capabilities'>,
@@ -111,6 +136,22 @@ export function providerDescriptor(id: BuiltInProviderId): (typeof BUILT_IN_PROV
     throw new Error(`Unknown built-in provider: ${id}`);
   }
   return descriptor;
+}
+
+/** Return a capability-narrowed descriptor or fail before an unsupported path can branch. */
+export function requireProviderCapability<Capability extends ProviderCapability>(
+  id: BuiltInProviderId,
+  capability: Capability,
+): ProviderWith<Capability> {
+  const provider = providerDescriptor(id);
+  if (supportsProviderCapability(provider, capability)) {
+    return provider as ProviderWith<Capability>;
+  }
+
+  const owningIntake = PROVIDER_CAPABILITY_OWNERS[
+    capability as keyof typeof PROVIDER_CAPABILITY_OWNERS
+  ] ?? '#1884';
+  throw new ProviderCapabilityUnsupportedError(id, capability, owningIntake);
 }
 
 /** Resolve an override at use time so tests and child processes can provide it. */

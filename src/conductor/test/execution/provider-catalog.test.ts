@@ -1,10 +1,14 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   BUILT_IN_PROVIDERS,
   DEFAULT_PROVIDER,
+  ProviderCapabilityUnsupportedError,
+  requireProviderCapability,
   resolveProviderExecutable,
   supportsProviderCapability,
+  type ProviderCapabilityFlags,
+  type ProviderWith,
 } from '../../src/execution/provider-catalog.js';
 
 const executableOverrides = ['CLAUDE_EXECUTABLE', 'CODEX_EXECUTABLE'] as const;
@@ -63,5 +67,28 @@ describe('built-in provider catalog', () => {
     'nativeSchema',
   ] as const)('fails closed when a descriptor omits %s capability', (capability) => {
     expect(supportsProviderCapability({ capabilities: {} }, capability)).toBe(false);
+  });
+
+  it('refuses an undeclared self-host capability by provider, capability, and intake', () => {
+    const claude = BUILT_IN_PROVIDERS.find((provider) => provider.id === 'claude')!;
+    const capabilities = claude.capabilities;
+
+    try {
+      Object.defineProperty(claude, 'capabilities', {
+        configurable: true,
+        value: { ...capabilities, selfHost: false } satisfies ProviderCapabilityFlags,
+      });
+
+      const requireSelfHost = () => requireProviderCapability('claude', 'selfHost');
+      expect(requireSelfHost).toThrow(ProviderCapabilityUnsupportedError);
+      expect(requireSelfHost).toThrow(
+        /claude.*selfHost.*#1887/,
+      );
+    } finally {
+      Object.defineProperty(claude, 'capabilities', { configurable: true, value: capabilities });
+    }
+
+    const provider: ProviderWith<'selfHost'> = requireProviderCapability('claude', 'selfHost');
+    expect(provider).toBe(claude);
   });
 });
