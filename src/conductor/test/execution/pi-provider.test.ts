@@ -1,4 +1,4 @@
-// Covers: task:15, task:16, task:17
+// Covers: task:15, task:16, task:17, task:18
 import { readFile } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
@@ -157,5 +157,51 @@ describe('PiProvider', () => {
     expect(result).not.toHaveProperty('modelUnavailable');
     expect(result).not.toHaveProperty('authFailure');
     expect(result).not.toHaveProperty('rateLimited');
+  });
+
+  it.each([
+    [
+      'a structural ENOENT',
+      { stdout: '', stderr: '', exitCode: undefined, code: 'ENOENT' },
+      { providerUnavailable: true, providerUnavailableScope: 'run' },
+    ],
+    [
+      'exit 127',
+      { stdout: '', stderr: 'shell could not execute command', exitCode: 127 },
+      { providerUnavailable: true, providerUnavailableScope: 'run' },
+    ],
+    [
+      'the verified unknown-model diagnostic',
+      { stdout: '', stderr: 'Error: Model "x" not found. Use --list-models to see available models.', exitCode: 1 },
+      { modelUnavailable: true },
+    ],
+    [
+      'an unmatched non-zero failure',
+      { stdout: '', stderr: 'Pi encountered an unexpected transport failure.', exitCode: 1 },
+      {},
+    ],
+    [
+      'authentication-style output',
+      { stdout: '', stderr: 'Authentication required. Please log in.', exitCode: 1 },
+      {},
+    ],
+    [
+      'rate-limit-style output',
+      { stdout: '', stderr: 'Error 429: rate limit exceeded.', exitCode: 1 },
+      {},
+    ],
+  ])('classifies %s without inferring unsupported Pi recovery signals', async (_name, response, expected) => {
+    spawn.mockResolvedValue(response as ExecaResult);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result).toMatchObject({ success: false, exitCode: response.exitCode ?? 1, ...expected });
+    expect(result).not.toHaveProperty('authFailure');
+    expect(result).not.toHaveProperty('rateLimited');
+    if (!('providerUnavailable' in expected)) {
+      expect(result).not.toHaveProperty('providerUnavailable');
+      expect(result).not.toHaveProperty('providerUnavailableScope');
+    }
+    if (!('modelUnavailable' in expected)) expect(result).not.toHaveProperty('modelUnavailable');
   });
 });
