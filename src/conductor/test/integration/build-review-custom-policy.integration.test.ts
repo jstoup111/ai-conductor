@@ -594,6 +594,69 @@ describe('custom build-review policy runner', () => {
     expect(invoke).toHaveBeenCalledTimes(4);
   });
 
+  /** testQuality enabled over an empty test scope beside one custom member. */
+  function emptyTestScopeRunner(root: string, invoke: LLMProvider['invoke'], resolver = failingEffectiveResolver): DefaultStepRunner {
+    const provider: LLMProvider = {
+      invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+    };
+    return new DefaultStepRunner(provider, 'custom-policy-empty-test-scope', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false } }, custom_rubrics: {
+        portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
+      } } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(), probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: resolver,
+      buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+    });
+  }
+
+  it('never lets an empty-test-scope built-in PASS replace a custom FAIL', async () => {
+    const root = await fixture();
+    const frozenLine = 'export const value = 0;\n';
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [{
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', confidence: 90,
+      evidenceLocations: ['src/a.ts:1'],
+      sourceRegions: [{
+        path: 'src/a.ts', startLine: 1, endLine: 1, display: 'value',
+        contentHash: `sha256:${createHash('sha256').update(frozenLine).digest('hex')}`,
+      }],
+    }] };
+    const resolved: unknown[] = [];
+    const runner = emptyTestScopeRunner(root, vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })), (async (_projectRoot: string, aggregate: unknown) => {
+      resolved.push(aggregate);
+      return failingEffectiveResolver();
+    }) as never);
+
+    await runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(resolved).toHaveLength(1);
+    const aggregate = JSON.parse(await readFile(join(root, '.pipeline', 'build-review.json'), 'utf8'));
+    expect(aggregate).toMatchObject({
+      verdict: 'FAIL',
+      results: { testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'test_quality_empty_scope' } },
+      customResults: { portable: { result: { kind: 'judged', verdict: 'FAIL' } } },
+    });
+  });
+
+  it('honors the whole-lap digest before an empty-test-scope settlement', async () => {
+    const root = await fixture();
+    const evidence = join(root, '.pipeline', 'test-suite-evidence.json');
+    await writeFile(evidence, '{"status":"CURRENT"}\n');
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const runner = emptyTestScopeRunner(root, vi.fn(async () => {
+      await writeFile(evidence, '{"status":"MUTATED"}\n');
+      return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+    }), passingEffectiveResolver);
+
+    const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(result).toMatchObject({ success: false, currentLapMechanicalFault: true });
+    expect(result.output).toContain('review-input-mutated');
+    await expect(readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
+  });
+
   it('halts needs-human without an aggregate when review-input-mutated exhausts the mechanical allowance', async () => {
     const root = await fixture();
     vi.mocked(buildReviewCache.readBuildReviewCacheEntry)

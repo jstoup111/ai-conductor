@@ -2527,6 +2527,7 @@ export class DefaultStepRunner implements StepRunner {
             lapId,
             engineIdentity,
             useCandidateCache: true,
+            ...(customPolicyLap ? { joinsCustomPolicyLap: true } : {}),
             preflight: async () => this.runTautologyPreflight(inputs),
             readCache: async (branch, _projection, _policyFingerprint, semanticIdentity) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
               readFile: async (path) => readFile(path, 'utf-8'), readdir,
@@ -2600,7 +2601,10 @@ export class DefaultStepRunner implements StepRunner {
       // built-in's enabled flag as a proxy for the complete catalog: security
       // (and every future built-in) must share this lap's frozen input and
       // candidate path whenever it is enabled beside a custom policy.
-      if (joinedCoordination === undefined) {
+      // D5.3: a lap whose built-in coordination settled without judging
+      // (disabled gate, nothing dispatchable) is settled by its custom
+      // outcomes and the whole-lap digest, never by a built-in-only result.
+      if (joinedCoordination === undefined || joinedCoordination.kind !== 'ready') {
         const changedInputs = await finishCustomLapInputDigests();
         if (changedInputs.length > 0) {
           lapGate!.discardCacheWrites();
@@ -2622,24 +2626,12 @@ export class DefaultStepRunner implements StepRunner {
     const coordination = joinedCoordination!;
 
     if (coordination.kind === 'gate-disabled') {
-      if (customEntries.length > 0) {
-        await finishCustomLapInputDigests();
-        lapGate!.discardCacheWrites();
-      }
       return { success: true, output: 'build_review disabled' };
     }
     if (coordination.kind === 'passed') {
-      if (customEntries.length > 0) {
-        await finishCustomLapInputDigests();
-        lapGate!.discardCacheWrites();
-      }
       return this.publishBuildReviewPass(coordination.reason);
     }
     if (coordination.kind === 'refused') {
-      if (customEntries.length > 0) {
-        await finishCustomLapInputDigests();
-        lapGate!.discardCacheWrites();
-      }
       return { success: false, output: `build_review refused: ${coordination.reason}` };
     }
 
