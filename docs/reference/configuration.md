@@ -21,8 +21,8 @@ code that consumes it, and what a bad value does. Sections follow the loader's o
 | Legacy project dir | `<project>/.harness/config.yml` | `LEGACY_PROJECT_CONFIG_DIR`, `config.ts:96` |
 | Legacy user JSON seed | `~/.claude/ai-conductor.config.json` (flat camelCase) | One-time migration input; after a successful seed it is renamed to `ai-conductor.config.json.migrated` |
 
-Both files use the same schema. Keep per-user state (`conductor:` and `markdown_viewer:`) in the
-user file. Keep self-host settings such as `harness_self_host`, `owner_gate_cutover`, and
+Both files use the same schema. Keep per-user state (`conductor:`, `markdown_viewer:`, and
+`github_bot:`) in the user file. Keep self-host settings such as `harness_self_host`, `owner_gate_cutover`, and
 `auto_restart_on_stale_engine` in the harness checkout's project config, not in unrelated
 projects.
 
@@ -187,6 +187,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `otel` | object | disabled | [otel](#otel) |
 | `build_progress` | object | see section | [build_progress](#build_progress) |
 | `provider_stream` | object | `{ min_interval_ms: 5000 }` | [provider_stream](#provider_stream) |
+| `github_bot` | object | none | [github_bot](#github_bot) |
 | `spec_owner` | string | none | [spec_owner](#spec_owner) |
 | `owner_gate_cutover` | ISO-8601 string | `null` | [owner_gate_cutover](#owner_gate_cutover) |
 | `attribution_audit_sample_pct` | number | `10` | [attribution telemetry](#attribution-telemetry) |
@@ -1499,6 +1500,32 @@ key has no default behavior and is never read as
 `.pipeline/step-heartbeat` remains activity telemetry for `daemon status`. Neither heartbeat
 silence nor staleness terminates, retries, replaces, or completes a running provider, so this key
 grants no termination or lifecycle authority.
+
+## github_bot
+
+Optional machine-user credential for authorized GitHub writes. Configure it only in
+`~/.ai-conductor/config.yml`:
+
+```yaml
+github_bot:
+  token_file: ~/.config/ai-conductor/github-bot-token
+```
+
+`token_file` is required when the block is present and must be a non-empty string. `~` and `~/…`
+expand from the current user's home directory. The file contains the token itself; it is read at
+write time, trimmed, and never belongs in configuration or version control.
+
+**This key may live only in `~/.ai-conductor/config.yml`.** A project
+`.ai-conductor/config.yml` containing `github_bot`, even with an empty value, is rejected so a
+repository cannot distribute one operator's credential location. Unknown keys in the block are
+also rejected.
+
+When configured, authorized GitHub writes and HTTPS pushes first use the bot credential. Reads
+and operator identity resolution continue to use the ambient `gh` credential. If the token cannot
+be read, GitHub refuses it, or a write uses an SSH remote, the authorized operation logs a
+`github_write_credential_fallback` event and retries once with the ambient operator credential.
+Other failures do not trigger a fallback. The event records only the operation, target, and reason;
+it never includes the token, token-file path, or command output.
 
 ## spec_owner
 
