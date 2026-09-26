@@ -1,4 +1,5 @@
 import { LIVE_E2E_PROVIDERS } from './live-e2e-providers.js';
+import type { BuiltInProviderId } from '../execution/provider-catalog.js';
 
 /** The complete set of capabilities a smoke test may require. */
 export const SMOKE_CAPABILITIES = [
@@ -40,7 +41,7 @@ export type AdvisorySmokeCapabilityResolution =
 
 export type GateSmokeCapabilityResolution =
   | { outcome: 'ran' }
-  | { outcome: 'skipped'; provider: 'claude' | 'codex'; unmet: string }
+  | { outcome: 'skipped'; provider: BuiltInProviderId; unmet: string }
   | { outcome: 'failed'; unmet: string };
 
 type CredentialedSmokeCapability = Extract<SmokeCapability, `credentialed:${string}`>;

@@ -48,12 +48,6 @@ export interface BuiltInProviderDescriptor {
   readonly capabilities: ProviderCapabilityFlags;
 }
 
-type BuiltInProviderTable = readonly [
-  BuiltInProviderDescriptor & { readonly id: 'claude' },
-  BuiltInProviderDescriptor & { readonly id: 'codex' },
-  BuiltInProviderDescriptor & { readonly id: 'pi' },
-];
-
 const PI_NO_MODEL = '';
 
 /** Pi owns its configured default model, so no harness model id is selected. */
@@ -72,7 +66,7 @@ const PI_MODEL_POLICY: ProviderModelPolicy = {
  * The built-in provider source of truth.  New built-ins belong here before a
  * consumer can select or branch on them.
  */
-export const BUILT_IN_PROVIDERS: BuiltInProviderTable = [
+export const BUILT_IN_PROVIDERS = [
   {
     id: 'claude',
     createAdapter: (): LLMProvider => new ClaudeProvider(
@@ -96,7 +90,7 @@ export const BUILT_IN_PROVIDERS: BuiltInProviderTable = [
       costSelfReporting: true,
       writeFence: true,
       nativeSchema: true,
-    },
+    } as const satisfies ProviderCapabilityFlags,
   },
   {
     id: 'codex',
@@ -122,7 +116,7 @@ export const BUILT_IN_PROVIDERS: BuiltInProviderTable = [
       reviewPolicyCatalog: true,
       supportsSessionResume: false,
       nativeSchema: true,
-    },
+    } as const satisfies ProviderCapabilityFlags,
   },
   {
     id: 'pi',
@@ -137,17 +131,24 @@ export const BUILT_IN_PROVIDERS: BuiltInProviderTable = [
     modelPolicy: PI_MODEL_POLICY,
     capabilities: {
       supportsSessionResume: false,
-    },
+    } as const satisfies ProviderCapabilityFlags,
   },
-] as const;
+] as const satisfies readonly BuiltInProviderDescriptor[];
 
 export type BuiltInProviderId = (typeof BUILT_IN_PROVIDERS)[number]['id'];
 
 export const DEFAULT_PROVIDER: BuiltInProviderId = 'claude';
 
-export type ProviderWith<Capability extends ProviderCapability> = BuiltInProviderDescriptor & {
-  readonly capabilities: ProviderCapabilityFlags & Readonly<Record<Capability, true>>;
-};
+type ProviderWithCapability<Provider, Capability extends ProviderCapability> = Provider extends {
+  readonly capabilities: Readonly<Record<Capability, true>>;
+}
+  ? Provider
+  : never;
+
+export type ProviderWith<Capability extends ProviderCapability> = ProviderWithCapability<
+  (typeof BUILT_IN_PROVIDERS)[number],
+  Capability
+>;
 
 export class ProviderCapabilityUnsupportedError extends Error {
   constructor(

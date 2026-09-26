@@ -40,6 +40,7 @@ import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { scrubTmuxEnvironment } from '../../execution/child-environment.js';
+import { BUILT_IN_PROVIDERS, requireProviderCapability } from '../../execution/provider-catalog.js';
 import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 export {
@@ -142,6 +143,14 @@ const SETTINGS_FILE = 'settings.json';
 /** Claude Code state file — holds per-project workspace-trust grants. */
 const STATE_FILE = '.claude.json';
 
+function sandboxProvider() {
+  const descriptor = BUILT_IN_PROVIDERS.find(
+    (candidate) => candidate.homeVariable === 'CLAUDE_CONFIG_DIR',
+  );
+  if (!descriptor) throw new Error('The self-host sandbox provider is not registered.');
+  return requireProviderCapability(descriptor.id, 'selfHost');
+}
+
 class ThrowawaySandbox implements SandboxBuildEnv {
   private tornDown = false;
   constructor(
@@ -157,7 +166,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     // (if present). The token is set dynamically around step execution and may change
     // during retries/parks, so we capture the current value at call time.
     const env: Record<string, string | undefined> = { ...this.parentEnv };
-    env.CLAUDE_CONFIG_DIR = this.configDir;
+    env[sandboxProvider().homeVariable] = this.configDir;
     if (process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined) {
       env.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     }
@@ -183,6 +192,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
  */
 export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<SandboxBuildEnv> {
   const fs = opts.fs ?? realSandboxFs;
+  const provider = sandboxProvider();
   const usesScratch = opts.baseDir === undefined;
   const base = opts.baseDir ?? await acquireScratchHome({
     worktreeRoot: opts.worktreeRoot,
@@ -190,7 +200,7 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     featureSlug: opts.featureSlug,
     runId: opts.runId,
     attempt: opts.attempt,
-    provider: 'claude',
+    provider: provider.id,
   });
   const parentEnv = opts.parentEnv ?? process.env;
 
@@ -241,7 +251,7 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
           worktreeRoot: opts.worktreeRoot,
           runId: opts.runId!,
           attempt: opts.attempt!,
-          provider: 'claude',
+          provider: provider.id,
         });
     } else if (configDir) {
         await fs.rm(configDir, { recursive: true, force: true }).catch(() => {});
@@ -263,7 +273,7 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
         worktreeRoot: opts.worktreeRoot,
         runId: opts.runId!,
         attempt: opts.attempt!,
-        provider: 'claude',
+        provider: provider.id,
       }).then(() => {})
       : undefined,
   );
@@ -276,8 +286,9 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
  * Derived at runtime — no hardcoded path.
  */
 function defaultGlobalStateFile(parentEnv: NodeJS.ProcessEnv): string {
-  return parentEnv.CLAUDE_CONFIG_DIR
-    ? join(parentEnv.CLAUDE_CONFIG_DIR, STATE_FILE)
+  const homeVariable = sandboxProvider().homeVariable;
+  return parentEnv[homeVariable]
+    ? join(parentEnv[homeVariable], STATE_FILE)
     : join(homedir(), STATE_FILE);
 }
 
