@@ -3038,6 +3038,7 @@ export class Conductor {
     step: StepName,
     expectedRunId: string | undefined,
     dispatchStartedAt: number | undefined,
+    dispatchOutput?: string,
   ): Promise<CompletionResult | undefined> {
     if (
       step !== 'manual_test' &&
@@ -3047,6 +3048,12 @@ export class Conductor {
 
     try {
       if (step === 'architecture_review_as_built') {
+        // A rejected structured result persisted nothing; record the
+        // rejection (and its named field) as its own absent outcome rather
+        // than a generic missing file or a prior lap's verdict.
+        if (dispatchOutput?.startsWith('structured-result-rejected:')) {
+          return { done: false, routeClass: 'absent', retrySignal: 'structured-result-rejected', reason: dispatchOutput };
+        }
         const stored = await readAsBuiltVerdict(this.projectRoot);
         if (stored.kind !== 'present') {
           return { done: false, routeClass: 'absent', reason: stored.kind === 'absent' ? `${AS_BUILT_VERDICT_PATH} is missing` : stored.reason };
@@ -10889,6 +10896,7 @@ export class Conductor {
               step.name,
               this.currentRunId,
               this.currentAttemptStartedAt,
+              result.output,
             );
             if (handshake?.routeClass === 'absent' && handshake.reason) {
               lastVerdictHandshakeFailure = handshake.reason;

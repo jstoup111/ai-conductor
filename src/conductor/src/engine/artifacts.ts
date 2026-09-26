@@ -1111,8 +1111,11 @@ export interface CompletionResult {
     floorMs?: number;
     floorSource: 'attempt' | 'session' | 'run-identity';
   } & VerdictFreshnessClassification;
-  /** Telemetry-only classification for a retryable stale verdict identity. */
-  retrySignal?: 'stale-run-identity';
+  /**
+   * Telemetry-only classification for a retryable absent verdict: a stale run
+   * identity, or an as-built structured result the engine rejected.
+   */
+  retrySignal?: 'stale-run-identity' | 'structured-result-rejected';
   /**
    * Route-signal facet for retry-classification (issue #646). 'named-route'
    * marks a fresh, parseable, non-passing verdict (a real reviewer decision
