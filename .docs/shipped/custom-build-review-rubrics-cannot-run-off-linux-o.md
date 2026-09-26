@@ -4,6 +4,61 @@ spec_hash: c346722f505a8b4424733b9134dd11e1c4388d8461d0166390826ae752c400c3
 pr: https://github.com/jstoup111/ai-conductor/pull/2747
 shipped: 2026-09-26
 engine_version: 20260926T130155Z-4676e13f10c4
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "Task 10"
+    outcome: remediated
+    summary: "Ordinary non-self-host build_review dispatch omits the frozen startup capability map, so the runner re-probes and can disagree with startup telemetry."
+  - gate: architecture_review_as_built
+    finding: AB-2
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-10-portable-build-review-policy D5.5"
+    outcome: remediated
+    summary: "A built-in peer whose read-only candidates are all unavailable settles as generic setup exhaustion instead of the required closed cause and immediate halt path."
+  - gate: architecture_review_as_built
+    finding: AB-3
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-10-portable-build-review-policy D12"
+    outcome: remediated
+    summary: "Shipped consumer guidance still claims Linux-only bubblewrap containment and the retired unsupported-policy recovery."
+  - gate: architecture_review_as_built
+    finding: AB-9
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-10-portable-build-review-policy D5.5"
+    outcome: remediated
+    summary: "The default foreground production root admits custom-policy candidates without establishing their host read-only capability."
+  - gate: architecture_review_as_built
+    finding: AB-10
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-10-portable-build-review-policy D5.3"
+    outcome: remediated
+    summary: "A later provider fallback can baseline its distinct policy inputs after sibling reviewer fan-out has begun."
+  - gate: architecture_review_as_built
+    finding: AB-11
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-10-portable-build-review-policy D5.5"
+    outcome: remediated
+    summary: "Daemon status forgets the startup capability result once it ages beyond the final 64 KiB of the event spine."
+  - gate: architecture_review_as_built
+    finding: AB-12
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-10-portable-build-review-policy D5.3"
+    outcome: remediated
+    summary: "Post-join failure and rejection exits can bypass the required mutation classification and whole-lap discard."
+  - gate: architecture_review_as_built
+    finding: AB-13
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-10-portable-build-review-policy D5.3"
+    outcome: remediated
+    summary: "The integrity digest omits symlink identity and targets from governed input trees."
+  - gate: architecture_review_as_built
+    finding: AB-14
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane D3.2"
+    outcome: remediated
+    summary: "The unavailable-capability halt leaves no current aggregate, so the promised reduced-coverage recovery cannot run."
 ---
 
 ## Cost
