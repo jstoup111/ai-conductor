@@ -5,10 +5,8 @@ import type {
   ProviderNativeSchemaCapability,
   SelfHostAuthContext,
   SelfHostAuthPreparation,
-  SpawnPermit,
-  SpawnPermitDecision,
-  SpawnPermitPurpose,
 } from '../execution/llm-provider.js';
+export { validateSpawnPermit } from '../execution/spawn-permit.js';
 import { ModelAvailability } from './model-availability.js';
 import {
   hasBuiltInProviderModelPolicy,
@@ -89,17 +87,6 @@ export class ProviderRuntimeSet {
       ? (context) => runtime.provider.prepareSelfHostAuth!(context)
       : undefined;
   }
-}
-
-/**
- * Evaluates a lifecycle-owned permit without awaiting, so adapters can invoke
- * it immediately before their subprocess factory and fail closed on denial.
- */
-export function validateSpawnPermit(
-  permit: SpawnPermit | undefined,
-  purpose?: SpawnPermitPurpose,
-): SpawnPermitDecision {
-  return permit?.(purpose) ?? { permitted: true };
 }
 
 export function createProviderRuntimeSet(
