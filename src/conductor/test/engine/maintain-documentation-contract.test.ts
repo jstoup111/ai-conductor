@@ -119,7 +119,10 @@ describe('repository-local maintain-documentation contract', () => {
         input: /Input:/i.test(preFinish) && /implementation/i.test(preFinish),
         output: /Output:/i.test(preFinish) && /impact verdict/i.test(preFinish),
         commit: /Commit:/i.test(preFinish) && /before PASS/i.test(preFinish),
-        changelog: /Changelog:/i.test(preFinish) && /evaluate/i.test(preFinish),
+        changelog:
+          /Changelog:/i.test(preFinish) &&
+          /`release-disposition` gate owns the disposition/i.test(preFinish) &&
+          /never a pre-finish blocker/i.test(preFinish),
         verdicts: /PASS:/i.test(preFinish) && /BLOCKED:/i.test(preFinish),
       },
       documentationOnly: {
@@ -533,82 +536,25 @@ describe('repository-local maintain-documentation contract', () => {
     });
   });
 
-  it('defines implementation release-disposition selection and format', async () => {
+  it('delegates PR release metadata to the later release-disposition gate', async () => {
     const skill = await readFile(canonicalSkill, 'utf-8');
     const changelog =
       skill.match(/## Changelog decisions\n([\s\S]*?)(?=\n## |$)/)?.[1] ?? '';
-    const subsection = (heading: string): string =>
-      changelog.match(new RegExp(`### ${heading}\\n([\\s\\S]*?)(?=\\n### |$)`))?.[1] ?? '';
-    const selection = subsection('Selection');
-    const format = subsection('Entry format');
-    const blocking = subsection('Blocking validation');
 
     expect({
-      selection: {
-        notableRequired:
-          /notable reader-visible implementation change.*requires a release-note disposition/i.test(
-            selection,
-          ),
-        nonNotableMayPass: /non-notable implementation.*PASS.*explicit no-note disposition/i.test(selection),
-        exclusions: {
-          specOnly: /spec-only/i.test(selection),
-          documentationOnly: /documentation-only/i.test(selection),
-          internalNonNotable: /internal and non-notable/i.test(selection),
-          noImplementationChange: /no implementation change/i.test(selection),
-        },
-      },
-      entryFormat: {
-        oneSentence: /exactly one.*sentence/i.test(format),
-        presentTense: /present-tense/i.test(format),
-        readerOutcomeFirst: /led by the reader outcome/i.test(format),
-        prMetadata: /category and semver impact.*implementation PR metadata/i.test(format),
-        noChangelogWrite: /do not edit `CHANGELOG\.md`/i.test(format),
-      },
-      blocking: {
-        outcome: /return BLOCKED.*pass marker absent/i.test(blocking),
-        missingRequiredEntry: /missing required release-note disposition/i.test(blocking),
-        missingNoNote: /missing explicit no-note disposition/i.test(blocking),
-        multipleSentences: /multiple sentences/i.test(blocking),
-        futureTense: /future tense/i.test(blocking),
-        internalMechanicsFirst: /internal mechanics first/i.test(blocking),
-      },
-      migrationBlocks: {
-        runnable: /runnable migration blocks/i.test(format),
-        separate: /separate from.*one-sentence (?:entry|release note)/i.test(format),
-      },
+      noChangelogWrite: /never author or finalize `CHANGELOG\.md`/i.test(changelog),
+      delegated: /`release-disposition` gate.*runs after this step and before `finish`.*owns the PR release metadata/i.test(
+        changelog,
+      ),
+      neverBlocks: /do not check, author, or block on that metadata in any mode/i.test(changelog),
+      noDispositionBlocker: /missing required release-note disposition/i.test(skill),
     }).toEqual({
-      selection: {
-        notableRequired: true,
-        nonNotableMayPass: true,
-        exclusions: {
-          specOnly: true,
-          documentationOnly: true,
-          internalNonNotable: true,
-          noImplementationChange: true,
-        },
-      },
-      entryFormat: {
-        oneSentence: true,
-        presentTense: true,
-        readerOutcomeFirst: true,
-        prMetadata: true,
-        noChangelogWrite: true,
-      },
-      blocking: {
-        outcome: true,
-        missingRequiredEntry: true,
-        missingNoNote: true,
-        multipleSentences: true,
-        futureTense: true,
-        internalMechanicsFirst: true,
-      },
-      migrationBlocks: {
-        runnable: true,
-        separate: true,
-      },
+      noChangelogWrite: true,
+      delegated: true,
+      neverBlocks: true,
+      noDispositionBlocker: false,
     });
   });
-
   it('aligns repository release policy without changing consumer defaults', async () => {
     const [claudePolicy, architecture, pullRequestTemplate] = await Promise.all([
       readFile(join(repoRoot, 'CLAUDE.md'), 'utf-8'),
