@@ -958,3 +958,27 @@ Task 27 <- 12, 13
 - [x] Dependencies are explicit and acyclic
 - [x] Every citable decision of the four amended ADRs has exactly one Architecture Obligation Coverage row (35)
 - [x] No task directs an amendment to another feature's sealed artifact
+
+### Task rem-as-built-rem-ab2-1: src/conductor/src/engine/step-runners.ts:1133 — in the as-built branch, return toStepRunResult unchanged for a failed result carrying modelUnavailable or provider exhaustion (providerSetupExhaustion, or attempts where every candidate was unavailable) before the structured-result-missing check; add a test in src/conductor/test/engine/step-runners-as-built.test.ts proving an exhausted-model result keeps its provider-unavailable output and is not reported as structured-result-missing, keeping Task 11's auth, rate-limit, unresolved-command, and missing-result tests
+**Gate:** as-built
+**Rationale:** D6.2 requires model-availability classification before structured-output faults, but the as-built branch at src/conductor/src/engine/step-runners.ts:1133-1144 preserves only authFailure/rateLimited/commandUnresolved and overwrites a provider-exhaustion result (provider-execution.ts:1056-1080 'All configured providers are unavailable') with structured-result-missing; Task 11 Steps admit the fix (step 3.2 orders existing provider classifications first) but its Done-when names only auth, rate limit, and unresolved command, so the repair is a file-scoped build task in step-runners.ts; provider-execution.ts's shared exhaustion result is left unchanged (other steps consume it) and Task 11's auth/rate-limit/unresolved and structured-result-missing tests are preserved.
+**Governing clause:** adr-2026-09-07-durable-prd-widening-decision-reconciliation D6
+**Done when:**
+- adr-2026-09-07-durable-prd-widening-decision-reconciliation D6 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-1 is complete.
+
+### Task rem-as-built-rem-ab3-1: src/conductor/src/engine/as-built-projection.ts — return a mechanical fault (dimension plan-tasks) naming the task when parsePlanTaskDoneWhen has no Done-when for a plan task (:284-288), a story-criteria fault naming the stories path when extractAuthoritativeStoryCriteria returns zero criteria (:243-253), and a governing-adr-decisions fault naming the stem when a plan-cited or diff-added ADR stem has no ADR file (:263-280); keep superseded/non-APPROVED filtering and the empty-governing-set non-fault; add one test per fault in src/conductor/test/as-built-projection.test.ts
+**Gate:** as-built
+**Rationale:** D7.1 requires a missing required structured dimension to halt deterministically, but src/conductor/src/engine/as-built-projection.ts:284-288 substitutes [] for a task without Done-when, :243-253 accepts an empty extracted criteria set, and :263-280 silently skips a plan-cited ADR stem with no file; no Task Done-when names these missing-dimension faults (Task 9 covers unreadable stories and unparseable ADRs, whose faults stay), so this is a build task in as-built-projection.ts; found-and-excluded: cited ADRs present but not APPROVED stay filtered (Task 7, S1.6, as-built-projection.test.ts:183) and an empty governing set stays non-fault (S1.7, :208).
+**Governing clause:** adr-2026-09-07-durable-prd-widening-decision-reconciliation D7
+**Done when:**
+- adr-2026-09-07-durable-prd-widening-decision-reconciliation D7 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab3-1 is complete.
+
+### Task rem-as-built-rem-ab4-1: Clarify the approved as-built architecture diagram's mechanical-fault lane: native-schema-unsupported and input faults halt without retry; structured-result-missing and invalid-structured-result score absent, rerun within the retry budget, and halt needs-human on exhaustion, matching stories S4.16/S4.17 and plan Tasks 11 and 15
+**Gate:** as-built
+**Rationale:** AB-4 reads the approved architecture diagram's mechanical-fault lane (lines 50-55, 178-179) as a no-retry halt for missing and invalid structured results, but sealed stories S4.16/S4.17 and plan Tasks 11 and 15 require those results to score absent, rerun within the retry budget, and halt needs-human on exhaustion, which is what step-runners.ts:1139-1159 and conductor.ts:13015-13122 do; D6.2 itself does not require no-retry for structured-output faults (only D7.1 input faults), so no build change can satisfy the finding without breaking the sealed stories — the approved diagram must be clarified to say missing/invalid structured results are never a substantive verdict and follow the absent-rerun-then-needs-human route, while native-schema-unsupported and over-limit input remain no-retry mechanical halts.
+**Governing clause:** adr-2026-09-07-durable-prd-widening-decision-reconciliation D6
+**Done when:**
+- adr-2026-09-07-durable-prd-widening-decision-reconciliation D6 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab4-1 is complete.
