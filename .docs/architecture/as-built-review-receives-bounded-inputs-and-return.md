@@ -145,8 +145,9 @@ sequenceDiagram
             PR-->>PX: terminal structured result
             PX-->>RN: finalStructuredResult or structuredResultFailure
             RN->>VD: validate(result)
-            alt missing or invalid field
-                VD-->>CD: mechanical fault naming the field
+        alt missing or invalid structured result
+            VD-->>CD: scored absent; rerun within retry budget
+            CD-->>CN: needs-human only on exhaustion
             else valid
                 VD->>AU: persist verdict stamped with run identity
                 AU->>AU: render report .md from typed verdict
