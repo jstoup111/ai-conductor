@@ -1236,6 +1236,11 @@ Selecting a custom rubric adopts its skill as a read-only review policy: its cri
 resources inform findings for the declared question, but its standalone workflow and output format do
 not replace the engine's bounded review contract or aggregate verdict.
 
+Custom findings may cite `evidenceLocations` as `path:line` or inclusive `path:start-end`
+ranges. Every citation must fit entirely inside one admitted source region. The engine
+checks source-region paths, line bounds, and content hashes against the frozen changed input
+before stamping findings, for both Claude and Codex.
+
 Custom review runs on every platform in each provider's own read-only review mode (Claude restricted
 mode and the Codex read-only sandbox), in the ordinary provider environment. The host read-only
 capability result is reported at daemon start, interactive config load, and `daemon status` under
