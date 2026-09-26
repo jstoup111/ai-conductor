@@ -4548,6 +4548,67 @@ export class Conductor {
    * next gate pass and halt then). A missing/stale/unusable plan is `none` —
    * the caller falls through to its deterministic fallback or the generic HALT.
    */
+  /**
+   * Pre-dispatch prd_audit lap-cap check (#2753). Returns the kickback-cap
+   * halt planRemediation would otherwise produce after /remediate, or
+   * undefined when the lap is available or the inputs are not conclusive
+   * (the post-dispatch path then decides exactly as before).
+   */
+  private async prdAuditLapCapHaltBeforeRemediate(
+    state: ConductState,
+    hintSource: RemediationHintSource,
+  ): Promise<{ kind: 'halt'; detail: string; haltClass: KickbackCapHaltClass } | undefined> {
+    const evidence = hintSource.evidence ?? [];
+    const prdAuditEvidenceFile = evidence.find((p) => p.gate === 'prd_audit')?.evidenceFile;
+    if (prdAuditEvidenceFile === undefined) return undefined;
+    try {
+      const activePlanPath = await this.getActivePlanPath();
+      const planPath = activePlanPath === null
+        ? await resolveFeaturePlanPath(this.projectRoot, state.feature_desc)
+        : isAbsolute(activePlanPath) ? activePlanPath : join(this.projectRoot, activePlanPath);
+      if (!planPath) return undefined;
+      const planText = await readFile(planPath, 'utf8');
+      const report = await readFile(join(this.projectRoot, prdAuditEvidenceFile), 'utf8');
+      const parsed = parsePrdAuditReport(report, planText);
+      if (!parsed.ok || parsed.value.rejectedRows.length > 0) return undefined;
+      const fixable = parsed.value.findings.filter(
+        (finding) => finding.grade === 'FIXABLE' && finding.planTask !== undefined,
+      );
+      if (fixable.length === 0) return undefined;
+      const lapCap = remediationLapCapForGate('prd_audit', this.config);
+      const authoredTaskCount = planText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0;
+      const budget = await readRemediationGateAppendBudget(
+        this.projectRoot, this.config, 'prd_audit', lapCap, 0, 0, authoredTaskCount,
+      );
+      if (remediationGateAppendBudgetExhausted(budget) !== 'laps') return undefined;
+      const asBuiltEnabled = (this.config as HarnessConfig & {
+        architecture_review_as_built?: { remediation?: { enabled?: boolean } };
+      }).architecture_review_as_built?.remediation?.enabled ?? true;
+      const asBuiltEvidenceFile = evidence.find(
+        (p) => p.gate === 'architecture_review_as_built',
+      )?.evidenceFile;
+      const asBuiltReport = asBuiltEnabled && asBuiltEvidenceFile !== undefined
+        ? await readFile(join(this.projectRoot, asBuiltEvidenceFile), 'utf8').catch(() => undefined)
+        : undefined;
+      const findingList = [...new Set(fixable.map((finding) => finding.criterion))].join(', ');
+      const capReason = `lap cap reached (${budget.priorLaps}/${budget.lapCap})`;
+      const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'prd_audit', {
+        consumed: budget.priorLaps,
+        limit: budget.lapCap,
+        latestReason: capReason,
+      });
+      return {
+        kind: 'halt',
+        haltClass: KICKBACK_CAP_HALT_CLASS,
+        detail: `prd_audit remediation ${capReason} before appending fix tasks. `
+          + `Findings: ${findingList}.\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}`
+          + renderAsBuiltBlockedFindingDetail(asBuiltReport),
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
   private async planRemediation(
     state: ConductState,
     steps: StepDefinition[],
@@ -4609,6 +4670,14 @@ export class Conductor {
         };
       }
     }
+    // #2753: the prd_audit lap cap depends only on the ledger and the audit
+    // report, both known before /remediate runs. Decide it here so a lap that
+    // cannot append never pays for remediate nor strands a remediation.json
+    // the resumed (raised) lap cannot reuse. Same halt text, class and
+    // kickback-cap evidence as the post-dispatch exit below, which remains
+    // the authority for growth caps (they need remediate's task count).
+    const preDispatchCapHalt = await this.prdAuditLapCapHaltBeforeRemediate(state, hintSource);
+    if (preDispatchCapHalt) return preDispatchCapHalt;
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
     const planResult = await readRemediationPlanResult(
       this.projectRoot,
