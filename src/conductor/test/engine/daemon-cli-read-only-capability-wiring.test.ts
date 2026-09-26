@@ -1,16 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runDaemonMode } from '../../src/daemon-cli.js';
 import type { ReadOnlyReviewCapability } from '../../src/engine/build-review-read-only-capability.js';
+import type { StepRunOptions, StepRunResult, StepRunner } from '../../src/engine/conductor.js';
+import { writeState } from '../../src/engine/state.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import * as daemonCore from '../../src/engine/daemon.js';
 import * as daemonLock from '../../src/engine/daemon-lock.js';
+import { Conductor } from '../test-conductor.js';
 
 const roots: string[] = [];
 const testTmpdir = (): string => process.env.TMPDIR ?? '/tmp';
-const conductorSource = new URL('../../src/engine/conductor.ts', import.meta.url);
-
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -99,9 +102,48 @@ describe('Task 10 — daemon read-only review capability wiring', () => {
     expect(events).not.toContainEqual(expect.objectContaining({ type: 'build_review_read_only_capability' }));
   });
 
-  it('threads the daemon-start snapshot into build_review runner options', async () => {
-    const source = await readFile(conductorSource, 'utf8');
-    expect(source).toMatch(/readOnlyReviewCapabilities:\s*this\.readOnlyReviewCapabilities/);
-    expect(source).toMatch(/name === 'build_review'[\s\S]{0,240}readOnlyReviewCapabilities/);
+  it('threads the frozen startup snapshot to an ordinary non-self-host build_review dispatch', async () => {
+    const projectRoot = await mkdtemp(join(testTmpdir(), 'ordinary-read-only-capability-'));
+    roots.push(projectRoot);
+    const state = Object.fromEntries(ALL_STEPS.map((step) => [
+      step.name,
+      step.name === 'build_review' ? 'pending' : 'done',
+    ])) as ConductState;
+    state.complexity_tier = 'M';
+    const stateFilePath = join(projectRoot, '.pipeline', 'state.json');
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeState(stateFilePath, state);
+
+    const capabilities: Readonly<Record<string, ReadOnlyReviewCapability>> = {
+      codex: { provider: 'codex', platform: process.platform, status: 'available' },
+    };
+    let observed: StepRunOptions | undefined;
+    const runner: StepRunner = {
+      run: async (step: StepName, _state: ConductState, options?: StepRunOptions): Promise<StepRunResult> => {
+        expect(step).toBe('build_review');
+        observed = options;
+        return {
+          success: false,
+          output: 'stop after ordinary build_review dispatch',
+          refusal: { kind: 'needs-human', reason: 'read-only-review-unavailable' },
+          buildReviewReadOnlyReviewUnavailable: true,
+        };
+      },
+    };
+
+    await new Conductor({
+      projectRoot,
+      stateFilePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      fromStep: 'build_review',
+      mode: 'auto',
+      daemon: true,
+      selfHost: false,
+      verifyArtifacts: false,
+      readOnlyReviewCapabilities: capabilities,
+    }).run();
+
+    expect(observed?.readOnlyReviewCapabilities).toBe(capabilities);
   });
 });

@@ -6184,6 +6184,13 @@ export class Conductor {
     );
   }
 
+  /** Preserve the daemon-start capability observation for build-review only. */
+  private buildReviewCapabilityOption(name: StepName): Pick<StepRunOptions, 'readOnlyReviewCapabilities'> {
+    return name === 'build_review' && this.readOnlyReviewCapabilities !== undefined
+      ? { readOnlyReviewCapabilities: this.readOnlyReviewCapabilities }
+      : {};
+  }
+
   /**
    * Dispatch one self-build through candidate-local isolation. Provider
    * selection happens inside the executor, so preparation and boundary
@@ -6313,9 +6320,7 @@ export class Conductor {
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
-          ...(name === 'build_review' && this.readOnlyReviewCapabilities !== undefined
-            ? { readOnlyReviewCapabilities: this.readOnlyReviewCapabilities }
-            : {}),
+          ...this.buildReviewCapabilityOption(name),
         });
       }
       const installed = await this.guardrails.resolveInstalledHarnessRoot();
@@ -6344,9 +6349,7 @@ export class Conductor {
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
-          ...(name === 'build_review' && this.readOnlyReviewCapabilities !== undefined
-            ? { readOnlyReviewCapabilities: this.readOnlyReviewCapabilities }
-            : {}),
+          ...this.buildReviewCapabilityOption(name),
         });
       } finally {
         if (hadConfig) process.env.CLAUDE_CONFIG_DIR = priorConfig;
@@ -6519,9 +6522,7 @@ export class Conductor {
         retryReason: retryHint,
         ...identityOption,
         ...executionContextOption,
-        ...(name === 'build_review' && this.readOnlyReviewCapabilities !== undefined
-          ? { readOnlyReviewCapabilities: this.readOnlyReviewCapabilities }
-          : {}),
+        ...this.buildReviewCapabilityOption(name),
       });
     } finally {
       if (this.providerExecution) {
@@ -10334,6 +10335,7 @@ export class Conductor {
                                 ...(step.name === 'prd_audit' && this.prdWideningReviewContext
                                   ? { prdWideningReviewContext: this.prdWideningReviewContext }
                                   : {}),
+                                ...this.buildReviewCapabilityOption(step.name),
                                 retryReason: retryHint,
                                 attempt,
                                 escalate: resolved.escalate,
