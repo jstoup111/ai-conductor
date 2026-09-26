@@ -1,3 +1,4 @@
+// Covers: task:21
 /**
  * Tests for T9-T10 (when: conductor dispatch) and T12-T22 (parallel: fan-out).
  */
@@ -613,6 +614,41 @@ describe('parallel: group execution (T15-T22)', () => {
     expect(runCalls).toContain('frontend');
     expect(runCalls).toContain('backend');
     expect(runCalls).not.toContain('explore');
+  });
+
+  it('forwards a usage-exhausted configured member into daemon provider suppression', async () => {
+    await seedAllDoneExcept(statePath, 'explore');
+    const deadline = Date.now() + 60_000;
+    const providerAvailability = { suppress: vi.fn(), isAvailable: () => true };
+    const onProviderSuppressed = vi.fn();
+    const runner: StepRunner = {
+      run: vi.fn()
+        .mockResolvedValueOnce({ success: false, rateLimited: true, usageExhausted: true, actualProvider: 'codex', deadline })
+        .mockResolvedValue({ success: true }),
+    };
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      config: { steps: { explore: { parallel: [{ name: 'backend' }] } } },
+      mode: 'auto',
+      providerExecution: {
+        runtimes: {} as never,
+        sessions: {} as never,
+        configuredProviders: ['codex'],
+        providerAvailability,
+        onProviderSuppressed,
+      },
+    });
+
+    await conductor.run();
+
+    expect({ suppress: providerAvailability.suppress.mock.calls, persisted: onProviderSuppressed.mock.calls }).toEqual({
+      suppress: [['codex', deadline]],
+      persisted: [['codex', deadline]],
+    });
   });
 });
 

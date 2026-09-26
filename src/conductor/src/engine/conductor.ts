@@ -8305,6 +8305,8 @@ export class Conductor {
                   memberExecutionContexts.set(member.name, executionContext);
                   return runGroupBranch(member, state, {
                       stepRunner: this.stepRunner,
+                      providerAvailability: this.providerExecution?.providerAvailability,
+                      onProviderSuppressed: this.providerExecution?.onProviderSuppressed,
                       ...(member.name === 'prd_audit' && this.prdWideningReviewContext
                         ? { prdWideningReviewContext: this.prdWideningReviewContext }
                         : {}),
@@ -14602,6 +14604,8 @@ export class Conductor {
         memberExecutionContexts.set(member.name, executionContext);
         return runGroupBranch(member, state, {
           stepRunner: this.stepRunner,
+          providerAvailability: this.providerExecution?.providerAvailability,
+          onProviderSuppressed: this.providerExecution?.onProviderSuppressed,
           executionContext,
           operatorParkBoundary: this.daemon && this.featureSlug !== undefined
             ? this.operatorParkBoundary

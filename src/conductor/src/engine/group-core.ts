@@ -25,6 +25,10 @@ import type { HarnessConfig } from "../types/config.js";
 import type { ProviderSessionScope } from "./provider-session.js";
 import type { AuthenticationReadiness } from "../execution/llm-provider.js";
 import type { ObservedInterval } from "../execution/observed-interval.js";
+import {
+  MAX_PROVIDER_SUPPRESSION_MS,
+  type ProviderAvailability,
+} from "./provider-availability.js";
 
 /** The three possible verdicts a validator branch can produce. */
 export type Verdict = "pass" | "fail" | "blocked";
@@ -412,6 +416,10 @@ export interface GroupBranchLifecycleObserver {
 
 export interface BranchExecutorDeps {
   stepRunner: BranchStepRunner;
+  /** Daemon-scoped admission state shared by every concurrent member. */
+  providerAvailability?: ProviderAvailability;
+  /** Daemon-origin durable projection of a newly opened suppression window. */
+  onProviderSuppressed?: (provider: string, deadline: number) => void | Promise<void>;
   /** Engine-rendered PRD widening history for the prd_audit member only. */
   prdWideningReviewContext?: StepRunOptions['prdWideningReviewContext'];
   /** Every production branch reports its admitted lifecycle through this observer. */
@@ -774,7 +782,16 @@ async function runGroupBranchInner(
     // default backoff window), await clear(), then retry WITHOUT burning
     // the branch's retry budget — mirrors conductor.ts:1717-1755.
     if (result.rateLimited) {
-      const deadline = result.deadline ?? Date.now() + (result.waitSeconds ?? 300) * 1000;
+      const rateLimitNow = Date.now();
+      const requestedDeadline = result.deadline ?? rateLimitNow + (result.waitSeconds ?? 300) * 1000;
+      const deadline = Math.min(requestedDeadline, rateLimitNow + MAX_PROVIDER_SUPPRESSION_MS);
+      const provider = typeof result.actualProvider === "string" && result.actualProvider.trim() !== ""
+        ? result.actualProvider
+        : undefined;
+      if (result.usageExhausted === true && provider !== undefined) {
+        deps.providerAvailability?.suppress(provider, deadline);
+        await deps.onProviderSuppressed?.(provider, deadline);
+      }
 
       if (deps.rateLimitEpisode) {
         deps.rateLimitEpisode.enter(deadline);
