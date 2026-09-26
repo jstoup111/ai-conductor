@@ -520,6 +520,12 @@ export async function runCiFix(
   deps: {
     fixRunner: CiFixRunner;
     verify?: (worktreePath: string) => Promise<number>;
+    /**
+     * Prepares the transient resolver checkout before dispatch. Production
+     * uses the standard worktree preparation; tests may inject a bounded fake
+     * when preparation is outside the behavior under observation.
+     */
+    prepareWorktree?: (worktreePath: string) => Promise<void>;
     liveness?: ResolveWorktreeLiveness;
     /** Production supplies its gh transport; tests may inject proven authority. */
     gh?: GhRunner;
@@ -666,7 +672,7 @@ export async function runCiFix(
 
       logOutcome(log, prUrl, 'ci-fix-lease-push', 'refreshed');
       return { kind: 'published', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
-    }, undefined, deps.liveness ?? {});
+    }, deps.prepareWorktree, deps.liveness ?? {});
 
     return outcome as CiFixOutcome;
   } catch (err) {

@@ -170,7 +170,13 @@ describe('CF-4: spawn/exec failures are classified, never a bare unclassified Ex
         },
       };
 
-      const outcome = await runCiFix(entry, 'feat/fix', 'hint', { fixRunner }, logger);
+      const outcome = await runCiFix(entry, 'feat/fix', 'hint', {
+        fixRunner,
+        // CF-4 owns the resolver's classified error boundary, not project
+        // setup or hook installation. Keep the real local-Git worktree seam
+        // while removing unrelated preparation from this bounded fixture.
+        prepareWorktree: async () => {},
+      }, logger);
       expect(outcome).toEqual({ kind: 'failed', stage: 'worktree' });
 
       const combined = logs.join('\n');
