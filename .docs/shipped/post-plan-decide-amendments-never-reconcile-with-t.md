@@ -4,6 +4,37 @@ spec_hash: 3298a6e62066922f76397c47188ee150fc802a4d8bca732faf3cec3ea51c1b7f
 pr: https://github.com/jstoup111/ai-conductor/pull/2745
 shipped: 2026-09-26
 engine_version: 20260925T125013Z-084a4eab8370
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-31-coverage-binding-judge-step D18"
+    outcome: remediated
+    summary: "Cached `not-carried` amendment verdicts discard the required `missingObligation` diagnostic."
+  - gate: architecture_review_as_built
+    finding: AB-2
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-06-reopened-task-resolution decision 10"
+    outcome: remediated
+    summary: "Coverage-binding repair admission charges laps without enforcing the approved default per-gate cap."
+  - gate: architecture_review_as_built
+    finding: AB-3
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-31-coverage-binding-judge-step D20"
+    outcome: remediated
+    summary: "The disabled path emits criterion entries as amendment events with an invalid verdict and missing artifact path."
+  - gate: architecture_review_as_built
+    finding: AB-4
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-31-coverage-binding-judge-step D19"
+    outcome: remediated
+    summary: "The amendment judge is not issued completed-task identity, so it cannot ground `contradictsCompleted`; the approved sequence diagram is not implemented."
+  - gate: architecture_review_as_built
+    finding: AB-5
+    class: REMEDIABLE
+    governing_clause: "Task 8"
+    outcome: remediated
+    summary: "Legacy/no-section, tier-S, and uncitable-ADR paths do not persist the required ADR-layer `not-applicable` record."
 ---
 
 ## Cost
