@@ -195,6 +195,7 @@ Tasks 2, 7, 8, and 9 are expected to require no production change: they exist to
 **Done when:**
 - a test asserts the only production callers of the readability predicate are the land rung and `GATE_ONLY_PREDICATES.stories`, and fails if any BUILD or SHIP step module imports it
 - a test asserts daemon discovery admits a merged spec whose stories artifact the predicate refuses, so the spec is dispatched rather than skipped and the build proceeds
+- a test asserts daemon discovery dispatches rather than skips a merged spec whose stories file is missing a Negative Paths section
 - a test asserts a merged spec whose stories artifact yields zero readable criteria runs through the BUILD and SHIP step gates without any step refusing it on readability grounds
 
 **Files likely touched:**
@@ -282,7 +283,7 @@ Task 10 (independent)
 | Story 4 happy: Given a merged spec whose stories file the readability predicate would refuse, when the daemon discovers and dispatches it, then discovery admits it and the build proceeds | 8 | "a test asserts daemon discovery admits a merged spec whose stories artifact the predicate refuses, so the spec is dispatched rather than skipped and the build proceeds" | diff-local |
 | Story 4 happy: Given that merged spec reaching `acceptance_specs`, when the step derives its required evidence, then the readability predicate adds no requirement the step did not already impose | 9 | "a test asserts the `acceptance_specs` required-evidence derivation calls no readability predicate and its required criterion set is produced solely by `extractAuthoritativeStoryCriteria`" | diff-local |
 | Story 4 negative: Given a merged spec whose stories file yields zero readable criteria, when the feature runs through BUILD and SHIP, then no BUILD or SHIP step refuses it on readability grounds | 8 | "a test asserts a merged spec whose stories artifact yields zero readable criteria runs through the BUILD and SHIP step gates without any step refusing it on readability grounds" | diff-local |
-| Story 4 negative: Given a merged spec whose stories file is missing a Negative Paths section, when the daemon evaluates it for dispatch, then it is dispatched rather than skipped | 8 | "a test asserts daemon discovery admits a merged spec whose stories artifact the predicate refuses, so the spec is dispatched rather than skipped and the build proceeds" | diff-local |
+| Story 4 negative: Given a merged spec whose stories file is missing a Negative Paths section, when the daemon evaluates it for dispatch, then it is dispatched rather than skipped | 8 | "a test asserts daemon discovery dispatches rather than skips a merged spec whose stories file is missing a Negative Paths section" | diff-local |
 | Story 4 negative: Given this feature's own change set, when the diff is inspected, then no other feature's stories artifact is added, modified, or deleted | 10 | "the feature's `base...HEAD` diff lists exactly one path in the repository's stories artifact directory, this feature's own artifact, and no other stories file appears as added, modified, or deleted" | diff-local |
 
 ## Architecture Obligation Coverage

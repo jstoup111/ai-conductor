@@ -33,9 +33,13 @@ const ACCEPTED_STORIES = [
   '',
   '**Status:** Accepted',
   '',
-  '## Story: test feature',
+  '## Story 1: test feature',
   '### Acceptance Criteria',
+  '#### Happy Path',
   '- Given X, when Y, then Z.',
+  '',
+  '#### Negative Paths',
+  '- Given invalid input, when Y, then it is refused.',
   '',
 ].join('\n');
 

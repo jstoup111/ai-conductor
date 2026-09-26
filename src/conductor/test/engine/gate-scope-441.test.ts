@@ -1,3 +1,4 @@
+// Covers: task:6
 // ─────────────────────────────────────────────────────────────────────────────
 // Test: stories/plan gate predicates are scoped to the FEATURE's docs (#441).
 //
@@ -48,6 +49,24 @@ const LEGACY_STORIES = `# Stories
 - **Given** x, **When** y, **Then** z.
 `;
 
+const STORY_2_WITHOUT_NEGATIVE_PATHS = `# Stories
+
+**Status:** Accepted
+
+## Story 1: readable
+
+### Happy Path
+- **Given** a valid thing, **When** it runs, **Then** it works.
+
+### Negative Paths
+- **Given** a broken thing, **When** it runs, **Then** it fails loudly.
+
+## Story 2: incomplete criteria
+
+### Happy Path
+- **Given** another thing, **When** it runs, **Then** it works.
+`;
+
 const COVERING_PLAN = `# Plan
 
 ## Task Dependency Graph
@@ -79,14 +98,24 @@ describe('stories gate scoping (#441)', () => {
     expect(result.done).toBe(true);
   });
 
-  it("the feature's OWN invalid doc still fails, naming only it", async () => {
-    await writeFile(join(root, `.docs/stories/${FEATURE}.md`), LEGACY_STORIES);
+  it("the feature's OWN unreadable doc still fails, naming Story 2", async () => {
+    await writeFile(join(root, `.docs/stories/${FEATURE}.md`), STORY_2_WITHOUT_NEGATIVE_PATHS);
     await writeFile(join(root, '.docs/stories/other-feature.md'), VALID_STORIES);
 
     const result = await GATE_ONLY_PREDICATES.stories!(root, { featureDesc: FEATURE });
     expect(result.done).toBe(false);
     expect(result.reason).toContain(`${FEATURE}.md`);
-    expect(result.reason).toContain('missing a happy path');
+    expect(result.reason).toContain('Story 2');
+  });
+
+  it('refuses the legacy shape because it has no headed Happy Path section', async () => {
+    await writeFile(join(root, `.docs/stories/${FEATURE}.md`), LEGACY_STORIES);
+
+    const result = await GATE_ONLY_PREDICATES.stories!(root, { featureDesc: FEATURE });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toContain(`${FEATURE}.md`);
+    expect(result.reason).toContain('Story 2');
   });
 
   it('unresolvable feature doc fails explicitly instead of scanning the corpus', async () => {

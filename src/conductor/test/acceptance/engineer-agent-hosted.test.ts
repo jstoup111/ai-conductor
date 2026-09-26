@@ -71,12 +71,12 @@ async function writeDocsArtifacts(dir: string, idea: string): Promise<void> {
   await writeFile(join(specsDir, `${slug}.md`), `# PRD: ${idea}\n\nApproved spec content.\n`, 'utf-8');
   await writeFile(
     join(storiesDir, `${slug}.md`),
-    `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story 1 — main\n\n### Acceptance Criteria\n#### Happy Path\n- Given x, when y, then z.\n`,
+    `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story 1 — main\n\n### Acceptance Criteria\n#### Happy Path\n- Given x, when y, then z.\n\n#### Negative Paths\n- Given invalid input, when land runs, then it refuses.\n`,
     'utf-8',
   );
   await writeFile(
     join(plansDir, `${slug}.md`),
-    `# Plan: ${idea}\n\n## Tasks\n\n### Task 1\n**Dependencies:** none\n\n**Done when:**\n- Given x, when y, then z.\n- The scoped tests pass.\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n\n## Coverage Check\n\n| Criterion | Task | Done when quote | Disposition |\n|---|---|---|---|\n| Story 1 happy: Given x, when y, then z. | 1 | Given x, when y, then z. | diff-local |\n`,
+    `# Plan: ${idea}\n\n## Tasks\n\n### Task 1\n**Dependencies:** none\n\n**Done when:**\n- Given x, when y, then z.\n- Given invalid input, when land runs, then it refuses.\n- The scoped tests pass.\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n\n## Coverage Check\n\n| Criterion | Task | Done when quote | Disposition |\n|---|---|---|---|\n| Story 1 happy: Given x, when y, then z. | 1 | Given x, when y, then z. | diff-local |\n| Story 1 negative: Given invalid input, when land runs, then it refuses. | 1 | Given invalid input, when land runs, then it refuses. | diff-local |\n`,
     'utf-8',
   );
 }
