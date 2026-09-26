@@ -568,7 +568,7 @@ describe('build-review domain', () => {
     const closed: readonly BuildReviewInfrastructureFailureReason[] = [
       'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact',
       'identity-mismatch', 'preflight-failed', 'artifact-read-failed', 'artifact-write-failed', 'scope-incomplete',
-      'projection-oversized', 'invalid-structured-result', 'native-schema-unsupported',
+      'projection-oversized', 'invalid-structured-result', 'native-schema-unsupported', 'review-input-mutated',
       'read-only-review-unavailable',
     ];
 
