@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.5.0] - 2026-09-26
+## [1.5.0] - 2026-09-27
 
 ### Added
 
@@ -74,6 +74,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Codex-routed build_review rubrics now send a strict-mode output schema the API accepts, and a failed first reviewer attempt no longer crashes the lap when a fallback candidate retries. ([implementation PR #2767](https://github.com/jstoup111/ai-conductor/pull/2767)).
 - Codex-routed custom build_review rubrics that report no findings as null are now accepted instead of failing every lap. ([implementation PR #2768](https://github.com/jstoup111/ai-conductor/pull/2768)).
 - Custom build_review findings that cite an inclusive line range inside an admitted source region are now accepted instead of failing as malformed. ([implementation PR #2769](https://github.com/jstoup111/ai-conductor/pull/2769)).
+- Build-review rubric judgments no longer borrow the test-suite timeout; each rubric has its own acceptance deadline (default 300s, configurable via `timeout_seconds`). ([implementation PR #2770](https://github.com/jstoup111/ai-conductor/pull/2770)).
 
 ## [1.4.0] - 2026-09-19
 
