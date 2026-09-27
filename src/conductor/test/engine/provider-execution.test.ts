@@ -955,6 +955,38 @@ describe('executeProviderCandidates', () => {
     });
   });
 
+  it('reports an elapsed deadline after judgment as a metered timeout, not a skipped cancellation', async () => {
+    const controller = new AbortController();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const tokenUsage = { input: 10, output: 20, numTurns: 1 };
+    const invoke = vi.fn(async (): Promise<InvokeResult> => {
+      clock.mockReturnValue(131_000);
+      controller.abort('build-review-candidate-deadline');
+      return { success: true, output: 'late judgment', exitCode: 0, tokenUsage };
+    });
+    try {
+      const result = await executeAuxiliaryProviderCandidates({
+        step: 'build_review', memberId: 'scope',
+        policy: {
+          enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
+          model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0,
+        },
+        runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+        sessions: new ProviderSessionScope(vi.fn().mockReturnValue('candidate-session')),
+        options: { prompt: 'review', cwd: '/workspace' },
+        deadlineAt: 121_000, abortSignal: controller.signal,
+        preparedCandidateOperation: async (context) => ({ kind: 'judged', result: await context.invoke() }),
+      });
+      expect(result.success).toBe(false);
+      expect(result.output).toContain('timed out');
+      expect(result.output).not.toContain('before judgment');
+      expect(result.attempts).toEqual([expect.objectContaining({ invoked: true, outcome: 'failure', tokenUsage })]);
+      expect(invoke).toHaveBeenCalledTimes(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('classifies a timed-out prepared candidate without invoking its operation', async () => {
     const operation = vi.fn();
     const invoke = vi.fn();

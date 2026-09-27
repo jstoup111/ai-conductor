@@ -719,6 +719,8 @@ export type BuildReviewRubricId = (typeof BUILD_REVIEW_RUBRIC_IDS)[number];
 
 /** Optional execution overrides for one build-review rubric branch. */
 export interface BuildReviewRubricConfig {
+  /** Candidate acceptance deadline in seconds, independent of test_suite. Default: 300. */
+  timeout_seconds?: number;
   enabled?: boolean;
   /** Maximum UTF-8 bytes in this rubric's canonical projection. */
   max_projection_bytes?: number;

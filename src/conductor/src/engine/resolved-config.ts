@@ -707,6 +707,8 @@ const DEFAULT_BUILD_REVIEW_MAX_PARALLEL = 4;
 export const DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES = 1_048_576;
 /** Concrete execution policy for one independently-dispatched review rubric. */
 export interface ResolvedBuildReviewRubricPolicy {
+  /** Omitted policies retain the five-minute review acceptance budget. */
+  readonly timeout_seconds?: number;
   readonly enabled: boolean;
   readonly max_projection_bytes: number;
   readonly llm_provider: ProviderSelection;
@@ -894,6 +896,7 @@ export function resolveBuildReviewConfig(
     );
     return freezeRubricPolicy({
       enabled: rubric?.enabled ?? defaultEnabled,
+      ...(rubric?.timeout_seconds === undefined ? {} : { timeout_seconds: rubric.timeout_seconds }),
       max_projection_bytes: rubric?.max_projection_bytes ?? DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
       llm_provider: rubricProvider,
       model: resolvedNative.model,

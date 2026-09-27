@@ -103,6 +103,8 @@ describe('engine/build-review-registry', () => {
       min_confidence: 0,
     };
 
+    expect(fingerprintBuildReviewRubricPolicy({ ...policy, timeout_seconds: 3600 }))
+      .not.toBe(fingerprintBuildReviewRubricPolicy(policy));
     expect(fingerprintBuildReviewRubricPolicy(policy)).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(fingerprintBuildReviewRubricPolicy(reorderedObject)).toBe(
       fingerprintBuildReviewRubricPolicy(policy),

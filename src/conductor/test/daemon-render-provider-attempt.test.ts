@@ -76,6 +76,14 @@ describe('renderDaemonEvent: provider_attempt', () => {
     expect(line).not.toContain('✓');
   });
 
+  it('does not call a preparation timeout provider unavailability', () => {
+    expect(lines({
+      type: 'provider_attempt', step: 'build_review', provider: 'codex',
+      outcome: 'failure', invoked: false,
+      reason: 'Prepared candidate operation timed out before judgment.',
+    })).toEqual(['·   build_review skipped codex (not-invoked: Prepared candidate operation timed out before judgment.)']);
+  });
+
   it('renders a skipped provider with its unavailable reason', () => {
     expect(
       lines({

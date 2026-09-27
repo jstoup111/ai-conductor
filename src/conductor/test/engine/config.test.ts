@@ -2860,6 +2860,25 @@ steps:
       },
     );
 
+    it.each(['rubrics', 'custom_rubrics'] as const)('resolves an independent review deadline from %s', (key) => {
+      const id = key === 'rubrics' ? 'testQuality' : 'moneySafety';
+      const policy = { enabled: true, timeout_seconds: 3600, ...(key === 'custom_rubrics' ? { skill: 'money-safety', question: 'Check money.' } : {}) };
+      const result = validateConfig({ test_suite: { command: "make test", timeout_seconds: 120 }, build_review: { [key]: { [id]: policy } } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const resolved = resolveBuildReviewConfig(result.config);
+      expect(resolved.catalog.find((entry) => entry.id === id)?.policy.timeout_seconds).toBe(3600);
+    });
+
+    it.each([0, -1, Infinity, NaN, '120', 3_000_000])('rejects invalid rubric timeout %j', (timeout_seconds) => {
+      for (const key of ['rubrics', 'custom_rubrics']) {
+        const id = key === 'rubrics' ? 'testQuality' : 'moneySafety';
+        expect(validateConfig({ build_review: { [key]: { [id]: { timeout_seconds,
+          ...(key === 'custom_rubrics' ? { skill: 'money-safety', question: 'Check money.' } : {}),
+        } } } }).ok).toBe(false);
+      }
+    });
+
     it('loads an explicit test-quality max_projection_bytes as a number', () => {
       const result = validateConfig({
         build_review: { rubrics: { testQuality: { max_projection_bytes: 1_048_576 } } },

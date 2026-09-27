@@ -2980,7 +2980,8 @@ export class DefaultStepRunner implements StepRunner {
     let cacheProvenance: Extract<BuildReviewBranchProvenance, { kind: 'cache-hit' }> | undefined;
     let coverageFailure = false;
     const controller = new AbortController();
-    const deadlineAt = Date.now() + (this.config?.test_suite?.timeout_seconds ?? 300) * 1_000;
+    // Review acceptance is rubric policy; a fast test suite must not shorten a model judgment.
+    const deadlineAt = Date.now() + (entry.policy.timeout_seconds ?? 300) * 1_000;
     // The outer deadline timer is registered before discovery's own timer.
     // Preserve its cause so that an in-flight catalog operation reports a
     // deadline rather than a generic cancellation when this timer fires first.
@@ -3732,7 +3733,7 @@ export class DefaultStepRunner implements StepRunner {
         }
         const safety = this.candidateSafetyFor('build_review');
         const controller = new AbortController();
-        const deadlineAt = Date.now() + (this.config?.test_suite?.timeout_seconds ?? 300) * 1_000;
+        const deadlineAt = Date.now() + (branch.policy.timeout_seconds ?? 300) * 1_000;
         const timeout = setTimeout(() => controller.abort(), Math.max(0, deadlineAt - Date.now()));
         let result: ProviderExecutionResult;
         try {
