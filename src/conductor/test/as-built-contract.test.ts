@@ -256,7 +256,7 @@ describe('as-built verdict contract', () => {
       verdict: 'APPROVED',
       reachability: [],
       driftNotes: [],
-      findings: [],
+      findings: [{ id: 'AB-1', class: 'DESIGN', summary: 'An approval that still lists a finding.' }],
     })).toEqual({
       ok: false,
       field: 'findings',
@@ -328,6 +328,42 @@ describe('as-built verdict contract', () => {
       field: 'findings[0].class',
       requirement: 'one of REMEDIABLE or DESIGN is required',
     });
+  });
+
+  it('drops PLAN_GAP outcome fields a provider filled on a BLOCKED verdict', () => {
+    const finding = { id: 'AB-1', class: 'DESIGN', summary: 'Abort is not wired.' };
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [], driftNotes: [],
+      outcomeDelivered: false,
+      affectedOutcome: 'Story 5 abort is not delivered.',
+      findings: [finding],
+      violations: 'Abort has no production caller.',
+      resolution: 'Wire abort.',
+    })).toEqual({
+      ok: true,
+      verdict: {
+        version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict: 'BLOCKED', reachability: [], driftNotes: [],
+        findings: [finding], violations: 'Abort has no production caller.', resolution: 'Wire abort.',
+      },
+    });
+  });
+
+  it.each(['APPROVED', 'APPROVED WITH DRIFT NOTES'])('drops outcome fields and empty BLOCKED fields on an %s verdict', (verdict) => {
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict, reachability: [], driftNotes: [],
+      outcomeDelivered: true, affectedOutcome: 'Delivered.', findings: [], violations: '', resolution: null,
+    })).toEqual({ ok: true, verdict: { version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict, reachability: [], driftNotes: [] } });
+  });
+
+  it('drops empty BLOCKED fields on a PLAN_GAP verdict but keeps rejecting non-empty ones', () => {
+    const planGap = {
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict: 'PLAN_GAP', reachability: [], driftNotes: [],
+      outcomeDelivered: false, affectedOutcome: 'Story 2 is undelivered.',
+    };
+    expect(validateAsBuiltVerdict({ ...planGap, findings: [], violations: null, resolution: '' })).toEqual({ ok: true, verdict: planGap });
+    expect(validateAsBuiltVerdict({ ...planGap, violations: 'Something is wrong.' })).toMatchObject({ ok: false, field: 'violations' });
   });
 
   it('rejects an unknown top-level key with the admitted APPROVED keys', () => {
