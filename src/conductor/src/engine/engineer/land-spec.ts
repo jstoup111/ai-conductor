@@ -71,6 +71,7 @@ import { resolvePlanStoriesPath } from '../plan-stories-reference.js';
 import { scanPlanProtectedTargets } from '../plan-protected-targets.js';
 import { validatePlanDoneWhen } from '../plan-done-when.js';
 import { PLAN_TASK_HARD_STOP_BOUNDARY, validatePlanTaskCount } from '../plan-task-count.js';
+import { assessAcceptedStoryReadability } from '../story-criteria.js';
 import { composeSpecCommitMessage } from './spec-commit-message.js';
 import { isEngineAppendedRemediationTaskId } from '../remediation-append.js';
 
@@ -119,6 +120,7 @@ export type LandGateIdentifier =
   | 'plan-task-count'
   | 'plan-stories-reference'
   | 'stories-not-approved'
+  | 'stories-unreadable'
   | 'tier-artifacts-missing'
   | 'architecture-mermaid-missing'
   | 'artifact-stem-mismatch'
@@ -397,6 +399,19 @@ export async function landSpec(
     throw landGateError('stories-not-approved',
       'landSpec: stories artifact is not approved — it must declare "Status: Accepted" ' +
         '(and no "Status: DRAFT"). Run the /stories skill and approve before landing.',
+    );
+  }
+
+  // Accepted stories are executable input for criterion coverage and later
+  // dispatch. Approval alone cannot make a story with no derivable criterion
+  // readable, so refuse it before any downstream gate or landing write.
+  const readability = assessAcceptedStoryReadability(storiesContent);
+  const unreadableStory = readability.stories.find((story) => !story.readable);
+  if (unreadableStory) {
+    throw landGateError('stories-unreadable',
+      `landSpec: accepted stories contain an unreadable Story ${unreadableStory.id ?? 'unnamed'}. ` +
+      'Each criterion must be one single-line Given/When/Then bullet under a headed Happy Path or Negative Paths section. ' +
+      'Amend the stories artifact before landing.',
     );
   }
 

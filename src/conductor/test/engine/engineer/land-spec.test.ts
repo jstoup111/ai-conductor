@@ -27,9 +27,13 @@ const ACCEPTED_STORIES = [
   '',
   '**Status:** Accepted',
   '',
-  '## Story: bump',
+  '## Story 1: bump',
   '### Acceptance Criteria',
+  '#### Happy Path',
   '- Given X, when Y, then Z.',
+  '',
+  '#### Negative Paths',
+  '- Given invalid input, when land runs, then it refuses.',
   '',
 ].join('\n');
 
@@ -54,6 +58,9 @@ const SMALL_TIER_STORIES = [
   '### Happy Path',
   '- Given X, when Y, then Z.',
   '',
+  '### Negative Paths',
+  '- Given invalid input, when land runs, then it refuses.',
+  '',
 ].join('\n');
 
 const SMALL_TIER_PLAN = [
@@ -66,6 +73,7 @@ const SMALL_TIER_PLAN = [
   '',
   '**Done when:**',
   '- Given X, when Y, then Z.',
+  '- Given invalid input, when land runs, then it refuses.',
   '- The dependency update is documented.',
   '',
   '## Coverage Check',
@@ -73,6 +81,7 @@ const SMALL_TIER_PLAN = [
   '| Criterion | Task ids | Quote | Disposition |',
   '| --- | --- | --- | --- |',
   '| Story 1 happy: Given X, when Y, then Z. | 1 | "Given X, when Y, then Z." | diff-local |',
+  '| Story 1 negative: Given invalid input, when land runs, then it refuses. | 1 | "Given invalid input, when land runs, then it refuses." | diff-local |',
   '',
 ].join('\n');
 
@@ -179,7 +188,7 @@ async function seedNamedTierMWorktree(
   await writeFile(join(dir, '.docs', 'specs', `${slug}.md`), `# PRD: ${idea}\n\nApproved.\n`);
   await writeFile(
     join(dir, '.docs', 'stories', `${storiesStem}.md`),
-    `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story: validate\n### Acceptance Criteria\n- Given X, when Y, then Z.\n`,
+    `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story 1: validate\n### Acceptance Criteria\n#### Happy Path\n- Given X, when Y, then Z.\n\n#### Negative Paths\n- Given invalid input, when land runs, then it refuses.\n`,
   );
   await writeFile(
     join(dir, '.docs', 'plans', `${planFileStem}.md`),
@@ -243,10 +252,16 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
       '#### Happy Path',
       '- Given X, when Y, then Z.',
       '',
+      '#### Negative Paths',
+      '- Given invalid input, when land runs, then it refuses.',
+      '',
       '## Story 2: Keep the commit evidence inert',
       '### Acceptance Criteria',
       '#### Happy Path',
       '- Given X, when Y, then Z.',
+      '',
+      '#### Negative Paths',
+      '- Given invalid input, when land runs, then it refuses.',
       '',
     ].join('\n');
     const plan = [
@@ -262,12 +277,14 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
       '**Story:** Story 1',
       '**Done when:**',
       '- Given X, when Y, then Z.',
+      '- Given invalid input, when land runs, then it refuses.',
       '- The subject remains unchanged.',
       '',
       '### Task 2: Keep prose inert',
       '**Story:** Story 2',
       '**Done when:**',
       '- Given X, when Y, then Z.',
+      '- Given invalid input, when land runs, then it refuses.',
       '- No trailer-shaped line is emitted.',
       '',
       '### Task 3: Commit the summary',
@@ -281,7 +298,9 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
       '| Criterion | Task ids | Quote | Disposition |',
       '| --- | --- | --- | --- |',
       '| Story 1 happy: Given X, when Y, then Z. | 1 | "Given X, when Y, then Z." | diff-local |',
+      '| Story 1 negative: Given invalid input, when land runs, then it refuses. | 1 | "Given invalid input, when land runs, then it refuses." | diff-local |',
       '| Story 2 happy: Given X, when Y, then Z. | 2 | "Given X, when Y, then Z." | diff-local |',
+      '| Story 2 negative: Given invalid input, when land runs, then it refuses. | 2 | "Given invalid input, when land runs, then it refuses." | diff-local |',
       '',
     ].join('\n');
     await mkdir(join(dir, '.docs', 'track'), { recursive: true });
@@ -321,6 +340,9 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
         '#### Happy Path',
         '- Given valid artifacts, when land runs twice, then the second run does not add a commit.',
         '',
+        '#### Negative Paths',
+        '- Given invalid input, when land runs, then it refuses.',
+        '',
       ].join('\n'),
     );
     await writeFile(
@@ -338,6 +360,7 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
         '**Story:** Story 1',
         '**Done when:**',
         '- Given valid artifacts, when land runs, then the commit succeeds.',
+        '- Given invalid input, when land runs, then it refuses.',
         '- The commit remains reviewable.',
         '',
         '## Coverage Check',
@@ -345,6 +368,7 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
         '| Criterion | Task ids | Quote | Disposition |',
         '| --- | --- | --- | --- |',
         '| Story 1 happy: Given valid artifacts, when land runs twice, then the second run does not add a commit. | 1 | "Given valid artifacts, when land runs, then the commit succeeds." | diff-local |',
+        '| Story 1 negative: Given invalid input, when land runs, then it refuses. | 1 | "Given invalid input, when land runs, then it refuses." | diff-local |',
         '',
       ].join('\n'),
     );
@@ -370,7 +394,7 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
 });
 
 describe('Task 4: landSpec keeps degraded DECIDE artifacts landable', () => {
-  it('commits the unchanged subject without empty summary or stories sections', async () => {
+  it('refuses an accepted stories artifact with no readable story', async () => {
     const idea = 'dep bump';
     const dir = await seedValidWorktree(idea);
     await writeFile(
@@ -394,13 +418,8 @@ describe('Task 4: landSpec keeps degraded DECIDE artifacts landable', () => {
     );
 
     const gh: GhRunner = async () => ({ stdout: 'operator\n' });
-    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
-
-    expect(result).toEqual({ slug: 'dep-bump', branch: 'spec/dep-bump', repoPath: dir });
-    const message = await git(['log', '-1', '--format=%B'], dir);
-    expect(message.split('\n')[0]).toBe('spec: land authored artifacts for "dep bump" [engineer/land]');
-    expect(message).not.toContain('Summary:');
-    expect(message).not.toContain('Stories:');
+    await expect(landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }))
+      .rejects.toMatchObject({ gate: 'stories-unreadable' });
   });
 });
 

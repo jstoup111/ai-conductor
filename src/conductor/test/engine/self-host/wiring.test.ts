@@ -515,8 +515,9 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
   });
 
   it('selecting Codex skips Claude-only self-build preparation when release artifacts are disabled', async () => {
-    const priorClaudeToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     await writeState(statePath, preBuildDoneState());
+    const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'ambient-claude-token';
     const { preflightBuildAuthCheck } = await import(
       '../../../src/engine/self-host/build-auth-preflight.js'
     );
@@ -524,27 +525,32 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     const { guardrails, teardown } = makeGuardrails();
     const { runner, seen } = recordingRunner();
 
-    await selfBuildConductor(guardrails, runner, {
-      config: {
-        // Every dispatched step in this fixture must resolve to Codex.  The
-        // typed as-built gate can be invalidated after BUILD, and leaving its
-        // provider implicit would exercise Claude sandbox setup after the
-        // Codex BUILD assertion.
-        llm_provider: 'codex',
-        harness_self_host: { release_artifact_gate: false },
-        steps: { build: { llm_provider: 'codex' } },
-      },
-    }).run();
+    try {
+      await selfBuildConductor(guardrails, runner, {
+        config: {
+          // Every dispatched step in this fixture must resolve to Codex.  The
+          // typed as-built gate can be invalidated after BUILD, and leaving its
+          // provider implicit would exercise Claude sandbox setup after the
+          // Codex BUILD assertion.
+          llm_provider: 'codex',
+          harness_self_host: { release_artifact_gate: false },
+          steps: { build: { llm_provider: 'codex' } },
+        },
+      }).run();
 
-    expect(guardrails.relink).not.toHaveBeenCalled();
-    expect(preflightBuildAuthCheck).not.toHaveBeenCalled();
-    expect(guardrails.provisionSandbox).not.toHaveBeenCalled();
-    expect(teardown).not.toHaveBeenCalled();
-    expect(seen.find((entry) => entry.step === 'build')?.configDir).toBeUndefined();
-    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(priorClaudeToken);
-    expect(guardrails.versionGate).toHaveBeenCalledTimes(1);
-    expect(guardrails.releaseGate).not.toHaveBeenCalled();
-    expect(seen.find((entry) => entry.step === 'build')).toBeDefined();
+      expect(guardrails.relink).not.toHaveBeenCalled();
+      expect(preflightBuildAuthCheck).not.toHaveBeenCalled();
+      expect(guardrails.provisionSandbox).not.toHaveBeenCalled();
+      expect(teardown).not.toHaveBeenCalled();
+      expect(seen.find((entry) => entry.step === 'build')?.configDir).toBeUndefined();
+      expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('ambient-claude-token');
+      expect(guardrails.versionGate).toHaveBeenCalledTimes(1);
+      expect(guardrails.releaseGate).not.toHaveBeenCalled();
+      expect(seen.find((entry) => entry.step === 'build')).toBeDefined();
+    } finally {
+      if (priorToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = priorToken;
+    }
   });
 
   it('passes the INSTALLED root (not the detection root) to provisionSandbox (#363 / TR-4)', async () => {
