@@ -14,8 +14,9 @@ own activity.
 
 This feature adds an **optional** machine-scoped bot credential, a machine-user token referenced
 from user config. When the bot is configured, every harness remote write, pushes included, runs as
-the bot. Every read stays on the operator's credential. When no bot is configured, nothing
-changes.
+the bot. Every read stays on the operator's credential, except the bot's read of its own GitHub
+identity for commit co-authorship (adr-2026-09-11-github-operation-ownership D10.1). When no bot
+is configured, nothing changes.
 
 Governing decisions: adr-2026-09-11-github-operation-ownership D9 (amended 2026-09-23) and
 adr-2026-07-22-canonical-tracker-client-seam item 3 (amended 2026-09-23). Architecture review:
@@ -25,7 +26,8 @@ Terms used below:
 - **Bot configured** means the user config `~/.ai-conductor/config.yml` contains a `github_bot`
   block whose `token_file` names a readable file holding a machine-user token.
 - **Write** means any guarded GitHub operation whose access class is not `read`, and any
-  authorized remote push.
+  authorized remote push. The bot self-identity read (`ambient.bot-identity.read`) is not a write:
+  it uses only the bot credential and never falls back to the operator's.
 - **Fallback warning** means the new `ConductorEvent` variant that records a write performed with
   the operator's credential although a bot was configured.
 
@@ -60,7 +62,7 @@ breaking ownership.
 
 #### Happy Path
 - **Given** a bot is configured, **When** a guarded GitHub operation of access class `feature-write`, `intake-write`, `create`, or `shared-write` runs, **Then** its `gh` child process receives `GH_TOKEN` equal to the token file's contents and every other environment variable is inherited unchanged.
-- **Given** a bot is configured, **When** a guarded `read` operation, operator identity resolution (`gh api user`), or `--assignee @me` intake capture runs, **Then** its `gh` child receives no bot token and uses the operator's ambient credential.
+- **Given** a bot is configured, **When** a guarded `read` operation other than the bot self-identity read, operator identity resolution (`gh api user`), or `--assignee @me` intake capture runs, **Then** its `gh` child receives no bot token and uses the operator's ambient credential.
 - **Given** a bot is configured, **When** an operator-run CLI (`compose handoff`, `intake file`) performs a GitHub write, **Then** that write runs with the bot credential exactly as a daemon write does.
 - **Given** a bot is configured, **When** the `github-operation` CLI is invoked from inside a provider session and performs a write, **Then** it resolves the bot from the same user config that supplies `spec_owner` and runs the write with the bot credential.
 
@@ -71,7 +73,7 @@ breaking ownership.
 - **Given** a guarded GitHub request that carries no operation access class, **When** the guarded runner receives it, **Then** it is refused without spawning `gh` under either credential.
 
 ### Done When
-- [ ] A transport test proves that each non-`read` access class spawns `gh` with the bot `GH_TOKEN`, and that `read` does not.
+- [ ] A transport test proves that each non-`read` access class spawns `gh` with the bot `GH_TOKEN`, and that `read` does not (the bot self-identity read uses the separate `bot` credential).
 - [ ] Identity resolution and `@me` intake capture are proven to spawn `gh` without the bot token.
 - [ ] A real-binary smoke test shows that the installed `gh` honors a child-process `GH_TOKEN` in preference to stored credentials.
 

@@ -125,7 +125,7 @@ correct commit no longer depends on me remembering trailer grammar (kills #433 C
 
 #### Negative Paths
 - Given `current-task` is absent and zero (or two or more) rows are `in_progress`, when an
-  untrailered commit is made, then the hook abstains — message unchanged, commit not blocked
+  untrailered commit is made, then the hook abstains — no `Task:` trailer is added, commit not blocked
   (a wrong stamp is worse than no stamp; validation still applies).
 - Given a rebase is in progress (`rebase-merge`/`rebase-apply` directory exists), when commits
   are replayed, then the hook abstains — replayed history is never restamped with the current
@@ -133,7 +133,7 @@ correct commit no longer depends on me remembering trailer grammar (kills #433 C
 - Given `git commit --amend` (hook source arg = `commit`), when the hook runs, then it abstains
   — amending an old commit must not re-attribute it.
 - Given `task-status.json` is corrupt JSON, when the fallback path is consulted, then the hook
-  abstains cleanly (exit 0, message unchanged) — a broken sidecar must never block commits.
+  abstains cleanly (exit 0, no `Task:` trailer added) — a broken sidecar must never block commits.
 
 > **Scope note (2026-07-10, #505):** the abstain scenarios above describe `prepare-commit-msg`
 > (the STAMPING hook) and remain authoritative for it: it never blocks. Whether the resulting
