@@ -267,8 +267,8 @@ function isEmptyValue(value: unknown): boolean {
 /**
  * AS_BUILT_VERDICT_SCHEMA is one flat object, so a provider may legally fill a field that
  * belongs to another verdict (Codex strict mode requires every field). Outcome commentary
- * is dropped outside PLAN_GAP; BLOCKED-only fields are dropped only when empty, so an
- * APPROVED verdict that still lists findings stays a rejected contradiction.
+ * is dropped outside PLAN_GAP; BLOCKED-only fields are dropped only when empty. An APPROVED
+ * verdict that lists findings or reports an undelivered outcome stays a rejected contradiction.
  */
 function withoutForeignVariantFields(value: Record<string, unknown>): Record<string, unknown> {
   const foreign = new Set<string>();
@@ -282,6 +282,9 @@ function withoutForeignVariantFields(value: Record<string, unknown>): Record<str
 /** Validate one complete terminal structured result before it becomes a verdict. */
 export function validateAsBuiltVerdict(input: unknown): ValidateAsBuiltVerdictResult {
   if (!record(input)) return rejected('', 'a verdict object is required');
+  if ((input.verdict === 'APPROVED' || input.verdict === 'APPROVED WITH DRIFT NOTES') && input.outcomeDelivered === false) {
+    return rejected('outcomeDelivered', `an undelivered outcome contradicts an ${input.verdict} verdict; use PLAN_GAP or BLOCKED`);
+  }
   const value = withoutForeignVariantFields(input);
   if (value.version !== AS_BUILT_VERDICT_CONTRACT_VERSION) return rejected('version', `the contract version ${AS_BUILT_VERDICT_CONTRACT_VERSION} is required`);
   if (!AS_BUILT_VERDICTS.includes(value.verdict as typeof AS_BUILT_VERDICTS[number])) return rejected('verdict', `one of ${AS_BUILT_VERDICTS.join(', ')} is required`);

@@ -357,6 +357,17 @@ describe('as-built verdict contract', () => {
     })).toEqual({ ok: true, verdict: { version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict, reachability: [], driftNotes: [] } });
   });
 
+  it.each(['APPROVED', 'APPROVED WITH DRIFT NOTES'])('rejects an %s verdict that reports an undelivered outcome', (verdict) => {
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict, reachability: [], driftNotes: [],
+      outcomeDelivered: false, affectedOutcome: 'Story 3 is not delivered.',
+    })).toEqual({
+      ok: false,
+      field: 'outcomeDelivered',
+      requirement: `an undelivered outcome contradicts an ${verdict} verdict; use PLAN_GAP or BLOCKED`,
+    });
+  });
+
   it('drops empty BLOCKED fields on a PLAN_GAP verdict but keeps rejecting non-empty ones', () => {
     const planGap = {
       version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict: 'PLAN_GAP', reachability: [], driftNotes: [],
