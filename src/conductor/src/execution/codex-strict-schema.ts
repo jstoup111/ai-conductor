@@ -4,7 +4,9 @@
  * `required`. Engine contracts share one schema with Claude's native grammar
  * and leave some fields optional, so the Codex adapter sends a strict copy in
  * which each optional property is required but nullable, and removes those
- * nulls from the result before any parser sees it.
+ * nulls from the result before any parser sees it. Strict mode also demands a
+ * `type` on every subschema and rejects `oneOf`, so the copy types each bare
+ * `const`/`enum` and rewrites `oneOf` as `anyOf`.
  */
 
 type JsonObject = Record<string, unknown>;
@@ -21,13 +23,31 @@ function requiredOf(schema: JsonObject): readonly string[] {
   return Array.isArray(schema.required) ? schema.required.filter((key): key is string => typeof key === 'string') : [];
 }
 
+function jsonTypeOf(value: unknown): string | undefined {
+  if (value === null) return 'null';
+  if (typeof value === 'string' || typeof value === 'boolean') return typeof value;
+  if (typeof value === 'number') return Number.isInteger(value) ? 'integer' : 'number';
+  return undefined;
+}
+
+/** Strict mode demands a `type` on every schema; infer it from a `const` or single-typed `enum`. */
+function inferredType(schema: JsonObject): string | undefined {
+  if (schema.type !== undefined) return undefined;
+  const values = 'const' in schema ? [schema.const] : Array.isArray(schema.enum) ? schema.enum : [];
+  const types = new Set(values.map(jsonTypeOf));
+  return types.size === 1 ? [...types][0] : undefined;
+}
+
 /** Returns a strict-mode copy of `schema`; the input is never mutated. */
 export function toCodexStrictSchema(schema: unknown): unknown {
   if (Array.isArray(schema)) return schema.map(toCodexStrictSchema);
   if (!isObject(schema)) return schema;
   const strict: JsonObject = {};
+  const type = inferredType(schema);
+  if (type !== undefined) strict.type = type;
   for (const [key, value] of Object.entries(schema)) {
-    strict[key] = key === 'enum' || key === 'const' ? value : toCodexStrictSchema(value);
+    // Strict mode rejects `oneOf`; engine contracts use it only for disjoint branches, so `anyOf` is equivalent.
+    strict[key === 'oneOf' ? 'anyOf' : key] = key === 'enum' || key === 'const' ? value : toCodexStrictSchema(value);
   }
   const properties = propertiesOf(schema);
   if (properties === undefined) return strict;
