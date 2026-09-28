@@ -106,6 +106,20 @@ Export one canonical `GhRunner` + one guarded `makeProductionGh`; no semantic in
    > per-project `tracker.credentials` reference reserved here, which stays Jira-only and must
    > never hold a token.
 
+> **Amended 2026-09-28 by #845 (operator-approved in the #845 DECIDE session):** the contract in
+> item 3 is extended additively. The original shape and every statement above still hold.
+>
+> 4. **Jira location fields and hosting rules.** The reserved key gains two optional Jira-only
+>    fields, so the hosted shape is
+>    `tracker: { backend: github|jira, transport?: api|mcp, credentials?: <reference>, site?: <https URL>, project_key?: <Jira project key> }`.
+>    `transport`, `credentials`, `site` and `project_key` are valid only with `backend: jira`; a
+>    `github` block that carries any of them is a validation error, never silently ignored. An
+>    absent `tracker` key means `backend: github`, with behavior identical to before the key was
+>    read. #845 hosts the key in project `.ai-conductor/config.yml` (never on the registry record)
+>    and reads it through one resolver at the intake composition root. A project whose selected
+>    backend has no registered adapter, or whose `tracker` block cannot be read, is excluded from
+>    intake and reported on the event spine; it never falls back to GitHub.
+
 Because the GitHub client is constructed unconditionally and needs no config, **#846
 has no build dependency on #845** — the contract is one-directional (#845 must host the
 key shape defined here).
