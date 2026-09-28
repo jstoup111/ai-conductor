@@ -685,3 +685,63 @@ Task 22 <- 20
 **Done when:**
 - S5.7 is satisfied by this task.
 - Re-run prd-audit and confirm task rem-prd-audit-rem-s5-7-1 is complete.
+
+### Task rem-as-built-rem-ab5-1: src/conductor/src/execution/provider-catalog.ts + src/conductor/src/engine/provider-model-policy.ts:21 + src/conductor/src/engine/self-host/environment-claim-audit.ts:86-93: add descriptor fields optInModelIds (codex ['gpt-6-astra'], claude and pi []) and osSandbox (claude false, codex true, pi false); derive the opt-in model table and PROVIDER_OS_SANDBOX from BUILT_IN_PROVIDERS and delete both hand-keyed tables in the same change so the catalog is the single source. Existing model-policy and environment-claim-audit tests keep their assertions unchanged (Task 3 and Task 6 Done-when).
+**Gate:** as-built
+**Rationale:** Conforming drift under approved ADR decision 1 (catalog is the single provider authority); no architectural decision needed. provider-model-policy.ts:21 deepFreezePolicy({ codex: ['gpt-6-astra'] }) and self-host/environment-claim-audit.ts:86-93 PROVIDER_OS_SANDBOX { claude: false, codex: true } are hand-keyed provider tables. Admitted by Task 3 (model policy from descriptor fields) and Task 6 (self-host paths read descriptor fields). Sibling sweep: the id-literal guard gap that lets these pass is handled under S1.4 (Task 8), ordered after this task so the extended scan finds clean production source. Task 3 and Task 6 Done-when coverage (claude/codex model-policy and self-host tests with unchanged assertions) must survive.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 1
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 1 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab5-1 is complete.
+
+### Task rem-prd-audit-rem-s1-4-1: src/conductor/test/engine/provider-id-literals.test.ts:48: extend the scan beyond ts.isStringLiteral to identifier and computed property-name nodes (object literal keys, interface and type-literal members) whose text equals a BUILT_IN_PROVIDERS id; add a fixture test asserting const t = { codex: true } is reported with file:line; keep the existing string-literal and codex-fixture assertions unchanged (Task 8 Done-when) and assert zero findings on production source after rem-ab5-1.
+**Gate:** prd-audit
+**Rationale:** provider-id-literals.test.ts:48 visits only ts.isStringLiteral nodes, so provider-keyed tables written with bare identifier keys (provider-model-policy.ts:21, environment-claim-audit.ts:89,92) evade the Story 1 guard by syntax alone. Task 8 owns the scan; the table moves themselves are tasked under AB-5 (rem-ab5-1), which must land first. Task 8 Done-when string-literal and fixture assertions must survive unchanged.
+**Criterion:** S1.4
+**Parent task:** 8
+**Done when:**
+- S1.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s1-4-1 is complete.
+
+### Task rem-prd-audit-rem-s1-5-1: src/conductor/test/engine/provider-id-literals.test.ts:39-48: keep the adapter-module exemption for catalog id literals only; in declared adapter modules report any string literal or template span containing that adapter's own descriptor displayName as a whole word, with file:line; add a fixture test proving an adapter-module fixture with 'Pi invocation aborted.' is reported, keeping existing Task 8 fixture assertions unchanged. Then replace the literal display names at src/conductor/src/execution/pi-provider.ts:41,113,159 (and any claude-provider.ts / codex-provider.ts literals the extended scan reports) with the descriptor displayName, keeping message text byte-identical so existing adapter tests pass with unchanged assertions.
+**Gate:** prd-audit
+**Rationale:** provider-id-literals.test.ts:40 returns no findings for descriptor-declared adapter modules before the display check, and :48 matches only exact displayName strings, so pi-provider.ts:41 'Pi invocation aborted.', :113 and :159 hard-code the display name, against Task 8's Done-when that production display strings come from descriptor displayName. Admitted by Task 8. Found and excluded: word-bounded provider names inside longer prose strings in non-adapter modules (for example provider-model-policy.ts 'Claude-compatible model defaults'); Task 8 scopes enforcement to display-string literals, so sweeping them would widen the diff beyond plan admission. Task 8's existing fixture assertions must survive.
+**Criterion:** S1.5
+**Parent task:** 8
+**Done when:**
+- S1.5 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s1-5-1 is complete.
+
+### Task rem-prd-audit-rem-s7-3-1: src/conductor/src/execution/pi-provider.ts:60-95 (parsePiJsonl): count each assistant message_end event as one turn and set tokenUsage.numTurns to that count (creating tokenUsage with input/output 0 when a turn completes without a usage-bearing event), and also read usage carried on assistant message_end, not only message_update; in src/conductor/test/execution/pi-provider.test.ts add assertions that a stream with two assistant message_end events yields numTurns 2 and that usage on message_end is attached, keeping the existing Task 16 usage, cost-unmetered, malformed-line, and no-terminal-message assertions unchanged.
+**Gate:** prd-audit
+**Rationale:** The Pi smoke leg ends in assertSuccessfulCredentialedRun (test/fixtures/live-e2e-run-body.ts:509), which requires meter.totalTurns > 0 (:208), but parsePiJsonl (src/execution/pi-provider.ts:60-95) builds tokenUsage without numTurns, unlike codex-provider.ts:171-184; a credentialed Pi run therefore cannot pass. Admitted by Task 16 (Pi JSONL parsing attaches usage) and Task 22 (Pi leg over the shared run body). Task 16's existing usage and cost-unmetered assertions must survive.
+**Criterion:** S7.3
+**Parent task:** 22
+**Done when:**
+- S7.3 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s7-3-1 is complete.
+
+### Task rem-as-built-rem-ab6-1: src/conductor/test/structural/live-provider-coverage.test.ts (and the coverage helper behind providersRequiringLiveCoverage): make the coverage check fail naming the id for every enumerated provider, built-in or registered external plugin, that lacks a live-e2e-providers.ts descriptor or a smoke leg; add a test registering 'fixture-live-provider' with no descriptor or leg and asserting the check reports it; keep the existing enumeration test at :87 and the pi entry/leg requirement unchanged (Task 20 Done-when).
+**Gate:** as-built
+**Rationale:** Conforming drift under approved adr-2026-08-12-live-provider-coverage-from-plugin-registry decision 1: test/structural/live-provider-coverage.test.ts:87 only asserts a registered external plugin is enumerated, never that each enumerated id has a live descriptor and smoke leg, so an uncovered plugin passes. Admitted by Task 20 (structural test iterates catalog plus plugins and requires entry and smoke leg). Task 20's existing enumeration and pi-entry assertions must survive.
+**Governing clause:** adr-2026-08-12-live-provider-coverage-from-plugin-registry decision 1
+**Done when:**
+- adr-2026-08-12-live-provider-coverage-from-plugin-registry decision 1 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab6-1 is complete.
+
+### Task rem-as-built-rem-ab7-1: src/conductor/src/engine/ci-fix.ts: delete the dead defaultCiFixProbe, any preflight helper and result type only it uses, and imports left unused; remove the stale ci-fix startup preflight comment in src/conductor/src/daemon-cli.ts; drop the orphaned defaultCiFixProbe mock keys from src/conductor/test/daemon-otel-wiring.test.ts, test/engine/daemon-mode-feature-log.integration.test.ts, test/acceptance/no-daemon-level-metrics-queue-depth-halts-and-gate.acceptance.test.ts, test/acceptance/export-failure-visible-without-changing-run.acceptance.test.ts, test/acceptance/daemon-otel-parity.acceptance.test.ts, test/engine/daemon-cli-config-resolution.test.ts, and test/engine/daemon-state-refusal-event.test.ts, and delete any preflight-only test cases while keeping ci-fix resolver error-classification tests unchanged. Coverage preserved by the Task 12/13 boot not-installed tests.
+**Gate:** as-built
+**Rationale:** defaultCiFixProbe (src/engine/ci-fix.ts) has no production caller: daemon-cli.ts keeps only a stale CF-5/CF-6 comment, and the only other references are test mocks. It was already unwired at merge-base; the ci-fix startup-preflight ADR's #2153 amendment forbids the Claude-only startup veto and its #1884 amendment moves installation checks to catalog boot discovery (delivered by Tasks 12-13), so removal conforms and production-wiring would reinstate a forbidden veto. Admitted by Task 7, which lists ci-fix.ts. Coverage survives via the Task 12/13 boot not-installed tests and unchanged ci-fix resolver classification tests. Orphan sweep: every test file that mocks defaultCiFixProbe is named in the task.
+**Parent task:** 7
+**Governing clause:** Task 7
+**Done when:**
+- Task 7 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab7-1 is complete.
+
+### Task rem-as-built-rem-ab8-1: src/conductor/src/index.ts:490 (CLI_PROVIDER_DISPATCHING_COMMANDS) + src/conductor/src/engine/engineer-cli.ts (launchClaudeEngineer and its compose/engineer wiring): add the compose/engineer interactive launch to the provider-dispatching command set and run the same discoverInstalledProviders -> provider_discovery event -> validateProviderInstallation sequence before spawning, failing with the same not-installed error; in src/conductor/test/engine/daemon-provider-boot.test.ts add a test that with discovery reporting claude missing the compose/engineer entry exits non-zero naming claude and never calls the spawn stub, keeping the Task 14 set-membership and non-dispatching-skip assertions unchanged.
+**Gate:** as-built
+**Rationale:** Conforming drift under approved ADR decision 8: the bare compose/engineer launch (engineer-cli.ts launchClaudeEngineer) spawns the Claude executable directly with no discovery, installed-only registration, or not-installed validation, and CLI_PROVIDER_DISPATCHING_COMMANDS (index.ts:490) lists only inline and daemon. Admitted by Task 13 (dispatching CLI boot runs discovery and fails fast) and Task 14 (dispatching command set declared beside the command table). Task 14 Done-when coverage (rate-card, overlap-scan, render-diagrams excluded and skip discovery) must survive.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 8
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 8 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab8-1 is complete.
