@@ -1,6 +1,7 @@
 import { execa, type Options as ExecaOptions, type ResultPromise } from 'execa';
+import { realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { copySelectedCodexLogin } from './codex-self-host-auth.js';
 import type {
   AuthenticationReadiness,
@@ -1022,6 +1023,8 @@ export class CodexProvider implements LLMProvider {
           '--config', 'approvals_reviewer="auto_review"',
           '--config', 'shell_environment_policy.ignore_default_excludes=false',
         );
+        const memoryRoot = options.cwd ? externalMemoryRoot(options.cwd) : undefined;
+        if (memoryRoot) args.push('--add-dir', memoryRoot);
       }
     }
     if (options.cwd) args.push('--cd', options.cwd);
@@ -1061,5 +1064,21 @@ export class CodexProvider implements LLMProvider {
   private composePrompt(options: InvokeOptions): string {
     if (!options.systemPrompt) return options.prompt;
     return `${options.systemPrompt}\n\n${options.prompt}`;
+  }
+}
+
+/**
+ * A harness worktree's `.memory` is a symlink into `~/.ai-conductor/memory/<key>/harness`.
+ * workspace-write confines writes to the workspace, so without this root every memory
+ * checkpoint the pipeline skill requires is denied and the build halts on it.
+ */
+function externalMemoryRoot(cwd: string): string | undefined {
+  try {
+    const target = realpathSync(join(cwd, '.memory'));
+    if (!statSync(target).isDirectory()) return undefined;
+    const fromWorkspace = relative(realpathSync(cwd), target);
+    return fromWorkspace.startsWith('..') || isAbsolute(fromWorkspace) ? target : undefined;
+  } catch {
+    return undefined;
   }
 }
