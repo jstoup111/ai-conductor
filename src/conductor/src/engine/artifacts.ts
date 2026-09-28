@@ -77,10 +77,15 @@ import {
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
 import { extractStoryCriterionIds, sectionBody, splitStoryBlocks } from './story-criteria.js';
-import { readAsBuiltVerdictLine } from './as-built-verdict-line.js';
+import {
+  asBuiltFindingDetail,
+  asBuiltOutcome,
+  readAsBuiltVerdict,
+  AS_BUILT_REPORT_PATH,
+  AS_BUILT_VERDICT_PATH,
+} from './as-built-verdict-store.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
-export { readAsBuiltVerdictLine, type AsBuiltVerdictLine } from './as-built-verdict-line.js';
 import {
   COVERAGE_BINDING_COMPLETION_STATUSES,
   coverageBindingEnvelopePath,
@@ -336,7 +341,7 @@ export const STEP_ARTIFACT_CONTRACTS = {
   manual_test: [{ pattern: '.pipeline/manual-test-results.md', scope: 'run' }],
   prd_audit: [{ pattern: '.pipeline/prd-audit.md', scope: 'run' }],
   architecture_review_as_built: [
-    { pattern: '.pipeline/architecture-review-as-built.md', scope: 'run' },
+    { pattern: AS_BUILT_VERDICT_PATH, scope: 'run' },
   ],
   rebase: [],
   finish: [],
@@ -1006,20 +1011,15 @@ async function sweptArtifactStillValid(
       return (await prdAuditStoryCoverageGap(dir, resolution, undefined, report)) === null;
     }
     if (step === 'architecture_review_as_built') {
-      const raw = await readFile(join(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP), 'utf-8');
-      const marker = JSON.parse(raw) as GateCodeStampMarker;
-      if (!marker.codeStamp) return false;
+      const stored = await readAsBuiltVerdict(dir);
+      if (stored.kind !== 'present' || stored.value.codeStamp === null) return false;
       const validity = await gateVerdictStillValid(
         ctx,
         'architecture_review_as_built',
-        marker.codeStamp,
+        stored.value.codeStamp,
       );
       if (validity !== 'preserve') return false;
-      // Mirrors the predicate's own premise re-check (Task 6).
-      const verdict = parseAsBuiltVerdict(
-        await readFile(join(dir, '.pipeline/architecture-review-as-built.md'), 'utf-8'),
-      );
-      return verdict !== null && /^APPROVED\b/i.test(verdict);
+      return asBuiltOutcome(stored.value.verdict) === 'approved';
     }
   } catch {
     // No sidecar/marker, unreadable, or unparseable — fall through to false
@@ -1063,11 +1063,18 @@ export async function sweepStaleReviewArtifacts(
   for (const f of await findArtifactFiles(dir, step)) {
     if (await fileIsFreshSinceSession(f, sessionStartedAt)) continue; // fresh → keep
     if (await sweptArtifactStillValid(dir, step, config, artifactResolution, expectedRunId)) continue; // still code-valid → spare
-    try {
-      await rm(f);
-      removed.push(f);
-    } catch {
-      /* best-effort: a concurrent unlink / permission error must not abort the step */
+    // The as-built report is a derived view of the typed verdict. Never leave
+    // either half of that authority/view pair behind after a stale sweep.
+    const targets = step === 'architecture_review_as_built'
+      ? [f, join(dir, AS_BUILT_REPORT_PATH)]
+      : [f];
+    for (const target of targets) {
+      try {
+        await rm(target);
+        removed.push(target);
+      } catch {
+        /* best-effort: a concurrent unlink / permission error must not abort the step */
+      }
     }
   }
   return removed;
@@ -1104,8 +1111,11 @@ export interface CompletionResult {
     floorMs?: number;
     floorSource: 'attempt' | 'session' | 'run-identity';
   } & VerdictFreshnessClassification;
-  /** Telemetry-only classification for a retryable stale verdict identity. */
-  retrySignal?: 'stale-run-identity';
+  /**
+   * Telemetry-only classification for a retryable absent verdict: a stale run
+   * identity, or an as-built structured result the engine rejected.
+   */
+  retrySignal?: 'stale-run-identity' | 'structured-result-rejected';
   /**
    * Route-signal facet for retry-classification (issue #646). 'named-route'
    * marks a fresh, parseable, non-passing verdict (a real reviewer decision
@@ -1563,80 +1573,6 @@ export function isSkipAttempt(section: string): boolean {
   return section
     .split('\n')
     .some((line) => line.trim() === MANUAL_TEST_SKIP_SENTINEL);
-}
-
-/**
- * Pull the recognized value off the `Verdict:` line of an as-built review
- * report. Returns null when the line is absent or uses an unknown verdict.
- */
-export function parseAsBuiltVerdict(content: string): string | null {
-  const verdict = readAsBuiltVerdictLine(content);
-  return verdict.found ? verdict.recognized : null;
-}
-
-/** The terminal interpretation of a fresh as-built review report. */
-export type AsBuiltReviewOutcome =
-  | { kind: 'approved' }
-  | { kind: 'plan-gap-delivered' }
-  | { kind: 'plan-gap-undelivered' }
-  | { kind: 'blocked-remediable' }
-  | { kind: 'blocked-design'; designFindings: { id: string; clause: string }[] }
-  | { kind: 'invalid'; cause: 'no-verdict-line' }
-  | { kind: 'invalid'; cause: 'unrecognized-verdict'; value: string }
-  | { kind: 'invalid'; cause: 'plan-gap-missing-outcome' }
-  | { kind: 'invalid'; cause: 'unparseable-blocked-findings'; detail: string };
-
-/**
- * Classify the as-built review's explicit verdict without giving its prose any
- * routing authority. A PLAN_GAP may ship only when the report also records
- * `Outcome delivered: yes`; an explicit `no` is the operator-facing plan-gap
- * halt, while an omitted/malformed outcome remains fail-closed as invalid.
- */
-export function classifyAsBuiltReviewOutcome(content: string): AsBuiltReviewOutcome {
-  const verdict = readAsBuiltVerdictLine(content);
-  if (!verdict.found) return { kind: 'invalid', cause: 'no-verdict-line' };
-  if (verdict.recognized === null) {
-    return { kind: 'invalid', cause: 'unrecognized-verdict', value: verdict.raw };
-  }
-  const recognizedVerdict = verdict.recognized;
-  if (recognizedVerdict === 'APPROVED' || recognizedVerdict === 'APPROVED WITH DRIFT NOTES') return { kind: 'approved' };
-  if (recognizedVerdict === 'BLOCKED') {
-    const findings = parseAsBuiltBlockedFindings(content);
-    if (!findings.ok) {
-      return { kind: 'invalid', cause: 'unparseable-blocked-findings', detail: findings.error };
-    }
-    const designFindings = findings.value.findings
-      .filter((finding) => finding.class === 'DESIGN')
-      .map(({ id, clause }) => ({ id, clause }));
-    return designFindings.length > 0
-      ? { kind: 'blocked-design', designFindings }
-      : { kind: 'blocked-remediable' };
-  }
-  if (recognizedVerdict !== 'PLAN_GAP') return { kind: 'invalid', cause: 'unrecognized-verdict', value: recognizedVerdict };
-
-  const outcome = content.match(/^[^\S\n]*\*{0,2}\s*Outcome delivered\s*\*{0,2}\s*:+\s*(yes|no)\s*$/im)?.[1]
-    ?.toLowerCase();
-  if (outcome === 'yes') return { kind: 'plan-gap-delivered' };
-  if (outcome === 'no') return { kind: 'plan-gap-undelivered' };
-  return { kind: 'invalid', cause: 'plan-gap-missing-outcome' };
-}
-
-/** Render the operator-facing reason for an invalid as-built review outcome. */
-export function renderAsBuiltInvalidReason(
-  outcome: Extract<AsBuiltReviewOutcome, { kind: 'invalid' }>,
-): string {
-  switch (outcome.cause) {
-    case 'no-verdict-line':
-      return 'no parseable `Verdict:` line was found in the as-built review; record one `Verdict: <value>` line and re-run the as-built review';
-    case 'unrecognized-verdict':
-      return `as-built review verdict ${outcome.value} is unrecognized; use one of APPROVED, APPROVED WITH DRIFT NOTES, PLAN_GAP, or BLOCKED and re-run the as-built review`;
-    case 'plan-gap-missing-outcome':
-      return 'as-built review must record `Outcome delivered: yes|no` for PLAN_GAP; re-run the as-built review';
-    case 'unparseable-blocked-findings':
-      return `as-built BLOCKED findings block is unparseable: ${outcome.detail}; re-run the as-built review`;
-  }
-  const exhaustive: never = outcome;
-  return exhaustive;
 }
 
 /**
@@ -3440,131 +3376,73 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // unless the literal word BLOCKED appeared), which let a no-ADR / garbled
   // verdict slip through marked `done` and the loop end without DONE or HALT.
   architecture_review_as_built: async (dir, ctx): Promise<CompletionResult> => {
-    const runIdentity = await completionVerdictRunIdentity(
-      dir,
-      'architecture_review_as_built',
-      ctx,
-    );
-    // Stale run identity is decided AFTER the code-stamp preservation check,
-    // mirroring prd_audit (adr-2026-08-25 D5 as amended 2026-09-06).
-    // gate-code-validity-on-redispatch (#817, Task 6): mirrors prd_audit's
-    // preserve-check above — the sidecar is written ONLY on the clean-
-    // APPROVED PASS path (Task 4), so its mere presence with a codeStamp IS
-    // the "last verdict was a pass" signal.
-    if (resolveGateCodeValidityConfig(ctx.config).enabled) {
-      try {
-        const raw = await readFile(join(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP), 'utf-8');
-        const marker = JSON.parse(raw) as GateCodeStampMarker;
-        if (marker.codeStamp) {
-          const git = ctx.git ?? makeGitRunner(dir);
-          const validity = await gateVerdictStillValid(
-            { projectRoot: dir, git },
-            'architecture_review_as_built',
-            marker.codeStamp,
-          );
-          if (validity === 'preserve') {
-            // Mirrors prd_audit's premise re-check above: the sidecar's
-            // presence signals "last recorded verdict was APPROVED", but the
-            // CURRENT report on disk can diverge from what it was stamped
-            // from — never preserve past a report that does not itself
-            // currently parse as a clean APPROVED.
-            const preCheckFiles = await findArtifactFiles(dir, 'architecture_review_as_built');
-            if (preCheckFiles.length > 0) {
-              const content = await readFile(preCheckFiles[0], 'utf-8');
-              if (classifyAsBuiltReviewOutcome(content).kind === 'approved') {
-                const artifact = preCheckFiles[0];
-                return {
-                  done: true,
-                  verdictFreshness: await verdictFreshnessFor(artifact, ctx, 'preserved_surface_miss'),
-                };
-              }
-            }
-          }
-        }
-      } catch {
-        // No sidecar, unreadable, or unparseable — fall through.
-      }
+    // The JSON envelope is the sole authority. The Markdown report is an
+    // engine-rendered view and deliberately has no completion semantics.
+    const stored = await readAsBuiltVerdict(dir);
+    if (stored.kind === 'absent') {
+      return {
+        done: false,
+        reason: `no ${AS_BUILT_VERDICT_PATH} present — the as-built review must return a typed verdict`,
+        routeClass: 'absent',
+      };
     }
-    if (runIdentity.state === 'stale-run-identity') {
-      return staleVerdictRunIdentityResult(
-        '.pipeline/architecture-review-as-built.md',
-        runIdentity,
+    if (stored.kind === 'unreadable') {
+      return { done: false, reason: stored.reason, routeClass: 'absent' };
+    }
+    const artifact = join(dir, AS_BUILT_VERDICT_PATH);
+    let codeStampStillValid = false;
+    if (stored.value.codeStamp !== null) {
+      const git = ctx.git ?? makeGitRunner(dir);
+      const validity = await gateVerdictStillValid(
+        { projectRoot: dir, git }, 'architecture_review_as_built', stored.value.codeStamp,
       );
+      if (validity !== 'preserve') {
+        return {
+          done: false, routeClass: 'absent',
+          reason: `${AS_BUILT_VERDICT_PATH} prior code stamp ${stored.value.codeStamp} cannot vouch for current run identity ${ctx.attemptRunId ?? 'unresolved'} as-built inputs`,
+        };
+      }
+      codeStampStillValid = true;
     }
-
-    const files = await findArtifactFiles(dir, 'architecture_review_as_built');
-    if (files.length === 0) {
+    // A code-valid clean verdict survives a later dispatch identity. This is
+    // the code-stamp-first preservation rule: a halt/resume must not repeat a
+    // review solely because it minted a new run id.
+    if (!codeStampStillValid && ctx.attemptRunId !== undefined && stored.value.attemptId !== ctx.attemptRunId) {
       return {
         done: false,
-        reason: 'no .pipeline/architecture-review-as-built.md present — the as-built review must record a verdict',
         routeClass: 'absent',
+        retrySignal: 'stale-run-identity',
+        verdictFreshness: { artifact, floorSource: 'run-identity', outcome: 'stale_invalidated', fresh: false },
+        reason: `${AS_BUILT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${ctx.attemptRunId} — scoring 'no fresh verdict'`,
       };
     }
-    const cmpFloor = verdictFreshnessComparand(ctx);
-    const fresh: string[] = [];
-    for (const f of files) {
-      if (runIdentity.state === 'match' || await fileIsFreshSinceSession(f, cmpFloor)) {
-        fresh.push(f);
-      }
-    }
-    if (fresh.length === 0) {
-      const f = files[0];
+    const outcome = asBuiltOutcome(stored.value.verdict);
+    if (outcome === 'approved' || outcome === 'plan-gap-delivered') {
+      await writeArchitectureReviewAsBuiltCodeStamp(dir, ctx);
       return {
-        done: false,
-        reason:
-          "as-built architecture review verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused",
-        verdictFreshness: await verdictFreshnessFor(f, ctx, 'stale_invalidated'),
-        routeClass: 'absent',
+        done: true,
+        verdictFreshness: {
+          artifact,
+          floorSource: 'run-identity',
+          outcome: codeStampStillValid ? 'preserved_surface_miss' : 'rewritten',
+          fresh: true,
+        },
       };
     }
-    for (const f of fresh) {
-      const content = await readFile(f, 'utf-8');
-      const outcome = classifyAsBuiltReviewOutcome(content);
-      if (outcome.kind === 'invalid') {
-        return {
-          done: false,
-          reason: renderAsBuiltInvalidReason(outcome),
-          routeClass: 'absent',
-        };
-      }
-      if (outcome.kind === 'plan-gap-delivered') {
-        return {
-          done: true,
-          verdictFreshness: await verdictFreshnessFor(f, ctx, 'rewritten'),
-        };
-      }
-      if (outcome.kind === 'plan-gap-undelivered') {
-        return {
-          done: false,
-          reason: 'as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome',
-          routeClass: 'named-route',
-        };
-      }
-      if (outcome.kind === 'blocked-design') {
-        return {
-          done: false,
-          reason:
-            'as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): ' +
-            outcome.designFindings.map((finding) => `${finding.id} (${finding.clause})`).join(', '),
-          routeClass: 'named-route',
-        };
-      }
-      if (outcome.kind === 'blocked-remediable') {
-        return {
-          done: false,
-          reason:
-            'as-built review verdict is BLOCKED and every blocking finding is REMEDIABLE — ' +
-            'a repair, not a decision',
-          routeClass: 'named-route',
-        };
-      }
+    if (outcome === 'plan-gap-undelivered') {
+      const verdict = stored.value.verdict;
+      return { done: false, routeClass: 'named-route', reason: `as-built review found PLAN_GAP and records outcome undelivered — ${verdict.verdict === 'PLAN_GAP' ? verdict.affectedOutcome : 'unknown outcome'}` };
     }
-    const passF = fresh[0];
-    const verdictFreshness = await verdictFreshnessFor(passF, ctx, 'rewritten');
-    await writeArchitectureReviewAsBuiltCodeStamp(dir, ctx);
+    if (outcome === 'blocked-design') {
+      const verdict = stored.value.verdict;
+      return {
+        done: false, routeClass: 'named-route',
+        reason: `as-built review verdict is BLOCKED and needs a human decision — Blocking findings: ${verdict.verdict === 'BLOCKED' ? asBuiltFindingDetail(verdict.findings) : 'unknown finding'}`,
+      };
+    }
     return {
-      done: true,
-      verdictFreshness,
+      done: false, routeClass: 'named-route',
+      reason: 'as-built review verdict is BLOCKED and every blocking finding is REMEDIABLE — a repair, not a decision',
     };
   },
 
@@ -4512,131 +4390,6 @@ function tableCells(line: string): string[] {
 
 function isTableSeparator(cells: readonly string[]): boolean {
   return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
-}
-
-/** The closed classification set for a BLOCKED as-built review finding. */
-export type AsBuiltBlockedFindingClass = 'REMEDIABLE' | 'DESIGN';
-
-/** A machine-readable BLOCKED finding emitted by an as-built review. */
-export interface AsBuiltBlockedFinding {
-  id: string;
-  class: AsBuiltBlockedFindingClass;
-  clause: string;
-  summary: string;
-}
-
-export interface AsBuiltBlockedFindings {
-  findings: AsBuiltBlockedFinding[];
-}
-
-/** A parser fault is data, so callers can fail closed without catching. */
-export type AsBuiltBlockedFindingsParseResult =
-  | { ok: true; value: AsBuiltBlockedFindings }
-  | { ok: false; class: 'mechanical-fault'; error: string };
-
-const AS_BUILT_BLOCKING_FINDINGS_HEADING_RE = /^\s{0,3}##\s+Blocking\s+Findings\s*$/i;
-const AS_BUILT_BLOCKED_FINDING_CLASSES: ReadonlySet<AsBuiltBlockedFindingClass> = new Set([
-  'REMEDIABLE',
-  'DESIGN',
-]);
-
-/**
- * Parse the machine-readable Blocking Findings table from a BLOCKED as-built
- * review. Only the dedicated section is authoritative; historical or prose
- * tables elsewhere in the report have no routing authority.
- */
-export function parseAsBuiltBlockedFindings(content: string): AsBuiltBlockedFindingsParseResult {
-  const lines = content.split('\n');
-  const sectionStarts = lines.flatMap((line, index) =>
-    AS_BUILT_BLOCKING_FINDINGS_HEADING_RE.test(line) ? [index] : []);
-  if (sectionStarts.length === 0) {
-    return asBuiltBlockedFindingsMechanicalFault('As-built BLOCKED report is missing its Blocking Findings table.');
-  }
-  if (sectionStarts.length > 1) {
-    return asBuiltBlockedFindingsMechanicalFault('As-built BLOCKED report has duplicate Blocking Findings sections.');
-  }
-  const [sectionStart] = sectionStarts;
-
-  const remainingSection = lines.slice(sectionStart + 1);
-  const sectionEnd = remainingSection.findIndex((line) => /^\s{0,3}##\s+/.test(line));
-  const section = sectionEnd === -1 ? remainingSection : remainingSection.slice(0, sectionEnd);
-  const headerIndex = section.findIndex((line) => {
-    if (!/^\s*\|/.test(line)) return false;
-    const cells = tableCells(line).map((cell) => cell.toLowerCase());
-    return ['finding', 'class', 'governing clause', 'summary'].every((column) => cells.includes(column));
-  });
-  if (headerIndex === -1) {
-    return asBuiltBlockedFindingsMechanicalFault('As-built Blocking Findings table has a malformed header.');
-  }
-
-  const header = tableCells(section[headerIndex]).map((cell) => cell.toLowerCase());
-  const requiredColumns = ['finding', 'class', 'governing clause', 'summary'] as const;
-  if (requiredColumns.some((column) => header.filter((cell) => cell === column).length !== 1)) {
-    return asBuiltBlockedFindingsMechanicalFault('As-built Blocking Findings table has a malformed header.');
-  }
-  const findingIndex = header.indexOf('finding');
-  const classIndex = header.indexOf('class');
-  const clauseIndex = header.indexOf('governing clause');
-  const summaryIndex = header.indexOf('summary');
-  const findings: AsBuiltBlockedFinding[] = [];
-  const findingIds = new Set<string>();
-  let readingTable = false;
-  let tableEnded = false;
-
-  for (const line of section.slice(headerIndex + 1)) {
-    if (!/^\s*\|/.test(line)) {
-      if (readingTable && line.trim() === '') {
-        readingTable = false;
-        tableEnded = true;
-      }
-      continue;
-    }
-    if (tableEnded) {
-      return asBuiltBlockedFindingsMechanicalFault(
-        'As-built BLOCKED report has duplicate Blocking Findings tables.',
-      );
-    }
-    readingTable = true;
-    const cells = tableCells(line);
-    if (isTableSeparator(cells)) continue;
-
-    const id = cells[findingIndex]?.trim() ?? '';
-    if (id === '') {
-      return asBuiltBlockedFindingsMechanicalFault('As-built Blocking Findings row has an empty Finding.');
-    }
-    if (findingIds.has(id)) {
-      return asBuiltBlockedFindingsMechanicalFault(`As-built Blocking Findings table has duplicate Finding id "${id}".`);
-    }
-    findingIds.add(id);
-    const classValue = cells[classIndex]?.trim() ?? '';
-    const rawClass = classValue;
-    if (!AS_BUILT_BLOCKED_FINDING_CLASSES.has(rawClass as AsBuiltBlockedFindingClass)) {
-      return asBuiltBlockedFindingsMechanicalFault(`As-built finding ${id} has an invalid Class value "${classValue}".`);
-    }
-    const clause = cells[clauseIndex]?.trim() ?? '';
-    if (rawClass === 'REMEDIABLE' && clause === '') {
-      return asBuiltBlockedFindingsMechanicalFault(`As-built REMEDIABLE finding ${id} has no Governing clause.`);
-    }
-    const summary = cells[summaryIndex]?.trim() ?? '';
-    if (summary === '') {
-      return asBuiltBlockedFindingsMechanicalFault(`As-built finding ${id} has an empty Summary.`);
-    }
-    findings.push({
-      id,
-      class: rawClass as AsBuiltBlockedFindingClass,
-      clause,
-      summary,
-    });
-  }
-
-  if (findings.length === 0) {
-    return asBuiltBlockedFindingsMechanicalFault('As-built Blocking Findings table has no finding rows.');
-  }
-  return { ok: true, value: { findings } };
-}
-
-function asBuiltBlockedFindingsMechanicalFault(error: string): AsBuiltBlockedFindingsParseResult {
-  return { ok: false, class: 'mechanical-fault', error };
 }
 
 function rejectedPrdAuditRow(

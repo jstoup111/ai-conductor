@@ -56,11 +56,19 @@ import {
   runReleaseArtifactGate,
   type ReleaseGateOptions,
 } from '../../../src/engine/self-host/release-gate.js';
+import { persistAsBuiltVerdict } from '../../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../../src/engine/as-built-policy.js';
 import type { GhRunner, GitRunner } from '../../../src/engine/pr-labels.js';
 import { Conductor } from '../../test-conductor.js';
 
 const NOOP_ESCALATION = async () => ({});
 const SANDBOX_DIR = '/tmp/harness-selfbuild-TESTDIR';
+const APPROVED_AS_BUILT_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'all tiers' },
+  planGap: { enabled: true, reason: 'all tiers' },
+  adrCompliance: { enabled: false, reason: 'no approved ADRs' },
+  diagramDrift: { enabled: false, reason: 'no diagrams' },
+};
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -158,7 +166,11 @@ function releaseDispositionRunner(projectRoot: string) {
   });
 }
 
-async function writeValidatorArtifact(projectRoot: string, step: StepName): Promise<void> {
+async function writeValidatorArtifact(
+  projectRoot: string,
+  step: StepName,
+  attemptId?: string,
+): Promise<void> {
   if (step === 'prd_audit') {
     await mkdir(join(projectRoot, '.docs', 'specs'), { recursive: true });
     await mkdir(join(projectRoot, '.docs', 'stories'), { recursive: true });
@@ -170,7 +182,19 @@ async function writeValidatorArtifact(projectRoot: string, step: StepName): Prom
     await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), '**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | Evidence |\n| --- | --- | --- | --- |\n| S1.1 | PASS | 1 | fixture |\n\n| FR | Verdict | Gap-class | Evidence | Accepted? |\n| --- | --- | --- | --- | --- |\n| FR-1 | ALIGNED | n/a | fixture | — |\n');
   }
   if (step === 'architecture_review_as_built') {
-    await writeFile(join(projectRoot, '.pipeline', 'architecture-review-as-built.md'), '# As-Built Review\n\nVerdict: APPROVED\n');
+    // The typed envelope is the sole completion authority.  This test's fake
+    // runner must therefore produce the same run-identified result as the
+    // real provider path, rather than a Markdown-only legacy fixture.
+    await persistAsBuiltVerdict(projectRoot, {
+      version: 'v1',
+      verdict: 'APPROVED',
+      reachability: [],
+      driftNotes: [],
+    }, {
+      attemptId: attemptId ?? 'missing-test-attempt-id',
+      codeStamp: null,
+      policy: APPROVED_AS_BUILT_POLICY,
+    });
   }
 }
 
@@ -287,7 +311,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       stepRunner: {
         ...runner,
         run: async (step, state, options) => {
-          await writeValidatorArtifact(dir, step);
+          await writeValidatorArtifact(dir, step, options?.runId);
           return runner.run(step, state, options);
         },
       },
@@ -491,6 +515,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
   });
 
   it('selecting Codex skips Claude-only self-build preparation when release artifacts are disabled', async () => {
+    const priorClaudeToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     await writeState(statePath, preBuildDoneState());
     const { preflightBuildAuthCheck } = await import(
       '../../../src/engine/self-host/build-auth-preflight.js'
@@ -501,6 +526,11 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
 
     await selfBuildConductor(guardrails, runner, {
       config: {
+        // Every dispatched step in this fixture must resolve to Codex.  The
+        // typed as-built gate can be invalidated after BUILD, and leaving its
+        // provider implicit would exercise Claude sandbox setup after the
+        // Codex BUILD assertion.
+        llm_provider: 'codex',
         harness_self_host: { release_artifact_gate: false },
         steps: { build: { llm_provider: 'codex' } },
       },
@@ -511,7 +541,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     expect(guardrails.provisionSandbox).not.toHaveBeenCalled();
     expect(teardown).not.toHaveBeenCalled();
     expect(seen.find((entry) => entry.step === 'build')?.configDir).toBeUndefined();
-    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(priorClaudeToken);
     expect(guardrails.versionGate).toHaveBeenCalledTimes(1);
     expect(guardrails.releaseGate).not.toHaveBeenCalled();
     expect(seen.find((entry) => entry.step === 'build')).toBeDefined();

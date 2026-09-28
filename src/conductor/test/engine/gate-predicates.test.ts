@@ -4,6 +4,15 @@ import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import { checkGateCompletion } from '../../src/engine/gate-verdicts.js';
 import { verdictFreshnessFloor } from '../../src/engine/artifacts.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+
+const AS_BUILT_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'all tiers' },
+  planGap: { enabled: true, reason: 'all tiers' },
+  adrCompliance: { enabled: false, reason: 'not applicable' },
+  diagramDrift: { enabled: false, reason: 'not applicable' },
+};
 
 // Mirrors the real repo convention: **Status:**, ### Happy Path / ### Negative
 // Paths headings with Given/When/Then bullets. See gate-audit-2026-06-23.md.
@@ -180,148 +189,92 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
     return full;
   }
 
-  const header = '# As-Built Architecture Review\n**Mode:** as-built\n';
+  async function persist(
+    verdict: Parameters<typeof persistAsBuiltVerdict>[1],
+    attemptId = 'attempt-1',
+  ) {
+    return persistAsBuiltVerdict(dir, verdict, {
+      attemptId,
+      codeStamp: null,
+      policy: AS_BUILT_POLICY,
+    });
+  }
 
-  it('fails when no report is present', async () => {
+  it('fails when no typed verdict is present', async () => {
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
-    expect(r.reason).toMatch(/no \.pipeline\/architecture-review-as-built\.md/);
+    expect(r.reason).toMatch(/no \.pipeline\/architecture-review-as-built\.json/);
     expect(r.routeClass).toBe('absent');
   });
 
-  it('passes on a clean APPROVED verdict', async () => {
-    await report(`${header}**Verdict:** APPROVED\n`);
+  it('passes on a typed clean APPROVED verdict', async () => {
+    await persist({ version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] });
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(true);
     expect(r.routeClass).toBeUndefined();
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'run-identity' });
   });
 
-  it('passes on APPROVED WITH DRIFT NOTES', async () => {
-    await report(`${header}**Verdict:** APPROVED WITH DRIFT NOTES\n## Drift\n- diagram stale\n`);
+  it('passes on typed APPROVED WITH DRIFT NOTES', async () => {
+    await persist({
+      version: 'v1', verdict: 'APPROVED WITH DRIFT NOTES', reachability: [],
+      driftNotes: [{ note: 'diagram stale' }],
+    });
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(true);
   });
 
-  it('fails on a BLOCKED verdict', async () => {
-    await report(
-      `${header}**Verdict:** BLOCKED\n\n## Blocking Findings\n\n` +
-        '| Finding | Class | Governing clause | Summary |\n' +
-        '|---|---|---|---|\n' +
-        '| ARCH-1 | DESIGN | Task 1 | A decision is required. |\n',
-    );
+  it('fails on a typed BLOCKED design verdict', async () => {
+    await persist({
+      version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{ id: 'ARCH-1', class: 'DESIGN', summary: 'A decision is required.' }],
+      violations: 'architecture conflict', resolution: 'make a decision',
+    });
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/BLOCKED/);
     expect(r.routeClass).toBe('named-route');
   });
 
-  // The reported random-number-api bug: a non-clean, non-BLOCKED verdict was
-  // accepted as done by the old fail-OPEN predicate. Fail-closed rejects it.
-  it('fails on an unrecognized verdict (not a clean APPROVED)', async () => {
-    await report(`${header}**Verdict:** NEEDS REVIEW\n`);
+  it('does not treat a reviewer-written Markdown report as authority', async () => {
+    await report('Verdict: APPROVED\n');
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
-    expect(r.reason).toMatch(/must record `Verdict:`|NEEDS REVIEW/);
+    expect(r.reason).toMatch(/typed verdict/);
     expect(r.routeClass).toBe('absent');
   });
 
-  it('fails when the report has no Verdict line at all (unparseable verdict)', async () => {
-    await report(`${header}## Notes\nThere were no ADRs to check.\n`);
+  it('fails closed when the typed envelope is unreadable', async () => {
+    const full = join(dir, '.pipeline/architecture-review-as-built.json');
+    await mkdir(dirname(full), { recursive: true });
+    await writeFile(full, '{not-json');
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
-    expect(r.reason).toMatch(/must record `Verdict:`|no parseable .*Verdict/i);
+    expect(r.reason).toMatch(/unreadable/);
     expect(r.routeClass).toBe('absent');
   });
 
-  it('fails on a stale report (mtime predates session) with routeClass absent', async () => {
-    const full = await report(`${header}**Verdict:** APPROVED\n`);
+  it('scores a prior attempt identity as no fresh verdict regardless of mtime', async () => {
+    const stored = await persist({ version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] }, 'prior-attempt');
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    const full = join(dir, '.pipeline/architecture-review-as-built.json');
+    await utimes(full, old, old);
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built', { attemptRunId: 'current-attempt' });
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/no fresh verdict/i);
+    expect(r.routeClass).toBe('absent');
+    expect(r.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'run-identity' });
+    expect(stored.attemptId).toBe('prior-attempt');
+  });
+
+  it('passes a matching typed attempt identity even when its artifact mtime is old', async () => {
+    await persist({ version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] }, 'current-attempt');
+    const full = join(dir, '.pipeline/architecture-review-as-built.json');
     const old = new Date(Date.now() - 60 * 60 * 1000);
     await utimes(full, old, old);
-    const sessionStartedAt = Date.now();
-    const r = await checkGateCompletion(dir, 'architecture_review_as_built', { sessionStartedAt });
-    expect(r.done).toBe(false);
-    expect(r.reason).toMatch(/no fresh verdict/i);
-    expect(r.routeClass).toBe('absent');
-  });
-
-  // Task 1, session-fresh-verdict-artifacts (incident 2026-07-12-wiring-reachability-gate):
-  // require the verdict artifact to be fresh relative to the per-attempt
-  // judging session, not just the conductor-run session start.
-  it('passes when artifact mtime >= attemptStartedAt', async () => {
-    await report(`${header}**Verdict:** APPROVED\n`);
-    const T = Date.now();
-    const full = join(dir, '.pipeline/architecture-review-as-built.md');
-    await utimes(full, new Date(T + 1000), new Date(T + 1000));
-    const r = await checkGateCompletion(dir, 'architecture_review_as_built', {
-      sessionStartedAt: T - 60_000,
-      attemptStartedAt: T,
-    });
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built', { attemptRunId: 'current-attempt' });
     expect(r.done).toBe(true);
-    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'attempt' });
-  });
-
-  it("scores no-fresh-verdict when mtime < attemptStartedAt though >= sessionStartedAt (the incident)", async () => {
-    await report(`${header}**Verdict:** APPROVED\n`);
-    const S = Date.now() - 60_000;
-    const T = Date.now();
-    const full = join(dir, '.pipeline/architecture-review-as-built.md');
-    // mtime between S and T: fresh for the run session, stale for this attempt.
-    await utimes(full, new Date(S + 30_000), new Date(S + 30_000));
-    const r = await checkGateCompletion(dir, 'architecture_review_as_built', {
-      sessionStartedAt: S,
-      attemptStartedAt: T,
-    });
-    expect(r.done).toBe(false);
-    expect(r.reason).toMatch(/no fresh verdict/i);
-    expect(r.reason).not.toBe('as-built review has no parseable `Verdict:` line — expected APPROVED / APPROVED WITH DRIFT NOTES / BLOCKED; re-run the as-built review');
-    expect(r.reason).not.toMatch(/^as-built review verdict is "BLOCKED"/);
-    expect(r.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'attempt' });
-  });
-
-  it('byte-identical rewrite this attempt still passes', async () => {
-    const content = `${header}**Verdict:** APPROVED\n`;
-    await report(content);
-    const T = Date.now();
-    const full = join(dir, '.pipeline/architecture-review-as-built.md');
-    // Simulate a rewrite this attempt with identical bytes but a fresh mtime.
-    await writeFile(full, content);
-    await utimes(full, new Date(T + 1000), new Date(T + 1000));
-    const r = await checkGateCompletion(dir, 'architecture_review_as_built', {
-      sessionStartedAt: T - 60_000,
-      attemptStartedAt: T,
-    });
-    expect(r.done).toBe(true);
-  });
-
-  // Filesystem-clock lag: a verdict written *during* this dispatch can record an
-  // mtime a few ms BEFORE `attemptStartedAt` (captured just before the write via
-  // Date.now()) because the kernel's coarse filesystem clock lags CLOCK_REALTIME.
-  // The per-attempt comparison absorbs this via VERDICT_FRESHNESS_FS_TOLERANCE_MS
-  // so a genuinely fresh verdict is never a false "no fresh verdict".
-  it('passes when mtime is a few ms below attemptStartedAt (filesystem-clock lag tolerance)', async () => {
-    await report(`${header}**Verdict:** APPROVED\n`);
-    const T = Date.now();
-    const full = join(dir, '.pipeline/architecture-review-as-built.md');
-    // Written this dispatch, but mtime lags the captured floor by 50ms.
-    await utimes(full, new Date(T - 50), new Date(T - 50));
-    const r = await checkGateCompletion(dir, 'architecture_review_as_built', {
-      sessionStartedAt: T - 60_000,
-      attemptStartedAt: T,
-    });
-    expect(r.done).toBe(true);
-    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'attempt' });
-  });
-
-  it('verdictFreshnessFloor falls back to sessionStartedAt when attemptStartedAt is undefined', async () => {
-    const S = Date.now() - 1000;
-    expect(verdictFreshnessFloor({ sessionStartedAt: S })).toBe(S);
-    expect(verdictFreshnessFloor({ sessionStartedAt: S, attemptStartedAt: undefined })).toBe(S);
-
-    // Predicate outcome identical to pre-change: only sessionStartedAt present.
-    await report(`${header}**Verdict:** APPROVED\n`);
-    const r = await checkGateCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: S });
-    expect(r.done).toBe(true);
-    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'session' });
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'run-identity' });
   });
 });
 
@@ -505,7 +458,6 @@ describe('engine/artifacts — verdict-freshness floor regression/fallback', () 
     return full;
   }
 
-  const asBuiltHeader = '# As-Built Architecture Review\n**Mode:** as-built\n';
   const prdAligned = '# PRD Audit\n\n| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n';
   async function buildReviewPass() {
     return write(
@@ -513,22 +465,6 @@ describe('engine/artifacts — verdict-freshness floor regression/fallback', () 
       JSON.stringify({ verdict: 'PASS', rubric: { testQuality: false } }),
     );
   }
-
-  it('(a) no attemptStartedAt: architecture_review_as_built behaves exactly as before against sessionStartedAt only', async () => {
-    const full = await write('.pipeline/architecture-review-as-built.md', `${asBuiltHeader}**Verdict:** APPROVED\n`);
-    const S = Date.now() - 60_000;
-    // Fresh relative to session (mtime is "now", after S) — should pass.
-    const r = await checkGateCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: S });
-    expect(r.done).toBe(true);
-    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'session' });
-
-    // Stale relative to session — should fail, same as pre-change behavior.
-    const old = new Date(S - 60_000);
-    await utimes(full, old, old);
-    const r2 = await checkGateCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: S });
-    expect(r2.done).toBe(false);
-    expect(r2.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'session' });
-  });
 
   it('(a) no attemptStartedAt: prd_audit behaves exactly as before against sessionStartedAt only', async () => {
     const full = await write('.pipeline/prd-audit.md', prdAligned);
@@ -558,14 +494,9 @@ describe('engine/artifacts — verdict-freshness floor regression/fallback', () 
     expect(r2.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'session' });
   });
 
-  it('(b) both attemptStartedAt and sessionStartedAt undefined: fail-open on presence for all three predicates', async () => {
-    await write('.pipeline/architecture-review-as-built.md', `${asBuiltHeader}**Verdict:** APPROVED\n`);
+  it('(b) both attemptStartedAt and sessionStartedAt undefined: fail-open on presence for mtime predicates', async () => {
     await write('.pipeline/prd-audit.md', prdAligned);
     await buildReviewPass();
-
-    const rAsBuilt = await checkGateCompletion(dir, 'architecture_review_as_built', {});
-    expect(rAsBuilt.done).toBe(true);
-    expect(rAsBuilt.verdictFreshness).toMatchObject({ fresh: true, floorMs: undefined });
 
     const rPrd = await checkGateCompletion(dir, 'prd_audit', {});
     expect(rPrd.done).toBe(true);
@@ -582,10 +513,10 @@ describe('engine/artifacts — verdict-freshness floor regression/fallback', () 
   });
 
   it('(c) idempotency: repeated evaluation of identical on-disk state yields an identical decision + reason', async () => {
-    const full = await write('.pipeline/architecture-review-as-built.md', `${asBuiltHeader}**Verdict:** APPROVED\n`);
-    const T = Date.now();
-    await utimes(full, new Date(T + 1000), new Date(T + 1000));
-    const ctx = { sessionStartedAt: T - 60_000, attemptStartedAt: T };
+    await persistAsBuiltVerdict(dir, {
+      version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+    }, { attemptId: 'idempotent-attempt', codeStamp: null, policy: AS_BUILT_POLICY });
+    const ctx = { attemptRunId: 'idempotent-attempt' };
 
     const r1 = await checkGateCompletion(dir, 'architecture_review_as_built', ctx);
     const r2 = await checkGateCompletion(dir, 'architecture_review_as_built', ctx);

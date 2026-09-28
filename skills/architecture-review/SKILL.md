@@ -449,19 +449,6 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
     was stated. `.docs/intake/` is an idea capture that is **superseded** once stories are approved;
     never grade the shipped code against it. Where intake and the stories disagree, the stories win:
     a deliberate narrowing recorded in an amended, resealed story is the decision, not a plan gap.
-- **Context budget.** This review runs late in a long session and providers with a ~250k-token
-  window have compacted mid-review (jstoup111/ai-conductor#2377: peaks of 236k–251k, with the
-  reviewer's own reads accounting for 0.85–1.5M characters of output). Treat the window as a budget:
-  - Do NOT re-read the harness rules, `CLAUDE.md`, or this skill file. They are already in context via
-    the session-start hook and the skill loader.
-  - Read each artifact once. The plan and stories are large; extract the task table, `Done when`
-    blocks, and the criteria you are grading, not the whole file twice.
-  - Bound every git and search command: `git diff --stat <base>...HEAD` first, then per-file
-    `git diff <base>...HEAD -- <path>` with DEFAULT context (never `--unified=80` or higher);
-    `git log --oneline -n 30`; `rg -l` / `rg --files` piped through a slug or path filter before
-    listing. Never dump an unfiltered file list or an unbounded log.
-  - Read source by symbol or line range (`nl -ba <file> | sed -n 'A,Bp'`), not whole engine files.
-  - If you must choose, spend the budget on the shipped source under review, not on policy prose.
 - **Delegated evidence gathering.** The window that matters is the reviewer's own: it holds the
   verdict. Keep it for judgement and push the reading into subagents through the host's facility
   (Claude Code: the Agent tool; Codex: `collaboration.spawn_agent` / `collaboration.wait_agent`),
@@ -490,12 +477,10 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
      tests, typecheck, lint, build, the integrity script, or any command that runs project code —
      including `vitest`, `npm test`/`npm run`, `npx`, `node -e` probes over project modules, and
      bash test scripts. Evidence is what the source and committed artifacts say: `file:line`, test
-     names read from test source, `git diff`/`git log` output, and `Scope:` trailers. Reachability
-     is proved by citing the caller chain in the source, never by running it. If a check cannot be
+     names read from test source, source-control evidence, and `Scope:` trailers. Reachability is
+     proved by citing the caller chain in the source, never by running it. If a check cannot be
      judged without running code, grade it from the evidence available and say so in the rationale;
-     never run it. The only files the validator writes are its own outputs —
-     `.pipeline/architecture-review-as-built.md` and its review-required markers. Nothing else is
-     written, staged, or committed.
+     never run it. Nothing is written, staged, or committed.
   2. **Never yield with delegated work outstanding.** The validator MUST NOT end its turn while any
      subagent it spawned has not returned. Collect every digest before grading; if a subagent is
      slow, wait for it — do not summarize partial results and do not report progress in place of a
@@ -509,94 +494,27 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
   pass. This is a code-vs-approved-design pattern match plus the reachability sweep above,
   deliberately cheap.
 
-**Verdict:**
+**Verdict meanings**
 - **APPROVED** — shipped code matches the approved architecture. Proceed to finish.
 - **APPROVED WITH DRIFT NOTES** — minor, non-violating drift (e.g. a diagram is now slightly stale,
   a pattern was extended consistently). Record the drift; proceed. Note it for a follow-up ADR only
   when it makes or changes a structural decision; otherwise no ADR is needed, and it does not block.
 - **PLAN_GAP** — the shipped code faithfully implements the approved design, but the design is the
-  limit preventing an outcome the sealed story criteria require. Include `Outcome delivered: yes`
-  when the sealed story criteria are satisfied; record the outcome-level gap and proceed. Include
-  `Outcome delivered: no` only when a sealed story criterion is genuinely unmet and the approved
-  design is the limit; the loop HALTS for a human. Never turn this finding into unplanned BUILD work.
+  limit preventing an outcome the sealed story criteria require. Record whether the outcome was
+  delivered; an undelivered outcome HALTs for a human. Never turn this finding into unplanned BUILD work.
 - **BLOCKED** — an enabled check found an architectural violation, such as an APPROVED-ADR
   violation or an unreachable production rung. The loop HALTS. A human must resolve it: fix the
   code to comply, or for an ADR violation supersede the ADR with a new, human-APPROVED ADR
   (`Supersedes: <old>`, old → `Status: SUPERSEDED`). **Never silently downgrade** an APPROVED ADR
   or auto-resolve the violation. After resolution, re-run the as-built gate.
 
-**Artifact:** write the result to `.pipeline/architecture-review-as-built.md`
-(run evidence — gitignored, stable filename, overwritten each run; NOT a
-committed design artifact. Durable ADRs and the design-time architecture
-review remain in `.docs/decisions/`):
-
-> **(Over)writing this file is mandatory on EVERY invocation — make it the final
-> action of this step.** Even if a prior run's artifact is already present and you
-> judge it still accurate (same HEAD, unchanged tree, identical verdict), do NOT
-> keep it as-is and do NOT skip the write. The conductor's gate checks the file's
-> mtime against the *current session*: a prior-session artifact you decline to
-> rewrite reads as **stale**, fails the gate, and HALTs the SHIP tail — and every
-> retry repeats the same reuse decision, so it never clears. Re-emit the full
-> verdict every run. The write is unconditional; it is never satisfied by reusing
-> an existing artifact, however complete that artifact seems.
-
-```markdown
-# As-Built Architecture Review: <Feature Name>
-**Date:** YYYY-MM-DD
-**Mode:** as-built (SHIP compliance gate)
-**APPROVED ADRs checked:** [list]
-**Applied check policy:** [each check: on/off — reason]
-Verdict: APPROVED | APPROVED WITH DRIFT NOTES | PLAN_GAP | BLOCKED
-Outcome delivered: <yes or no; required for PLAN_GAP>
-
-## Production Reachability (every new/changed primitive → its production caller, file:line;
-same-file exceptions independently cite root → caller → export at the reviewed HEAD;
-UNEXERCISED entries carry their observation signature)
-## Drift Notes (if any)
-## Recorded Findings (if PLAN_GAP — affected outcome and why the approved design is the limit)
-## Blocking Findings (required exactly when Verdict is BLOCKED)
-| Finding | Class | Governing clause | Summary |
-|---|---|---|---|
-| AB-1 | REMEDIABLE | adr-2026-06-29-rate-limit-strategy decision 4 | <one-line finding summary> |
-| AB-2 | REMEDIABLE | Task 7 | <one-line finding summary> |
-## Blocking Violations (if BLOCKED — which APPROVED ADR or unreachable rung, file:line)
-## Resolution (if BLOCKED — code fix OR superseding ADR; human-approved)
-```
-
-For a `BLOCKED` verdict, `## Blocking Findings` is required exactly once and contains one row per
-finding. The header row is **copy-exact** — write literally
-`| Finding | Class | Governing clause | Summary |` with those four names in that order. Do not
-rename columns (`ID`, `Description`, `Finding` in the last slot, etc.): the SHIP gate parses this
-table mechanically and any other header halts the feature as unparseable, wasting the whole review
-lap. `Class` is a closed set: exactly `REMEDIABLE` or `DESIGN`. A `REMEDIABLE` row's
-`Governing clause` must name either an ADR filename stem plus its decision number (`adr-x decision 3`
-or the heading shorthand `adr-x D3` — both resolve), or a task id from
-this feature's own plan; a REMEDIABLE row without a governing clause is malformed. These citations
-name whole decisions: a subsection form such as adr-x D3.2 resolves to decision 3 because its dotted
-tail collapses as the ADR parser does. Write the clause
-as **bare text** — no backticks, no bold — and cite **exactly one** clause per row: the resolver
-matches a single identifier, so `` `adr-x` + Decision 4 `` and `Task 9 and Task 10` are both
-unresolvable and HALT the bounded remediation route. Split a finding that spans two tasks into two
-rows. `DESIGN` is for a
-finding that requires a human architectural decision rather than work already required by an approved
-artifact.
-
-The conductor's objective gate reads the `Verdict:` line and is **fail-closed**: only an explicit
-`APPROVED` or `APPROVED WITH DRIFT NOTES` passes. A `PLAN_GAP` passes only with
-`Outcome delivered: yes`; with `Outcome delivered: no` it HALTs for a human. `BLOCKED`, a missing
-`Verdict:` line, or any malformed verdict keeps the gate unsatisfied so the SHIP tail cannot reach
-finish — always write a clean, recognizable verdict.
-
-**Review marker:** review mode for this step is **conditional**. Write
-`.pipeline/review-required-architecture-as-built` (existence = signal) whenever the verdict is not a
-clean `APPROVED` — i.e. on `APPROVED WITH DRIFT NOTES`, `PLAN_GAP`, or `BLOCKED`, or when an ADR
-was superseded to resolve a violation. On a clean `APPROVED`, do NOT write the marker.
-
-```bash
-# Example: write the marker when the as-built sweep was not clean
-mkdir -p .pipeline
-echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline/review-required-architecture-as-built
-```
+For interactive use, state one verdict from the closed set `APPROVED`,
+`APPROVED WITH DRIFT NOTES`, `PLAN_GAP`, or `BLOCKED`. State the affected
+outcome and whether it was delivered for a plan gap. For a blocked result,
+state each finding's `REMEDIABLE` or `DESIGN` class, summary, and typed
+governing reference: either an APPROVED ADR's whole decision or an active plan
+task. `REMEDIABLE` means the approved design already requires bounded BUILD
+work; `DESIGN` means a human architectural decision is required.
 
 ## Verification
 
@@ -627,18 +545,5 @@ echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline
       remain rejected
 - [ ] **As-built mode:** statically-reachable-but-unobserved behavior recorded as `UNEXERCISED`
       with its greppable observation signature
-- [ ] **As-built mode:** verdict written to `.pipeline/architecture-review-as-built.md`
-- [ ] **As-built mode:** PLAN_GAP records the affected outcome and `Outcome delivered: yes|no`,
-      judged against the sealed `.docs/stories/` criteria and never against superseded
-      `.docs/intake/` capture; no as-built finding sends unplanned work back to BUILD
 - [ ] **As-built mode:** BLOCKED on any enabled APPROVED-ADR violation; resolved by code fix or
       human-approved superseding ADR (never silent downgrade)
-- [ ] **As-built mode:** every BLOCKED verdict contains exactly one `## Blocking Findings` table
-      whose header row is literally `| Finding | Class | Governing clause | Summary |` (no renamed
-      columns such as `ID`); Class is exactly `REMEDIABLE` or `DESIGN`
-- [ ] **As-built mode:** every REMEDIABLE blocking finding cites its governing ADR filename stem
-      plus decision number, or its task id from this feature's plan; a missing clause is malformed
-- [ ] **As-built mode:** every `Governing clause` cell is bare text (no backticks or bold) naming
-      exactly one clause
-- [ ] **As-built mode:** `.pipeline/review-required-architecture-as-built` marker written when the
-      verdict is not a clean APPROVED

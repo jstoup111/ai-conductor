@@ -4,17 +4,36 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunOptions } from '../../src/engine/conductor.js';
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 // Acceptance coverage for .docs/stories/ship-tail-parallel-validation-serial-
 // publication-922.md. This drives Conductor.run() through explicit finish
 // targeting: the #532 resume clamp is intentionally bypassed, but publication
 // safety must not be.
 describe('SHIP-tail publication fence (#922)', () => {
+  const asBuiltPolicy: AsBuiltPolicy = {
+    reachability: { enabled: true, reason: 'test fixture' },
+    planGap: { enabled: true, reason: 'test fixture' },
+    adrCompliance: { enabled: false, reason: 'test fixture' },
+    diagramDrift: { enabled: false, reason: 'test fixture' },
+  };
+
+  async function writeAsBuiltApproval(dir: string, options?: StepRunOptions): Promise<void> {
+    await persistAsBuiltVerdict(dir, {
+      version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+    }, {
+      attemptId: options?.runId ?? 'test-run',
+      codeStamp: null,
+      policy: asBuiltPolicy,
+    });
+  }
+
   function stateAtPublicationWithMissingAsBuiltEvidence(): ConductState {
     const state: Record<string, unknown> = {
       complexity_tier: 'M',
@@ -22,7 +41,7 @@ describe('SHIP-tail publication fence (#922)', () => {
     };
     for (const step of ALL_STEPS) {
       if (step.name === 'finish') break;
-      state[step.name] = 'done';
+      state[step.name] = 'skipped';
     }
     // These are legitimate skip policies: technical work has no PRD audit,
     // and this fixture explicitly disables manual validation.
@@ -31,6 +50,7 @@ describe('SHIP-tail publication fence (#922)', () => {
     // State completion alone is not publication evidence: deliberately omit the
     // as-built review artifact so only the finish fence can detect the gap.
     state.architecture_review_as_built = 'done';
+    state.rebase = 'done';
     return state as ConductState;
   }
 
@@ -39,13 +59,10 @@ describe('SHIP-tail publication fence (#922)', () => {
     return {
       dispatched,
       runner: {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           dispatched.push(step);
           if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '**Verdict:** APPROVED\n',
-            );
+            await writeAsBuiltApproval(dir, options);
           }
           return { success: true };
         }),
@@ -73,6 +90,7 @@ describe('SHIP-tail publication fence (#922)', () => {
         events,
         daemon: true,
         mode: 'auto',
+        verifyArtifacts: true,
         config: { steps: { manual_test: { disable: true } } },
       }).run();
 
@@ -108,6 +126,7 @@ describe('SHIP-tail publication fence (#922)', () => {
         daemon: true,
         mode: 'auto',
         resume: true,
+        verifyArtifacts: true,
         config: { steps: { manual_test: { disable: true } } },
       }).run();
 
@@ -146,6 +165,7 @@ describe('SHIP-tail publication fence (#922)', () => {
         mode: 'auto',
         fromStep: 'finish',
         maxRetries: 1,
+        verifyArtifacts: true,
       });
 
       await conductor.run();
@@ -174,7 +194,7 @@ describe('SHIP-tail publication fence (#922)', () => {
 
       const timeline: Array<{ step: StepName; phase: 'start' | 'end'; at: number }> = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           timeline.push({ step, phase: 'start', at: Date.now() });
           if (step === 'manual_test') {
             await writeFile(
@@ -188,10 +208,7 @@ describe('SHIP-tail publication fence (#922)', () => {
               '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | src/fence.ts:1 |\n',
             );
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n',
-            );
+            await writeAsBuiltApproval(dir, options);
           }
           timeline.push({ step, phase: 'end', at: Date.now() });
           return { success: true };
@@ -206,6 +223,7 @@ describe('SHIP-tail publication fence (#922)', () => {
         mode: 'auto',
         fromStep: 'finish',
         maxRetries: 1,
+        verifyArtifacts: true,
       });
 
       await conductor.run();
@@ -252,7 +270,7 @@ describe('SHIP-tail publication fence (#922)', () => {
 
       const dispatched: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           dispatched.push(step);
           if (step === 'prd_audit') {
             await writeFile(
@@ -260,10 +278,7 @@ describe('SHIP-tail publication fence (#922)', () => {
               '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | src/fence.ts:1 |\n',
             );
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n',
-            );
+            await writeAsBuiltApproval(dir, options);
           }
           return { success: true };
         }),
@@ -277,6 +292,7 @@ describe('SHIP-tail publication fence (#922)', () => {
         mode: 'auto',
         fromStep: 'finish',
         maxRetries: 1,
+        verifyArtifacts: true,
         config: { steps: { manual_test: { disable: true } } },
       });
 

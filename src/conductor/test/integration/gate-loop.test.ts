@@ -12,12 +12,14 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunOptions, StepRunResult } from '../../src/engine/conductor.js';
 import { Conductor } from '../test-conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 // Drives the gate-driven tail (build…finish) with verifyArtifacts on. The front
 // half is pre-marked done and the loop is started at `build` (fromStep), so each
@@ -53,6 +55,13 @@ const validShipmentEvidence = async () => ({
   commit: 'verified',
 });
 
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
+
 describe('integration/gate-loop', () => {
   let dir: string;
   let statePath: string;
@@ -87,7 +96,7 @@ describe('integration/gate-loop', () => {
   }
 
   // Per-step artifact creation so each gate's objective verdict passes.
-  async function satisfy(step: string): Promise<StepRunResult> {
+  async function satisfy(step: string, options?: StepRunOptions): Promise<StepRunResult> {
     if (step === 'build') {
       // The build gate now recomputes completion from the engine-only
       // evidence sidecar (H6/H7) rather than trusting raw task-status.json
@@ -154,11 +163,16 @@ describe('integration/gate-loop', () => {
         '**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | PRD: | Evidence |\n|---|---|---|---|---|\n| S1.1 | PASS | — | FR-1 | foo.ts:1 |\n',
       );
     } else if (step === 'architecture_review_as_built') {
+      // This gate's JSON envelope is its sole authority; the Markdown report
+      // is rendered by persistAsBuiltVerdict as a derived view.
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
-      await writeFile(
-        join(dir, '.pipeline/architecture-review-as-built.md'),
-        '# As-Built Review\n\nVerdict: APPROVED\n\nOutcome delivered: Plan implemented as approved.\n',
-      );
+      await persistAsBuiltVerdict(dir, {
+        version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+      }, {
+        attemptId: options?.runId ?? 'test-run',
+        codeStamp: null,
+        policy: AS_BUILT_TEST_POLICY,
+      });
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'keep');
     } else if (step === 'coherence_check') {
@@ -172,9 +186,9 @@ describe('integration/gate-loop', () => {
     await writeState(statePath, { ...FRONT_DONE });
     const ran: string[] = [];
     const runner: StepRunner = {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         ran.push(step);
-        return satisfy(step);
+        return satisfy(step, options);
       },
     };
     let completed = false;
@@ -212,7 +226,7 @@ describe('integration/gate-loop', () => {
 
     let buildRuns = 0;
     const runner: StepRunner = {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         if (step === 'build') {
           buildRuns++;
           await satisfy('build');
@@ -226,7 +240,7 @@ describe('integration/gate-loop', () => {
           }
           return { success: true };
         }
-        return satisfy(step);
+        return satisfy(step, options);
       },
     };
     let completed = false;
@@ -261,7 +275,7 @@ describe('integration/gate-loop', () => {
 
     let buildRuns = 0;
     const runner: StepRunner = {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         if (step === 'build') {
           buildRuns++;
           await satisfy('build');
@@ -274,7 +288,7 @@ describe('integration/gate-loop', () => {
           }
           return { success: true };
         }
-        return satisfy(step);
+        return satisfy(step, options);
       },
     };
     let completed = false;
@@ -308,7 +322,7 @@ describe('integration/gate-loop', () => {
 
     const ran: string[] = [];
     const runner: StepRunner = {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         ran.push(step);
         return { success: true };
       },
@@ -376,7 +390,7 @@ describe('integration/gate-loop', () => {
         }
       });
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           ran.push(step);
           if (step === customStep && evidence === 'fresh') {
             await writeFile(join(root, marker), 'PASS\n');
@@ -558,7 +572,7 @@ describe('integration/gate-loop', () => {
       const ran: string[] = [];
       let conflictRuns = 0;
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           ran.push(step);
           if (step === 'conflict_check') {
             conflictRuns++;
@@ -581,7 +595,7 @@ describe('integration/gate-loop', () => {
               });
             }
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const kicks = trackKickbacks();
@@ -615,7 +629,7 @@ describe('integration/gate-loop', () => {
       await writeState(statePath, { ...FRONT_TO_CONFLICT });
 
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           if (step === 'conflict_check') {
             await writeVerdict(dir, 'architecture_review', {
               satisfied: false,
@@ -623,7 +637,7 @@ describe('integration/gate-loop', () => {
               // No `kickback` field — plain unsatisfied, not a re-open.
             });
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const kicks = trackKickbacks();
@@ -638,7 +652,7 @@ describe('integration/gate-loop', () => {
       await writeState(statePath, { ...FRONT_TO_CONFLICT });
 
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           if (step === 'conflict_check') {
             await writeVerdict(dir, 'architecture_review', {
               satisfied: false,
@@ -647,7 +661,7 @@ describe('integration/gate-loop', () => {
               kickback: { from: 'stories', evidence: 'unrelated re-open' },
             });
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const kicks = trackKickbacks();
@@ -664,7 +678,7 @@ describe('integration/gate-loop', () => {
 
       let conflictRuns = 0;
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           if (step === 'conflict_check') {
             conflictRuns++;
             await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
@@ -684,7 +698,7 @@ describe('integration/gate-loop', () => {
               });
             }
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const kicks = trackKickbacks();
@@ -712,7 +726,7 @@ describe('integration/gate-loop', () => {
       let conflictRuns = 0;
       let buildRuns = 0;
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           if (step === 'conflict_check') {
             conflictRuns++;
             await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
@@ -727,7 +741,7 @@ describe('integration/gate-loop', () => {
                 kickback: { from: 'conflict_check', evidence: 'incompatible ADR seam' },
               });
             }
-            return satisfy(step);
+            return satisfy(step, options);
           }
           if (step === 'build') {
             buildRuns++;
@@ -745,7 +759,7 @@ describe('integration/gate-loop', () => {
             }
             return { success: true };
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const kicks = trackKickbacks();
@@ -773,7 +787,7 @@ describe('integration/gate-loop', () => {
 
       let conflictRuns = 0;
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           if (step === 'conflict_check') {
             conflictRuns++;
             await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
@@ -797,7 +811,7 @@ describe('integration/gate-loop', () => {
                 kickback: { from: 'conflict_check', evidence: 'incompatible ADR seam #2' },
               });
             }
-            return satisfy(step);
+            return satisfy(step, options);
           }
           if (step === 'build') {
             await satisfy('build');
@@ -808,7 +822,7 @@ describe('integration/gate-loop', () => {
             });
             return { success: true };
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const kicks = trackKickbacks();
@@ -884,10 +898,10 @@ describe('integration/gate-loop', () => {
     });
     const ran: StepName[] = [];
     const runner: StepRunner & { resetSession: typeof resetSession } = {
-      run: async (step) => {
+      run: async (step, _state, options) => {
         if (validators.includes(step)) expect(resetValidators).toHaveLength(validators.length);
         ran.push(step);
-        return satisfy(step);
+        return satisfy(step, options);
       },
       resetSession,
     };
@@ -968,7 +982,7 @@ describe('integration/gate-loop', () => {
       let fixed = false;
       const ran: string[] = [];
       const runner: StepRunner = {
-        run: async (step, _artifacts?: unknown, opts?: { retryReason?: string }) => {
+        run: async (step, _artifacts?: unknown, opts?: StepRunOptions) => {
           ran.push(step);
           if (step === 'build') {
             await writeFile(
@@ -1002,7 +1016,7 @@ describe('integration/gate-loop', () => {
             await writeState(join(dir, '.pipeline/conduct-state.json'), state);
             return { success: true };
           }
-          return satisfy(step);
+          return satisfy(step, opts);
         },
       };
       const kickbacks: Array<{ from: string; to: string }> = [];
@@ -1047,7 +1061,7 @@ describe('integration/gate-loop', () => {
 
       let kicked = false;
       const runner: StepRunner = {
-        run: async (step, _artifacts?: unknown, opts?: { retryReason?: string }) => {
+        run: async (step, _artifacts?: unknown, opts?: StepRunOptions) => {
           if (step === 'build') {
             await writeFile(
               join(dir, '.pipeline/task-status.json'),
@@ -1063,7 +1077,7 @@ describe('integration/gate-loop', () => {
             );
             return { success: true };
           }
-          return satisfy(step);
+          return satisfy(step, opts);
         },
       };
       const stepErrors: string[] = [];
@@ -1122,9 +1136,9 @@ describe('integration/gate-loop', () => {
       await writeState(statePath, { ...FRONT_DONE });
       const ran: string[] = [];
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           ran.push(step);
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
 
@@ -1160,7 +1174,7 @@ describe('integration/gate-loop', () => {
       );
       await writeState(statePath, { ...FRONT_DONE });
       const runner: StepRunner = {
-        run: async (step) => satisfy(step),
+        run: async (step, _state, options) => satisfy(step, options),
       };
 
       // build_review is default-on (#773 Task 4) — "flag off" now requires
@@ -1193,9 +1207,9 @@ describe('integration/gate-loop', () => {
       const config = { build_review: { enabled: true } };
       const ran: string[] = [];
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           ran.push(step);
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const conductor = new Conductor({
@@ -1255,12 +1269,12 @@ describe('integration/gate-loop', () => {
       const retryReasons: string[] = [];
       const ran: string[] = [];
       const runner: StepRunner = {
-        run: async (step, _artifacts?: unknown, opts?: { retryReason?: string }) => {
+        run: async (step, _artifacts?: unknown, opts?: StepRunOptions) => {
           ran.push(step);
           if (step === 'build') {
             buildRuns++;
             if (opts?.retryReason) retryReasons.push(opts.retryReason);
-            return satisfy('build');
+            return satisfy('build', opts);
           }
           if (step === 'remediate') {
             if (remediationDispositions) {
@@ -1329,7 +1343,7 @@ describe('integration/gate-loop', () => {
             await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify(state));
             return { success: true };
           }
-          return satisfy(step);
+          return satisfy(step, opts);
         },
       };
       const kicks: Array<{ from: string; to: string }> = [];
@@ -1534,7 +1548,7 @@ describe('integration/gate-loop', () => {
     ): Promise<Array<Record<string, unknown>>> {
       await writeState(statePath, { ...FRONT_DONE });
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           if (step === 'build_review') {
             await writeFile(
               join(dir, '.pipeline/build-review.json'),
@@ -1542,7 +1556,7 @@ describe('integration/gate-loop', () => {
             );
             return { success: true, ...(repairProvenance ? { repairProvenance } : {}) };
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const provenanceEvents: Array<Record<string, unknown>> = [];
@@ -1595,13 +1609,13 @@ describe('integration/gate-loop', () => {
       const received: unknown[] = [];
       await writeState(statePath, { ...FRONT_DONE });
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           if (step === 'build_review') {
             received.push(provenance);
             await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({ verdict: 'PASS', reasons: [] }));
             return { success: true, repairProvenance: provenance };
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const conductor = new Conductor({
@@ -1623,7 +1637,7 @@ describe('integration/gate-loop', () => {
       await writeState(statePath, { ...FRONT_DONE });
       let buildRuns = 0;
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           if (step === 'build') {
             buildRuns++;
             return satisfy('build');
@@ -1639,7 +1653,7 @@ describe('integration/gate-loop', () => {
             );
             return { success: true };
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const kicks: Array<{ from: string; to: string }> = [];
@@ -1690,7 +1704,7 @@ describe('integration/gate-loop', () => {
       await writeState(statePath, { ...FRONT_DONE });
       let buildRuns = 0;
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           if (step === 'build') {
             buildRuns++;
             return satisfy('build');
@@ -1706,7 +1720,7 @@ describe('integration/gate-loop', () => {
             );
             return { success: true };
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const kicks: Array<{ from: string; to: string }> = [];
@@ -1754,7 +1768,7 @@ describe('integration/gate-loop', () => {
       let buildRuns = 0;
       let manualTestRuns = 0;
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           if (step === 'build') {
             buildRuns++;
             return satisfy('build');
@@ -1793,7 +1807,7 @@ describe('integration/gate-loop', () => {
             await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify(st));
             return { success: true };
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const kicks: Array<{ from: string; to: string }> = [];
@@ -1840,7 +1854,7 @@ describe('integration/gate-loop', () => {
       await writeState(statePath, { ...FRONT_DONE });
       let buildRuns = 0;
       const alwaysFailReviewRunner: StepRunner = {
-        run: async (step) => {
+        run: async (step, _state, options) => {
           if (step === 'build') {
             buildRuns++;
             return satisfy('build');
@@ -1856,7 +1870,7 @@ describe('integration/gate-loop', () => {
             );
             return { success: true };
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
       const config = { build_review: { enabled: true }, kickback_escalation: { enabled: false } };
@@ -1999,7 +2013,7 @@ describe('integration/gate-loop', () => {
       let buildRuns = 0;
       let reviewRuns = 0;
       const runner: StepRunner = {
-        run: async (step, _artifacts?: unknown, opts?: { retryReason?: string }) => {
+        run: async (step, _artifacts?: unknown, opts?: StepRunOptions) => {
           if (step === 'build') {
             buildRuns++;
             // Real commit carrying the `Task: <id>` trailer — this is the
@@ -2061,7 +2075,7 @@ describe('integration/gate-loop', () => {
             await writeState(join(dir, '.pipeline/conduct-state.json'), state);
             return { success: true };
           }
-          return satisfy(step);
+          return satisfy(step, opts);
         },
       };
 

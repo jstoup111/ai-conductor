@@ -10,7 +10,9 @@ vi.mock('execa', () => ({ execa: vi.fn(async () => ({ stdout: '' })) }));
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
-import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunOptions, StepRunResult } from '../../src/engine/conductor.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { Conductor } from '../test-conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
@@ -34,6 +36,13 @@ import {
   REKICK_SENTINEL,
   type RekickSweepDeps,
 } from '../../src/engine/daemon-rekick.js';
+
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for `.docs/stories/daemon-mode-kickbacks-route-human-
@@ -147,7 +156,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
 
   // Per-step artifact creation so each gate's objective verdict passes —
   // same convention as `test/integration/gate-loop.test.ts`'s `satisfy`.
-  async function satisfy(step: string): Promise<StepRunResult> {
+  async function satisfy(step: string, options?: StepRunOptions): Promise<StepRunResult> {
     if (step === 'build') {
       let taskIds: string[] = ['t1'];
       try {
@@ -185,9 +194,9 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',
       );
     } else if (step === 'architecture_review_as_built') {
-      await writeFile(
-        join(dir, '.pipeline/architecture-review-as-built.md'),
-        '# As-Built Review\n\nVerdict: APPROVED\n',
+      await persistAsBuiltVerdict(dir,
+        { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] },
+        { attemptId: options?.runId ?? 'test-run', codeStamp: null, policy: AS_BUILT_TEST_POLICY },
       );
     } else if (step === 'finish') {
       // Daemon-shaped finish (the mode every case below runs in): record the
@@ -255,11 +264,11 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
   ): StepRunner {
     let buildRuns = 0;
     return {
-      run: async (step: StepName) => {
+      run: async (step: StepName, _state, options) => {
         ran.push(step);
         if (step === 'build') {
           buildRuns++;
-          await satisfy('build');
+          await satisfy('build', options);
           if (buildRuns === 1) {
             await writeVerdict(dir, 'plan', {
               satisfied: false,
@@ -269,7 +278,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
           }
           return { success: true };
         }
-        return satisfy(step);
+        return satisfy(step, options);
       },
     };
   }
@@ -406,9 +415,9 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
 
       const ran: StepName[] = [];
       const runner: StepRunner = {
-        run: async (step: StepName) => {
+        run: async (step: StepName, _state, options) => {
           ran.push(step);
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
 
@@ -460,7 +469,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       let fixed = false;
       const ran: StepName[] = [];
       const runner: StepRunner = {
-        run: async (step: StepName, _artifacts?: unknown, opts?: { retryReason?: string }) => {
+        run: async (step: StepName, _state, opts?: StepRunOptions) => {
           ran.push(step);
           if (step === 'build') {
             await writeFile(
@@ -494,7 +503,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
             await writeState(join(dir, '.pipeline/conduct-state.json'), state);
             return { success: true };
           }
-          return satisfy(step);
+          return satisfy(step, opts);
         },
       };
 
@@ -578,7 +587,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
 
       const ran: StepName[] = [];
       const runner: StepRunner = {
-        run: async (step: StepName) => {
+        run: async (step: StepName, _state, options) => {
           ran.push(step);
           if (step === 'conflict_check') {
             await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
@@ -592,7 +601,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
               kickback: { from: 'conflict_check', evidence: KICKBACK_EVIDENCE },
             });
           }
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
 
@@ -800,9 +809,9 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
 
       const ran: StepName[] = [];
       const resumeRunner: StepRunner = {
-        run: async (step: StepName) => {
+        run: async (step: StepName, _state, options) => {
           ran.push(step);
-          return satisfy(step);
+          return satisfy(step, options);
         },
       };
 

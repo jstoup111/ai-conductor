@@ -17,8 +17,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   Conductor,
   type StepRunner,
+  type StepRunOptions,
   type StepRunResult,
 } from '../../src/engine/conductor.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -49,44 +52,12 @@ const PRD_AUDIT_PASS = [
   '',
 ].join('\n');
 
-const AS_BUILT_REMEDIABLE = [
-  '# As-Built Architecture Review',
-  '',
-  'Verdict: BLOCKED',
-  '',
-  '## Blocking Findings',
-  '',
-  '| Finding | Class | Governing clause | Summary |',
-  '|---|---|---|---|',
-  '| AB-1 | REMEDIABLE | 1 | The approved task is not wired into the live gate. |',
-  '',
-  '## Blocking Violations',
-  '',
-  '- AB-1 is not wired into the live gate.',
-  '',
-  '## Resolution',
-  '',
-  '- Implement the already-approved Task 1 behavior.',
-  '',
-].join('\n');
-
-const AS_BUILT_MIXED_DESIGN = [
-  '# As-Built Architecture Review',
-  '',
-  'Verdict: BLOCKED',
-  '',
-  '## Blocking Findings',
-  '',
-  '| Finding | Class | Governing clause | Summary |',
-  '|---|---|---|---|',
-  '| AB-D | DESIGN | Open question: durable state shape | Needs a human architectural decision. |',
-  '| AB-1 | REMEDIABLE | 1 | The approved task is not wired into the live gate. |',
-  '',
-  '## Blocking Violations',
-  '',
-  '- AB-D needs a decision; AB-1 is code conformance.',
-  '',
-].join('\n');
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
 
 const PRD_AUDIT_FIXABLE = [
   '# PRD Audit',
@@ -100,6 +71,55 @@ const PRD_AUDIT_FIXABLE = [
   '| S3.1 | FIXABLE | 1 | src/feature.ts:1 — the criterion is not satisfied |',
   '',
 ].join('\n');
+
+async function writeRemediableAsBuiltVerdict(root: string, runId: string | undefined): Promise<void> {
+  await persistAsBuiltVerdict(root, {
+    version: 'v1',
+    verdict: 'BLOCKED',
+    reachability: [],
+    driftNotes: [],
+    findings: [{
+      id: 'AB-1',
+      class: 'REMEDIABLE',
+      reference: { kind: 'plan-task', taskId: '1' },
+      summary: 'The approved task is not wired into the live gate.',
+    }],
+    violations: 'AB-1 is not wired into the live gate.',
+    resolution: 'Implement the already-approved Task 1 behavior.',
+  }, {
+    attemptId: runId ?? 'test-run',
+    codeStamp: null,
+    policy: AS_BUILT_TEST_POLICY,
+  });
+}
+
+async function writeMixedDesignAsBuiltVerdict(root: string, runId: string | undefined): Promise<void> {
+  await persistAsBuiltVerdict(root, {
+    version: 'v1',
+    verdict: 'BLOCKED',
+    reachability: [],
+    driftNotes: [],
+    findings: [
+      {
+        id: 'AB-D',
+        class: 'DESIGN',
+        summary: 'Needs a human architectural decision.',
+      },
+      {
+        id: 'AB-1',
+        class: 'REMEDIABLE',
+        reference: { kind: 'plan-task', taskId: '1' },
+        summary: 'The approved task is not wired into the live gate.',
+      },
+    ],
+    violations: 'AB-D needs a decision; AB-1 is code conformance.',
+    resolution: 'A human must resolve the design question.',
+  }, {
+    attemptId: runId ?? 'test-run',
+    codeStamp: null,
+    policy: AS_BUILT_TEST_POLICY,
+  });
+}
 
 async function seedFixture(): Promise<{ root: string; statePath: string }> {
   const root = await mkdtemp(join(tmpdir(), 'as-built-remediable-'));
@@ -183,17 +203,14 @@ describe('acceptance: an all-REMEDIABLE as-built verdict returns the daemon to B
     const { root, statePath } = await seedFixture();
     const calls: StepName[] = [];
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+      run: vi.fn(async (step: StepName, _state, options?: StepRunOptions): Promise<StepRunResult> => {
         calls.push(step);
         if (step === 'manual_test') {
           await writeFile(join(root, '.pipeline', 'manual-test-results.md'), MANUAL_TEST_PASS);
         } else if (step === 'prd_audit') {
           await writeFile(join(root, '.pipeline', 'prd-audit.md'), PRD_AUDIT_PASS);
         } else if (step === 'architecture_review_as_built') {
-          await writeFile(
-            join(root, '.pipeline', 'architecture-review-as-built.md'),
-            AS_BUILT_REMEDIABLE,
-          );
+          await writeRemediableAsBuiltVerdict(root, options?.runId);
         } else if (step === 'remediate') {
           await writeFile(
             join(root, '.pipeline', 'remediation.json'),
@@ -244,7 +261,7 @@ describe('acceptance: an all-REMEDIABLE as-built verdict returns the daemon to B
       remediateDispatches: calls.filter((step) => step === 'remediate').length,
       buildDispatched: calls.includes('build'),
       appendedTask: /### Task rem-as-built-/.test(plan),
-      governingClause: plan.includes('**Governing clause:** 1'),
+      governingClause: plan.includes('**Governing clause:** Task 1'),
       asBuiltStatus: state?.architecture_review_as_built,
       sentinelReached: existsSync(join(root, '.pipeline', 'HALT')) &&
         (await readFile(join(root, '.pipeline', 'HALT'), 'utf8')).includes('sentinel:'),
@@ -304,12 +321,9 @@ describe('acceptance: a serial as-built kickback-to-build no-op is a capped term
     );
 
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+      run: vi.fn(async (step: StepName, _state, options?: StepRunOptions): Promise<StepRunResult> => {
         if (step === 'architecture_review_as_built') {
-          await writeFile(
-            join(root, '.pipeline', 'architecture-review-as-built.md'),
-            AS_BUILT_REMEDIABLE,
-          );
+          await writeRemediableAsBuiltVerdict(root, options?.runId);
         }
         return { success: true };
       }),
@@ -336,7 +350,7 @@ describe('acceptance: a serial as-built kickback-to-build no-op is a capped term
     expect(halt).toContain('as-built architecture review kickback-to-build no-op');
     expect(haltClass.trim()).toBe('kickback-cap');
     expect(halt).toContain('Blocking findings:');
-    expect(halt).toContain('AB-1 (REMEDIABLE; 1): The approved task is not wired into the live gate.');
+    expect(halt).toContain('AB-1 (REMEDIABLE; plan task 1): The approved task is not wired into the live gate.');
   });
 });
 
@@ -351,16 +365,13 @@ describe('acceptance: a mixed DESIGN as-built report appends no as-built work', 
   it('halts without appending a rem-as-built task for the REMEDIABLE sibling', async () => {
     const { root, statePath } = await seedFixture();
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+      run: vi.fn(async (step: StepName, _state, options?: StepRunOptions): Promise<StepRunResult> => {
         if (step === 'manual_test') {
           await writeFile(join(root, '.pipeline', 'manual-test-results.md'), MANUAL_TEST_PASS);
         } else if (step === 'prd_audit') {
           await writeFile(join(root, '.pipeline', 'prd-audit.md'), PRD_AUDIT_FIXABLE);
         } else if (step === 'architecture_review_as_built') {
-          await writeFile(
-            join(root, '.pipeline', 'architecture-review-as-built.md'),
-            AS_BUILT_MIXED_DESIGN,
-          );
+          await writeMixedDesignAsBuiltVerdict(root, options?.runId);
         } else if (step === 'remediate') {
           await writeFile(
             join(root, '.pipeline', 'remediation.json'),

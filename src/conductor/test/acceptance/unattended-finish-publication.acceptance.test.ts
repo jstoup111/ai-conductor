@@ -32,13 +32,15 @@
  *   - src/conductor/src/engine/step-runners.ts#runDispatch
  */
 
-import { access, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -47,6 +49,13 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const FINISH_PUBLICATION_MODULE = '../../src/engine/finish-publication.js';
 const PR_URL = 'https://github.com/acme/widget/pull/1172';
+
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
 
 type EvidenceState = 'valid' | 'invalid' | 'indeterminate';
 type PublicationMode = 'interactive' | 'foreground' | 'foreground-auto' | 'daemon';
@@ -827,13 +836,15 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
     await writeFile(join(conductorRoot, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
     await mkdir(join(conductorRoot, '.docs', 'plans'), { recursive: true });
     await writeFile(join(conductorRoot, '.docs', 'plans', 'feature.md'), 'plan\n');
-    const asBuiltReport = join(pipeline, 'architecture-review-as-built.md');
-    await writeFile(asBuiltReport, 'Verdict: APPROVED\n');
-    // The publication fence evaluates this pre-seeded result in the session
-    // that starts below. Keep the fixture's already-complete SHIP validator
-    // evidence fresh for that session without dispatching an unrelated review.
-    const future = new Date(Date.now() + 60_000);
-    await utimes(asBuiltReport, future, future);
+    // The typed envelope is the as-built gate's authority; the Markdown
+    // report is rendered from it by the production writer.
+    await persistAsBuiltVerdict(conductorRoot, {
+      version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+    }, {
+      attemptId: 'test-run',
+      codeStamp: null,
+      policy: AS_BUILT_TEST_POLICY,
+    });
     const prosePasses = { author: 0, judge: 0 };
     const gh = vi.fn(async (args: string[]) => {
       if (args[0] === 'auth' && args[1] === 'status') return { stdout: '' };
@@ -935,6 +946,13 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
       finish: 'pending',
     });
     await writeState(stateFilePath, state as ConductState);
+    await persistAsBuiltVerdict(conductorRoot, {
+      version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+    }, {
+      attemptId: 'test-run',
+      codeStamp: null,
+      policy: AS_BUILT_TEST_POLICY,
+    });
 
     const runner: StepRunner = {
       run: vi.fn(async (_step: StepName) => ({ success: true, output: 'legacy finish ran' })),
@@ -949,6 +967,15 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
       daemon: false,
       fromStep: 'finish',
       verifyArtifacts: false,
+      // This scenario isolates the safe unattended keep disposition. Its
+      // validator evidence is outside that boundary and therefore disabled
+      // instead of allowing the run to re-enter unrelated SHIP gates.
+      config: {
+        steps: {
+          manual_test: { disable: true },
+          prd_audit: { disable: true },
+        },
+      },
       finishPublication: createProductionFinishPublicationCoordinator({
         projectRoot: conductorRoot,
         stateFilePath,
