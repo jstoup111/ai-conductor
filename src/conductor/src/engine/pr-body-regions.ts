@@ -22,6 +22,46 @@ export type ParsePrTemplateRegionsResult =
 const MARKER = /(^|\r?\n)(<!-- ai-conductor:step ([^\r\n]+) -->|<!-- \/ai-conductor:step -->)(?=\r?\n|$)/g;
 const CLOSING_MARKER = '<!-- /ai-conductor:step -->';
 
+function markersFor(key: string): { readonly start: string; readonly end: string } {
+  return { start: `<!-- ai-conductor:step ${key} -->`, end: CLOSING_MARKER };
+}
+
+/** Restores one captured region without interpreting any of its captured bytes. */
+export function restoreRegion(body: string, region: PrTemplateRegion): string {
+  const { start, end } = markersFor(region.key);
+  const restored = `${start}${region.bytes}${end}`;
+  const ranges: Array<{ readonly start: number; readonly end: number }> = [];
+  let cursor = 0;
+
+  while (true) {
+    const regionStart = body.indexOf(start, cursor);
+    if (regionStart === -1) break;
+    const closingStart = body.indexOf(end, regionStart + start.length);
+    if (closingStart === -1) break;
+    ranges.push({ start: regionStart, end: closingStart + end.length });
+    cursor = closingStart + end.length;
+  }
+
+  if (ranges.length === 0) {
+    if (body.length === 0) return restored;
+    return `${body}${body.endsWith('\n') ? '\n' : '\n\n'}${restored}`;
+  }
+  if (ranges.length === 1 && body.slice(ranges[0].start, ranges[0].end) === restored) return body;
+
+  let next = body.slice(0, ranges[0].start) + restored;
+  let previousEnd = ranges[0].end;
+  for (const duplicate of ranges.slice(1)) {
+    next += body.slice(previousEnd, duplicate.start);
+    previousEnd = duplicate.end;
+  }
+  return next + body.slice(previousEnd);
+}
+
+/** A region is empty when it contains only whitespace and HTML comments. */
+export function isEmptyRegion(bytes: string): boolean {
+  return bytes.replace(/<!--[\s\S]*?-->/g, '').trim().length === 0;
+}
+
 /** Parses project-owned, step-keyed regions without interpreting their contents. */
 export function parsePrTemplateRegions(template: string): ParsePrTemplateRegionsResult {
   const regions: PrTemplateRegion[] = [];

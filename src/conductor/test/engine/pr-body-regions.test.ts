@@ -5,7 +5,7 @@ import {
   BUILD_REVIEW_ACCEPTED_RISK_START,
   REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
 } from '../../src/engine/build-review-accepted-risk.js';
-import { parsePrTemplateRegions } from '../../src/engine/pr-body-regions.js';
+import { isEmptyRegion, parsePrTemplateRegions, restoreRegion } from '../../src/engine/pr-body-regions.js';
 
 describe('parsePrTemplateRegions', () => {
   it('returns each marked region with its key and exact bytes between the markers', () => {
@@ -101,5 +101,64 @@ describe('parsePrTemplateRegions', () => {
         text: engineOwnedText,
       },
     });
+  });
+});
+
+// Covers: task:5
+describe('project-owned region restoration', () => {
+  const region = {
+    key: 'compliance-attest',
+    bytes: '\nAttested-By: security-bot\n<!-- opaque: preserve -->\n',
+  };
+  const rendered = '<!-- ai-conductor:step compliance-attest -->\nAttested-By: security-bot\n<!-- opaque: preserve -->\n<!-- /ai-conductor:step -->';
+
+  it('appends an omitted region after the existing body without interpreting its bytes', () => {
+    const body = '# Pull request\n\nSummary here.';
+
+    expect(restoreRegion(body, region)).toBe(`${body}\n\n${rendered}`);
+  });
+
+  it('replaces altered bytes in place', () => {
+    const body = [
+      '# Pull request',
+      '<!-- ai-conductor:step compliance-attest -->',
+      'Attested-By: someone-else',
+      '<!-- /ai-conductor:step -->',
+      '## Details',
+    ].join('\n');
+
+    expect(restoreRegion(body, region)).toBe([
+      '# Pull request',
+      rendered,
+      '## Details',
+    ].join('\n'));
+  });
+
+  it('collapses duplicate regions to the one captured region', () => {
+    const body = [
+      '# Pull request',
+      '<!-- ai-conductor:step compliance-attest -->',
+      'first altered copy',
+      '<!-- /ai-conductor:step -->',
+      '<!-- ai-conductor:step compliance-attest -->',
+      'second altered copy',
+      '<!-- /ai-conductor:step -->',
+    ].join('\n');
+
+    const restored = restoreRegion(body, region);
+    expect(restored.match(/<!-- ai-conductor:step compliance-attest -->/g)).toHaveLength(1);
+    expect(restored).toContain(rendered);
+    expect(restored).not.toContain('altered copy');
+  });
+
+  it('returns the original string when the region is already byte-identical', () => {
+    const body = `# Pull request\n${rendered}\n`;
+
+    expect(restoreRegion(body, region)).toBe(body);
+  });
+
+  it('recognizes whitespace and HTML comments as an empty region', () => {
+    expect(isEmptyRegion('\n  <!-- pending -->\n\t<!-- another comment -->\n')).toBe(true);
+    expect(isEmptyRegion('\nAttested-By: security-bot\n')).toBe(false);
   });
 });
