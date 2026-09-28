@@ -25,6 +25,7 @@ import { loadConfig } from './config.js';
 import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 import { detectAutoResume } from './auto-resume.js';
 import { classifyRunningWork } from './daemon-dashboard.js';
+import { describeLiveHalt } from './unpark-halt-warning.js';
 import { isLive, readPidRecordDiagnosed, type PidRecord, type PidRecordRead } from './daemon-lock.js';
 import type { ReconcileMergedParkOutcome } from './park-reconciliation.js';
 import type { GitRunner, GhRunner } from './pr-labels.js';
@@ -328,7 +329,13 @@ export async function dispatchDaemonPark(
       if (usedFallback) {
         out(`Unparked '${cmd.slug}' and reset no-evidence counter at resolved root (fallback — worktree missing) — normal dispatch and re-kick resume.`);
       } else {
-        out(`Unparked '${cmd.slug}' and reset no-evidence counter — normal dispatch and re-kick resume.`);
+        const haltWarning = await describeLiveHalt(worktreeDir);
+        if (haltWarning) {
+          out(`Unparked '${cmd.slug}' and reset no-evidence counter.`);
+          for (const line of haltWarning) out(line);
+        } else {
+          out(`Unparked '${cmd.slug}' and reset no-evidence counter — normal dispatch and re-kick resume.`);
+        }
       }
 
       // Only remove the marker after counter reset succeeds.
