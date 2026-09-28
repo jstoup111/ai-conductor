@@ -47,7 +47,7 @@ case "$command" in
   reset)
     for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --hard ]] && { destructive=true; reason='hard reset discards working-tree changes'; alternative='git reset --keep <target>'; break; }; done ;;
   clean)
-    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --force || "$a" == -f* && "$a" != -n* ]] && { destructive=true; reason='forced clean deletes untracked files'; alternative='git clean -n then remove named paths'; break; }; done ;;
+    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --force || ( "$a" == -?* && "$a" != --* && "$a" == *f* ) ]] && { destructive=true; reason='forced clean deletes untracked files'; alternative='git clean -n then remove named paths'; break; }; done ;;
   checkout)
     has_paths=false; safe_side=false
     for a in "\${args[@]:$((i+1))}"; do [[ "$a" == -- ]] && has_paths=true; [[ "$a" == --ours || "$a" == --theirs || "$a" == --merge || "$a" == -m ]] && safe_side=true; done
