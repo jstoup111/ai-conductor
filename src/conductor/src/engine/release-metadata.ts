@@ -29,7 +29,6 @@ const runnableMigrationFenceRe = /^```bash migration\s*\n[\s\S]*?```$/;
 const thematicBreakRe = /^(?:-{3,}|\*{3,}|_{3,})$/;
 const fenceDelimiterRe = /^```/;
 const migrationFenceOpenRe = /^```bash migration\s*$/;
-const releaseMetadataLineRe = /^Release-(?:Disposition|Category|Semver|Note):.*(?:\r?\n|$)/gm;
 /**
  * A single release-metadata line, a GitHub issue-linking trailer, or a shipment
  * plan declaration — any of which ends the Migration section (#1396).
@@ -74,9 +73,7 @@ export function isRunnableMigrationBlock(value: string): boolean {
  * Fence tracking keeps a rule INSIDE a ```bash migration``` block (a heredoc
  * body, say) from truncating a real migration.
  *
- * Returns the section text AND the offset in `raw` where the section stops, so
- * callers that need the section's span in the body (`migrationBlockRanges`)
- * share this one bound instead of re-deriving it.
+ * Returns the section text and the offset in `raw` where the section stops.
  */
 function migrationSectionContent(raw: string): { text: string; end: number } {
   const kept: string[] = [];
@@ -155,36 +152,6 @@ function migrationFenceRegion(content: string): { text: string; start: number; e
   }
   if (start === null || end === null) return null;
   return { text: content.slice(start, end), start, end };
-}
-
-/**
- * Every `## Migration` section in `body` that carries a runnable fence, as the
- * span from its heading through the closing delimiter of its last fence.
- *
- * The snapshot and the merge-time strip both need this span, and both used to
- * re-derive it with their own regex that required the fence on the very next
- * non-blank line. A section opening with a sentence of operator prose therefore
- * parsed but could not be snapshotted, and merging left the prose-form section
- * behind while appending the canonical one — two `## Migration` sections, which
- * `parseMigrationBlock` rejects. That is the loop behind
- * "release metadata restore could not be verified" (PR #1957).
- *
- * Only `## Migration` is canonicalised, matching what the snapshot has always
- * rewritten; a `### Migration` section still parses but is not relocated.
- */
-function migrationBlockRanges(body: string): Array<{ start: number; end: number }> {
-  const ranges: Array<{ start: number; end: number }> = [];
-  for (const match of body.matchAll(migrationSectionRe)) {
-    const raw = match[1]!;
-    const matched = match[0]!;
-    const headingStart = match.index + (matched.startsWith('\n') ? 1 : 0);
-    if (!body.startsWith('## Migration', headingStart)) continue;
-    const rawStart = match.index + matched.length - raw.length;
-    const region = migrationFenceRegion(raw.slice(0, migrationSectionContent(raw).end));
-    if (!region) continue;
-    ranges.push({ start: headingStart, end: rawStart + region.end });
-  }
-  return ranges;
 }
 
 function parseMigrationBlock(body: string): string | undefined {

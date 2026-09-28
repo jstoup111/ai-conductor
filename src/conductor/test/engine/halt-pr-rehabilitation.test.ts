@@ -652,7 +652,7 @@ describe('isEngineFlooredBody', () => {
       'Release-Disposition: note',
       'Release-Category: Fixed',
       'Release-Semver: patch',
-      'Release-Note: A reader-facing summary of the delivered change, restored from the pre-finish snapshot.',
+      'Release-Note: A reader-facing summary of the delivered change, preserved in its project-owned region.',
       '',
       '<!-- build-review-accepted-risk:start -->',
       '## Accepted build-review risk',

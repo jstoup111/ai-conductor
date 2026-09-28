@@ -6819,8 +6819,8 @@ export class Conductor {
    *     PR. `findOrCreatePr` already treats any OPEN PR for the branch as that
    *     branch's PR; this agrees with it rather than opening a second one.
    *
-   * Memoized into `shipDraftPrUrl` so every later consumer (the pre-finish
-   * snapshot, the finish-time restore) shares one identity.
+   * Memoized into `shipDraftPrUrl` so every later consumer (region capture,
+   * region restoration, and release-gate validation) shares one identity.
    */
   private async resolveRetainedShipDraftPrUrl(
     branch: string | undefined,
