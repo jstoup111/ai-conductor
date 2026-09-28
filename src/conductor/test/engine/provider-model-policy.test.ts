@@ -1,9 +1,13 @@
+// Covers: task:3
 import { expect, it } from 'vitest';
 import {
+  BUILT_IN_PROVIDER_MODEL_POLICIES,
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
+  COST_SELF_REPORTING_PROVIDERS,
   resolveProviderModelPolicy,
 } from '../../src/engine/provider-model-policy.js';
+import { BUILT_IN_PROVIDERS } from '../../src/execution/provider-catalog.js';
 import type { EffortLevel } from '../../src/types/config.js';
 import type { StepName } from '../../src/types/steps.js';
 
@@ -242,6 +246,18 @@ it('defines exhaustive, provider-native, deeply frozen built-in model policies',
       claude: true,
       codex: true,
     },
+  });
+});
+
+it('derives built-in model and cost policies from catalog descriptors', () => {
+  expect({
+    modelPolicies: Object.entries(BUILT_IN_PROVIDER_MODEL_POLICIES),
+    costSelfReportingProviders: [...COST_SELF_REPORTING_PROVIDERS],
+  }).toEqual({
+    modelPolicies: BUILT_IN_PROVIDERS.map((provider) => [provider.id, provider.modelPolicy]),
+    costSelfReportingProviders: BUILT_IN_PROVIDERS
+      .filter((provider) => provider.capabilities.costSelfReporting === true)
+      .map((provider) => provider.id),
   });
 });
 

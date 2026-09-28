@@ -475,11 +475,11 @@ describe('registerBuiltins — memory_provider:local (adr-2026-06-29-memory-prov
 });
 
 describe('registerBuiltins — built-in provider catalog', () => {
-  it('registers only installed catalog providers and uses the catalog default selection', async () => {
+  it('registers every installed catalog provider and uses the catalog default selection', async () => {
     const { BUILT_IN_PROVIDERS, DEFAULT_PROVIDER } = await import('../../src/execution/provider-catalog.js');
     const { normalizeProviderSelection } = await import('../../src/engine/provider-selection.js');
     const registry = new PluginRegistry();
-    const installed = new Set([BUILT_IN_PROVIDERS[0].id]);
+    const installed = new Set(BUILT_IN_PROVIDERS.map((provider) => provider.id));
 
     registerBuiltins(
       registry,
@@ -495,7 +495,7 @@ describe('registerBuiltins — built-in provider catalog', () => {
       registered: registry.list('llm_provider'),
       defaultSelection: normalizeProviderSelection(undefined),
     }).toEqual({
-      registered: [...installed],
+      registered: BUILT_IN_PROVIDERS.map((provider) => provider.id),
       defaultSelection: [DEFAULT_PROVIDER],
     });
   });
