@@ -256,7 +256,10 @@ describe('architecture_review_as_built dispatch classification', () => {
       success: true,
       output: 'review complete',
       exitCode: 0,
-      finalStructuredResult: { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [], findings: [] },
+      finalStructuredResult: {
+        version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+        findings: [{ id: 'AB-1', class: 'DESIGN', summary: 'A contradictory blocking finding.' }],
+      },
     }));
 
     const result = await runner(projectDir, provider(invoke)).run(

@@ -593,6 +593,122 @@ describe('engine/daemon-park-cli', () => {
       expect(out.join('\n')).toContain('feat-widgets');
     });
 
+    it.each([
+      ['mechanical', 'mechanical', 'mechanical', true],
+      ['absent sidecar', undefined, 'unclassified', true],
+      ['legacy', 'legacy', 'legacy', true],
+      ['over-scope', 'over-scope', 'over-scope', false],
+      ['kickback-cap', 'kickback-cap', 'kickback-cap', false],
+      ['needs-human', 'needs-human', 'needs-human', false],
+      ['plan-gap', 'plan-gap', 'plan-gap', false],
+      ['protected-artifact', 'protected-artifact', 'protected-artifact', false],
+      ['future class', 'future-class', 'future-class', false],
+      ['unreadable sidecar', 'directory', 'unreadable', false],
+    ])('unparked parked live HALT %s prints recovery without changing HALT files', async (
+      _fixture,
+      haltClass,
+      expectedClass,
+      removesBoth,
+    ) => {
+      const slug = `halt-${expectedClass.replace(/[^a-z0-9]+/g, '-')}`;
+      const worktreeDir = join(root, '.worktrees', slug);
+      const pipelineDir = join(worktreeDir, '.pipeline');
+      await makeWorktree(root, slug);
+      await dispatchDaemonPark({ kind: 'park', slug }, { cwd: root, out: () => {} });
+      await mkdir(pipelineDir, { recursive: true });
+
+      const haltPath = join(pipelineDir, 'HALT');
+      const haltClassPath = join(pipelineDir, 'HALT.class');
+      const clearedPath = join(pipelineDir, 'HALT.cleared');
+      await writeFile(haltPath, `halt body for ${expectedClass}\n`);
+      await writeFile(clearedPath, 'previously cleared\n');
+      if (haltClass === 'directory') {
+        await mkdir(haltClassPath);
+      } else if (haltClass !== undefined) {
+        await writeFile(haltClassPath, `${haltClass}\n`);
+      }
+
+      const before = {
+        halt: await readFile(haltPath, 'utf8'),
+        cleared: await readFile(clearedPath, 'utf8'),
+        haltClass: haltClass === undefined || haltClass === 'directory'
+          ? haltClass
+          : await readFile(haltClassPath, 'utf8'),
+      };
+      const out: string[] = [];
+      const code = await dispatchDaemonPark({ kind: 'unpark', slug }, { cwd: root, out: (line) => out.push(line) });
+      const joined = out.join('\n');
+
+      expect(code).toBe(0);
+      expect(await isOperatorParked(root, slug)).toBe(false);
+      expect(joined).toContain(`Unparked '${slug}' and reset no-evidence counter.`);
+      expect(joined).toContain(`class: ${expectedClass}`);
+      expect(joined).toContain('will not resume until the HALT is cleared');
+      expect(joined).not.toContain('normal dispatch and re-kick resume');
+      expect(await readFile(haltPath, 'utf8')).toBe(before.halt);
+      expect(await readFile(clearedPath, 'utf8')).toBe(before.cleared);
+      if (before.haltClass === undefined) {
+        await expect(readFile(haltClassPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      } else if (before.haltClass === 'directory') {
+        expect((await (await import('node:fs/promises')).stat(haltClassPath)).isDirectory()).toBe(true);
+      } else {
+        expect(await readFile(haltClassPath, 'utf8')).toBe(before.haltClass);
+      }
+      await expect(readFile(join(pipelineDir, 'REKICK'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+      if (removesBoth) {
+        expect(joined).toContain(`rm ${haltPath} ${haltClassPath}`);
+      } else if (expectedClass !== 'over-scope') {
+        expect(joined).not.toContain('rm ');
+      }
+      if (expectedClass === 'over-scope') {
+        expect(joined).toContain(`record each decision in ${haltPath}`);
+        expect(joined).toContain(`mv ${haltPath} ${clearedPath}; rm -f ${haltClassPath}`);
+      }
+      if (expectedClass === 'kickback-cap') {
+        expect(joined).toContain('ai-conductor kickback-budget');
+      }
+      if (['needs-human', 'plan-gap', 'protected-artifact', 'future-class', 'unreadable'].includes(expectedClass)) {
+        expect(joined).toContain(`resolve the cause recorded in ${haltPath} before the HALT is cleared`);
+        expect(joined).toContain('docs/runbooks/stalled-or-stuck-feature.md');
+      }
+      if (['kickback-cap', 'future-class', 'unreadable'].includes(expectedClass)) {
+        const haltLines = out.filter((line) => /\.pipeline\/HALT(?:\s|$)/.test(line));
+        expect(haltLines).not.toEqual(expect.arrayContaining([
+          expect.stringMatching(/\b(unlink|remove|delete)\b|rm /i),
+        ]));
+      }
+    });
+
+    it('keeps normal resume output for parked worktrees without a live HALT', async () => {
+      const slug = 'parked-no-halt';
+      await makeWorktree(root, slug);
+      await dispatchDaemonPark({ kind: 'park', slug }, { cwd: root, out: () => {} });
+      const out: string[] = [];
+
+      const code = await dispatchDaemonPark({ kind: 'unpark', slug }, { cwd: root, out: (line) => out.push(line) });
+
+      expect(code).toBe(0);
+      expect(await isOperatorParked(root, slug)).toBe(false);
+      expect(out.at(-1)).toBe(`Unparked '${slug}' and reset no-evidence counter — normal dispatch and re-kick resume.`);
+      expect(out.join('\n')).not.toContain('HALT');
+    });
+
+    it('keeps the worktree-missing fallback output when a parked slug has no worktree', async () => {
+      const slug = 'parked-worktree-missing';
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(root, '.docs', 'plans', `${slug}.md`), '# plan\n');
+      await dispatchDaemonPark({ kind: 'park', slug }, { cwd: root, out: () => {} });
+      const out: string[] = [];
+
+      const code = await dispatchDaemonPark({ kind: 'unpark', slug }, { cwd: root, out: (line) => out.push(line) });
+
+      expect(code).toBe(0);
+      expect(await isOperatorParked(root, slug)).toBe(false);
+      expect(out.join('\n')).toContain('normal dispatch and re-kick resume');
+      expect(out.join('\n')).not.toContain('will not resume until the HALT is cleared');
+    });
+
     it('unpark removes an automatic marker and restores default backlog eligibility', async () => {
       const slug = 'auto-parked-widgets';
       const worktreeDir = await initGitRepoWithWorktree(root, slug);
@@ -629,6 +745,75 @@ describe('engine/daemon-park-cli', () => {
       expect(code).toBe(0);
       expect(await isOperatorParked(root, 'never-parked')).toBe(false);
       expect(out.join('\n')).toContain('was not operator-parked');
+    });
+
+    it.each([
+      ['mechanical', 'mechanical'],
+      ['over-scope', 'over-scope'],
+    ])('unpark on a never-parked slug with a live %s HALT only prints its recovery', async (
+      fixture,
+      haltClass,
+    ) => {
+      const slug = `never-parked-${fixture}`;
+      const worktreeDir = join(root, '.worktrees', slug);
+      const pipelineDir = join(worktreeDir, '.pipeline');
+      const haltPath = join(pipelineDir, 'HALT');
+      const haltClassPath = join(pipelineDir, 'HALT.class');
+      const clearedPath = join(pipelineDir, 'HALT.cleared');
+      const evidencePath = join(pipelineDir, 'task-evidence.json');
+      await mkdir(pipelineDir, { recursive: true });
+      await writeFile(haltPath, `halt body for ${haltClass}\n`);
+      await writeFile(haltClassPath, `${haltClass}\n`);
+      await writeFile(clearedPath, 'previously cleared\n');
+      await writeFile(evidencePath, '{"noEvidenceAttempts":2}\n');
+      const before = {
+        halt: await readFile(haltPath),
+        haltClass: await readFile(haltClassPath),
+        cleared: await readFile(clearedPath),
+        evidence: await readFile(evidencePath),
+      };
+      const out: string[] = [];
+
+      const code = await dispatchDaemonPark({ kind: 'unpark', slug }, { cwd: root, out: (line) => out.push(line) });
+
+      const warning = `'${slug}' still has a live HALT (class: ${haltClass}) — it will not resume until the HALT is cleared.`;
+      const recovery = haltClass === 'mechanical'
+        ? `To resume: rm ${haltPath} ${haltClassPath}`
+        : `To resume: record each decision in ${haltPath}, then mv ${haltPath} ${clearedPath}; rm -f ${haltClassPath}`;
+      expect({ code, out }).toEqual({
+        code: 0,
+        out: [`'${slug}' was not operator-parked — nothing to do.`, warning, recovery],
+      });
+      expect(await isOperatorParked(root, slug)).toBe(false);
+      await expect(readFile(haltPath)).resolves.toEqual(before.halt);
+      await expect(readFile(haltClassPath)).resolves.toEqual(before.haltClass);
+      await expect(readFile(clearedPath)).resolves.toEqual(before.cleared);
+      await expect(readFile(evidencePath)).resolves.toEqual(before.evidence);
+      if (haltClass === 'over-scope') {
+        expect(out.join('\n')).toContain(`rm -f ${haltClassPath}`);
+        expect(out.join('\n')).not.toContain(`rm ${haltPath}`);
+        expect(out.join('\n')).not.toMatch(new RegExp(`\\b(?:unlink|remove|delete)\\b.*${haltPath}`));
+      }
+    });
+
+    it.each([
+      ['no HALT', 'never-parked-no-halt', true],
+      ['no worktree', 'never-parked-worktree-missing', false],
+    ])('unpark on a never-parked slug with %s leaves the single no-op line unchanged', async (
+      _fixture,
+      slug,
+      createWorktree,
+    ) => {
+      if (createWorktree) await makeWorktree(root, slug);
+      const out: string[] = [];
+
+      const code = await dispatchDaemonPark({ kind: 'unpark', slug }, { cwd: root, out: (line) => out.push(line) });
+
+      expect({ code, out, parked: await isOperatorParked(root, slug) }).toEqual({
+        code: 0,
+        out: [`'${slug}' was not operator-parked — nothing to do.`],
+        parked: false,
+      });
     });
 
     it('unpark on an entirely unknown slug (no plan, no worktree) is still a graceful no-op', async () => {
