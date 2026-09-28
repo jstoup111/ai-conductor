@@ -255,9 +255,37 @@ function parseFindings(value: unknown): Parsed<readonly AsBuiltFinding[]> {
   return { ok: true, value: findings };
 }
 
+const PLAN_GAP_ONLY_KEYS = ['outcomeDelivered', 'affectedOutcome'] as const;
+const BLOCKED_ONLY_KEYS = ['findings', 'violations', 'resolution'] as const;
+
+function isEmptyValue(value: unknown): boolean {
+  return value === null || value === undefined
+    || (typeof value === 'string' && value.trim().length === 0)
+    || (Array.isArray(value) && value.length === 0);
+}
+
+/**
+ * AS_BUILT_VERDICT_SCHEMA is one flat object, so a provider may legally fill a field that
+ * belongs to another verdict (Codex strict mode requires every field). Outcome commentary
+ * is dropped outside PLAN_GAP; BLOCKED-only fields are dropped only when empty. An APPROVED
+ * verdict that lists findings or reports an undelivered outcome stays a rejected contradiction.
+ */
+function withoutForeignVariantFields(value: Record<string, unknown>): Record<string, unknown> {
+  const foreign = new Set<string>();
+  if (value.verdict !== 'PLAN_GAP') for (const key of PLAN_GAP_ONLY_KEYS) foreign.add(key);
+  if (value.verdict !== 'BLOCKED') {
+    for (const key of BLOCKED_ONLY_KEYS) if (isEmptyValue(value[key])) foreign.add(key);
+  }
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !foreign.has(key)));
+}
+
 /** Validate one complete terminal structured result before it becomes a verdict. */
-export function validateAsBuiltVerdict(value: unknown): ValidateAsBuiltVerdictResult {
-  if (!record(value)) return rejected('', 'a verdict object is required');
+export function validateAsBuiltVerdict(input: unknown): ValidateAsBuiltVerdictResult {
+  if (!record(input)) return rejected('', 'a verdict object is required');
+  if ((input.verdict === 'APPROVED' || input.verdict === 'APPROVED WITH DRIFT NOTES') && input.outcomeDelivered === false) {
+    return rejected('outcomeDelivered', `an undelivered outcome contradicts an ${input.verdict} verdict; use PLAN_GAP or BLOCKED`);
+  }
+  const value = withoutForeignVariantFields(input);
   if (value.version !== AS_BUILT_VERDICT_CONTRACT_VERSION) return rejected('version', `the contract version ${AS_BUILT_VERDICT_CONTRACT_VERSION} is required`);
   if (!AS_BUILT_VERDICTS.includes(value.verdict as typeof AS_BUILT_VERDICTS[number])) return rejected('verdict', `one of ${AS_BUILT_VERDICTS.join(', ')} is required`);
   const reachability = parseReachability(value.reachability);
