@@ -1283,6 +1283,42 @@ describe('production FINISH publication composition', () => {
     })).resolves.toMatchObject({ ok: false });
   });
 
+  it('appends accepted build-review risk after a final project-owned region without interpreting its bytes', async () => {
+    const finding = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+      anchor: {
+        rubric: 'testQuality',
+        locus: {
+          path: 'test/a.test.ts',
+          contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          display: 'test a',
+        },
+      },
+    })!;
+    const accepted: BuildReviewDispositionRecord = {
+      version: 'v1', feature: { version: 'v1', repository: 'github.com/acme/conductor', feature: 'review-rubrics' },
+      finding, sourceLapId: parseBuildReviewLapId('lap-7')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
+    };
+    const capturedRegion = [
+      '<!-- ai-conductor:step compliance-attest -->',
+      '<!-- build-review-accepted-risk:start -->',
+      'Attested-By: security-bot',
+      '<!-- /ai-conductor:step -->',
+    ].join('\n');
+    const body = `## Summary\n\n${capturedRegion}`;
+    const run = vi.fn(async (_request: Parameters<GithubOperationRunner['run']>[0]) => ({}));
+    const operations: GithubOperationRunner = { run };
+
+    await expect(publishAcceptedBuildReviewRiskToRetainedPr({
+      prUrl: 'https://github.com/acme/conductor/pull/1', body, records: [accepted], operations,
+    })).resolves.toEqual({ ok: true, changed: true });
+
+    const request = run.mock.calls[0]![0];
+    const published = (request.payload as { body: string }).body;
+    expect(published).toContain(capturedRegion);
+    expect(published.indexOf('## Accepted build-review risk', published.indexOf(capturedRegion) + capturedRegion.length)).toBeGreaterThan(-1);
+  });
+
   it('reports a verified advance as publication progress', async () => {
     const advanceFinishPublication = vi.fn(async () => ({
       kind: 'advanced' as const,
@@ -1982,6 +2018,16 @@ describe('production FINISH publication composition', () => {
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
       await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
       const prUrl = 'https://github.com/acme/widget/pull/1173';
+      // This is runtime content, so it may contain an engine-owned heading
+      // that template validation would reject. It remains opaque to FINISH.
+      const capturedRegion = [
+        '<!-- ai-conductor:step compliance-attest -->',
+        '## Reduced build-review coverage',
+        '',
+        'Attested-By: security-bot',
+        '<!-- /ai-conductor:step -->',
+      ].join('\n');
+      const bodyWithFinalRegion = `Reader-facing summary.\n\n${capturedRegion}`;
       const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
       const finding = canonicalizeBuildReviewFindingIdentity({
         rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
@@ -2013,7 +2059,7 @@ describe('production FINISH publication composition', () => {
       const edits: string[][] = [];
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body: 'Reader-facing summary.', isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body: bodyWithFinalRegion, isDraft: true }) };
         if (args[0] === 'pr' && args[1] === 'edit') { edits.push(args); return commandResult; }
         throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
       });
@@ -2048,8 +2094,12 @@ describe('production FINISH publication composition', () => {
       expect(edits.length).toBe(1);
       const body = edits[0][edits[0].indexOf('--body') + 1];
       expect(body).toContain('Reader-facing summary.');
+      expect(body).toContain(capturedRegion);
       expect(body).toContain('Accepted build-review risk');
       expect(body).toContain('## Reduced build-review coverage');
+      const regionEnd = body.indexOf(capturedRegion) + capturedRegion.length;
+      expect(body.indexOf('## Reduced build-review coverage', regionEnd)).toBeGreaterThan(regionEnd);
+      expect(body.indexOf('## Accepted build-review risk', regionEnd)).toBeGreaterThan(regionEnd);
       expect(body).toContain('Current diagnostic: provider unavailable');
       expect(body).toContain(`- Finding: \`${finding.id}\` — rubric: testQuality`);
       expect(body).not.toContain('**Rationale:**');
