@@ -4,6 +4,12 @@ spec_hash: a4deed0bdd09be2be5bd746be0b5c1709a17c50b217108db15ed6ffbb613b409
 pr: https://github.com/jstoup111/ai-conductor/pull/2775
 shipped: 2026-09-28
 engine_version: 20260928T204648Z-343f8837ef9b
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/engine/as-built-dispatch-classification.test.ts:259-262 — unplanned edit to an unrelated as-built test fixture (commit da3135b7c)"
+    accepted: true
 ---
 
 ## Cost
