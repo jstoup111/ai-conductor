@@ -31,6 +31,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Codex-routed as-built reviews no longer fail with an invalid output schema. ([implementation PR #2774](https://github.com/jstoup111/ai-conductor/pull/2774)).
 - Codex builds can write the harness memory store instead of halting on the memory checkpoint. ([implementation PR #2776](https://github.com/jstoup111/ai-conductor/pull/2776)).
 - As-built reviews no longer reject findings that cite the feature's plan tasks. ([implementation PR #2778](https://github.com/jstoup111/ai-conductor/pull/2778)).
+- As-built reviews accept verdicts in which the provider filled another verdict type's fields. ([implementation PR #2779](https://github.com/jstoup111/ai-conductor/pull/2779)).
 
 ## [1.5.0] - 2026-09-27
 
