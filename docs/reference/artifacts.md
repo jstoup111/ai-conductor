@@ -251,7 +251,10 @@ baseline stale by design. Review the amendment, then reseal the reviewed paths w
 [`ai-conductor reseal`](cli.md#ai-conductor-reseal) before the feature is re-queued — it runs only from an
 interactive operator terminal, refuses the whole reseal if any unlisted protected path has also
 drifted, and records the old and new fingerprints, trigger, and rationale in both the seal's
-`rebaselines` entry and the audit trail. Editing the JSON directly is never a valid reseal.
+`rebaselines` entry and the audit trail. If a resealed, changed path belongs to the current
+coverage-binding DECIDE set and its completed coverage evidence is still current, the engine marks
+that evidence `invalidated`, makes the gate unsatisfied with a `decide-change` origin, and re-runs
+coverage binding before BUILD resumes. Editing the JSON directly is never a valid reseal.
 
 Verification also tolerates these cases without halting:
 
@@ -460,7 +463,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `build-review-regrade.json` | Per-feature-session regrade counter; bounds stale-mirage regrade to once per session | `build-review-disposition.ts` |
 | `build-review-work-order.json` | `{ version: 'v1', domain: 'build_review', feature, effectId, cases[], attemptedCaseIds? }`. The effect-bound, feature-local ordered BUILD work from a post-join adjudication; BUILD records `attemptedCaseIds` before dispatch so restart recovery and repeat detection remain durable. | build-review adjudication coordinator |
 | `build-stall-question.md` | Free-form stall question surfaced to the operator | `task-progress.ts` |
-| `coverage-binding.json` | `{ version: 1, slug, runId, status, entries[] }`, where `status` is `disabled`, `done`, `failed`, `partial`, or `refused`; every entry binds an engine-stamped claim digest to its verdict and cited task checks. `partial` checkpoints accepted batches but is not completion evidence. | `coverage_binding` step |
+| `coverage-binding.json` | `{ version: 1, slug, runId, status, entries[] }`, where `status` is `disabled`, `done`, `failed`, `partial`, `refused`, or `invalidated`; entries bind engine-stamped digests either to a criterion verdict and cited task checks or to a DECIDE amendment's plan-obligation verdict. `partial` checkpoints accepted batches, and `invalidated` retains the prior entries as a re-judgement baseline; neither is completion evidence. | `coverage_binding` step |
 | `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |
 | `fr-coverage.md` | Product-track FR-to-spec coverage table | `writing-system-tests` skill |
 | `intake-outcomes.md` | Staged intake outcomes | `engineer/outcome-staging.ts` |

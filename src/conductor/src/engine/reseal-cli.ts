@@ -9,10 +9,19 @@ import {
   type ResealProtectedArtifactSealOptions,
 } from './protected-artifact-seal.js';
 import { AuditTrailWriter } from './audit-trail.js';
+import { EventPersister } from './event-persister.js';
 import { clearMarker } from './daemon-rekick.js';
 import { HALT_CLASS_MARKER, HALT_MARKER, PROTECTED_ARTIFACT_HALT_CLASS } from './halt-marker.js';
 import { makeGitRunner, originDefaultBranch } from './rebase.js';
 import { ConductorEventEmitter } from '../ui/events.js';
+import {
+  resolveCoverageBindingDecideSet,
+  type CoverageBindingDecideSet,
+} from './coverage-binding-decide-set.js';
+import {
+  voidCoverageBindingForDecideChange,
+  type VoidCoverageBindingForDecideChangeOptions,
+} from './coverage-binding-void.js';
 
 export interface ResealDispatch {
   kind: 'reseal';
@@ -114,6 +123,13 @@ export interface ResealCommandDependencies {
   resolveBaseBranch?: (projectRoot: string) => Promise<string>;
   reseal?: (options: ResealProtectedArtifactSealOptions) => Promise<ProtectedArtifactSeal>;
   clearHalt?: (worktreePath: string) => Promise<void>;
+  resolveCoverageBindingDecideSet?: (
+    projectRoot: string,
+    featureDesc: string | undefined,
+  ) => Promise<CoverageBindingDecideSet | undefined>;
+  voidCoverageBindingForDecideChange?: (
+    options: VoidCoverageBindingForDecideChangeOptions,
+  ) => Promise<void>;
   events?: ConductorEventEmitter;
 }
 
@@ -154,7 +170,10 @@ export async function dispatchResealCommand(
   }
 
   const events = deps.events ?? new ConductorEventEmitter();
-  if (!deps.events) new AuditTrailWriter(worktree, { throwOnWriteFailure: true }).subscribe(events);
+  if (!deps.events) {
+    new AuditTrailWriter(worktree, { throwOnWriteFailure: true }).subscribe(events);
+    new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events).start();
+  }
   const refuse = async (condition: string): Promise<void> => {
     const path = refusalPath(condition);
     await events.emitOrThrow({
@@ -213,6 +232,22 @@ export async function dispatchResealCommand(
   const nextFingerprints = new Map(
     resealed.protectedArtifacts.map(({ path, fingerprint }) => [path, fingerprint]),
   );
+  const decideSet = await (deps.resolveCoverageBindingDecideSet ?? resolveCoverageBindingDecideSet)(
+    worktree,
+    command.slug,
+  );
+  if (decideSet) {
+    await (deps.voidCoverageBindingForDecideChange ?? voidCoverageBindingForDecideChange)({
+      projectRoot: worktree,
+      decideSet,
+      rebaselines: command.paths.map((path) => ({
+        path,
+        priorFingerprint: priorFingerprints.get(path) ?? '',
+        newFingerprint: nextFingerprints.get(path) ?? '',
+      })),
+      events,
+    });
+  }
   await events.emitOrThrow({
     type: 'protected_artifact_reseal',
     paths: command.paths.map((path) => ({

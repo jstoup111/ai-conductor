@@ -22,7 +22,7 @@ export interface ArchitectureObligationViolation {
   readonly detail: string;
 }
 
-interface ArchitectureObligationMapping {
+export interface ArchitectureObligationMapping {
   readonly decisionId: string;
   readonly disposition: ArchitectureObligationDisposition | null;
   readonly taskIds: readonly string[];
@@ -58,7 +58,8 @@ function linesOutsideFences(text: string): string[] {
   return lines;
 }
 
-function parseMappings(
+/** Parse the plan-local obligation rows for consumers that need their ADR citations. */
+export function parseArchitectureObligationMappings(
   planText: string,
 ): { mappings: ArchitectureObligationMapping[]; violations: ArchitectureObligationViolation[] } {
   const lines = linesOutsideFences(planText);
@@ -164,7 +165,7 @@ export function validateArchitectureObligationCoverage(
   planText: string,
   requiredDecisionIds: ReadonlySet<string>,
 ): readonly ArchitectureObligationViolation[] {
-  const { mappings, violations: parseViolations } = parseMappings(planText);
+  const { mappings, violations: parseViolations } = parseArchitectureObligationMappings(planText);
   if (requiredDecisionIds.size === 0 && mappings.length === 0) return parseViolations;
 
   const violations = [...parseViolations];
