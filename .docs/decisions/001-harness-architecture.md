@@ -20,6 +20,8 @@ generator/evaluator separation, mandatory story coverage, and a self-improvement
 Build a custom harness as a pure Markdown skills + agent personas repository, using Claude Code
 as the execution engine. No custom runtime.
 
+> **Amended 2026-09-28 by #742:** Shipped skills are no longer Markdown-only. A skill may bundle executable helpers under `skills/<name>/scripts/`. Each helper is a thin wrapper that resolves the harness and execs an engine entry point, and the skill invokes it by its skill-directory path. See adr-2026-09-28-skills-may-bundle-executable-helpers. The "no custom runtime" statement was already overtaken by the `src/conductor` engine; this note records the skill-directory part only.
+
 ### Key architectural choices:
 
 1. **Skills are technology-agnostic.** Stack-specific knowledge lives in a separate `tech-context/`
