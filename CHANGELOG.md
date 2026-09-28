@@ -23,6 +23,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Plans now pass an independent coverage judgement before they land, so coverage_binding refusals are fixed during planning instead of halting the build. ([implementation PR #2763](https://github.com/jstoup111/ai-conductor/pull/2763)).
 - Operators can inspect and raise exhausted remediation plan-growth budgets with clearer recovery guidance. ([implementation PR #2719](https://github.com/jstoup111/ai-conductor/pull/2719)).
 
+### Fixed
+
+- Accepted stories are rejected before landing when their criteria cannot be read consistently. ([implementation PR #2731](https://github.com/jstoup111/ai-conductor/pull/2731)).
+
 ## [1.5.0] - 2026-09-27
 
 ### Added
