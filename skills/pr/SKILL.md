@@ -183,7 +183,8 @@ prose, halt narrative, "rehabilitated from…" footnotes, or recovery history in
 the body — that content belongs in the engine-posted PR comment. The engine's
 deterministic body floor exists only as a last resort when `/pr` did not run at
 all; if you see a floored body (`<!-- conductor:pr-body-floor -->`) on a PR you
-are updating, replace it wholesale with real prose.
+are updating, replace it wholesale with real prose while keeping every
+`ai-conductor:step` region and its markers unchanged.
 
 ### 7. Verify
 
