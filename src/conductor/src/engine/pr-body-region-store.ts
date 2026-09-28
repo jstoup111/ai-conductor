@@ -88,9 +88,8 @@ export async function discardRegionCapture(
   const captures = await readCaptureFile(worktree);
   const byStep = captures[pullRequestUrl];
   if (byStep === undefined || !(stepKey in byStep)) {
-    // Preserve the durable-write boundary even when the capture was already
-    // absent: a missing root is still a mid-run durability incident.
-    await writeCaptureFile(worktree, captures);
+    // A first dispatch has nothing to invalidate.  Do not create an empty
+    // capture store before the owner has successfully supplied any content.
     return;
   }
   const { [stepKey]: _discarded, ...remaining } = byStep;

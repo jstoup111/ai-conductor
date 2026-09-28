@@ -77,16 +77,11 @@ describe('PR body region capture store', () => {
     }
   });
 
-  it('warns and recreates a missing pipeline root during discard', async () => {
+  it('does not create a capture store when there is no owner capture to discard', async () => {
     const worktree = await mkdtemp(join(tmpdir(), 'pr-body-region-store-'));
     dirs.push(worktree);
-    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      await discardRegionCapture(worktree, 'https://github.com/example/repo/pull/12', 'compliance-attest');
-      expect(warning).toHaveBeenCalledWith(MISSING_PIPELINE_ROOT_WARNING);
-      await expect(readFile(join(worktree, PR_BODY_REGION_CAPTURES_PATH), 'utf8')).resolves.toBe('{}\n');
-    } finally {
-      warning.mockRestore();
-    }
+    await discardRegionCapture(worktree, 'https://github.com/example/repo/pull/12', 'compliance-attest');
+
+    await expect(readFile(join(worktree, PR_BODY_REGION_CAPTURES_PATH), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
