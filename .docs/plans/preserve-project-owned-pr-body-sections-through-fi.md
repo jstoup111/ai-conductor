@@ -383,6 +383,28 @@ Fifteen tasks let a project declare step-owned pull request body regions in its 
 
 **Dependencies:** none
 
+### Task 16: Region owners must be SHIP-phase steps
+**Story:** 1
+**Type:** negative-path
+
+> Added 2026-09-28 by #2616 (operator decision on as-built AB-013): the draft pull request exists only from SHIP entry, so a BUILD-phase owner halted at region preparation (ADR D4 amendment).
+
+**Steps:**
+1. Write a failing test in `src/conductor/test/engine/config.test.ts`: a marked `.github/pull_request_template.md` whose region names a declared custom step with `after: build`.
+2. Verify RED (today the step is accepted because it is ordered before `finish`).
+3. Implement in `src/conductor/src/engine/config.ts`: after the before-`finish` check, reject a region owner whose resolved step phase is not SHIP, naming the step and the rule.
+4. Verify GREEN; commit.
+
+**Done when:**
+- `loadConfig` fails with an error naming the step and stating that a region owner must run in the SHIP phase for a region whose declared owner's `after:` target is a BUILD-phase step, as asserted by the BUILD-phase-owner config test
+- a region owner whose `after:` target is a SHIP-phase step still loads, as asserted by the existing region-owner config tests
+
+**Files likely touched:**
+- src/conductor/src/engine/config.ts — SHIP-phase owner rule
+- src/conductor/test/engine/config.test.ts — BUILD-phase owner case
+
+**Dependencies:** 2
+
 ## Task Dependency Graph
 
 Task 2 ← Task 1; Task 3 ← Task 2; Task 4 ← Tasks 2, 3; Task 5 ← Task 1; Task 6 ← Tasks 2, 5; Task 7 ← Tasks 5, 6; Task 8 ← Tasks 5, 7; Task 9 ← Tasks 5, 7; Task 10 ← Task 9; Task 11 ← Task 5; Task 12 ← Tasks 4, 7, 8, 9, 11; Task 13 ← Task 2; Task 14 ← Tasks 8, 9, 10, 13; Task 15 independent.
@@ -410,6 +432,7 @@ Task 2 ← Task 1; Task 3 ← Task 2; Task 4 ← Tasks 2, 3; Task 5 ← Task 1; 
 | Story 1 negative: Given a template region whose marker names built-in step `finish`, when the project config loads, then loading fails with an error naming the marker key `finish` and stating that built-in steps cannot own a region. | 2 | "`loadConfig` fails with an error naming the marker key and the broken rule for a region naming built-in step `finish` (built-in steps cannot own a region), an undeclared key `release-disposiiton` (undeclared step), and a declared step whose `after:` orders it after `finish` (a region owner must run before `finish`), as asserted by the three owner-rule config tests" | diff-local |
 | Story 1 negative: Given a template region whose marker names `release-disposiiton` and no step of that name is declared, when the project config loads, then loading fails with an error naming `release-disposiiton` as an undeclared step. | 2 | "`loadConfig` fails with an error naming the marker key and the broken rule for a region naming built-in step `finish` (built-in steps cannot own a region), an undeclared key `release-disposiiton` (undeclared step), and a declared step whose `after:` orders it after `finish` (a region owner must run before `finish`), as asserted by the three owner-rule config tests" | diff-local |
 | Story 1 negative: Given a template region naming a declared custom step whose `after:` places it after `finish`, when the project config loads, then loading fails with an error naming that step and stating that a region owner must run before `finish`. | 2 | "`loadConfig` fails with an error naming the marker key and the broken rule for a region naming built-in step `finish` (built-in steps cannot own a region), an undeclared key `release-disposiiton` (undeclared step), and a declared step whose `after:` orders it after `finish` (a region owner must run before `finish`), as asserted by the three owner-rule config tests" | diff-local |
+| Story 1 negative: Given a template region naming a declared custom step whose `after:` target is a BUILD-phase step, when the project config loads, then loading fails with an error naming that step and stating that a region owner must run in the SHIP phase. | 16 | "`loadConfig` fails with an error naming the step and stating that a region owner must run in the SHIP phase for a region whose declared owner's `after:` target is a BUILD-phase step, as asserted by the BUILD-phase-owner config test" | diff-local |
 | Story 1 negative: Given a template with two regions that both name `compliance-attest`, when the project config loads, then loading fails with an error naming `compliance-attest` as owning more than one region. | 2 | "`loadConfig` fails with an error naming the offending step key for the duplicate-key, unclosed, and nested (naming both keys) templates, and naming the step key and the engine-owned text it contains for the engine-owned-text template, as asserted by the four template-shape config tests" | diff-local |
 | Story 1 negative: Given a template with an opening region marker and no closing marker, when the project config loads, then loading fails with an error naming the unclosed region's step key. | 2 | "`loadConfig` fails with an error naming the offending step key for the duplicate-key, unclosed, and nested (naming both keys) templates, and naming the step key and the engine-owned text it contains for the engine-owned-text template, as asserted by the four template-shape config tests" | diff-local |
 | Story 1 negative: Given a template with a region opened inside another region, when the project config loads, then loading fails with an error naming both step keys as nested. | 2 | "`loadConfig` fails with an error naming the offending step key for the duplicate-key, unclosed, and nested (naming both keys) templates, and naming the step key and the engine-owned text it contains for the engine-owned-text template, as asserted by the four template-shape config tests" | diff-local |
