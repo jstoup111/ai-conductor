@@ -33,6 +33,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - As-built reviews no longer reject findings that cite the feature's plan tasks. ([implementation PR #2778](https://github.com/jstoup111/ai-conductor/pull/2778)).
 - As-built reviews accept verdicts in which the provider filled another verdict type's fields. ([implementation PR #2779](https://github.com/jstoup111/ai-conductor/pull/2779)).
 - Operators now receive recovery guidance when unpark encounters a live feature halt. ([implementation PR #2775](https://github.com/jstoup111/ai-conductor/pull/2775)).
+- Provider output that mentions an expired or in-use session no longer triggers unbudgeted step retries; the unused stale-session recovery path and session-reuse override were removed. ([implementation PR #2784](https://github.com/jstoup111/ai-conductor/pull/2784)).
 
 ## [1.5.0] - 2026-09-27
 
