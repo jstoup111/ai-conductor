@@ -203,7 +203,9 @@ export function auditEnvironmentBlockerClaims(
   const deniable = facts.writeFenceInstalled
     ? writeFenceDeniableOperations()
     : new Set<AuditedOperation>();
-  const refuted = detectClaims(output).filter((claim) => !deniable.has(claim.operation));
+  const refuted = detectClaims(output).filter((claim) =>
+    !deniable.has(claim.operation) && !(claim.operation === 'git push' && /git\s+push\s+(?:--force\b|-f\b|\S*\+\S*:)/i.test(claim.claim)),
+  );
   if (refuted.length === 0) return none;
 
   // Each quote carries the marker so a later attempt that echoes the whole

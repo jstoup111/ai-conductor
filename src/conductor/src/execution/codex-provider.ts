@@ -27,6 +27,8 @@ import {
 } from './provider-diagnostics.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
+import { withGitGuardPath } from './child-environment.js';
+import { ensureGitGuardForDispatch } from '../engine/git-guard.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
@@ -306,6 +308,10 @@ export class CodexProvider implements LLMProvider {
     // session id, but the invariant is enforced uniformly at every adapter
     // entry so no future arg-building change can resurrect reuse.
     options = enforceFreshSessionOptions(options, 'codex');
+    let guardDir: string | null;
+    try { guardDir = await ensureGitGuardForDispatch(options.cwd); } catch (error) {
+      return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
+    }
     const repl = options.interactive === true;
     const jsonOutput = !repl;
     // A real interactive session leaves authorization to the operator. Auto
@@ -333,7 +339,7 @@ export class CodexProvider implements LLMProvider {
     const command = {
       executable: options.selfHost?.executable ?? this.executable,
       args: [...this.selfHostArgs(options), ...this.buildArgs(options, !repl, schemaFile)],
-      env: this.invocationEnv(options, authentication),
+      env: withGitGuardPath(this.invocationEnv(options, authentication), guardDir),
     };
     let streamedTokenUsage: TokenUsage | undefined;
 

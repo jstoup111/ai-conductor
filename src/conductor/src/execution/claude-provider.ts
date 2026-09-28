@@ -25,6 +25,8 @@ import {
 } from './provider-stream.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
+import { withGitGuardPath } from './child-environment.js';
+import { ensureGitGuardForDispatch } from '../engine/git-guard.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import {
   inferRateLimitWaitSeconds,
@@ -638,6 +640,10 @@ export class ClaudeProvider implements LLMProvider {
     // enforceFreshSessionOptions for the 2026-08-14 megatoken incident this
     // deterministically prevents.
     options = enforceFreshSessionOptions(options, 'claude');
+    let guardDir: string | null;
+    try { guardDir = await ensureGitGuardForDispatch(options.cwd); } catch (error) {
+      return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
+    }
     // Claude's native JSON-schema mode is a non-interactive print-mode
     // capability. A REPL cannot return its terminal result envelope, so never
     // silently run an unconstrained interactive request.
@@ -668,7 +674,7 @@ export class ClaudeProvider implements LLMProvider {
           ? { input: options.prompt }
           : { stdin: options.interactive ? 'inherit' as const : 'ignore' as const }),
         reject: false,
-        env: this.buildEnv(options),
+        env: withGitGuardPath(this.buildEnv(options), guardDir),
         cwd: options.cwd,
         diagnosticLog: options.diagnosticLog,
         onActivity: options.onActivity,

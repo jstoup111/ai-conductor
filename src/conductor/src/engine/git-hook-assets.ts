@@ -2,6 +2,80 @@ import { PROTECTED_ARTIFACT_DIRECTORIES } from './protected-artifact-seal.js';
 import { resolveCanonicalLauncher, shellQuote } from './canonical-launcher.js';
 
 /**
+ * A PATH-shadowing git wrapper for agent processes. Runtime values are data
+ * files beside the wrapper so this source remains deterministic and auditable.
+ */
+export const GIT_GUARD_SCRIPT = `#!/usr/bin/env bash
+set -u
+guard_dir="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+real_git="$(cat "$guard_dir/../git-guard/real-git")"
+feature_common="$(cat "$guard_dir/../git-guard/common-dir")"
+
+refuse() {
+  printf 'ai-conductor git guard: refused %s — %s. Safe alternative: %s.\\n' "$1" "$2" "$3" >&2
+  exit 1
+}
+
+# Keep the original argv for exec; classify after one safe non-shell alias expansion.
+args=("$@")
+i=0
+while [[ $i -lt \${#args[@]} ]]; do
+  case "\${args[$i]}" in
+    -C|--git-dir|--work-tree|-c) ((i+=2)); continue ;;
+    --no-pager|--paginate) ((i++)); continue ;;
+  esac
+  break
+done
+command="\${args[$i]:-}"
+if [[ -n "$command" ]]; then
+  alias_value="$($real_git config --get "alias.$command" 2>/dev/null || true)"
+  if [[ -n "$alias_value" && "$alias_value" != '!'* ]]; then
+    read -r -a expanded <<< "$alias_value"
+    args=("\${args[@]:0:$i}" "\${expanded[@]}" "\${args[@]:$((i+1))}")
+    command="\${args[$i]}"
+  fi
+fi
+
+destructive=false
+reason=''
+alternative=''
+case "$command" in
+  push)
+    for a in "\${args[@]:$((i+1))}"; do
+      [[ "$a" == --force || "$a" == -f || "$a" == +*:* ]] && { destructive=true; reason='bare force push can rewrite remote history'; alternative='git push --force-with-lease'; break; }
+    done ;;
+  reset)
+    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --hard ]] && { destructive=true; reason='hard reset discards working-tree changes'; alternative='git reset --keep <target>'; break; }; done ;;
+  clean)
+    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --force || "$a" == -f* && "$a" != -n* ]] && { destructive=true; reason='forced clean deletes untracked files'; alternative='git clean -n then remove named paths'; break; }; done ;;
+  checkout)
+    has_paths=false; safe_side=false
+    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == -- ]] && has_paths=true; [[ "$a" == --ours || "$a" == --theirs || "$a" == --merge || "$a" == -m ]] && safe_side=true; done
+    [[ "$has_paths" == true && "$safe_side" == false ]] && { destructive=true; reason='path checkout discards working-tree changes'; alternative='commit a WIP first or use a temporary worktree'; } ;;
+  restore)
+    safe_side=false; staged=false; worktree=false
+    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --ours || "$a" == --theirs || "$a" == --merge ]] && safe_side=true; [[ "$a" == --staged || "$a" == -S ]] && staged=true; [[ "$a" == --worktree || "$a" == -W ]] && worktree=true; done
+    [[ "$safe_side" == false && ( "$staged" == false || "$worktree" == true ) ]] && { destructive=true; reason='restore discards working-tree changes'; alternative='commit a WIP first or use a temporary worktree'; } ;;
+  branch)
+    force=false; names=()
+    for a in "\${args[@]:$((i+1))}"; do [[ "$a" == -D || "$a" == --force ]] && force=true; [[ "$a" != -* ]] && names+=("$a"); done
+    if [[ "$force" == true && \${#names[@]} -gt 0 ]]; then
+      for name in "\${names[@]}"; do
+        reachable=false
+        while IFS= read -r ref; do [[ "$ref" == "refs/heads/$name" ]] || "$real_git" merge-base --is-ancestor "refs/heads/$name" "$ref" >/dev/null 2>&1 && { reachable=true; break; }; done < <("$real_git" for-each-ref --format='%(refname)' refs/heads refs/remotes)
+        [[ "$reachable" == false ]] && { destructive=true; reason='force deletion would make commits unreachable'; alternative='git branch -d <branch>'; break; }
+      done
+    fi ;;
+esac
+
+if [[ "$destructive" == true ]]; then
+  common="$($real_git "\${args[@]:0:$i}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  [[ "$common" == "$feature_common" ]] && refuse "$command" "$reason" "$alternative"
+fi
+exec "$real_git" "$@"
+`;
+
+/**
  * Git hook scripts embedded as engine assets
  *
  * Both hooks are written to .pipeline/git-hooks/ at worktree provisioning

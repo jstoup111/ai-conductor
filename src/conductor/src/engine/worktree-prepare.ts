@@ -46,6 +46,7 @@ import { access, readFile, writeFile, mkdir, chmod, constants, rename, rm, stat,
 import { createHash } from 'node:crypto';
 import { basename, join } from 'node:path';
 import { PRE_COMMIT_HOOK, PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
+import { writeGitGuard } from './git-guard.js';
 import {
   PRE_DISPATCH_HOOK,
   DOCS_GUARD_HOOK,
@@ -657,6 +658,7 @@ async function writeGitHooks(
   const commitMsgPath = join(hooksDir, 'commit-msg');
   await writeFile(commitMsgPath, COMMIT_MSG_HOOK, 'utf-8');
   await chmod(commitMsgPath, 0o755);
+  await writeGitGuard(worktreePath);
 
   log?.('git hooks: written to .pipeline/git-hooks/');
 }
