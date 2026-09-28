@@ -25,7 +25,7 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
     });
   });
 
-  it('parses release metadata and a migration inside a project-owned region', () => {
+  it('accepts a note disposition and runnable migration closed by the release-disposition region marker (Task 13)', () => {
     expect(parseReleaseDisposition([
       '<!-- ai-conductor:step release-disposition -->',
       'Release-Disposition: note',
@@ -38,7 +38,13 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
       './bin/migrate',
       '```',
       '<!-- /ai-conductor:step -->',
-    ].join('\n'))).toMatchObject({ disposition: 'note', category: 'Fixed', migration: '```bash migration\n./bin/migrate\n```' });
+    ].join('\n'))).toEqual({
+      disposition: 'note',
+      category: 'Fixed',
+      semver: 'patch',
+      note: 'Preserve the release block.',
+      migration: '```bash migration\n./bin/migrate\n```',
+    });
   });
 
   it.each([
