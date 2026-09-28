@@ -193,7 +193,7 @@ async function buildDeps(
 }
 
 /** Slugs in dispatch order, as returned by `workSource.discover()`. */
-async function orderedSlugs(dir: string, deps: LocalWorkSourceDeps, refresh = true): Promise<string[]> {
+async function orderedSlugs(_dir: string, deps: LocalWorkSourceDeps, refresh = true): Promise<string[]> {
   const items = await localWorkSource(deps).discover({ refresh });
   return items.map((i) => i.slug);
 }

@@ -11,10 +11,8 @@ import { tmpdir } from 'os';
 import {
   buildExporters,
   buildHttpExporterOptions,
-  type Exporters,
 } from '../../../src/engine/otel/transport.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
-import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { OTLPTraceExporter as OTLPGrpcTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { OTLPMetricExporter as OTLPGrpcMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc';
 import { OTLPTraceExporter as OTLPHttpTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
@@ -178,7 +176,6 @@ describe('buildExporters', () => {
 
       // Export a fake span result — we use the in-memory exporter shape
       // (finishedSpans array). The file exporter must accept the same interface.
-      const inMemory = new InMemorySpanExporter();
       // Give the file exporter something to serialize
       const spans: Parameters<typeof exporters.spanExporter.export>[0] = [];
       await new Promise<void>((resolve, reject) => {

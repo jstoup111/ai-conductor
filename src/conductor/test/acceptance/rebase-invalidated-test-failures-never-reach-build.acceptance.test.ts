@@ -30,7 +30,7 @@ import { promisify } from 'node:util';
 
 import { assembleBuildReviewInputs, TestSuiteProofError } from '../../src/engine/build-review-inputs.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
-import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import {
   applyRebaseVerdicts,
   emitRebaseEvent,

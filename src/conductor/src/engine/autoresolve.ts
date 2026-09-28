@@ -417,7 +417,7 @@ export async function withResolveWorktree<T>(
  *
  * @param git          Git runner (injected for testability)
  * @param projectRoot  Worktree path where the rebase is paused
- * @param baseRef      The base reference (e.g., "main" or "origin/main") that the rebase is onto
+ * @param _baseRef      The base reference (e.g., "main" or "origin/main") that the rebase is onto
  * @param remaining    Remaining conflicted files from Tier 1 (if any)
  * @param cap          Maximum attempts for resolution; 0 disables tier 2
  * @param resolver     Injected resolver function (dispatches to /rebase or test stub)
@@ -427,7 +427,7 @@ export async function withResolveWorktree<T>(
 export async function runTier2(
   git: GitRunner,
   projectRoot: string,
-  baseRef: string,
+  _baseRef: string,
   remaining: string[],
   cap: number,
   resolver: RebaseResolver,

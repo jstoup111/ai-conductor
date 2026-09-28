@@ -15,9 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 
 // Load backlog-priority module to verify resolver contract
@@ -37,7 +35,6 @@ async function loadDaemonWorkSource() {
   };
 }
 
-type ExecRunner = (args: string[]) => Promise<{ stdout: string }>;
 type IssueLabelReader = (refs: string[]) => Promise<Map<string, string[] | 'not-found'>>;
 
 let workDirs: string[] = [];
@@ -50,11 +47,6 @@ afterEach(async () => {
   await Promise.all(workDirs.map((d) => rm(d, { recursive: true, force: true })));
 });
 
-async function freshDir(): Promise<string> {
-  const d = await mkdtemp(join(tmpdir(), 'daemon-cli-priority-'));
-  workDirs.push(d);
-  return d;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test Suite: Task 13 — daemon-cli priority resolver wiring

@@ -1102,8 +1102,6 @@ describe('engine/rebase — featureCommitsPreserved SQL comment deletion (real g
 describe('engine/rebase — .docs keep-both resolver (happy path)', () => {
   let repo: string;
   const g = (args: string[]) => execFile('git', args, { cwd: repo });
-  const gc = (args: string[]) =>
-    execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
 
   afterEach(async () => {
     await rm(repo, { recursive: true, force: true });
@@ -1364,8 +1362,6 @@ describe('engine/rebase — .docs keep-both resolver (happy path)', () => {
 describe('engine/rebase — .docs keep-both resolver (negative scope cases)', () => {
   let repo: string;
   const g = (args: string[]) => execFile('git', args, { cwd: repo });
-  const gc = (args: string[]) =>
-    execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
 
   afterEach(async () => {
     await rm(repo, { recursive: true, force: true });
@@ -1531,8 +1527,6 @@ describe('engine/rebase — .docs keep-both resolver (negative scope cases)', ()
 describe('engine/rebase — runTier1 driver (.docs keep-both resolver)', () => {
   let repo: string;
   const g = (args: string[]) => execFile('git', args, { cwd: repo });
-  const gc = (args: string[]) =>
-    execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
 
   afterEach(async () => {
     await rm(repo, { recursive: true, force: true });

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { discoverPlugins } from '../../src/engine/plugin-loader.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { join } from 'path';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, cpSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { readFileSync } from 'fs';
 

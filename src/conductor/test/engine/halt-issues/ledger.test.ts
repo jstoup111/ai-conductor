@@ -1,6 +1,6 @@
 // Covers: task:3
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { Ledger, LedgerSchema, LedgerEntry, mergeVerdicts } from '../../../src/engine/halt-issues/ledger';
+import { Ledger, LedgerSchema, mergeVerdicts } from '../../../src/engine/halt-issues/ledger';
 import { VerdictEntry } from '../../../src/engine/halt-issues/verdict-parser';
 
 /**
@@ -92,7 +92,6 @@ describe('Ledger', () => {
       // Verify writeFile was called
       expect(mockFs.writeFile).toHaveBeenCalled();
       const writeCall = (mockFs.writeFile as any).mock.calls[0];
-      const tmpPath = writeCall[0];
       const fileContent = JSON.parse(writeCall[1]);
 
       // Verify structure

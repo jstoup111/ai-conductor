@@ -1,6 +1,6 @@
 // Test: governorReport — read-only governor report (Task 29, FR-9 happy + negative)
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, writeFile, readFile, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createEngineerStoreReader } from '../../../src/engine/engineer-store.js';
@@ -306,7 +306,6 @@ describe('governorReport — read-only guarantee (falsifiable)', () => {
 
   it('no new files are created in the engineer dir by governorReport', async () => {
     await seedSignals([sig1]);
-    const signalsPath = join(tmpDir, 'signals.jsonl');
     const { readdirSync } = await import('node:fs');
     const filesBefore = readdirSync(tmpDir).sort();
 
@@ -324,7 +323,7 @@ describe('governorReport — read-only guarantee (falsifiable)', () => {
 
     // Spy on both the read method and any potential mutating methods
     const readSpy = vi.spyOn(reader, 'readSignalsWithStats');
-    const readSignalsSpy = vi.spyOn(reader, 'readSignals');
+    vi.spyOn(reader, 'readSignals');
 
     await governorReport(reader);
 

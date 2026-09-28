@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { parseDirtyStatus, enumerateCandidates, classifyModifiedFiles, triageModifiedFiles, renderLeakSuspectWarn } from '../../src/engine/leak-triage.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
-import { mkdtemp, rm, writeFile, mkdir, unlink } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 

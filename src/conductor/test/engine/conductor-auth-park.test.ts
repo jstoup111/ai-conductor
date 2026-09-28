@@ -2027,7 +2027,6 @@ describe('conductor auth-park: daemon-token mode', () => {
 
   it('authFailure in daemon-token mode parks on the daemon token path (not operator credentials)', async () => {
     let buildAttempts = 0;
-    const observedParkPaths: string[] = [];
     let buildAttempt1Failed = false;
 
     const runner: StepRunner = {

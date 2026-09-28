@@ -329,7 +329,7 @@ describe('engine/daemon-deps', () => {
     const mockExeca = vi.mocked(execa);
     const slug = 'feat-x';
 
-    function deps(worktreePath: string) {
+    function deps(_worktreePath: string) {
       return makeFeatureRunnerDeps({
         projectRoot: dir,
         worktreeBase: join(dir, '.worktrees'),
@@ -419,7 +419,7 @@ describe('engine/daemon-deps', () => {
         await git(['commit', '-m', 'S2']);
         const s2 = (await git(['rev-parse', 'HEAD'])).stdout;
         await git(['update-ref', 'refs/remotes/origin/main', s2]);
-        mockExeca.mockImplementation((async (command: string, args: string[], options?: { cwd?: string }) => {
+        mockExeca.mockImplementation((async (_command: string, args: string[], options?: { cwd?: string }) => {
           const result = await git(args, options?.cwd);
           return result;
         }) as unknown as typeof execa);

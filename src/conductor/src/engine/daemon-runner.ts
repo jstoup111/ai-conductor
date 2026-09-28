@@ -12,9 +12,6 @@ import {
   type SweepOpts,
 } from './mergeable-sweep.js';
 import {
-  prMergeState,
-  removeLabel,
-  setReady,
   cleanupHaltPresentation,
   guardedPrRunner,
   makeProductionGh,

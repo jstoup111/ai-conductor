@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import type { ConductState, StepName } from '../../src/types/index.js';
-import { ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP, BUILD_REVIEW_VERDICT, checkStepCompletion, MANUAL_TEST_FAIL_EVIDENCE, PRD_AUDIT_CODE_STAMP } from '../../src/engine/artifacts.js';
+import { ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP, checkStepCompletion, MANUAL_TEST_FAIL_EVIDENCE, PRD_AUDIT_CODE_STAMP } from '../../src/engine/artifacts.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
@@ -35,7 +35,6 @@ const OLD_MTIME = new Date(2000, 0, 1);
 const gates = ['prd_audit', 'architecture_review_as_built', 'build_review', 'manual_test'] as const;
 type Gate = typeof gates[number];
 const PRD_REPORT = '# PRD Audit\n\n**PRD:** none\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | Evidence |\n|---|---|---|---|\n| S1.1 | PASS | 1 | test |\n\n| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | n/a | test | — |\n';
-const ARCH_REPORT = '# As-Built Review\n\nVerdict: APPROVED\n';
 const MANUAL_REPORT = '# Manual Test Results\n\n## Attempt 1\n\n| Story | Result |\n|---|---|\n| S1 | PASS |\n';
 const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'test fixture' },

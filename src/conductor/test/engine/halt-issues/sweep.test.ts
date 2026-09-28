@@ -8,9 +8,8 @@
  * 3. Unauthenticated gh (all gh calls fail) → parse/ledger complete, all gh marked errors, exit 0
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { sweep, SweepConfig, SweepResult } from '../../../src/engine/halt-issues/sweep';
-import { LedgerEntry } from '../../../src/engine/halt-issues/ledger';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { sweep, SweepConfig } from '../../../src/engine/halt-issues/sweep';
 import { TrackerClient, GhRunnerError } from '../../../src/engine/tracker-client';
 
 /**
@@ -67,7 +66,6 @@ class MockFs {
  * since sweep/closer should never call them.
  */
 class MockGh implements Partial<TrackerClient> {
-  private editIndex = 0;
   private stampIndex = 0;
   private closeIndex = 0;
   private commentIndex = 0;
@@ -154,7 +152,7 @@ class MockGh implements Partial<TrackerClient> {
 
   commentBodies: string[] = [];
 
-  async upsertIssueComment(repo: string, issue: string, body: string): Promise<void> {
+  async upsertIssueComment(_repo: string, _issue: string, body: string): Promise<void> {
     this.callCounts.upsertIssueComment++;
     this.commentBodies.push(body);
     const response = this.commentResponses[this.commentIndex++];
@@ -293,7 +291,7 @@ describe('sweep', () => {
         clock: { now: () => new Date('2026-07-05T10:00:00Z') }
       };
 
-      const result = await sweep(config);
+      await sweep(config);
 
       // Read back ledger
       const ledgerContent = await mockFs.readFile(baseConfig.ledgerPath);

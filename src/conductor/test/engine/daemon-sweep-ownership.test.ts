@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   runDaemon,
   type BacklogItem,
@@ -138,7 +138,7 @@ describe('engine/daemon — per-sweep ownership gate', () => {
     // has been overwritten with a different uuid (simulating another daemon's takeover).
     // This test ensures the production wiring in daemon-cli.ts is correct:
     // lockOwnershipLost: async () => !(await ownsLock(projectRoot, lock.uuid))
-    const { readFile, writeFile, mkdir } = await import('node:fs/promises');
+    const { writeFile, mkdir } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const { mkdtemp } = await import('node:fs/promises');

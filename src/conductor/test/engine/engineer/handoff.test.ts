@@ -601,9 +601,6 @@ describe('openSpecPr — no-merge / no-build guarantee (task-26, FR-7)', () => {
 
   // ── Shared helpers (local to this describe) ────────────────────────────────
 
-  /** All tokens that handoff is allowed to pass to the runner. */
-  const ALLOWED_RUNNER_TOKENS = new Set(['pr', 'create', '--head', '--fill', 'remote']);
-
   /** Build/pipeline tokens that must NEVER appear in any runner invocation. */
   const FORBIDDEN_BUILD_TOKENS = ['build', 'pipeline', 'deploy', 'run', 'ci', 'publish'];
 

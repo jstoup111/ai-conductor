@@ -147,7 +147,7 @@ function deps(
     project: 'test-project',
     projectRoot: '/proj',
     runGh: async () => ({ stdout: '' }),
-    enrollWatch: async (projectRoot: string, entry: any) => {
+    enrollWatch: async (_projectRoot: string, entry: any) => {
       rec.enrollCalls!.push({ prUrl: entry.prUrl, slug: entry.slug });
     },
   };

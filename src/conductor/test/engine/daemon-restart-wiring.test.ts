@@ -43,7 +43,6 @@ import {
   hasSession as realHasSession,
   setRemainOnExit,
   respawnPane as realRespawnPane,
-  sessionNameForRepo,
 } from '../../src/engine/daemon-tmux.js';
 import { buildDaemonModeOptions } from '../../src/index.js';
 import type { DaemonCommandOptions } from '../../src/engine/daemon-command.js';
@@ -65,16 +64,6 @@ async function freshDir(): Promise<string> {
   return d;
 }
 
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5000, intervalMs = 50): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await predicate()) return;
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  if (!(await predicate())) {
-    throw new Error(`waitFor: predicate did not become true within ${timeoutMs}ms`);
-  }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // (a) Queued restart with busy marker, driven against a REAL tmux session,
@@ -334,7 +323,7 @@ describe('daemon-cli.ts wiring: createRestartRequester deps injection', () => {
     // Track if process.exit was called
     let exitCalled = false;
     const processMock = {
-      exit: (code: number) => {
+      exit: (_code: number) => {
         exitCalled = true;
       },
     } as unknown as NodeJS.Process;

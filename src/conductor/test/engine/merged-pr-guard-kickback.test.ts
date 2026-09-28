@@ -292,7 +292,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
 
     it('negative: interactive (daemon:false) run with pr_url set — zero gh calls, behavior identical to today', async () => {
       await seedShipTail();
-      const { runner, calls } = remediateToBuildRunner();
+      const { runner } = remediateToBuildRunner();
       const { runGh, calls: ghCalls } = makeGhFake({ state: 'MERGED' });
       const onRecovery = vi.fn().mockResolvedValue('quit');
 

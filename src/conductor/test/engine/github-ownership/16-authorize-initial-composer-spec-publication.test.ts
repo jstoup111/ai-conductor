@@ -66,7 +66,7 @@ describe('composer handoff — initial spec publication ownership', () => {
         return { stdout: '' };
       };
       const result = await openSpecPr({ name: 'specs', canonicalPath: '/fixture', remote: `https://github.com/${REPOSITORY}.git` }, BRANCH, {
-        runner: async (args, options) => {
+        runner: async (args, _options) => {
           const response = await gh(args);
           return { stdout: response.stdout, stderr: '' };
         },
@@ -133,7 +133,7 @@ describe('composer handoff — initial spec publication ownership', () => {
       };
 
       const result = await openSpecPr({ name: 'specs', canonicalPath: root, remote: `https://github.com/${REPOSITORY}.git` }, BRANCH, {
-        runner: async (args, options) => ({
+        runner: async (args, _options) => ({
           ...(await runner(args)),
           stderr: '',
         }),

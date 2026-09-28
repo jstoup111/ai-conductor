@@ -46,7 +46,7 @@ async function resolveHookPath(scriptPath: string): Promise<{ resolved: string; 
 export async function runWithHooks(
   stepName: string,
   config: HarnessConfig,
-  projectRoot: string,
+  _projectRoot: string,
   skillRunner: () => Promise<{ success: boolean; output: string }>,
   hookRunner: HookRunner,
 ): Promise<HookResult> {

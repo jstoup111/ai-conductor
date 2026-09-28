@@ -1548,7 +1548,7 @@ export function resolveRequiredLayers(
 
 /** Enumerate this idea's changed files with git status codes, for the waiver's fresh-in-diff check. */
 async function resolveChangedFilesForWaiver(
-  worktreePath: string,
+  _worktreePath: string,
   canonicalPath: string,
   git: GitRunner,
 ): Promise<CoherenceWaiverChangedFile[]> {

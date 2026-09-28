@@ -122,7 +122,7 @@ export class PluginLoadError extends Error {
  * Error thrown when requested plugin is not found in registry.
  */
 export class PluginNotFoundError extends Error {
-  constructor(message: string, public readonly kind: PluginKind, public readonly name: string) {
+  constructor(message: string, public readonly kind: PluginKind, public override readonly name: string) {
     super(message);
     this.name = 'PluginNotFoundError';
   }

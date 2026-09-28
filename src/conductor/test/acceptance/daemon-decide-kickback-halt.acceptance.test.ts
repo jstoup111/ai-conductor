@@ -18,7 +18,6 @@ import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
-import { currentCommitSha } from '../../src/engine/project-prelude.js';
 import {
   HALT_MARKER,
   HALT_CLASS_MARKER,
@@ -845,4 +844,3 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
   });
 });
 
-import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

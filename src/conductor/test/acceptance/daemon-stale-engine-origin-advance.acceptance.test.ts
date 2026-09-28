@@ -155,7 +155,7 @@ describe('acceptance: merged engine fix reaches the running daemon without opera
 
         const order: string[] = [];
         let outcome: any;
-        const requestRestart = vi.fn(async (info: any) => {
+        const requestRestart = vi.fn(async (_info: any) => {
           order.push('restart');
           return { fired: true };
         });

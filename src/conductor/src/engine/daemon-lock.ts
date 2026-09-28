@@ -299,13 +299,13 @@ export function isLive(pid: number, kill: KillProbe = defaultKill): boolean {
  *     should call reclaim() to replace it)
  *
  * @param repoPath - Absolute path to the repository root.
- * @param kill     - Injectable kill probe (default: process.kill).
+ * @param _kill     - Injectable kill probe (default: process.kill).
  * @param opts     - `transient: true` marks the created record as a handoff
  *                   record (#374) — set by callers that immediately unlink it.
  */
 export async function acquire(
   repoPath: string,
-  kill: KillProbe = defaultKill,
+  _kill: KillProbe = defaultKill,
   opts: { transient?: boolean } = {},
 ): Promise<AcquireResult> {
   try {

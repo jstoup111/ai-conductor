@@ -31,7 +31,6 @@ import { RESTART_MARKER, readRestartPending, writeRestartPending } from '../../s
 import { computeStatusRow } from '../../src/engine/daemon-observe-cli.js';
 import { getPidfilePath } from '../../src/engine/daemon-lock.js';
 import type { ConductState } from '../../src/types/index.js';
-import { writeState } from '../../src/engine/state.js';
 import { deriveDaemonBaseState, persistDaemonBaseState } from '../../src/engine/daemon-state.js';
 import {
   createForcedSetupPrepare,
@@ -755,7 +754,6 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     // This guards against N redundant handlers in daemon mode.
 
     const dir = await mkdtemp(join(tmpdir(), 'conductor-interactive-test-'));
-    const statePath = join(dir, '.pipeline', 'conduct-state.json');
 
     try {
       await mkdir(join(dir, '.pipeline'), { recursive: true });

@@ -83,7 +83,7 @@ describe('runFleetAction (Task 17)', () => {
 
   it('one repo with a broken path errors per-repo; the others still succeed', async () => {
     const a = await repo('a');
-    const b = await repo('b');
+    await repo('b');
     // Make `b`'s "path" a file, not a directory, so any fs op that expects a
     // dir under it throws — simulating a broken/missing-path registration.
     const brokenLeaf = join(root, 'b-is-a-file');

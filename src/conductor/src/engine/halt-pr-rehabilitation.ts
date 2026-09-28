@@ -39,7 +39,6 @@ import {
   NEEDS_REMEDIATION_MARKER,
   NEEDS_REMEDIATION_BODY_MARKER,
 } from './pr-labels.js';
-import { injectIssueRef } from './engineer/issue-ref.js';
 import { runTrackerUrlRead } from './tracker-client.js';
 
 export const NEEDS_REMEDIATION_TITLE_PREFIX = 'needs-remediation:';

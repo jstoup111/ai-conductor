@@ -16,7 +16,6 @@ import { tmpdir } from 'node:os';
 import {
   runDaemon,
   type DaemonDeps,
-  type DaemonOptions,
   type BacklogItem,
   type FeatureOutcome,
 } from '../../src/engine/daemon.js';
@@ -31,7 +30,6 @@ import {
   writeRestartPending,
   consumeOnBoot,
   readRestartPending,
-  RESTART_MARKER,
 } from '../../src/engine/restart-marker.js';
 
 let workDirs: string[] = [];
@@ -54,40 +52,7 @@ function items(n: number): BacklogItem[] {
   return Array.from({ length: n }, (_, i) => ({ slug: `f${i}` }) as BacklogItem);
 }
 
-/**
- * Build a mock daemon deps object suitable for testing.
- * Allows injection of:
- *  - discoverBacklog: what items the daemon sees
- *  - isPausedCheck: whether pause marker is present
- *  - hasRestartPending: whether restart marker is present
- *  - hasRestartPending behavior during run
- */
-interface MockDaemonDepsOpts {
-  projectRoot: string;
-  backlog: BacklogItem[];
-  pauseCheck?: () => Promise<boolean>;
-  restartCheck?: () => Promise<boolean>;
-  onDispatch?: (slug: string) => void;
-  restartTrigger?: () => Promise<void>;
-}
 
-function mockDaemonDeps(opts: MockDaemonDepsOpts): DaemonDeps {
-  const dispatched: string[] = [];
-
-  return {
-    discoverBacklog: async () => opts.backlog,
-    runFeature: async (item: BacklogItem): Promise<FeatureOutcome> => {
-      dispatched.push(item.slug);
-      opts.onDispatch?.(item.slug);
-      return { slug: item.slug, status: 'done' };
-    },
-    isPaused: opts.pauseCheck,
-    hasRestartPending: opts.restartCheck,
-    triggerSelfRestart: opts.restartTrigger,
-    sleep: async () => {}, // no-op for tests
-    log: () => {}, // suppress logs in tests
-  };
-}
 
 describe('Task T31: restart preserves pause state (FR-11)', () => {
   // ─────────────────────────────────────────────────────────────────────────

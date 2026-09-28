@@ -1,7 +1,6 @@
 import {
   FullSuiteVerifier,
   type FullSuiteInspectionResult,
-  type FullSuiteVerifierResult,
 } from './full-suite-verifier.js';
 import type { FullSuiteFailureReason } from './full-suite-evidence.js';
 

@@ -49,7 +49,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
-import type { StepName, ConductState } from '../../src/types/index.js';
+import type { StepName } from '../../src/types/index.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 
 describe('acceptance: tokenUsage + model reach step_completed and the events.jsonl ledger (Story 2, #537)', () => {

@@ -248,7 +248,7 @@ describe('deferred feature-worktree reap — production lifecycle entry points',
   it('S2/S4: absent and indeterminate records retain and recheck without blocking a proven sibling reap', async () => {
     const projectRoot = await tempRoot('deferred-reap-recheck-');
     const slugs = ['record-absent', 'fetch-indeterminate', 'record-present'];
-    const urls = slugs.map((slug, index) => `https://github.com/owner/repo/pull/${1200 + index}`);
+    const urls = slugs.map((_slug, index) => `https://github.com/owner/repo/pull/${1200 + index}`);
     await Promise.all(slugs.map((slug) => seedWorktree(projectRoot, slug)));
     for (let index = 0; index < slugs.length; index += 1) {
       await enrollWatch(projectRoot, {

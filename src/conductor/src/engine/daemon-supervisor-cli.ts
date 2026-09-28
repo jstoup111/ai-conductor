@@ -6,7 +6,7 @@
 // (makeTmuxSupervisor()) is only resolved at call time to avoid importing the
 // supervisor runtime eagerly.
 
-import { buildDaemonForegroundCommand, makeTmuxSupervisor, TmuxNotInstalledError, type Supervisor } from './daemon-tmux.js';
+import { buildDaemonForegroundCommand, makeTmuxSupervisor, type Supervisor } from './daemon-tmux.js';
 import { loadConfig } from './config.js';
 import type { DaemonSupervisorCommand } from './daemon-command.js';
 import {

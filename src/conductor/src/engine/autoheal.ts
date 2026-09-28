@@ -27,11 +27,6 @@ export function resetDeriveWarnOnce(): void {
   derivedWarningsSeen.clear();
 }
 
-function warnOnce(key: string, message: string): void {
-  if (derivedWarningsSeen.has(key)) return;
-  derivedWarningsSeen.add(key);
-  console.warn(message);
-}
 
 /**
  * True when a commit-changed file satisfies a plan-declared task path (#425).

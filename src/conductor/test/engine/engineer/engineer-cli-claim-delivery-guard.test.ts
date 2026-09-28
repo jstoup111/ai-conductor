@@ -133,7 +133,7 @@ describe('engineer claim with delivery guard (Task 8: integration of guard into 
     await queue.enqueue(makeEnvelope({ text: 'a healthy pending idea' }));
 
     const { out, opts } = captureOut();
-    const { gh, calls } = makeGh('OPEN');
+    const { gh } = makeGh('OPEN');
 
     // Run: engineer claim with guard wrapping the queue
     const code = await dispatchEngineer({ kind: 'claim' }, opts({ gh }));

@@ -6,7 +6,6 @@ import { ConductorEventEmitter } from '../src/ui/events.js';
 import { TerminalSubscriber } from '../src/ui/subscriber.js';
 import { dispatchRenderers } from '../src/ui/dispatch.js';
 import { JsonStdoutSubscriber } from '../../../plugins/json-stdout-subscriber/index.js';
-import type { UIRenderer } from '../src/ui/types.js';
 
 /**
  * JsonStdoutSubscriber is a UIRenderer, so it can receive the fan-out directly.

@@ -415,7 +415,7 @@ describe('evaluateShipmentEvidence', () => {
   it.each([
     {
       name: 'a working-tree-only record',
-      prepare: async (repoDir: string, recordPath: string, record: string) => {
+      prepare: async (_repoDir: string, recordPath: string, record: string) => {
         await writeFile(recordPath, record);
       },
       expected: (candidateCommit: string) => ({

@@ -693,7 +693,7 @@ Another task.
   });
 
   it('parsePlanTaskPaths works with extended id grammar', async () => {
-    const mod = await loadAutoheal();
+    await loadAutoheal();
 
     const planText = `# Plan
 
@@ -740,7 +740,7 @@ Another task.
   });
 
   it('parses task paths with em-dash headers', async () => {
-    const mod = await loadAutoheal();
+    await loadAutoheal();
 
     const planText = `# Plan
 
@@ -834,7 +834,7 @@ Add a reusable test helper.
     });
 
     it('parsePlanTaskPaths: parses bare T-prefixed headers and their paths', async () => {
-      const mod = await loadAutoheal();
+      await loadAutoheal();
 
       const planText = `# Plan
 
@@ -855,7 +855,7 @@ Add a reusable test helper.
     });
 
     it('parsePlanTaskPaths: extracts the real 2026-07-12-rtk-hook-preservation.md fixture tasks (T0-T5)', async () => {
-      const mod = await loadAutoheal();
+      await loadAutoheal();
       const fixturePath = join(
         __dirname,
         '../../../../.docs/plans/2026-07-12-rtk-hook-preservation.md',
@@ -995,7 +995,7 @@ Task 1 → Task 2
       // `### Task <id>` with no colon, dash, or title. The #620 tightening
       // must only reject DIGITLESS bare ids (Graph/Breakdown/Dependency),
       // never ids containing a digit.
-      const mod = await loadAutoheal();
+      await loadAutoheal();
 
       const planText = `# Plan
 

@@ -217,7 +217,7 @@ describe('conduct-state lease', () => {
       acquiredAt: '2026-09-11T00:00:00.000Z',
     })}\n`;
     let intercepted = false;
-    ownerPublication.onRename = async (temporaryPath, destination) => {
+    ownerPublication.onRename = async (_temporaryPath, destination) => {
       intercepted = true;
       expect(destination).toBe(ownerPath);
       await writeFile(destination, liveOwner, { encoding: 'utf8', flag: 'wx' });

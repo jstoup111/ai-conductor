@@ -5,7 +5,7 @@
  * Enumerates candidate branches with worktrees prioritized for in-flight daemon build triage.
  */
 
-import type { GitRunner, GitResult } from './rebase.js';
+import type { GitRunner } from './rebase.js';
 
 export interface TriageResult {
   /** Whether the triage can proceed with healing (no staged changes present) */
@@ -470,13 +470,13 @@ export async function classifyModifiedFiles(
  * the result as not healable to prevent healing attempts while staged changes exist.
  *
  * @param git - GitRunner for executing git commands
- * @param defaultBranchForStatus - Optional default branch name for status lookup (only used when git is a spied/mock runner)
+ * @param _defaultBranchForStatus - Optional default branch name for status lookup (only used when git is a spied/mock runner)
  * @param candidateOverride - Optional explicit candidate list (primarily for testing); when provided, skips enumerateCandidates
  * @returns TriageResult with healable, canHeal flags and file classifications
  */
 export async function triageModifiedFiles(
   git: GitRunner,
-  defaultBranchForStatus?: string,
+  _defaultBranchForStatus?: string,
   candidateOverride?: string[],
 ): Promise<TriageResult> {
   // Get the dirty status

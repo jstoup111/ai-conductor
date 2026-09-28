@@ -87,7 +87,7 @@ function makeGhFake(state: {
   const comments: string[] = [];
   const calls: string[][] = [];
 
-  const gh: GhRunner = async (args, opts?: { cwd?: string }) => {
+  const gh: GhRunner = async (args, _opts?: { cwd?: string }) => {
     calls.push([...args]);
     // Check if this is a pr view call that includes body in the --json fields
     if (args[0] === 'pr' && args[1] === 'view' && args.some((a) => a.includes('body'))) {

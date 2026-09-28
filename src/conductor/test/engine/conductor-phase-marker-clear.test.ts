@@ -1,5 +1,5 @@
-import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
-import { existsSync, readFileSync } from 'fs';
+import { mkdtemp, rm, mkdir } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';

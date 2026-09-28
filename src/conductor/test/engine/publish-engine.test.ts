@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readdir, readFile, chmod, lstat, readlink, utimes } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readdir, readFile, lstat, readlink, utimes } from 'fs/promises';
 import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';

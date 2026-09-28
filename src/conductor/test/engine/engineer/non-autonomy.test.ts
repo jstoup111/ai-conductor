@@ -53,7 +53,6 @@ import { describe, it, expect, vi } from 'vitest';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { launchDaemon } from '../../../src/engine/engineer/daemon-launch.js';
-import type { LaunchDaemonOpts } from '../../../src/engine/engineer/daemon-launch.js';
 import * as daemonLaunchModule from '../../../src/engine/engineer/daemon-launch.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -72,15 +71,6 @@ const ENGINEER_ENTRY_ROOTS: string[] = [
     .map((path) => join(engineerModuleRoot, path)),
 ];
 
-/**
- * Pipeline/build entry modules the engineer MUST NEVER import transitively.
- * Named by their relative path suffix (matched against absolute reachable paths).
- */
-const FORBIDDEN_MODULE_SUFFIXES: string[] = [
-  'engine/conductor.ts',    // pipeline build entry — runs full SDLC
-  'engine/step-runners.ts', // build step implementations (gh pr create, code runs, etc.)
-  'engine/daemon-runner.ts', // daemon runner that fires the full conductor loop
-];
 
 /**
  * Regex patterns that represent forbidden tokens when present in reachable source.
@@ -338,7 +328,6 @@ describe('engineer import graph: structural non-autonomy (FR-10, ADR-005)', () =
 
     // Also verify the comment-line exemption: a comment explaining the merge
     // guard must not be flagged.
-    const commentLine = `  // The engineer MUST NOT call 'merge' on any PR.`;
     // Pattern 0 has a negative lookbehind for comment lines — it should not fire.
     // (Note: JS negative lookbehind with ^ is complex; we accept this may fire
     // on comment lines — that is conservative/safe, not a false negative.)

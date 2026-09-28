@@ -17,7 +17,6 @@ import {
   RESTART_MARKER_PATH,
   SUPPRESSION_PATH,
   type RestartMarker,
-  type RestartMarkerStatus,
 } from '../../src/engine/restart-intent.js';
 import { RESTART_MARKER as QUEUED_RESTART_MARKER } from '../../src/engine/restart-marker.js';
 

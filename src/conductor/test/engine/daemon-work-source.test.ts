@@ -182,7 +182,6 @@ describe('localWorkSource — discoverBacklog receives correct args + call-throu
 
     // Capture the args discoverBacklog receives.
     let capturedRoot: string | undefined;
-    let capturedIsProcessed: ((slug: string) => Promise<boolean>) | undefined;
     let capturedLog: unknown;
     let capturedOpts: Record<string, unknown> | undefined;
 
@@ -202,7 +201,6 @@ describe('localWorkSource — discoverBacklog receives correct args + call-throu
           opts: unknown,
         ) => {
           capturedRoot = root;
-          capturedIsProcessed = isProc;
           capturedLog = log;
           capturedOpts = opts as Record<string, unknown>;
           // Invoke the wrapper so we can assert it delegates to the injected dep.

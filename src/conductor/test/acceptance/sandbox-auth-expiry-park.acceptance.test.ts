@@ -40,8 +40,6 @@ import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 
-/** The story's flag is not yet on StepRunResult — overlay it locally. */
-type AuthResult = StepRunResult & { authFailure?: boolean };
 
 const READY_STATE: ConductState = {
   worktree: 'done',
@@ -87,10 +85,6 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
   let events: ConductorEventEmitter;
   let priorConfigDir: string | undefined;
   let provisionedDirs: string[];
-  // Sandbox teardown (TR-5) removes the config dir on every exit path, so the
-  // sandbox's credentials copy must be captured at teardown time to be asserted.
-  let sandboxCredsAtTeardown: string | null;
-
   function makeGuardrails(): SelfHostGuardrails {
     return {
       resolveHarnessRoot: async () => dir,
@@ -108,10 +102,6 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
           configDir,
           childEnv: () => process.env,
           teardown: async () => {
-            sandboxCredsAtTeardown = await readFile(
-              join(configDir, '.credentials.json'),
-              'utf-8',
-            ).catch(() => null);
             await rm(configDir, { recursive: true, force: true });
           },
         };
@@ -127,7 +117,6 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
     statePath = join(dir, 'conduct-state.json');
     events = new ConductorEventEmitter();
     provisionedDirs = [];
-    sandboxCredsAtTeardown = null;
     priorConfigDir = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = operatorDir;
     await mkdir(join(dir, '.pipeline'), { recursive: true });

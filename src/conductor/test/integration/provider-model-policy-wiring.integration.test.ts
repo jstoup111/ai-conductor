@@ -625,16 +625,9 @@ it('freezes one daemon registry without retaining legacy global provider authori
     const kind = runnerKind(construction);
     return kind ? [kind] : [];
   });
-  const mainRunner = runnerConstructions.find(
-    (construction) => runnerKind(construction) === 'main',
-  );
   const auxiliaryRunners = runnerConstructions.filter(
     (construction) => runnerKind(construction) !== 'main',
   );
-  const allConstructions = [
-    ...runnerConstructions,
-    ...conductorConstructions,
-  ];
 
   expect({
     registryConstructedOnceWithoutShadowing:
@@ -1210,13 +1203,6 @@ it('binds every production step-resolution call to the policy owned by its execu
         scope: 'resolveGroupMembership',
         argumentCount: 5,
         policyProvenance: 'parameter:modelPolicy:ProviderModelPolicy',
-      },
-      {
-        file: 'engine/conductor.ts',
-        scope: 'run',
-        argumentCount: 5,
-        policyProvenance:
-          'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
       },
       {
         file: 'engine/conductor.ts',

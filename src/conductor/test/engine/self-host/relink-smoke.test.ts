@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execa } from 'execa';
-import { mkdtemp, rm, mkdir, writeFile, chmod, lstat, readlink } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, chmod, lstat, readlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -4,9 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  HALT_CLEARED_MARKER,
   HALT_MARKER,
-  REKICK_SENTINEL,
   clearMarker,
   listHaltedWorktrees,
   readHaltReason,

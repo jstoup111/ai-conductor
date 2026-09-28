@@ -7,7 +7,7 @@ import { createLiveRegion } from '../../src/ui/live-region.js';
 import type { UIRenderer } from '../../src/ui/types.js';
 import { Writable } from 'node:stream';
 
-class CaptureStream extends Writable { _write(_chunk: Buffer | string, _e: string, cb: (e?: Error | null) => void) { cb(); } }
+class CaptureStream extends Writable { override _write(_chunk: Buffer | string, _e: string, cb: (e?: Error | null) => void) { cb(); } }
 
 describe('Config-driven renderer selection', () => {
   afterEach(() => vi.restoreAllMocks());

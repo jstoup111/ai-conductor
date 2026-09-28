@@ -966,7 +966,7 @@ describe('engine/resolved-config', () => {
     // This is an invariant-locking test (#188): no production change expected,
     // it pins the floor so a future edit can't quietly regress it.
     it('every Claude policy S-tier max_retries override is >= 3', () => {
-      for (const [step, tiers] of Object.entries(CLAUDE_MODEL_POLICY.stepTierOverrides)) {
+      for (const [, tiers] of Object.entries(CLAUDE_MODEL_POLICY.stepTierOverrides)) {
         const sRow = tiers?.S;
         if (sRow && sRow.max_retries !== undefined) {
           expect(sRow.max_retries).toBeGreaterThanOrEqual(3);

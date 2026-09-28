@@ -1763,7 +1763,6 @@ describe('ClaudeProvider', () => {
           failed: true,
         } as any);
 
-        const beforeInvoke = Date.now();
         const result = await provider.invoke({ ...baseOptions });
         const afterInvoke = Date.now();
 

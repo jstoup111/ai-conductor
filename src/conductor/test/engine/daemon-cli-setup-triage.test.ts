@@ -10,8 +10,8 @@
 // 3. Env kill-switch prevents actual setup execution
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
@@ -78,14 +78,7 @@ describe('Task 15 — Production wiring in daemon-cli', () => {
     await mkdir(worktreePath, { recursive: true });
 
     // Mock git runner to capture cwd
-    const capturedCwds: string[] = [];
-    let gitRunnerCalled = false;
 
-    const mockGitRunner = async (args: string[]) => {
-      gitRunnerCalled = true;
-      capturedCwds.push(worktreePath); // Capture where it was invoked from
-      return { exitCode: 0, stdout: '', stderr: '' };
-    };
 
     // Simulate what daemon-cli does: pass worktreePath to makeGitRunner
     // For now, just verify the pattern of passing worktreeePath
@@ -182,7 +175,7 @@ describe('Task 15 — Production wiring in daemon-cli', () => {
     };
 
     const mockDeps: FeatureRunnerDepsShape = {
-      runSetupTriage: async (error, worktree, item) => {
+      runSetupTriage: async (_error, _worktree, _item) => {
         return { kind: 'park' };
       },
     };
@@ -218,7 +211,7 @@ describe('Task 15 — Production wiring in daemon-cli', () => {
 
       // Mock git runner — GitRunner is directly callable (args) => Promise<GitResult>,
       // not an object with a `.run` method.
-      const mockGit: GitRunner = async (args: string[]) => ({
+      const mockGit: GitRunner = async (_args: string[]) => ({
         exitCode: 0,
         stdout: '',
         stderr: '',
@@ -227,7 +220,7 @@ describe('Task 15 — Production wiring in daemon-cli', () => {
       // Reconstruct the runSetupTriage closure with mocked dependencies
       // This mirrors the pattern in daemon-cli.ts lines 827-894
       const runSetupTriage = async (
-        error: any,
+        _error: any,
         worktree: { path: string; branch: string },
         item: { slug: string },
       ) => {
@@ -240,7 +233,7 @@ describe('Task 15 — Production wiring in daemon-cli', () => {
         const git: GitRunner = mockGit;
 
         // Inject mock prepareWorktree
-        const runPrepare = async (worktreePath: string) => {
+        const runPrepare = async (_worktreePath: string) => {
           // Mock implementation
         };
 

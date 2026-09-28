@@ -1,8 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseAttributionVerdict,
-  type AttributionVerdict,
-  type Verdict,
 } from '../src/engine/attribution-verdict.js';
 
 describe('parseAttributionVerdict — fail-closed parser for attribution verdict files', () => {

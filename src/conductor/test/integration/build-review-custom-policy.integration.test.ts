@@ -54,7 +54,7 @@ function git() {
 }
 
 /** A synthetic Git boundary that creates real detached source-view directories. */
-function materializedGit(root: string) {
+function materializedGit(_root: string) {
   const head = 'a'.repeat(40);
   const baseline = 'b'.repeat(40);
   const paths: { headPath?: string; baselinePath?: string } = {};

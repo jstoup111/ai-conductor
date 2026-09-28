@@ -102,7 +102,7 @@ describe('daemon CI-fix production dispatch callback', () => {
   });
 
   it('returns not-started when canonical branch lookup is malformed or throws', async () => {
-    for (const gh of [vi.fn(async () => ({ stdout: '{bad json' })), vi.fn(async () => { throw new Error('permission denied'); })]) {
+    for (const {} of [vi.fn(async () => ({ stdout: '{bad json' })), vi.fn(async () => { throw new Error('permission denied'); })]) {
       const run = vi.fn();
       const dispatch = createDaemonCiFixDispatch({
         tracker: { getPullRequestHeadRef: async () => { throw new Error('permission denied'); }, viewWorkflowRunFailedLog: async () => '' } as any, createDispatcher: () => ({ resolveCiFailure: async () => ({ kind: 'session-completed' }) }), run,
@@ -156,11 +156,6 @@ describe('daemon CI-fix production dispatch callback', () => {
       })),
     };
     let logReads = 0;
-    const gh = vi.fn(async (args: string[]) => {
-      if (args[0] === 'pr') return { stdout: JSON.stringify({ headRefName: 'repair-branch' }) };
-      logReads += 1;
-      return { stdout: 'é'.repeat(20_000) };
-    });
     const run = vi.fn(async (_entry, _branch, hint) => {
       expect(Buffer.byteLength(hint, 'utf8')).toBeLessThanOrEqual(24_576);
       expect(hint).toContain('[log enrichment omitted for 1 workflow runs]');

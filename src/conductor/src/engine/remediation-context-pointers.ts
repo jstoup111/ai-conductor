@@ -111,6 +111,3 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}

@@ -665,7 +665,7 @@ describe('dispatchDaemonSupervisor: restart — immediate (idle/paused) vs queue
   it('idle → relink called before supervisor.restart (TR-4)', async () => {
     const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
     const repo = await tempRepo();
-    const { calls, supervisor } = makeFakeSupervisor();
+    const { supervisor } = makeFakeSupervisor();
     const out: string[] = [];
     const callOrder: string[] = [];
 

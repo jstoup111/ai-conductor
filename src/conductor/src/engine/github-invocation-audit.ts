@@ -756,7 +756,7 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
   return findings;
 }
 
-function auditExecutableSite(parsed: ts.SourceFile, file: string, site: ExecutableSite, bindings: ProcessBindings): GithubInvocationAuditFinding[] {
+function auditExecutableSite(parsed: ts.SourceFile, file: string, site: ExecutableSite, _bindings: ProcessBindings): GithubInvocationAuditFinding[] {
   const { node, program } = site;
   const args = argv(site.argvNode);
   const command = argvHead(site.argvNode);

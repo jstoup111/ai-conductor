@@ -225,7 +225,6 @@ describe("build-review semantic cache", () => {
   });
 
   it("parses legacy projection candidates through the read seam, then misses against the current v3 identity", async () => {
-    const currentProjectionDigest = "sha256:digest-that-includes-evidence-content-hash";
     const currentLookup = {
       rubric: "testQuality",
       contractVersion: "v3",

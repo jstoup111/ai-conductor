@@ -6,10 +6,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { Conductor } from './test-conductor.js';
 import { EventPersister } from '../src/engine/event-persister.js';
-import {
-  createStepStatusWriteRefusalDiagnostics,
-  resolveConductorStateStore,
-} from '../src/engine/conductor-deps.js';
 import { writeState } from '../src/engine/state.js';
 import type { StepRunner } from '../src/engine/conductor.js';
 import type { ConductState } from '../src/types/index.js';

@@ -70,7 +70,7 @@ describe('daemon default sleep: unref timer (Task 11)', () => {
     // Create a long sleep that would normally block the process
     // In a real scenario with continuous mode and no other work, this would allow
     // clean shutdown. In the test, we just verify it doesn't hang the suite.
-    const longSleep = sleep(60000); // 60 second timeout
+    void sleep(60000); // 60 second timeout
 
     // Do other work immediately while sleep is pending
     let otherWorkDone = false;

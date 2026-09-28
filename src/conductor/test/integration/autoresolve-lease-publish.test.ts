@@ -146,8 +146,8 @@ describe('integration/autoresolve — lease-protected publish', () => {
   });
 
   it('removes the resolution worktree after successful push (FR-12)', async () => {
-    const autoresolve = await import('../../src/engine/autoresolve.js');
-    const { mkdir, rm } = await import('node:fs/promises');
+    await import('../../src/engine/autoresolve.js');
+    const { mkdir } = await import('node:fs/promises');
 
     // Create a mock worktree directory to verify it gets cleaned up
     const worktreePath = join(work, '.worktrees', `resolve-example`);
@@ -156,26 +156,12 @@ describe('integration/autoresolve — lease-protected publish', () => {
     await writeFile(testFile, 'test');
 
     // Verify it exists
-    let worktreeExists = false;
     try {
       await execFile('test', ['-d', worktreePath]);
-      worktreeExists = true;
     } catch {
-      worktreeExists = false;
     }
 
-    const entry = {
-      prUrl: 'https://github.com/example/repo/pull/42',
-      slug: 'example',
-      repoCwd: work,
-      resolveAttempts: 0,
-    };
 
-    const realGit = async (args: string[]) => {
-      const { execa } = await import('execa');
-      const r = await execa('git', args, { cwd: work, reject: false });
-      return { exitCode: r.exitCode ?? 1, stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? '') };
-    };
 
     // The actual worktree removal is done separately (by withResolveWorktree wrapper)
     // Here we just verify the push succeeds; the wrapper tests in autoresolve-worktree-lifecycle.test.ts

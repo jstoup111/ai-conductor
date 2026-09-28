@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createHash } from 'crypto';
 import type { EvidenceStamp } from '../../src/engine/task-evidence.js';
 import type { TaskEvidence } from '../../src/engine/task-evidence.js';
-import { selectAuditSample, selectAuditSampleFromStamps } from '../../src/engine/attribution-audit.js';
+import { selectAuditSample } from '../../src/engine/attribution-audit.js';
 import type { AccuracyLedgerRecord } from '../../src/engine/attribution-audit.js';
 
 // #505 TS-14: Deterministic spot-audit sampler — select a reproducible
@@ -838,7 +838,7 @@ describe('runSpotAudit — post-green non-blocking spot audit dispatch', () => {
         };
 
         // Dispatch should fail or skip when verdict doesn't exist
-        const result = await runSpotAudit({
+        await runSpotAudit({
           evidence,
           featureSlug: 'test-feature',
           auditSamplePct: 100,
@@ -990,7 +990,6 @@ describe('runSpotAudit — post-green non-blocking spot audit dispatch', () => {
 
         const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
         let dispatchStarted = false;
-        let dispatchCompleted = false;
 
         await import('node:fs/promises').then((m) =>
           m.mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true }),
@@ -1001,7 +1000,6 @@ describe('runSpotAudit — post-green non-blocking spot audit dispatch', () => {
           dispatchStarted = true;
           // Simulate slow dispatch
           await new Promise((resolve) => setTimeout(resolve, 100));
-          dispatchCompleted = true;
           return { success: true, output: '{}' };
         };
 

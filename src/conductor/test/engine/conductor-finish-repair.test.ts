@@ -156,11 +156,10 @@ describe('conductor/finish-repair', () => {
   });
 
   it('repairFinishPr invokes repair functions in correct order via composition', async () => {
-    const fakeGh = makeFakeGh();
     const callLog: string[] = [];
 
     // Create a wrapper that patches the repair module functions
-    const patchedGh: GhRunner = async (args: string[], opts: { cwd: string }) => {
+    const patchedGh: GhRunner = async (args: string[], _opts: { cwd: string }) => {
       callLog.push(`gh-call: ${args[0]}`);
       return { stdout: '{"isDraft":true,"title":"needs-remediation: test","labels":[]}' };
     };

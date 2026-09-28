@@ -11,7 +11,6 @@ import { toCodexStrictSchema } from '../../src/execution/codex-strict-schema.js'
 import { AS_BUILT_VERDICT_SCHEMA, renderAsBuiltVerdictShape } from '../../src/engine/as-built-contract.js';
 import {
   AS_BUILT_PROJECTION_VERSION,
-  renderAsBuiltProjection,
   type AsBuiltProjection,
 } from '../../src/engine/as-built-projection.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';

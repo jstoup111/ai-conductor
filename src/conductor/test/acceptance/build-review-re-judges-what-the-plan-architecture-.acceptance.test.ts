@@ -79,19 +79,6 @@ const PRD_AUDIT_NO_PRD_PASS = [
   '',
 ].join('\n');
 
-const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
-const AS_BUILT_PLAN_GAP = [
-  '# As-Built Architecture Review',
-  '',
-  'Verdict: PLAN_GAP',
-  'Outcome delivered: yes',
-  '',
-  '## Recorded Findings',
-  '- Outcome: The accepted behavior remains eventually consistent.',
-  '- Summary: The code faithfully implements the approved design; the plan is the limit.',
-  '',
-].join('\n');
-
 const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'test fixture' },
   planGap: { enabled: true, reason: 'test fixture' },
