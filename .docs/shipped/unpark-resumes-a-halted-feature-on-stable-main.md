@@ -4,12 +4,6 @@ spec_hash: a4deed0bdd09be2be5bd746be0b5c1709a17c50b217108db15ed6ffbb613b409
 pr: https://github.com/jstoup111/ai-conductor/pull/2775
 shipped: 2026-09-28
 engine_version: 20260928T204648Z-343f8837ef9b
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "src/conductor/test/engine/as-built-dispatch-classification.test.ts:259-262 — unplanned edit to an unrelated as-built test fixture (commit da3135b7c)"
-    accepted: true
 ---
 
 ## Cost
@@ -28,8 +22,10 @@ providers:
   claude: input: 86, output: 28245, cache_read: 2070701, cache_creation: 484088, cost_usd: 4.8521, dispatches: 9, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","888dca42-22a7-4476-9dcd-d1f03ff1a5f3","lifecycle-step","finish"]
+state: measured
+active_ms: 6616212
+provider_active_ms: 4724427
+no_provider_active_ms: 1891785
 
 ## Build Review
 laps_to_pass: 1
