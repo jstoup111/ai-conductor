@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-28T23:26:07.035Z
 Slug: preserve-project-owned-pr-body-sections-through-fi
 Class: needs-human
 Halting step: prd_audit
