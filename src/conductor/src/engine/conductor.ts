@@ -13759,7 +13759,20 @@ export class Conductor {
           if (step.name !== 'complexity' && step.name !== 'worktree' && step.name !== 'rebase') {
             // Capture only successful owner output. Failed steps must not make
             // partial or empty prose authoritative for a later FINISH pass.
-            await this.captureOwnedStepRegion(state, step.name);
+            try {
+              await this.captureOwnedStepRegion(state, step.name);
+            } catch (error) {
+              const reason = error instanceof Error ? error.message : String(error);
+              // A successful provider result cannot make an absent, empty, or
+              // unreadable owner region optional.  Halt before marking the
+              // step done (and therefore before FINISH can be selected).
+              await this.writeHaltMarker(`${reason}\n`, 'needs-human');
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
+              await this.emitLoopHalt(reason);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
             await this.saveConductorStepStatus(state, step.name, 'done');
           }
           state[step.name] = 'done';
