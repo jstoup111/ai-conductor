@@ -256,7 +256,10 @@ it('derives built-in model and cost policies from catalog descriptors', () => {
   }).toEqual({
     modelPolicies: BUILT_IN_PROVIDERS.map((provider) => [provider.id, provider.modelPolicy]),
     costSelfReportingProviders: BUILT_IN_PROVIDERS
-      .filter((provider) => provider.capabilities.costSelfReporting === true)
+      .filter((provider) =>
+        'costSelfReporting' in provider.capabilities
+        && provider.capabilities.costSelfReporting === true,
+      )
       .map((provider) => provider.id),
   });
 });
