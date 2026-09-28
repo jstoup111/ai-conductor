@@ -28,6 +28,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Accepted stories are rejected before landing when their criteria cannot be read consistently. ([implementation PR #2731](https://github.com/jstoup111/ai-conductor/pull/2731)).
 - As-built architecture reviews no longer halt with a plan projection fault in repositories that hold more than one plan. ([implementation PR #2772](https://github.com/jstoup111/ai-conductor/pull/2772)).
+- Codex-routed as-built reviews no longer fail with an invalid output schema. ([implementation PR #2774](https://github.com/jstoup111/ai-conductor/pull/2774)).
+- Codex builds can write the harness memory store instead of halting on the memory checkpoint. ([implementation PR #2776](https://github.com/jstoup111/ai-conductor/pull/2776)).
 
 ## [1.5.0] - 2026-09-27
 
