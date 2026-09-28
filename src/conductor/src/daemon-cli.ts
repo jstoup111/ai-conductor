@@ -1436,6 +1436,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         projectRoot: wt.path,
         stateFilePath,
         baseBranch,
+        prTemplateBytes: config?.pr_template_bytes,
         git: finishPublicationGit,
         gh: finishPublicationGh,
         events: featureEvents,

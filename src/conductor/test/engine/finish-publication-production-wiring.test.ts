@@ -31,5 +31,11 @@ describe('production FINISH coordinator wiring', () => {
     expect(daemon).toMatch(
       /finishPublication:\s*createProductionFinishPublicationCoordinator\(\{[\s\S]*?baseBranch,/
     );
+
+    for (const source of [foreground, daemon]) {
+      expect(source).toMatch(
+        /finishPublication:\s*createProductionFinishPublicationCoordinator\(\{[\s\S]*?prTemplateBytes:\s*config\?\.pr_template_bytes/,
+      );
+    }
   });
 });
