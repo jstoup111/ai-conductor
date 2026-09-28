@@ -338,7 +338,7 @@ export class CodexProvider implements LLMProvider {
     }
     const command = {
       executable: options.selfHost?.executable ?? this.executable,
-      args: [...this.selfHostArgs(options), ...this.buildArgs(options, !repl, schemaFile)],
+      args: [...this.selfHostArgs(options), ...this.buildArgs(options, !repl, schemaFile, guardDir)],
       env: withGitGuardPath(this.invocationEnv(options, authentication), guardDir),
     };
     let streamedTokenUsage: TokenUsage | undefined;
@@ -983,7 +983,7 @@ export class CodexProvider implements LLMProvider {
     );
   }
 
-  private buildArgs(options: InvokeOptions, unattended: boolean, schemaFile?: string): string[] {
+  private buildArgs(options: InvokeOptions, unattended: boolean, schemaFile?: string, guardDir?: string | null): string[] {
     const args = ['exec'];
 
     if (options.model) args.push('--model', options.model);
@@ -1020,6 +1020,10 @@ export class CodexProvider implements LLMProvider {
         const memoryRoot = options.cwd ? externalMemoryRoot(options.cwd) : undefined;
         if (memoryRoot) args.push('--add-dir', memoryRoot);
       }
+    }
+    if (guardDir) {
+      const inheritedPath = this.invocationEnv(options, this.authentication).PATH ?? process.env.PATH ?? '';
+      args.push('--config', `shell_environment_policy.set.PATH="${guardDir}:${inheritedPath}"`);
     }
     if (options.cwd) args.push('--cd', options.cwd);
     if (!options.interactive) args.push('--json');

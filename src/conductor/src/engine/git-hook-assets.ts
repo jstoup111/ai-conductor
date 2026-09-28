@@ -62,7 +62,13 @@ case "$command" in
     if [[ "$force" == true && \${#names[@]} -gt 0 ]]; then
       for name in "\${names[@]}"; do
         reachable=false
-        while IFS= read -r ref; do [[ "$ref" == "refs/heads/$name" ]] || "$real_git" merge-base --is-ancestor "refs/heads/$name" "$ref" >/dev/null 2>&1 && { reachable=true; break; }; done < <("$real_git" for-each-ref --format='%(refname)' refs/heads refs/remotes)
+        while IFS= read -r ref; do
+          [[ "$ref" == "refs/heads/$name" ]] && continue
+          if "$real_git" merge-base --is-ancestor "refs/heads/$name" "$ref" >/dev/null 2>&1; then
+            reachable=true
+            break
+          fi
+        done < <("$real_git" for-each-ref --format='%(refname)' refs/heads refs/remotes)
         [[ "$reachable" == false ]] && { destructive=true; reason='force deletion would make commits unreachable'; alternative='git branch -d <branch>'; break; }
       done
     fi ;;
