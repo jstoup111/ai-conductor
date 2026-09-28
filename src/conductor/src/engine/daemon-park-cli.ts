@@ -314,6 +314,13 @@ export async function dispatchDaemonPark(
       const wasParked = await isOperatorParked(resolvedRoot, cmd.slug);
       if (!wasParked) {
         out(`'${cmd.slug}' was not operator-parked — nothing to do.`);
+        const worktreeDir = join(resolvedRoot, '.worktrees', cmd.slug);
+        if (existsSync(worktreeDir)) {
+          const haltWarning = await describeLiveHalt(worktreeDir);
+          if (haltWarning) {
+            for (const line of haltWarning) out(line);
+          }
+        }
         return 0;
       }
 
