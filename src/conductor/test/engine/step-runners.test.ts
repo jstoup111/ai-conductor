@@ -4410,23 +4410,6 @@ TIER: M`,
 
       expect(result.waitSeconds).toBe(300);
     });
-
-    it('surfaces sessionExpired=true when provider reports it', async () => {
-      const provider = createMockProvider();
-      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
-        success: false,
-        output: 'No conversation found with id abc',
-        exitCode: 1,
-        sessionExpired: true,
-      });
-      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
-        pipelineDir: pipeDir,
-      });
-
-      const result = await runner.run('worktree', emptyState);
-
-      expect(result.sessionExpired).toBe(true);
-    });
   });
 
   describe('resetSession', () => {

@@ -1420,11 +1420,6 @@ export interface StepRunResult {
    */
   deadline?: number;
   /**
-   * Set when Claude reports "No conversation found" (session evaporated).
-   * The conductor resets the session state and retries without burning budget.
-   */
-  sessionExpired?: boolean;
-  /**
    * Set when the operator's OAuth token is expired or invalid.
    * The conductor halts and reports the auth failure.
    */
@@ -1666,9 +1661,8 @@ export interface StepRunner {
   assessComplexity?(): Promise<ComplexityTier | ComplexityAssessment | null>;
   /**
    * Drop session state so the next invocation creates a fresh provider session.
-   * Called by the conductor when `sessionExpired` is reported.
-   * `providerKey` targets the provider that reported expiry; absent metadata
-   * preserves the legacy runner's captured-provider reset.
+   * Called by the conductor before a step's first dispatch. `providerKey`
+   * targets one provider; absent, the runner's captured provider is reset.
    */
   resetSession?(step?: StepName, providerKey?: string): Promise<void>;
   /**
@@ -10507,8 +10501,8 @@ export class Conductor {
               ? result.actualProvider
               : undefined;
             // Quota exhaustion is the only rate-limit class that establishes
-            // process-wide provider unavailability. Auth/session recovery
-            // remains eligible for its existing refresh-and-retry path.
+            // process-wide provider unavailability. Auth recovery remains
+            // eligible for its existing refresh-and-retry path.
             if (result.usageExhausted === true && provider !== undefined) {
               this.providerExecution?.providerAvailability?.suppress(provider, deadline);
               await this.providerExecution?.onProviderSuppressed?.(provider, deadline);
@@ -10545,27 +10539,6 @@ export class Conductor {
             }
 
             // Continue retry loop without burning budget
-            attempt--;
-            continue;
-          }
-
-          // Stale session: reset + retry without burning budget
-          // stale-session detection.
-          if (result.sessionExpired) {
-            await emitTracked({
-              type: 'session_reset',
-              reason: 'session unavailable (expired or in use) — resetting to a fresh session',
-            });
-            if (this.stepRunner.resetSession) {
-              if (result.actualProvider !== undefined) {
-                await this.stepRunner.resetSession(
-                  undefined,
-                  result.actualProvider,
-                );
-              } else {
-                await this.stepRunner.resetSession();
-              }
-            }
             attempt--;
             continue;
           }

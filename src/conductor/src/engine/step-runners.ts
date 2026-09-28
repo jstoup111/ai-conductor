@@ -1809,7 +1809,6 @@ export class DefaultStepRunner implements StepRunner {
               : {}),
           }
         : {}),
-      ...(result.sessionExpired ? { sessionExpired: true } : {}),
       ...(result.authentication
         ? { authentication: result.authentication }
         : {}),
@@ -1933,20 +1932,6 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.usageExhausted ? { usageExhausted: true } : {}),
         waitSeconds,
         deadline: result.deadline,
-        ...(result.authentication
-          ? { authentication: result.authentication }
-          : {}),
-        ...observedIntervals,
-      };
-    }
-
-    // Stale session detected. Report it — the conductor will call resetSession()
-    // and retry without burning the retry budget.
-    if (result.sessionExpired) {
-      return {
-        success: false,
-        output: result.output,
-        sessionExpired: true,
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),

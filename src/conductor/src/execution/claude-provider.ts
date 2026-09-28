@@ -64,11 +64,6 @@ const RATE_LIMIT_RE = /rate limit|429|overloaded/i;
 // "session limit" in prose.
 const SESSION_LIMIT_RE = /you've hit your \S+ limit|session limit reached|usage limit reached|\S+ limit\s+·\s+resets/i;
 const PERIOD_LIMIT_RE = /you've hit your (?!session\b|usage\b)\S+ limit/i;
-const STALE_SESSION_RE = /No conversation found/i;
-// A session-id lock ("already in use" / "session is in use by another
-// process"). Recovers the same way as a stale session — reset to a fresh
-// session id and retry — so it's folded into the sessionExpired signal.
-const SESSION_IN_USE_RE = /\balready in use\b|\b(session|conversation)\b[^\n]{0,60}\bin use\b/i;
 // Signatures indicating authentication failure — the daemon's OAuth token is
 // missing, stale, or invalid. Distinct from model unavailability (entitled
 // but token expired) or rate limiting (entitled but quota hit). Drives the
@@ -777,7 +772,6 @@ export class ClaudeProvider implements LLMProvider {
     // 3. Model unavailable: only on exit !== 0
     // 4. Rate limit (non-session): only on exit !== 0
     // 5. Auth failure: only on exit !== 0
-    // 6. Session expired: checked regardless of exit code
 
     const sessionLimit = SESSION_LIMIT_RE.test(output);
     const outOfCredits = OUT_OF_CREDITS_RE.test(output);
@@ -788,8 +782,6 @@ export class ClaudeProvider implements LLMProvider {
     // response even when its diagnostic happens to contain auth-shaped prose.
     const authFailure =
       !rateLimited && !modelUnavailable && exitCode !== 0 && AUTH_FAILURE_RE.test(output);
-    const sessionExpired =
-      STALE_SESSION_RE.test(output) || SESSION_IN_USE_RE.test(output);
     const commandUnresolvedName = parsed.numTurns === 0
       ? unresolvedCommandName(parsed.output, prompt)
       : undefined;
@@ -824,7 +816,6 @@ export class ClaudeProvider implements LLMProvider {
       exitCode,
       authFailure: authFailure || undefined,
       rateLimited: rateLimited || undefined,
-      sessionExpired: sessionExpired || undefined,
       modelUnavailable: modelUnavailable || undefined,
       commandUnresolved: commandUnresolvedName !== undefined || undefined,
       commandUnresolvedName,

@@ -233,7 +233,6 @@ export interface InvokeResult {
    * present in the message. Clamped to cap (≈3600s); past/negative → default (60s).
    */
   deadline?: number;
-  sessionExpired?: boolean;
   tokenUsage?: TokenUsage;
   /**
    * Set when the provider detects that the requested model is unavailable
@@ -290,16 +289,6 @@ export interface InvokeOptions {
   nativeSchema?: NativeSchemaRequest;
   sessionId: string;
   resume: boolean;
-  /**
-   * Explicit override valve for the adapter-boundary fresh-session
-   * enforcement (`enforceFreshSessionOptions`). Provider session reuse was
-   * removed from this harness by design — every invocation gets a freshly
-   * minted session id and `resume: false` at the adapter entry. Nothing in
-   * production sets this field and no config key enables it; it exists only
-   * so a test can prove the enforcement valve itself. Default: permanently
-   * off.
-   */
-  dangerouslyReuseSession?: boolean;
   interactive?: boolean;
   dangerouslySkipPermissions?: boolean;
   /** Engine-owned provider read-only profile for build-review members. */

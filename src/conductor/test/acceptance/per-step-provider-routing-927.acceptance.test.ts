@@ -864,12 +864,11 @@ describe('ST-927-4 and ST-927-5 — ordered availability fallback', () => {
 });
 
 describe('ST-927-6 — failure-classification boundary', () => {
-  it('does not cross providers for auth, rate limit, stale session, timeout, rejection, or ordinary failure', async () => {
+  it('does not cross providers for auth, rate limit, timeout, rejection, or ordinary failure', async () => {
     const execute = await loadExecuteProviderCandidates();
     const cases: InvokeResult[] = [
       { success: false, output: 'not logged in', exitCode: 1, authFailure: true },
       { success: false, output: '429', exitCode: 1, rateLimited: true },
-      { success: false, output: 'session expired', exitCode: 1, sessionExpired: true },
       { success: false, output: 'timeout', exitCode: 1 },
       { success: false, output: 'request rejected', exitCode: 1 },
       { success: false, output: 'ordinary unavailable prose', exitCode: 1 },

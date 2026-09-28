@@ -457,16 +457,6 @@ describe('ProviderRuntimeSet', () => {
         expectedCalls: 2,
       },
       {
-        name: 'session expiry',
-        result: {
-          success: false,
-          output: 'session expired',
-          exitCode: 1,
-          sessionExpired: true,
-        },
-        expectedCalls: 2,
-      },
-      {
         name: 'rejection',
         result: {
           success: false,

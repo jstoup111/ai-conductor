@@ -328,15 +328,6 @@ describe('InvokeResult provider-unavailable contract', () => {
         },
       },
       {
-        name: 'session expiry',
-        result: {
-          success: false,
-          output: 'session expired',
-          exitCode: 1,
-          sessionExpired: true,
-        },
-      },
-      {
         name: 'ordinary failure',
         result: {
           success: false,

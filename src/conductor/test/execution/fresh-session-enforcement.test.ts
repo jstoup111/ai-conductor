@@ -1,7 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
 import { enforceFreshSessionOptions } from '../../src/execution/fresh-session.js';
@@ -12,7 +9,7 @@ import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 // session id resurrected a ~1.28M-token resumed conversation shared across
 // all four build_review rubric branches. These tests pin the deterministic
 // boundary invariant: a fresh session id and resume:false on every
-// invocation, with `dangerouslyReuseSession: true` as the only override.
+// invocation.
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -71,14 +68,6 @@ describe('fresh-session enforcement (claude adapter)', () => {
     const args = calls[0]!;
     expect(sessionIdFromArgs(args)).not.toBe('caller-reused-session-id');
     expect(args).not.toContain('--resume');
-  });
-
-  it('preserves the supplied session id only through the explicit dangerouslyReuseSession valve', async () => {
-    const { calls, provider } = claudeCapture();
-
-    await provider.invoke({ ...baseOptions, dangerouslyReuseSession: true });
-
-    expect(sessionIdFromArgs(calls[0]!)).toBe('caller-reused-session-id');
   });
 
   it('reports each replacement through the threaded diagnostic channel', async () => {
@@ -152,22 +141,6 @@ describe('enforceFreshSessionOptions', () => {
     expect(first.sessionId).not.toBe(second.sessionId);
   });
 
-  it('leaves options untouched only when dangerouslyReuseSession is exactly true', () => {
-    const reused = enforceFreshSessionOptions(
-      { ...baseOptions, dangerouslyReuseSession: true },
-      'claude',
-    );
-    expect(reused.sessionId).toBe('caller-reused-session-id');
-    expect(reused.resume).toBe(true);
-
-    const truthyButNotTrue = enforceFreshSessionOptions(
-      { ...baseOptions, dangerouslyReuseSession: 1 as unknown as boolean },
-      'claude',
-    );
-    expect(truthyButNotTrue.sessionId).not.toBe('caller-reused-session-id');
-    expect(truthyButNotTrue.resume).toBe(false);
-  });
-
   it('warns on console only for an actual resume suppression when no diagnostic log is threaded', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
@@ -180,29 +153,5 @@ describe('enforceFreshSessionOptions', () => {
     } finally {
       warn.mockRestore();
     }
-  });
-});
-
-describe('dangerouslyReuseSession stays a dead valve in production code', () => {
-  it('appears only in the type definition and the boundary enforcement module', async () => {
-    const sourceRoot = fileURLToPath(new URL('../../src', import.meta.url));
-    const allowed = new Set([
-      'execution/llm-provider.ts', // InvokeOptions field declaration
-      'execution/fresh-session.ts', // the enforcement check itself
-    ]);
-
-    const entries = await readdir(sourceRoot, { recursive: true, withFileTypes: true });
-    const offenders: string[] = [];
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
-      const absolute = join(entry.parentPath, entry.name);
-      const relative = absolute.slice(sourceRoot.length + 1).split('\\').join('/');
-      if (relative.startsWith('dist-versions/')) continue;
-      const content = await readFile(absolute, 'utf-8');
-      if (!content.includes('dangerouslyReuseSession')) continue;
-      if (!allowed.has(relative)) offenders.push(relative);
-    }
-
-    expect(offenders).toEqual([]);
   });
 });

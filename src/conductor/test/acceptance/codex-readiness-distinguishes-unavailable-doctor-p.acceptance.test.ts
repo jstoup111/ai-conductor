@@ -217,7 +217,6 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
     ['rate limit', 'Error 429: rate limit exceeded', 'rateLimited'],
     ['permission', 'automatic approval review timed out', 'permissionDenied'],
     ['model unavailable', 'Requested model gpt-nope is unavailable', 'modelUnavailable'],
-    ['session', 'Thread not found; cannot resume this session', 'sessionExpired'],
     ['ordinary', 'network connection reset by peer', undefined],
   ] as const)(
     'preserves the real %s result after a degraded preflight',
@@ -243,7 +242,6 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
           'rateLimited',
           'permissionDenied',
           'modelUnavailable',
-          'sessionExpired',
         ] as const) {
           expect(result[flag]).toBeUndefined();
         }

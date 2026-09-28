@@ -3522,17 +3522,6 @@ describe('executeProviderCandidates', () => {
         },
       },
       {
-        name: 'session-expiry precedence',
-        failure: {
-          success: false,
-          output: 'session expired',
-          exitCode: 1,
-          sessionExpired: true,
-          modelUnavailable: true,
-          ...conflictingAvailability,
-        },
-      },
-      {
         name: 'timeout',
         failure: {
           success: false,

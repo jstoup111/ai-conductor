@@ -106,7 +106,7 @@ export class ModelAvailability {
 
     // Existing recovery owns these failures, even if a provider reports
     // conflicting availability metadata.
-    if (result.authFailure || result.rateLimited || result.sessionExpired) {
+    if (result.authFailure || result.rateLimited) {
       return { result, model: requested };
     }
 

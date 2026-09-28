@@ -95,10 +95,6 @@ export class SessionManager {
     return args;
   }
 
-  detectStaleSession(output: string): boolean {
-    return /No conversation found/i.test(output);
-  }
-
   detectRateLimit(output: string): boolean {
     return /rate limit|429|overloaded|usage limit/i.test(output);
   }

@@ -124,16 +124,6 @@ describe('SessionManager', () => {
 
   // --- Detection ---
 
-  describe('detectStaleSession', () => {
-    it('returns true for "No conversation found"', () => {
-      expect(mgr.detectStaleSession('Error: No conversation found for session')).toBe(true);
-    });
-
-    it('returns false for normal output', () => {
-      expect(mgr.detectStaleSession('Task completed successfully')).toBe(false);
-    });
-  });
-
   describe('detectRateLimit', () => {
     it.each([
       'rate limit exceeded',

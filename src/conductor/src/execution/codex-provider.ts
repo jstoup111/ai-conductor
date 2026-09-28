@@ -43,8 +43,6 @@ export const CODEX_USAGE_EXHAUSTED_RE =
   /usage limit|quota exceeded|exhausted [^\n]{0,40}usage|usage [^\n]{0,40}exhausted/i;
 export const CODEX_MODEL_UNAVAILABLE_RE =
   /(?:requested |selected )?model .{0,80}(?:not found|unavailable|not available|unsupported|not supported)|unknown model|model not found|do not have access to (?:the )?model/i;
-export const CODEX_SESSION_EXPIRED_RE =
-  /(?:session|thread|conversation) (?:not found|does not exist|expired|invalid)|no conversation found|no rollout found|thread\/resume failed|failed to resume|cannot resume/i;
 export const CODEX_PERMISSION_DECISION_RE =
   /(?:permission|approval|review).{0,80}(?:denied|unavailable|rejected|cancel(?:led|ed)|timed out|timeout|unknown result|failed to (?:produce|return) (?:an? )?decision|indeterminate|no decision)/i;
 
@@ -577,7 +575,6 @@ export class CodexProvider implements LLMProvider {
     const rateLimited = usageExhausted || (exitCode !== 0 && CODEX_RATE_LIMIT_RE.test(rawOutput));
     const modelUnavailable = exitCode !== 0 && CODEX_MODEL_UNAVAILABLE_RE.test(rawOutput);
     const authFailure = exitCode !== 0 && !rateLimited && !modelUnavailable && CODEX_AUTH_FAILURE_RE.test(rawOutput);
-    const sessionExpired = CODEX_SESSION_EXPIRED_RE.test(rawOutput);
     // Automatic runs cannot wait for an operator to decide a permission
     // request. Once every established recovery class has been excluded, treat
     // the remaining Codex-specific permission-decision result as an unavailable
@@ -589,7 +586,6 @@ export class CodexProvider implements LLMProvider {
       !rateLimited &&
       !modelUnavailable &&
       !authFailure &&
-      !sessionExpired &&
       CODEX_PERMISSION_DECISION_RE.test(rawOutput);
     const authentication = authFailure
       ? this.authenticationResult(source, 'unusable')
@@ -631,7 +627,6 @@ export class CodexProvider implements LLMProvider {
       modelUnavailable: modelUnavailable || undefined,
       authFailure: authFailure || undefined,
       permissionDenied: permissionDenied || undefined,
-      sessionExpired: sessionExpired || undefined,
       tokenUsage: parsed.tokenUsage,
       authentication,
       ...(finalStructuredResult === undefined ? {} : { finalStructuredResult }),

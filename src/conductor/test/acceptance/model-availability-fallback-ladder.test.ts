@@ -191,7 +191,6 @@ describe('In-attempt ladder walk on the autonomous entry point (TS-2, TS-4)', ()
 
     expect(result.success).toBe(false);
     expect(result.rateLimited).toBeUndefined();
-    expect(result.sessionExpired).toBeUndefined();
     // Exactly one invocation per live ladder model — never a retry loop within the attempt.
     expect(invokeCalls).toHaveLength(3);
     // Exhaustion failure must name every model tried so the eventual HALT (if
