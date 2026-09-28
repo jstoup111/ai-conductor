@@ -1,22 +1,20 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-28T10:58:53.441Z
+Status: halted
 Slug: pi-as-a-build-provider
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-pi-as-a-build-provider
-Head SHA: b552ac107b0f2deac50ba930bb2adf42f587208c
-Halted at: 2026-09-26T19:32:11.092Z
+Head SHA: 85298106f5d035cdf900671a036f788c961a9e86
+Halted at: 2026-09-28T12:09:36.327Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-5 (adr-2026-08-12-per-provider-live-smoke-legs decision 1)
+Validation group "prd_audit" halted: post-dispatch verdict write handshake failed for architecture_review_as_built: .pipeline/architecture-review-as-built.md is stale (found mtime 2026-09-26T19:29:09.200Z); expected run id 89593a2c-35ff-4d33-abe4-fb01be93fdd6; found run id 89593a2c-35ff-4d33-abe4-fb01be93fdd6
 
 Blocking findings:
 AB-1 (REMEDIABLE; Task 17): Pi's abort handler has no production signal producer, so lifecycle cancellation cannot terminate a running Pi subprocess.
