@@ -13,6 +13,8 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { BuildReviewRubricProjection } from '../../src/engine/build-review-projections.js';
+import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
 
 const roots: string[] = [];
 
@@ -114,6 +116,13 @@ describe('build_review git-guard exemption', () => {
       expect(calls).toHaveLength(1);
       const guardBin = join(headPath, '.pipeline', 'bin');
       expect(calls[0]?.env?.PATH?.split(':') ?? []).not.toContain(guardBin);
+
+      await initTestRepo(root);
+      await prepareWorktree(root);
+      await runner.run('build', { complexity_tier: 'S' });
+
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.env?.PATH?.split(':')[0]).toBe(join(root, '.pipeline', 'bin'));
     },
   );
 });
