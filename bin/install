@@ -1532,7 +1532,96 @@ install() {
 # ─── Uninstall ────────────────────────────────────────────────────────────────
 
 uninstall() {
-  local document reference_source reference_label
+  local document reference_source reference_label settings_file perms_file settings_cleanup_output settings_cleanup_status
+
+  settings_file="${HOME}/.claude/settings.json"
+  perms_file=$(mktemp)
+  printf '%s\n' "${HARNESS_PERMISSIONS[@]}" > "$perms_file"
+  if settings_cleanup_output=$(python3 - "$settings_file" "$perms_file" "${HARNESS_DIR}/hooks/claude/" <<'PYEOF'
+import json
+import sys
+
+settings_path, perms_path, hooks_prefix = sys.argv[1:4]
+
+with open(perms_path) as f:
+    harness_permissions = {line.strip() for line in f if line.strip()}
+
+with open(settings_path) as f:
+    settings = json.load(f)
+
+removed_hooks = 0
+removed_permissions = 0
+
+hooks = settings.get("hooks")
+if isinstance(hooks, dict):
+    hooks_were_nonempty = bool(hooks)
+    for event, groups in list(hooks.items()):
+        if not isinstance(groups, list):
+            continue
+        groups_were_nonempty = bool(groups)
+        remaining_groups = []
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                remaining_groups.append(group)
+                continue
+            commands = group["hooks"]
+            remaining_commands = []
+            for command in commands:
+                if isinstance(command, dict) and str(command.get("command", "")).startswith(hooks_prefix):
+                    removed_hooks += 1
+                else:
+                    remaining_commands.append(command)
+            if commands and not remaining_commands:
+                continue
+            if len(remaining_commands) != len(commands):
+                group = dict(group)
+                group["hooks"] = remaining_commands
+            remaining_groups.append(group)
+        if groups_were_nonempty and not remaining_groups:
+            del hooks[event]
+        elif len(remaining_groups) != len(groups):
+            hooks[event] = remaining_groups
+    if hooks_were_nonempty and not hooks:
+        del settings["hooks"]
+
+permissions = settings.get("permissions")
+if isinstance(permissions, dict) and isinstance(permissions.get("allow"), list):
+    permissions_were_nonempty = bool(permissions)
+    allow = permissions["allow"]
+    remaining_allow = []
+    for permission in allow:
+        if permission in harness_permissions:
+            removed_permissions += 1
+        else:
+            remaining_allow.append(permission)
+    if allow and not remaining_allow:
+        del permissions["allow"]
+    elif len(remaining_allow) != len(allow):
+        permissions["allow"] = remaining_allow
+    if permissions_were_nonempty and not permissions:
+        del settings["permissions"]
+
+if removed_hooks or removed_permissions:
+    with open(settings_path, "w") as f:
+        json.dump(settings, f, indent=2)
+        f.write("\n")
+
+print(f"{removed_hooks} {removed_permissions}")
+PYEOF
+  ); then
+    settings_cleanup_status=0
+  else
+    settings_cleanup_status=$?
+  fi
+  rm -f "$perms_file"
+
+  if [ "$settings_cleanup_status" -eq 0 ]; then
+    read -r removed_hook_commands removed_permissions <<< "$settings_cleanup_output"
+    ok "Settings: removed ${removed_hook_commands} harness hook commands and ${removed_permissions} permissions from ${settings_file}"
+  else
+    warn "Could not remove harness settings entries from ${settings_file}"
+  fi
+
   echo -e "${BOLD}${CYAN}Uninstalling AI Conductor Harness${NC}"
   echo ""
 
