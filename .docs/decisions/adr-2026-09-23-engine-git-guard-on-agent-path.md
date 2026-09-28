@@ -55,6 +55,14 @@ Option A.
    writes it through the existing fail-closed preventive-hook provisioning, following the
    preventive-control precedent in adr-2026-08-07-provider-neutral-commit-gate-for-protected-artifacts.
    A write failure fails preparation and never proceeds silently.
+
+   > **Amended 2026-09-28 by #1354 (operator decision):** the guard does not bake values into its
+   > source. `«worktree»/.pipeline/bin/git` is the static `GIT_GUARD_SCRIPT` asset, so the
+   > interpreter-source inventory can check it like every other embedded hook asset. The two values
+   > are written at preparation time as data files, `«worktree»/.pipeline/git-guard/real-git` and
+   > `«worktree»/.pipeline/git-guard/common-dir`, through the same fail-closed provisioning, and the
+   > guard reads them at run time. This matches the approved plan and feature diagram (2026-09-23).
+
 2. **Every provider adapter's child-environment construction is the enforcement point.** When the
    dispatch working directory is an engine-prepared worktree, the adapter prepends
    `«worktree»/.pipeline/bin` to the child `PATH`. An engine-prepared worktree is one whose

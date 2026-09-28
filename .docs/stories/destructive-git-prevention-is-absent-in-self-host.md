@@ -112,7 +112,7 @@ As a build agent, I want a refusal to tell me what was blocked and what to do in
 
 ### Negative Paths
 
-- **Given** a guarded agent shell, **When** a refused command runs, **Then** the real git is never invoked for that command, as a stub real git that records every call shows.
+- **Given** a guarded agent shell, **When** a refused command runs, **Then** the real git never runs the refused command or any command that can change repository state; only the read-only queries the guard uses to classify it (`rev-parse`, `config`, `for-each-ref`, `merge-base`) reach the real git, as a stub real git that records every call shows.
 - **Given** a guarded agent shell, **When** an allowed command fails inside git (for example a push rejected as non-fast-forward), **Then** the message and exit status the agent sees are git's own, with no refusal text added.
 
 ### Done When
