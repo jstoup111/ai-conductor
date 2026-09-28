@@ -57,7 +57,7 @@ function recoveryLine({
   }
 
   if (haltClass === OVER_SCOPE_HALT_CLASS) {
-    return `To resume: record each decision in ${haltPath}, then mv ${haltPath} ${worktreePath}/.pipeline/HALT.cleared`;
+    return `To resume: record each decision in ${haltPath}, then mv ${haltPath} ${worktreePath}/.pipeline/HALT.cleared; rm -f ${haltClassPath}`;
   }
 
   if (haltClass === KICKBACK_CAP_HALT_CLASS) {

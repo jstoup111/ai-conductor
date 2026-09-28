@@ -658,12 +658,12 @@ describe('engine/daemon-park-cli', () => {
 
       if (removesBoth) {
         expect(joined).toContain(`rm ${haltPath} ${haltClassPath}`);
-      } else {
+      } else if (expectedClass !== 'over-scope') {
         expect(joined).not.toContain('rm ');
       }
       if (expectedClass === 'over-scope') {
         expect(joined).toContain(`record each decision in ${haltPath}`);
-        expect(joined).toContain(`mv ${haltPath} ${clearedPath}`);
+        expect(joined).toContain(`mv ${haltPath} ${clearedPath}; rm -f ${haltClassPath}`);
       }
       if (expectedClass === 'kickback-cap') {
         expect(joined).toContain('ai-conductor kickback-budget');
@@ -672,8 +672,8 @@ describe('engine/daemon-park-cli', () => {
         expect(joined).toContain(`resolve the cause recorded in ${haltPath} before the HALT is cleared`);
         expect(joined).toContain('docs/runbooks/stalled-or-stuck-feature.md');
       }
-      if (['over-scope', 'kickback-cap', 'future-class', 'unreadable'].includes(expectedClass)) {
-        const haltLines = out.filter((line) => line.includes('.pipeline/HALT'));
+      if (['kickback-cap', 'future-class', 'unreadable'].includes(expectedClass)) {
+        const haltLines = out.filter((line) => /\.pipeline\/HALT(?:\s|$)/.test(line));
         expect(haltLines).not.toEqual(expect.arrayContaining([
           expect.stringMatching(/\b(unlink|remove|delete)\b|rm /i),
         ]));
@@ -779,7 +779,7 @@ describe('engine/daemon-park-cli', () => {
       const warning = `'${slug}' still has a live HALT (class: ${haltClass}) — it will not resume until the HALT is cleared.`;
       const recovery = haltClass === 'mechanical'
         ? `To resume: rm ${haltPath} ${haltClassPath}`
-        : `To resume: record each decision in ${haltPath}, then mv ${haltPath} ${clearedPath}`;
+        : `To resume: record each decision in ${haltPath}, then mv ${haltPath} ${clearedPath}; rm -f ${haltClassPath}`;
       expect({ code, out }).toEqual({
         code: 0,
         out: [`'${slug}' was not operator-parked — nothing to do.`, warning, recovery],
@@ -790,10 +790,9 @@ describe('engine/daemon-park-cli', () => {
       await expect(readFile(clearedPath)).resolves.toEqual(before.cleared);
       await expect(readFile(evidencePath)).resolves.toEqual(before.evidence);
       if (haltClass === 'over-scope') {
-        expect(out.join('\n')).not.toContain('rm ');
-        expect(out.filter((line) => line.includes('.pipeline/HALT'))).not.toEqual(expect.arrayContaining([
-          expect.stringMatching(/\b(unlink|remove|delete)\b|rm /i),
-        ]));
+        expect(out.join('\n')).toContain(`rm -f ${haltClassPath}`);
+        expect(out.join('\n')).not.toContain(`rm ${haltPath}`);
+        expect(out.join('\n')).not.toMatch(new RegExp(`\\b(?:unlink|remove|delete)\\b.*${haltPath}`));
       }
     });
 
