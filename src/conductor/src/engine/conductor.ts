@@ -3289,35 +3289,38 @@ export class Conductor {
   private async ensureOwnedStepRegion(state: ConductState, step: StepName): Promise<void> {
     const bytes = this.config.pr_template_region_owners?.[step];
     if (bytes === undefined) return;
-    const prUrl = await this.resolveRetainedShipDraftPrUrl(state.worktree_branch);
-    if (!prUrl) throw new Error(`project-owned region for ${step} cannot be prepared: retained draft PR is missing`);
-    let body: string;
     try {
+      const prUrl = await this.resolveRetainedShipDraftPrUrl(state.worktree_branch);
+      if (!prUrl) throw new Error(`project-owned region for ${step} cannot be prepared: retained draft PR is missing`);
+      let body: string;
       const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
       const value = (JSON.parse(stdout) as { body?: unknown }).body;
       if (typeof value !== 'string') throw new Error('response has no string body');
       body = value;
+      // A present region belongs to its project author; never overwrite it with
+      // the template floor merely because the step is being retried.
+      if (extractRegionBytes(body, step) !== undefined) return;
+      const next = restoreRegion(body, { key: step, bytes });
+      const publication = await this.resolveShipDraftPublicationDependencies({
+        cwd: this.projectRoot, branch: state.worktree_branch, baseBranch: this.baseBranch,
+        featureDesc: state.feature_desc, prUrl, git: this.git, gh: this.gh, events: this.events,
+      });
+      if (!publication) throw new Error(`project-owned region for ${step} cannot be prepared: guarded edit is unavailable`);
+      const target = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
+      if (!target) throw new Error(`project-owned region for ${step} cannot be prepared: pull request URL is invalid`);
+      const result = await executeGithubOperation({
+        operation: 'pull-request.edit', repository: target[1], resource: { kind: 'pull-request', number: Number(target[2]) },
+        context: { actor: 'step-region-prepare' }, payload: { body: next },
+      }, publication.operations);
+      if (result.kind !== 'executed') throw new Error(`project-owned region for ${step} cannot be prepared: guarded edit ${result.kind}`);
     } catch (error) {
-      throw new Error(`project-owned region for ${step} cannot be prepared: body read failed: ${error instanceof Error ? error.message : String(error)}`);
+      const reason = error instanceof Error ? error.message : String(error);
+      const namedReason = reason.startsWith(`project-owned region for ${step} cannot be prepared:`)
+        ? reason
+        : `project-owned region for ${step} cannot be prepared: body read failed: ${reason}`;
+      await this.writeHaltMarker(`${namedReason}\n`, 'needs-human');
+      throw new Error(namedReason);
     }
-    // A present region belongs to its project author; never overwrite it with
-    // the template floor merely because the step is being retried.
-    if (extractRegionBytes(body, step) !== undefined) {
-      return;
-    }
-    const next = restoreRegion(body, { key: step, bytes });
-    const publication = await this.resolveShipDraftPublicationDependencies({
-      cwd: this.projectRoot, branch: state.worktree_branch, baseBranch: this.baseBranch,
-      featureDesc: state.feature_desc, prUrl, git: this.git, gh: this.gh, events: this.events,
-    });
-    if (!publication) throw new Error(`project-owned region for ${step} cannot be prepared: guarded edit is unavailable`);
-    const target = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
-    if (!target) throw new Error(`project-owned region for ${step} cannot be prepared: pull request URL is invalid`);
-    const result = await executeGithubOperation({
-      operation: 'pull-request.edit', repository: target[1], resource: { kind: 'pull-request', number: Number(target[2]) },
-      context: { actor: 'step-region-prepare' }, payload: { body: next },
-    }, publication.operations);
-    if (result.kind !== 'executed') throw new Error(`project-owned region for ${step} cannot be prepared: guarded edit ${result.kind}`);
   }
 
   /** A replacement dispatch invalidates only this owner's prior capture. */
