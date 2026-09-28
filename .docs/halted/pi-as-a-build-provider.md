@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-28T21:15:17.208Z
+Status: halted
 Slug: pi-as-a-build-provider
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-pi-as-a-build-provider
-Head SHA: c19e79f6498bc67f30f2f09647563ee00e5c697c
-Halted at: 2026-09-28T19:30:13.838Z
+Head SHA: 19a800b25bf7d6412e1c831e79570e1c8b13b54e
+Halted at: 2026-09-28T21:28:12.035Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-as-built architecture review halted: structured-result-rejected: verdict: BLOCKED requires only version, verdict, reachability, driftNotes, findings, violations, and resolution
+as-built architecture review halted: needs human DECIDE — As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings. Missing: AB-4.
 ```
