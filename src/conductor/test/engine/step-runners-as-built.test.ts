@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
+import { toCodexStrictSchema } from '../../src/execution/codex-strict-schema.js';
 import { AS_BUILT_VERDICT_SCHEMA, renderAsBuiltVerdictShape } from '../../src/engine/as-built-contract.js';
 import {
   AS_BUILT_PROJECTION_VERSION,
@@ -161,7 +162,7 @@ describe('architecture_review_as_built native-schema dispatch', () => {
       nativeSchemaIdentity: true,
       interactive: false,
       schemaUnderScratch: true,
-      schema: AS_BUILT_VERDICT_SCHEMA,
+      schema: toCodexStrictSchema(AS_BUILT_VERDICT_SCHEMA),
       scratchRemoved: true,
     });
   });

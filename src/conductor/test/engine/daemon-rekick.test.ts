@@ -25,6 +25,9 @@ import type { HaltDisposition } from '../../src/engine/halt-marker.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { join as pjoin } from 'node:path';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { Conductor } from '../../src/engine/conductor.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { readVerdict } from '../../src/engine/gate-verdicts.js';
@@ -190,6 +193,167 @@ describe('consumeResumeAuthorizations', () => {
     }, 'prd_audit');
     try {
       await expect(consumeResumeAuthorizations(base(worktree, { readLiveHaltClass: async () => 'kickback-cap' }) as never)).resolves.toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  async function runGrowthRemediation(
+    worktree: string,
+    options: { requested: number; added: number; effectiveGrowthCap: number },
+  ): Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }> {
+    const planPath = join(worktree, '.docs', 'plans', 'feature.md');
+    const criteria = Array.from({ length: options.requested }, (_, index) => `S2.${index + 1}`);
+    const authoredTasks = Array.from(
+      { length: 10 },
+      (_, index) => `### Task ${index + 1}: authored work ${index + 1}`,
+    );
+    const priorRemediationTasks = Array.from(
+      { length: options.added },
+      (_, index) => `### Task rem-prior-${index + 1}: prior remediation ${index + 1}`,
+    );
+    await mkdir(join(worktree, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(worktree, '.docs', 'stories'), { recursive: true });
+    await writeFile(planPath, [...authoredTasks, ...priorRemediationTasks].join('\n'));
+    await writeFile(join(worktree, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await writeFile(join(worktree, '.docs', 'stories', 'feature.md'), [
+      '# Stories', '', '## Story 2: remediation', '', '#### Happy Path',
+      ...criteria.map((criterion) => `- Given ${criterion}, when repaired, then it holds.`),
+    ].join('\n'));
+    await writeFile(join(worktree, '.pipeline', 'prd-audit.md'), [
+      '**PRD:** present', '', '## Verdict Table',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      ...criteria.map((criterion, index) =>
+        `| ${criterion} | FIXABLE | ${index + 1} | Missing ${criterion} behavior |`),
+    ].join('\n'));
+
+    const conductor = new Conductor({
+      stateFilePath: join(worktree, '.pipeline', 'conduct-state.json'),
+      stepRunner: {
+        run: async () => {
+          await writeFile(join(worktree, '.pipeline', 'remediation.json'), JSON.stringify({
+            dispositions: criteria.map((criterion) => ({
+              id: criterion,
+              disposition: 'build',
+              category: null,
+              rationale: `Repair ${criterion}.`,
+              tasks: [{ id: `rem-${criterion.toLowerCase()}`, title: `Repair ${criterion}` }],
+            })),
+          }));
+          return { success: true };
+        },
+      },
+      events: new ConductorEventEmitter(),
+      projectRoot: worktree,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+      config: { prd_audit: { max_remediation_laps: 1, max_appended_tasks: 10, max_appended_ratio: 1 } } as never,
+    });
+    return (conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
+      ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'prd audit blocked',
+      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    );
+  }
+
+  async function seedGrowthRaisedHalt(
+    worktree: string,
+    options: { added: number; effectiveGrowthCap: number },
+  ): Promise<void> {
+    await mkdir(join(worktree, '.pipeline'), { recursive: true });
+    await writeKickbackLedger(worktree, {
+      version: 1,
+      effectiveGrowthCap: options.effectiveGrowthCap,
+      growth: { authored: 10, added: options.added, byGate: { prd_audit: options.added } },
+      gates: {
+        prd_audit: {
+          count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: 'growth cap', priorVerdict: false,
+          resolvedBefore: 0,
+          capEvidence: {
+            gate: 'prd_audit', allowance: 'growth', consumed: options.added, limit: 10,
+            latestReason: 'growth cap', haltGeneration: 'g1',
+          },
+          resumeAuthorization: { adjustmentId: 'raise-1', haltGeneration: 'g1', consumed: false },
+        },
+      },
+    });
+    await writeFile(join(worktree, HALT_MARKER), 'growth cap\nKickback halt generation: g1\n');
+    await writeFile(join(worktree, '.pipeline', 'HALT.class'), 'kickback-cap\n');
+  }
+
+  function authorizationDeps(worktree: string, events: ConductorEvent[]): Parameters<typeof consumeResumeAuthorizations>[0] {
+    return {
+      listHaltedWorktrees: async () => ['feature'],
+      worktreePath: () => worktree,
+      isOperatorParked: async () => false,
+      readLiveHaltClass: async () => readFile(join(worktree, '.pipeline', 'HALT.class'), 'utf8'),
+      readLiveHaltGeneration: async () => {
+        const marker = await readFile(join(worktree, HALT_MARKER), 'utf8');
+        return /^Kickback halt generation: ([^\s]+)$/m.exec(marker)?.[1] ?? '';
+      },
+      clearHalt: async () => {
+        await clearMarker(worktree);
+        return 'confirmed';
+      },
+      emit: async (_slug, event) => { events.push(event); },
+    };
+  }
+
+  it('clears a growth-raised halt through the authorization boundary and appends all six fixes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'growth-raised-rekick-'));
+    const worktree = join(root, 'feature');
+    try {
+      await seedGrowthRaisedHalt(worktree, { added: 6, effectiveGrowthCap: 12 });
+      const events: ConductorEvent[] = [];
+
+      await expect(consumeResumeAuthorizations(authorizationDeps(worktree, events))).resolves.toEqual(['feature']);
+      expect(await access(join(worktree, HALT_MARKER)).then(() => false, () => true)).toBe(true);
+      expect((await readKickbackLedger(worktree)).gates.prd_audit.resumeAuthorization?.consumed).toBe(true);
+      expect(events).toEqual([{ type: 'halt_cleared', cause: 'kickback-budget' }]);
+
+      await expect(runGrowthRemediation(worktree, { requested: 6, added: 6, effectiveGrowthCap: 12 }))
+        .resolves.toMatchObject({ kind: 'route', target: 'build' });
+      const plan = await readFile(join(worktree, '.docs', 'plans', 'feature.md'), 'utf8');
+      expect([...plan.matchAll(/^\*\*Criterion:\*\* S2\.\d+$/gm)]).toHaveLength(6);
+      expect(await access(join(worktree, HALT_MARKER)).then(() => true, () => false)).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('retains a new growth halt when a one-task raise still leaves two requested fixes over budget', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'growth-raised-rekick-'));
+    const worktree = join(root, 'feature');
+    try {
+      await seedGrowthRaisedHalt(worktree, { added: 10, effectiveGrowthCap: 11 });
+      const events: ConductorEvent[] = [];
+      await expect(consumeResumeAuthorizations(authorizationDeps(worktree, events))).resolves.toEqual(['feature']);
+
+      const outcome = await runGrowthRemediation(worktree, { requested: 2, added: 10, effectiveGrowthCap: 11 });
+      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+      const nextEvidence = (await readKickbackLedger(worktree)).gates.prd_audit.capEvidence!;
+      expect(nextEvidence).toMatchObject({ allowance: 'growth', consumed: 10, limit: 11 });
+      expect(nextEvidence.haltGeneration).not.toBe('g1');
+      await writeFile(
+        join(worktree, HALT_MARKER),
+        `growth cap\nKickback halt generation: ${nextEvidence.haltGeneration}\n`,
+      );
+      await writeFile(join(worktree, '.pipeline', 'HALT.class'), 'kickback-cap\n');
+
+      await expect(consumeResumeAuthorizations(authorizationDeps(worktree, events))).resolves.toEqual([]);
+      expect(await access(join(worktree, HALT_MARKER)).then(() => true, () => false)).toBe(true);
+      expect(events).toEqual([{ type: 'halt_cleared', cause: 'kickback-budget' }]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

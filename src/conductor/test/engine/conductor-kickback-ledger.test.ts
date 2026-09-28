@@ -24,6 +24,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import type { RebaseOutcome } from '../../src/engine/rebase.js';
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
 
 describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
   let dir: string;
@@ -48,6 +49,133 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       },
     };
   }
+
+  async function runPrdAuditGrowthRemediation(root: string): Promise<{
+    outcome: { kind: string; target?: string; detail?: string; haltClass?: string };
+    planPath: string;
+  }> {
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    const criteria = Array.from({ length: 6 }, (_, index) => `S2.${index + 1}`);
+    const authoredTasks = Array.from(
+      { length: 10 },
+      (_, index) => `### Task ${index + 1}: authored work ${index + 1}`,
+    );
+    const priorRemediationTasks = Array.from(
+      { length: 6 },
+      (_, index) => `### Task rem-prior-${index + 1}: prior remediation ${index + 1}`,
+    );
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(planPath, [...authoredTasks, ...priorRemediationTasks].join('\n'));
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await writeFile(join(root, '.docs', 'stories', 'feature.md'), [
+      '# Stories', '', '## Story 2: remediation', '', '#### Happy Path',
+      ...criteria.map((criterion) => `- Given ${criterion}, when repaired, then it holds.`),
+    ].join('\n'));
+    await writeFile(join(root, '.pipeline', 'prd-audit.md'), [
+      '**PRD:** present', '', '## Verdict Table',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      ...criteria.map((criterion, index) =>
+        `| ${criterion} | FIXABLE | ${index + 1} | Missing ${criterion} behavior |`),
+    ].join('\n'));
+
+    const conductor = new Conductor({
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      stepRunner: {
+        run: async () => {
+          await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
+            dispositions: criteria.map((criterion) => ({
+              id: criterion,
+              disposition: 'build',
+              category: null,
+              rationale: `Repair ${criterion}.`,
+              tasks: [{ id: `rem-${criterion.toLowerCase()}`, title: `Repair ${criterion}` }],
+            })),
+          }));
+          return { success: true };
+        },
+      },
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+      config: { prd_audit: { max_remediation_laps: 1, max_appended_tasks: 10, max_appended_ratio: 1 } } as never,
+    });
+    const outcome = await (conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
+      ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'prd audit blocked',
+      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    );
+    return { outcome, planPath };
+  }
+
+  describe('remediation effective plan-growth cap (Task 2, #2185)', () => {
+    it('uses an operator-raised effective growth cap to append all requested fixes', async () => {
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {},
+        effectiveGrowthCap: 12,
+        growth: { authored: 10, added: 6, byGate: { prd_audit: 6 } },
+      });
+
+      const { outcome, planPath } = await runPrdAuditGrowthRemediation(dir);
+
+      expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+      const appendedPlan = await readFile(planPath, 'utf8');
+      expect([...appendedPlan.matchAll(/^\*\*Criterion:\*\* S2\.\d+$/gm)]).toHaveLength(6);
+    });
+
+    it('fails closed before append or cap evidence when effectiveGrowthCap is unreadable', async () => {
+      await writeFile(ledgerPath, JSON.stringify({
+        version: 1,
+        gates: {},
+        effectiveGrowthCap: '12',
+        growth: { authored: 10, added: 6, byGate: { prd_audit: 6 } },
+      }));
+
+      await expect(runPrdAuditGrowthRemediation(dir)).rejects.toThrow(/kickback ledger/i);
+
+      const plan = await readFile(join(dir, '.docs', 'plans', 'feature.md'), 'utf8');
+      expect(plan).not.toContain('### Task rem-s2.1:');
+      expect((await readKickbackLedger(dir)).gates.prd_audit?.capEvidence).toBeUndefined();
+    });
+
+    it('uses the config-derived cap for a separate feature without a raised cap and does not mutate config', async () => {
+      const secondFeature = await mkdtemp(join(tmpdir(), 'conductor-kickback-ledger-second-'));
+      try {
+        const configPath = join(secondFeature, '.ai-conductor', 'config.yml');
+        await mkdir(join(secondFeature, '.ai-conductor'), { recursive: true });
+        await writeFile(configPath, 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n');
+        const configBefore = await readFile(configPath);
+        await writeKickbackLedger(secondFeature, {
+          version: 1,
+          gates: {},
+          growth: { authored: 10, added: 6, byGate: { prd_audit: 6 } },
+        });
+
+        const { outcome, planPath } = await runPrdAuditGrowthRemediation(secondFeature);
+
+        expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+        expect(outcome.detail).toContain('6/10 appended');
+        expect((await readFile(planPath, 'utf8'))).not.toContain('### Task rem-s2.1:');
+        expect(await readFile(configPath)).toEqual(configBefore);
+      } finally {
+        await rm(secondFeature, { recursive: true, force: true });
+      }
+    });
+  });
 
   async function settleBuildReview(verdict: 'PASS' | 'FAIL'): Promise<void> {
     await rm(join(dir, '.pipeline/build-review.json'), { force: true });
@@ -902,5 +1030,3 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     expect(otherGateKickback.cumulativeCount).toBeUndefined();
   });
 });
-
-import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

@@ -8,13 +8,15 @@ import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
-import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackGate, isUnreadableKickbackLedger, readKickbackLedger, stageKickbackBudgetAdjustment, unreadableKickbackGates, type KickbackBudgetAdjustment } from './kickback-ledger.js';
-import { kickbackBudgetView, renderKickbackBudgetView } from './kickback-budget-view.js';
+import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackGate, isUnreadableKickbackLedger, readGrowth, readKickbackLedger, stageKickbackBudgetAdjustment, unreadableKickbackGates, type KickbackBudgetAdjustment, type KickbackLedger } from './kickback-ledger.js';
+import { kickbackBudgetView, renderKickbackBudgetView, type KickbackPlanGrowthView } from './kickback-budget-view.js';
 import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
 import { isAcceptableOperatorRationale, resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { HALT_CLASS_MARKER } from './halt-marker.js';
 import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import { loadConfig } from './config.js';
+import { prdAuditAppendCap } from './conductor.js';
+import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
 
 const GATES = new Set(['build_review', 'prd_audit', 'architecture_review_as_built']);
@@ -30,6 +32,23 @@ async function defaultsFor(worktree: string): Promise<Record<string, number>> {
     ...DEFAULTS,
     prd_audit: config.prd_audit?.max_remediation_laps ?? DEFAULTS.prd_audit,
     architecture_review_as_built: config.architecture_review_as_built?.max_remediation_laps ?? DEFAULTS.architecture_review_as_built,
+  };
+}
+
+/** Resolve the shared plan-growth accounting view without consulting halt prose. */
+async function planGrowthViewFor(worktree: string, ledger: KickbackLedger): Promise<KickbackPlanGrowthView> {
+  const storedGrowth = ledger.growth ?? await readGrowth(worktree, 0);
+  const config = await loadConfig(worktree);
+  const configGrowthCap = prdAuditAppendCap(
+    config.ok ? config.config : {} as HarnessConfig,
+    storedGrowth.authored,
+  );
+  const cap = ledger.effectiveGrowthCap ?? configGrowthCap;
+  return {
+    ...storedGrowth,
+    remaining: Math.max(0, cap - storedGrowth.added),
+    cap,
+    capSource: ledger.effectiveGrowthCap === undefined ? 'config-derived' : 'raised',
   };
 }
 
@@ -108,15 +127,18 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const ledger = await readKickbackLedger(worktree);
     if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
     const defaults = await defaultsFor(worktree);
+    // Resolve plan growth from the same authored-task cap as remediation. A
+    // read-only inspect deliberately does not reconcile or persist it.
+    const planGrowth = await planGrowthViewFor(worktree, ledger);
     // adr-2026-08-31 decision 3: one malformed gate is reported as unavailable;
     // its healthy siblings still render their authoritative values.
     const unavailable = unreadableKickbackGates(ledger).filter((gate) => GATES.has(gate));
     const readable = [...GATES].filter((gate) => !unavailable.includes(gate));
-    const views = readable.map((gate) => kickbackBudgetView(ledger.gates[gate], gate, defaults[gate]));
+    const views = readable.map((gate) => kickbackBudgetView(ledger.gates[gate], gate, defaults[gate], planGrowth));
     print(command.format === 'json'
       ? JSON.stringify({ feature: command.feature, gates: views, ...(unavailable.length > 0 ? { unavailableGates: unavailable } : {}) })
       : [
-        ...views.map((view) => renderKickbackBudgetView(ledger.gates[view.gate], view.gate, defaults[view.gate])),
+        ...views.map((view) => renderKickbackBudgetView(ledger.gates[view.gate], view.gate, defaults[view.gate], planGrowth)),
         ...unavailable.map((gate) => `${gate}: budget unavailable (durable entry failed validation)`),
       ].join('\n\n'));
     return unavailable.length > 0 ? 1 : 0;
@@ -137,6 +159,16 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   // write `kickback-cap` (adr-2026-08-25 D4, preserved by D1's amendment). Read
   // the raw sidecar — `readHaltClass` folds every class outside the daemon's
   // scheduling union to `unclassified`, which would refuse both of them.
+  // Resetting a lap counter cannot recover exhausted plan-growth allowance.
+  // This is deliberately outside the shared staging refusal: the same durable
+  // evidence authorizes raise, and it must be rejected before taking a park.
+  if (command.action === 'reset') {
+    const ledger = await readKickbackLedger(worktree);
+    if (!isUnreadableKickbackLedger(ledger) && ledger.gates[gate]?.capEvidence?.allowance === 'growth') {
+      print('kickback-budget: refused — plan-growth evidence requires `raise` recovery.');
+      return 1;
+    }
+  }
   const parked = await isOperatorParked(root, command.feature);
   if (!parked) {
     const result = await dispatchDaemonPark({ kind: 'park', slug: command.feature }, { cwd: root, out: () => {} });
@@ -156,15 +188,19 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     if (!operator?.trim()) { print('kickback-budget: no approved operator identity is available.'); return 1; }
     // The eligibility read and adjustment arithmetic happen while the ledger
     // lease is held, after this command owns its temporary park.
-    const adjustment = await stageKickbackBudgetAdjustment(worktree, gate, (entry) => {
+    const adjustment = await stageKickbackBudgetAdjustment(worktree, gate, (entry, ledger) => {
       if (!entry.capEvidence) throw new Error('no current cap evidence for that gate');
-      const currentLimit = remediation ? (entry.effectiveLapCap ?? defaults[gate]) : (entry.effectiveLimit ?? defaults[gate]);
-      const currentConsumed = remediation ? (entry.laps ?? 0) : entry.cumulative;
+      const allowance = entry.capEvidence.allowance ?? 'laps';
+      const growth = allowance === 'growth';
+      const currentLimit = growth
+        ? (ledger.effectiveGrowthCap ?? entry.capEvidence.limit)
+        : remediation ? (entry.effectiveLapCap ?? entry.capEvidence.limit) : (entry.effectiveLimit ?? defaults[gate]);
+      const currentConsumed = growth ? (ledger.growth?.added ?? 0) : remediation ? (entry.laps ?? 0) : entry.cumulative;
       return {
         id: randomUUID(), kind: action, beforeConsumed: currentConsumed,
         afterConsumed: action === 'reset' ? 0 : currentConsumed,
         beforeLimit: currentLimit, afterLimit: action === 'raise' ? currentLimit + command.by! : currentLimit,
-        operator, rationale, timestamp: new Date().toISOString(), haltGeneration: entry.capEvidence.haltGeneration,
+        operator, rationale, timestamp: new Date().toISOString(), haltGeneration: entry.capEvidence.haltGeneration, allowance,
       };
     }, async () => {
       let haltBody: string;
@@ -183,11 +219,14 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       feature: command.feature, operator: adjustment.operator, rationale: adjustment.rationale,
       beforeConsumed: adjustment.beforeConsumed, afterConsumed: adjustment.afterConsumed,
       beforeLimit: adjustment.beforeLimit, afterLimit: adjustment.afterLimit, ts: adjustment.timestamp,
+      allowance: adjustment.allowance,
     };
     await appendAuthorizationEvent(worktree, event, deps.appendEvent);
     const applied = await applyKickbackBudgetAdjustment(worktree, gate, adjustment, defaults[gate]);
     committed = true;
-    print(`${renderKickbackBudgetView(applied, gate, defaults[gate])}${parked ? '\nFeature remains parked; unpark it when ready.' : ''}`);
+    const adjustedLedger = await readKickbackLedger(worktree);
+    const planGrowth = await planGrowthViewFor(worktree, adjustedLedger);
+    print(`${renderKickbackBudgetView(applied, gate, defaults[gate], planGrowth)}${parked ? '\nFeature remains parked; unpark it when ready.' : ''}`);
     return 0;
   } catch (error) {
     print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1;

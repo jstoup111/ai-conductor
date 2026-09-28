@@ -1532,6 +1532,7 @@ export type ConductorEvent =
       beforeLimit: number;
       afterLimit: number;
       ts: string;
+      allowance?: 'laps' | 'growth';
     }
   // ── Ship→CI feedback loop (Task 5): CI failure events ──
   | {

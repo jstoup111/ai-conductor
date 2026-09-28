@@ -973,6 +973,9 @@ markers by hand. If the feature was already parked, unpark it after the authoriz
 park deliberately prevents automatic consumption. See the [kickback-budget CLI reference](../reference/cli.md#ai-conductor-kickback-budget)
 for its exact gate and terminal requirements.
 
+For a plan-growth halt, use `raise`: it extends the feature's plan-growth cap. `reset` only restarts
+a gate's lap count and refuses plan-growth evidence.
+
 ### DECIDE-entry halts need a grant
 
 A `needs-human` HALT that begins `DECIDE entry refused` is not retryable. After deciding that the
