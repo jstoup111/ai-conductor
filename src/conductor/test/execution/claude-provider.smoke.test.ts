@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { detectsModelUnavailable, detectsAuthFailure } from '../../src/execution/claude-provider.js';
 import { unauthenticatedClaudeExecaOptions } from './claude-provider-smoke-env.js';
 
+export const smokeCapability = 'credentialed:claude';
 
 /**
  * Real-binary smoke test for TS-1 Done-When 3: prove the real Claude CLI's

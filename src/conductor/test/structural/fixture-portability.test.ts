@@ -433,7 +433,7 @@ describe('Structural guard: fixture portability (git-init pattern)', () => {
   // is a follow-up, not part of this change. Any NEW violation outside this known list
   // still fails the test.
   const KNOWN_BARE_REMOTE_OFFENDERS: ReadonlyArray<{ file: string; line: number }> = [
-    { file: 'acceptance/daemon-build-agents-leak-edits-into-the-main-check.acceptance.test.ts', line: 58 },
+    { file: 'acceptance/daemon-build-agents-leak-edits-into-the-main-check.acceptance.test.ts', line: 50 },
     { file: 'engine/autoheal.test.ts', line: 1274 },
     { file: 'engine/autoheal.test.ts', line: 1314 },
     { file: 'engine/autoheal.test.ts', line: 1348 },
