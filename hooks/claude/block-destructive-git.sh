@@ -12,8 +12,37 @@ set -e
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
 
-# Scannable copy: drop single- and double-quoted spans (content and quotes).
-SCAN=$(printf '%s' "$COMMAND" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")
+# Scannable copy: first drop heredoc bodies, then drop single- and double-quoted
+# spans (content and quotes). A heredoc delimiter may be quoted, but its body is
+# command data rather than shell syntax and must never be interpreted as a git
+# operation by this hook.
+SCAN=$(COMMAND="$COMMAND" python3 - <<'PY'
+import os
+import re
+
+heredoc_start = re.compile(
+    r"<<(?P<strip>-?)[ \t]*(?:(?P<quote>['\"])(?P<quoted>[^'\"]+)(?P=quote)|(?P<bare>[^\s;|&]+))"
+)
+delimiter = None
+strip_tabs = False
+
+for line in os.environ["COMMAND"].splitlines(keepends=True):
+    if delimiter is not None:
+        candidate = line.rstrip("\n")
+        if strip_tabs:
+            candidate = candidate.lstrip("\t")
+        if candidate == delimiter:
+            delimiter = None
+        continue
+
+    print(line, end="")
+    match = heredoc_start.search(line)
+    if match is not None:
+        delimiter = match.group("quoted") or match.group("bare")
+        strip_tabs = match.group("strip") == "-"
+PY
+)
+SCAN=$(printf '%s' "$SCAN" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")
 
 # Patterns that are destructive and hard to reverse
 # Allow --force-with-lease (safe) but block exact bare --force/-f tokens.

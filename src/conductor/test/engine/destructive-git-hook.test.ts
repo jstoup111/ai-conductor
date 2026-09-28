@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:14
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -208,5 +208,37 @@ describe('block-destructive-git hook force-push protection', () => {
     expect(result.status).toBe(0);
     expect(result.calledGitOrGh).toBe(false);
     expect(result.stderr).not.toMatch(/force.*push/i);
+  });
+
+  it.each([
+    "cat <<'EOF'\ngit reset --hard\ngit push --force\nEOF",
+    'cat <<EOF\ngit reset --hard\ngit push --force\nEOF',
+  ])('allows destructive text contained only in a heredoc: %s', (command) => {
+    const result = invoke(command);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it('denies a real hard reset after a heredoc body', () => {
+    const result = invoke("cat <<'EOF'\ngit reset --hard\nEOF\ngit reset --hard");
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.calledGitOrGh).toBe(false);
+    expect(result.stderr).toMatch(/git reset --hard is destructive and irreversible/i);
+  });
+
+  it.each([
+    ['git clean -f', /git clean -f permanently removes untracked files/i],
+    ['git branch -D unmerged', /force-delete UNMERGED branch/i],
+    ['git checkout -- .', /discards all unstaged changes/i],
+  ])('continues to deny %s', (command, refusal) => {
+    const result = invoke(command);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(refusal);
   });
 });
