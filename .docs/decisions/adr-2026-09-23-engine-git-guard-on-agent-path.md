@@ -73,6 +73,12 @@ Option A.
    (adr-2026-08-27-daemon-dispatcher-executor-seam), and review allowlisting and credential
    stripping are unchanged. For Codex, the prepended `PATH` also goes into
    `shell_environment_policy.set`, so the policy-built shell environment carries it explicitly.
+
+   > **Amended 2026-09-28 by #1354 (operator decision):** review dispatches are out of the guard's
+   > scope. adr-2026-09-10-portable-build-review-policy D5.1 retired review mount composition, and a
+   > review launches from a materialized detached checkout that is not an engine-prepared worktree,
+   > so no guard is prepended for it. This is a recorded limit under D10.
+
 3. **The guard is re-verified before every guarded dispatch, fail-closed.** Before prepending, the
    engine confirms the guard's content and mode match the embedded asset, and rewrites it if they
    do not. If it still cannot be confirmed, the dispatch is not launched and fails with a message
@@ -101,6 +107,12 @@ Option A.
    refused operation, why it is refused, and the safe alternative: `--force-with-lease`,
    `reset --keep`, `branch -d`, `clean -n`, or committing a WIP first or using a temporary worktree.
 
+   > **Amended 2026-09-28 by #1354 (operator decision):** "without running `git`" means the refused
+   > command, and any command that can change repository state, never reaches the real `git`. The
+   > read-only queries the guard uses to classify the command (`rev-parse`, `config`,
+   > `for-each-ref`, `merge-base`) may run first.
+
+
    > **Amended 2026-09-23 by #1354:** conflict-check found that the self-host environment-claim audit (#1106) treats the write-fence as the only environmental control and refutes any claimed `git push` blocker. A refusal from this guard is a real environmental control, so the audit does not refute a claimed blocker naming a push form the guard refuses (a bare force push). It still refutes a claimed blocker for a plain or lease push.
 7. **Engine git is unaffected by construction, and there is no bypass variable.** Engine rewrites
    (rebase, quarantine, shipped-record, spec landing, setup triage) run through `execa` in the daemon
@@ -122,6 +134,10 @@ Option A.
       `docs/reference/settings-and-hooks.md`: absolute-path `git`, shell startup files that put
       another `git` earlier on `PATH`, shell aliases, interactive and inline runs with no prepared
       worktree, and custom providers.
+
+    > **Amended 2026-09-28 by #1354 (operator decision):** the stub real `git` records the guard's
+    > read-only classification queries; the proof is that it records no refused subcommand and no
+    > state-changing subcommand. Review dispatches (D2 amendment) are added to the recorded limits.
 
 ## Consequences
 

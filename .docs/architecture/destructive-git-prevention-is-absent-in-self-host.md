@@ -86,7 +86,7 @@ flowchart TB
     EXECA -->|"never sees the guard"| REAL
 ```
 
-> **Amended 2026-09-23 by #1354 (plan update):** the guard does not bake values into its source. `SHIM` is the static `GIT_GUARD_SCRIPT` asset (`git-hook-assets.ts`). The real-git path and the repository common dir are data files in `«worktree»/.pipeline/git-guard/`, written by `writeGitGuard` in the new `git-guard.ts`. `VERIFY` is `ensureGitGuardForDispatch`, called from each adapter's `invoke`. `ENV` applies `withGitGuardPath` (`child-environment.ts`) and, for Codex, `shell_environment_policy.set.PATH`. Build-review containment mounts `.pipeline/bin`, `.pipeline/git-guard` and the real git read-only.
+> **Amended 2026-09-23 by #1354 (plan update):** the guard does not bake values into its source. `SHIM` is the static `GIT_GUARD_SCRIPT` asset (`git-hook-assets.ts`). The real-git path and the repository common dir are data files in `«worktree»/.pipeline/git-guard/`, written by `writeGitGuard` in the new `git-guard.ts`. `VERIFY` is `ensureGitGuardForDispatch`, called from each adapter's `invoke`. `ENV` applies `withGitGuardPath` (`child-environment.ts`) and, for Codex, `shell_environment_policy.set.PATH`. Build-review dispatches are outside the guard's scope (ADR D2 amendment, 2026-09-28): they launch from a materialized review checkout with no guard on `PATH`.
 
 ## Refusal flow
 
@@ -128,9 +128,9 @@ These apply only when the target repository's common dir equals the feature repo
 - Interactive and inline runs never call `prepareWorktree`, so they have no guard. They keep the
   operator hook.
 - Custom and third-party providers get no `PATH` prepend.
-- build_review dispatches run under a containment profile with read-only source mounts
-  (adr-2026-09-10-portable-build-review-policy D5), which is where the protection for those sessions
-  comes from.
+- build_review dispatches get no guard. They launch from a materialized review checkout, and
+  adr-2026-09-10-portable-build-review-policy D5.1 retired review mount composition (ADR D2
+  amendment, 2026-09-28).
 
 ## Change Log
 
@@ -138,3 +138,4 @@ These apply only when the target repository's common dir equals the feature repo
 |------|--------|--------|
 | 2026-09-23 | Initial generation | #1354 DECIDE |
 | 2026-09-23 | Plan update: guard data files, per-dispatch ensure, containment mounts | /plan step 8b |
+| 2026-09-28 | build_review dispatches exempt from the guard | as-built DESIGN finding, operator decision |

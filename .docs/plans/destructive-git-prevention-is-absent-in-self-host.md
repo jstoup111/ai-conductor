@@ -250,23 +250,22 @@ Seventeen tasks deliver an engine-generated `git` argv guard, provisioned fail-c
 
 **Dependencies:** 9
 
-### Task 11: Contained build_review launches resolve git to the guard
+### Task 11: build_review dispatches are exempt from the git guard
 **Story:** 6
 **Type:** happy-path
 
+> Rewritten 2026-09-28 by #1354 (operator decision): the read-only mount design conflicts with adr-2026-09-10-portable-build-review-policy D5.1, which retired review mount composition. Review dispatches are out of the guard's scope (ADR D2 amendment).
+
 **Steps:**
-1. Write failing tests: in `src/conductor/test/engine/build-review-containment.test.ts`, `composeReviewLaunchMounts` for a review source that is a prepared worktree; in the existing bwrap-gated containment test file, a contained launch that runs `command -v git`.
-2. Verify RED.
-3. In `composeReviewLaunchMounts` (`build-review-containment.ts`), when the review source is a prepared worktree, add read-only mounts for its `.pipeline/bin` and `.pipeline/git-guard` and for the real-git path recorded in `.pipeline/git-guard/real-git`. This keeps the read-only review role of adr-2026-09-10 D5 and widens no writable mount.
-4. Verify GREEN. Commit: "build review containment: mount the git guard read-only"
+1. Write a test that dispatches a build_review member from a materialized review checkout (no worktree-scoped `core.hooksPath`) through each adapter and captures the child environment.
+2. Assert no `.pipeline/bin` entry is prepended to the child `PATH` and the dispatch launches.
+3. Commit: "test(git-guard): build_review dispatches are exempt from the guard"
 
 **Done when:**
-- `composeReviewLaunchMounts` for a review whose source is a prepared worktree includes the worktree's `.pipeline/bin` and `.pipeline/git-guard` and the recorded real-git path as read-only mounts and adds no writable mount, as asserted by the mount-composition test.
-- In the bwrap-gated containment test, a contained review launch in a prepared worktree resolves `command -v git` to that worktree's `.pipeline/bin/git`, as asserted by the contained-review resolution test.
+- a build_review dispatch from a materialized review checkout launches with no `.pipeline/bin` entry on its child `PATH` for both Claude and Codex, as asserted by the review-exemption test.
 
 **Files likely touched:**
-- `src/conductor/src/engine/build-review-containment.ts`
-- `src/conductor/test/engine/build-review-containment.test.ts`
+- `src/conductor/test/engine/git-guard-review-exemption.test.ts`
 
 **Dependencies:** 8
 
@@ -439,7 +438,7 @@ Seventeen tasks deliver an engine-generated `git` argv guard, provisioned fail-c
 | Story 5 negative: **Given** a guarded agent shell, **When** an allowed command fails inside git (for example a push rejected as non-fast-forward), **Then** the message and exit status the agent sees are git's own, with no refusal text added. | 5 | "surfaces the stub's exact stderr and exit status with no guard text added" | diff-local |
 | Story 6 happy: **Given** an engine-prepared feature worktree and an empty operator home (no `~/.claude/settings.json`, no Codex config), **When** the daemon dispatches Claude non-self-host, Claude self-host, Codex non-self-host, and Codex self-host into that worktree, **Then** each child environment's `PATH` begins with that worktree's guard directory. | 8, 9 | "passes a child env whose `PATH` begins with that worktree's `.pipeline/bin`, as asserted by the two Claude env-cell tests" | diff-local |
 | Story 6 happy: **Given** a Codex dispatch into an engine-prepared worktree, **When** the engine builds the Codex invocation, **Then** the shell-environment policy passed to Codex carries the same guarded `PATH`. | 9 | "contains `--config` with `shell_environment_policy.set.PATH` equal to the guarded child `PATH`" | diff-local |
-| Story 6 happy: **Given** a contained build_review dispatch into an engine-prepared worktree, **When** the reviewer's shell resolves `git`, **Then** it resolves to the guard. | 11 | "resolves `command -v git` to that worktree's `.pipeline/bin/git`" | diff-local |
+| Story 6 happy: **Given** a build_review dispatch, **When** the engine builds the review's child environment, **Then** no guard directory is prepended to its `PATH`, because review dispatches are outside the guard's scope (ADR D2 amendment, 2026-09-28). | 11 | "launches with no `.pipeline/bin` entry on its child `PATH`" | diff-local |
 | Story 6 negative: **Given** a dispatch whose working directory is not an engine-prepared worktree (an interactive run or the root checkout), **When** the engine builds the child environment, **Then** `PATH` is unchanged and no guard directory is added. | 8, 9 | "passes a child `PATH` equal to the inherited one" | diff-local |
 | Story 6 negative: **Given** any guarded dispatch, **When** the engine builds the child environment, **Then** the daemon's own `process.env.PATH` is identical before and after, and the credential stripping and review allowlisting are unchanged. | 8, 9 | "still omits `CLAUDE_CODE_OAUTH_TOKEN` wherever it is stripped today, and the contained-review env still equals the allowlisted set with only `PATH` changed" | diff-local |
 | Story 6 negative: **Given** a model-fallback retry, an auxiliary dispatch, or a replacement-provider dispatch into an engine-prepared worktree, **When** the engine builds that child environment, **Then** its `PATH` begins with the guard directory, just like the initial dispatch. | 10 | "an initial dispatch, a model-fallback rung retry, and a replacement-provider candidate into a prepared worktree each reach the recorded spawn with a child `PATH` beginning with the guard directory" | diff-local |

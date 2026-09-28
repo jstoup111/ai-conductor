@@ -130,7 +130,7 @@ As the harness operator, I want the guard present for Claude and Codex in both s
 
 - **Given** an engine-prepared feature worktree and an empty operator home (no `~/.claude/settings.json`, no Codex config), **When** the daemon dispatches Claude non-self-host, Claude self-host, Codex non-self-host, and Codex self-host into that worktree, **Then** each child environment's `PATH` begins with that worktree's guard directory.
 - **Given** a Codex dispatch into an engine-prepared worktree, **When** the engine builds the Codex invocation, **Then** the shell-environment policy passed to Codex carries the same guarded `PATH`.
-- **Given** a contained build_review dispatch into an engine-prepared worktree, **When** the reviewer's shell resolves `git`, **Then** it resolves to the guard.
+- **Given** a build_review dispatch, **When** the engine builds the review's child environment, **Then** no guard directory is prepended to its `PATH`, because review dispatches are outside the guard's scope (ADR D2 amendment, 2026-09-28).
 
 ### Negative Paths
 
@@ -143,7 +143,7 @@ As the harness operator, I want the guard present for Claude and Codex in both s
 - [ ] An adapter test per provider × run-mode cell with an empty operator home asserts the child `PATH` begins with the worktree guard directory
 - [ ] A Codex adapter test asserts the invocation carries the guarded `PATH` in its shell-environment policy
 - [ ] An adapter test asserts a non-prepared working directory leaves `PATH` unchanged and the daemon `process.env.PATH` is never mutated
-- [ ] A contained-review launch test asserts `git` resolves to the worktree guard inside the review containment profile
+- [ ] A review-exemption test asserts a build_review dispatch launches with no guard directory on its child `PATH`
 
 ## Story 7: A missing or altered guard is restored before launch, or the dispatch does not launch
 
