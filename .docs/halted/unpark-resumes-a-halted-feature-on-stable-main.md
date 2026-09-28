@@ -3,19 +3,22 @@
 Status: halted
 Slug: unpark-resumes-a-halted-feature-on-stable-main
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-unpark-resumes-a-halted-feature-on-stable-main
-Head SHA: 3762f190af16ae503f53b69f29b9a5e556b512ff
-Halted at: 2026-09-28T18:03:24.558Z
+Head SHA: 623954702a0bbfab9e39dd9a5e246616d0a790b0
+Halted at: 2026-09-28T19:36:20.891Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Need user decision: grant write access to /home/james-stoup/.ai-conductor/memory/eadab3f4ae90a56d6d663555/harness so the mandatory pipeline memory checkpoint can be persisted.
+Validation group "prd_audit" halted: needs human DECIDE — DECIDE entry refused — autonomous run may not enter DECIDE without operator direction.
 
-
-stall:memory-write-access (unanswerable: Environmental stall: the build agent cannot write to /home/james-stoup/.ai-conductor/memory/eadab3f4ae90a56d6d663555/harness (the pipeline memory checkpoint directory outside the worktree), a host permission/sandbox constraint that no plan, story, ADR, or code change can repair. Question preserved verbatim: "Need user decision: grant write access to /home/james-stoup/.ai-conductor/memory/eadab3f4ae90a56d6d663555/harness so the mandatory pipeline memory checkpoint can be persisted.")
+Source gate:       remediate
+Requested target:  plan
+Evidence:          AB-1→plan
+Why refused:       remediation requires a DECIDE revision of DECIDE step 'plan' despite the current artifact — explicit operator grant required
+Operator choices:  direct a return to a named step | correct the routing target | reject the kickback
 ```
