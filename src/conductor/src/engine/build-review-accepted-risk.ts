@@ -3,8 +3,9 @@ import {
   type BuildReviewDispositionRecord,
 } from './build-review-dispositions.js';
 
-const START = '<!-- build-review-accepted-risk:start -->';
-const END = '<!-- build-review-accepted-risk:end -->';
+export const BUILD_REVIEW_ACCEPTED_RISK_START = '<!-- build-review-accepted-risk:start -->';
+export const BUILD_REVIEW_ACCEPTED_RISK_END = '<!-- build-review-accepted-risk:end -->';
+export const REDUCED_BUILD_REVIEW_COVERAGE_HEADING = '## Reduced build-review coverage';
 const SECTION = '## Accepted build-review risk';
 const POINTER = "Details are retained in the feature's local build-review disposition store.";
 
@@ -37,7 +38,7 @@ export function renderBuildReviewAcceptedRisk(records: readonly BuildReviewDispo
   }
   const entries = [...records].sort((left, right) => left.finding.id.localeCompare(right.finding.id));
   const lines = [
-    START,
+    BUILD_REVIEW_ACCEPTED_RISK_START,
     SECTION,
     '',
     `Accepted findings: ${entries.length}`,
@@ -45,17 +46,17 @@ export function renderBuildReviewAcceptedRisk(records: readonly BuildReviewDispo
     ...entries.map((record) => `- Finding: \`${record.finding.id}\` — rubric: ${record.finding.canonicalPayload.rubric}`),
     '',
     POINTER,
-    END,
+    BUILD_REVIEW_ACCEPTED_RISK_END,
   ];
   return { ok: true, section: lines.join('\n') };
 }
 
 function removeExistingSection(body: string): string | undefined {
-  const start = body.indexOf(START);
+  const start = body.indexOf(BUILD_REVIEW_ACCEPTED_RISK_START);
   if (start === -1) return body;
-  const end = body.indexOf(END, start);
+  const end = body.indexOf(BUILD_REVIEW_ACCEPTED_RISK_END, start);
   if (end === -1) return undefined;
-  const after = end + END.length;
+  const after = end + BUILD_REVIEW_ACCEPTED_RISK_END.length;
   return `${body.slice(0, start).trimEnd()}${body.slice(after).trimStart() ? '\n\n' : ''}${body.slice(after).trimStart()}`.trimEnd();
 }
 
