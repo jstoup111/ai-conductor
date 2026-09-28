@@ -59,6 +59,7 @@ import { HALT_PR_BANNER_LINES, NEEDS_REMEDIATION_BODY_MARKER } from '../../src/e
 import { HALT_HISTORY_COMMENT_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import type { CompletionContext } from '../../src/engine/artifacts.js';
 import { writeRegionCapture } from '../../src/engine/pr-body-region-store.js';
 import type {
   GithubOperationRequest,
@@ -149,6 +150,70 @@ function repairFixture(
   const repair = createFinishPresentationRepair({ projectRoot, gh, operations: guarded, log: () => {} });
   const request = { prUrl: REGION_PR_URL, state: { feature_desc: 'test feature', worktree_branch: 'feat/test-feature' } };
   return { calls, guarded, operations, pr, repair, request };
+}
+
+async function prepareFinishCompletion(dir: string, prUrl = REGION_PR_URL): Promise<void> {
+  await mkdir(join(dir, '.pipeline'), { recursive: true });
+  await writeFile(join(dir, '.pipeline/finish-choice'), 'pr', 'utf8');
+  await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ pr_url: prUrl }), 'utf8');
+}
+
+function validFinishEvidence() {
+  return async () => ({
+    kind: 'valid' as const,
+    slug: 'test-feature',
+    pr: REGION_PR_URL,
+    recordPath: '.docs/shipped/test-feature.md',
+    hash: 'test-hash',
+    commit: 'test-commit',
+  });
+}
+
+function completionRepairFixture(projectRoot: string, failVerificationRead = false) {
+  const calls: string[] = [];
+  let awaitingVerification = false;
+  const pr = {
+    title: 'feat: test feature',
+    isDraft: true,
+    labels: [] as string[],
+    body: `## What Changed\n\nReader-facing prose.\n${regionBody('\nAttested-By: altered\n')}`,
+    comments: [] as string[],
+  };
+  const gh: GhRunner = async (args) => {
+    if (args[0] !== 'pr' || args[1] !== 'view') throw new Error(`unexpected gh call: ${args.join(' ')}`);
+    if (args.some((arg) => arg.includes('body')) && awaitingVerification) {
+      calls.push('region-verification-read');
+      if (failVerificationRead) throw new Error('verification read unavailable');
+      awaitingVerification = false;
+    }
+    return { stdout: JSON.stringify(pr) };
+  };
+  const operations: GithubOperationRunner = {
+    run: vi.fn(async (request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> => {
+      if (request.operation === 'pull-request.edit' && 'body' in (request.payload ?? {})) {
+        calls.push('region-restore');
+        pr.body = (request.payload as { body: string }).body;
+        awaitingVerification = true;
+      }
+      if (request.operation === 'pull-request.ready') {
+        calls.push('ready');
+        pr.isDraft = false;
+      }
+      return {};
+    }),
+  };
+  const repair = createFinishPresentationRepair({ projectRoot, gh, operations, log: () => {} });
+  const ctx: CompletionContext = {
+    featureDesc: 'test-feature',
+    gh,
+    shipmentEvidence: validFinishEvidence(),
+    repairFinishPr: async (prUrl, opts) => repair({
+      prUrl,
+      state: { feature_desc: 'test feature', worktree_branch: 'feat/test-feature' },
+      mode: opts?.mode,
+    }),
+  };
+  return { calls, ctx, pr };
 }
 
 // ── suite ────────────────────────────────────────────────────────────────────
@@ -262,6 +327,53 @@ describe('conductor/finish-repair', () => {
     // would add the restore read plus the verification read after it.
     expect(fixture.calls).toEqual(['region-read', 'ready']);
     expect(fixture.operations.map(({ operation }) => operation)).toEqual(['pull-request.ready']);
+  });
+
+  it('completion repair restores and verifies captured regions before marking the PR ready', async () => {
+    await prepareFinishCompletion(dir);
+    await writeRegionCapture(dir, REGION_PR_URL, REGION_OWNER, REGION_CAPTURE);
+    const fixture = completionRepairFixture(dir);
+
+    const result = await checkStepCompletion(dir, 'finish', fixture.ctx);
+
+    expect(result).toEqual({ done: true });
+    expect(fixture.pr.body).toContain(
+      `<!-- ai-conductor:step ${REGION_OWNER} -->${REGION_CAPTURE}<!-- /ai-conductor:step -->`,
+    );
+    expect(fixture.calls).toEqual(['region-restore', 'region-verification-read', 'ready']);
+  });
+
+  it('fails finish completion closed when a captured region verification read fails', async () => {
+    await prepareFinishCompletion(dir);
+    await writeRegionCapture(dir, REGION_PR_URL, REGION_OWNER, REGION_CAPTURE);
+    const fixture = completionRepairFixture(dir, true);
+
+    const result = await checkStepCompletion(dir, 'finish', fixture.ctx);
+
+    expect(result).toMatchObject({ done: false, missing: 'other' });
+    expect(result.reason).toContain(REGION_OWNER);
+    expect(result.reason).toContain('verification read unavailable');
+    expect(fixture.calls).toEqual(['region-restore', 'region-verification-read']);
+    expect(fixture.pr.isDraft).toBe(true);
+  });
+
+  it('keeps a capture-free completion repair warn-only when GitHub is unavailable', async () => {
+    await prepareFinishCompletion(dir);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const unavailableGh: GhRunner = async () => { throw new Error('GitHub unavailable'); };
+    const ctx: CompletionContext = {
+      featureDesc: 'test-feature',
+      gh: unavailableGh,
+      shipmentEvidence: validFinishEvidence(),
+      repairFinishPr: async () => { throw new Error('GitHub unavailable'); },
+    };
+
+    try {
+      await expect(checkStepCompletion(dir, 'finish', ctx)).resolves.toEqual({ done: true });
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('continuing (warn-only)'));
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it('repairFinishPr invokes repair functions in correct order via composition', async () => {
