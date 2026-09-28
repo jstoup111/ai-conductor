@@ -2266,6 +2266,66 @@ describe('production FINISH publication composition', () => {
     }
   });
 
+  it('selects authoring for an unauthored template-seeded draft', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-template-floor-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const prUrl = 'https://github.com/acme/widget/pull/2616';
+      const template = `## Project-owned context\n\n${'Template guidance. '.repeat(30)}`;
+      let body = `${PR_BODY_FLOOR_MARKER}\n\n${template}\n\nDraft opened automatically.`;
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ url: prUrl, title: 'feat: draft publication', body, isDraft: true }) };
+        }
+        throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
+      });
+      const dispatchJudgment = vi.fn(async () => ({ success: true }));
+      const dispatchAuthoring = vi.fn(async () => {
+        body = '## Why\n\nThe project template now retains its long project-owned context.\n';
+        return { success: true };
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        gh,
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        observeReleaseReadiness: async () => 'present',
+        writeShippedRecord: vi.fn(async () => 0),
+        repairPresentation: async () => {},
+        prTemplateBytes: template,
+      });
+
+      await expect(coordinator.advance({
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: prUrl,
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto' as const,
+        daemon: true,
+        dispatchJudgment,
+        dispatchAuthoring,
+        emit: async () => {},
+      })).resolves.toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+
+      expect(dispatchAuthoring).toHaveBeenCalledOnce();
+      expect(dispatchJudgment).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('advances the authoring transition when authored prose preserved the body-floor marker', async () => {
     // #1703: the authoring provider wrote 3,988 characters of genuine prose but
     // left the invisible floor marker line in place. Marker-presence-alone

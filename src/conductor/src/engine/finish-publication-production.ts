@@ -83,6 +83,8 @@ export interface ProductionFinishPublicationDeps {
   stateFilePath: string;
   /** Resolved PR base branch from the owning production composition root. */
   baseBranch: string;
+  /** Loaded `.github/pull_request_template.md` bytes, when the project has one. */
+  prTemplateBytes?: string;
   git: GitRunner;
   gh: GhRunner;
   /** The existing fail-closed finish-record entry, injectable for tests. */
@@ -276,6 +278,7 @@ function prProse(
   body: unknown,
   halted: boolean,
   verdict: 'accepted' | 'deficient' | 'none',
+  templateBytes?: string,
 ): 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt' {
   const prTitle = typeof title === 'string' ? title : '';
   const prBody = typeof body === 'string' ? body : '';
@@ -289,7 +292,7 @@ function prProse(
   // (#1703). `isEngineFlooredBody` reads the body content instead, so an
   // intact floor still classifies as a placeholder and authored prose does
   // not.
-  if (isEngineFlooredBody(prBody) || /Draft opened automatically/i.test(text)) {
+  if (isEngineFlooredBody(prBody, templateBytes) || /Draft opened automatically/i.test(text)) {
     return 'placeholder';
   }
   // Existing prose is a judgment candidate until this coordinator either
@@ -613,7 +616,7 @@ export function createProductionFinishPublicationCoordinator(
                   proseRevisionByPr.set(pr.url, revision);
                   await seedJudgmentStore();
                   if (authoredPlaceholderProsePendingByPr.delete(pr.url) && !halted) {
-                    const observedProse = prProse(pr.title, pr.body, false, 'none');
+                    const observedProse = prProse(pr.title, pr.body, false, 'none', deps.prTemplateBytes);
                     if (observedProse !== 'placeholder') {
                       // The authoring pass, not an independently observed
                       // reader-facing revision, owns this exact replacement.
@@ -645,6 +648,7 @@ export function createProductionFinishPublicationCoordinator(
                     pr.body,
                     halted,
                     verdict,
+                    deps.prTemplateBytes,
                   );
                   if (prose === 'placeholder' || prose === 'revision_required') {
                     authoringOriginByPr.set(pr.url, prose);

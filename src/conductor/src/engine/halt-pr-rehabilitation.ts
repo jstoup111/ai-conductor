@@ -494,8 +494,12 @@ const FLOOR_FREE_TEXT_MAX_CHARS = 400;
  * literal floor texts above. What survives is content somebody chose to
  * write, which is exactly what distinguishes an authored body from a floor.
  */
-function authoredProseLength(body: string): number {
-  return body
+function authoredProseLength(body: string, templateBytes?: string): number {
+  // A template is project-owned starting structure, not prose authored by the
+  // FINISH authoring pass. Remove one exact seeded copy before measuring so a
+  // long template does not make an otherwise untouched draft look authored.
+  const bodyWithoutTemplate = templateBytes === undefined ? body : body.replace(templateBytes, '');
+  return bodyWithoutTemplate
     .replace(/```[\s\S]*?```/g, '')
     .replace(/<!--\s*[\w:-]+:start\s*-->[\s\S]*?<!--\s*[\w:-]+:end\s*-->/g, '')
     .replace(/<!--[\s\S]*?-->/g, '')
@@ -529,7 +533,7 @@ function authoredProseLength(body: string): number {
  * text, the SHIP-entry draft note, or free text no larger than the single
  * description slot a floor can fill.
  */
-export function isEngineFlooredBody(body: string): boolean {
+export function isEngineFlooredBody(body: string, templateBytes?: string): boolean {
   if (!body.includes(PR_BODY_FLOOR_MARKER)) return false;
   // The floor TEXTS are provenance too, exactly like the marker above, and
   // the same reasoning applies: an authoring pass that writes real prose
@@ -543,7 +547,7 @@ export function isEngineFlooredBody(body: string): boolean {
   // No separate branch is needed: `authoredProseLength` already filters both
   // floor texts out, so a genuine floor measures ~zero and a body with prose
   // around the note measures far above the cap.
-  return authoredProseLength(body) <= FLOOR_FREE_TEXT_MAX_CHARS;
+  return authoredProseLength(body, templateBytes) <= FLOOR_FREE_TEXT_MAX_CHARS;
 }
 
 /**

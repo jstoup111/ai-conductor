@@ -1,3 +1,4 @@
+// Covers: task:3
 /**
  * Tests for the prefix-gated retitle-floor primitive (Task 6,
  * adr-2026-07-03-halt-pr-rehabilitation-at-finish).
@@ -592,6 +593,21 @@ describe('isEngineFlooredBody', () => {
 
   it('classifies the SHIP-entry draft body as a floor', () => {
     expect(isEngineFlooredBody(shipDraftPrBody('widget import flow'))).toBe(true);
+  });
+
+  it('classifies a long template-seeded draft without prose as a floor', () => {
+    const template = `## Project-owned context\n\n${'Template guidance. '.repeat(30)}`;
+    const body = `${PR_BODY_FLOOR_MARKER}\n\n${template}\n\nDraft opened automatically.`;
+
+    expect(template.length).toBeGreaterThan(400);
+    expect(isEngineFlooredBody(body, template)).toBe(true);
+  });
+
+  it('classifies prose added to a template-seeded draft as authored', () => {
+    const template = `## Project-owned context\n\n${'Template guidance. '.repeat(30)}`;
+    const body = `${PR_BODY_FLOOR_MARKER}\n\n${template}\n\n${'a'.repeat(1_000)}`;
+
+    expect(isEngineFlooredBody(body, template)).toBe(false);
   });
 
   it('classifies authored prose as authored even when the marker survived the rewrite', () => {
