@@ -45,7 +45,7 @@ describe('config', () => {
       const configWithCustomSteps = (steps: string) => steps === '' ? '{}\n' : `steps:\n${steps}`;
       const customStep = (
         name: string,
-        after = 'build',
+        after = 'manual_test',
         options: { enforcement?: 'gating' | 'advisory'; completionArtifact?: boolean } = {},
       ) =>
         `  ${name}:\n    after: ${after}\n    skill: skills/${name}/SKILL.md\n    enforcement: ${options.enforcement ?? 'gating'}\n${options.completionArtifact === false ? '' : `    completion_artifact: .pipeline/${name}\n`}`;
@@ -111,9 +111,9 @@ describe('config', () => {
       it.each([
         ['an advisory owner', { enforcement: 'advisory' as const }],
         ['an artifact-free owner', { completionArtifact: false }],
-      ])('loads %s ordered before finish', async (_name, options) => {
+      ])('loads %s in the SHIP phase before finish', async (_name, options) => {
         await writeCustomSkill('compliance-attest');
-        await writeConfig(customStep('compliance-attest', 'build', options));
+        await writeConfig(customStep('compliance-attest', 'manual_test', options));
         await writeTemplate(region('compliance-attest'));
 
         const result = await loadConfig(tmpDir);
@@ -146,6 +146,7 @@ describe('config', () => {
       it.each([
         ['a built-in owner', region('finish'), '', ['finish', 'built-in steps cannot own a region']],
         ['an undeclared owner', region('release-disposiiton'), '', ['release-disposiiton', 'undeclared step']],
+        ['a BUILD-phase owner', region('compliance-attest'), customStep('compliance-attest', 'build'), ['compliance-attest', 'must run in the SHIP phase']],
         ['an owner ordered after finish', region('late-attest'), customStep('late-attest', 'finish'), ['late-attest', 'must run before finish']],
         ['a duplicate owner', `${region('compliance-attest')}\n${region('compliance-attest')}`, customStep('compliance-attest'), ['compliance-attest', 'owns more than one region']],
         ['an unclosed owner', '<!-- ai-conductor:step compliance-attest -->\nAttested', customStep('compliance-attest'), ['compliance-attest', 'unclosed']],

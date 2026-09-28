@@ -609,6 +609,16 @@ async function loadProjectConfig(
           },
         };
       }
+      const owner = stepRegistry.find((step) => step.name === region.key);
+      if (owner?.phase !== 'SHIP') {
+        return {
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: `Pull request template region owner "${region.key}" must run in the SHIP phase`,
+          },
+        };
+      }
       regionOwners[region.key] = region.bytes;
     }
   }
