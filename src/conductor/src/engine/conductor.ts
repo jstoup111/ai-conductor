@@ -3303,7 +3303,6 @@ export class Conductor {
     // A present region belongs to its project author; never overwrite it with
     // the template floor merely because the step is being retried.
     if (extractRegionBytes(body, step) !== undefined) {
-      await discardRegionCapture(this.projectRoot, prUrl, step);
       return;
     }
     const next = restoreRegion(body, { key: step, bytes });
@@ -3319,7 +3318,13 @@ export class Conductor {
       context: { actor: 'step-region-prepare' }, payload: { body: next },
     }, publication.operations);
     if (result.kind !== 'executed') throw new Error(`project-owned region for ${step} cannot be prepared: guarded edit ${result.kind}`);
-    await discardRegionCapture(this.projectRoot, prUrl, step);
+  }
+
+  /** A replacement dispatch invalidates only this owner's prior capture. */
+  private async discardOwnedStepRegionCapture(state: ConductState, step: StepName): Promise<void> {
+    if (this.config.pr_template_region_owners?.[step] === undefined) return;
+    const prUrl = await this.resolveRetainedShipDraftPrUrl(state.worktree_branch);
+    if (prUrl) await discardRegionCapture(this.projectRoot, prUrl, step);
   }
 
   /** Capture the exact body bytes authored by a successful region-owning step. */
@@ -6320,6 +6325,7 @@ export class Conductor {
     executionContext?: ExecutionContext,
   ): Promise<StepRunResult> {
     if (!this.liveBoundaryCoordinator) {
+      await this.discardOwnedStepRegionCapture(state, name);
       return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext);
     }
     await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'queued' });
@@ -6330,6 +6336,7 @@ export class Conductor {
         return { success: false, operatorParkedBeforeDispatch: true };
       }
       await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'admitted' });
+      await this.discardOwnedStepRegionCapture(state, name);
       return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext);
     });
   }
@@ -10398,6 +10405,7 @@ export class Conductor {
                               if (recovery) return { success: false, output: recovery };
                             }
                             try {
+                              await this.discardOwnedStepRegionCapture(state, step.name);
                               return await this.stepRunner.run(step.name, state, {
                                 ...(step.name === 'prd_audit' && this.prdWideningReviewContext
                                   ? { prdWideningReviewContext: this.prdWideningReviewContext }

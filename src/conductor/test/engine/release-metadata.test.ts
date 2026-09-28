@@ -25,6 +25,22 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
     });
   });
 
+  it('parses release metadata and a migration inside a project-owned region', () => {
+    expect(parseReleaseDisposition([
+      '<!-- ai-conductor:step release-disposition -->',
+      'Release-Disposition: note',
+      'Release-Category: Fixed',
+      'Release-Semver: patch',
+      'Release-Note: Preserve the release block.',
+      '',
+      '## Migration',
+      '```bash migration',
+      './bin/migrate',
+      '```',
+      '<!-- /ai-conductor:step -->',
+    ].join('\n'))).toMatchObject({ disposition: 'note', category: 'Fixed', migration: '```bash migration\n./bin/migrate\n```' });
+  });
+
   it.each([
     ['missing disposition', 'Release-Category: Fixed\nRelease-Semver: patch\nRelease-Note: Correct a defect.', 'Disposition'],
     ['multiple dispositions', 'Release-Disposition: note\nRelease-Disposition: no-note', 'Disposition'],

@@ -43,8 +43,12 @@ describe('config', () => {
   describe('loadConfig', () => {
     describe('pull request template regions', () => {
       const configWithCustomSteps = (steps: string) => steps === '' ? '{}\n' : `steps:\n${steps}`;
-      const customStep = (name: string, after = 'build') =>
-        `  ${name}:\n    after: ${after}\n    skill: skills/${name}/SKILL.md\n    enforcement: gating\n    completion_artifact: .pipeline/${name}\n`;
+      const customStep = (
+        name: string,
+        after = 'build',
+        options: { enforcement?: 'gating' | 'advisory'; completionArtifact?: boolean } = {},
+      ) =>
+        `  ${name}:\n    after: ${after}\n    skill: skills/${name}/SKILL.md\n    enforcement: ${options.enforcement ?? 'gating'}\n${options.completionArtifact === false ? '' : `    completion_artifact: .pipeline/${name}\n`}`;
       const region = (name: string, content = `${name} content`) => [
         `<!-- ai-conductor:step ${name} -->`,
         content,
@@ -101,6 +105,22 @@ describe('config', () => {
               'release-disposition': '\nrelease-disposition content\n',
             },
           },
+        });
+      });
+
+      it.each([
+        ['an advisory owner', { enforcement: 'advisory' as const }],
+        ['an artifact-free owner', { completionArtifact: false }],
+      ])('loads %s ordered before finish', async (_name, options) => {
+        await writeCustomSkill('compliance-attest');
+        await writeConfig(customStep('compliance-attest', 'build', options));
+        await writeTemplate(region('compliance-attest'));
+
+        const result = await loadConfig(tmpDir);
+
+        expect(result).toMatchObject({
+          ok: true,
+          config: { pr_template_region_owners: { 'compliance-attest': '\ncompliance-attest content\n' } },
         });
       });
 

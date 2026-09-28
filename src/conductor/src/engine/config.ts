@@ -32,7 +32,6 @@ import { FALLBACK_RETRIES } from './resolved-config.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
 import { parsePrTemplateRegions } from './pr-body-regions.js';
-import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisites.js';
 import { buildStepRegistry } from './steps.js';
 
 export type ConfigError = {
@@ -577,9 +576,11 @@ async function loadProjectConfig(
     }
 
     const builtInSteps = new Set(ALL_STEPS.map((step) => step.name as string));
-    const finishPrerequisites = new Set(
-      selectFinishPrerequisiteSteps(validation.config, buildStepRegistry(validation.config)),
-    );
+    // Region ownership is a dispatch-order contract, not a FINISH artifact
+    // prerequisite: advisory and artifact-free custom steps may own regions.
+    const stepRegistry = buildStepRegistry(validation.config);
+    const finishIndex = stepRegistry.findIndex((step) => step.name === 'finish');
+    const stepsBeforeFinish = new Set<string>(stepRegistry.slice(0, finishIndex).map((step) => step.name));
     for (const region of parsedRegions.regions) {
       if (builtInSteps.has(region.key)) {
         return {
@@ -599,7 +600,7 @@ async function loadProjectConfig(
           },
         };
       }
-      if (!finishPrerequisites.has(region.key)) {
+      if (!stepsBeforeFinish.has(region.key)) {
         return {
           ok: false,
           error: {
