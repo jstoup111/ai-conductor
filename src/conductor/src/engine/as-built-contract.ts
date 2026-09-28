@@ -298,6 +298,7 @@ export function validateAsBuiltVerdict(value: unknown): ValidateAsBuiltVerdictRe
 export async function resolveAsBuiltReferences(
   verdict: AsBuiltVerdict,
   worktree: string,
+  featurePlanPath?: string,
 ): Promise<ValidateAsBuiltVerdictResult> {
   if (verdict.verdict !== 'BLOCKED') return { ok: true, verdict };
 
@@ -351,7 +352,8 @@ export async function resolveAsBuiltReferences(
     }
 
     if (!activePlanRead) {
-      const activePlan = await readActivePlanText(worktree);
+      // A repository holds every shipped feature's plan; resolve task ids against this feature's.
+      const activePlan = await readActivePlanText(worktree, featurePlanPath);
       activePlanTaskIds = activePlan === undefined
         ? undefined
         : new Set(parsePlanTaskBodies(activePlan).keys());

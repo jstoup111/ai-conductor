@@ -62,11 +62,13 @@ async function fixture(): Promise<string> {
   return root;
 }
 
-function harness(projectDir: string, featureDesc?: string) {
+const APPROVED = { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] };
+
+function harness(projectDir: string, featureDesc?: string, finalStructuredResult: unknown = APPROVED) {
   const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
     success: true,
     output: 'review complete',
-    finalStructuredResult: { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] },
+    finalStructuredResult,
   } as unknown as InvokeResult));
   const provider = { name: 'claude', invoke } as unknown as LLMProvider;
   const runtimes = new ProviderRuntimeSet([{
@@ -118,6 +120,23 @@ describe('architecture_review_as_built dispatch with the real input projection',
     expect(result.asBuiltFault).toBeUndefined();
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke.mock.calls[0]![0].prompt).toContain('first done condition');
+  });
+
+  it('resolves a BLOCKED verdict\'s plan-task reference against the feature\'s own plan when other plans exist', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'plans', 'other-feature.md'), '# Plan\n\n**Stories:** .docs/stories/missing.md\n');
+    await execFileAsync('git', ['-C', root, 'add', '.']);
+    await execFileAsync('git', ['-C', root, 'commit', '-m', 'another feature plan']);
+    const { invoke, stepRunner } = harness(root, 'feature', {
+      version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Task 1 is unreached.' }],
+      violations: 'Task 1 has no caller.', resolution: 'Wire task 1.',
+    });
+
+    const result = await stepRunner.run('architecture_review_as_built', { complexity_tier: 'M' });
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(result.output).not.toContain('structured-result-rejected');
   });
 
   it('halts with an input fault and no provider dispatch when the sealed stories are unreadable', async () => {
