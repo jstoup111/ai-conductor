@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BUILD_REVIEW_CUSTOM_V1_SCHEMA, BUILD_REVIEW_JUDGED_V3_SCHEMAS, parseBuildReviewCustomReviewerPayload } from '../../src/engine/build-review-domain.js';
+import { AS_BUILT_VERDICT_SCHEMA, validateAsBuiltVerdict } from '../../src/engine/as-built-contract.js';
+import { PRD_WIDENING_RECONCILIATION_SCHEMA } from '../../src/engine/prd-widening-contract.js';
 import { fromCodexStrictResult, toCodexStrictSchema } from '../../src/execution/codex-strict-schema.js';
 
 type Json = Record<string, unknown>;
@@ -17,7 +19,48 @@ function objectsMissingRequiredKeys(schema: unknown, path = '$'): string[] {
   return [...own, ...Object.entries(node).flatMap(([key, child]) => objectsMissingRequiredKeys(child, `${path}.${key}`))];
 }
 
+/** Strict mode also rejects typeless subschemas (e.g. a bare `const`) and `oneOf` (#2748 shipped both). */
+function typelessOrOneOfNodes(schema: unknown, path = '$'): string[] {
+  if (Array.isArray(schema)) return schema.flatMap((child, index) => typelessOrOneOfNodes(child, `${path}[${index}]`));
+  if (typeof schema !== 'object' || schema === null) return [];
+  const node = schema as Json;
+  const own: string[] = [];
+  if ('oneOf' in node) own.push(`${path}.oneOf`);
+  if (('const' in node || 'enum' in node) && !('type' in node)) own.push(path);
+  const children = Object.entries(node).filter(([key]) => key !== 'const' && key !== 'enum');
+  return [...own, ...children.flatMap(([key, child]) => typelessOrOneOfNodes(child, `${path}.${key}`))];
+}
+
 describe('toCodexStrictSchema', () => {
+  const nativeContracts = {
+    asBuilt: AS_BUILT_VERDICT_SCHEMA,
+    prdWidening: PRD_WIDENING_RECONCILIATION_SCHEMA,
+  };
+
+  it.each(Object.entries(nativeContracts))('types every const and replaces oneOf in the %s contract', (_name, schema) => {
+    expect(typelessOrOneOfNodes(schema)).not.toEqual([]);
+    const strict = toCodexStrictSchema(schema);
+    expect(typelessOrOneOfNodes(strict)).toEqual([]);
+    expect(objectsMissingRequiredKeys(strict)).toEqual([]);
+  });
+
+  it('infers the JSON type of a const and a single-typed enum, and leaves mixed enums alone', () => {
+    expect(toCodexStrictSchema({ const: 'v1' })).toEqual({ type: 'string', const: 'v1' });
+    expect(toCodexStrictSchema({ const: 2 })).toEqual({ type: 'integer', const: 2 });
+    expect(toCodexStrictSchema({ enum: [true, false] })).toEqual({ type: 'boolean', enum: [true, false] });
+    expect(toCodexStrictSchema({ enum: ['a', 1] })).toEqual({ enum: ['a', 1] });
+    expect(toCodexStrictSchema({ type: 'string', const: 'x' })).toEqual({ type: 'string', const: 'x' });
+  });
+
+  it('round-trips a Codex as-built verdict through the closed validator', () => {
+    const strictOutput = {
+      version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+      outcomeDelivered: null, affectedOutcome: null, findings: null, violations: null, resolution: null,
+    };
+    const verdict = validateAsBuiltVerdict(fromCodexStrictResult(AS_BUILT_VERDICT_SCHEMA, strictOutput));
+    expect(verdict).toMatchObject({ ok: true, verdict: { verdict: 'APPROVED' } });
+  });
+
   const engineSchemas = {
     custom: BUILD_REVIEW_CUSTOM_V1_SCHEMA,
     testQuality: BUILD_REVIEW_JUDGED_V3_SCHEMAS.testQuality,
