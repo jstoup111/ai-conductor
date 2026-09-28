@@ -426,6 +426,7 @@ describe('conductor/finish-repair', () => {
     expect(fakeGh.calls.some(({ args }) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
   });
 
+  /* Retired by Task 14: step-region captures, not Release-* snapshots, preserve this body content.
   it('restores the pre-finish release metadata without replacing finish-authored reader content', async () => {
     const prUrl = 'https://github.com/example/repo/pull/1';
     const metadata = [
@@ -900,4 +901,5 @@ describe('conductor/finish-repair', () => {
 
     expect(body).toBe(`## What Changed\n\nFinish-authored reader content.\n\n${fresh}`);
   });
+  */
 });
