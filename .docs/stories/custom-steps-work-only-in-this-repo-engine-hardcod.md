@@ -131,7 +131,7 @@ to stop loudly when it cannot run, so that the release gate can never go quiet.
 - **Given** an ai-conductor self-build with the release-artifact gate enabled and no `release-disposition` step declared, **When** the self-host finish gates run, **Then** the run halts for a human with a reason naming the `release-disposition` step, a committed halt record is produced, and the pull request is not marked ready.
 - **Given** a repository that is not an ai-conductor self-build and that declares a step named `release-disposition`, **When** `finish` runs, **Then** no release-metadata snapshot or restore is attempted and FINISH treats that step only as an ordinary gating custom step.
 - **Given** an ai-conductor self-build with the release-artifact gate disabled, **When** `finish` runs, **Then** no release-metadata snapshot or restore is attempted and no halt is raised for a missing step.
-- **Given** an active release flow whose retained draft body holds a malformed `Release-*` block, **When** the pre-finish snapshot is taken, **Then** the run refuses as it does today rather than publishing without metadata.
+- **Given** an active release flow whose retained draft body holds a malformed `Release-*` block, **When** the self-host release gate validates the retained draft body before finish, **Then** the run refuses as it does today rather than publishing without metadata.
 
 ### Done When
 

@@ -179,9 +179,13 @@ the terminal artifact is the same reviewable PR regardless of mode.
   and `pr_url` recorded in `conduct-state.json` equals the draft PR's URL.
 
 #### Negative Paths
-- Given early publishes all failed (no PR exists), when the finish step runs, then the
-  current `/finish` path creates the PR exactly as today and the build completes — the
-  mode never leaves a build PR-less.
+- Given early publishes all failed (no PR exists) and the project's pull request template
+  declares no step-owned body region, when the finish step runs, then the current `/finish`
+  path creates the PR exactly as today and the build completes — the mode never leaves a
+  build PR-less.
+- Given early publishes all failed (no PR exists) and a step-owned body region's owning step
+  is about to dispatch, when the engine prepares that step, then the step is not dispatched
+  and the run halts naming the step and the missing draft.
 - Given `markReadyForReview` fails (gh error), when finish runs, then the failure is
   surfaced in the finish output (not swallowed) and `pr_url` is still recorded.
   **End-state SUPERSEDED (2026-07-11, conflict-check, operator-approved):** the finish
