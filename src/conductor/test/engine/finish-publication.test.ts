@@ -521,13 +521,22 @@ describe('FINISH human-required halt marker', () => {
         },
         observeReleaseReadiness: async () => 'present',
       });
+      // This fixture observes the production coordinator's halt-state route,
+      // but intentionally supplies mocked dispatch rather than current-HEAD
+      // validator artifacts. Keep that test-only authority explicit so the
+      // production coordinator's publication fence remains required in real
+      // runs.
+      const mockedFinishPublication = {
+        ...coordinator,
+        requiresArtifactValidation: false,
+      };
       const provider = vi.fn(async () => {
         throw new Error('provider must not be called for a halt-state PR');
       });
       const conductor = new Conductor({
         stateFilePath,
         stepRunner: { run: provider },
-        finishPublication: coordinator,
+        finishPublication: mockedFinishPublication,
         events: new ConductorEventEmitter(),
         projectRoot,
         fromStep: 'finish',

@@ -150,7 +150,11 @@ describe('custom build-review policy event spine', () => {
     });
 
     persister.start();
-    const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    const result = await runner.run('build_review', { complexity_tier: 'M' } as never, {
+      readOnlyReviewCapabilities: {
+        claude: { provider: 'claude', platform: process.platform, status: 'available' },
+      },
+    });
     persister.stop();
     expect(result.success, result.output).toBe(true);
 

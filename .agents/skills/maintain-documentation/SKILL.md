@@ -15,8 +15,8 @@ Maintain this repository's human-facing documentation when invoked.
 - Select: Run as the configured gate after implementation and before `finish`.
 - Input: Inspect the current implementation change and repository evidence.
 - Output: Produce a documentation impact verdict and complete required human-facing documentation updates.
-- Commit: Commit documentation and eligible changelog changes before PASS. Create no commit for an evidence-backed no-op.
-- Changelog: Evaluate the current implementation under the changelog policy. Apply eligible changelog changes in this mode.
+- Commit: Commit documentation changes before PASS. Create no commit for an evidence-backed no-op.
+- Changelog: Do not change `CHANGELOG.md` and do not read, author, or require PR release metadata. The later `release-disposition` gate owns the disposition; its absence from the PR body is never a pre-finish blocker.
 - PASS: Use when documentation is aligned or remediated and every required commit is complete.
 - BLOCKED: Use when required work cannot be completed or verified.
 
@@ -152,25 +152,5 @@ If a required claim cannot be verified, return BLOCKED. Never guess or weaken th
 
 ## Changelog decisions
 
-### Selection
-
-- A notable reader-visible implementation change requires a release-note disposition in its PR metadata; the serialized release PR renders the changelog entry after merge.
-- A non-notable implementation may PASS with an explicit no-note disposition.
-- Spec-only, documentation-only, internal and non-notable, and no implementation change use the explicit no-note disposition.
-- Do not author or finalize `CHANGELOG.md` on an implementation branch.
-
-### Entry format
-
-- Write the reader-facing release note as exactly one present-tense sentence led by the reader outcome.
-- Record its category and semver impact in the implementation PR metadata; use the explicit no-note disposition when no entry is eligible.
-- Do not edit `CHANGELOG.md`; the release PR renderer supplies implementation attribution. Preserve runnable migration blocks separate from the one-sentence release note.
-
-### Blocking validation
-
-For any condition below, return BLOCKED and keep the pass marker absent:
-
-- missing required release-note disposition
-- missing explicit no-note disposition for a non-notable implementation
-- multiple sentences
-- future tense
-- internal mechanics first
+- Never author or finalize `CHANGELOG.md` on an implementation branch; the serialized release PR renders it after merge.
+- The repository-local `release-disposition` gate, which runs after this step and before `finish`, owns the PR release metadata: disposition, category, semver, note wording, and migration block. Do not check, author, or block on that metadata in any mode.

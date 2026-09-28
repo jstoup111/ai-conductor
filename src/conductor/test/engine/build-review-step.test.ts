@@ -967,10 +967,19 @@ describe('build_review structured rubric dispatch', () => {
     });
     try {
       const outcome = await (runner as unknown as {
-        dispatchInstalledBuildReviewPolicy: (entry: ResolvedBuildReviewCustomCatalogEntry, inputs: unknown, lapId: string) => Promise<unknown>;
+        dispatchInstalledBuildReviewPolicy: (
+          entry: ResolvedBuildReviewCustomCatalogEntry,
+          inputs: unknown,
+          lapId: string,
+          tier?: unknown,
+          lapGate?: unknown,
+          readOnlyReviewCapabilityFor?: (provider: string) => Promise<unknown>,
+        ) => Promise<unknown>;
       }).dispatchInstalledBuildReviewPolicy(entry, {
         sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot', sourceChanges: [] },
-      }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8');
+      }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', undefined, undefined, async (provider) => ({
+        provider, platform: process.platform, status: 'available' as const,
+      }));
       const options = invoke.mock.calls[0]?.[0];
 
       expect(options?.nativeSchema).toBe(entry.contract.output.jsonSchema);
@@ -1023,10 +1032,19 @@ describe('build_review structured rubric dispatch', () => {
     });
     try {
       const outcome = await (runner as unknown as {
-        dispatchInstalledBuildReviewPolicy: (entry: ResolvedBuildReviewCustomCatalogEntry, inputs: unknown, lapId: string) => Promise<unknown>;
+        dispatchInstalledBuildReviewPolicy: (
+          entry: ResolvedBuildReviewCustomCatalogEntry,
+          inputs: unknown,
+          lapId: string,
+          tier?: unknown,
+          lapGate?: unknown,
+          readOnlyReviewCapabilityFor?: (provider: string) => Promise<unknown>,
+        ) => Promise<unknown>;
       }).dispatchInstalledBuildReviewPolicy(entry, {
         sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot', sourceChanges: [] },
-      }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8');
+      }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', undefined, undefined, async (provider) => ({
+        provider, platform: process.platform, status: 'available' as const,
+      }));
 
       expect(outcome).toMatchObject({
         success: true,

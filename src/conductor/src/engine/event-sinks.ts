@@ -31,6 +31,7 @@ export const EVENT_SINKS = {
   coverage_binding_judged: { render: false, persist: true, audit: false, otel: false },
   coverage_binding_disabled: { render: false, persist: true, audit: false, otel: false },
   config_deprecated_key: { render: false, persist: true, audit: false, otel: false },
+  build_review_read_only_capability: { render: true, persist: true, audit: false, otel: false },
   contained_live_checkout_drift: { render: true, persist: true, audit: false, otel: false },
   self_host_containment_verdict: { render: true, persist: true, audit: false, otel: false },
   self_host_boundary_fingerprint: { render: true, persist: true, audit: false, otel: false },
@@ -82,6 +83,9 @@ export const EVENT_SINKS = {
   // the event excludes payloads and request bodies by construction.
   github_operation_refused: { render: true, persist: true, audit: false, otel: false },
   provider_attempt: { render: true, persist: true, audit: false, otel: true },
+  // Daemon-origin only: this is the durable restart projection, not a second
+  // rendering of a feature's rate-limit event.
+  provider_suppressed: { render: false, persist: true, audit: false, otel: false },
   // Per-interval progress would flood .daemon/daemon.log; daemon status reads the ledger directly.
   provider_stream_progress: { render: false, persist: true, audit: false, otel: false },
   scratch_cleanup_reclaimed: { render: true, persist: true, audit: false, otel: false },

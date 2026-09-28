@@ -11,20 +11,25 @@ import {
   type TmuxRunner,
 } from '../../src/engine/daemon-tmux.js';
 
-const sockets: Array<{ root: string; run: TmuxRunner }> = [];
+const sockets: Array<{ root: string; socketRoot: string; run: TmuxRunner }> = [];
 
 afterEach(async () => {
-  await Promise.all(sockets.splice(0).map(async ({ run, root }) => {
+  await Promise.all(sockets.splice(0).map(async ({ run, root, socketRoot }) => {
     run(['kill-server'], { inherit: false });
     await rm(root, { recursive: true, force: true });
+    await rm(socketRoot, { recursive: true, force: true });
   }));
 });
 
-function privateTmux(socket: string): TmuxRunner {
+function privateTmux(socket: string, socketRoot: string, tempRoot: string): TmuxRunner {
   return (args, opts) => {
     const result = spawnSync('tmux', ['-L', socket, ...args], {
       encoding: 'utf8',
       stdio: opts.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
+      // tmux ignores TMPDIR for its server socket. Keep this real-tmux fixture
+      // inside its mkdtemp root so the suite-wide tmpdir leak guard can prove
+      // cleanup without touching the operator's socket directory.
+      env: { ...process.env, TMPDIR: tempRoot, TMUX_TMPDIR: socketRoot },
     });
     return {
       code: result.status ?? 1,
@@ -46,9 +51,13 @@ async function eventually<T>(read: () => Promise<T>): Promise<T> {
 async function fixture(): Promise<{ repo: string; run: TmuxRunner; restore: () => void }> {
   const root = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), 'daemon-exit-witness-tmux-'));
   const repo = join(root, 'repo');
+  // TMUX_TMPDIR needs a short path: tmux appends `tmux-<uid>/<socket>` and
+  // Unix-domain sockets have a small pathname limit. This explicit fixture
+  // root is still removed in afterEach, so it never escapes the leak guard.
+  const socketRoot = await mkdtemp(join(process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR!, 'tmux-exit-witness-'));
   const socket = `exit-witness-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const run = privateTmux(socket);
-  sockets.push({ root, run });
+  const run = privateTmux(socket, socketRoot, root);
+  sockets.push({ root, socketRoot, run });
   await mkdir(join(repo, '.daemon'), { recursive: true });
   const launcher = join(root, 'source-launcher.sh');
   const witness = join(root, 'witness-launcher.ts');
@@ -62,7 +71,11 @@ async function fixture(): Promise<{ repo: string; run: TmuxRunner; restore: () =
       '}\n',
     'utf8',
   );
-  await writeFile(launcher, `#!/bin/sh\nexec node --import tsx ${witness} "$@"\n`, 'utf8');
+  await writeFile(
+    launcher,
+    `#!/bin/sh\nexport TMPDIR=${JSON.stringify(root)}\nexec node --experimental-strip-types ${witness} "$@"\n`,
+    'utf8',
+  );
   await chmod(launcher, 0o755);
   const priorLauncher = process.env.AI_CONDUCTOR_ENGINE_BIN;
   process.env.AI_CONDUCTOR_ENGINE_BIN = launcher;
@@ -103,7 +116,11 @@ describe('daemon pane exit-witness wrapper', () => {
 
         expect(records).toHaveLength(1);
         expect(records[0]).toMatchObject({ type: 'daemon_exited', ...expected, pid: expect.any(Number) });
-        expect(await supervisor.isUp(test.repo)).toBe(false);
+        // The witness deliberately writes before the shell's final `exit`, so
+        // its record is not itself proof that tmux has marked the pane dead.
+        await eventually(async () => {
+          expect(await supervisor.isUp(test.repo)).toBe(false);
+        });
       } finally { test.restore(); }
     });
   }

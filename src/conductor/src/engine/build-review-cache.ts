@@ -14,7 +14,8 @@ import { parseBuildReviewCustomArtifactMember, type BuildReviewCustomArtifactMem
 
 const LEGACY_CACHE_VERSION = 1;
 const CACHE_VERSION = 2;
-const CACHE_DIRECTORY = ".pipeline/build-review/cache";
+export const BUILD_REVIEW_CACHE_DIRECTORY = ".pipeline/build-review/cache";
+const CACHE_DIRECTORY = BUILD_REVIEW_CACHE_DIRECTORY;
 
 /**
  * The judging engine's identity (adr-2026-08-21 D1): a sixth, sibling cache

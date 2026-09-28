@@ -1,4 +1,4 @@
-import type { HarnessConfig, ProviderSelection } from '../types/config.js';
+import type { HarnessConfig, ProviderSelection, ProviderSubstitutionPolicy } from '../types/config.js';
 
 export function normalizeProviderSelection(
   selection: ProviderSelection | undefined,
@@ -10,12 +10,17 @@ export function normalizeProviderSelection(
 export function resolveProviderCandidates({
   configuredProviders,
   stepSelection,
+  substitutionPolicy,
 }: {
   configuredProviders: readonly string[];
   stepSelection?: ProviderSelection;
+  substitutionPolicy?: ProviderSubstitutionPolicy;
 }): string[] {
   const selectedProviders =
     stepSelection === undefined ? [] : normalizeProviderSelection(stepSelection);
+  if (substitutionPolicy === 'disallow' && selectedProviders.length > 0) {
+    return stableUniqueProviders(selectedProviders);
+  }
   return stableUniqueProviders([...selectedProviders, ...configuredProviders]);
 }
 

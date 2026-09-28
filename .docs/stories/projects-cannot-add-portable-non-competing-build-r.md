@@ -9,7 +9,7 @@
 **Accepted by:** James Stoup, 2026-09-10
 **Scope boundary:** Full #1986 functional outcome; #1804 effective-policy cache correctness included where required. General custom-step redesign in #1344 remains excluded.
 
-These stories describe the additional custom-policy behavior and the cache correction. Existing rubric and adjudication contracts remain the baseline, including mixed infrastructure/content laps, suppression, settled recurrence, and cumulative bounds. Criteria below extend those contracts to custom policies; they do not recreate a separate adjudicator. A supported custom-policy environment initially means Linux with proven read-only containment for the selected provider. Standard automated verification replaces every third-party boundary with a faithful fake; no private package or live model account is an acceptance prerequisite.
+These stories describe the additional custom-policy behavior and the cache correction. Existing rubric and adjudication contracts remain the baseline, including mixed infrastructure/content laps, suppression, settled recurrence, and cumulative bounds. Criteria below extend those contracts to custom policies; they do not recreate a separate adjudicator. A supported custom-policy environment is any host where a selected provider's read-only review mode is available. Standard automated verification replaces every third-party boundary with a faithful fake; no private package or live model account is an acceptance prerequisite.
 
 ## Story 1: Select an installed policy from each supported source
 
@@ -239,18 +239,18 @@ As an implementation worker, I want every reviewer to inspect the same unchanged
 #### Happy Path
 
 - Given a lap with enabled custom policies and a built-in peer, when the rubrics execute, then all observe the same frozen implementation input and receive only their own review context, regardless of completion order.
-- Given the selected provider needs writable bookkeeping during a supported custom review, when the reviewer runs, then it can write its private scratch while the reviewed source, original checkout, original policy installation, and engine evidence remain protected.
+- Given the selected provider needs writable bookkeeping during a supported custom review, when the reviewer runs, then it keeps its own provider state in its ordinary provider home, while its read-only review mode cannot change the reviewed source, original checkout, original policy installation, or engine evidence.
 
 #### Negative Paths
 
-- Given a reviewer attempts to modify protected input or read a sibling's private review evidence, when that access is attempted, then it cannot alter protected state or obtain the sibling evidence; no later rubric observes a changed input caused by that reviewer.
-- Given containment is unavailable, a protected-write or scratch-write probe fails, or the host's nested sandbox cannot support the boundary, when review prepares, then it names the provider, missing capability, and recovery action before judging, with no writable fallback.
+- Given a reviewer attempts to modify protected input, when the write is attempted, then its read-only review mode refuses it; and if any protected lap input still changes before the join, every member result of that lap is discarded so that no verdict rests on the changed input.
+- Given no candidate for a custom member has a read-only review mode available on the host, when review prepares, then it names the platform, the providers, and each reason before judging, with no writable fallback.
 - Given the original checkout changes after a custom lap's input was captured, when remaining reviewers execute, then they still observe that lap's captured input and their evidence is not relabeled as reviewing the new checkout.
 
 ### Done When
 
 - [ ] A mixed built-in/custom lap observes one captured input identity with independent reviewer context.
-- [ ] Allowed scratch and refused protected/sibling access are proved through the production access boundary; unavailable containment yields zero reviewer launches and unchanged protected fixtures.
+- [ ] Refused protected writes and whole-lap discard on a changed protected input are proved through the production dispatch boundary; an unavailable read-only review mode yields zero reviewer launches and unchanged protected fixtures.
 
 ## Story 11: Use one aggregate authority in attended and daemon review
 
@@ -461,7 +461,7 @@ Criterion ids are derived in story order, happy paths followed by negative paths
 | S7.1–S7.5 | Evidence publication/read/render integration and result-boundary validation: provenance, reuse accounting, invalid references, and historic descriptors. |
 | S8.1–S8.5 | Cache/runner integration with injected candidates and real temporary cache files: hit/miss observation per independent identity mutation and incomplete-entry refusal. |
 | S9.1–S9.5 | Candidate-loop/cache integration: early/late unavailable candidate, fallback preparation, retained per-candidate hits, and teardown. |
-| S10.1–S10.5 | Input/containment/provider integration with a faithful process boundary: shared input and allowed/refused accesses; optional disposable Linux containment smoke proves real OS behavior without third parties. |
+| S10.1–S10.5 | Input/read-only-mode/provider integration with a faithful process boundary: shared input, refused writes, and whole-lap discard on a changed protected input. |
 | S11.1 | Acceptance flow A: configured custom policies through real attended and daemon review entry, branch settlement, aggregate decision, and one terminal repair or decision-stop route; fake every third-party boundary. |
 | S11.2–S11.5 | Conductor review-boundary integration: mixed, early, settled, infrastructure-only, and unsupported cases terminate at the observed route, asserting decision/effect/charge counts. |
 | S12.1–S12.5 | Adjudication-context/result/application integration: deterministic duplicate/consistent/blocked provider responses exercise source preservation and zero effects on incomplete or invalid decisions. |
@@ -485,7 +485,7 @@ Process-boundary tests must prove the production adapter reaches the injected fa
 | Concurrent access | Applicable to changing policy/input, late operator decisions, and competing recovery; S6/S10/S16/S17. Configuration is fixed for each lap. |
 | Resource exhaustion | Applicable to package/context bounds and incomplete persistent writes; S6/S8/S12/S16. No truncation into apparent coverage. |
 | Partial failure/rollback | Applicable to candidate preparation, branch settlement, validation, and effect application; S3/S5–S9/S11–S13/S16. No partial action set on an invalid aggregate. |
-| Dependency unavailable | Applicable to catalogs, declared policy capabilities/resources, provider candidates, and containment; S1/S3–S6/S9–S10. |
+| Dependency unavailable | Applicable to catalogs, declared policy capabilities/resources, provider candidates, and read-only review modes; S1/S3–S6/S9–S10. |
 | Data integrity | Applicable to evidence, cache identity, complete dispositions, and durable recovery; S7–S9/S12–S18. |
 | Cascade deletion | No entity/directory deletion is delivered. Removing a policy declaration/installation must preserve historic evidence and cases; S2/S7/S16. |
 | Immutability | Applicable to captured input, policy originals, historic producing identity, and operator authority; S1/S6–S7/S10/S16–S17. |
@@ -496,7 +496,7 @@ Process-boundary tests must prove the production adapter reaches the injected fa
 ## Verify-Claims Ledger
 
 - **Verified:** FR-1–FR-16 above are the approved functional baseline; each has at least one tagged story, with expected outcomes grounded in approved ADR D1–D12.
-- **Operator-confirmed:** Initial Linux/bubblewrap custom-policy support, review-role adaptation, complete captured package identity, shared attended/daemon custom authority, and preserved built-in behavior were approved on 2026-09-10.
+- **Operator-confirmed:** Custom-policy support wherever a provider's read-only review mode is available, review-role adaptation, complete captured package identity, shared attended/daemon custom authority, and preserved built-in behavior were approved on 2026-09-10.
 - **Verified:** Existing post-join adjudication stories cover mixed laps, complete source handling, durable effects, and one-charge recovery; confidence-floor stories cover suppression and settled recurrence. This feature adds custom-policy identity and explicit consistency/decision outcomes to those behaviors.
 - **Unverified and not assumed:** The private Kotlin package's compatibility or live host integration. Faithful portable fixtures prove the agreed interface; optional real-provider smoke is separate from default acceptance.
 - **No unconfirmed load-bearing assumptions.** Model semantic correctness is not a deterministic test claim: fake adjudicator outcomes prove context delivery, output validation, and resulting authority/effects, while the approved design retains the model judgment limitation.

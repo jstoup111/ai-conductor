@@ -122,6 +122,35 @@ steps:
 `build` tries `codex`, then `claude`. Every other step tries `claude` only. Step names come from
 [../reference/steps.md](../reference/steps.md).
 
+### Keep an explicit step selection exclusive
+
+Set `provider_substitution: disallow` when a step with its own `llm_provider` must not append the
+run-level providers as fallbacks:
+
+```yaml
+llm_provider: [claude, codex]
+steps:
+  build:
+    llm_provider: codex
+    provider_substitution: disallow
+```
+
+`build` now tries only `codex`; a step without its own provider selection still uses the run-level
+ladder. Set the key at the top level to make this the default, then use
+`steps.<step>.provider_substitution: allow` for an exception. Invalid values fail configuration
+loading. See the [configuration reference](../reference/configuration.md#provider_substitution).
+
+## Usage-exhaustion recovery
+
+In a daemon run, a provider that reports usage exhaustion is suppressed until its reported reset
+deadline, or the bounded retry deadline when no reset is available. Later steps and parallel-group
+members skip that provider without starting a process and use the next allowed candidate. The
+suppression survives a daemon restart and expires automatically.
+
+If every configured candidate is suppressed, the step waits and retries without consuming its retry
+budget. Authentication and expired-session recovery do not suppress a provider. The event ledger
+records the exhausted provider and deadline; see [artifacts](../reference/artifacts.md).
+
 ## What differs between the two hosts
 
 | Aspect | `claude` | `codex` |

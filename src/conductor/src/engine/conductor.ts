@@ -116,6 +116,7 @@ import {
   buildParallelFailureEvents,
   type GroupMember,
   type BranchOutcome,
+  type MechanicalFaultOutcome,
   type NoVerdictOutcome,
 } from './group-core.js';
 import { evaluateWhen } from './when-expression.js';
@@ -213,9 +214,6 @@ import {
   remediationDispositionAppendsToPlan,
   remediationDispositionStep,
   sweepStaleReviewArtifacts,
-  classifyAsBuiltReviewOutcome,
-  parseAsBuiltBlockedFindings,
-  readAsBuiltVerdictLine,
   parseAdrDecisions,
   parseTrack,
   parseIntakeSourceRef,
@@ -241,7 +239,16 @@ import {
   isVerdictRunIdentityStep,
 } from './artifacts.js';
 import { extractStoryCriterionIds } from './story-criteria.js';
+import {
+  AS_BUILT_VERDICT_PATH,
+  asBuiltFindingDetail,
+  asBuiltOutcome,
+  persistAsBuiltVerdict,
+  readAsBuiltVerdict,
+  type RecordedAsBuiltFinding,
+} from './as-built-verdict-store.js';
 import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
+import type { AsBuiltGoverningReference } from './as-built-contract.js';
 import { canonicalTaskId } from './autoheal.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
 import {
@@ -467,6 +474,7 @@ import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
+import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
 
@@ -677,6 +685,8 @@ export function isEngineComputedStep(step: StepName): boolean {
 // Anti-ping-pong: a single gate may be re-opened by kickback at most this many
 // times per feature before the loop HALTs for a human.
 const MAX_KICKBACKS_PER_GATE = 2;
+/** Bound message-derived reset deadlines so a malformed provider response cannot wedge a run. */
+const MAX_RATE_LIMIT_DEADLINE_MS = 6 * 60 * 60 * 1000;
 
 /**
  * Identifies the gate evidence that authorized a remediation dispatch. A
@@ -736,6 +746,27 @@ export function remediationLapCapForGate(
 }
 
 /**
+ * Round budget for the validation-group join's `/remediate` dispatch. The
+ * process-local round counter must never bind tighter than the durable
+ * per-gate lap caps `planRemediation` enforces from the kickback ledger —
+ * otherwise an operator `kickback-budget raise` is silently ignored and the
+ * join falls through to a generic needs-human halt. It still never drops
+ * below MAX_KICKBACKS_PER_GATE, which bounds routes with no durable lap.
+ */
+export async function validationJoinRemediationRoundCap(
+  projectRoot: string,
+  config: HarnessConfig,
+): Promise<number> {
+  const ledger = await readKickbackLedger(projectRoot).catch(() => undefined);
+  let cap = MAX_KICKBACKS_PER_GATE;
+  for (const gate of ['prd_audit', 'architecture_review_as_built'] as const) {
+    const gateCap = ledger?.gates[gate]?.effectiveLapCap ?? remediationLapCapForGate(gate, config);
+    cap = Math.max(cap, gateCap);
+  }
+  return cap;
+}
+
+/**
  * Authored `Governing clause` cells carry inline markdown. The clause grammar is
  * anchored on a bare identifier, so a habitually backticked stem
  * (`` `adr-x` + Decision 4 ``) failed the match before any ADR lookup ran, and
@@ -744,85 +775,38 @@ export function remediationLapCapForGate(
  * this cell; strip it before matching. `_` is left intact because it is a legal
  * character in a task id.
  */
-function stripClauseEmphasis(clause: string): string {
-  return clause.replace(/[`*]+/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
 export type AsBuiltGoverningClauseResolution =
-  | { kind: 'adr'; clause: string }
-  | { kind: 'plan-task'; clause: string; parentTask: string };
+  | { kind: 'adr'; clause: string; reference: AsBuiltGoverningReference }
+  | { kind: 'plan-task'; clause: string; parentTask: string; reference: AsBuiltGoverningReference };
 
-/** Resolve a remediable as-built finding's approved ADR decision or active-plan task. */
-export async function resolveAsBuiltGoverningClause(
-  projectRoot: string,
-  activePlan: string,
-  clause: string,
-): Promise<AsBuiltGoverningClauseResolution | null> {
-  const normalizedClause = stripClauseEmphasis(clause);
-  const taskReference = normalizedClause.match(/^task\s+([A-Za-z0-9._-]+)$/i)?.[1] ??
-    (/^[A-Za-z0-9._-]+$/.test(normalizedClause) ? normalizedClause : undefined);
-  if (taskReference !== undefined) {
-    const parentTask = [...parsePlanTaskBodies(activePlan).keys()].find(
-      (taskId) => taskId.toLowerCase() === taskReference.toLowerCase(),
-    );
-    if (parentTask !== undefined) {
-      return { kind: 'plan-task', clause: normalizedClause, parentTask };
-    }
-  }
-
-  const adrReference = normalizedClause.match(
-    // The skill's own template renders as `<stem> + <decision number>`, so the
-    // literal word `decision` is optional; requiring it made the documented
-    // form unresolvable. ADR headings themselves use the `D3` shorthand, so
-    // reviewers naturally cite `<stem> D3` — accept that form too (#2228).
-    // Dotted citations such as `<stem> D5.2` govern the whole D5 decision (#2424).
-    /^([A-Za-z0-9][A-Za-z0-9._-]*)\s+(?:\+\s*)?(?:decision\s+|D)?(\d+)(?:\.\d+)*$/i,
-  );
-  if (!adrReference) return null;
-  const [, stem, decisionNumber] = adrReference;
-  let decisionFiles: string[];
-  try {
-    decisionFiles = await readdir(join(projectRoot, '.docs', 'decisions'));
-  } catch {
-    return null;
-  }
-  const decisionFile = decisionFiles.find(
-    (file) => file.toLowerCase() === `${stem}.md`.toLowerCase(),
-  );
-  if (decisionFile === undefined) return null;
-
-  let decisionText: string;
-  try {
-    decisionText = await readFile(join(projectRoot, '.docs', 'decisions', decisionFile), 'utf8');
-  } catch {
-    return null;
-  }
-  const approved =
-    /^(?:\*\*)?status(?:\*\*)?\s*:(?:\*\*)?\s*approved\b/im.test(decisionText) ||
-    /^status\s*:\s*approved\b/im.test(decisionText);
-  if (!approved) return null;
-
-  const parsedDecisions = parseAdrDecisions(decisionText);
-  if (parsedDecisions.kind !== 'decisions' || !parsedDecisions.ids.has(decisionNumber)) return null;
-
-  return { kind: 'adr', clause: normalizedClause };
+function renderAsBuiltGoverningReference(reference: AsBuiltGoverningReference): string {
+  return reference.kind === 'adr-decision'
+    ? `${reference.stem} decision ${reference.decision}`
+    : `Task ${reference.taskId}`;
 }
 
-/** Render parser-validated BLOCKED findings into an operator-facing halt body. */
-function renderAsBuiltBlockedFindingDetail(report: string | undefined): string {
-  if (report === undefined) return '';
-  const verdict = readAsBuiltVerdictLine(report);
-  if (!verdict.found || verdict.recognized !== 'BLOCKED') {
-    return '';
-  }
-  const parsed = parseAsBuiltBlockedFindings(report);
-  return parsed.ok
-    ? '\n\nBlocking findings:\n' + parsed.value.findings
-      .map((finding) =>
-        `${finding.id} (${finding.class}; ${finding.clause || 'no governing clause'}): ${finding.summary}`,
-      )
-      .join('\n')
-    : `\n\nBlocking Findings parse fault: ${parsed.error}`;
+function typedAsBuiltResolution(reference: AsBuiltGoverningReference): AsBuiltGoverningClauseResolution {
+  const clause = renderAsBuiltGoverningReference(reference);
+  return reference.kind === 'adr-decision'
+    ? { kind: 'adr', clause, reference }
+    : { kind: 'plan-task', clause, parentTask: reference.taskId, reference };
+}
+
+function renderAsBuiltBlockedFindingDetail(findings: readonly import('./as-built-contract.js').AsBuiltFinding[] | undefined): string {
+  return findings && findings.length > 0 ? `\n\nBlocking findings:\n${asBuiltFindingDetail(findings)}` : '';
+}
+
+async function readAsBuiltRoutingOutcome(projectRoot: string): Promise<{
+  kind: 'approved' | 'plan-gap-delivered' | 'plan-gap-undelivered' | 'blocked-remediable' | 'blocked-design' | 'invalid';
+  findings?: readonly import('./as-built-contract.js').AsBuiltFinding[];
+}> {
+  const stored = await readAsBuiltVerdict(projectRoot);
+  if (stored.kind !== 'present') return { kind: 'invalid' };
+  const kind = asBuiltOutcome(stored.value.verdict);
+  return {
+    kind,
+    ...(stored.value.verdict.verdict === 'BLOCKED' ? { findings: stored.value.verdict.findings } : {}),
+  };
 }
 
 /** The prd-audit cap is both an absolute count and a fraction of authored plan work. */
@@ -1391,6 +1375,8 @@ export interface StepRunResult {
   infrastructureFailure?: Pick<CoverageBindingPayloadError, 'name' | 'kind' | 'reason'>;
   /** True only when this build-review lap observed an infrastructure fault. */
   currentLapMechanicalFault?: boolean;
+  /** A custom review had no provider with an available read-only review mode. */
+  buildReviewReadOnlyReviewUnavailable?: true;
   /**
    * Typed only by the FINISH composition boundary. Kept unknown at this edge
    * so malformed adapter results fail closed instead of reaching remediation.
@@ -1407,6 +1393,8 @@ export interface StepRunResult {
   unretryableInputs?: {
     retryAfterStep: StepName;
   };
+  /** Deterministic as-built input/capability failures never enter retries. */
+  asBuiltFault?: { kind: 'input' | 'capability'; reason: string };
   /** Provider routing identity and ordered candidate-attempt accounting. */
   preferredProvider?: string;
   actualProvider?: string;
@@ -1566,6 +1554,8 @@ export interface ComplexityAssessment extends ProviderAttributionMetadata {
 }
 
 export interface StepRunOptions {
+  /** Daemon-start capability observations for custom build-review candidates. */
+  readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>;
   /**
    * Durable PRD widening authority rendered by the engine for an audit
    * reviewer. It is history for judgement only: the reviewer cannot use it to
@@ -1756,6 +1746,8 @@ export type ArtifactReviewResult = 'approved' | 'rejected' | 'skip';
  * observed PR title/body prose needs a single quality pass.
  */
 export interface FinishPublicationCoordinator {
+  /** Production coordinators retain the current-HEAD SHIP-evidence fence. */
+  requiresArtifactValidation?: boolean;
   advance(input: {
     state: ConductState;
     mode: RunMode;
@@ -1937,6 +1929,8 @@ export interface ConductorOptions {
    * handling falls back to bare sleep (existing behavior).
    */
   rateLimitEpisode?: RateLimitEpisode;
+  /** Frozen daemon-start capability observations for custom build-review candidates. */
+  readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>;
   /**
    * Task 22: Callback to register an in-flight rate-limit wait AbortController
    * with the daemon-level handler. Called when a conductor creates a wait controller
@@ -2032,6 +2026,15 @@ export function renderExhaustedMechanicalBuildReviewHalt(
     `Current lap ${aggregate.lapId}: ${failure.rubric} closed cause ${failure.reason} (${failure.detail}).`,
     `1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap ${aggregate.lapId} --rubric ${failure.rubric} --rationale "<rationale>".`,
     '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
+  ].join('\n');
+}
+
+/** Render the closed recovery for a custom review with no read-only candidate. */
+export function renderReadOnlyReviewUnavailableBuildReviewHalt(detail: string): string {
+  return [
+    'build_review halted: read-only-review-unavailable.',
+    detail,
+    'Install or enable a read-only review mode for one listed provider, or record reduced coverage for this rubric before re-queueing the feature.',
   ].join('\n');
 }
 
@@ -2661,23 +2664,30 @@ export class Conductor {
     const unreadable = await this.reloadPendingAsBuiltRemediationFindings();
     if (unreadable) return unreadable;
     if (this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
-    const [reportPath] = await findArtifactFilesForStep(
-      this.projectRoot,
-      'architecture_review_as_built',
-    );
-    if (!reportPath) return 'as-built verdict artifact is unavailable for recorded-findings projection';
-    let reportText: string;
-    try {
-      reportText = await readFile(reportPath, 'utf8');
-    } catch (error) {
-      return `as-built verdict artifact could not be read for recorded-findings projection: ${error instanceof Error ? error.message : String(error)}`;
+    const stored = await readAsBuiltVerdict(this.projectRoot);
+    if (stored.kind !== 'present') {
+      return stored.kind === 'unreadable'
+        ? `as-built verdict artifact could not be read for recorded-findings projection: ${stored.reason}`
+        : 'as-built verdict artifact is absent for recorded-findings projection';
     }
-    const projected = await persistRecordedFindings(
-      reportPath,
-      reportText,
-      [...this.pendingAsBuiltRemediationFindings.values()],
-    );
-    if (!projected.ok) return projected.message;
+    const recordedFindings: RecordedAsBuiltFinding[] = [...this.pendingAsBuiltRemediationFindings.values()]
+      .map((finding) => ({
+        id: finding.finding,
+        class: finding.class,
+        ...(finding.reference ? { reference: finding.reference } : {}),
+        summary: finding.summary,
+        outcome: finding.outcome,
+      }));
+    try {
+      await persistAsBuiltVerdict(this.projectRoot, stored.value.verdict, {
+        attemptId: stored.value.attemptId,
+        codeStamp: stored.value.codeStamp,
+        policy: stored.value.policy,
+        recordedFindings,
+      });
+    } catch (error) {
+      return `as-built typed verdict could not record remediation findings: ${error instanceof Error ? error.message : String(error)}`;
+    }
     await this.clearPendingAsBuiltRemediationFindings();
     this.pendingAsBuiltRemediationFindings.clear();
     return undefined;
@@ -2689,6 +2699,7 @@ export class Conductor {
    * fallback to bare sleep).
    */
   private rateLimitEpisode: RateLimitEpisode | undefined;
+  private readOnlyReviewCapabilities: Readonly<Record<string, ReadOnlyReviewCapability>> | undefined;
 
   /**
    * Task 22: Optional callback to register in-flight wait AbortControllers with
@@ -3025,6 +3036,7 @@ export class Conductor {
     step: StepName,
     expectedRunId: string | undefined,
     dispatchStartedAt: number | undefined,
+    dispatchOutput?: string,
   ): Promise<CompletionResult | undefined> {
     if (
       step !== 'manual_test' &&
@@ -3033,6 +3045,26 @@ export class Conductor {
     ) return undefined;
 
     try {
+      if (step === 'architecture_review_as_built') {
+        // A rejected structured result persisted nothing; record the
+        // rejection (and its named field) as its own absent outcome rather
+        // than a generic missing file or a prior lap's verdict.
+        if (dispatchOutput?.startsWith('structured-result-rejected:')) {
+          return { done: false, routeClass: 'absent', retrySignal: 'structured-result-rejected', reason: dispatchOutput };
+        }
+        const stored = await readAsBuiltVerdict(this.projectRoot);
+        if (stored.kind !== 'present') {
+          return { done: false, routeClass: 'absent', reason: stored.kind === 'absent' ? `${AS_BUILT_VERDICT_PATH} is missing` : stored.reason };
+        }
+        if (expectedRunId !== undefined && stored.value.attemptId !== expectedRunId) {
+          return {
+            done: false, routeClass: 'absent', retrySignal: 'stale-run-identity',
+            verdictFreshness: { artifact: join(this.projectRoot, AS_BUILT_VERDICT_PATH), floorSource: 'run-identity', outcome: 'stale_invalidated', fresh: false },
+            reason: `${AS_BUILT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${expectedRunId}`,
+          };
+        }
+        return undefined;
+      }
       const files = await findArtifactFilesForStep(this.projectRoot, step);
       const identities = await verdictProducedByRun(
         this.projectRoot,
@@ -3141,10 +3173,9 @@ export class Conductor {
     // `verifyArtifacts:false` is the intentional mocked-dispatch mode used by
     // focused unit tests. Its success authority is the runner result, so the
     // publication fence must not reintroduce artifact-only validation and
-    // invalidate an otherwise green SHIP round indefinitely. A production
-    // publication coordinator is not an exemption: ADR 2026-07-26 requires
-    // current-HEAD validation before every FINISH publication side effect.
-    if (!this.verifyArtifacts && !this.daemon) return [];
+    // invalidate an otherwise green SHIP round indefinitely. The production
+    // coordinator declares its current-HEAD validation requirement explicitly.
+    if (!this.verifyArtifacts && this.finishPublication?.requiresArtifactValidation !== true) return [];
 
     const track = await this.resolveTrack(state);
     const membership = resolveGroupMembership(
@@ -3597,6 +3628,7 @@ export class Conductor {
     this.verifyMergedShipment = opts.verifyMergedShipment;
     this.shipmentEvidence = opts.shipmentEvidence;
     this.rateLimitEpisode = opts.rateLimitEpisode;
+    this.readOnlyReviewCapabilities = opts.readOnlyReviewCapabilities;
     this.registerAbortController = opts.registerAbortController;
     this.exitProcess = opts.exitProcess ?? ((code) => process.exit(code));
   }
@@ -4546,6 +4578,73 @@ export class Conductor {
    * next gate pass and halt then). A missing/stale/unusable plan is `none` —
    * the caller falls through to its deterministic fallback or the generic HALT.
    */
+  /**
+   * Pre-dispatch prd_audit lap-cap check (#2753). Returns the kickback-cap
+   * halt planRemediation would otherwise produce after /remediate, or
+   * undefined when the lap is available or the inputs are not conclusive
+   * (the post-dispatch path then decides exactly as before).
+   */
+  private async prdAuditLapCapHaltBeforeRemediate(
+    state: ConductState,
+    hintSource: RemediationHintSource,
+  ): Promise<{ kind: 'halt'; detail: string; haltClass: KickbackCapHaltClass } | undefined> {
+    const evidence = hintSource.evidence ?? [];
+    const prdAuditEvidenceFile = evidence.find((p) => p.gate === 'prd_audit')?.evidenceFile;
+    if (prdAuditEvidenceFile === undefined) return undefined;
+    try {
+      const activePlanPath = await this.getActivePlanPath();
+      const planPath = activePlanPath === null
+        ? await resolveFeaturePlanPath(this.projectRoot, state.feature_desc)
+        : isAbsolute(activePlanPath) ? activePlanPath : join(this.projectRoot, activePlanPath);
+      if (!planPath) return undefined;
+      const planText = await readFile(planPath, 'utf8');
+      const report = await readFile(join(this.projectRoot, prdAuditEvidenceFile), 'utf8');
+      const parsed = parsePrdAuditReport(report, planText);
+      if (!parsed.ok || parsed.value.rejectedRows.length > 0) return undefined;
+      const fixable = parsed.value.findings.filter(
+        (finding) => finding.grade === 'FIXABLE' && finding.planTask !== undefined,
+      );
+      if (fixable.length === 0) return undefined;
+      const lapCap = remediationLapCapForGate('prd_audit', this.config);
+      const authoredTaskCount = planText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0;
+      const budget = await readRemediationGateAppendBudget(
+        this.projectRoot, this.config, 'prd_audit', lapCap, 0, 0, authoredTaskCount,
+      );
+      if (remediationGateAppendBudgetExhausted(budget) !== 'laps') return undefined;
+      const asBuiltEnabled = (this.config as HarnessConfig & {
+        architecture_review_as_built?: { remediation?: { enabled?: boolean } };
+      }).architecture_review_as_built?.remediation?.enabled ?? true;
+      const asBuiltEvidenceFile = evidence.find(
+        (p) => p.gate === 'architecture_review_as_built',
+      )?.evidenceFile;
+      const asBuiltFindings = asBuiltEnabled && asBuiltEvidenceFile !== undefined
+        ? (await readAsBuiltRoutingOutcome(this.projectRoot).catch(() => undefined))?.findings
+        : undefined;
+      const findingList = [...new Set(fixable.map((finding) => finding.criterion))].join(', ');
+      const capReason = `lap cap reached (${budget.priorLaps}/${budget.lapCap})`;
+      const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'prd_audit', {
+        allowance: 'laps',
+        consumed: budget.priorLaps,
+        limit: budget.lapCap,
+        latestReason: capReason,
+      });
+      return {
+        kind: 'halt',
+        haltClass: KICKBACK_CAP_HALT_CLASS,
+        detail: `prd_audit remediation ${capReason} before appending fix tasks. `
+          + `Findings: ${findingList}.\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}`
+          + `\n${renderKickbackRecoveryHint({
+            slug: this.featureSlug,
+            gate: 'prd_audit',
+            allowance: 'laps',
+          })}`
+          + renderAsBuiltBlockedFindingDetail(asBuiltFindings),
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
   private async planRemediation(
     state: ConductState,
     steps: StepDefinition[],
@@ -4607,6 +4706,14 @@ export class Conductor {
         };
       }
     }
+    // #2753: the prd_audit lap cap depends only on the ledger and the audit
+    // report, both known before /remediate runs. Decide it here so a lap that
+    // cannot append never pays for remediate nor strands a remediation.json
+    // the resumed (raised) lap cannot reuse. Same halt text, class and
+    // kickback-cap evidence as the post-dispatch exit below, which remains
+    // the authority for growth caps (they need remediate's task count).
+    const preDispatchCapHalt = await this.prdAuditLapCapHaltBeforeRemediate(state, hintSource);
+    if (preDispatchCapHalt) return preDispatchCapHalt;
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
     const planResult = await readRemediationPlanResult(
       this.projectRoot,
@@ -4731,10 +4838,10 @@ export class Conductor {
     const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
       architecture_review_as_built?: { remediation?: { enabled?: boolean } };
     }).architecture_review_as_built?.remediation?.enabled ?? true;
-    const asBuiltRemediation = asBuiltRemediationEnabled && asBuiltEvidenceFile !== undefined;
-    const asBuiltEvidenceExists = asBuiltRemediation && asBuiltEvidenceFile !== undefined && await accessFile(
-      join(this.projectRoot, asBuiltEvidenceFile),
-    ).then(() => true).catch(() => false);
+    const asBuiltRemediation = asBuiltRemediationEnabled &&
+      asBuiltEvidenceFile !== undefined &&
+      (hintSource.source === 'architecture-review-as-built' || hintSource.source === 'validation-group');
+    const asBuiltEvidenceExists = asBuiltRemediation && asBuiltEvidenceFile !== undefined;
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
     const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config);
     const prdAuditFindings = new Map<string, { criterion: string; parentTask: string }>();
@@ -4744,7 +4851,7 @@ export class Conductor {
     let prdAuditValidated = false;
     let asBuiltValidated = false;
     let activePlanText = '';
-    let asBuiltReport: string | undefined;
+    let asBuiltTypedFindings: readonly import('./as-built-contract.js').AsBuiltFinding[] | undefined;
     if (planPath && prdAuditRemediation) {
       try {
         activePlanText = await readFile(
@@ -4817,40 +4924,35 @@ export class Conductor {
           'utf8',
         );
         activePlanText = asBuiltPlanText;
-        asBuiltReport = await readFile(join(this.projectRoot, asBuiltEvidenceFile), 'utf8');
-        const parsed = parseAsBuiltBlockedFindings(asBuiltReport);
-        if (!parsed.ok) {
+        const stored = await readAsBuiltVerdict(this.projectRoot);
+        if (stored.kind !== 'present' || stored.value.verdict.verdict !== 'BLOCKED') {
           // In a mixed validation group, a malformed/terminal as-built
           // report must not withdraw independently-authorized PRD-audit
           // repair work. The join will still fail-closed on that as-built
           // verdict after the PRD append attempt. Pure as-built remediation
           // remains a mechanical halt because no other gate owns the work.
           if (!prdAuditRemediation) {
-            const detail = `As-built review report mechanical fault: ${parsed.error}`;
+            const detail = stored.kind === 'unreadable'
+              ? `As-built review verdict mechanical fault: ${stored.reason}`
+              : 'As-built review verdict mechanical fault: a typed BLOCKED verdict is required for remediation authorization.';
             await this.events.emit({ type: 'gate_blocked', step: 'architecture_review_as_built', reason: detail });
             return { kind: 'halt', haltClass: 'mechanical', detail };
           }
         } else {
-          for (const finding of parsed.value.findings) {
+          asBuiltTypedFindings = stored.value.verdict.findings;
+          for (const finding of stored.value.verdict.findings) {
             if (finding.class !== 'REMEDIABLE') continue;
-            const resolution = await resolveAsBuiltGoverningClause(
-              this.projectRoot,
-              asBuiltPlanText,
-              finding.clause,
-            );
-            if (resolution !== null) {
-              asBuiltFindings.set(finding.id, resolution);
-              asBuiltRecordedFindings.set(finding.id, {
-                gate: 'architecture_review_as_built',
-                finding: finding.id,
-                class: 'REMEDIABLE',
-                governingClause: finding.clause,
-                summary: finding.summary,
-                outcome: 'remediated',
-              });
-            } else {
-              asBuiltUnresolvableClauses.push({ id: finding.id, clause: finding.clause });
-            }
+            const resolution = typedAsBuiltResolution(finding.reference);
+            asBuiltFindings.set(finding.id, resolution);
+            asBuiltRecordedFindings.set(finding.id, {
+              gate: 'architecture_review_as_built',
+              finding: finding.id,
+              class: 'REMEDIABLE',
+              governingClause: resolution.clause,
+              reference: resolution.reference,
+              summary: finding.summary,
+              outcome: 'remediated',
+            });
           }
           asBuiltValidated = true;
         }
@@ -5108,7 +5210,7 @@ export class Conductor {
         detail:
           `${hintSource.source} remediation requested ${allTasks.length} plan task${allTasks.length === 1 ? '' : 's'} ` +
           'with no plan-growth allowance; only validated prd_audit FIXABLE or as-built REMEDIABLE findings may append remediation work.' +
-          renderAsBuiltBlockedFindingDetail(asBuiltReport),
+          renderAsBuiltBlockedFindingDetail(asBuiltTypedFindings),
       };
     }
 
@@ -5181,7 +5283,7 @@ export class Conductor {
                 gate: 'prd_audit',
                 allowance: exhausted,
               })}`
-              + renderAsBuiltBlockedFindingDetail(asBuiltReport),
+              + renderAsBuiltBlockedFindingDetail(asBuiltTypedFindings),
           };
         }
       }
@@ -5209,7 +5311,7 @@ export class Conductor {
                 gate: 'architecture_review_as_built',
                 allowance: exhausted,
               })}` +
-              renderAsBuiltBlockedFindingDetail(asBuiltReport),
+              renderAsBuiltBlockedFindingDetail(asBuiltTypedFindings),
           };
         }
       }
@@ -5245,7 +5347,7 @@ export class Conductor {
             // allowance AND every finding. This exit is shared with prd_audit,
             // so it renders unconditionally — the helper yields '' unless an
             // as-built BLOCKED report actually participates.
-            renderAsBuiltBlockedFindingDetail(asBuiltReport),
+            renderAsBuiltBlockedFindingDetail(asBuiltTypedFindings),
         };
       }
       // Existing-task remediation deliberately reaches the budget block above
@@ -5413,7 +5515,7 @@ export class Conductor {
           (admissionKeys.length > 0
             ? `\nAvailable admission keys: ${admissionKeys.join(', ')}.`
             : '\nNo admission keys were available.') +
-          renderAsBuiltBlockedFindingDetail(asBuiltReport),
+          renderAsBuiltBlockedFindingDetail(asBuiltTypedFindings),
       };
     }
     if (routedFixes.length > 0) {
@@ -6008,6 +6110,14 @@ export class Conductor {
     });
   }
 
+  /** Halt a deterministic as-built precondition fault identically in both dispatch paths. */
+  private async haltForAsBuiltFault(state: ConductState, reason: string): Promise<void> {
+    await this.closeOpenExecutions();
+    await this.writeHaltMarker(reason + '\n', 'mechanical');
+    await this.persistPendingStateChanges(state, 'persist conductor transition');
+    await this.emitLoopHalt(reason);
+  }
+
   /** Resolve the strict merged-history verdict for the recorded implementation PR. */
   private async recordedMergedShipment(
     state: ConductState,
@@ -6120,6 +6230,13 @@ export class Conductor {
       (t) => t,
       () => null,
     );
+  }
+
+  /** Preserve the daemon-start capability observation for build-review only. */
+  private buildReviewCapabilityOption(name: StepName): Pick<StepRunOptions, 'readOnlyReviewCapabilities'> {
+    return name === 'build_review' && this.readOnlyReviewCapabilities !== undefined
+      ? { readOnlyReviewCapabilities: this.readOnlyReviewCapabilities }
+      : {};
   }
 
   /**
@@ -6251,6 +6368,7 @@ export class Conductor {
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
+          ...this.buildReviewCapabilityOption(name),
         });
       }
       const installed = await this.guardrails.resolveInstalledHarnessRoot();
@@ -6279,6 +6397,7 @@ export class Conductor {
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
+          ...this.buildReviewCapabilityOption(name),
         });
       } finally {
         if (hadConfig) process.env.CLAUDE_CONFIG_DIR = priorConfig;
@@ -6451,6 +6570,7 @@ export class Conductor {
         retryReason: retryHint,
         ...identityOption,
         ...executionContextOption,
+        ...this.buildReviewCapabilityOption(name),
       });
     } finally {
       if (this.providerExecution) {
@@ -8149,6 +8269,11 @@ export class Conductor {
                     member,
                     `Validation group "${step.name}" branch "${member.name}" produced no-verdict: ${outcome.reason}.`,
                   );
+                } else if (outcome.kind === 'mechanical-fault') {
+                  await closeMemberFailure(
+                    member,
+                    `Validation group "${step.name}" branch "${member.name}" produced mechanical-fault: ${outcome.reason}.`,
+                  );
                 }
               }
             };
@@ -8210,6 +8335,8 @@ export class Conductor {
                   memberExecutionContexts.set(member.name, executionContext);
                   return runGroupBranch(member, state, {
                       stepRunner: this.stepRunner,
+                      providerAvailability: this.providerExecution?.providerAvailability,
+                      onProviderSuppressed: this.providerExecution?.onProviderSuppressed,
                       ...(member.name === 'prd_audit' && this.prdWideningReviewContext
                         ? { prdWideningReviewContext: this.prdWideningReviewContext }
                         : {}),
@@ -8453,6 +8580,7 @@ export class Conductor {
             const hasGenuineFailure = outcomes.some(
               (outcome) =>
                 outcome.kind === 'no-verdict' ||
+                outcome.kind === 'mechanical-fault' ||
                 outcome.kind === 'permission-denied' ||
                 (outcome.kind === 'verdict' && outcome.verdict !== 'pass'),
             );
@@ -8621,6 +8749,38 @@ export class Conductor {
             };
 
             const allGreen = outcomes.every((_, idx) => memberSatisfiedAtJoin(idx));
+
+            const mechanicalFaultIdx = outcomes.findIndex((outcome) => outcome.kind === 'mechanical-fault');
+            if (mechanicalFaultIdx !== -1) {
+              const mechanicalFault = outcomes[mechanicalFaultIdx] as MechanicalFaultOutcome;
+              const mechanicalFaultMember = membership.dispatchable[mechanicalFaultIdx]!;
+              await closeSettledMembers(outcomes);
+              // S6.11: a mechanical fault is a no-verdict branch — apply the
+              // same step-failure handling: the member is recorded failed and
+              // satisfied siblings are retained, with no synthetic gap.
+              try {
+                await this.commitStateChanges(state, `fail ${step.name} validation group`, {
+                  ...Object.fromEntries(
+                    membership.dispatchable.flatMap((member, idx) =>
+                      idx !== mechanicalFaultIdx && memberSatisfiedAtJoin(idx)
+                        ? [[member.name, 'done'], [`${builtinGroup.name}__${member.name}`, 'done']]
+                        : [],
+                    ),
+                  ),
+                  [mechanicalFaultMember.name]: 'failed',
+                  last_step: step.name,
+                });
+              } catch (err) {
+                (this.log ?? console.warn)(
+                  `[conductor] validation-group mechanical-fault halt could not persist member state: ` +
+                    `${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
+              await this.haltForAsBuiltFault(state, mechanicalFault.reason);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
 
             // Task 18: a `no-verdict` outcome means a branch exhausted its
             // retries without ever producing a completion marker — an
@@ -8829,16 +8989,7 @@ export class Conductor {
                 outcomes[idx]?.verdict === 'pass' &&
                 gateVerdicts.get('prd_audit')?.satisfied !== true,
               );
-              const asBuiltFiles = await findArtifactFilesForStep(
-                this.projectRoot,
-                'architecture_review_as_built',
-              );
-              const asBuiltReport = asBuiltFiles[0]
-                ? await readFile(asBuiltFiles[0], 'utf8')
-                : undefined;
-              const asBuiltOutcome = asBuiltReport !== undefined
-                ? classifyAsBuiltReviewOutcome(asBuiltReport)
-                : { kind: 'invalid' as const };
+              const asBuiltOutcome = await readAsBuiltRoutingOutcome(this.projectRoot);
               const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
                 architecture_review_as_built?: { remediation?: { enabled?: boolean } };
               }).architecture_review_as_built?.remediation?.enabled ?? true;
@@ -8895,7 +9046,7 @@ export class Conductor {
                   // reached and what remained unrepaired.
                   const reason =
                     `as-built architecture review kickback-to-build no-op: ${escalation.reason}` +
-                    renderAsBuiltBlockedFindingDetail(asBuiltReport);
+                    renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings);
                   await this.writeHaltMarker(reason + '\n', KICKBACK_CAP_HALT_CLASS);
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   await closeClassifiedPassingMembers();
@@ -8919,7 +9070,7 @@ export class Conductor {
                 }
                 evidence.push({
                   gate: 'architecture_review_as_built',
-                  evidenceFile: '.pipeline/architecture-review-as-built.md',
+                  evidenceFile: AS_BUILT_VERDICT_PATH,
                 });
                 const dispatchContext =
                   `Blocking validation-group gaps at ${evidence.map((item) => item.evidenceFile).join(' and ')}. ` +
@@ -9020,7 +9171,7 @@ export class Conductor {
                   state,
                   steps,
                   'Blocking validation-group gaps at .pipeline/prd-audit.md and ' +
-                    '.pipeline/architecture-review-as-built.md. Plan remediation per the ' +
+                    `${AS_BUILT_VERDICT_PATH}. Plan remediation per the ` +
                     '/remediate skill and write .pipeline/remediation.json.',
                   {
                     source: 'validation-group',
@@ -9031,7 +9182,7 @@ export class Conductor {
                         ? []
                         : [{
                             gate: 'architecture_review_as_built' as const,
-                            evidenceFile: '.pipeline/architecture-review-as-built.md',
+                            evidenceFile: AS_BUILT_VERDICT_PATH,
                           }]),
                     ],
                   },
@@ -9063,7 +9214,7 @@ export class Conductor {
                   (asBuiltOutcome.kind === 'blocked-design' ||
                     asBuiltOutcome.kind === 'blocked-remediable' ||
                     asBuiltOutcome.kind === 'invalid'
-                    ? renderAsBuiltBlockedFindingDetail(asBuiltReport)
+                    ? renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings)
                     : '');
                 await this.writeHaltMarker(
                   reason + '\n',
@@ -9165,7 +9316,10 @@ export class Conductor {
               // make progress — or halt on its own cap/D2 no-op guard —
               // exactly like the serial baseline does when its LLM-routed
               // budget runs out).
-              if (gapMemberNamesForMerge.length > 0 && remediationRounds < MAX_KICKBACKS_PER_GATE) {
+              if (
+                gapMemberNamesForMerge.length > 0 &&
+                remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config)
+              ) {
                 mtMergeHandled = true;
                 const evidence: RemediationGateProvenance[] = [];
                 if (gapMemberNamesForMerge.includes('prd_audit' as StepName)) {
@@ -9174,7 +9328,7 @@ export class Conductor {
                 if (gapMemberNamesForMerge.includes('architecture_review_as_built' as StepName)) {
                   evidence.push({
                     gate: 'architecture_review_as_built',
-                    evidenceFile: '.pipeline/architecture-review-as-built.md',
+                    evidenceFile: AS_BUILT_VERDICT_PATH,
                   });
                 }
                 const dispatchContext =
@@ -9299,7 +9453,10 @@ export class Conductor {
             // work order (earliest target across MT + this union, hint
             // concatenation) lands in Task 22; this task only covers the
             // no-manual_test-in-play / manual_test-passed shape.
-            if (!mtMergeHandled && this.daemon && remediationRounds < MAX_KICKBACKS_PER_GATE) {
+            if (
+              !mtMergeHandled && this.daemon &&
+              remediationRounds < await validationJoinRemediationRoundCap(this.projectRoot, this.config)
+            ) {
               const gapMemberNames = membership.dispatchable
                 .filter((member, idx) => {
                   if (member.name === 'manual_test') return false;
@@ -9339,7 +9496,7 @@ export class Conductor {
                 if (gapMemberNames.includes('architecture_review_as_built' as StepName)) {
                   evidence.push({
                     gate: 'architecture_review_as_built',
-                    evidenceFile: '.pipeline/architecture-review-as-built.md',
+                    evidenceFile: AS_BUILT_VERDICT_PATH,
                   });
                 }
                 const dispatchContext =
@@ -10263,6 +10420,7 @@ export class Conductor {
                                 ...(step.name === 'prd_audit' && this.prdWideningReviewContext
                                   ? { prdWideningReviewContext: this.prdWideningReviewContext }
                                   : {}),
+                                ...this.buildReviewCapabilityOption(step.name),
                                 retryReason: retryHint,
                                 attempt,
                                 escalate: resolved.escalate,
@@ -10377,6 +10535,17 @@ export class Conductor {
             }
           }
 
+          // The as-built projection and native-schema capability are engine
+          // preconditions. A retry cannot make an unreadable input parse or add
+          // a provider capability, so halt before ordinary retry accounting.
+          if (step.name === 'architecture_review_as_built' && result.asBuiltFault) {
+            const reason = result.asBuiltFault.reason;
+            await this.haltForAsBuiltFault(state, reason);
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
+          }
+
           // Rate limit: wait deterministically, then retry WITHOUT burning the
           // retry budget.
           // Task 10: Integrate episode coordinator for deadline-aware backoff.
@@ -10387,7 +10556,8 @@ export class Conductor {
             // synthetic deadline.
             const rateLimitNow = Date.now();
             // Task 18: Prefer deadline-first (parsed from message) over escalation (waitSeconds)
-            const deadline = result.deadline ?? rateLimitNow + (result.waitSeconds ?? 300) * 1000;
+            const requestedDeadline = result.deadline ?? rateLimitNow + (result.waitSeconds ?? 300) * 1000;
+            const deadline = Math.min(requestedDeadline, rateLimitNow + MAX_RATE_LIMIT_DEADLINE_MS);
             let waitMs = deadline - rateLimitNow;
             // Ensure waitMs is positive (defensive guard against clock skew or past deadlines)
             if (waitMs <= 0) {
@@ -10395,10 +10565,25 @@ export class Conductor {
             }
             const waitSeconds = Math.ceil(waitMs / 1000);
 
+            // Limit-message text can identify an account. The persisted reason is deliberately
+            // closed rather than copying that provider output into the event spine.
+            const reason = result.usageExhausted ? 'usage-exhausted' as const : undefined;
+            const provider = typeof result.actualProvider === 'string' && result.actualProvider.trim() !== ''
+              ? result.actualProvider
+              : undefined;
+            // Quota exhaustion is the only rate-limit class that establishes
+            // process-wide provider unavailability. Auth/session recovery
+            // remains eligible for its existing refresh-and-retry path.
+            if (result.usageExhausted === true && provider !== undefined) {
+              this.providerExecution?.providerAvailability?.suppress(provider, deadline);
+              await this.providerExecution?.onProviderSuppressed?.(provider, deadline);
+            }
             await emitTracked({
               type: 'rate_limit',
               waitSeconds,
-              ...(result.usageExhausted ? { reason: 'usage-exhausted' as const } : {}),
+              ...(reason === undefined ? {} : { reason }),
+              ...(provider === undefined ? {} : { provider }),
+              deadline,
             });
 
             // Enter episode with deadline for coordinated backoff
@@ -10769,11 +10954,22 @@ export class Conductor {
               step.name,
               this.currentRunId,
               this.currentAttemptStartedAt,
+              result.output,
             );
             if (handshake?.routeClass === 'absent' && handshake.reason) {
               lastVerdictHandshakeFailure = handshake.reason;
             }
             failedStepResult = result;
+            if (step.name === 'build_review' && result.buildReviewReadOnlyReviewUnavailable === true) {
+              const reason = renderReadOnlyReviewUnavailableBuildReviewHalt(result.output ?? result.refusal?.reason ?? '');
+              state[step.name] = 'failed';
+              await this.writeHaltMarker(reason + '\n', 'needs-human');
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
+              await this.emitLoopHalt(reason);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
             // Task 10: the mechanical lane publishes a terminal aggregate
             // only after consuming its separate allowance. That aggregate is
             // the operator's diagnostic, not a retryable grader-dispatch
@@ -12870,7 +13066,7 @@ export class Conductor {
                   state,
                   steps,
                   'A blocking prd-audit is at .pipeline/prd-audit.md (an as-built ' +
-                    'review may be at .pipeline/architecture-review-as-built.md). Plan ' +
+                    `review may be at ${AS_BUILT_VERDICT_PATH}). Plan ` +
                     'remediation per the /remediate skill and write ' +
                     '.pipeline/remediation.json.',
                   {
@@ -13055,13 +13251,7 @@ export class Conductor {
             }
 
             if (step.name === 'architecture_review_as_built') {
-              const asBuiltFiles = await findArtifactFilesForStep(this.projectRoot, step.name);
-              const asBuiltReport = asBuiltFiles[0]
-                ? await readFile(asBuiltFiles[0], 'utf8')
-                : undefined;
-              const asBuiltOutcome = asBuiltReport !== undefined
-                ? classifyAsBuiltReviewOutcome(asBuiltReport)
-                : { kind: 'invalid' as const };
+              const asBuiltOutcome = await readAsBuiltRoutingOutcome(this.projectRoot);
               const asBuiltRemediationEnabled = (this.config as HarnessConfig & {
                 architecture_review_as_built?: { remediation?: { enabled?: boolean } };
               }).architecture_review_as_built?.remediation?.enabled ?? true;
@@ -13078,7 +13268,7 @@ export class Conductor {
                   // same per-finding listing.
                   const reason =
                     `as-built architecture review kickback-to-build no-op: ${escalation.reason}` +
-                    renderAsBuiltBlockedFindingDetail(asBuiltReport);
+                    renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings);
                   // AB-R5 class / adr-2026-08-12 D1: this serial exit returns
                   // between step_started and step_completed, so the open
                   // execution needs its one terminal before the loop ends. The
@@ -13097,13 +13287,13 @@ export class Conductor {
                   state,
                   steps,
                   'A blocking as-built architecture review is at ' +
-                    '.pipeline/architecture-review-as-built.md. Plan remediation per the ' +
+                    `${AS_BUILT_VERDICT_PATH}. Plan remediation per the ` +
                     '/remediate skill and write .pipeline/remediation.json.',
                   {
                     source: 'architecture-review-as-built',
                     evidence: [{
                       gate: 'architecture_review_as_built',
-                      evidenceFile: '.pipeline/architecture-review-as-built.md',
+                      evidenceFile: AS_BUILT_VERDICT_PATH,
                     }],
                   },
                 );
@@ -13157,7 +13347,7 @@ export class Conductor {
                 (asBuiltOutcome.kind === 'blocked-remediable' && remediableNoPlanReason
                   ? ` — remediation did not route: ${remediableNoPlanReason}`
                   : '') +
-                renderAsBuiltBlockedFindingDetail(asBuiltReport);
+                renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings);
               await this.writeHaltMarker(
                 reason + '\n',
                 asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
@@ -13204,7 +13394,7 @@ export class Conductor {
                       '.pipeline/test-failures.md. Plan remediation per the /remediate ' +
                       'skill and write .pipeline/remediation.json.'
                   : 'A blocking as-built architecture review is at ' +
-                      '.pipeline/architecture-review-as-built.md. Plan remediation per ' +
+                    `${AS_BUILT_VERDICT_PATH}. Plan remediation per ` +
                       'the /remediate skill and write .pipeline/remediation.json.',
                 finishGate
                   ? {
@@ -13215,7 +13405,7 @@ export class Conductor {
                       source: 'as-built architecture review',
                       evidence: [{
                         gate: 'architecture_review_as_built',
-                        evidenceFile: '.pipeline/architecture-review-as-built.md',
+                        evidenceFile: AS_BUILT_VERDICT_PATH,
                       }],
                     },
               );
@@ -14474,6 +14664,8 @@ export class Conductor {
         memberExecutionContexts.set(member.name, executionContext);
         return runGroupBranch(member, state, {
           stepRunner: this.stepRunner,
+          providerAvailability: this.providerExecution?.providerAvailability,
+          onProviderSuppressed: this.providerExecution?.onProviderSuppressed,
           executionContext,
           operatorParkBoundary: this.daemon && this.featureSlug !== undefined
             ? this.operatorParkBoundary
@@ -14613,7 +14805,9 @@ export class Conductor {
       await this.emitExecutionEvent({
         type: 'step_failed',
         step: groupName,
-        error: outcome.kind === 'no-verdict' ? outcome.reason : 'configured group member failed',
+        error: outcome.kind === 'no-verdict' || outcome.kind === 'mechanical-fault'
+          ? outcome.reason
+          : 'configured group member failed',
         retryCount: memberRetryCounts.get(branch.name) ?? 0,
         ...(result?.effort !== undefined ? { effort: result.effort } : {}),
         ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),

@@ -656,6 +656,21 @@ registered provider warns and falls back to the Claude policy
 Procedure and trade-offs are in [multiprovider](../guides/multiprovider.md); the per-provider model
 tables are in [models](models.md).
 
+## provider_substitution
+
+Whether an explicitly selected step may append run-level providers as fallbacks. Optional
+`allow` or `disallow`; any other value is a hard validation error naming this key.
+
+When unset or `allow`, a step's `steps.<name>.llm_provider` is followed by the run-level
+`llm_provider` entries, with duplicates removed in first-occurrence order. When `disallow`, an
+explicit step selection is its complete candidate list. A step without its own selection continues
+to use the run-level list.
+
+Set the key at the top level to establish the default for explicit step selections. Set
+`steps.<name>.provider_substitution` to override it for one step. This key does not change
+usage-exhaustion suppression: unavailable candidates are skipped only after the effective candidate
+list is resolved. See [multiprovider](../guides/multiprovider.md#keep-an-explicit-step-selection-exclusive).
+
 ## ui_renderer
 
 Plugin name for the run UI. Optional string, default `terminal` (`src/conductor/src/index.ts:1020-1023`).
@@ -1183,6 +1198,15 @@ opting a project out of the replacement authority.
 config key is the only off switch. When disabled, the step is marked `skipped` and a `config_skip` event
 is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved once per pass.
 
+Each built-in or custom rubric accepts `timeout_seconds`, independently of `test_suite.timeout_seconds`.
+It defaults to 300 seconds, retaining the engine's existing five-minute review budget for projects
+without an override. Set it explicitly for slower model/effort policies; for example,
+`build_review.custom_rubrics.moneySafety.timeout_seconds: 3600` allows an hour. The value must be
+positive and fit a Node timer (1–2147483647 milliseconds). The budget covers candidate preparation,
+catalog discovery, waiting for the lap, and judgment across provider fallback. Discovery is aborted
+on expiry; an already-running provider may finish, but its late judgment is rejected as a timeout
+and its invocation usage is retained. This is an acceptance deadline, not a process kill timeout.
+
 `testQuality` and `security` accept `enabled`, `max_projection_bytes`, `llm_provider`, `model`, `effort`,
 `model_fallback_ladder`, `max_retries`, `escalate`, and `min_confidence`. `max_projection_bytes` is a
 positive integer UTF-8 byte limit for the rubric's canonical projection; it defaults to `1048576` and the
@@ -1221,11 +1245,18 @@ Selecting a custom rubric adopts its skill as a read-only review policy: its cri
 resources inform findings for the declared question, but its standalone workflow and output format do
 not replace the engine's bounded review contract or aggregate verdict.
 
-Custom review is available on Linux only after bubblewrap proves the read-only profile: the frozen
-source and policy material are readable, while the original checkout, engine evidence, and sibling
-review evidence remain protected. If that profile, an admitted declared requirement, or a runtime
-policy requirement is unavailable, the member records an unsupported-policy coverage failure before
-judging; install/enable bubblewrap or adapt the policy to the read-only role, then rerun. Reuse keys
+Custom findings may cite `evidenceLocations` as `path:line` or inclusive `path:start-end`
+ranges. Every citation must fit entirely inside one admitted source region. The engine
+checks source-region paths, line bounds, and content hashes against the frozen changed input
+before stamping findings, for both Claude and Codex.
+
+Custom review runs on every platform in each provider's own read-only review mode (Claude restricted
+mode and the Codex read-only sandbox), in the ordinary provider environment. The host read-only
+capability result is reported at daemon start, interactive config load, and `daemon status` under
+`READ-ONLY REVIEW CAPABILITY`. A candidate without an available read-only mode is skipped; a member
+with none settles `read-only-review-unavailable` and halts `needs-human` immediately without spending
+mechanical allowance, recoverable with `record-reduced-coverage`. Any reviewer-visible input change
+discards the whole lap as retryable `review-input-mutated`. Reuse keys
 include the selected declaration and captured policy digest, frozen input, engine version, and actual
 provider/model/effort, so a fallback provider never borrows a preferred-provider result. Exact
 operator dispositions remain decision stops and are re-read before an effect is applied.

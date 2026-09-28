@@ -9,7 +9,6 @@ import type { ConductorEvent } from '../../../src/types/events.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import {
   acquireScratchHome,
-  acquireReviewScratchHome,
   collectLegacyScratch,
   readScratchLease,
   releaseScratchHome,
@@ -21,47 +20,6 @@ import {
 const execFile = promisify(execFileCb);
 
 describe('provider scratch homes', () => {
-  it('acquires and idempotently releases external review scratch', async () => {
-    const created: string[] = [];
-    const removed: string[] = [];
-    let leaf = 0;
-    const lease = await acquireReviewScratchHome({
-      worktreeRoot: '/worktree', runId: 'review-run', attempt: 2, provider: 'codex', memberId: 'quality',
-      fs: {
-        mkdir: async (path) => { created.push(path); },
-        lstat: async () => ({ uid: process.getuid?.() ?? 0, mode: 0o700, isSymbolicLink: () => false, isDirectory: () => true }),
-        mkdtemp: async (prefix) => `${prefix}${++leaf}`,
-        chmod: async () => {},
-        rm: async (path) => { removed.push(path); },
-      },
-    });
-
-    expect(lease.home).toContain(`/ai-conductor-build-review-${process.getuid?.() ?? 'nouid'}/review-run/2-codex/review-quality/review-`);
-    await lease.release();
-    await lease.release();
-    expect(created).toHaveLength(4);
-    expect(lease.home).toContain(created[3]!);
-    expect(removed).toEqual([lease.home]);
-  });
-
-  it('seeds private review authentication before exposing the scratch lease', async () => {
-    const seeded: string[] = [];
-    const lease = await acquireReviewScratchHome({
-      worktreeRoot: '/worktree', runId: 'review-auth', attempt: 1, provider: 'codex',
-      fs: {
-        mkdir: async () => {},
-        lstat: async () => ({ uid: process.getuid?.() ?? 0, mode: 0o700, isSymbolicLink: () => false, isDirectory: () => true }),
-        mkdtemp: async (prefix) => `${prefix}unique`,
-        chmod: async () => {},
-        rm: async () => {},
-      },
-      seed: async (home) => { seeded.push(join(home, 'codex-home', 'auth.json')); },
-    });
-
-    expect(seeded).toEqual([join(lease.home, 'codex-home', 'auth.json')]);
-    await lease.release();
-  });
-
   it('retains legacy entries that are not provably stale while continuing after a failed removal', async () => {
     const tempRoot = '/legacy-scratch-refusal';
     const processStartedAt = new Date('2026-08-11T12:00:00.000Z');

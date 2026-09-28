@@ -143,4 +143,14 @@ describe('repository-local release-disposition contract', () => {
       invalidVerdictBlocked: true,
     });
   });
+
+  it('blocks release-note wording that is not one present-tense reader-outcome sentence', async () => {
+    const skill = await readFile(join(canonicalDir, 'SKILL.md'), 'utf-8');
+
+    expect(
+      /Release-Note` is exactly one present-tense sentence led by the reader outcome;\s+multiple\s+sentences, future tense, or internal mechanics first is BLOCKED with the pass marker absent/.test(
+        skill,
+      ),
+    ).toBe(true);
+  });
 });

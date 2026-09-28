@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFile as execFileCb } from 'node:child_process';
-import { readdir, readFile, readlink } from 'node:fs/promises';
+import { readdir, readFile, readlink, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
@@ -137,6 +137,13 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'cache',                            // misc read-through caches (issue lists, changelog mirrors, etc.)
   'file-history',                     // per-session snapshots of every file any concurrent session edits
   'paste-cache',                      // per-session scratch for large pasted inputs
+  'skills/synced/**/.last-complete-round', // claude.ai skill-sync round marker; see below
+  'policy-limits.json.stamp.json',    // fetch stamp the CLI rewrites on its own policy-limits refresh
+                                       // cycle; verified 2026-09-25 as the sole diff ("changed
+                                       // policy-limits.json.stamp.json", 3 occurrences) behind a false
+                                       // halt of custom-build-review-rubrics-cannot-run-off-linux-o.
+                                       // Only the stamp is excluded: `policy-limits.json` itself is
+                                       // policy config and stays fingerprinted.
 ];
 
 /**
@@ -222,14 +229,53 @@ function matchesRootPattern(path: string, pattern: string): boolean {
 }
 
 /**
+ * True iff `path` sits anywhere under `prefix` AND its basename is exactly
+ * `basename` — the `<prefix>/**`+`/<basename>` exclusion form (any depth). It excludes ONE
+ * named marker, never the subtree around it.
+ *
+ * Its only user is the `.last-complete-round` entry under `skills/synced`. Claude Code syncs
+ * claude.ai skills into `skills/synced/<bucket-uuid>/` and writes, then deletes,
+ * a `.last-complete-round` marker every sync round. Verified 2026-09-25 as the
+ * sole diff (`1 added / 1 removed: skills/synced/<bucket-uuid>/.last-complete-round`)
+ * behind 9 false halts across the features custom-build-review-rubrics-cannot-run-off-linux-o
+ * and post-plan-decide-amendments-never-reconcile-with-t. The synced skill
+ * content itself (SKILL.md, manifest.json, scripts) stays fingerprinted: a
+ * self-host process rewriting an operator skill is exactly what this surface
+ * exists to catch. Widen this only with the same kind of observed-churn evidence.
+ */
+function matchesNestedBasename(path: string, prefix: string, basename: string): boolean {
+  return path.startsWith(`${prefix}/`) && path.slice(path.lastIndexOf('/') + 1) === basename;
+}
+
+/**
  * True iff `path` (root-relative, POSIX-ish) is an excluded path, sits under one,
- * or matches a root-level `*` pattern. An exclusion entry containing `*` is a
+ * matches a nested-basename marker (see `matchesNestedBasename`), or matches a root-level `*` pattern. An exclusion entry containing `*` is a
  * pattern; every other entry keeps the exact-or-prefix semantics it always had.
  */
 function isExcluded(path: string, exclude: readonly string[]): boolean {
-  return exclude.some(ex => ex.includes('*')
+  return exclude.some(ex => ex.includes('/**/')
+    ? matchesNestedBasename(path, ex.slice(0, ex.indexOf('/**/')), ex.slice(ex.indexOf('/**/') + 4))
+    : ex.includes('*')
     ? matchesRootPattern(path, ex)
     : path === ex || path.startsWith(`${ex}/`));
+}
+
+/**
+ * Content to digest for one walked entry. A socket, FIFO, or device (directly or through a
+ * symlink) is fingerprinted by its kind and link target, never read: reading a socket throws
+ * ENXIO and reading a FIFO blocks. Codex's managed app-server leaves exactly such a link at
+ * `app-server-control/app-server-control.sock` while an operator session is open.
+ */
+async function entryContent(file: string): Promise<Buffer | string> {
+  const info = await stat(file).catch(() => undefined);
+  if (info && !info.isFile() && !info.isDirectory()) {
+    const kind = info.isSocket() ? 'socket' : info.isFIFO() ? 'fifo' : 'device';
+    return `special:${kind}:${await readlink(file).catch(() => '')}`;
+  }
+  return readFile(file).catch(async (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EISDIR' || error.code === 'ENOENT') return readlink(file);
+    throw error;
+  });
 }
 
 async function manifest(
@@ -264,10 +310,7 @@ async function manifest(
   }
   const entries = await Promise.all(files.map(async file => {
     const path = relative(root, file);
-    const bytes = await readFile(file).catch(async (error: NodeJS.ErrnoException) => {
-      if (error.code === 'EISDIR' || error.code === 'ENOENT') return readlink(file);
-      throw error;
-    });
+    const bytes = await entryContent(file);
     return { path, digest: createHash('sha256').update(bytes).digest('hex') };
   }));
   const filteredEntries = entries.filter(entry => !exclude.includes(entry.path)).sort((a, b) => a.path.localeCompare(b.path));

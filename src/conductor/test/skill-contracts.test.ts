@@ -3,15 +3,14 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-const architectureReviewSkillPath = fileURLToPath(
-  new URL('../../../skills/architecture-review/SKILL.md', import.meta.url),
-);
-
 describe('architecture-review skill contract', () => {
-  it('requires the as-built reviewer to report PLAN_GAP delivery', async () => {
-    const skill = await readFile(architectureReviewSkillPath, 'utf8');
+  it('delegates as-built output-format enforcement to the scoped provider audit', async () => {
+    const audit = await readFile(
+      fileURLToPath(new URL('../../../test/test_provider_skill_contracts.sh', import.meta.url)),
+      'utf8',
+    );
 
-    expect(skill).toContain('Verdict: APPROVED | APPROVED WITH DRIFT NOTES | PLAN_GAP | BLOCKED');
-    expect(skill).toContain('Outcome delivered:');
+    expect(audit).toContain('as_built_skill_prose_audit');
+    expect(audit).toContain('as-built output-format prose rejected');
   });
 });

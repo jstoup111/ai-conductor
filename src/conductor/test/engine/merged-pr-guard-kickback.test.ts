@@ -24,8 +24,16 @@ import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
+const APPROVED_AS_BUILT_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'fixture' },
+  planGap: { enabled: true, reason: 'fixture' },
+  adrCompliance: { enabled: false, reason: 'fixture' },
+  diagramDrift: { enabled: false, reason: 'fixture' },
+};
 const PRD_AUDIT_FIXABLE = [
   '# PRD Audit',
   '',
@@ -66,6 +74,15 @@ async function markerExists(dir: string, rel: string): Promise<boolean> {
     () => true,
     () => false,
   );
+}
+
+async function writeAsBuiltApproval(dir: string, attemptId: string): Promise<void> {
+  await persistAsBuiltVerdict(dir, {
+    version: 'v1',
+    verdict: 'APPROVED',
+    reachability: [],
+    driftNotes: [],
+  }, { attemptId, codeStamp: null, policy: APPROVED_AS_BUILT_POLICY });
 }
 
 describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
@@ -326,7 +343,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
     function failingManualTestRunner(): { runner: StepRunner; calls: StepName[] } {
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           calls.push(step);
           if (step === 'build') {
             await writeFile(
@@ -341,10 +358,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
           } else if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n');
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
-            );
+            await writeAsBuiltApproval(dir, options?.runId ?? 'fixture-as-built-run');
           }
           return { success: true };
         }),
@@ -759,7 +773,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       const calls: StepName[] = [];
       let manualTestRunCount = 0;
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           calls.push(step);
           if (step === 'build') {
             await writeFile(
@@ -783,10 +797,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
           } else if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n');
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
-            );
+            await writeAsBuiltApproval(dir, options?.runId ?? 'fixture-as-built-run');
           }
           return { success: true };
         }),
@@ -850,7 +861,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       // Phase 1: Kickback — manual_test fails on first attempt, passes on retry
       let manualTestRunCount = 0;
       const kickbackRunner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'build') {
             await writeFile(
               join(dir, '.pipeline/task-status.json'),
@@ -872,10 +883,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
           } else if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n');
           } else if (step === 'architecture_review_as_built') {
-            await writeFile(
-              join(dir, '.pipeline/architecture-review-as-built.md'),
-              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
-            );
+            await writeAsBuiltApproval(dir, options?.runId ?? 'fixture-as-built-run');
           }
           return { success: true };
         }),

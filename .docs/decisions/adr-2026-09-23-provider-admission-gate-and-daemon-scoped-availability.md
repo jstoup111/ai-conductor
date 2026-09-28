@@ -105,6 +105,8 @@ verified.
    two refusals are the same question asked for two reasons, and splitting them is what produces
    divergent telemetry.
 
+D1 (amended 2026-09-25, operator decision on as-built finding AB-1): substitution policy is resolver-owned, not gate-owned. Per decision 2, `resolveProviderCandidates` removes every policy-forbidden candidate at resolution, so such a candidate never reaches the admission gate and, per sealed Story 2, records no `provider_attempt`. The admission gate governs only suppression and availability. The policy-refusal reason, its skip-reason member, and the gate's policy branch are unreachable by construction and are removed. The original decision text above is unchanged.
+
 2. **Substitution policy narrows the candidate list rather than reordering it.** A new
    configuration, settable globally and per step, makes `resolveProviderCandidates` return the
    step's own selection instead of its union with the global list. With the policy unset, the

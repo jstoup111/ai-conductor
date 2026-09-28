@@ -80,6 +80,8 @@ draft PR. Claude Code invokes this skill as `/release-disposition`; Codex invoke
    ```
    ````
 
+   A `Release-Note` is exactly one present-tense sentence led by the reader outcome; multiple
+   sentences, future tense, or internal mechanics first is BLOCKED with the pass marker absent.
    Use `no-note` only for an evidence-backed non-notable or non-implementation change; it cannot
    carry category, semver, note, or migration fields.
 8. Re-read the retained PR body and verify it parses as exactly one valid disposition. Record the

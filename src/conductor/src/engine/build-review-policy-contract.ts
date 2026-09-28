@@ -211,6 +211,7 @@ export function renderBuildReviewPolicyContract(
     '',
     'Return only an engine-defined custom reviewer payload; do not use another output contract or a standalone presentation format.',
     `Shared findings payload schema: ${renderRubricContractShape(options.contract)}`,
+    'Payload variants: {"kind":"custom-findings","version":"v1","findings":[...]} when you can judge the question (an empty findings array means no concern), or {"kind":"unsupported-policy","requirement":"<what the policy needs that the read-only review role cannot provide>"} when you cannot. Include no other fields.',
     `Source region rule: ${BUILD_REVIEW_CUSTOM_SOURCE_REGION_HASH_RULE}`,
     'The engine stamps policy, provider, lap, verdict, and all aggregate metadata after validating the payload.',
     '',

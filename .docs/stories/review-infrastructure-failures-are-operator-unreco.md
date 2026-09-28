@@ -111,7 +111,8 @@ rework, so that no work is asked of the builder for a fault the builder did not 
 
 #### Happy Path
 - Given a lap that ends in a retriable mechanical fault (any closed reason other than
-  `projection-oversized`, adr-2026-08-18 D3.1) with mechanical allowance remaining, when the lap
+  the deterministic causes `projection-oversized`, `native-schema-unsupported` and
+  `read-only-review-unavailable`, adr-2026-08-18 D3.1, D2.2 and D3.2) with mechanical allowance remaining, when the lap
   completes, then no review outcome is published for that lap and the review runs again.
 - Given a mechanical fault that clears on the next attempt, when the review runs again, then it
   proceeds to a normal judged outcome with no residue from the faulted lap.
@@ -275,8 +276,10 @@ meant to cover.
 - Given a rubric that ran and was judged, when a reduced-coverage decision is attempted for it, then
   it is refused with a reason and nothing is stored.
 - Given a rubric that was skipped, when a decision is attempted for it, then it is refused.
-- Given a rubric with mechanical allowance still remaining, when a decision is attempted for it, then
-  it is refused — the retry lane must be exhausted first.
+- Given a rubric with mechanical allowance still remaining whose fault is retriable, when a decision
+  is attempted for it, then it is refused — the retry lane must be exhausted first. A rubric halted on
+  a deterministic cause (`projection-oversized` or `read-only-review-unavailable`) is accepted without
+  an exhausted allowance.
 - Given a rubric for which a decision is already recorded, when the same decision is attempted again,
   then it is refused as already recorded and nothing changes.
 - Given a rubric name that does not exist, when a decision is attempted, then it is refused.

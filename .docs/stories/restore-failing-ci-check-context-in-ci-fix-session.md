@@ -72,7 +72,7 @@ As an operator, I want repairs to follow my build provider settings so that conf
 
 #### Negative Paths
 
-- Given the preferred provider is explicitly unavailable in a way the existing fallback policy allows, when a configured fallback is usable, then repair uses that fallback with a fresh provider-native session and does not require the unavailable provider to pass an independent global probe.
+- Given the preferred provider is installed but explicitly unavailable at runtime in a way the existing fallback policy allows, when a configured fallback is usable, then repair uses that fallback with a fresh provider-native session and does not require the unavailable provider to pass an independent global probe.
 - Given affirmative authentication failure, permission denial, or an ordinary execution failure, when the shared provider policy forbids fallback for that result, then repair retains the classified failure rather than selecting another provider or reporting a successful repair.
 - Given all eligible providers are affirmatively prevented from starting a repair, when dispatch finishes, then the operator receives the relevant provider/reason and the result does not claim an attempted successful session.
 - Given a supported custom or legacy provider has no Claude/Codex-specific readiness probe or no affirmative no-start evidence, when repair is dispatched, then no new provider-specific probe is required and the absence of evidence cannot authorize an attempt refund.

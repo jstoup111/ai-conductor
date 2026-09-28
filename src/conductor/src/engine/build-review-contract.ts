@@ -86,7 +86,8 @@ function schemaShape(schema: unknown, topLevel = false): string {
   if (!source) return 'value';
   const enumeration = enumShape(source);
   if (enumeration !== undefined) return enumeration;
-  if (Array.isArray(source.oneOf)) return source.oneOf.map((alternative) => schemaShape(alternative, topLevel)).join(' Or ');
+  const alternatives = Array.isArray(source.oneOf) ? source.oneOf : Array.isArray(source.anyOf) ? source.anyOf : undefined;
+  if (alternatives) return alternatives.map((alternative) => schemaShape(alternative, topLevel)).join(' Or ');
   if (source.type === 'array') return `array of ${schemaShape(source.items)}`;
   if (source.type === 'string') return 'string';
   if (source.type === 'integer') return 'integer';

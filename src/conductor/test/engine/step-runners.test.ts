@@ -1,6 +1,6 @@
 // Covers: task:1, task:3, task:12, task:17
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -2415,7 +2415,6 @@ describe('DefaultStepRunner', () => {
       { step: 'build', prompt: '$pipeline' },
       { step: 'manual_test', prompt: '$manual-test' },
       { step: 'prd_audit', prompt: '$prd-audit' },
-      { step: 'architecture_review_as_built', prompt: '$architecture-review --as-built' },
       { step: 'finish', prompt: '$finish' },
     ] satisfies ReadonlyArray<{ step: StepName; prompt: string }>;
     const codexBoundary = vi.fn(
@@ -2427,6 +2426,7 @@ describe('DefaultStepRunner', () => {
     );
     const codexProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
       invoke: codexBoundary,
     };
     const claudeProvider = createMockProvider();
@@ -2441,6 +2441,7 @@ describe('DefaultStepRunner', () => {
       {
         key: 'codex',
         provider: codexProvider,
+        nativeSchemaCapability: { nativeOutputSchema: true },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
@@ -4301,6 +4302,7 @@ TIER: M`,
       const priorSelectorMarker = process.env[selectorMarkerEnv];
       let checkoutRoot: string | undefined;
       const observedProjections: Array<{ preflight: { classification: string; excerpt: string } }> = [];
+      const observedPrompts: string[] = [];
       try {
         await execa('git', ['init', '-q', '-b', 'main'], { cwd: repository });
         await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repository });
@@ -4335,6 +4337,7 @@ TIER: M`,
           invoke: vi.fn(async (options) => {
             const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!) as typeof observedProjections[number];
             observedProjections.push(projection);
+            observedPrompts.push(options.prompt);
             const scopeContext = JSON.parse(options.prompt.match(/Candidate-resolution authority \(use only these ids, regions, and obligations\):\n(\{[\s\S]*?\})\n\nYour final/)![1]);
             const payload = {
               findings: [],
@@ -4397,6 +4400,9 @@ TIER: M`,
         expect(observedProjections[0]).toMatchObject({ preflight: { classification: 'nonzero-exit' } });
         expect(typeof observedProjections[0].preflight.excerpt).toBe('string');
         expect(queuedMutations).toEqual(['add:queued', 'remove:queued']);
+        // The grader is told each status's validator-required fields, so a
+        // `resolved` copy of the authority cannot omit `associationReason`.
+        expect(observedPrompts[0]).toContain('`resolved` requires `sourceRegion` and `obligationReferences` copied verbatim from that candidate in the authority (a non-empty subset of its obligations, no duplicates) plus a non-blank `associationReason`; `out-of-scope` requires a non-blank `exclusionReason`; `indeterminate` requires a non-blank `missingEvidenceReason`.');
       } finally {
         if (priorSelectorMarker === undefined) delete process.env[selectorMarkerEnv];
         else process.env[selectorMarkerEnv] = priorSelectorMarker;
@@ -4689,6 +4695,38 @@ TIER: M`,
         ]),
       );
       expect(prompts.join('\n')).not.toContain('Build Review Scope rubric');
+    });
+
+    it('persists the exact dispatched rubric prompt beside the lap artifact for offline replay', async () => {
+      await scopedPlan();
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scopedGit(),
+        planPath,
+        config: {
+          test_suite: { scoped_command: 'true' },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+        } as HarnessConfig,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+          } as never),
+        },
+      });
+
+      await runner.run('build_review', emptyState);
+
+      const dispatched = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls
+        .map(([options]) => options.prompt as string)
+        .find((prompt) => prompt.includes('Build Review Test Quality rubric'));
+      expect(dispatched).toBeDefined();
+      const laps = await readdir(join(dir, '.pipeline/build-review'));
+      const stored = await Promise.all(laps.filter((lap) => lap.startsWith('lap-')).map((lap) =>
+        readFile(join(dir, '.pipeline/build-review', lap, 'testQuality.prompt.txt'), 'utf8').catch(() => undefined)));
+      const prompt = stored.find((body) => body !== undefined);
+      expect(prompt).toContain('Build Review Test Quality rubric');
+      // The provider prompt only prefixes the skill command; the rest is byte-identical.
+      expect(dispatched!.endsWith(prompt!)).toBe(true);
     });
 
     it('does not dispatch the coordinator or legacy scalar grader when the whole gate is disabled', async () => {

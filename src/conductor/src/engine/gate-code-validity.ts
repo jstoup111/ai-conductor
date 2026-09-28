@@ -29,6 +29,7 @@ import { originDefaultBranch, changedPathsBetween, resolveReviewInputs } from '.
 import { featureTestPaths, GATE_SURFACE, partitionDelta, projectGateSurfaces } from './gate-invalidation.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { resolveThroughMap } from './rebase-translate.js';
+import { AS_BUILT_VERDICT_PATH, readAsBuiltVerdict } from './as-built-verdict-store.js';
 
 /** Minimal context the decision helper needs: an injected git runner rooted
  * at the project's working directory. Mirrors the `GitRunner` convention
@@ -137,7 +138,7 @@ const PRESERVED_GATE_ARTIFACTS: Partial<Record<StepName, string>> = {
   test_suite: '.pipeline/test-suite-evidence.json',
   manual_test: '.pipeline/manual-test-results.md',
   prd_audit: '.pipeline/prd-audit.md',
-  architecture_review_as_built: '.pipeline/architecture-review-as-built.md',
+  architecture_review_as_built: AS_BUILT_VERDICT_PATH,
 };
 
 /** Re-read the same artifact and engine-owned stamp that the rebase writer
@@ -153,6 +154,16 @@ export async function currentPreservedJudgeIdentity(
   if (!artifactPath) return null;
   try {
     const artifact = await readFile(join(projectRoot, artifactPath), 'utf-8');
+    if ((gate as string) === 'architecture_review_as_built') {
+      const stored = await readAsBuiltVerdict(projectRoot);
+      if (stored.kind !== 'present' || !stored.value.codeStamp) return null;
+      return {
+        artifactDigest: `sha256:${createHash('sha256').update(artifact).digest('hex')}`,
+        attemptId: stored.value.attemptId,
+        runId: stored.value.attemptId,
+        codeStamp: stored.value.codeStamp,
+      };
+    }
     let codeStamp: unknown;
     let runId: unknown;
     if (gate === 'manual_test') {

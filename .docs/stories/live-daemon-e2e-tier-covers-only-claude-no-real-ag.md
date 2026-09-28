@@ -299,8 +299,8 @@ untested for the life of this tier.
   the removed provider is reported, so the manifest cannot accumulate dead entries.
 
 ### Done When
-- [ ] A structural test enumerates registered `llm_provider` ids from the production registry and
-      asserts each has both a live leg and a capability entry.
+- [ ] A structural test enumerates every built-in provider catalog id together with every registered
+      external `llm_provider` plugin id and asserts each has both a live leg and a capability entry.
 - [ ] The test fails, with the provider named, when a registered provider has no leg — proven by
       a test that exercises the failing direction, not only the passing one.
 - [ ] The test passes when a credential is absent, proven explicitly.

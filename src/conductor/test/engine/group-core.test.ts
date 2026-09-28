@@ -1,4 +1,4 @@
-// Covers: task:8, task:11
+// Covers: task:8, task:11, task:21
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   makeVerdictOutcome,
@@ -44,6 +44,15 @@ import type {
   InvokeResult,
   LLMProvider,
 } from "../../src/execution/llm-provider.js";
+
+const { buildAsBuiltProjection } = vi.hoisted(() => ({
+  buildAsBuiltProjection: vi.fn(),
+}));
+
+vi.mock("../../src/engine/as-built-projection.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/engine/as-built-projection.js")>(),
+  buildAsBuiltProjection,
+}));
 
 /** Explicit test-only observer for fixtures unrelated to lifecycle assertions. */
 const TEST_LIFECYCLE_OBSERVER: GroupBranchLifecycleObserver = {
@@ -479,6 +488,20 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
   it("routes reversed concurrent members through provider-local branch scopes without mutating serial authority", async () => {
     const pipelineDir = await mkdtemp(join(tmpdir(), "group-provider-routing-"));
     try {
+      buildAsBuiltProjection.mockResolvedValue({
+        ok: true,
+        projection: {
+          version: 1,
+          diff: { changedFiles: [], hunks: [], omittedFiles: [] },
+          tasks: [], storyCriteria: [], diagrams: [], governingAdrs: [], priorFindings: [],
+          policy: {
+            reachability: { enabled: true, reason: "test" },
+            planGap: { enabled: true, reason: "test" },
+            adrCompliance: { enabled: false, reason: "test" },
+            diagramDrift: { enabled: false, reason: "test" },
+          },
+        },
+      });
       const deferred = <T>() => {
         let resolve!: (value: T) => void;
         const promise = new Promise<T>((done) => {
@@ -560,6 +583,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
             {
               key: "claude",
               provider: provider(claudeDispatch),
+              nativeSchemaCapability: { nativeOutputSchema: true },
               policy: CLAUDE_MODEL_POLICY,
               builtIn: true,
               availability: new ModelAvailability(
@@ -569,6 +593,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
             {
               key: "codex",
               provider: provider(codexDispatch),
+              nativeSchemaCapability: { nativeOutputSchema: true },
               policy: CODEX_MODEL_POLICY,
               builtIn: true,
               availability: new ModelAvailability(
@@ -647,7 +672,9 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         1,
       );
       const codexCalls = codexDispatch.mock.calls.map(([options]) => ({
-        prompt: options.prompt,
+        prompt: options.prompt.startsWith("$architecture-review --as-built\n\nAS-BUILT INPUT PROJECTION")
+          ? "$architecture-review --as-built"
+          : options.prompt,
         sessionId: options.sessionId,
         resume: options.resume,
         cwd: options.cwd,
@@ -724,8 +751,8 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
             prompt: "$architecture-review --as-built",
             resume: false,
             cwd: "/tmp/project",
-            interactive: true,
-            dangerouslySkipPermissions: false,
+            interactive: false,
+            dangerouslySkipPermissions: true,
             model: "gpt-5.6-sol",
             effort: "high",
           },
@@ -767,6 +794,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         },
       });
     } finally {
+      buildAsBuiltProjection.mockReset();
       await rm(pipelineDir, { recursive: true, force: true });
     }
   });
@@ -1034,6 +1062,53 @@ describe("group-core: runGroupBranch rate-limit pass-through into shared episode
 
     expect(episode.enterCalls).toEqual([deadline]);
     expect(episode.clearCalls).toBe(1);
+  });
+
+  it("opens and persists a shared suppression window only for a usage-exhausted group member", async () => {
+    const deadline = Date.now() + 60_000;
+    const runner = spyRunner([
+      { success: false, rateLimited: true, usageExhausted: true, actualProvider: "codex", deadline },
+      { success: true },
+    ]);
+    const suppress = vi.fn();
+    const onProviderSuppressed = vi.fn();
+    const providerAvailability = { suppress, isAvailable: () => true };
+    const member: GroupMember = { name: "manual_test", skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    await runGroupBranch(member, fakeState, {
+      stepRunner: runner,
+      rateLimitEpisode: fakeEpisode(),
+      providerAvailability,
+      onProviderSuppressed,
+    }, 1);
+
+    expect({ suppress: suppress.mock.calls, persisted: onProviderSuppressed.mock.calls }).toEqual({
+      suppress: [["codex", deadline]],
+      persisted: [["codex", deadline]],
+    });
+  });
+
+  it("does not open or persist a suppression window for authentication failure or an expired session", async () => {
+    const suppress = vi.fn();
+    const onProviderSuppressed = vi.fn();
+    const providerAvailability = { suppress, isAvailable: () => true };
+    const member: GroupMember = { name: "manual_test", skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    await runGroupBranch(member, fakeState, {
+      stepRunner: spyRunner([{ success: false, authFailure: true, actualProvider: "codex" }]),
+      providerAvailability,
+      onProviderSuppressed,
+    }, 1);
+    await runGroupBranch(member, fakeState, {
+      stepRunner: spyRunner([{ success: false, sessionExpired: true, actualProvider: "codex" }, { success: true }]),
+      providerAvailability,
+      onProviderSuppressed,
+    }, 1);
+
+    expect({ suppress: suppress.mock.calls, persisted: onProviderSuppressed.mock.calls }).toEqual({
+      suppress: [],
+      persisted: [],
+    });
   });
 
   it("a rate-limited branch that never gets an extra attempt beyond max_retries still isn't charged for the rate-limit cycle", async () => {
