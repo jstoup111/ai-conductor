@@ -833,8 +833,12 @@ export async function executeProviderCandidates({
           ...(options.nativeSchema !== undefined
             ? { nativeSchema: options.nativeSchema }
             : {}),
+          // Cancellation belongs to the enclosing lifecycle attempt. A
+          // candidate-local override must not detach a running subprocess from
+          // that authority.
+          ...(abortSignal !== undefined ? { abortSignal } : {}),
         }
-      : options;
+      : abortSignal !== undefined ? { ...options, abortSignal } : options;
     const candidate: ProviderCandidate = {
       step,
       providerKey,

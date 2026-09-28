@@ -371,6 +371,11 @@ export interface InvokeOptions {
    * immediately before creating a provider process.
    */
   spawnPermit?: SpawnPermit;
+  /**
+   * Lifecycle-owned cancellation signal for the current provider invocation.
+   * Adapters that create a subprocess must terminate it when this aborts.
+   */
+  abortSignal?: AbortSignal;
 }
 
 export interface LLMProvider {

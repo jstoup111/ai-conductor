@@ -146,7 +146,7 @@ describe('PiProvider', () => {
     const invocation = provider.invoke({
       ...invokeOptions,
       abortSignal: controller.signal,
-    } as InvokeOptions & { abortSignal: AbortSignal });
+    });
     controller.abort();
 
     const result = await invocation;

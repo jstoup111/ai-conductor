@@ -35,8 +35,6 @@ type PiJsonEvent = {
   };
 };
 
-type PiInvokeOptions = InvokeOptions & { abortSignal?: AbortSignal };
-
 function abortedInvocationResult(): InvokeResult {
   return {
     success: false,
@@ -108,7 +106,7 @@ export class PiProvider implements LLMProvider {
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     options = enforceFreshSessionOptions(options, 'pi');
-    const abortSignal = (options as PiInvokeOptions).abortSignal;
+    const { abortSignal } = options;
     if (abortSignal?.aborted) return abortedInvocationResult();
     const permit = validateSpawnPermit(options.spawnPermit);
     if (!permit.permitted) {

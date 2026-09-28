@@ -1,6 +1,7 @@
 // Covers: task:19
 import { describe, expect, it, vi } from 'vitest';
 import type { InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
+import { PiProvider } from '../../src/execution/pi-provider.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 import { resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet, type ProviderRuntime } from '../../src/engine/provider-runtime.js';
@@ -63,6 +64,57 @@ describe.each(['pi', 'codex'] as const)('provider fallback from %s', (firstProvi
     });
     expect(first.invoke).toHaveBeenCalledOnce();
     expect(claude.invoke).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Pi lifecycle abort', () => {
+  it('passes the executor abort signal to Pi, kills its subprocess, and does not advance fallback', async () => {
+    const controller = new AbortController();
+    let resolveSubprocess!: (result: { stdout: string; stderr: string; exitCode: number }) => void;
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+    const subprocess = Object.assign(
+      new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+        resolveSubprocess = resolve;
+      }),
+      {
+        kill: vi.fn(() => resolveSubprocess({ stdout: '', stderr: '', exitCode: 1 })),
+      },
+    );
+    const spawnPi = vi.fn(() => {
+      signalStarted();
+      return subprocess;
+    });
+    const pi = new PiProvider('pi', spawnPi as never);
+    const piInvoke = vi.spyOn(pi, 'invoke');
+    const claude = fakeProvider({ success: true, output: 'Claude must not run', exitCode: 0 });
+
+    const execution = executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['pi', 'claude'],
+      preferredProvider: 'pi',
+      runtimes: new ProviderRuntimeSet([runtime('pi', pi), runtime('claude', claude)]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      abortSignal: controller.signal,
+      options: { prompt: 'Build.', cwd: '/workspace' },
+    });
+
+    await started;
+    controller.abort();
+    const result = await execution;
+
+    expect(piInvoke.mock.calls[0]?.[0]?.abortSignal).toBe(controller.signal);
+    expect(subprocess.kill).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      success: false,
+      output: 'Pi invocation aborted.',
+      actualProvider: 'pi',
+    });
+    expect(result).not.toHaveProperty('providerUnavailable');
+    expect(result).not.toHaveProperty('modelUnavailable');
+    expect(result).not.toHaveProperty('authFailure');
+    expect(result).not.toHaveProperty('rateLimited');
+    expect(claude.invoke).not.toHaveBeenCalled();
   });
 });
 
