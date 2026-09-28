@@ -116,7 +116,7 @@ As an operator, I want to select Pi for a run or step so that the work is done b
 #### Negative Paths
 - Given Pi exits 0 but the stream contains no terminal assistant message, when the adapter parses it, then the invoke result is a step failure naming the missing terminal message.
 - Given a JSONL line is malformed, when the adapter parses the stream, then that line is ignored and the result is still derived from the valid terminal message if present.
-- Given the step is aborted by the lifecycle supervisor, when Pi is running, then the Pi subprocess is terminated and the result is an aborted step, not a success.
+- Given Pi is running, when its invoke's abort signal fires, then the Pi subprocess is terminated and the result is an aborted step, not a success (codex parity; no production caller aborts a running ordinary step for any provider today, operator decision 2026-09-28 on as-built AB-9).
 
 ### Done When
 - [ ] `execution/pi-provider.ts` implements only `invoke` and declares `supportsSessionResume` false.
