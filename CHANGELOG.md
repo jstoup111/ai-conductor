@@ -26,6 +26,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Fixed
 
 - Accepted stories are rejected before landing when their criteria cannot be read consistently. ([implementation PR #2731](https://github.com/jstoup111/ai-conductor/pull/2731)).
+- As-built architecture reviews no longer halt with a plan projection fault in repositories that hold more than one plan. ([implementation PR #2772](https://github.com/jstoup111/ai-conductor/pull/2772)).
 
 ## [1.5.0] - 2026-09-27
 
