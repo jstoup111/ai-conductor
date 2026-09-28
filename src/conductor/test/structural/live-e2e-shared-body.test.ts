@@ -17,7 +17,8 @@ vi.mock('../fixtures/daemon-e2e-diagnostics.js', () => ({
 
 const structuralRoot = dirname(fileURLToPath(import.meta.url));
 const sharedBodyPath = join(structuralRoot, '../fixtures/live-e2e-run-body.ts');
-const LITERAL_PROVIDER_IDS = new Set(['claude', 'codex']);
+const piSmokePath = join(structuralRoot, '../engine/daemon-e2e-live-pi.smoke.test.ts');
+const LITERAL_PROVIDER_IDS = new Set(['claude', 'codex', 'pi']);
 
 describe('structural: shared live E2E body', () => {
   it('does not override the production build-review effective-verdict resolver', async () => {
@@ -72,6 +73,30 @@ describe('structural: shared live E2E body', () => {
     expect(providerSpecificBranches).toEqual([]);
   });
 
+  it('routes the Pi smoke file through the shared body and only self-host-capable descriptors receive its wrapper', async () => {
+    const [piSmoke, sharedBody] = await Promise.all([
+      readFile(piSmokePath, 'utf8'),
+      readFile(sharedBodyPath, 'utf8'),
+    ]);
+    const parsedSmoke = ts.createSourceFile(piSmokePath, piSmoke, ts.ScriptTarget.Latest, true);
+    const sharedSmokeCalls: string[] = [];
+
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
+        node.expression.text === 'defineLiveE2EProviderSmoke' && node.arguments.length === 1 &&
+        ts.isIdentifier(node.arguments[0]) && node.arguments[0].text === 'provider') {
+        sharedSmokeCalls.push(node.arguments[0].text);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(parsedSmoke);
+
+    expect(sharedSmokeCalls).toEqual(['provider']);
+    expect(piSmoke).not.toContain('PiProvider');
+    expect(sharedBody).toContain('if (descriptor.selfHostExecutable)');
+    expect(sharedBody).toContain('await dispatchLiveRun(provider, { homeDir: sourceRoot });');
+  });
+
   it('executes every descriptor through equivalent provider selection, authentication, and diagnostics outcomes', async () => {
     const originalCredentials = new Map(
       LIVE_E2E_PROVIDERS.map((descriptor) => [descriptor.credentialEnvVar, process.env[descriptor.credentialEnvVar]]),
@@ -118,10 +143,14 @@ describe('structural: shared live E2E body', () => {
         authenticationChecks: authenticationChecks.mock.calls.map(([id]) => id).sort(),
         diagnostics: vi.mocked(dumpPipelineDiagnostics).mock.calls.length,
       }).toEqual({
-        outcomes: ['equivalent injected live-provider outcome', 'equivalent injected live-provider outcome'],
-        selections: ['claude', 'codex'],
-        authenticationChecks: ['claude', 'codex'],
-        diagnostics: 2,
+        outcomes: [
+          'equivalent injected live-provider outcome',
+          'equivalent injected live-provider outcome',
+          'equivalent injected live-provider outcome',
+        ],
+        selections: ['claude', 'codex', 'pi'],
+        authenticationChecks: ['claude', 'codex', 'pi'],
+        diagnostics: 3,
       });
     } finally {
       vi.mocked(dumpPipelineDiagnostics).mockReset();

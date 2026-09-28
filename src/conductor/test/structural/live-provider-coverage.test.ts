@@ -77,7 +77,7 @@ describe('structural: live provider coverage', () => {
           file: 'daemon-e2e-live-pi.smoke.test.ts',
           capability: 'credentialed:pi',
           providerIndex: 2,
-          delegatesToSharedBody: false,
+          delegatesToSharedBody: true,
         },
       ],
     });

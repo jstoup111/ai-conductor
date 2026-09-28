@@ -902,7 +902,7 @@ describe('live E2E shared spend policy', () => {
     );
     expect(() => assertSuccessfulCredentialedRun(
       { dispatches: 1 },
-      { totalTurns: 1, totalTokens: 1, unmetered: 2, unmeteredSteps: ['finish', 'unattributed'] },
+      { dispatches: 1, totalTurns: 1, totalTokens: 1, unmetered: 2, unmeteredSteps: ['finish', 'unattributed'] },
     )).toThrow('Unattributable unmetered dispatch cannot be allow-listed.');
   });
 

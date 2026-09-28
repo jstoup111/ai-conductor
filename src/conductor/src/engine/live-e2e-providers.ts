@@ -12,7 +12,8 @@ export interface LiveE2EProviderManifestEntry {
   readonly id: BuiltInProviderId;
   readonly binaryName: string;
   readonly credentialEnvVar: string;
-  readonly selfHostExecutable: string;
+  /** Omitted for providers that deliberately do not support self-host. */
+  readonly selfHostExecutable?: string;
   readonly providerKey: string;
 }
 
@@ -35,7 +36,6 @@ const LIVE_E2E_PROVIDER_DETAILS = {
   [PI_PROVIDER]: {
     binaryName: providerDescriptor(PI_PROVIDER).defaultExecutable,
     credentialEnvVar: 'PI_API_KEY',
-    selfHostExecutable: providerDescriptor(PI_PROVIDER).defaultExecutable,
     providerKey: PI_PROVIDER,
   },
 } as const satisfies Record<BuiltInProviderId, LiveE2EProviderDetails>;

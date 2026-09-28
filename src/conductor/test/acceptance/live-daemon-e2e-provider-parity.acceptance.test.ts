@@ -74,7 +74,7 @@ function discoveredLeg(provider: keyof typeof LIVE_FILES): { file: string; sourc
 }
 
 describe('live daemon E2E provider parity (#1264)', () => {
-  it('maps every self-host provider to one descriptor-only live leg and keeps Pi standalone', async () => {
+  it('maps every provider to one descriptor-only live leg over the shared body', async () => {
     const registry = new PluginRegistry();
     registerBuiltins(registry, new ConductorEventEmitter(), () => {});
     const registeredProviders = registry.list('llm_provider').sort();
@@ -86,7 +86,7 @@ describe('live daemon E2E provider parity (#1264)', () => {
     ]);
 
     expect(registeredProviders).toEqual(['claude', 'codex', 'pi']);
-    expect(manifestProviders.sort()).toEqual(['claude', 'codex']);
+    expect(manifestProviders.sort()).toEqual(['claude', 'codex', 'pi']);
     for (const provider of manifestProviders) {
       const leg = await requiredSource(
         join(CONDUCTOR_ROOT, `test/engine/daemon-e2e-live-${provider}.smoke.test.ts`),
@@ -95,10 +95,6 @@ describe('live daemon E2E provider parity (#1264)', () => {
       expect(leg).toMatch(/from\s+['"][^'"]*live-e2e-run-body(?:\.js)?['"]/);
       expect(leg).not.toMatch(/runDaemon|dumpPipelineDiagnostics|assertTokenCap/);
     }
-    const piLeg = await requiredSource(join(CONDUCTOR_ROOT, LIVE_FILES.pi));
-    expect(piLeg).toContain('credentialed:pi');
-    expect(piLeg).not.toMatch(/live-e2e-run-body/);
-
     expect(sharedBody).toMatch(/runDaemon\s*\(/);
     expect(sharedBody).toContain("new URL('./daemon-e2e/plan.md', import.meta.url)");
     expect(sharedBody).toContain("new URL('./daemon-e2e/stories.md', import.meta.url)");
