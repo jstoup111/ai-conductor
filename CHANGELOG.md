@@ -13,6 +13,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [1.5.1] - 2026-09-28
 
+### Added
+
+- Authorized GitHub writes and HTTPS pushes now support an optional machine-scoped bot credential with safe operator fallback. ([implementation PR #2734](https://github.com/jstoup111/ai-conductor/pull/2734)).
+
 ### Changed
 
 - As-built reviews now receive bounded, typed inputs and return structured verdicts reliably. ([implementation PR #2748](https://github.com/jstoup111/ai-conductor/pull/2748)).
