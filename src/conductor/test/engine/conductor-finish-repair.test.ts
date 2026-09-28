@@ -51,7 +51,7 @@ vi.mock('../../src/engine/halt-pr-rehabilitation.js', async (importOriginal) => 
   };
 });
 
-import { Conductor as ProductionConductor } from '../../src/engine/conductor.js';
+import { Conductor as ProductionConductor, createFinishPresentationRepair } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
@@ -59,6 +59,13 @@ import { HALT_PR_BANNER_LINES, NEEDS_REMEDIATION_BODY_MARKER } from '../../src/e
 import { HALT_HISTORY_COMMENT_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { writeRegionCapture } from '../../src/engine/pr-body-region-store.js';
+import type {
+  GithubOperationRequest,
+  GithubOperationRunner,
+  GithubOperationRunnerRefusal,
+  GithubOperationRunnerResponse,
+} from '../../src/engine/github-operations.js';
 
 class Conductor extends ProductionConductor {
   constructor(options: ConstructorParameters<typeof ProductionConductor>[0]) {
@@ -90,6 +97,58 @@ function makeSuccessfulRunner(): StepRunner {
       return { success: true };
     }),
   };
+}
+
+const REGION_PR_URL = 'https://github.com/example/repo/pull/1';
+const REGION_OWNER = 'compliance-attest';
+const REGION_CAPTURE = '\nAttested-By: security-bot\n';
+
+function regionBody(contents: string): string {
+  return `## Summary\n\n<!-- ai-conductor:step ${REGION_OWNER} -->${contents}<!-- /ai-conductor:step -->`;
+}
+
+function repairFixture(
+  projectRoot: string,
+  options: { halted?: boolean; refuseRestore?: boolean; persistRestore?: boolean } = {},
+) {
+  const operations: GithubOperationRequest[] = [];
+  const calls: string[] = [];
+  const pr = {
+    title: options.halted ? 'needs-remediation: test feature' : 'feat: test feature',
+    isDraft: true,
+    labels: options.halted ? ['needs-remediation'] : [] as string[],
+    body: regionBody('\nAttested-By: altered\n'),
+    comments: [] as string[],
+  };
+  const gh: GhRunner = async (args) => {
+    if (args[0] === 'pr' && args[1] === 'view') {
+      if (args.includes('--json') && args[args.indexOf('--json') + 1] === 'body') calls.push('region-read');
+      return { stdout: JSON.stringify(pr) };
+    }
+    throw new Error(`unexpected raw mutation: ${args.join(' ')}`);
+  };
+  const guarded: GithubOperationRunner = {
+    run: vi.fn(async (request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> => {
+      operations.push(request);
+      if (request.operation === 'pull-request.edit' && 'body' in (request.payload ?? {})) {
+        calls.push('region-restore');
+        if (options.refuseRestore) return { kind: 'refused' as const, reason: 'other-owner' as const };
+        if (!options.persistRestore) pr.body = (request.payload as { body: string }).body;
+      }
+      if (request.operation === 'pull-request.edit' && 'title' in (request.payload ?? {})) {
+        pr.title = (request.payload as { title: string }).title;
+      }
+      if (request.operation === 'pull-request.label.remove') pr.labels = [];
+      if (request.operation === 'pull-request.ready') {
+        calls.push('ready');
+        pr.isDraft = false;
+      }
+      return {};
+    }),
+  };
+  const repair = createFinishPresentationRepair({ projectRoot, gh, operations: guarded, log: () => {} });
+  const request = { prUrl: REGION_PR_URL, state: { feature_desc: 'test feature', worktree_branch: 'feat/test-feature' } };
+  return { calls, guarded, operations, pr, repair, request };
 }
 
 // ── suite ────────────────────────────────────────────────────────────────────
@@ -153,6 +212,56 @@ describe('conductor/finish-repair', () => {
     // Verify repairFinishPr is present and callable
     expect(ctx.repairFinishPr).toBeDefined();
     expect(typeof ctx.repairFinishPr).toBe('function');
+  });
+
+  it('restores the captured region after halt rehabilitation and body-floor rewrites before the ready flip', async () => {
+    await writeRegionCapture(dir, REGION_PR_URL, REGION_OWNER, REGION_CAPTURE);
+    const fixture = repairFixture(dir, { halted: true });
+
+    await fixture.repair(fixture.request);
+
+    expect(fixture.pr.body).toContain(
+      `<!-- ai-conductor:step ${REGION_OWNER} -->${REGION_CAPTURE}<!-- /ai-conductor:step -->`,
+    );
+    expect(fixture.calls).toEqual(expect.arrayContaining(['region-read', 'region-restore', 'ready']));
+    expect(fixture.calls.indexOf('region-restore')).toBeGreaterThan(fixture.calls.indexOf('region-read'));
+    expect(fixture.calls.lastIndexOf('region-read')).toBeGreaterThan(fixture.calls.indexOf('region-restore'));
+    expect(fixture.calls.indexOf('ready')).toBeGreaterThan(fixture.calls.lastIndexOf('region-read'));
+  });
+
+  it('keeps the draft and names the owner when the guarded region restore is refused', async () => {
+    await writeRegionCapture(dir, REGION_PR_URL, REGION_OWNER, REGION_CAPTURE);
+    const fixture = repairFixture(dir, { refuseRestore: true });
+
+    await expect(fixture.repair(fixture.request)).rejects.toThrow(
+      `guarded region restore refused for ${REGION_OWNER}`,
+    );
+
+    expect(fixture.pr.isDraft).toBe(true);
+    expect(fixture.calls).not.toContain('ready');
+  });
+
+  it('keeps the draft and names a verification mismatch when a restore does not persist', async () => {
+    await writeRegionCapture(dir, REGION_PR_URL, REGION_OWNER, REGION_CAPTURE);
+    const fixture = repairFixture(dir, { persistRestore: true });
+
+    await expect(fixture.repair(fixture.request)).rejects.toThrow(
+      `region verification mismatch for ${REGION_OWNER}`,
+    );
+
+    expect(fixture.pr.isDraft).toBe(true);
+    expect(fixture.calls.slice(-3)).toEqual(['region-read', 'region-restore', 'region-read']);
+  });
+
+  it('keeps the existing ready path operation sequence when there are no captures', async () => {
+    const fixture = repairFixture(dir);
+
+    await fixture.repair(fixture.request);
+
+    // The one body read belongs to the pre-existing body floor. A capture
+    // would add the restore read plus the verification read after it.
+    expect(fixture.calls).toEqual(['region-read', 'ready']);
+    expect(fixture.operations.map(({ operation }) => operation)).toEqual(['pull-request.ready']);
   });
 
   it('repairFinishPr invokes repair functions in correct order via composition', async () => {

@@ -38,4 +38,25 @@ describe('production FINISH coordinator wiring', () => {
       );
     }
   });
+
+  it('routes both production ready paths through the capture-verifying repair before ready', async () => {
+    const [foreground, daemon, conductor] = await Promise.all([
+      readFile(join(sourceRoot, 'index.ts'), 'utf8'),
+      readFile(join(sourceRoot, 'daemon-cli.ts'), 'utf8'),
+      readFile(join(sourceRoot, 'engine', 'conductor.ts'), 'utf8'),
+    ]);
+
+    for (const source of [foreground, daemon]) {
+      expect(source).toContain('repairPresentation: createProvenanceGuardedFinishPresentationRepair');
+    }
+
+    const repairStart = conductor.indexOf('export function createFinishPresentationRepair');
+    const restore = conductor.indexOf('const captures = await readRegionCaptures', repairStart);
+    const verify = conductor.indexOf('region verification mismatch for ${key}', restore);
+    const ready = conductor.indexOf('const outcome = await ensureShipReady', verify);
+    expect(repairStart).toBeGreaterThanOrEqual(0);
+    expect(restore).toBeGreaterThan(repairStart);
+    expect(verify).toBeGreaterThan(restore);
+    expect(ready).toBeGreaterThan(verify);
+  });
 });
