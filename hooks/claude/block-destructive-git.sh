@@ -21,10 +21,42 @@ import os
 import re
 
 heredoc_start = re.compile(
-    r"<<(?P<strip>-?)[ \t]*(?:(?P<quote>['\"])(?P<quoted>[^'\"]+)(?P=quote)|(?P<bare>[^\s;|&]+))"
+    r"(?<!<)<<(?P<strip>-?)(?!<)[ \t]*(?:(?P<quote>['\"])(?P<quoted>[^'\"]+)(?P=quote)|(?P<bare>[^\s;|&]+))"
 )
+
+def arithmetic_expansion_spans(line, depth):
+    spans = []
+    start = 0 if depth else None
+    i = 0
+    while i < len(line):
+        if start is None:
+            if line.startswith("$((", i):
+                start = i
+                depth = 1
+                i += 3
+                continue
+            if line.startswith("((", i):
+                start = i
+                depth = 1
+                i += 2
+                continue
+        elif line[i] == "(":
+            depth += 1
+        elif line[i] == ")":
+            if depth == 1 and line.startswith(")", i + 1):
+                spans.append((start, i + 2))
+                start = None
+                i += 2
+                continue
+            depth -= 1
+        i += 1
+    if start is not None:
+        spans.append((start, len(line)))
+    return spans, depth
+
 delimiter = None
 strip_tabs = False
+arithmetic_depth = 0
 
 for line in os.environ["COMMAND"].splitlines(keepends=True):
     if delimiter is not None:
@@ -36,7 +68,14 @@ for line in os.environ["COMMAND"].splitlines(keepends=True):
         continue
 
     print(line, end="")
-    match = heredoc_start.search(line)
+    arithmetic_spans, arithmetic_depth = arithmetic_expansion_spans(line, arithmetic_depth)
+    match = next(
+        (
+            candidate for candidate in heredoc_start.finditer(line)
+            if not any(start <= candidate.start() < end for start, end in arithmetic_spans)
+        ),
+        None,
+    )
     if match is not None:
         delimiter = match.group("quoted") or match.group("bare")
         strip_tabs = match.group("strip") == "-"

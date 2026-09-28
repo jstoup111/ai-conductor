@@ -231,6 +231,19 @@ describe('block-destructive-git hook force-push protection', () => {
   });
 
   it.each([
+    ['a here-string', 'cat <<< "harmless input"\ngit reset --hard'],
+    ['an arithmetic left shift', ': $((1 << 2))\ngit reset --hard'],
+    ['a multiline arithmetic left shift', ': $((1\n<< 2))\ngit reset --hard'],
+  ])('denies a real hard reset after %s', (_syntax, command) => {
+    const result = invoke(command);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.calledGitOrGh).toBe(false);
+    expect(result.stderr).toMatch(/git reset --hard is destructive and irreversible/i);
+  });
+
+  it.each([
     ['git clean -f', /git clean -f permanently removes untracked files/i],
     ['git branch -D unmerged', /force-delete UNMERGED branch/i],
     ['git checkout -- .', /discards all unstaged changes/i],
