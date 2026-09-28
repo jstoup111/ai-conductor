@@ -5167,7 +5167,7 @@ export class DefaultStepRunner implements StepRunner {
           'feature branch against its base branch, plus the feature specification, plan, and story artifacts, then ' +
           `follow this repository's PR authoring contract — the \`pr\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/pr\`; ${CODEX_DISPLAY_NAME} ` +
           'invokes it as `$pr`). Keep the template section shape (`## Why`, `## What Changed`, `## Testing`, and the ' +
-          '`Closes` reference), preserve any release metadata already present, and make the prose specific to the ' +
+          '`Closes` reference), leave every `ai-conductor:step` region and its markers unchanged, and make the prose specific to the ' +
           'delivered behavior. Change nothing else: do not create, push, merge, or ready a pull request, do not alter ' +
           'labels, shipment evidence, or completion files, and do not commit. The publication coordinator re-reads ' +
           'the pull request afterwards and judges the prose in a separate pass; it owns every mechanical transition ' +
@@ -5183,7 +5183,7 @@ export class DefaultStepRunner implements StepRunner {
           `PR authoring contract — the \`pr\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/pr\`; ${CODEX_DISPLAY_NAME} invokes it as ` +
         '`$pr`). Keep the template section shape (`## Why`, `## What Changed`, `## Testing`, and the ' +
         '`Closes` reference), replace every "not yet authored" marker and the body-floor marker with ' +
-        'specific reader-facing content, and preserve any release metadata already present. Change ' +
+        'specific reader-facing content, and leave every `ai-conductor:step` region and its markers unchanged. Change ' +
         'nothing else: do not create, push, merge, or ready a pull request, do not alter labels, ' +
         'shipment evidence, or completion files, and do not commit. The publication coordinator ' +
         're-reads the pull request afterwards and judges the prose in a separate pass; it owns every ' +

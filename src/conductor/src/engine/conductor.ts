@@ -373,12 +373,7 @@ import type { ChangedFile } from './self-host/release-gate.js';
 import { writeSelfHostHalt, type GateVerdict } from './self-host/gate-halt.js';
 import { parseReleaseDisposition } from './release-metadata.js';
 import {
-  clearPersistedReleaseMetadataSnapshot,
-  readPersistedReleaseMetadataSnapshot,
   resolveReleaseMetadataFlow,
-  restoreReleaseMetadata,
-  snapshotReleaseMetadata,
-  supersedesReleaseMetadataSnapshot,
 } from './self-host/release-metadata-flow.js';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
 import { LiveBoundaryCoordinator, type OpenAdmittedWindow } from './self-host/live-boundary-coordinator.js';
@@ -474,6 +469,8 @@ import {
 } from './cost-rollup.js';
 import { openShipDraftPr } from './ship-draft-pr.js';
 import { createShipDraftPublicationDependencies } from './ship-draft-pr.js';
+import { isEmptyRegion, parsePrTemplateRegions, restoreRegion } from './pr-body-regions.js';
+import { readRegionCaptures, writeRegionCapture } from './pr-body-region-store.js';
 import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
@@ -502,7 +499,6 @@ export function createFinishPresentationRepair(input: {
   gh: GhRunner;
   operations?: GithubOperationRunner;
   log?: (message: string) => void;
-  restoreReleaseMetadata?: (prUrl: string) => Promise<void>;
 }): (request: { prUrl: string; state: ConductState; mode?: 'capture-only' | 'full' }) => Promise<void> {
   return async ({ prUrl, state, mode = 'full' }) => {
     const { projectRoot: cwd, gh } = input;
@@ -544,7 +540,29 @@ export function createFinishPresentationRepair(input: {
       const outcome = await bodyFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, sourceRef, testEvidenceLine, operations: input.operations }, repairLog);
       if (outcome === 'refused') throw new Error('guarded body repair refused');
     } catch (error) { repairLog(`[conductor-repair] bodyFloor failed: ${error}`); throw error; }
-    await input.restoreReleaseMetadata?.(prUrl);
+    // Regions captured from completed project-owned steps are authoritative
+    // across every engine-owned presentation rewrite.
+    const captures = await readRegionCaptures(cwd, prUrl);
+    // A capture has no template bytes at this boundary; reconstruct the marker
+    // wrapper from its key and preserve the captured interior exactly.
+    if (Object.keys(captures).length > 0) {
+      const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
+      const body = (JSON.parse(stdout) as { body?: unknown }).body;
+      if (typeof body !== 'string') throw new Error('region verification read returned no pull request body');
+      let next = body;
+      for (const [key, bytes] of Object.entries(captures)) next = restoreRegion(next, { key, bytes });
+      if (next !== body) {
+        const target = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
+        if (!target || !input.operations) throw new Error('guarded region restore is unavailable');
+        const result = await executeGithubOperation({ operation: 'pull-request.edit', repository: target[1], resource: { kind: 'pull-request', number: Number(target[2]) }, context: { actor: 'finish-region-restore' }, payload: { body: next } }, input.operations);
+        if (result.kind !== 'executed') throw new Error(`guarded region restore ${result.kind}`);
+      }
+      const verified = (JSON.parse(await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body'])) as { body?: unknown }).body;
+      if (typeof verified !== 'string') throw new Error('region verification read returned no pull request body');
+      for (const [key, bytes] of Object.entries(captures)) {
+        if (!verified.includes(`<!-- ai-conductor:step ${key} -->${bytes}<!-- /ai-conductor:step -->`)) throw new Error(`region verification mismatch for ${key}`);
+      }
+    }
     try {
       const outcome = await ensureShipReady(
         gh, cwd, prUrl, repairLog, undefined, input.operations,
@@ -2573,8 +2591,6 @@ export class Conductor {
   private resumeHaltStateClearAttempted = false;
   /** Stable identity of the draft opened at SHIP entry, retained until finish. */
   private shipDraftPrUrl: string | undefined;
-  /** Exact repository-local release metadata captured before finish dispatches. */
-  private releaseMetadataSnapshot: { prUrl: string; block: string } | undefined;
   /** Strict merged-history verifier; injection is limited to hermetic tests. */
   private verifyMergedShipment?: (prUrl: string, slug: string) => Promise<VerifiedMergedPrResult>;
   /** Strict finish verifier; production defaults to evaluateShipmentEvidence. */
@@ -2934,7 +2950,6 @@ export class Conductor {
         gh: this.gh,
         operations: publication?.operations,
         log: this.log,
-        restoreReleaseMetadata: (url) => this.restoreFinishReleaseMetadata(url, state),
       })({ prUrl, state, mode: opts.mode });
     };
 
@@ -2973,7 +2988,6 @@ export class Conductor {
       gh: this.gh,
       buildReviewEffectiveResolver: this.buildReviewEffectiveResolver,
       repairFinishPr,
-      releaseMetadataPreservationRequired: this.releaseMetadataFlow() === 'active',
       fullSuiteInspect: async () => {
         const retained = this.retainedFullSuiteInspection;
         this.retainedFullSuiteInspection = undefined;
@@ -3226,26 +3240,99 @@ export class Conductor {
       state,
       mode: this.mode,
       daemon: this.daemon,
-      dispatchJudgment: async (_request) =>
-        this.stepRunner.run('finish', state, { ...options, finishProsePass: 'judge' }),
+      dispatchJudgment: async (request) => {
+        const result = await this.stepRunner.run('finish', state, { ...options, finishProsePass: 'judge' });
+        if (result.success) await this.restoreCapturedRegions(state, request.pullRequestUrl);
+        return result;
+      },
       // The authoring pass is the same FINISH dispatch under a different
       // mandate: the step runner selects the authoring instruction block, so
       // the provider is told to write the prose from the diff rather than to
       // grade prose that was never written.
-      dispatchAuthoring: async (request) =>
-        this.stepRunner.run('finish', state, {
+      dispatchAuthoring: async (request) => {
+        const result = await this.stepRunner.run('finish', state, {
           ...options,
           finishProsePass: 'author',
           ...(request.revisionGuidance === undefined
             ? {}
             : { revisionGuidance: request.revisionGuidance }),
-        }),
+        });
+        if (result.success) await this.restoreCapturedRegions(state, request.pullRequestUrl);
+        return result;
+      },
       emit: async (event) => this.events.emit(event),
     });
     return {
       success: publicationDisposition.kind === 'complete',
       publicationDisposition,
     };
+  }
+
+  /**
+   * Make a declared project-owned region available before its author runs.
+   * The template bytes are the floor, while a later capture is authoritative.
+   */
+  private async ensureOwnedStepRegion(state: ConductState, step: StepName): Promise<void> {
+    const bytes = this.config.pr_template_region_owners?.[step];
+    if (bytes === undefined) return;
+    const prUrl = await this.resolveRetainedShipDraftPrUrl(state.worktree_branch);
+    if (!prUrl) throw new Error(`project-owned region for ${step} cannot be prepared: retained draft PR is missing`);
+    const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
+    const body = (JSON.parse(stdout) as { body?: unknown }).body;
+    if (typeof body !== 'string') throw new Error(`project-owned region for ${step} cannot be prepared: body read failed`);
+    const next = restoreRegion(body, { key: step, bytes });
+    if (next === body) return;
+    const publication = await this.resolveShipDraftPublicationDependencies({
+      cwd: this.projectRoot, branch: state.worktree_branch, baseBranch: this.baseBranch,
+      featureDesc: state.feature_desc, prUrl, git: this.git, gh: this.gh, events: this.events,
+    });
+    if (!publication) throw new Error(`project-owned region for ${step} cannot be prepared: guarded edit is unavailable`);
+    const target = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
+    if (!target) throw new Error(`project-owned region for ${step} cannot be prepared: pull request URL is invalid`);
+    const result = await executeGithubOperation({
+      operation: 'pull-request.edit', repository: target[1], resource: { kind: 'pull-request', number: Number(target[2]) },
+      context: { actor: 'step-region-prepare' }, payload: { body: next },
+    }, publication.operations);
+    if (result.kind !== 'executed') throw new Error(`project-owned region for ${step} cannot be prepared: guarded edit ${result.kind}`);
+  }
+
+  /** Capture the exact body bytes authored by a successful region-owning step. */
+  private async captureOwnedStepRegion(state: ConductState, step: StepName): Promise<void> {
+    if (this.config.pr_template_region_owners?.[step] === undefined) return;
+    const prUrl = await this.resolveRetainedShipDraftPrUrl(state.worktree_branch);
+    if (!prUrl) throw new Error(`project-owned region capture for ${step} failed: retained draft PR is missing`);
+    const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
+    const body = (JSON.parse(stdout) as { body?: unknown }).body;
+    if (typeof body !== 'string') throw new Error(`project-owned region capture for ${step} failed: body read failed`);
+    const parsed = parsePrTemplateRegions(body);
+    if (!parsed.ok) throw new Error(`project-owned region capture for ${step} failed: malformed region body`);
+    const region = parsed.regions.find((candidate) => candidate.key === step);
+    if (!region) throw new Error(`project-owned region capture for ${step} failed: region is missing`);
+    if (isEmptyRegion(region.bytes)) throw new Error(`project-owned region capture for ${step} failed: region is empty`);
+    await writeRegionCapture(this.projectRoot, prUrl, step, region.bytes);
+  }
+
+  /** Restore every durable capture after a provider has rewritten PR prose. */
+  private async restoreCapturedRegions(state: ConductState, prUrl: string): Promise<void> {
+    const captures = await readRegionCaptures(this.projectRoot, prUrl);
+    if (Object.keys(captures).length === 0) return;
+    const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
+    const body = (JSON.parse(stdout) as { body?: unknown }).body;
+    if (typeof body !== 'string') throw new Error('project-owned region restore failed: body read failed');
+    let next = body;
+    for (const [key, bytes] of Object.entries(captures)) next = restoreRegion(next, { key, bytes });
+    if (next === body) return;
+    const publication = await this.resolveShipDraftPublicationDependencies({
+      cwd: this.projectRoot, branch: state.worktree_branch, baseBranch: this.baseBranch,
+      featureDesc: state.feature_desc, prUrl, git: this.git, gh: this.gh, events: this.events,
+    });
+    const target = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
+    if (!publication || !target) throw new Error('project-owned region restore failed: guarded edit is unavailable');
+    const result = await executeGithubOperation({
+      operation: 'pull-request.edit', repository: target[1], resource: { kind: 'pull-request', number: Number(target[2]) },
+      context: { actor: 'finish-region-restore' }, payload: { body: next },
+    }, publication.operations);
+    if (result.kind !== 'executed') throw new Error(`project-owned region restore failed: guarded edit ${result.kind}`);
   }
 
   /**
@@ -6813,84 +6900,6 @@ export class Conductor {
     if (outcome !== 'partial') this.resumeHaltStateClearAttempted = true;
   }
 
-  /**
-   * Drop the capture so the next finish dispatch re-derives it. Called before
-   * `release-disposition` dispatches: whatever that step writes supersedes any
-   * earlier capture, and restoring the superseded block would ship the wrong note.
-   */
-  private async clearFinishReleaseMetadataSnapshot(): Promise<void> {
-    this.releaseMetadataSnapshot = undefined;
-    await clearPersistedReleaseMetadataSnapshot(this.projectRoot);
-  }
-
-  /** Capture only a valid, re-readable release block before finish can replace the body. */
-  private async snapshotFinishReleaseMetadata(branch?: string): Promise<void> {
-    if (this.releaseMetadataFlow() !== 'active') {
-      this.releaseMetadataSnapshot = undefined;
-      return;
-    }
-
-    const prUrl = await this.resolveRetainedShipDraftPrUrl(branch);
-    if (!prUrl) {
-      throw new Error('pre-finish snapshot unavailable: retained draft PR identity is absent');
-    }
-
-    // FINISH advances one publication transition per dispatch, so this hook fires
-    // again after `author_pr_prose` has legitimately rewritten the body without the
-    // metadata. Re-deriving the capture from that body finds nothing and halts the
-    // feature on its last step. An existing capture for this same PR is therefore
-    // authoritative and is never re-derived from a body finish has already touched;
-    // the persisted copy carries it across a re-dispatch in a fresh process.
-    const retained = this.releaseMetadataSnapshot?.prUrl === prUrl
-      ? this.releaseMetadataSnapshot
-      : await readPersistedReleaseMetadataSnapshot(this.projectRoot);
-    this.releaseMetadataSnapshot = await snapshotReleaseMetadata({
-      gh: this.gh,
-      projectRoot: this.projectRoot,
-      prUrl,
-      retained,
-    });
-  }
-
-  /**
-   * Restore the snapshot only after a verified remote read/write cycle.
-   *
-   * Daemon dispatch supplies `worktreeBranch` but never `featureDesc` to the
-   * constructor; durable conduct state carries both, so the guard is composed
-   * from state first (as the sibling repair at `repairFinishPr` does). An
-   * uncomposable guard is deferred to the flow, which only needs it once the
-   * body actually has to be rewritten.
-   */
-  private async restoreFinishReleaseMetadata(
-    prUrl: string,
-    state?: Pick<ConductState, 'worktree_branch' | 'feature_desc'>,
-  ): Promise<void> {
-    const snapshot = this.releaseMetadataSnapshot;
-    if (this.releaseMetadataFlow() !== 'active') return;
-    if (!snapshot || snapshot.prUrl !== prUrl) {
-      throw new Error('pre-finish snapshot unavailable for the retained draft PR');
-    }
-
-    const publication = await this.resolveShipDraftPublicationDependencies({
-      cwd: this.projectRoot,
-      branch: state?.worktree_branch ?? this.worktreeBranch,
-      baseBranch: this.baseBranch,
-      featureDesc: state?.feature_desc ?? this.featureDesc,
-      prUrl,
-      git: this.git,
-      gh: this.gh,
-      events: this.events,
-    });
-
-    await restoreReleaseMetadata({
-      gh: this.gh,
-      projectRoot: this.projectRoot,
-      prUrl,
-      snapshot,
-      operations: publication?.operations,
-    });
-  }
-
   /** Read and parse the exact retained draft body through the injected GitHub seam. */
   private async readShipDraftReleaseMetadata(branch: string | undefined): Promise<
     | { ok: false; reason: string }
@@ -7928,6 +7937,7 @@ export class Conductor {
             branch: state.worktree_branch,
             baseBranch: this.baseBranch,
             featureDesc: state.feature_desc,
+            prTemplateBytes: this.config.pr_template_bytes,
             remoteMutation: publication?.remoteMutation,
             operations: publication?.operations,
             remoteGit: this.shipDraftRemoteGit,
@@ -10207,16 +10217,6 @@ export class Conductor {
             });
           }
 
-          // The repository-local release-disposition gate writes machine-owned
-          // metadata into the retained SHIP draft. Capture it immediately
-          // before finish dispatches, because finish may replace the body.
-          if (step.name === 'finish') {
-            await this.snapshotFinishReleaseMetadata(state.worktree_branch);
-          }
-          if (supersedesReleaseMetadataSnapshot(this.releaseMetadataFlow(), step.name)) {
-            await this.clearFinishReleaseMetadataSnapshot();
-          }
-
           // Native gates and the finish coordinator precede the self-host
           // branch below. Only that branch omits generic escalation overrides.
           const usesSelfBuildDispatch = this.isSelfBuild() &&
@@ -10316,6 +10316,10 @@ export class Conductor {
                 viaException: false,
               });
             }
+            // A project-owned custom step receives its template region before
+            // the provider is dispatched.  This keeps the region boundary
+            // mechanical rather than relying on the provider to recreate it.
+            await this.ensureOwnedStepRegion(state, step.name);
             result =
               (await this.missingWorktreeResult(step.name)) ??
               (step.name === 'complexity'
@@ -13707,6 +13711,9 @@ export class Conductor {
           // (#436) — gated on the rebase outcome, so a conflict_halt is never
           // stamped 'done' here. For all other steps, here.
           if (step.name !== 'complexity' && step.name !== 'worktree' && step.name !== 'rebase') {
+            // Capture only successful owner output. Failed steps must not make
+            // partial or empty prose authoritative for a later FINISH pass.
+            await this.captureOwnedStepRegion(state, step.name);
             await this.saveConductorStepStatus(state, step.name, 'done');
           }
           state[step.name] = 'done';

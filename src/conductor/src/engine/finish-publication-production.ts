@@ -190,8 +190,12 @@ async function mutateRetainedPullRequest(input: {
 
 function upsertReducedCoverageEvidence(body: string, section: string | undefined): { ok: true; body: string; changed: boolean } | { ok: false; message: string } {
   const heading = '## Reduced build-review coverage';
-  const start = body.indexOf(heading);
-  const end = start === -1 ? -1 : body.indexOf('\n## ', start + heading.length);
+  // Project-owned regions are opaque. Mask them at identical byte offsets so
+  // the engine never mistakes a project heading for its own section.
+  const searchable = body.replace(/<!-- ai-conductor:step [^\r\n]+ -->[\s\S]*?<!-- \/ai-conductor:step -->/g, (region) =>
+    region.replace(/[^\r\n]/g, ' '));
+  const start = searchable.indexOf(heading);
+  const end = start === -1 ? -1 : searchable.indexOf('\n## ', start + heading.length);
   const withoutExisting = start === -1
     ? body
     : `${body.slice(0, start).trimEnd()}${end === -1 ? '' : `\n\n${body.slice(end + 1).trimStart()}`}`.trimEnd();
@@ -759,6 +763,7 @@ export function createProductionFinishPublicationCoordinator(
             branch: state.worktree_branch,
             baseBranch: deps.baseBranch,
             featureDesc: state.feature_desc,
+            prTemplateBytes: deps.prTemplateBytes,
             remoteMutation: deps.remoteMutation ?? publication?.remoteMutation,
             remoteGit: deps.remoteGit,
             operations,

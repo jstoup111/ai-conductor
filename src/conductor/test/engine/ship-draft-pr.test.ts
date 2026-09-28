@@ -200,6 +200,15 @@ describe('openShipDraftPr', () => {
     expect(why).toContain('widget import flow');
   });
 
+  it('seeds a draft with the project template without changing its bytes', () => {
+    const template = '<!-- ai-conductor:step attest -->\nAttested-By: security-bot\n<!-- /ai-conductor:step -->';
+    const body = shipDraftPrBody('widget import flow', template);
+    expect(body).toContain(PR_BODY_FLOOR_MARKER);
+    expect(body).toContain(template);
+    expect(body).toContain('<!-- Closes <owner/repo#N>');
+    expect(body).toContain(SHIP_DRAFT_PR_NOTE);
+  });
+
   it('reuses an already-open PR without preserving or choosing a release disposition', async () => {
     const { git } = aheadGit();
     const { gh, calls: ghCalls } = fakeGh((args) => {

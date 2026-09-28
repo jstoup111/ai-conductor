@@ -34,8 +34,10 @@ draft PR. Claude Code invokes this skill as `/release-disposition`; Codex invoke
    surface and no waiver committed in the feature diff, and you cannot confidently judge whether the
    change is internal-only or consumer-facing, record `Surface-Verdict: unclassifiable`; do not
    guess `waiver` or `migration`.
-4. Replace any existing `Release-Disposition`, `Release-Category`, `Release-Semver`,
-   `Release-Note`, and `## Migration` metadata while preserving all unrelated PR-body content.
+4. Write only inside the `<!-- ai-conductor:step release-disposition -->` …
+   `<!-- /ai-conductor:step -->` region. Replace its `Release-Disposition`,
+   `Release-Category`, `Release-Semver`, `Release-Note`, and `## Migration` metadata while
+   leaving both region markers and all content outside the region unchanged.
 5. Write one of these valid forms directly to the retained draft PR body:
 
    ```text
