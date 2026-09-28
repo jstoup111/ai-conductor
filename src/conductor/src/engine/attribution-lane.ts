@@ -99,7 +99,6 @@ export interface VerifierDispatchResult extends ProviderAttributionMetadata {
   authFailure?: boolean;
   rateLimited?: boolean;
   waitSeconds?: number;
-  sessionExpired?: boolean;
   authentication?: AuthenticationReadiness;
 }
 
@@ -412,14 +411,6 @@ export async function dispatchAttributionVerifier(
       output: result.output,
       rateLimited: true,
       waitSeconds: result.waitSeconds ?? 300,
-      ...providerMetadata,
-    };
-  }
-  if (result.sessionExpired) {
-    return {
-      success: false,
-      output: result.output,
-      sessionExpired: true,
       ...providerMetadata,
     };
   }

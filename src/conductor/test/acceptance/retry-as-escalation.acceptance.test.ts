@@ -409,8 +409,8 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
     expect(haltEvents).toHaveLength(1);
   });
 
-  it('S10: a non-consuming (stale-session) retry re-runs at the SAME rung, no model bump', async () => {
-    // Script: attempt 1 fails; attempt 2 (effort=high) returns sessionExpired
+  it('S10: a non-consuming (rate-limit) retry re-runs at the SAME rung, no model bump', async () => {
+    // Script: attempt 1 fails; attempt 2 (effort=high) returns rateLimited
     // (attempt--; continue — budget not burned); the re-run of attempt 2 fails
     // normally; attempt 3 fails. Escalation derives from `attempt`, so the two
     // attempt-2 dispatches must share the same rung and NEITHER may be opus.
@@ -418,7 +418,7 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
     const { runner, forStep } = makeRecordingRunner({
       plan: () => {
         call += 1;
-        if (call === 2) return { success: false, sessionExpired: true };
+        if (call === 2) return { success: false, rateLimited: true, waitSeconds: 0 };
         return { success: false, output: 'plan failed' };
       },
     });
@@ -431,6 +431,7 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
       daemon: true,
       config: planConfig(),
       escalateBuildFailure: okEscalation(),
+      sleepFn: vi.fn().mockResolvedValue(undefined),
     });
 
     await conductor.run();

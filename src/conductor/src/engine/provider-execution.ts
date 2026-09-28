@@ -331,8 +331,7 @@ export interface ProviderExecutionContext {
 function hasRecoveryPrecedence(result: InvokeResult): boolean {
   return (
     result.authFailure === true ||
-    result.rateLimited === true ||
-    result.sessionExpired === true
+    result.rateLimited === true
   );
 }
 

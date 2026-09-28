@@ -887,7 +887,6 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
 
   it.each([
     ['rate limit', { success: false, rateLimited: true }],
-    ['stale session', { success: false, sessionExpired: true }],
   ])('parks after a %s free retry without redispatching the member', async (_name, firstResult) => {
     const runner = spyRunner([firstResult]);
     const member: GroupMember = { name: 'manual_test', skill: 'manual-test', outcome: makeSkippedOutcome() };
@@ -1088,7 +1087,7 @@ describe("group-core: runGroupBranch rate-limit pass-through into shared episode
     });
   });
 
-  it("does not open or persist a suppression window for authentication failure or an expired session", async () => {
+  it("does not open or persist a suppression window for authentication failure", async () => {
     const suppress = vi.fn();
     const onProviderSuppressed = vi.fn();
     const providerAvailability = { suppress, isAvailable: () => true };
@@ -1096,11 +1095,6 @@ describe("group-core: runGroupBranch rate-limit pass-through into shared episode
 
     await runGroupBranch(member, fakeState, {
       stepRunner: spyRunner([{ success: false, authFailure: true, actualProvider: "codex" }]),
-      providerAvailability,
-      onProviderSuppressed,
-    }, 1);
-    await runGroupBranch(member, fakeState, {
-      stepRunner: spyRunner([{ success: false, sessionExpired: true, actualProvider: "codex" }, { success: true }]),
       providerAvailability,
       onProviderSuppressed,
     }, 1);
@@ -1178,7 +1172,7 @@ describe("group-core: runGroupBranch rate-limit pass-through into shared episode
   });
 });
 
-describe("group-core: runGroupBranch authFailure / sessionExpired parity", () => {
+describe("group-core: runGroupBranch authFailure parity and fresh sessions", () => {
   /** Minimal runner-spy: captures every (step, opts) call it receives. */
   function spyRunner(results: StepRunResult[]) {
     const calls: Array<{ step: StepName; opts?: StepRunOptions }> = [];
@@ -1277,9 +1271,9 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
     expect(outcome).not.toEqual({ kind: "no-verdict", reason: "retries exhausted" });
   });
 
-  it("a sessionExpired result re-mints a fresh session id and retries with resume:false, without burning retry budget", async () => {
+  it("every retry dispatch mints a fresh session id with resume:false", async () => {
     const runner = spyRunner([
-      { success: false, sessionExpired: true },
+      { success: false, output: "first attempt failed" },
       { success: true },
     ]);
     const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
@@ -1290,14 +1284,11 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
       return `SESSION-${mintCount}`;
     };
 
-    // maxRetries=1: only one real attempt is allowed. The sessionExpired
-    // cycle must not count against it, so the branch still succeeds on
-    // its retry.
     const outcome = await runGroupBranch(
       member,
       fakeState,
       { stepRunner: runner, mintSessionId },
-      1,
+      2,
     );
 
     expect(runner.calls).toHaveLength(2);
@@ -1307,8 +1298,8 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
     expect(runner.calls[0]!.opts?.sessionId).toBe("SESSION-1");
     expect(runner.calls[0]!.opts?.resume).toBe(false);
 
-    // After sessionExpired, a NEW session is minted (not the expired one
-    // resumed) and dispatched fresh (resume:false), not resume:true.
+    // The retry mints a NEW session (never the failed one resumed) and
+    // dispatches it fresh (resume:false).
     expect(runner.calls[1]!.opts?.sessionId).toBe("SESSION-2");
     expect(runner.calls[1]!.opts?.resume).toBe(false);
   });

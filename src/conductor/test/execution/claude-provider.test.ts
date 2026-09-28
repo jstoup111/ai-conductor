@@ -757,7 +757,7 @@ describe('ClaudeProvider', () => {
       };
       provider = new ClaudeProvider(clock);
       mockExeca.mockResolvedValue({
-        stdout: 'No conversation found',
+        stdout: 'interactive session failed',
         stderr: '',
         exitCode: 1,
         failed: true,
@@ -770,11 +770,10 @@ describe('ClaudeProvider', () => {
 
       expect(result).toEqual({
         success: false,
-        output: 'No conversation found',
+        output: 'interactive session failed',
         exitCode: 1,
         authFailure: undefined,
         rateLimited: undefined,
-        sessionExpired: true,
         modelUnavailable: undefined,
         tokenUsage: undefined,
         waitSeconds: undefined,
@@ -829,7 +828,6 @@ describe('ClaudeProvider', () => {
         exitCode: 1,
         authFailure: true,
         rateLimited: undefined,
-        sessionExpired: undefined,
         modelUnavailable: undefined,
         tokenUsage: undefined,
         waitSeconds: undefined,
@@ -1085,31 +1083,6 @@ describe('ClaudeProvider', () => {
       expect(result.success).toBe(false);
     });
 
-    it.each([
-      'No conversation found for this session',
-      'Error: Session abc-123 is already in use',
-    ])('classifies recoverable session failure %j as sessionExpired', async (output) => {
-      mockExeca.mockResolvedValue({
-        stdout: output,
-        exitCode: 1,
-        failed: true,
-      } as any);
-
-      const result = await provider.invoke({ ...baseOptions, interactive: true });
-      expect(result.sessionExpired).toBe(true);
-    });
-
-    it('treats a session-in-use lock as recoverable (sessionExpired)', async () => {
-      mockExeca.mockResolvedValue({
-        stdout: 'This conversation is currently in use by another process',
-        exitCode: 1,
-        failed: true,
-      } as any);
-
-      const result = await provider.invoke({ ...baseOptions, interactive: true });
-      expect(result.sessionExpired).toBe(true);
-    });
-
     it('returns success for exit code 0', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'Done!',
@@ -1223,19 +1196,6 @@ describe('ClaudeProvider', () => {
             rateLimited: true,
           },
         },
-        {
-          name: 'session',
-          response: {
-            stdout: '',
-            stderr: 'No conversation found for this session',
-            exitCode: 1,
-            failed: true,
-          },
-          expected: {
-            output: 'No conversation found for this session',
-            sessionExpired: true,
-          },
-        },
       ] as const;
       const observed = [];
 
@@ -1251,7 +1211,6 @@ describe('ClaudeProvider', () => {
           authFailure: result.authFailure,
           modelUnavailable: result.modelUnavailable,
           rateLimited: result.rateLimited,
-          sessionExpired: result.sessionExpired,
         });
       }
 
@@ -1279,8 +1238,6 @@ describe('ClaudeProvider', () => {
               : undefined,
           rateLimited:
             'rateLimited' in expected ? expected.rateLimited : undefined,
-          sessionExpired:
-            'sessionExpired' in expected ? expected.sessionExpired : undefined,
         })),
       );
     });

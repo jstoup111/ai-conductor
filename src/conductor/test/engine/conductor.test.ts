@@ -3034,14 +3034,14 @@ describe('engine/conductor', () => {
     }]]);
   });
 
-  it('preserves all ordered intervals after a grouped session-expired retry', async () => {
-    const expiredIntervals = [{ startedAtMs: 800, durationMs: 15 }];
+  it('preserves all ordered intervals across a grouped retry', async () => {
+    const firstIntervals = [{ startedAtMs: 800, durationMs: 15 }];
     const terminalIntervals = [{ startedAtMs: 900, durationMs: 60 }];
     const run = vi.fn()
       .mockResolvedValueOnce({
         success: false,
-        sessionExpired: true,
-        observedIntervals: expiredIntervals,
+        output: 'first failure',
+        observedIntervals: firstIntervals,
       })
       .mockResolvedValueOnce({
         success: false,
@@ -3057,7 +3057,7 @@ describe('engine/conductor', () => {
     const outcome = await runGroupBranch(member, {}, {
       stepRunner: { run },
       lifecycleObserver: NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER,
-    }, 1);
+    }, 2);
 
     expect({
       kind: outcome.kind,
@@ -3067,7 +3067,7 @@ describe('engine/conductor', () => {
     }).toEqual({
       kind: 'no-verdict',
       calls: 2,
-      intervals: [...expiredIntervals, ...terminalIntervals],
+      intervals: [...firstIntervals, ...terminalIntervals],
     });
   });
 
@@ -13886,13 +13886,6 @@ describe('engine/conductor', () => {
       } as StepRunResult,
     },
     {
-      signal: 'stale-session',
-      transient: {
-        success: false,
-        sessionExpired: true,
-      } as StepRunResult,
-    },
-    {
       signal: 'auth-park',
       transient: {
         success: false,
@@ -14313,8 +14306,8 @@ describe('engine/conductor', () => {
     });
   });
 
-  describe('stale-session handling', () => {
-    it('scopes serial sessions per step and provider while stale recovery stays budget-neutral', async () => {
+  describe('provider session scoping', () => {
+    it('scopes serial sessions per step and provider across retries and fallback', async () => {
       const calls: Array<{
         step: 'memory' | 'explore';
         provider: 'claude' | 'codex';
@@ -14344,14 +14337,6 @@ describe('engine/conductor', () => {
         });
 
         if (step === 'memory' && provider === 'codex' && call === 1) {
-          return {
-            success: false,
-            output: 'codex session expired',
-            exitCode: 1,
-            sessionExpired: true,
-          };
-        }
-        if (step === 'memory' && provider === 'codex' && call === 2) {
           return {
             success: false,
             output: 'ordinary retryable failure',
@@ -14399,9 +14384,7 @@ describe('engine/conductor', () => {
         },
       ]);
       const ids = [
-        'memory-codex-stale',
-        'memory-codex-reset',
-        'memory-codex-recovered',
+        'memory-codex',
         'memory-codex-retry',
         'explore-codex',
         'explore-claude',
@@ -14442,9 +14425,9 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       const targetSteps = new Set(['memory', 'explore']);
-      // Session reuse was removed by design: every dispatch — the stale
-      // attempt, its recovery, the budget-neutral retry, and each provider
-      // candidate — mints its own fresh, unused UUID (never a store id).
+      // Session reuse was removed by design: every dispatch — the first
+      // attempt, its retry, and each provider candidate — mints its own
+      // fresh, unused UUID (never a store id).
       const freshSessionIdRe =
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       const sessionIds = calls.map(({ sessionId }) => sessionId);
@@ -14466,81 +14449,15 @@ describe('engine/conductor', () => {
         calls: [
           { step: 'memory', provider: 'codex', resume: false },
           { step: 'memory', provider: 'codex', resume: false },
-          { step: 'memory', provider: 'codex', resume: false },
           { step: 'explore', provider: 'codex', resume: false },
           { step: 'explore', provider: 'claude', resume: false },
         ],
         beginStepCalls: [['memory'], ['explore']],
         resetSessionCalls: [
           ['memory'],
-          [undefined, 'codex'],
           ['explore'],
         ],
       });
-    });
-
-    it('calls resetSession and retries without burning retry budget', async () => {
-      let attempt = 0;
-      const resetSession = vi.fn().mockResolvedValue(undefined);
-      const runner: StepRunner = {
-        run: vi.fn(async () => {
-          attempt++;
-          if (attempt === 1) return { success: false, sessionExpired: true };
-          return { success: true };
-        }),
-        resetSession,
-      };
-      const conductor = new Conductor({
-        stateFilePath: statePath,
-        stepRunner: runner,
-        events,
-        projectRoot: dir,
-        // One budgeted attempt: the successful retry can occur only if the
-        // stale-session cycle is explicitly budget-neutral.
-        maxRetries: 1,
-      });
-
-      const resetEvents: Array<{ reason: string }> = [];
-      events.on('session_reset', (e) => {
-        if (e.type === 'session_reset') resetEvents.push({ reason: e.reason });
-      });
-
-      await conductor.run();
-
-      expect({
-        completedAfterReset: attempt > 1,
-        staleResetCalls: resetSession.mock.calls.filter((args) => args.length === 0),
-        resetEvents,
-      }).toEqual({
-        completedAfterReset: true,
-        staleResetCalls: [[]],
-        resetEvents: [{
-          reason: 'session unavailable (expired or in use) — resetting to a fresh session',
-        }],
-      });
-    });
-
-    it('tolerates a runner without resetSession', async () => {
-      let attempt = 0;
-      const runner: StepRunner = {
-        run: vi.fn(async () => {
-          attempt++;
-          if (attempt === 1) return { success: false, sessionExpired: true };
-          return { success: true };
-        }),
-        // resetSession omitted
-      };
-      const conductor = new Conductor({
-        stateFilePath: statePath,
-        stepRunner: runner,
-        events,
-        projectRoot: dir,
-      });
-
-      await conductor.run();
-
-      // Should not crash; step succeeded on the retry-after-session-expired.
-      expect(attempt).toBeGreaterThanOrEqual(2);
     });
   });
 

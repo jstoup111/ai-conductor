@@ -593,7 +593,6 @@ describe('operator park boundary contract', () => {
 
     const reentryCases = [
       ['rate-limit wait', 'if (result.rateLimited)', 'attempt--;\n            continue;'],
-      ['stale-session reset', 'if (result.sessionExpired)', 'attempt--;\n            continue;'],
       ['auth refresh', 'if (result.authFailure)', 'attempt--;\n            continue;'],
       ['finish-publication progress retry', 'if (progressBypassed || attempt < stepMaxRetries)', 'continue;'],
       ['test-suite infrastructure retry', 'MAX_SUITE_INFRASTRUCTURE_RETRIES', 'attempt--;\n                continue;'],
@@ -666,30 +665,6 @@ describe('operator park boundary contract', () => {
     expect({ result, runnerCalls: run.mock.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'memory', attempt: 1 } },
       runnerCalls: 1,
-      boundaryCalls: 3,
-    });
-  });
-
-  it('declines a stale-session retry before a second runner dispatch', async () => {
-    await writeState(statePath, stateWithPending('memory'));
-    let parked = false;
-    const boundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(async () => parked);
-    const resetSession = vi.fn(async () => {
-      // The admission preflight may reset before the first dispatch; park
-      // only when the stale-session branch itself performs its reset.
-      if (run.mock.calls.length > 0) parked = true;
-    });
-    const run = vi.fn<StepRunner['run']>(async () => ({ success: false, sessionExpired: true }));
-    const result = await new Conductor({
-      projectRoot, stateFilePath: statePath, stepRunner: { run, resetSession }, events: new ConductorEventEmitter(),
-      fromStep: 'memory', mode: 'auto', daemon: true, verifyArtifacts: false,
-      featureSlug: 'operator-park-boundary', operatorParkBoundary: boundary,
-    }).run();
-
-    expect({ result, runnerCalls: run.mock.calls.length, resetCalls: resetSession.mock.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
-      result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'memory', attempt: 1 } },
-      runnerCalls: 1,
-      resetCalls: 2,
       boundaryCalls: 3,
     });
   });

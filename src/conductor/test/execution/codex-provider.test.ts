@@ -1550,7 +1550,6 @@ describe('CodexProvider', () => {
         authFailure: undefined,
         rateLimited: undefined,
         modelUnavailable: undefined,
-        sessionExpired: undefined,
         authentication: { provider: 'codex', source: 'cached-login', state: 'ready' },
       });
       expect(result.output).toMatch(/Codex.*automatic permission.*(unavailable|denied).*retry/i);
@@ -2098,7 +2097,6 @@ describe('CodexProvider', () => {
         modelUnavailable: result.modelUnavailable,
         providerUnavailable: result.providerUnavailable,
         providerUnavailableScope: result.providerUnavailableScope,
-        sessionExpired: result.sessionExpired,
         authentication: result.authentication,
       },
     }).toEqual({
@@ -2111,7 +2109,6 @@ describe('CodexProvider', () => {
         modelUnavailable: undefined,
         providerUnavailable: undefined,
         providerUnavailableScope: undefined,
-        sessionExpired: undefined,
         authentication: {
           provider: 'codex',
           source: 'cached-login',
@@ -2185,13 +2182,6 @@ describe('CodexProvider', () => {
       resume: true,
       response: { stdout: '', stderr: 'Requested model gpt-nope is not available', exitCode: 1 },
       expected: { success: false, modelUnavailable: true },
-      authenticationState: 'probe-failed',
-    },
-    {
-      name: 'resumed automatic stream reports an expired session',
-      resume: true,
-      response: { stdout: '', stderr: 'Thread not found; cannot resume this session', exitCode: 1 },
-      expected: { success: false, sessionExpired: true },
       authenticationState: 'probe-failed',
     },
     {
@@ -2617,11 +2607,6 @@ describe('CodexProvider', () => {
     ['authentication failure', { stdout: '', stderr: 'Authentication required. Please run codex login.', exitCode: 1 }, 'authFailure'],
     ['rate limit', { stdout: '', stderr: 'Error 429: rate limit exceeded; retry after 45 seconds', exitCode: 1 }, 'rateLimited'],
     ['model unavailable', { stdout: '', stderr: 'Requested model gpt-nope is not available', exitCode: 1 }, 'modelUnavailable'],
-    ['expired session', { stdout: '', stderr: 'Thread not found; cannot resume this session', exitCode: 1 }, 'sessionExpired'],
-    ['thread resume failed', { stdout: '', stderr: 'Error: thread/resume failed for thread id c6a57ca5-fe83-47a1-aa23-9c30b9bff882', exitCode: 1 }, 'sessionExpired'],
-    // Codex 0.145 reports a resume against a home with no matching rollout this
-    // way; it must heal as an expired session rather than burn every retry.
-    ['missing rollout', { stdout: '', stderr: 'Error: thread/resume: thread/resume failed: no rollout found for thread id c6a57ca5-fe83-47a1-aa23-9c30b9bff882 (code -32600)', exitCode: 1 }, 'sessionExpired'],
   ])('classifies %s from fake CLI output', async (_name, response, expectedFlag) => {
     mockExeca.mockResolvedValue(response as any);
 
@@ -2730,19 +2715,6 @@ describe('CodexProvider', () => {
         },
       },
       {
-        name: 'session',
-        response: {
-          stdout: '',
-          stderr: 'Thread not found; cannot resume this session',
-          exitCode: 1,
-          failed: true,
-        },
-        expected: {
-          output: 'Thread not found; cannot resume this session',
-          sessionExpired: true,
-        },
-      },
-      {
         name: 'ordinary failure',
         response: {
           stdout: '',
@@ -2769,7 +2741,6 @@ describe('CodexProvider', () => {
         authFailure: result.authFailure,
         modelUnavailable: result.modelUnavailable,
         rateLimited: result.rateLimited,
-        sessionExpired: result.sessionExpired,
       });
     }
 
@@ -2797,8 +2768,6 @@ describe('CodexProvider', () => {
             : undefined,
         rateLimited:
           'rateLimited' in expected ? expected.rateLimited : undefined,
-        sessionExpired:
-          'sessionExpired' in expected ? expected.sessionExpired : undefined,
       })),
     );
   });

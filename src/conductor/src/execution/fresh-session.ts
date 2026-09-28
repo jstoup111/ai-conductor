@@ -11,9 +11,7 @@ import type { InvokeOptions } from './llm-provider.js';
  * branches shared a ~1.28M-token "conversation" that grew across the day and
  * eventually failed one-turn calls with "Prompt is too long". Per the repo's
  * design principle — machinery over prompt/call-site discipline — this
- * boundary makes fresh sessions an invariant no call path can bypass:
- * unless the caller passes the explicit `dangerouslyReuseSession: true`
- * valve (nothing in production sets it; there is no config key for it), any
+ * boundary makes fresh sessions an invariant no call path can bypass: any
  * caller-supplied session id is replaced with a freshly minted UUID and
  * `resume` is forced off before either can reach a provider CLI.
  */
@@ -21,7 +19,6 @@ export function enforceFreshSessionOptions(
   options: InvokeOptions,
   provider: string,
 ): InvokeOptions {
-  if (options.dangerouslyReuseSession === true) return options;
   const freshSessionId = randomUUID();
   const suppressedResume = options.resume === true;
   const notice =

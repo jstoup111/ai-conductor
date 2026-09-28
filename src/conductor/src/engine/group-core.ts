@@ -585,9 +585,9 @@ export function runAuxiliaryGroupBranches<MemberId extends string, Policy, Outco
  *
  * Returns a `BranchOutcome`: `verdict:pass` on the first successful
  * dispatch, or `no-verdict` (carrying the last failure's output) once
- * `maxRetries` is exhausted without success. Rate-limit/authFailure/
- * sessionExpired handling and verdict parsing beyond pass/fail are out of
- * scope for this task (Tasks 6-7).
+ * `maxRetries` is exhausted without success. Rate-limit/authFailure
+ * handling and verdict parsing beyond pass/fail are out of scope for this
+ * task (Tasks 6-7).
  */
 export async function runGroupBranch(
   member: GroupMember,
@@ -846,18 +846,6 @@ async function runGroupBranchInner(
         );
       }
 
-      attempt -= 1;
-      continue;
-    }
-
-    // Stale session: mint a fresh session id and retry WITHOUT burning the
-    // retry budget — mirrors conductor.ts:1757-1769 (resets to a fresh
-    // session, not a resume of the expired one).
-    if (result.sessionExpired) {
-      const expiredProvider = result.actualProvider ?? result.preferredProvider;
-      if (providerSessions && expiredProvider) {
-        await providerSessions.replace(expiredProvider);
-      }
       attempt -= 1;
       continue;
     }

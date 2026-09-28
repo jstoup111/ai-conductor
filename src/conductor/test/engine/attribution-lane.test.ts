@@ -451,27 +451,6 @@ Add tests for sweep.
     });
   });
 
-  it('returns failure on session expired', async () => {
-    const invoke = vi.fn().mockResolvedValue({
-      success: false,
-      output: 'session expired',
-      sessionExpired: true,
-    });
-    const provider: LLMProvider = { invoke, };
-
-    const result = await dispatchAttributionVerifier({
-      provider,
-      projectDir: dir,
-      planPath,
-      residueIds: ['1'],
-      featureWorktreePath: dir,
-      gitRunner: createMockedGitRunner(),
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.sessionExpired).toBe(true);
-  });
-
   it('names attempted models on full ladder exhaustion', async () => {
     const invoke = vi.fn().mockResolvedValue({
       success: false,
