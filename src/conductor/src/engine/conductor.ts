@@ -328,7 +328,7 @@ import {
   type PlanGrowth,
   type PlanGrowthEventSink,
 } from './kickback-ledger.js';
-import { renderKickbackBudgetView } from './kickback-budget-view.js';
+import { renderKickbackBudgetView, renderKickbackRecoveryHint } from './kickback-budget-view.js';
 import {
   consumeOperatorGrant,
   decideEntryDisposition,
@@ -845,11 +845,9 @@ async function readRemediationGateAppendBudget(
   growthTaskCount: number,
   authoredTaskCount: number,
 ): Promise<RemediationGateAppendBudget> {
-  const growthCap = prdAuditAppendCap(config, authoredTaskCount);
-  const [ledger, growth] = await Promise.all([
-    readKickbackLedger(projectRoot),
-    readGrowth(projectRoot, growthCap),
-  ]);
+  const ledger = await readKickbackLedger(projectRoot);
+  const growthCap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(config, authoredTaskCount);
+  const growth = await readGrowth(projectRoot, growthCap);
   // A corrupt ledger must not be mistaken for fresh remediation allowance:
   // budget recovery is an explicit operator decision, not a best-effort
   // fallback. Scoped to THIS gate (adr-2026-08-31 decision 3) so a sibling
@@ -4628,6 +4626,7 @@ export class Conductor {
       const findingList = [...new Set(fixable.map((finding) => finding.criterion))].join(', ');
       const capReason = `lap cap reached (${budget.priorLaps}/${budget.lapCap})`;
       const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'prd_audit', {
+        allowance: 'laps',
         consumed: budget.priorLaps,
         limit: budget.lapCap,
         latestReason: capReason,
@@ -4637,6 +4636,11 @@ export class Conductor {
         haltClass: KICKBACK_CAP_HALT_CLASS,
         detail: `prd_audit remediation ${capReason} before appending fix tasks. `
           + `Findings: ${findingList}.\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}`
+          + `\n${renderKickbackRecoveryHint({
+            slug: this.featureSlug,
+            gate: 'prd_audit',
+            allowance: 'laps',
+          })}`
           + renderAsBuiltBlockedFindingDetail(asBuiltFindings),
       };
     } catch {
@@ -5260,8 +5264,9 @@ export class Conductor {
               `growth cap reached (${prdAuditBudget.growth.added}/${prdAuditBudget.growthCap} appended; ` +
               `${prdAuditBudget.growthTaskCount} requested, ${prdAuditBudget.growth.remaining} remaining)`;
           const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'prd_audit', {
-            consumed: prdAuditBudget.priorLaps,
-            limit: prdAuditBudget.lapCap,
+            allowance: exhausted,
+            consumed: exhausted === 'growth' ? prdAuditBudget.growth.added : prdAuditBudget.priorLaps,
+            limit: exhausted === 'growth' ? prdAuditBudget.growthCap : prdAuditBudget.lapCap,
             latestReason: capReason,
           });
           return {
@@ -5276,6 +5281,11 @@ export class Conductor {
             // yields '' unless an as-built BLOCKED report actually participates.
             detail: `prd_audit remediation ${capReason} before appending fix tasks. `
               + `Findings: ${findingList}.\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}`
+              + `\n${renderKickbackRecoveryHint({
+                slug: this.featureSlug,
+                gate: 'prd_audit',
+                allowance: exhausted,
+              })}`
               + renderAsBuiltBlockedFindingDetail(asBuiltTypedFindings),
           };
         }
@@ -5289,8 +5299,9 @@ export class Conductor {
               `shared plan-growth allowance exhausted (${asBuiltBudget.growth.added}/${asBuiltBudget.growthCap} appended; ` +
               `${asBuiltBudget.growthTaskCount} requested, ${asBuiltBudget.growth.remaining} remaining)`;
           const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'architecture_review_as_built', {
-            consumed: asBuiltBudget.priorLaps,
-            limit: asBuiltBudget.lapCap,
+            allowance: exhausted,
+            consumed: exhausted === 'growth' ? asBuiltBudget.growth.added : asBuiltBudget.priorLaps,
+            limit: exhausted === 'growth' ? asBuiltBudget.growthCap : asBuiltBudget.lapCap,
             latestReason: capReason,
           });
           return {
@@ -5298,6 +5309,11 @@ export class Conductor {
             haltClass: KICKBACK_CAP_HALT_CLASS,
             detail:
               `architecture_review_as_built remediation ${capReason} before appending fix tasks. Findings:\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}` +
+              `\n${renderKickbackRecoveryHint({
+                slug: this.featureSlug,
+                gate: 'architecture_review_as_built',
+                allowance: exhausted,
+              })}` +
               renderAsBuiltBlockedFindingDetail(asBuiltTypedFindings),
           };
         }
@@ -5308,13 +5324,28 @@ export class Conductor {
       // more than the shared remaining allowance together.
       const sharedGrowthBudget = prdAuditBudget ?? asBuiltBudget;
       if (sharedGrowthBudget && allTasks.length > sharedGrowthBudget.growth.remaining) {
+        const evidenceGate = prdAuditBudget ? 'prd_audit' : 'architecture_review_as_built';
+        const capReason =
+          `shared plan-growth allowance exhausted (${sharedGrowthBudget.growth.added}/` +
+          `${sharedGrowthBudget.growthCap} appended; ${allTasks.length} requested, ` +
+          `${sharedGrowthBudget.growth.remaining} remaining)`;
+        const capEntry = await recordKickbackCapEvidence(this.projectRoot, evidenceGate, {
+          allowance: 'growth',
+          consumed: sharedGrowthBudget.growth.added,
+          limit: sharedGrowthBudget.growthCap,
+          latestReason: capReason,
+        });
         return {
           kind: 'halt',
           haltClass: KICKBACK_CAP_HALT_CLASS,
           detail:
-            `remediation shared plan-growth allowance exhausted (${sharedGrowthBudget.growth.added}/` +
-            `${sharedGrowthBudget.growthCap} appended; ${allTasks.length} requested, ` +
-            `${sharedGrowthBudget.growth.remaining} remaining) before appending fix tasks.` +
+            `remediation ${capReason} before appending fix tasks.\n` +
+            `Kickback halt generation: ${capEntry.capEvidence!.haltGeneration}` +
+            `\n${renderKickbackRecoveryHint({
+              slug: this.featureSlug,
+              gate: evidenceGate,
+              allowance: 'growth',
+            })}` +
             // AB-R8 / APPROVED decision 4 + Story 4: a cap terminal names the
             // allowance AND every finding. This exit is shared with prd_audit,
             // so it renders unconditionally — the helper yields '' unless an
