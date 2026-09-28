@@ -105,7 +105,7 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 
 **Done when:**
 - a test asserts a claude invoke with `CLAUDE_EXECUTABLE` set to an absolute path spawns that path as the subprocess executable
-- `REVIEW_PROVIDER_PREFIXES` is computed from descriptor env-prefix namespaces and a test asserts it equals the pre-refactor claude and codex prefix lists
+- (Withdrawn 2026-09-28, as-built AB-4, operator decision: no pre-refactor review prefix map or production consumer ever existed, so `REVIEW_PROVIDER_PREFIXES` is dead code; Task 23 removes it.)
 - the existing claude and codex argv, environment-prefix, and provider-home tests pass with unchanged assertions
 
 **Files likely touched:**
@@ -540,6 +540,26 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 - src/conductor/test/engine/live-e2e-shared-body.test.ts — structural assertion
 
 **Dependencies:** 20
+
+### Task 23: Remove the unconsumed REVIEW_PROVIDER_PREFIXES export
+**Story:** 1
+**Type:** refactor
+
+**Steps:**
+1. Confirm with a repository search that `REVIEW_PROVIDER_PREFIXES` has no reader under `src/conductor/src`.
+2. Remove the export from `src/conductor/src/execution/child-environment.ts` and its assertion and import from `src/conductor/test/execution/child-environment.test.ts`.
+3. Verify the child-environment tests pass and the TypeScript build succeeds.
+4. Commit with message: "refactor(providers): remove the unconsumed REVIEW_PROVIDER_PREFIXES export"
+
+**Done when:**
+- a repository search for `REVIEW_PROVIDER_PREFIXES` under `src/conductor` returns no match
+- the child-environment tests pass and `tsc --noEmit` succeeds
+
+**Files likely touched:**
+- src/conductor/src/execution/child-environment.ts — remove dead export
+- src/conductor/test/execution/child-environment.test.ts — remove its assertion
+
+**Dependencies:** 4
 
 ## Task Dependency Graph
 
