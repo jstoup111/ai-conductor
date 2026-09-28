@@ -1,12 +1,31 @@
 // Covers: task:2, task:4
 // Covers: task:5
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const { mockExeca, mockValidateSpawnPermit, mockEnforceFreshSessionOptions } = vi.hoisted(() => ({
+  mockExeca: vi.fn(),
+  mockValidateSpawnPermit: vi.fn((permit, purpose) =>
+    permit?.(purpose) ?? { permitted: true as const }),
+  mockEnforceFreshSessionOptions: vi.fn(),
+}));
+vi.mock('execa', () => ({ execa: mockExeca }));
+vi.mock('../../src/execution/spawn-permit.js', () => ({
+  validateSpawnPermit: (...args: Parameters<typeof mockValidateSpawnPermit>) =>
+    mockValidateSpawnPermit(...args),
+}));
+vi.mock('../../src/execution/fresh-session.js', () => ({
+  enforceFreshSessionOptions: (...args: Parameters<typeof mockEnforceFreshSessionOptions>) =>
+    mockEnforceFreshSessionOptions(...args),
+}));
+
+vi.resetModules();
+
 import { PassThrough } from 'node:stream';
-import {
+const {
   ClaudeProvider,
   detectsSessionLimit,
   parseRateLimitWaitSeconds,
-} from '../../src/execution/claude-provider.js';
+} = await import('../../src/execution/claude-provider.js');
 import { classifyMetering } from '../../src/engine/metering.js';
 import { executeAuxiliaryProviderCandidates } from '../../src/engine/provider-execution.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
@@ -17,6 +36,8 @@ import { BUILD_REVIEW_RUBRIC_REGISTRY } from '../../src/engine/build-review-regi
 import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-config.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
+import type { ClaudeProvider as ClaudeProviderInstance } from '../../src/execution/claude-provider.js';
+
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 
 /**
@@ -30,12 +51,6 @@ import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
  * mock is re-typed to that actual call shape via `unknown` to bridge past
  * execa's overload-collapsing type limitation.
  */
-const { mockExeca } = vi.hoisted(() => ({
-  mockExeca: vi.fn<
-    (file: string, args: string[], options: ExecaOptions) => Promise<ExecaResult>
-  >(),
-}));
-
 const claudeRubricPolicy: ResolvedBuildReviewRubricPolicy = {
   enabled: true,
   max_projection_bytes: 1_048_576,
@@ -48,7 +63,7 @@ const claudeRubricPolicy: ResolvedBuildReviewRubricPolicy = {
   min_confidence: 0,
 };
 
-function claudeRuntime(provider: ClaudeProvider): ProviderRuntimeSet {
+function claudeRuntime(provider: ClaudeProviderInstance): ProviderRuntimeSet {
   return new ProviderRuntimeSet([{
     key: 'claude',
     provider,
@@ -61,10 +76,15 @@ function claudeRuntime(provider: ClaudeProvider): ProviderRuntimeSet {
 }
 
 describe('ClaudeProvider', () => {
-  let provider: ClaudeProvider;
+  let provider: ClaudeProviderInstance;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockEnforceFreshSessionOptions.mockImplementation((options) => ({
+      ...options,
+      sessionId: '00000000-0000-4000-8000-000000000001',
+      resume: false,
+    }));
     provider = new ClaudeProvider(undefined, mockExeca as never);
   });
 
@@ -361,13 +381,18 @@ describe('ClaudeProvider', () => {
     it.each([
       ['non-REPL', (options: InvokeOptions) => provider.invoke({ ...options, interactive: false })],
       ['REPL', (options: InvokeOptions) => provider.invoke({ ...options, interactive: true })],
-    ])('forces a fresh, non-resumed Claude session for a %s dispatch', async (_mode, dispatch) => {
+    ])('forces a fresh, non-resumed Claude session exactly once for a %s dispatch', async (_mode, dispatch) => {
       mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, failed: false } as any);
 
       await dispatch({ ...baseOptions, resume: true });
 
+      expect(mockEnforceFreshSessionOptions).toHaveBeenCalledTimes(1);
+      expect(mockEnforceFreshSessionOptions).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 'abc-123', resume: true }),
+        'claude',
+      );
       const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
-      expect(args).toEqual(expect.arrayContaining(['--session-id']));
+      expect(args).toEqual(expect.arrayContaining(['--session-id', '00000000-0000-4000-8000-000000000001']));
       expect(args).not.toContain('abc-123');
       expect(args).not.toContain('--resume');
     });
@@ -643,6 +668,7 @@ describe('ClaudeProvider', () => {
       await provider.invoke({ ...baseOptions, spawnPermit });
 
       expect(callOrder).toEqual(['spawn permit', 'subprocess factory']);
+      expect(mockValidateSpawnPermit).toHaveBeenCalledWith(spawnPermit);
     });
 
     it('fails closed without creating a child when its permit is revoked', async () => {
