@@ -41,6 +41,114 @@ describe('config', () => {
   });
 
   describe('loadConfig', () => {
+    describe('pull request template regions', () => {
+      const configWithCustomSteps = (steps: string) => steps === '' ? '{}\n' : `steps:\n${steps}`;
+      const customStep = (name: string, after = 'build') =>
+        `  ${name}:\n    after: ${after}\n    skill: skills/${name}/SKILL.md\n    enforcement: gating\n    completion_artifact: .pipeline/${name}\n`;
+      const region = (name: string, content = `${name} content`) => [
+        `<!-- ai-conductor:step ${name} -->`,
+        content,
+        '<!-- /ai-conductor:step -->',
+      ].join('\n');
+
+      const writeCustomSkill = async (name: string) => {
+        const skillDir = join(tmpDir, 'skills', name);
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(join(skillDir, 'SKILL.md'), `---\nname: ${name}\n---\n`);
+      };
+
+      const writeConfig = async (steps: string) => {
+        await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), configWithCustomSteps(steps));
+      };
+
+      const writeTemplate = async (template: string) => {
+        await mkdir(join(tmpDir, '.github'), { recursive: true });
+        await writeFile(join(tmpDir, '.github', 'pull_request_template.md'), template);
+      };
+
+      it('loads template bytes and one declared pre-finish custom region owner', async () => {
+        await writeCustomSkill('compliance-attest');
+        await writeConfig(customStep('compliance-attest'));
+        const template = region('compliance-attest', 'Attested-By: security-bot');
+        await writeTemplate(template);
+
+        const result = await loadConfig(tmpDir);
+
+        expect(result).toMatchObject({
+          ok: true,
+          config: {
+            pr_template_bytes: template,
+            pr_template_region_owners: {
+              'compliance-attest': '\nAttested-By: security-bot\n',
+            },
+          },
+        });
+      });
+
+      it('loads two declared pre-finish custom region owners', async () => {
+        await writeCustomSkill('compliance-attest');
+        await writeCustomSkill('release-disposition');
+        await writeConfig(customStep('compliance-attest') + customStep('release-disposition', 'compliance-attest'));
+        await writeTemplate(`${region('compliance-attest')}\n\n${region('release-disposition')}`);
+
+        const result = await loadConfig(tmpDir);
+
+        expect(result).toMatchObject({
+          ok: true,
+          config: {
+            pr_template_region_owners: {
+              'compliance-attest': '\ncompliance-attest content\n',
+              'release-disposition': '\nrelease-disposition content\n',
+            },
+          },
+        });
+      });
+
+      it('keeps region owners empty for an unmarked template and ignores a root-only template', async () => {
+        await writeConfig('');
+        await writeTemplate('# Pull request\n\n## Summary\n');
+        const unmarked = await loadConfig(tmpDir);
+
+        await rm(join(tmpDir, '.github'), { recursive: true, force: true });
+        await writeFile(join(tmpDir, 'pull_request_template.md'), region('undeclared-root-step'));
+        const rootOnly = await loadConfig(tmpDir);
+
+        expect(unmarked).toMatchObject({
+          ok: true,
+          config: { pr_template_region_owners: {} },
+        });
+        expect(rootOnly).toMatchObject({
+          ok: true,
+          config: { pr_template_region_owners: {} },
+        });
+      });
+
+      it.each([
+        ['a built-in owner', region('finish'), '', ['finish', 'built-in steps cannot own a region']],
+        ['an undeclared owner', region('release-disposiiton'), '', ['release-disposiiton', 'undeclared step']],
+        ['an owner ordered after finish', region('late-attest'), customStep('late-attest', 'finish'), ['late-attest', 'must run before finish']],
+        ['a duplicate owner', `${region('compliance-attest')}\n${region('compliance-attest')}`, customStep('compliance-attest'), ['compliance-attest', 'owns more than one region']],
+        ['an unclosed owner', '<!-- ai-conductor:step compliance-attest -->\nAttested', customStep('compliance-attest'), ['compliance-attest', 'unclosed']],
+        ['nested owners', '<!-- ai-conductor:step compliance-attest -->\n<!-- ai-conductor:step release-disposition -->\n<!-- /ai-conductor:step -->\n<!-- /ai-conductor:step -->', customStep('compliance-attest') + customStep('release-disposition', 'compliance-attest'), ['compliance-attest', 'release-disposition', 'nested inside']],
+        ['engine-owned heading', region('compliance-attest', '## Reduced build-review coverage'), customStep('compliance-attest'), ['compliance-attest', '## Reduced build-review coverage']],
+        ['engine-owned accepted-risk marker', region('compliance-attest', '<!-- build-review-accepted-risk:start -->'), customStep('compliance-attest'), ['compliance-attest', '<!-- build-review-accepted-risk:start -->']],
+      ])('rejects %s', async (_caseName, template, steps, expectedMessageParts) => {
+        for (const name of ['compliance-attest', 'release-disposition', 'late-attest']) {
+          await writeCustomSkill(name);
+        }
+        await writeConfig(steps);
+        await writeTemplate(template);
+
+        const result = await loadConfig(tmpDir);
+
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        for (const expected of expectedMessageParts) {
+          expect(result.error.message).toContain(expected);
+        }
+      });
+    });
+
     it('returns error with config-init remedy when config missing', async () => {
       const emptyDir = await mkdtemp(join(tmpdir(), 'config-missing-'));
       try {

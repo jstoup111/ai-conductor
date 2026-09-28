@@ -480,6 +480,10 @@ export interface HarnessConfig {
    * and custom steps (new entries with `after` + `skill`).
    */
   steps?: Record<string, StepConfig>;
+  /** Bytes read from `.github/pull_request_template.md`, when that file exists. */
+  pr_template_bytes?: string;
+  /** Exact template region bytes keyed by the declared custom step that owns them. */
+  pr_template_region_owners?: Record<string, string>;
   complexity?: Record<string, never>;
   /** User-level global state — loaded from ~/.ai-conductor/config.yml. */
   conductor?: ConductorConfig;
