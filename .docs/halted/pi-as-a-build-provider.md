@@ -1,27 +1,26 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-28T13:24:57.439Z
+Status: halted
 Slug: pi-as-a-build-provider
 Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-pi-as-a-build-provider
-Head SHA: 85298106f5d035cdf900671a036f788c961a9e86
-Halted at: 2026-09-28T12:09:36.327Z
+Head SHA: dc3d62c9fcf6918e0295a1adaec2e011d8c5a024
+Halted at: 2026-09-28T14:22:22.627Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: post-dispatch verdict write handshake failed for architecture_review_as_built: .pipeline/architecture-review-as-built.md is stale (found mtime 2026-09-26T19:29:09.200Z); expected run id 89593a2c-35ff-4d33-abe4-fb01be93fdd6; found run id 89593a2c-35ff-4d33-abe4-fb01be93fdd6
+rebase conflict — parked for human resolution
+replay commit 761257154 (now e4ef6962d); src/conductor/test/acceptance/release-time-smoke-gate.acceptance.test.ts line 84; source intends the smoke-tier count to include the new Pi smoke file (12->13); upstream 53c65f6b7 intends the count to include github-bot-credential.smoke.test.ts (12->13), so git dropped the identical source hunk and the assertion stays at 13 while 14 smoke files exist (test fails). Rebase itself completed all 38 commits and the conflicted replay 4f32f5615->f9b69704f was merged by keeping both upstream and source entries and validated; missing decision: approve a follow-up or amended commit setting the count to 14
+Conflicted files: src/conductor/src/engine/event-sinks.ts, src/conductor/src/types/events.ts, src/conductor/test/integration/audit-trail-completeness.integration.test.ts
 
-Blocking findings:
-AB-1 (REMEDIABLE; Task 17): Pi's abort handler has no production signal producer, so lifecycle cancellation cannot terminate a running Pi subprocess.
-AB-2 (REMEDIABLE; Task 4): `REVIEW_PROVIDER_PREFIXES` is materially changed but remains test-only with no production consumer.
-AB-3 (REMEDIABLE; Task 7): The descriptor-backed `defaultCiFixProbe` and its preflight have no production caller.
-AB-4 (REMEDIABLE; Task 8): The structural guard excludes adapters and therefore cannot enforce the sealed catalog-owned display-name outcome.
-AB-5 (DESIGN; adr-2026-08-12-per-provider-live-smoke-legs decision 1): Pi's standalone adapter smoke violates the approved shared full-daemon run-body architecture.
+Resume procedure:
+  1. Resolve the conflicts in the listed file(s).
+  2. git rebase --continue
+  3. rm .pipeline/HALT
+  4. Re-queue the feature for the daemon.
 ```
