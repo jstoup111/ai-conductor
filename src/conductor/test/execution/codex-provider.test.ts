@@ -3,7 +3,7 @@
 import { toCodexStrictSchema } from '../../src/execution/codex-strict-schema.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -1082,6 +1082,58 @@ describe('CodexProvider', () => {
       'approvals_reviewer="auto_review"',
       'shell_environment_policy.ignore_default_excludes=false',
     ]));
+  });
+
+  describe('harness memory store outside the worktree', () => {
+    async function unattendedArgs(cwd: string, extra: Partial<InvokeOptions> = {}): Promise<string[]> {
+      const subprocessFactory = vi.fn<
+        (file: string, args: readonly string[], options: ExecaOptions) => ResultPromise
+      >(() => Promise.resolve({ stdout: jsonlMessage('unattended'), exitCode: 0, failed: false }) as any);
+      const subject = new CodexProvider(vi.fn(async () => readyDoctorResult()), 'codex', undefined, subprocessFactory);
+      await subject.invoke({ ...baseOptions, ...extra, cwd });
+      return subprocessFactory.mock.calls[0][1] as string[];
+    }
+
+    async function withDirs(body: (worktree: string, store: string) => Promise<void>): Promise<void> {
+      const root = await mkdtemp(join(tmpdir(), 'codex-memory-root-'));
+      try {
+        const worktree = join(root, 'worktree');
+        const store = join(root, 'store', 'harness');
+        await mkdir(worktree, { recursive: true });
+        await mkdir(store, { recursive: true });
+        await body(worktree, store);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+
+    it('adds the resolved memory store as a writable dir when .memory links outside the worktree', async () => {
+      await withDirs(async (worktree, store) => {
+        await symlink(store, join(worktree, '.memory'));
+        const args = await unattendedArgs(worktree);
+        const index = args.indexOf('--add-dir');
+        expect(args[index + 1]).toBe(await realpath(store));
+        expect(index).toBeLessThan(args.indexOf('-'));
+      });
+    });
+
+    it.each([
+      ['.memory is a directory inside the worktree', (worktree: string) => mkdir(join(worktree, '.memory'))],
+      ['.memory is absent', async () => {}],
+      ['.memory is a dangling link', (worktree: string, store: string) => symlink(join(store, 'missing'), join(worktree, '.memory'))],
+    ])('adds no writable dir when %s', async (_name, arrange) => {
+      await withDirs(async (worktree, store) => {
+        await arrange(worktree, store);
+        expect(await unattendedArgs(worktree)).not.toContain('--add-dir');
+      });
+    });
+
+    it('keeps a read-only review read-only even when .memory links outside the worktree', async () => {
+      await withDirs(async (worktree, store) => {
+        await symlink(store, join(worktree, '.memory'));
+        expect(await unattendedArgs(worktree, { readOnlyReview: true })).not.toContain('--add-dir');
+      });
+    });
   });
 
   it('passes no --config values through the injected subprocess factory for an interactive REPL dispatch', async () => {
