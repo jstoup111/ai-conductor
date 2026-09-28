@@ -4,7 +4,7 @@
 
 **Track:** technical (no PRD — acceptance criteria live here)
 **Feature area:** intake **capture/file** surfaces — `.github/ISSUE_TEMPLATE/intake.yml`,
-a new `.github/workflows/intake-label-sync.yml`, the `/intake` skill + `bin/intake-file`,
+a new `.github/workflows/intake-label-sync.yml`, the `/intake` skill + its bundled `scripts/intake-file` helper,
 and a one-shot `bin/intake-backfill`. The claim path
 (`src/conductor/src/engine/engineer/intake/dependency-claim.ts`) is explicitly **out of
 scope for enforcement** and a story asserts it stays unchanged.
@@ -83,7 +83,7 @@ linking as part of filing, instead of relying on prose to remember the labels.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `bin/intake-file` is invoked with a size and priority, when it files, then
+- Given the intake skill's bundled `scripts/intake-file` helper is invoked with a size and priority, when it files, then
   it creates the issue **and** applies the `priority:`/`size:` labels + records
   `blocked_by` links in the same operation (via the existing REST label idiom) —
   the returned issue is criteria-complete.
@@ -92,7 +92,7 @@ linking as part of filing, instead of relying on prose to remember the labels.
   and, failing a confident signal, applies the **default** (`size: M` /
   `priority: medium`). Filing never aborts for a missing label.
 - Given the `/intake` skill's §7 GATE / §8 File, then they direct the filer through
-  `bin/intake-file` (the deterministic step) rather than a prose "remember to add a
+  the skill's bundled `scripts/intake-file` helper, named relative to the skill's own directory (the deterministic step), rather than a prose "remember to add a
   label" instruction.
 
 #### Negative Paths
@@ -104,10 +104,10 @@ linking as part of filing, instead of relying on prose to remember the labels.
   explicit "no dependencies" acknowledgement, not left undecided.
 
 ### Done When
-- [ ] A `bin/intake-file` test asserts create + label + link in one filing, prompt
+- [ ] An intake-filing test asserts create + label + link in one filing, prompt
   vs infer vs default for missing size/priority, and success-with-warning on a
   failed label apply.
-- [ ] `skills/intake/SKILL.md` §7/§8 reference `bin/intake-file`; the harness
+- [ ] `skills/intake/SKILL.md` §7/§8 reference the bundled `scripts/intake-file` helper; the harness
   integrity suite (cross-skill/template refs) stays green.
 
 ---
