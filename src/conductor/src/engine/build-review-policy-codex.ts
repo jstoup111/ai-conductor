@@ -108,7 +108,7 @@ export function createCodexAppServerTransport(executable = 'codex', launch: type
       child.once('exit', (code) => rejectAll(new Error(`Codex app server exited${code === null ? '' : ` ${code}`}`)));
       const abort = () => child.kill();
       environment.signal?.addEventListener('abort', abort, { once: true });
-      return {
+      const session: CodexAppServerSession = {
         request(method, params) {
           return new Promise((resolve, reject) => {
             const id = randomUUID();
@@ -126,6 +126,16 @@ export function createCodexAppServerTransport(executable = 'codex', launch: type
           child.kill();
         },
       };
+      // The app server rejects every request with "Not initialized" until the
+      // client completes the initialize request and initialized notification.
+      try {
+        await session.request('initialize', { clientInfo: { name: 'ai-conductor', title: 'ai-conductor', version: '0' } });
+        child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'initialized' })}\n`);
+      } catch (error) {
+        await session.close();
+        throw error;
+      }
+      return session;
     },
   };
 }

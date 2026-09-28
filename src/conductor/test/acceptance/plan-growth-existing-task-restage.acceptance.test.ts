@@ -25,10 +25,40 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
 import type { ConductorEvent } from '../../src/types/events.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 let projectRoot: string;
 let stateFilePath: string;
 const execFile = promisify(execFileCb);
+
+const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
+
+async function writeBlockedAsBuiltFixture(taskId: string, runId?: string): Promise<void> {
+  await persistAsBuiltVerdict(projectRoot, {
+    version: 'v1',
+    verdict: 'BLOCKED',
+    reachability: [],
+    driftNotes: [],
+    findings: [{
+      id: 'ARCH-1',
+      class: 'REMEDIABLE',
+      reference: { kind: 'plan-task', taskId },
+      summary: 'Add the approved guard',
+    }],
+    violations: 'The approved guard is missing.',
+    resolution: 'Repair the task that owns the guard.',
+  }, {
+    attemptId: runId ?? 'fixture-run',
+    codeStamp: null,
+    policy: AS_BUILT_FIXTURE_POLICY,
+  });
+}
 
 async function git(...args: string[]): Promise<string> {
   const { stdout } = await execFile(
@@ -114,17 +144,7 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
       run: vi.fn(async (step: StepName, _state, opts) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'architecture-review-as-built.md'),
-            [
-              'Verdict: BLOCKED',
-              '',
-              '## Blocking Findings',
-              '| Finding | Class | Governing clause | Summary |',
-              '| --- | --- | --- | --- |',
-              '| ARCH-1 | REMEDIABLE | Task 1 | Repair the completed task |',
-            ].join('\n'),
-          );
+          await writeBlockedAsBuiltFixture('1', opts?.runId);
         } else if (step === 'remediate') {
           await writeFile(
             join(projectRoot, '.pipeline', 'remediation.json'),
@@ -263,17 +283,7 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
       run: vi.fn(async (step: StepName) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'architecture-review-as-built.md'),
-            [
-              'Verdict: BLOCKED',
-              '',
-              '## Blocking Findings',
-              '| Finding | Class | Governing clause | Summary |',
-              '| --- | --- | --- | --- |',
-              '| ARCH-1 | REMEDIABLE | Task 1 | Repair the completed task |',
-            ].join('\n'),
-          );
+          await writeBlockedAsBuiltFixture('1');
         } else if (step === 'remediate') {
           await writeFile(
             join(projectRoot, '.pipeline', 'remediation.json'),
@@ -313,17 +323,7 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
       run: vi.fn(async (step: StepName) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'architecture-review-as-built.md'),
-            [
-              'Verdict: BLOCKED',
-              '',
-              '## Blocking Findings',
-              '| Finding | Class | Governing clause | Summary |',
-              '| --- | --- | --- | --- |',
-              '| ARCH-1 | REMEDIABLE | Task 1 | Add the approved guard |',
-            ].join('\n'),
-          );
+          await writeBlockedAsBuiltFixture('1');
         } else if (step === 'remediate') {
           await writeFile(
             join(projectRoot, '.pipeline', 'remediation.json'),
@@ -429,15 +429,6 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
  * BLOCKED report and the planner's existing-task answer are the same in both;
  * only the sibling validators and the BUILD observation differ.
  */
-const AS_BUILT_BLOCKED = (clause: string) => [
-  'Verdict: BLOCKED',
-  '',
-  '## Blocking Findings',
-  '| Finding | Class | Governing clause | Summary |',
-  '| --- | --- | --- | --- |',
-  `| ARCH-1 | REMEDIABLE | ${clause} | Add the approved guard |`,
-].join('\n');
-
 const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
 
 function makeConductor(
@@ -493,10 +484,7 @@ describe('a consolidated manual-test FAIL round never runs the existing-task rou
         if (step === 'manual_test') {
           await writeFile(join(projectRoot, '.pipeline', 'manual-test-results.md'), MT_FAIL);
         } else if (step === 'architecture_review_as_built') {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'architecture-review-as-built.md'),
-            AS_BUILT_BLOCKED('Task 1'),
-          );
+          await writeBlockedAsBuiltFixture('1', opts?.runId);
         } else if (step === 'remediate') {
           await writeFile(
             join(projectRoot, '.pipeline', 'remediation.json'),
@@ -589,10 +577,7 @@ describe('a mixed prd_audit/as-built existing-task lap keeps every gate armed fo
             '| S1.1 | FIXABLE | 1 | FR-1 | Missing implementation |',
           ].join('\n'));
         } else if (step === 'architecture_review_as_built') {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'architecture-review-as-built.md'),
-            AS_BUILT_BLOCKED('Task 2'),
-          );
+          await writeBlockedAsBuiltFixture('2');
         } else if (step === 'remediate') {
           remediateCalls++;
           await writeFile(
@@ -670,10 +655,7 @@ describe('existing-task refusals carry the finding onto the spine (S1.4, S7.2)',
       run: vi.fn(async (step: StepName) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'architecture-review-as-built.md'),
-            AS_BUILT_BLOCKED('Task 1'),
-          );
+          await writeBlockedAsBuiltFixture('1');
         } else if (step === 'remediate') {
           await writeFile(
             join(projectRoot, '.pipeline', 'remediation.json'),
@@ -730,10 +712,7 @@ describe('existing-task refusals carry the finding onto the spine (S1.4, S7.2)',
       run: vi.fn(async (step: StepName) => {
         dispatched.push(step);
         if (step === 'architecture_review_as_built') {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'architecture-review-as-built.md'),
-            AS_BUILT_BLOCKED('Task 1'),
-          );
+          await writeBlockedAsBuiltFixture('1');
         } else if (step === 'remediate') {
           await writeFile(
             join(projectRoot, '.pipeline', 'remediation.json'),

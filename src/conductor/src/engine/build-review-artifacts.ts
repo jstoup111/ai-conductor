@@ -13,6 +13,8 @@ import { MAX_POLICY_BUNDLE_BYTES } from './build-review-policy-bundle.js';
 
 const ARTIFACT_VERSION = 2 as const;
 const ARTIFACT_DIRECTORY = '.pipeline/build-review';
+/** Where each candidate's captured policy bundle is copied before judgment. */
+export const BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY = `${ARTIFACT_DIRECTORY}/policy-material`;
 
 type BuildReviewArtifactVersion = 1 | typeof ARTIFACT_VERSION;
 export type BuildReviewArtifactRubric = BuildReviewRubricId | string;
@@ -55,7 +57,8 @@ const CUSTOM_INFRASTRUCTURE_FAILURE_REASONS = new Set<BuildReviewCustomInfrastru
   'policy-load-failed', 'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact',
   'stale-artifact', 'identity-mismatch', 'preflight-failed', 'artifact-read-failed',
   'artifact-write-failed', 'scope-incomplete', 'projection-oversized',
-  'invalid-structured-result', 'native-schema-unsupported',
+  'invalid-structured-result', 'native-schema-unsupported', 'review-input-mutated',
+  'read-only-review-unavailable',
 ]);
 
 export function isBuildReviewCustomInfrastructureFailureReason(

@@ -19,17 +19,15 @@ import {
   type ConductorOptions,
   type StepRunner,
   type StepRunResult,
+  type StepRunOptions,
 } from '../../src/engine/conductor.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import {
   BuildReviewDispositionStore,
   type BuildReviewFeatureIdentity,
 } from '../../src/engine/build-review-dispositions.js';
 import { readGrowth } from '../../src/engine/kickback-ledger.js';
-import {
-  appendRecordedShipmentFindings,
-  recordedShipmentFindings,
-} from '../../src/engine/shipment-association.js';
-import { renderShippedRecord } from '../../src/engine/shipped-record.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -93,6 +91,13 @@ const AS_BUILT_PLAN_GAP = [
   '- Summary: The code faithfully implements the approved design; the plan is the limit.',
   '',
 ].join('\n');
+
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
 
 interface Fixture {
   root: string;
@@ -223,7 +228,7 @@ interface RunnerOptions {
 
 function fakeRunner(fixture: Fixture, calls: StepName[], options: RunnerOptions = {}): StepRunner {
   return {
-    run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+    run: vi.fn(async (step: StepName, _state, runOptions?: StepRunOptions): Promise<StepRunResult> => {
       calls.push(step);
       if (step === 'build') {
         await writeFile(
@@ -238,10 +243,17 @@ function fakeRunner(fixture: Fixture, calls: StepName[], options: RunnerOptions 
           options.prdAudit === 'no-prd' ? PRD_AUDIT_NO_PRD_PASS : PRD_AUDIT_PASS,
         );
       } else if (step === 'architecture_review_as_built') {
-        await writeFile(
-          join(fixture.pipelineDir, 'architecture-review-as-built.md'),
-          options.asBuilt === 'plan-gap' ? AS_BUILT_PLAN_GAP : AS_BUILT_APPROVED,
-        );
+        await persistAsBuiltVerdict(fixture.root, options.asBuilt === 'plan-gap'
+          ? {
+              version: 'v1', verdict: 'PLAN_GAP', reachability: [], driftNotes: [],
+              outcomeDelivered: true,
+              affectedOutcome: 'The accepted behavior remains eventually consistent.',
+            }
+          : { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] }, {
+          attemptId: runOptions?.runId ?? 'test-run',
+          codeStamp: null,
+          policy: AS_BUILT_TEST_POLICY,
+        });
       } else if (step === 'finish') {
         await writeFile(join(fixture.pipelineDir, 'finish-choice'), 'keep\n');
       }
@@ -388,18 +400,8 @@ describe('Covers: FR-16, FR-17, S13.1 — a delivered as-built PLAN_GAP is non-b
     expect(calls).toContain('finish');
     expect(calls).not.toContain('build');
     expect(calls).not.toContain('remediate');
-    const asBuilt = await readFile(join(fixture.pipelineDir, 'architecture-review-as-built.md'), 'utf8');
-    expect(asBuilt)
-      .toContain('Verdict: PLAN_GAP');
-    const shippedRecord = appendRecordedShipmentFindings(
-      renderShippedRecord({ slug: fixture.slug, specHash: 'fixture', pr: 'local', shipped: '2026-08-22' }),
-      recordedShipmentFindings({ asBuilt }),
-    );
-    const recordPath = join(fixture.root, '.docs', 'shipped', `${fixture.slug}.md`);
-    await mkdir(join(fixture.root, '.docs', 'shipped'), { recursive: true });
-    await writeFile(recordPath, shippedRecord);
-    await expect(readFile(recordPath, 'utf8')).resolves.toContain('findings:');
-    await expect(readFile(recordPath, 'utf8')).resolves.toContain('gate: architecture_review_as_built');
+    await expect(readFile(join(fixture.pipelineDir, 'architecture-review-as-built.json'), 'utf8'))
+      .resolves.toContain('"verdict": "PLAN_GAP"');
     expect(existsSync(join(fixture.pipelineDir, 'HALT'))).toBe(false);
   });
 });

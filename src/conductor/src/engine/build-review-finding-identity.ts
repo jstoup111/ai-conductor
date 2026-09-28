@@ -125,7 +125,7 @@ const POLICY_BUNDLE_DIGEST = /^sha256-v1:[a-f0-9]{64}$/;
 const CUSTOM_RUBRIC = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const CUSTOM_SEMANTIC_NAME = /^[A-Za-z][A-Za-z0-9:_.-]{0,127}$/;
 const CUSTOM_CONCERN = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
-const LOCATION = /^(.*):([1-9][0-9]*)$/;
+const LOCATION = /^(.*):([1-9][0-9]*)(?:-([1-9][0-9]*))?$/;
 function nonEmptyText(value: unknown, max = 4_096): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 }
@@ -225,15 +225,16 @@ function validStamp(stamp: BuildReviewCustomResultStamp): boolean {
     nonEmptyText(stamp.candidate.provider, 64) && nonEmptyText(stamp.candidate.model, 256) && nonEmptyText(stamp.candidate.effort, 64) &&
     stamp.reviewedInput.version === 'v1' && hash(stamp.reviewedInput.contentDigest);
 }
-/** Every location must name a one-based line inside one admitted frozen source region. */
+/** Every location's entire inclusive range must lie inside one admitted frozen source region. */
 function locationsAreAdmitted(locations: readonly string[], references: BuildReviewCustomFindingReferenceContext): boolean {
   return locations.every((location) => {
     const match = LOCATION.exec(location);
     if (!match) return false;
     const path = parseBuildReviewCanonicalPathReference(match[1]);
-    const line = Number(match[2]);
-    return path !== undefined && Number.isSafeInteger(line) && references.sourceRegions.some((region) =>
-      region.path === path && line >= region.startLine && line <= region.endLine,
+    const startLine = Number(match[2]);
+    const endLine = match[3] === undefined ? startLine : Number(match[3]);
+    return path !== undefined && Number.isSafeInteger(startLine) && Number.isSafeInteger(endLine) && endLine >= startLine && references.sourceRegions.some((region) =>
+      region.path === path && startLine >= region.startLine && endLine <= region.endLine,
     );
   });
 }

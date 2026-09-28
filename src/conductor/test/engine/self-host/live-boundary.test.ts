@@ -9,11 +9,15 @@ import { promisify } from 'node:util';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from '../../../src/engine/self-host/live-boundary.js';
 
 const readdirMock = vi.hoisted(() => vi.fn());
+const readFileMock = vi.hoisted(() => vi.fn());
+const statMock = vi.hoisted(() => vi.fn());
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   readdirMock.mockImplementation(actual.readdir);
-  return { ...actual, readdir: readdirMock };
+  readFileMock.mockImplementation(actual.readFile);
+  statMock.mockImplementation(actual.stat);
+  return { ...actual, readdir: readdirMock, readFile: readFileMock, stat: statMock };
 });
 
 const execFileAsync = promisify(execFile);
@@ -139,6 +143,36 @@ describe('live self-host boundary', () => {
         reason: 'per-step verification',
       })).toEqual({ ok: true });
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('fingerprints a symlinked socket in provider state without reading it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-socket-link-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    const control = join(provider, 'app-server-control');
+    const socketLink = join(control, 'app-server-control.sock');
+    await Promise.all([mkdir(live), mkdir(control, { recursive: true })]);
+    await writeFile(join(root, 'daemon.sock'), '');
+    await symlink(join(root, 'daemon.sock'), socketLink);
+    // The fs boundary reports the link's target as a live socket: reading it throws ENXIO.
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    statMock.mockImplementation(async (path: string) => {
+      const info = await actual.stat(path);
+      return path === socketLink ? Object.assign(info, { isFile: () => false, isSocket: () => true }) : info;
+    });
+    readFileMock.mockImplementation(async (path: string, ...rest: unknown[]) => {
+      if (path === socketLink) throw Object.assign(new Error(`ENXIO: no such device or address, open '${path}'`), { code: 'ENXIO' });
+      return (actual.readFile as (...args: unknown[]) => Promise<unknown>)(path, ...rest);
+    });
+    try {
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'codex' });
+      expect(baseline.surfaces[1]?.manifest.map((entry) => entry.path)).toContain(join('app-server-control', 'app-server-control.sock'));
+      expect(readFileMock).not.toHaveBeenCalledWith(socketLink);
+      expect(await verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' })).toEqual({ ok: true });
+    } finally {
+      statMock.mockImplementation(actual.stat);
+      readFileMock.mockImplementation(actual.readFile);
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('ignores a plugin lock marker a concurrent provider process drops into its home', async () => {

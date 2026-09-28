@@ -314,6 +314,13 @@ already exists and is reused; additive fields follow `adr-2026-07-26-event-sink-
 > view. D6's reduced-coverage record remains the operator's attributed way past either cause;
 > nothing here accepts a finding or manufactures a PASS.
 >
+> **Amended 2026-09-26 by operator decision (James Stoup, as-built AB-1 of
+> custom-build-review-rubrics-cannot-run-off-linux-o):** D3.2's "publishes no aggregate" governs
+> `review-input-mutated` only. A `read-only-review-unavailable` lap publishes its aggregate before the
+> D5 HALT, carrying the fault on the affected member, because D6's `build-review
+> record-reduced-coverage` reads the current fault from that aggregate; withholding it would leave
+> the operator no way past the HALT. The deterministic, charged-once, direct-HALT routing is unchanged.
+>
 > **D10.2 — Both ride the existing spine.** Each occurrence is emitted on the existing
 > `build_review_rubric_infrastructure_failure` event with its closed `cause`. The platform and the
 > changed-input list are carried as additive optional fields. No new event, ledger, or sidecar.

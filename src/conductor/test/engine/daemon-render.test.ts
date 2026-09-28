@@ -87,6 +87,18 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
+  it('renders an unavailable read-only review capability with its provider, platform, and reason', () => {
+    expect(lines({
+      type: 'build_review_read_only_capability',
+      provider: 'codex',
+      platform: 'linux',
+      status: 'unavailable',
+      reason: 'probe write was not refused',
+    })).toEqual([
+      '· ⚠ build_review read-only capability unavailable: codex on linux — probe write was not refused',
+    ]);
+  });
+
   it('renders every confidence-suppressed build-review finding alongside the outer verdict', () => {
     expect(lines({
       type: 'build_review_outer_verdict', lapId: 'lap-current', rawVerdict: 'FAIL', effectiveVerdict: 'PASS',

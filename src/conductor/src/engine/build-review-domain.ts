@@ -19,9 +19,9 @@ export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' }
 export type BuildReviewRubricContractVersion = 'v1' | 'v2' | 'v3';
 export const CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION = 'v3' as const;
 export type BuildReviewSkipReason = 'disabled' | 'test_quality_empty_scope';
-export type BuildReviewInfrastructureFailureReason = 'provider-error' | 'retry-exhausted' | 'missing-artifact' | 'malformed-artifact' | 'stale-artifact' | 'identity-mismatch' | 'preflight-failed' | 'artifact-read-failed' | 'artifact-write-failed' | 'scope-incomplete' | 'projection-oversized' | 'invalid-structured-result' | 'native-schema-unsupported';
+export type BuildReviewInfrastructureFailureReason = 'provider-error' | 'retry-exhausted' | 'missing-artifact' | 'malformed-artifact' | 'stale-artifact' | 'identity-mismatch' | 'preflight-failed' | 'artifact-read-failed' | 'artifact-write-failed' | 'scope-incomplete' | 'projection-oversized' | 'invalid-structured-result' | 'native-schema-unsupported' | 'review-input-mutated' | 'read-only-review-unavailable';
 export const mapBuildReviewCoordinatorFailureReason = Object.freeze({
-  'no-changed-tests': 'preflight-failed', 'no-production-changes': 'preflight-failed', 'missing-scoped-configuration': 'preflight-failed', 'materialization-failed': 'preflight-failed', 'missing-merge-base-file': 'preflight-failed', 'scoped-run-failed': 'preflight-failed', 'scoped-run-launch-failed': 'preflight-failed', 'scoped-run-timeout': 'preflight-failed', 'scoped-run-signaled': 'preflight-failed', aborted: 'preflight-failed', 'cleanup-failed': 'preflight-failed', 'cache-read-failed': 'artifact-read-failed', 'cache-write-failed': 'artifact-write-failed', 'artifact-write-failed': 'artifact-write-failed', 'projection-rubric-mismatch': 'malformed-artifact', 'projection-oversized': 'projection-oversized', 'invalid-provider-result': 'malformed-artifact', 'invalid-structured-result': 'invalid-structured-result', 'native-schema-unsupported': 'native-schema-unsupported', 'provider-error': 'provider-error', 'missing-settlement': 'missing-artifact', 'scope-incomplete': 'scope-incomplete',
+  'no-changed-tests': 'preflight-failed', 'no-production-changes': 'preflight-failed', 'missing-scoped-configuration': 'preflight-failed', 'materialization-failed': 'preflight-failed', 'missing-merge-base-file': 'preflight-failed', 'scoped-run-failed': 'preflight-failed', 'scoped-run-launch-failed': 'preflight-failed', 'scoped-run-timeout': 'preflight-failed', 'scoped-run-signaled': 'preflight-failed', aborted: 'preflight-failed', 'cleanup-failed': 'preflight-failed', 'cache-read-failed': 'artifact-read-failed', 'cache-write-failed': 'artifact-write-failed', 'artifact-write-failed': 'artifact-write-failed', 'projection-rubric-mismatch': 'malformed-artifact', 'projection-oversized': 'projection-oversized', 'invalid-provider-result': 'malformed-artifact', 'invalid-structured-result': 'invalid-structured-result', 'native-schema-unsupported': 'native-schema-unsupported', 'read-only-review-unavailable': 'read-only-review-unavailable', 'provider-error': 'provider-error', 'missing-settlement': 'missing-artifact', 'scope-incomplete': 'scope-incomplete',
 } satisfies Record<string, BuildReviewInfrastructureFailureReason>);
 export type BuildReviewCoordinatorFailureReason = keyof typeof mapBuildReviewCoordinatorFailureReason;
 export function deriveBuildReviewInfrastructureFailureReason(branch: { readonly reason: BuildReviewCoordinatorFailureReason }): BuildReviewInfrastructureFailureReason { return mapBuildReviewCoordinatorFailureReason[branch.reason]; }
@@ -321,8 +321,9 @@ export const MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH = 512;
  * so they remain parser-enforced and are named by the rejection diagnosis.
  * The root is one flat object: Claude's tool `input_schema` requires a root
  * `type` and rejects `oneOf`/`anyOf`/`allOf` at the top level. Which fields
- * each `kind` requires (`version` + `findings` for custom-findings,
- * `requirement` for unsupported-policy) is therefore parser-enforced.
+ * each `kind` requires (`version` for custom-findings, `requirement` for
+ * unsupported-policy) is therefore parser-enforced. Custom findings omitted
+ * or represented as null normalize to an empty array before validation.
  */
 export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
   type: 'object',
@@ -679,9 +680,15 @@ function customFinding(value: unknown): BuildReviewCustomFinding | undefined {
 const CUSTOM_REVIEWER_ENVELOPE_FIELDS = new Set(['rubric', 'lapId']);
 
 function reviewerOwnedCustomPayload(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(
+  const payload = Object.fromEntries(
     Object.entries(value).filter(([field]) => !CUSTOM_REVIEWER_ENVELOPE_FIELDS.has(field)),
   );
+  // The flat native schema leaves findings optional for unsupported-policy.
+  // Codex represents that optionality with null, which its adapter strips.
+  // For custom-findings, both empty representations mean no reported concerns;
+  // version, non-null findings, and all finding contents remain validated below.
+  if (payload.kind === 'custom-findings' && payload.findings == null) payload.findings = [];
+  return payload;
 }
 
 /**
@@ -915,7 +922,7 @@ export interface BuildReviewDispatchFailure {
   readonly detail: string;
   readonly providerSetupExhaustion?: ProviderSetupExhaustion;
   /** A native structured payload was present but rejected by the engine contract. */
-  readonly cause?: 'invalid-structured-result' | 'native-schema-unsupported';
+  readonly cause?: 'invalid-structured-result' | 'native-schema-unsupported' | 'read-only-review-unavailable';
   /** Kept typed so the existing fault event can carry it once its union admits the field. */
   readonly rejection?: BuildReviewJudgedResultRejection;
 }
@@ -929,7 +936,7 @@ function providerSetupExhaustion(value: unknown): ProviderSetupExhaustion | unde
 export function makeBuildReviewDispatchFailure(
   detail: string,
   setupExhaustion?: ProviderSetupExhaustion,
-  structuredFailure?: { readonly cause: 'invalid-structured-result'; readonly rejection: BuildReviewJudgedResultRejection } | { readonly cause: 'native-schema-unsupported' },
+  structuredFailure?: { readonly cause: 'invalid-structured-result'; readonly rejection: BuildReviewJudgedResultRejection } | { readonly cause: 'native-schema-unsupported' } | { readonly cause: 'read-only-review-unavailable' },
 ): BuildReviewDispatchFailure {
   return {
     kind: 'dispatch-failure', detail,
@@ -949,12 +956,14 @@ export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDisp
     ? source.rejection as BuildReviewJudgedResultRejection
     : undefined;
   const nativeSchemaUnsupported = source?.cause === 'native-schema-unsupported';
+  const readOnlyReviewUnavailable = source?.cause === 'read-only-review-unavailable';
   return source?.kind === 'dispatch-failure' && text(source.detail) && (source.providerSetupExhaustion === undefined || setupExhaustion)
     ? {
         kind: 'dispatch-failure', detail: source.detail,
         ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}),
         ...(invalidStructuredResult ? { cause: 'invalid-structured-result' as const, rejection: invalidStructuredResult } : {}),
         ...(nativeSchemaUnsupported ? { cause: 'native-schema-unsupported' as const } : {}),
+        ...(readOnlyReviewUnavailable ? { cause: 'read-only-review-unavailable' as const } : {}),
       }
     : undefined;
 }

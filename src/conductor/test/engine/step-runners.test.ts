@@ -2415,7 +2415,6 @@ describe('DefaultStepRunner', () => {
       { step: 'build', prompt: '$pipeline' },
       { step: 'manual_test', prompt: '$manual-test' },
       { step: 'prd_audit', prompt: '$prd-audit' },
-      { step: 'architecture_review_as_built', prompt: '$architecture-review --as-built' },
       { step: 'finish', prompt: '$finish' },
     ] satisfies ReadonlyArray<{ step: StepName; prompt: string }>;
     const codexBoundary = vi.fn(
@@ -2427,6 +2426,7 @@ describe('DefaultStepRunner', () => {
     );
     const codexProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
       invoke: codexBoundary,
     };
     const claudeProvider = createMockProvider();
@@ -2441,6 +2441,7 @@ describe('DefaultStepRunner', () => {
       {
         key: 'codex',
         provider: codexProvider,
+        nativeSchemaCapability: { nativeOutputSchema: true },
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),

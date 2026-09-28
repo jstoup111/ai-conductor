@@ -25,6 +25,29 @@ const infrastructureAggregate = joinBuildReviewRubricOutcomes({
   },
 });
 
+const readOnlyReviewUnavailableAggregate = joinBuildReviewRubricOutcomes({
+  lapId, snapshotDigest: 'sha256:read-only-review-unavailable',
+  results: {
+    testQuality: {
+      kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:read-only-review-unavailable',
+      contractVersion: 'v3', findings: [], verdict: 'PASS',
+    },
+  },
+  customResults: {
+    portablePolicy: {
+      declaration: {
+        version: 'v1', rubricId: 'portablePolicy', semanticSkill: 'portable-policy',
+        question: 'Does this preserve the portable policy contract?', source: 'project', resources: ['criteria.md'],
+      },
+      result: {
+        kind: 'infrastructure-failure', rubric: 'portablePolicy', reason: 'read-only-review-unavailable',
+        detail: 'No installed provider can perform the required read-only review.',
+      },
+    },
+  },
+  currentCustomRubrics: ['portablePolicy'],
+} satisfies BuildReviewAggregateInput);
+
 const securityInfrastructureAggregate = joinBuildReviewRubricOutcomes({
   lapId, snapshotDigest: 'sha256:security',
   results: {
@@ -189,6 +212,33 @@ describe('build-review findings CLI', () => {
       feature: { version: 'v1', repository: '/main', feature: 'review-rubrics' }, rubric: 'testQuality', reason: 'provider-error',
       rationale: 'Provider is unavailable.', operator: 'local-operator',
     }, expect.any(Function));
+  });
+
+  // Covers: task:15
+  it('records reduced coverage for read-only-review-unavailable before the mechanical-fault ceiling', async () => {
+    const appendReducedCoverageIfCurrent = vi.fn(async (input, validate) => {
+      expect(await validate([])).toBe(true);
+      return {
+        ok: true as const,
+        record: {
+          kind: 'reduced-coverage' as const, version: 'v1' as const, feature: input.feature,
+          identity: { rubric: input.rubric, reason: input.reason }, rationale: input.rationale,
+          operator: input.operator, acceptedAt: '2026-09-25T00:00:00.000Z',
+        },
+      };
+    });
+
+    await expect(dispatchBuildReviewRecordReducedCoverage({
+      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'portablePolicy', rationale: 'No provider can enforce the required boundary.',
+    }, {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(readOnlyReviewUnavailableAggregate), readMechanicalFaults: async () => 2,
+      createStore: () => ({ appendReducedCoverageIfCurrent }), print: vi.fn(), appendEvent: vi.fn(),
+    })).resolves.toBe(0);
+
+    expect(appendReducedCoverageIfCurrent).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'read-only-review-unavailable', operator: 'local-operator',
+    }), expect.any(Function));
   });
 
   it('accepts the terminal security recovery command and writes its reduced-coverage record', async () => {

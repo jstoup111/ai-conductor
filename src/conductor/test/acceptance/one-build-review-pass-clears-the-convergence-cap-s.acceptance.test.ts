@@ -34,11 +34,19 @@ import {
 import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const dirs: string[] = [];
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
 
 async function git(dir: string, ...args: string[]): Promise<string> {
   const { stdout } = await execFile('git', args, { cwd: dir });
@@ -126,7 +134,7 @@ describe('acceptance: a build_review PASS does not clear convergence (#1694 Stor
     let buildRuns = 0;
     let manualTestRuns = 0;
     const runner: StepRunner = {
-      run: async (step): Promise<StepRunResult> => {
+      run: async (step, _state, options): Promise<StepRunResult> => {
         if (step === 'build_review') {
           reviewRuns += 1;
           await writeFile(
@@ -148,10 +156,13 @@ describe('acceptance: a build_review PASS does not clear convergence (#1694 Stor
           return { success: true };
         }
         if (step === 'architecture_review_as_built') {
-          await writeFile(
-            join(pipelineDir, 'architecture-review-as-built.md'),
-            '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
-          );
+          await persistAsBuiltVerdict(dir, {
+            version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+          }, {
+            attemptId: options?.runId ?? 'test-run',
+            codeStamp: null,
+            policy: AS_BUILT_TEST_POLICY,
+          });
           return { success: true };
         }
         if (step === 'build') {

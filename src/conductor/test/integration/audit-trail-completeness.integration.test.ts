@@ -70,6 +70,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   coverage_binding_judged: 'not-audited-by-design',
   coverage_binding_disabled: 'not-audited-by-design',
   config_deprecated_key: 'not-audited-by-design',
+  build_review_read_only_capability: 'not-audited-by-design',
   contained_live_checkout_drift: 'not-audited-by-design',
   self_host_dispatch_admission: 'not-audited-by-design',
   self_host_containment_verdict: 'not-audited-by-design',
@@ -116,6 +117,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   github_operation_refused: 'not-audited-by-design',
   github_write_credential_fallback: 'not-audited-by-design',
   provider_attempt: 'not-audited-by-design',
+  // Daemon-only suppression durability is not an operator-friction record.
+  provider_suppressed: 'not-audited-by-design',
   provider_stream_progress: 'not-audited-by-design',
   scratch_cleanup_reclaimed: 'not-audited-by-design',
   scratch_cleanup_retained: 'not-audited-by-design',
@@ -278,6 +281,13 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     key: 'build_review.rubrics.scope',
     adr: 'adr-2026-08-22-build-review-opt-in-rubric-container',
   },
+  build_review_read_only_capability: {
+    type: 'build_review_read_only_capability',
+    provider: 'codex',
+    platform: 'linux',
+    status: 'unavailable',
+    reason: 'probe write was not refused',
+  },
   contained_live_checkout_drift: {
     type: 'contained_live_checkout_drift',
     evidence: 'live root read-only; worktree writable',
@@ -372,6 +382,9 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     provider: 'claude',
     outcome: 'success',
     invoked: true,
+  },
+  provider_suppressed: {
+    type: 'provider_suppressed', provider: 'claude', deadline: 1,
   },
   provider_stream_progress: {
     type: 'provider_stream_progress',

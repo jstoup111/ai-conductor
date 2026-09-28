@@ -1278,22 +1278,15 @@ Codex could not create a process for 4 shell tool calls (its tool router reporte
 `exec_command failed ... CreateProcess`).
 ```
 
-Codex sandboxes each shell tool call inside its own bubblewrap namespace. When the host denies
-that namespace, every `exec_command` is rejected while Codex itself still exits 0 and still
-answers. The engine now classifies such a dispatch as a failure rather than a result, so a
+Codex uses its provider-native sandbox for each shell tool call. When the host denies that
+sandbox capability, every `exec_command` is rejected while Codex itself still exits 0 and still
+answers. The engine classifies such a dispatch as a failure rather than a result, so a
 `build_review` rubric that could not run `git diff` reports an infrastructure failure instead of a
 hollow PASS.
 
-**Diagnose the host, not the feature.** Confirm the sandbox can create a namespace:
-
-```bash
-bwrap --unshare-user --ro-bind / / /bin/true; echo "exit=$?"
-sysctl kernel.apparmor_restrict_unprivileged_userns
-```
-
-A non-zero exit, or the restriction enabled while the daemon already runs inside a namespace,
-means Codex has no way to spawn a shell there. Until the host grants it, route the affected steps
-to another provider; clearing the halt alone re-runs into the same denial.
+**Diagnose the host, not the feature.** Check `daemon status` for `READ-ONLY REVIEW CAPABILITY` and
+the provider-specific reason. Until that capability is available, route the affected steps to another
+provider or record reduced coverage; clearing the halt alone re-runs into the same denial.
 
 ### build_review has a scope-incomplete candidate
 

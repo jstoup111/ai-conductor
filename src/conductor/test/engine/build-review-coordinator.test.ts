@@ -1093,9 +1093,11 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
       "projection-oversized": true,
       "invalid-structured-result": true,
       "native-schema-unsupported": true,
+      "review-input-mutated": true,
+      "read-only-review-unavailable": true,
     };
     // The parser admits exactly the reasons the coordinator mapping can produce;
-    // the three union members outside that mapping are carried by other
+    // the five union members outside that mapping are carried by other
     // producers and never reach this parser.
     const producible = new Set<string>(Object.values(mapBuildReviewCoordinatorFailureReason));
     expect([...producible].every((reason) => reason in pinned)).toBe(true);

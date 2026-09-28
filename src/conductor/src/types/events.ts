@@ -272,7 +272,7 @@ export interface ProviderAttemptEvent {
   reason?: string;
   fallbackReason?: string;
   /** Present only for an unavailable candidate that was not invoked. */
-  skipReason?: 'setup-unavailable' | 'cached-unavailable';
+  skipReason?: 'setup-unavailable' | 'cached-unavailable' | 'suppression-refused';
   /** Redacted details retained for an explicit setup-unavailable skip. */
   setupCapability?: string;
   setupRecoveryAction?: string;
@@ -402,6 +402,21 @@ export type ConductorEvent =
       key: string;
       adr: string;
     }
+  /** Provider-owned read-only review capability observed at configuration time. */
+  | {
+      type: 'build_review_read_only_capability';
+      provider: string;
+      platform: string;
+      status: 'available';
+      reason?: never;
+    }
+  | {
+      type: 'build_review_read_only_capability';
+      provider: string;
+      platform: string;
+      status: 'unavailable';
+      reason: string;
+    }
   | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
   | { type: 'self_host_dispatch_admission'; step: StepName; state: 'queued' | 'admitted' | 'cancelled' }
   /** Candidate-local installed custom policy selected for a frozen review lap. */
@@ -504,6 +519,10 @@ export type ConductorEvent =
       /** Present only when the canonical rubric projection exceeded its configured byte bound. */
       measuredBytes?: number;
       limitBytes?: number;
+      /** Paths in the captured review inputs that changed before the lap settled. */
+      changedInputs?: readonly string[];
+      /** Host platform on which a read-only review capability was assessed. */
+      platform?: string;
     }
   /** Valid scope judgment could not resolve a concrete candidate; not a malformed provider result. */
   | {
@@ -866,7 +885,21 @@ export type ConductorEvent =
   | { type: 'tier_skip'; step: StepName; tier: ComplexityTier }
   | { type: 'config_skip'; step: StepName; reason?: string }
   | { type: 'navigation_back'; from: StepName; to: StepName }
-  | { type: 'rate_limit'; waitSeconds: number; reason?: 'usage-exhausted' }
+  | {
+      type: 'rate_limit';
+      waitSeconds: number;
+      reason?: 'usage-exhausted';
+      /** Provider whose attempt reported the rate limit; absent on historical records. */
+      provider?: string;
+      /** Absolute retry deadline used for the rate-limit wait; absent on historical records. */
+      deadline?: number;
+    }
+  | {
+      /** Daemon-origin durable record used to restore provider suppression after restart. */
+      type: 'provider_suppressed';
+      provider: string;
+      deadline: number;
+    }
   | { type: 'session_reset'; reason: string }
   | { type: 'credentials_park'; reason: string }
   | {

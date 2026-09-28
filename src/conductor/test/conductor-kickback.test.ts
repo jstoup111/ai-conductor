@@ -6,6 +6,8 @@ import { join } from 'path';
 
 import { Conductor } from './test-conductor.js';
 import { readState, writeState } from '../src/engine/state.js';
+import { persistAsBuiltVerdict } from '../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../src/engine/as-built-policy.js';
 import type { StepRunner } from '../src/engine/conductor.js';
 import type { ConductState, StepName } from '../src/types/index.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
@@ -22,6 +24,13 @@ const PRD_AUDIT_PASS = [
   '|--|--|--|--|--|',
   '| FR-1 | ALIGNED | | feature.ts:1 | yes |',
 ].join('\n');
+
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
 
 describe('manual_test FAIL kickback restage', () => {
   const dirs: string[] = [];
@@ -145,7 +154,7 @@ describe('validation-group kickback restages', () => {
     ]);
 
     const runner: StepRunner = {
-      run: async (step: StepName) => {
+      run: async (step: StepName, _state, options) => {
         if (step === 'manual_test') {
           await writeFile(
             join(dir, '.pipeline', 'manual-test-results.md'),
@@ -157,10 +166,20 @@ describe('validation-group kickback restages', () => {
             input.gapMembers.includes('prd_audit') ? PRD_AUDIT_GAP : PRD_AUDIT_PASS,
           );
         } else if (step === 'architecture_review_as_built') {
-          await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), [
-            '# As-Built Architecture Review', '',
-            input.gapMembers.includes('architecture_review_as_built') ? 'Verdict: BLOCKED\n\n## Blocking Findings\n| Finding | Class | Governing clause | Summary |\n| --- | --- | --- | --- |\n| ARCH-1 | REMEDIABLE | Task 1 | Missing guard |' : '**Verdict:** APPROVED',
-          ].join('\n'));
+          await persistAsBuiltVerdict(dir, input.gapMembers.includes('architecture_review_as_built')
+            ? {
+              version: 'v1', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+              findings: [{
+                id: 'ARCH-1', class: 'REMEDIABLE',
+                reference: { kind: 'plan-task', taskId: '1' }, summary: 'Missing guard',
+              }],
+              violations: 'The guard is missing.', resolution: 'Add the guard.',
+            }
+            : { version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [] }, {
+            attemptId: options?.runId ?? 'test-run',
+            codeStamp: null,
+            policy: AS_BUILT_TEST_POLICY,
+          });
         } else if (step === 'build') {
           return { success: false, error: 'stop after restage observation' };
         }

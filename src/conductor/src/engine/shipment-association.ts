@@ -1,4 +1,4 @@
-import { readAsBuiltVerdictLine } from './as-built-verdict-line.js';
+import type { PersistedAsBuiltVerdict } from './as-built-verdict-store.js';
 
 export interface ShipmentAssociationInput {
   planStems: readonly string[];
@@ -67,7 +67,8 @@ export type RecordedShipmentFinding =
  */
 export function recordedShipmentFindings(input: {
   prdAudit?: string;
-  asBuilt?: string;
+  /** The engine-owned verdict envelope; rendered Markdown is deliberately not accepted. */
+  asBuilt?: PersistedAsBuiltVerdict;
 }): RecordedShipmentFinding[] {
   return [
     ...recordedPrdAuditFindings(input.prdAudit),
@@ -168,88 +169,31 @@ function recordedPrdAuditFindings(report: string | undefined): RecordedShipmentF
   }
 }
 
-function recordedAsBuiltFindings(report: string | undefined): RecordedShipmentFinding[] {
-  // AB-R9 / adr-2026-08-22-as-built-review-runs-always-with-plan-gap D2: the two
-  // record kinds are ADDITIVE, not alternatives. A lap can both remediate
-  // REMEDIABLE findings and deliver a PLAN_GAP, and the shipped record owes the
-  // reader both. Returning early on the projected findings dropped the
-  // delivered PLAN_GAP whenever remediation had also run.
-  const projected = recordedAsBuiltRemediationFindings(report);
-  return [...projected, ...deliveredPlanGapFinding(report)];
-}
-
-/**
- * The narrative `## Recorded Findings` section of a delivered-PLAN_GAP report.
- * Order-independent: the remediation JSON block may precede or follow it, and
- * a fenced section is never narrative. Returns undefined when none qualifies.
- */
-function deliveredPlanGapSection(report: string): string | undefined {
-  const headingRe = /^## Recorded Findings(?:\s*\(if PLAN_GAP\s*[\u2014-][^)]*\))?\s*$/gim;
-  for (let match = headingRe.exec(report); match !== null; match = headingRe.exec(report)) {
-    const afterHeading = report.slice(match.index + match[0].length);
-    const nextHeading = afterHeading.search(/^#{1,6}\s/m);
-    const section = (nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading)).trim();
-    if (!section || section.startsWith('```')) continue;
-    return section;
-  }
-  return undefined;
-}
-
-function deliveredPlanGapFinding(report: string | undefined): RecordedShipmentFinding[] {
-  if (!report) return [];
-  const verdict = readAsBuiltVerdictLine(report);
-  if (!verdict.found || verdict.recognized !== 'PLAN_GAP' || !/^\s*Outcome delivered\s*:\s*yes\s*$/im.test(report)) return [];
-  // AB-R10: a lap that BOTH remediated findings and delivered a PLAN_GAP
-  // carries two `## Recorded Findings` sections — the remediation JSON block
-  // this engine projects, and the reviewer's PLAN_GAP narrative. Taking the
-  // first heading read the JSON as prose and recorded `outcome: "```json"`
-  // with the whole block as the summary. Scan every candidate section in
-  // either order and take the first that is narrative, never a fenced block.
-  const section = deliveredPlanGapSection(report);
-  if (section === undefined) return [];
-  const entries = section.split('\n').map((line) => line.trim()).filter(Boolean);
-  const labeled = (name: string): string | undefined => entries
-    .map((line) => line.match(new RegExp(`^(?:[-*]\\s*)?${name}:\\s*(.+)$`, 'i'))?.[1]?.trim())
-    .find((value): value is string => Boolean(value));
-  const outcome = labeled('outcome') ?? entries[0]!.replace(/^[-*]\s*/, '');
-  const summary = labeled('summary') ?? section.replace(/\s+/g, ' ').trim();
-  return outcome && summary
-    ? [{ gate: 'architecture_review_as_built', grade: 'PLAN_GAP', outcome, summary }]
+function recordedAsBuiltFindings(value: PersistedAsBuiltVerdict | undefined): RecordedShipmentFinding[] {
+  if (!value) return [];
+  const remediation = value.recordedFindings
+    .filter((finding) => finding.class === 'REMEDIABLE' && finding.outcome === 'remediated')
+    .map((finding) => ({
+      gate: 'architecture_review_as_built' as const,
+      finding: finding.id,
+      class: 'REMEDIABLE' as const,
+      governingClause: finding.reference?.kind === 'adr-decision'
+        ? `${finding.reference.stem} decision ${finding.reference.decision}`
+        : finding.reference?.kind === 'plan-task'
+          ? `Task ${finding.reference.taskId}`
+          : 'none',
+      summary: finding.summary,
+      outcome: 'remediated' as const,
+    }));
+  const planGap = value.verdict.verdict === 'PLAN_GAP' && value.verdict.outcomeDelivered
+    ? [{
+        gate: 'architecture_review_as_built' as const,
+        grade: 'PLAN_GAP' as const,
+        outcome: value.verdict.affectedOutcome,
+        summary: value.verdict.affectedOutcome,
+      }]
     : [];
-}
-
-function recordedAsBuiltRemediationFindings(report: string | undefined): RecordedShipmentFinding[] {
-  const block = report?.match(/^## Recorded Findings\s*\n+```json\s*\n([\s\S]*?)\n```\s*$/im)?.[1];
-  if (!block) return [];
-  try {
-    const parsed: unknown = JSON.parse(block);
-    const findings = parsed !== null && typeof parsed === 'object' && Array.isArray((parsed as { findings?: unknown }).findings)
-      ? (parsed as { findings: unknown[] }).findings
-      : [];
-    return findings.flatMap<RecordedShipmentFinding>((finding) => {
-      if (!isObject(finding) || finding.gate !== 'architecture_review_as_built') return [];
-      const id = nonEmptyString(finding.finding);
-      const governingClause = nonEmptyString(finding.governingClause);
-      const summary = nonEmptyString(finding.summary);
-      if (
-        !id ||
-        !governingClause ||
-        !summary ||
-        finding.class !== 'REMEDIABLE' ||
-        finding.outcome !== 'remediated'
-      ) return [];
-      return [{
-        gate: 'architecture_review_as_built',
-        finding: id,
-        class: 'REMEDIABLE',
-        governingClause,
-        summary,
-        outcome: 'remediated',
-      }];
-    });
-  } catch {
-    return [];
-  }
+  return [...remediation, ...planGap];
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

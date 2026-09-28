@@ -12,11 +12,20 @@ import { join } from 'node:path';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { Conductor } from '../test-conductor.js';
 
 const BLOCKER = 'CHANGELOG carries an unsubstituted {{IMPLEMENTATION_PR}} token';
+
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
 
 describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
   let projectRoot: string;
@@ -45,8 +54,14 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
       'architecture_review_as_built', 'rebase',
     ] satisfies StepName[]) state[step] = 'done';
     await writeState(stateFilePath, state as ConductState);
+    await persistAsBuiltVerdict(projectRoot, {
+      version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+    }, {
+      attemptId: 'fixture-run',
+      codeStamp: null,
+      policy: AS_BUILT_TEST_POLICY,
+    });
     const asBuiltReport = join(pipelineDir, 'architecture-review-as-built.md');
-    await writeFile(asBuiltReport, 'Verdict: APPROVED\n');
     const future = new Date(Date.now() + 60_000);
     await utimes(asBuiltReport, future, future);
   });

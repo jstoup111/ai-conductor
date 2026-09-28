@@ -266,6 +266,7 @@ async function runFlow(input: {
     providerRuntimes: new ProviderRuntimeSet([runtime]),
     configuredProviders: ['claude'],
     sessionStore: new ProviderSessionStore(),
+    probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'available' as const }),
     buildReviewEffectiveResolver: resolveCustomAggregate as never,
     // Faithful prepared-candidate catalog fake: the acceptance boundary owns
     // orchestration and durable aggregation, while host metadata discovery is

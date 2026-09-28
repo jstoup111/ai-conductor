@@ -1,7 +1,7 @@
 // Covers: task:16, task:8
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -54,6 +54,40 @@ describe('EventPersister wiring constraints', () => {
   it('index.ts imports EventPersister', () => {
     const indexSrc = readFileSync(join(srcRoot, 'index.ts'), 'utf-8');
     expect(indexSrc).toContain('EventPersister');
+  });
+
+  it('persists daemon-origin suppression records while continuing to exclude forwarded feature events', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR ?? process.env.TEMP ?? '/tmp', 'provider-suppression-ledger-'));
+    const daemonEvents = new ConductorEventEmitter();
+    const daemonPersistence = startDaemonEventPersistence(root, daemonEvents);
+    const feature = startFeatureEventPersistence(join(root, 'feature'), daemonEvents, 'feature');
+    try {
+      await feature.events.emit({ type: 'rate_limit', waitSeconds: 10, provider: 'claude', deadline: 2_000 });
+      await daemonEvents.emit({ type: 'provider_suppressed', provider: 'claude', deadline: 2_000 });
+
+      const daemonLedger = await readFile(join(root, '.daemon', 'events.jsonl'), 'utf8');
+      expect(daemonLedger).toContain('"type":"provider_suppressed"');
+      expect(daemonLedger).not.toContain('"type":"rate_limit"');
+    } finally {
+      feature.stop();
+      daemonPersistence.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('surfaces a daemon-origin suppression persistence failure', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR ?? process.env.TEMP ?? '/tmp', 'provider-suppression-failure-'));
+    const daemonEvents = new ConductorEventEmitter();
+    const messages: string[] = [];
+    await writeFile(join(root, '.daemon'), 'not a directory');
+    const daemonPersistence = startDaemonEventPersistence(root, daemonEvents, (message) => messages.push(message));
+    try {
+      await daemonEvents.emit({ type: 'provider_suppressed', provider: 'claude', deadline: 2_000 });
+      expect(messages.join('\n')).toContain('event persistence failed');
+    } finally {
+      daemonPersistence.stop();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('forwards interleaved configured-member contexts to one daemon projection and renders them without duplicating the feature ledger', async () => {

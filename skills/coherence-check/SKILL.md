@@ -126,6 +126,12 @@ The artifact is a Markdown table (or one table per row class) with these columns
    also reports `criterion:correction-unknown-decision:<n>`. Do not use the
    correction cell on `covered` or `gap` rows.
 
+   Before writing the artifact, run the plan skill's independent coverage judgement (plan §7a) on
+   every criterion row, using this artifact's cited tasks. A row whose criterion, cited task ids,
+   and cited `Done when` blocks are identical to a plan `## Coverage Check` row the judgement has
+   already passed needs no second judgement. Resolve every refusal as §7a directs; a refused row
+   is never recorded `covered`.
+
 ### 4b. Verdict Vocabulary
 
 Use exactly these three verdict values — this is the same vocabulary the land-time

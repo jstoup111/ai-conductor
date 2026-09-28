@@ -14,7 +14,7 @@ The work lands in one subsystem through four seams, in this order.
 
 **Configuration.** A new optional substitution-policy value is declared at run level and step level, validated fail-closed, and declared in the total config-key consumer registry. It changes `resolveProviderCandidates` from returning the union of step selection and configured providers to returning the step's own selection alone. Unset, the union is returned exactly as today.
 
-**Admission.** A single admission function is consulted per candidate immediately before dispatch, in the existing candidate loop. Policy refusal and suppression refusal both exit through it; no candidate path bypasses it. Refusals reuse the existing provider attempt record with `invoked` false, extending its closed skip-reason set rather than minting a new event.
+**Admission.** A single admission function is consulted per candidate immediately before dispatch, in the existing candidate loop. Suppression refusal exits through it and no candidate path bypasses it; substitution policy is resolver-owned, removing a policy-forbidden candidate at resolution (ADR D1 as amended 2026-09-25). Refusals reuse the existing provider attempt record with `invoked` false, extending its closed skip-reason set rather than minting a new event.
 
 **Availability state.** A new pure, clock-injected module holds suppression windows keyed by provider. It is constructed once at daemon startup beside the rate-limit episode and injected into each conductor, above the per-feature run boundary that rebuilds every provider runtime. An absent store means today's behavior. Suppression is written only for the usage-exhaustion class, never for the authentication-failure or expired-session classes that share the same recovery-precedence guard.
 
@@ -87,6 +87,7 @@ Sequencing rationale: configuration and the availability module are independent 
 - resolveProviderCandidates returns the configured global list unchanged when the policy disallows substitution and the step declares no selection of its own
 - with the policy unset, resolveProviderCandidates returns the union of step selection and configured providers, byte-identical to the pre-change result for the same inputs
 - a policy set for one step narrows only that step, asserted by resolving two steps where one sets the policy and the other does not, with each scope governing its own step
+- with substitution disallowed at the global scope and permitted for exactly one step, resolveProviderCandidates returns the permitted union for that step while every other step resolves to the global disallowed result, asserted over that exact configuration with neither scope silently overriding the other
 
 **Files likely touched:**
 - src/conductor/src/engine/provider-selection.ts — narrow the union when the policy disallows substitution
@@ -130,6 +131,7 @@ Sequencing rationale: configuration and the availability module are independent 
 - the later of two competing deadlines for one provider governs its window, asserted by recording an earlier deadline second
 - a deadline at or before the injected now leaves the provider admitted rather than suppressed
 - the store exposes no permanent-unavailability state and never reorders providers, asserted after repeated suppression and expiry cycles
+- with one provider suppressed, the resolved candidate list keeps the same providers in the same order as the unsuppressed resolution and differs only in that provider's admission, asserted by comparing both resolutions
 
 **Files likely touched:**
 - src/conductor/src/engine/provider-availability.ts — new module holding suppression windows keyed by provider
@@ -191,11 +193,11 @@ Sequencing rationale: configuration and the availability module are independent 
 5. Commit with message: "feat(telemetry): record provider admission refusals"
 
 **Done when:**
-- the skip-reason set gains the policy-refusal and suppression-refusal members within its existing closed set, so an existing provider attempt reader parses a refusal record without modification
-- a policy-refused candidate emits a provider attempt carrying invoked false and the policy refusal reason
+- the skip-reason set gains only the provider-suppressed member, and no policy-refusal member, within its existing closed set, so an existing provider attempt reader parses a refusal record without modification
+- the dispatch path passes the step's substitution policy to resolveProviderCandidates so a policy-forbidden candidate is never in the dispatch list and emits no provider attempt
 - a suppression-refused candidate emits a provider attempt carrying invoked false and the suppression refusal reason
 - an admitted candidate emits a provider attempt carrying invoked true and no refusal reason
-- a candidate that is both policy-forbidden and suppressed emits exactly one provider attempt carrying exactly one refusal reason
+- a candidate that is both policy-forbidden and suppressed emits no provider attempt, and a suppressed candidate the policy permits emits exactly one provider attempt carrying exactly one refusal reason
 
 **Files likely touched:**
 - src/conductor/src/types/events.ts — extend the closed skip-reason set with the two refusal members
@@ -305,7 +307,7 @@ Sequencing rationale: configuration and the availability module are independent 
 5. Commit with message: "feat(provider): expire suppression windows automatically"
 
 **Done when:**
-- advancing the injected clock past a suppression deadline admits the provider again with no operator action
+- advancing the injected clock past a suppression deadline admits the provider again with no operator action, and the next dispatch invokes that provider, asserted on the injected provider invoker
 - advancing the injected clock past the bounded default interval admits a provider suppressed with no parsed deadline
 - a provider re-admitted after expiry and exhausted again receives a fresh window rather than an extension of the previous one
 - two admission evaluations at nearly the same moment just after a deadline both observe the provider admitted
@@ -468,6 +470,50 @@ Sequencing rationale: configuration and the availability module are independent 
 
 **Dependencies:** 15
 
+### Task 21: Wire usage-exhaustion suppression into both GroupCore consumers
+**Story:** 3
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests driving the built-in validation group and a configured parallel group through GroupCore with a member reporting usage exhaustion, authentication failure, and expired session.
+2. Verify tests fail (RED)
+3. Implement by extending the branch-executor dependencies with the availability store and the daemon-origin persistence callback, and opening the window in the GroupCore rate-limit branch exactly as the serial branch in conductor.ts does.
+4. Verify tests pass (GREEN)
+5. Commit with message: "feat(provider): suppress exhausted providers from GroupCore members"
+
+**Done when:**
+- both production GroupCore consumers open the shared suppression window and call the daemon-origin persistence callback when a group member reports usage exhaustion, exactly as the serial rate-limit branch does
+- a usage-exhausted group member's provider is refused without a subprocess in a later or concurrent feature dispatch while its window is unexpired
+- an authentication failure or expired session reported by a group member opens no suppression window and writes no suppression record
+
+**Files likely touched:**
+- src/conductor/src/engine/group-core.ts — extend branch-executor dependencies and the rate-limit branch
+- src/conductor/src/engine/conductor.ts — pass the store and persistence callback at both GroupCore roots
+
+**Dependencies:** 12, 18
+
+### Task 22: Remove the unreachable policy-refusal surface
+**Story:** 2
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests asserting the skip-reason set and the gate's refusal reasons contain no policy member.
+2. Verify tests fail (RED)
+3. Remove the policy-refused reason, its skip-reason member, and the dead gate and executor paths in provider-execution.ts and provider-selection.ts, per ADR D1 as amended 2026-09-25.
+4. Verify tests pass (GREEN)
+5. Commit with message: "refactor(provider): remove unreachable policy-refusal surface"
+
+**Done when:**
+- the policy-refused refusal reason and skip-reason member are removed, and the admission gate carries no substitution-policy branch
+- resolveProviderCandidates remains the sole owner of substitution policy, and a policy-forbidden candidate still emits no provider attempt
+
+**Files likely touched:**
+- src/conductor/src/engine/provider-execution.ts — remove the gate's policy branch and its refusal handling
+- src/conductor/src/engine/provider-selection.ts — keep narrowing as the sole policy owner
+- src/conductor/src/types/events.ts — remove the policy skip-reason member
+
+**Dependencies:** 8
+
 ## Task Dependency Graph
 
 ```text
@@ -482,6 +528,9 @@ Task 5 ──┬─ Task 6 ──┬─ Task 12
          │                                 └─ Task 20
          └─ Task 13 ── Task 14
 Task 10 ── Task 11
+Task 12 ── Task 21
+Task 18 ── Task 21
+Task 8 ── Task 22
 ```
 
 ## Integration Points
@@ -503,22 +552,22 @@ Task 10 ── Task 11
 | Story 1 negative: Given substitution is disallowed at the global scope and permitted for one step, when that step's candidate list is resolved, then the step's own setting governs that step and the global setting continues to govern every other step, with neither silently overriding the other. | 3 | "a policy set for one step narrows only that step, asserted by resolving two steps where one sets the policy and the other does not, with each scope governing its own step" | diff-local |
 | Story 1 negative: Given substitution is disallowed and the step's only candidate raises a run-scoped unavailability that today triggers fallback, when the step runs, then the unavailability surfaces instead of another provider being invoked. | 4 | "with substitution disallowed, a single candidate raising a run-scoped unavailability surfaces that unavailability and no other provider is invoked, asserted by attempt records naming only the pinned provider" | diff-local |
 | Story 1 negative: Given a project configuration omits the substitution setting entirely, when it is loaded alongside a user-level configuration that sets it, then existing user-under-project precedence applies and the resolved list matches that precedence rather than a hardcoded default. | 1 | "existing user-under-project precedence governs the new key, asserted by a merge test in which the project value wins and a user-only value survives" | diff-local |
-| Story 2 happy: Given a candidate the policy forbids, when the step resolves candidates, then a `provider_attempt` is recorded for that candidate with `invoked` false and the policy refusal reason. | 8 | "a policy-refused candidate emits a provider attempt carrying invoked false and the policy refusal reason" | diff-local |
+| Story 2 happy: Given a candidate the policy forbids, when the step resolves candidates, then that candidate is excluded from the dispatch list at resolution and no `provider_attempt` is recorded for it. | 8 | "the dispatch path passes the step's substitution policy to resolveProviderCandidates so a policy-forbidden candidate is never in the dispatch list and emits no provider attempt" | diff-local |
 | Story 2 happy: Given a candidate suppressed as usage-exhausted, when the step resolves candidates, then a `provider_attempt` is recorded with `invoked` false and the suppression refusal reason. | 8 | "a suppression-refused candidate emits a provider attempt carrying invoked false and the suppression refusal reason" | diff-local |
 | Story 2 happy: Given a candidate the gate admits, when it is invoked, then its `provider_attempt` carries `invoked` true and no refusal reason, unchanged from today. | 8 | "an admitted candidate emits a provider attempt carrying invoked true and no refusal reason" | diff-local |
 | Story 2 happy: Given a candidate refused by the gate, when the step completes, then no provider subprocess was spawned for that candidate. | 7 | "a refused candidate never reaches the process-spawn seam, asserted with that seam mocked to fail if reached" | diff-local |
-| Story 2 happy: Given an existing reader of `provider_attempt` records, when it processes a refusal record, then it parses it without modification, because the refusal reuses the existing record shape. | 8 | "the skip-reason set gains the policy-refusal and suppression-refusal members within its existing closed set, so an existing provider attempt reader parses a refusal record without modification" | diff-local |
-| Story 2 negative: Given a candidate that is both policy-forbidden and suppressed, when the gate refuses it, then exactly one `provider_attempt` is recorded carrying exactly one refusal reason, never two records or a combined reason. | 8 | "a candidate that is both policy-forbidden and suppressed emits exactly one provider attempt carrying exactly one refusal reason" | diff-local |
+| Story 2 happy: Given an existing reader of `provider_attempt` records, when it processes a refusal record, then it parses it without modification, because the refusal reuses the existing record shape. | 8 | "the skip-reason set gains only the provider-suppressed member, and no policy-refusal member, within its existing closed set, so an existing provider attempt reader parses a refusal record without modification" | diff-local |
+| Story 2 negative: Given a candidate that is both policy-forbidden and suppressed, when the step dispatches, then no `provider_attempt` is recorded for it, and a suppressed candidate the policy permits records exactly one `provider_attempt` carrying exactly one refusal reason, never two records or a combined reason. | 8 | "a candidate that is both policy-forbidden and suppressed emits no provider attempt, and a suppressed candidate the policy permits emits exactly one provider attempt carrying exactly one refusal reason" | diff-local |
 | Story 2 negative: Given telemetry emission for a refusal fails, when the step continues, then the refusal itself still takes effect and the failure is reported through the existing attempt-telemetry error path rather than admitting the candidate. | 9 | "a telemetry emission failure on a refusal routes through the existing attempt-telemetry error path while the candidate remains refused and unspawned" | diff-local |
-| Story 2 negative: Given a candidate refused by the gate, when its record is inspected, then the refusal reason belongs to the record's closed set and is not free-form text. | 8 | "the skip-reason set gains the policy-refusal and suppression-refusal members within its existing closed set, so an existing provider attempt reader parses a refusal record without modification" | diff-local |
+| Story 2 negative: Given a candidate refused by the gate, when its record is inspected, then the refusal reason belongs to the record's closed set and is not free-form text. | 8 | "the skip-reason set gains only the provider-suppressed member, and no policy-refusal member, within its existing closed set, so an existing provider attempt reader parses a refusal record without modification" | diff-local |
 | Story 2 negative: Given a provider already refused earlier in the same step, when the candidate loop reaches it again, then it is refused again without a subprocess rather than being admitted on a second look. | 9 | "a provider refused earlier in the same step is refused again when the candidate loop reaches it, without a subprocess" | diff-local |
 | Story 2 negative: Given the gate is consulted for a candidate, when the step runs under a provider configuration that predates this change, then the gate admits every candidate and emits no refusal record. | 9 | "with no policy configured and no suppression in force, the gate admits every candidate and emits no refusal record" | diff-local |
-| Story 3 happy: Given a provider observed usage-exhausted during a step, when a later step in the same run resolves candidates, then that provider is refused without a subprocess while its window is unexpired. | 19 | "a provider suppressed during an earlier step is refused without a subprocess in a later step while its window is unexpired" | diff-local |
+| Story 3 happy: Given a provider observed usage-exhausted during a step, when a later step in the same run resolves candidates, then that provider is refused without a subprocess while its window is unexpired. | 19, 21 | "a usage-exhausted group member's provider is refused without a subprocess in a later or concurrent feature dispatch while its window is unexpired" | diff-local |
 | Story 3 happy: Given a provider suppressed during one feature's run, when a later feature run begins and resolves candidates, then the suppression is still in force, because the store was constructed above the per-feature boundary. | 6 | "a suppression recorded during one feature run is still observed by a later feature run in the same process, asserted across two feature-run boundaries that rebuild the provider runtimes" | diff-local |
 | Story 3 happy: Given a feature run begins, when its provider runtimes and model-availability caches are rebuilt, then the injected availability store is not rebuilt with them. | 6 | "the store is constructed once at daemon startup beside the rate-limit episode and injected into each conductor through the existing injection sites, above the per-feature run boundary" | diff-local |
 | Story 3 happy: Given no availability store is injected, when candidates are resolved, then behavior is today's, with every candidate admitted. | 6 | "an absent store leaves candidate admission and provider attempts identical to pre-change behavior and raises no error" | diff-local |
 | Story 3 happy: Given a provider is suppressed, when a different provider is resolved as a candidate, then the different provider is admitted normally. | 19 | "a different provider remains admitted while one provider is suppressed" | diff-local |
-| Story 3 negative: Given a provider suppressed in one feature run, when a concurrently running feature resolves the same provider, then it is refused there too rather than each feature re-earning the suppression independently. | 19 | "a provider suppressed in one feature run is refused in a concurrently running feature rather than re-earned independently there" | diff-local |
+| Story 3 negative: Given a provider suppressed in one feature run, when a concurrently running feature resolves the same provider, then it is refused there too rather than each feature re-earning the suppression independently. | 19, 21 | "a provider suppressed in one feature run is refused in a concurrently running feature rather than re-earned independently there" | diff-local |
 | Story 3 negative: Given the availability store is absent because the run is interactive rather than daemon-hosted, when a provider is observed exhausted, then the run behaves exactly as it does today and no error is raised for the missing store. | 6 | "an absent store leaves candidate admission and provider attempts identical to pre-change behavior and raises no error" | diff-local |
 | Story 3 negative: Given a suppression is recorded while a second exhaustion of the same provider reports a later deadline, when both are applied, then the later deadline governs rather than the earlier one shortening the window. | 5 | "the later of two competing deadlines for one provider governs its window, asserted by recording an earlier deadline second" | diff-local |
 | Story 3 negative: Given the suppression record cannot be persisted, when the run continues, then in-memory suppression still takes effect for the current daemon process and the persistence failure is surfaced rather than silently dropped. | 18 | "a persistence failure surfaces through the existing error path while in-memory suppression still takes effect for the current process" | diff-local |
@@ -562,9 +611,9 @@ Task 10 ── Task 11
 
 | Decision | Disposition | Task(s) | Evidence |
 | --- | --- | --- | --- |
-| adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability#D1 | task | task-7 | candidate execution consults a single admission function before invoking any candidate, and no candidate path reaches the dispatch seam without it |
+| adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability#D1 | task | task-7, task-22 | the policy-refused refusal reason and skip-reason member are removed, and the admission gate carries no substitution-policy branch |
 | adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability#D2 | task | task-3, task-2, task-1 | resolveProviderCandidates returns only the step selection when the policy disallows substitution and the step declares a selection |
-| adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability#D3 | task | task-8 | a policy-refused candidate emits a provider attempt carrying invoked false and the policy refusal reason |
+| adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability#D3 | task | task-8 | the dispatch path passes the step's substitution policy to resolveProviderCandidates so a policy-forbidden candidate is never in the dispatch list and emits no provider attempt |
 | adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability#D4 | task | task-6, task-5 | the store is constructed once at daemon startup beside the rate-limit episode and injected into each conductor through the existing injection sites, above the per-feature run boundary |
 | adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability#D5 | task | task-10 | the rate-limit record declares provider and deadline as optional fields, and a pre-change record fixture parses and renders unchanged |
 | adr-2026-09-23-provider-admission-gate-and-daemon-scoped-availability#D6 | task | task-13, task-14 | advancing the injected clock past a suppression deadline admits the provider again with no operator action |

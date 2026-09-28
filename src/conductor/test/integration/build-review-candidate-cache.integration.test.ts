@@ -138,6 +138,7 @@ describe('build-review candidate cache runner ordering', () => {
       } as HarnessConfig,
       providerRuntimes,
       sessionStore,
+      probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'available' as const }),
       providerExecution: {
         configuredProviders: ['codex'],
         runtimes: providerRuntimes,
@@ -230,6 +231,7 @@ describe('build-review candidate cache runner ordering', () => {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', llm_provider: ['codex', 'claude'] },
       } } } as HarnessConfig,
       providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(), events,
+      probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'available' as const }),
       providerExecution: { configuredProviders: ['codex', 'claude'], runtimes, sessions: new ProviderSessionStore(), prepareCandidateSelfHost: async () => ({ executable: 'provider', env: {}, args: [], teardown: async () => {} }) },
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: passingEffectiveResolver,
@@ -270,6 +272,7 @@ describe('build-review candidate cache runner ordering', () => {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', source: 'project', llm_provider: 'codex' },
       } } } as HarnessConfig,
       providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(), events,
+      probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'available' as const }),
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: passingEffectiveResolver,
       buildReviewPolicyCatalog: async () => [{ semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const }],
@@ -305,7 +308,7 @@ describe('build-review candidate cache runner ordering', () => {
     });
 
     await (runner as never as { dispatchBuildReviewRubric: (...args: unknown[]) => Promise<unknown> }).dispatchBuildReviewRubric(
-      { rubric: 'testQuality', skillName: 'build-review-test-quality', policy: { enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0 } },
+      { rubric: 'testQuality', skillName: 'build-review-test-quality', policy: { enabled: true, llm_provider: 'codex', timeout_seconds: 0.05, model: 'gpt-5.6-sol', effort: 'medium', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0 } },
       { rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v3', lapId: 'lap-deadline', snapshotDigest: 'sha256:snapshot', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [], repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflight: {} },
       'M', {}, builtInInputs(), { engineStamp: 'stamp', skillDigests: { testQuality: { kind: 'unavailable', path: 'skills/build-review-test-quality/SKILL.md' } } },
     );

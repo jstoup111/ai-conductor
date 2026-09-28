@@ -116,8 +116,9 @@ sequenceDiagram
 ## Legend
 
 - **`admitCandidate`** is the one new seam, evaluated per candidate immediately before dispatch.
-  Both refusal classes flow through it: substitution policy and exhaustion suppression. Neither
-  gets its own bypass path, so there is one place to read and one telemetry record to consult.
+  It governs only suppression and availability. Substitution policy is resolver-owned:
+  `resolveProviderCandidates` removes a policy-forbidden candidate before execution, so that
+  candidate never reaches the gate and records no `provider_attempt` (ADR D1 as amended 2026-09-25).
 - **`provider_attempt { invoked: false }`** is reused, not invented. Its documented meaning is
   already "a cached unavailability avoided process dispatch"; the refusals extend `skipReason`
   alongside the existing `setup-unavailable` and `cached-unavailable` values.
@@ -142,3 +143,4 @@ sequenceDiagram
 | Date | Change | Reason |
 |---|---|---|
 | 2026-09-23 | Initial diagram for the admission gate, the policy narrowing, and spine-carried suppression. | Fix the seam, the new event fields, and the dispatch-boundary rebuild before implementation, and make explicit that exhaustion remains a wait rather than becoming a substitution (#1492). |
+| 2026-09-25 | Policy refusal no longer routes through the gate; the gate governs suppression only. | As-built AB-1: resolution removes policy-forbidden candidates per ADR D2, so the gate's policy arm was unreachable; ADR D1 amended by operator decision. |

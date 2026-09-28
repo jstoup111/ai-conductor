@@ -148,10 +148,10 @@ describe('operator park boundary contract', () => {
       "await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });",
       prdWideningReconciliationDispatch,
       buildReviewAdjudicationDispatch,
-      /return(?: await)? this\.stepRunner\.run\(name, state, \{\s*retryReason: retryHint,\s*\.\.\.identityOption,\s*\.\.\.executionContextOption,\s*\}\);/g,
+      /return(?: await)? this\.stepRunner\.run\(name, state, \{\s*retryReason: retryHint,\s*\.\.\.identityOption,\s*\.\.\.executionContextOption,\s*\.\.\.this\.buildReviewCapabilityOption\(name\),\s*\}\);/g,
       // Configured-group branches run only through runParallelGroupViaCore,
       // whose caller is one of the guarded scheduling-unit entries above.
-      /return runGroupBranch\(member, state, \{\s*stepRunner: this\.stepRunner,\s*executionContext,/g,
+      /return runGroupBranch\(member, state, \{\s*stepRunner: this\.stepRunner,\s*providerAvailability: this\.providerExecution\?\.providerAvailability,\s*onProviderSuppressed: this\.providerExecution\?\.onProviderSuppressed,\s*executionContext,/g,
       "return this.stepRunner.run('finish', state, options);",
       // The two bounded FINISH prose passes. Both are reached only from inside
       // the already-park-guarded FINISH dispatch.

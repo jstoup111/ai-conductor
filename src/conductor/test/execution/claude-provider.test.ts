@@ -1038,6 +1038,41 @@ describe('ClaudeProvider', () => {
       expect(args).not.toContain('--dangerously-skip-permissions');
     });
 
+    it('maps read-only review to Claude restricted mode without changing its environment', async () => {
+      mockExeca.mockResolvedValue({ stdout: 'ok', exitCode: 0, failed: false } as any);
+
+      await provider.invoke({
+        ...baseOptions,
+        readOnlyReview: true,
+        dangerouslySkipPermissions: true,
+      });
+      const [, readOnlyArgs, readOnlyOptions] = mockExeca.mock.calls[0] as [string, string[], any];
+
+      mockExeca.mockClear();
+      await provider.invoke({ ...baseOptions, dangerouslySkipPermissions: true });
+      const [, ordinaryArgs, ordinaryOptions] = mockExeca.mock.calls[0] as [string, string[], any];
+
+      expect(readOnlyArgs).toContain('--restricted');
+      expect(readOnlyArgs[readOnlyArgs.indexOf('--tools') + 1]).toBe('Read,Grep,Glob,Bash');
+      const allowedTools = readOnlyArgs[readOnlyArgs.indexOf('--allowedTools') + 1];
+      expect(allowedTools).toBe([
+        'Bash(git show:*)',
+        'Bash(git diff:*)',
+        'Bash(git log:*)',
+        'Bash(git ls-tree:*)',
+        'Bash(git ls-files:*)',
+        'Bash(git cat-file:*)',
+        'Bash(git rev-parse:*)',
+        'Bash(git blame:*)',
+        'Bash(git grep:*)',
+      ].join(','));
+      expect(allowedTools).not.toMatch(/Edit|Write|NotebookEdit|mcp|Bash\((?!git (?:show|diff|log|ls-tree|ls-files|cat-file|rev-parse|blame|grep):)/i);
+      expect(readOnlyArgs).toContain('--strict-mcp-config');
+      expect(readOnlyArgs).not.toContain('--dangerously-skip-permissions');
+      expect(readOnlyOptions.env).toEqual(ordinaryOptions.env);
+      expect(ordinaryArgs).toContain('--dangerously-skip-permissions');
+    });
+
     it('detects rate limit in output', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'Error: rate limit exceeded',

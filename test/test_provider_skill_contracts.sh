@@ -168,18 +168,25 @@ require_pattern 'code review scopes evaluator model selection to Claude' \
   "$HARNESS_DIR/skills/code-review/SKILL.md"
 require_pattern 'architecture review preserves its two-agent medium-tier limit' \
   'Max 2 agents|maximum of 2 agents' "$HARNESS_DIR/skills/architecture-review/SKILL.md"
-require_pattern 'as-built architecture review independently verifies the root-to-caller-to-export chain' \
-  'independently verif.{0,160}root-to-caller-to-export|root-to-caller-to-export.{0,160}independently verif' \
-  "$HARNESS_DIR/skills/architecture-review/SKILL.md"
-require_pattern 'as-built architecture review permits same-file composition only with exact caller and root evidence' \
-  'same-file.{0,220}(exact caller-to-export|caller-to-export.{0,120}exact).{0,220}(production-entry-point|production root|root chain)' \
-  "$HARNESS_DIR/skills/architecture-review/SKILL.md"
-require_pattern 'as-built architecture review rejects own-module-only claims' \
-  'own-module.{0,120}(alone|only).{0,120}(does not count|insufficient|reject)' \
-  "$HARNESS_DIR/skills/architecture-review/SKILL.md"
-require_pattern 'as-built architecture review rejects stale BUILD proof as authority' \
-  'stale.{0,100}(BUILD )?proof.{0,160}(does not|never).{0,120}(count|authorit|pass)|persisted BUILD proof.{0,160}(corroborat|not authorit)' \
-  "$HARNESS_DIR/skills/architecture-review/SKILL.md"
+# As-built judgement-prose pins. Kept as data so the S9.9 fixture below can
+# prove these same pins fail when the same-file exception prose is dropped.
+AS_BUILT_PROSE_PIN_DESCRIPTIONS=(
+  'as-built architecture review independently verifies the root-to-caller-to-export chain'
+  'as-built architecture review permits same-file composition only with exact caller and root evidence'
+  'as-built architecture review rejects own-module-only claims'
+  'as-built architecture review rejects stale BUILD proof as authority'
+)
+AS_BUILT_PROSE_PIN_PATTERNS=(
+  'independently verif.{0,160}root-to-caller-to-export|root-to-caller-to-export.{0,160}independently verif'
+  'same-file.{0,220}(exact caller-to-export|caller-to-export.{0,120}exact).{0,220}(production-entry-point|production root|root chain)'
+  'own-module.{0,120}(alone|only).{0,120}(does not count|insufficient|reject)'
+  'stale.{0,100}(BUILD )?proof.{0,160}(does not|never).{0,120}(count|authorit|pass)|persisted BUILD proof.{0,160}(corroborat|not authorit)'
+)
+for pin_index in "${!AS_BUILT_PROSE_PIN_PATTERNS[@]}"; do
+  require_pattern "${AS_BUILT_PROSE_PIN_DESCRIPTIONS[$pin_index]}" \
+    "${AS_BUILT_PROSE_PIN_PATTERNS[$pin_index]}" \
+    "$HARNESS_DIR/skills/architecture-review/SKILL.md"
+done
 require_pattern 'assess retains specialist-report output contract' \
   'Write your findings to \.pipeline/assessment/' "$HARNESS_DIR/skills/assess/SKILL.md"
 require_pattern 'code review retains fresh-context evaluator review' \
@@ -475,6 +482,86 @@ expect_audit 'provider audit rejects unscoped interactive Claude command' 1 "$co
 
 printf '%s\n' 'Claude Code invokes `conduct` as `/conduct`; Codex invokes it as `$conduct`.' > "$contract_fixture"
 expect_audit 'provider audit rejects a compatibility edit that removes the shared gate' 1 "$contract_fixture" 'Shared lifecycle gate'
+
+as_built_skill_prose_audit() {
+  local file=$1
+  local section
+  local pattern
+  local violations=0
+
+  section=$(awk '
+    /^### 12\. As-Built Compliance Gate/ { active = 1; next }
+    active && /^## / { exit }
+    active { print }
+  ' "$file")
+  if [ -z "$section" ]; then
+    printf 'as-built output-format prose rejected: %s is missing section 12\n' "$file"
+    return 1
+  fi
+  for pattern in \
+    '^\| Finding \| Class \| Governing clause \| Summary \|$' \
+    'git (diff|log)' \
+    '^Verdict:'; do
+    if printf '%s\n' "$section" | grep -qiE "$pattern"; then
+      printf 'as-built output-format prose rejected: %s matches %s\n' "$file" "$pattern"
+      violations=1
+    fi
+  done
+  [ "$violations" -eq 0 ]
+}
+
+expect_as_built_skill_prose_fixture_failure() {
+  local fixture=$1
+  local expected_pattern=$2
+  local output
+  local status
+  set +e
+  output=$(as_built_skill_prose_audit "$fixture" 2>&1)
+  status=$?
+  set -e
+  if [ "$status" -ne 0 ] && [[ "$output" == *"$fixture"* ]] && [[ "$output" == *"$expected_pattern"* ]]; then
+    pass "as-built prose fixture rejects $(basename "$fixture") naming file and pattern"
+  else
+    fail "as-built prose fixture rejects $(basename "$fixture") naming file and pattern"
+  fi
+}
+
+as_built_skill="$HARNESS_DIR/skills/architecture-review/SKILL.md"
+if as_built_skill_prose_audit "$as_built_skill"; then
+  pass 'as-built output-format audit accepts the shipped section only'
+else
+  fail 'as-built output-format audit accepts the shipped section only'
+fi
+
+as_built_fixture=$(mktemp)
+printf '%s\n' '### 12. As-Built Compliance Gate (`--as-built` mode)' '| Finding | Class | Governing clause | Summary |' > "$as_built_fixture"
+expect_as_built_skill_prose_fixture_failure "$as_built_fixture" '^\| Finding \| Class \| Governing clause \| Summary \|$'
+printf '%s\n' '### 12. As-Built Compliance Gate (`--as-built` mode)' 'git diff HEAD~1 -- src' > "$as_built_fixture"
+expect_as_built_skill_prose_fixture_failure "$as_built_fixture" 'git (diff|log)'
+printf '%s\n' '### 12. As-Built Compliance Gate (`--as-built` mode)' 'Verdict: BLOCKED' > "$as_built_fixture"
+expect_as_built_skill_prose_fixture_failure "$as_built_fixture" '^Verdict:'
+rm -f "$as_built_fixture"
+
+# S9.9: a skill copy whose as-built section drops the same-file
+# root-to-caller-to-export exception prose must fail the existing pins above.
+awk '
+  /^  - \*\*Narrow same-file composition exception\.\*\*/ { skipping = 1; next }
+  skipping && /^  - \*\*/ { skipping = 0 }
+  !skipping { print }
+' "$as_built_skill" > "$as_built_fixture"
+if cmp -s "$as_built_skill" "$as_built_fixture"; then
+  fail 'same-file prose fixture actually drops the exception bullet'
+else
+  pass 'same-file prose fixture actually drops the exception bullet'
+fi
+for pin_index in 0 1 2; do
+  if grep -qiE "${AS_BUILT_PROSE_PIN_PATTERNS[$pin_index]}" "$as_built_fixture"; then
+    fail "pin fails on dropped same-file prose: ${AS_BUILT_PROSE_PIN_DESCRIPTIONS[$pin_index]}"
+  else
+    pass "pin fails on dropped same-file prose: ${AS_BUILT_PROSE_PIN_DESCRIPTIONS[$pin_index]}"
+  fi
+done
+rm -f "$as_built_fixture"
 
 build_review_skill_prose_audit() {
   local file=$1

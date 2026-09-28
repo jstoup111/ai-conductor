@@ -39,26 +39,54 @@ import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunOptions, StepRunResult } from '../../src/engine/conductor.js';
 import { CoverageBindingPayloadError, DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { StepName } from '../../src/types/index.js';
+import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 // ── shared fixtures ───────────────────────────────────────────────────────
 
 const AUDIT_HEADER = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n';
-const AS_BUILT_DESIGN = [
-  '# As-Built Review',
-  '',
-  'Verdict: BLOCKED',
-  '',
-  '## Blocking Findings',
-  '',
-  '| Finding | Class | Governing clause | Summary |',
-  '|---|---|---|---|',
-  '| ARCH-1 | DESIGN | Task 1 | A new architectural decision is required. |',
-  '',
-].join('\n');
+const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
+  reachability: { enabled: true, reason: 'test fixture' },
+  planGap: { enabled: true, reason: 'test fixture' },
+  adrCompliance: { enabled: false, reason: 'test fixture' },
+  diagramDrift: { enabled: false, reason: 'test fixture' },
+};
+
+async function persistDesignBlockedAsBuiltVerdict(
+  dir: string,
+  options?: StepRunOptions,
+): Promise<void> {
+  await persistAsBuiltVerdict(dir, {
+    version: 'v1',
+    verdict: 'BLOCKED',
+    reachability: [],
+    driftNotes: [],
+    findings: [{ id: 'ARCH-1', class: 'DESIGN', summary: 'A new architectural decision is required.' }],
+    violations: 'The design requires an operator decision.',
+    resolution: 'Decide the required architecture before continuing.',
+  }, {
+    attemptId: options?.runId ?? 'test-run',
+    codeStamp: null,
+    policy: AS_BUILT_TEST_POLICY,
+  });
+}
+
+async function persistApprovedAsBuiltVerdict(
+  dir: string,
+  options?: StepRunOptions,
+): Promise<void> {
+  await persistAsBuiltVerdict(dir, {
+    version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
+  }, {
+    attemptId: options?.runId ?? 'test-run',
+    codeStamp: null,
+    policy: AS_BUILT_TEST_POLICY,
+  });
+}
 
 /** All steps before `target` marked 'done'; tail starts exactly at `target`. */
 async function seedTailAt(
@@ -99,7 +127,7 @@ function coverageBindingRefusalBatch(prompt: string): string {
 /** A remediate runner that writes a routable (non-halt) plan targeting `build`. */
 function withRemediation(
   dir: string,
-  handlers: Record<string, (opts?: { retryReason?: string }) => Promise<void>>,
+  handlers: Record<string, (opts?: StepRunOptions) => Promise<void>>,
 ): StepRunner {
   const calls: StepName[] = [];
   const runner: StepRunner = {
@@ -716,12 +744,8 @@ describe('integration/retry-classify (#646)', () => {
   it('Story 1: fresh DESIGN as-built BLOCKED verdict halts on try 1 and never sends work back to build', async () => {
     await seedTailAt(statePath, 'architecture_review_as_built');
     const runner = withRemediation(dir, {
-      architecture_review_as_built: async () => {
-        await mkdir(join(dir, '.pipeline'), { recursive: true });
-        await writeFile(
-          join(dir, '.pipeline/architecture-review-as-built.md'),
-          AS_BUILT_DESIGN,
-        );
+      architecture_review_as_built: async (options) => {
+        await persistDesignBlockedAsBuiltVerdict(dir, options);
       },
       build: async () => {},
     });
@@ -760,14 +784,10 @@ describe('integration/retry-classify (#646)', () => {
     await seedTailAt(statePath, 'architecture_review_as_built');
     let attempts = 0;
     const runner = withRemediation(dir, {
-      architecture_review_as_built: async () => {
+      architecture_review_as_built: async (options) => {
         attempts++;
         if (attempts >= 2) {
-          await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(
-            join(dir, '.pipeline/architecture-review-as-built.md'),
-            '# As-Built Review\n\nVerdict: APPROVED\n',
-          );
+          await persistApprovedAsBuiltVerdict(dir, options);
         }
         // attempt 1: writes nothing — artifact absent.
       },
@@ -873,12 +893,8 @@ describe('integration/retry-classify (#646)', () => {
   it('Story 5: retry_routing.enabled=false burns retries then halts at step_failed, no retry_decision', async () => {
     await seedTailAt(statePath, 'architecture_review_as_built');
     const runner = withRemediation(dir, {
-      architecture_review_as_built: async () => {
-        await mkdir(join(dir, '.pipeline'), { recursive: true });
-        await writeFile(
-          join(dir, '.pipeline/architecture-review-as-built.md'),
-          AS_BUILT_DESIGN,
-        );
+      architecture_review_as_built: async (options) => {
+        await persistDesignBlockedAsBuiltVerdict(dir, options);
       },
       build: async () => {},
     });
@@ -910,12 +926,8 @@ describe('integration/retry-classify (#646)', () => {
   it('Story 5: an absent/malformed retry_routing block still resolves to enabled:true', async () => {
     await seedTailAt(statePath, 'architecture_review_as_built');
     const runner = withRemediation(dir, {
-      architecture_review_as_built: async () => {
-        await mkdir(join(dir, '.pipeline'), { recursive: true });
-        await writeFile(
-          join(dir, '.pipeline/architecture-review-as-built.md'),
-          AS_BUILT_DESIGN,
-        );
+      architecture_review_as_built: async (options) => {
+        await persistDesignBlockedAsBuiltVerdict(dir, options);
       },
       build: async () => {},
     });
@@ -1041,12 +1053,8 @@ describe('integration/retry-classify (#646)', () => {
   it('Regression: non-daemon (interactive) mode is unaffected — no retry_decision, legacy retry-to-failure behavior', async () => {
     await seedTailAt(statePath, 'architecture_review_as_built');
     const runner = withRemediation(dir, {
-      architecture_review_as_built: async () => {
-        await mkdir(join(dir, '.pipeline'), { recursive: true });
-        await writeFile(
-          join(dir, '.pipeline/architecture-review-as-built.md'),
-          AS_BUILT_DESIGN,
-        );
+      architecture_review_as_built: async (options) => {
+        await persistDesignBlockedAsBuiltVerdict(dir, options);
       },
     });
     const { retryDecisions, stepRetries } = collect();
@@ -1086,15 +1094,11 @@ describe('integration/retry-classify (#646)', () => {
       prd_audit: 'skipped',
     });
     const base = withRemediation(dir, {
-      architecture_review_as_built: async () => {
+      architecture_review_as_built: async (options) => {
         // Every attempt re-writes a fresh BLOCKED verdict — always
         // routeClass 'named-route', so the classifier routes on attempt 1
         // of every cycle (never burns a same-step retry).
-        await mkdir(join(dir, '.pipeline'), { recursive: true });
-        await writeFile(
-          join(dir, '.pipeline/architecture-review-as-built.md'),
-          AS_BUILT_DESIGN,
-        );
+        await persistDesignBlockedAsBuiltVerdict(dir, options);
       },
       build: async () => {
         await mkdir(join(dir, '.pipeline'), { recursive: true });

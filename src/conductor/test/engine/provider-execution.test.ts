@@ -1,5 +1,6 @@
-// Covers: task:2, task:4, task:5, task:14
+// Covers: task:2, task:3, task:4, task:5, task:7, task:8, task:13, task:14, task:16
 import { access, mkdtemp, rm } from 'node:fs/promises';
+import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,6 +26,8 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import type { ProviderAttemptEvent } from '../../src/types/events.js';
+import { parseEvents } from '../../src/engine/report-renderer.js';
 import {
   createCandidateSafetyBoundary,
   executeAuxiliaryProviderCandidates,
@@ -33,6 +36,11 @@ import {
   type ProviderAttemptMetadata,
 } from '../../src/engine/provider-execution.js';
 import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -130,6 +138,201 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('keeps dispatch-derived admission refusal records readable by the existing event reader', async () => {
+    const codexInvoke = vi.fn(async () => {
+      throw new Error('refused provider must not reach spawn');
+    });
+    const claudeInvoke = vi.fn(async () => {
+      throw new Error('refused provider must not reach spawn');
+    });
+    const emitted: ProviderAttemptEvent[] = [];
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      preferredProvider: 'codex',
+      config: { provider_substitution: 'disallow' },
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke }),
+        runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      providerAvailability: {
+        suppress: vi.fn(),
+        isAvailable: vi.fn((provider) => provider !== 'codex'),
+      },
+      options: { prompt: 'build', cwd: '/workspace' },
+      onAttempt: (step, attempt) => {
+        emitted.push({ type: 'provider_attempt', step, ...attempt });
+      },
+    });
+
+    expect(result.attempts).toEqual(emitted.map(({ type: _type, step: _step, ...attempt }) => attempt));
+    expect(emitted).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'suppression-refused' }),
+    ]));
+    expect(emitted).toHaveLength(1);
+    expect(codexInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).not.toHaveBeenCalled();
+
+    const parsed = parseEvents(emitted.map((event) => JSON.stringify(event)).join('\n'));
+
+    expect(parsed).toEqual(emitted);
+  });
+
+  it('records only the pinned provider when substitution is disallowed', async () => {
+    const codexInvoke = vi.fn(async () => ({ success: true, output: 'done', exitCode: 0 }));
+    const claudeInvoke = vi.fn(async () => ({ success: true, output: 'must not run', exitCode: 0 }));
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'], preferredProvider: 'codex',
+      config: { provider_substitution: 'disallow' },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      sessions: new ProviderSessionScope(vi.fn()), options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result.attempts.map(({ provider }) => provider)).toEqual(['codex']);
+    expect(codexInvoke).toHaveBeenCalledOnce();
+    expect(claudeInvoke).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke or record a non-selected fallback after the selected provider exhausts usage', async () => {
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false,
+      output: 'Codex usage exhausted.',
+      exitCode: 1,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+    }));
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'Claude must not run.',
+      exitCode: 0,
+    }));
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      preferredProvider: 'codex',
+      config: {
+        provider_substitution: 'disallow',
+        steps: { build: { llm_provider: 'codex' } },
+      },
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke }),
+        runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({ success: false });
+    expect(result.attempts.map(({ provider }) => provider)).toEqual(['codex']);
+    expect(codexInvoke).toHaveBeenCalledOnce();
+    expect(claudeInvoke).not.toHaveBeenCalled();
+  });
+
+  it('waits when the disallowed-substitution pinned provider is suppressed', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn();
+    const recorded: ProviderAttemptMetadata[] = [];
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'], preferredProvider: 'codex',
+      config: { provider_substitution: 'disallow' },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      providerAvailability: { suppress: vi.fn(), isAvailable: vi.fn(() => false) },
+      options: { prompt: 'build', cwd: '/workspace' },
+      onAttempt: (_step, attempt) => { recorded.push(attempt); },
+    });
+
+    expect(result).toMatchObject({ success: false, rateLimited: true, attempts: [
+      { provider: 'codex', invoked: false, skipReason: 'suppression-refused' },
+    ] });
+    expect(codexInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).not.toHaveBeenCalled();
+    expect(recorded).toEqual([
+      expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'suppression-refused' }),
+    ]);
+  });
+
+  it('continues past a suppressed candidate to an admitted candidate without entering the rate-limit path', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async () => ({ success: true, output: 'done', exitCode: 0 }));
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      providerAvailability: { suppress: vi.fn(), isAvailable: vi.fn((provider) => provider !== 'codex') },
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({ success: true, actualProvider: 'claude' });
+    expect(result.rateLimited).not.toBe(true);
+    expect(result.attempts).toEqual([
+      expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'suppression-refused' }),
+      expect.objectContaining({ provider: 'claude', invoked: true, outcome: 'success' }),
+    ]);
+    expect(codexInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).toHaveBeenCalledOnce();
+  });
+
+  it('does not turn an earlier provider failure into a rate limit when the final candidate is suppressed', async () => {
+    const codexInvoke = vi.fn(async () => ({
+      success: false, output: 'codex unavailable', exitCode: 17,
+      providerUnavailable: true, providerUnavailableScope: 'run' as const,
+      providerUnavailableReason: 'codex unavailable',
+    }));
+    const claudeInvoke = vi.fn();
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      providerAvailability: { suppress: vi.fn(), isAvailable: vi.fn((provider) => provider !== 'claude') },
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result.rateLimited).not.toBe(true);
+    expect(result.providerUnavailable).toBe(true);
+    expect(result.output).toContain('All configured providers are unavailable');
+    expect(result.attempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: 'claude', invoked: false, skipReason: 'suppression-refused' }),
+    ]));
+    expect(claudeInvoke).not.toHaveBeenCalled();
+  });
+  it('refuses an unavailable candidate before it can reach the provider or perform admission I/O', async () => {
+    const invoke = vi.fn(async () => {
+      throw new Error('provider invocation must not occur for a refused candidate');
+    });
+    const readFile = vi.mocked(fs.readFile).mockRejectedValue(
+      new Error('admission must not read from disk'),
+    );
+    const providerAvailability = {
+      isAvailable: vi.fn(() => false),
+      suppress: vi.fn(),
+    };
+
+    try {
+      const result = await executeProviderCandidates({
+        step: 'build',
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+        sessions: new ProviderSessionScope(vi.fn()),
+        providerAvailability,
+        options: { prompt: 'build', cwd: '/workspace' },
+      });
+
+      expect(invoke).not.toHaveBeenCalled();
+      expect(readFile).not.toHaveBeenCalled();
+      expect(providerAvailability.isAvailable).toHaveBeenCalledExactlyOnceWith('codex');
+      expect(result.success).toBe(false);
+    } finally {
+      readFile.mockRestore();
+    }
+  });
+
   it.each(['hit', 'rung-hit', 'cancel', 'timeout'] as const)('keeps a prepared %s distinct from cached setup failure without allocating schema scratch', async (outcome) => {
     const worktreeRoot = await mkdtemp(join(tmpdir(), 'prepared-result-'));
     const controller = new AbortController();
@@ -219,7 +422,7 @@ describe('executeProviderCandidates', () => {
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
     const result = await executeProviderCandidates({
       step: 'build', configuredProviders: ['codex', 'claude'],
-      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke, lifecycleCapability: { synchronousSpawnPermit: true } }), runtime('claude', { invoke: claudeInvoke, lifecycleCapability: { synchronousSpawnPermit: true } })]),
       sessions: new ProviderSessionScope(vi.fn()),
       prepareCandidateSelfHost: async (candidate) => {
         if (candidate.providerKey === 'codex') throw new ProviderSetupUnavailableError({ provider: 'codex', reason: 'missing setup', recoveryAction: 'install' });
@@ -230,6 +433,108 @@ describe('executeProviderCandidates', () => {
     expect(result).toMatchObject({ success: true, actualProvider: 'claude' });
     expect(codexInvoke).not.toHaveBeenCalled();
     expect(claudeInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls through a read-only-review setup skip and records its capability', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async () => ({ success: true, output: 'done', exitCode: 0 }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke, lifecycleCapability: { synchronousSpawnPermit: true } }), runtime('claude', { invoke: claudeInvoke, lifecycleCapability: { synchronousSpawnPermit: true } })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'build', cwd: '/workspace' },
+      preparedCandidateOperation: async (context) => context.candidate.providerKey === 'codex'
+        ? {
+            kind: 'failure',
+            result: {
+              success: false, exitCode: 1, providerUnavailable: true,
+              providerInvocationSkipped: true, readOnlyReviewUnavailable: true,
+              output: 'Codex read-only review mode is unavailable.',
+            },
+          }
+        : { kind: 'judged', result: await context.invoke() },
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      actualProvider: 'claude',
+      attempts: [
+        {
+          provider: 'codex', invoked: false, skipReason: 'setup-unavailable',
+          setupCapability: 'read-only-review-mode',
+        },
+        { provider: 'claude', invoked: true },
+      ],
+    });
+    expect(codexInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a custom member setup skip and launches nothing when its provider has no read-only review mode', async () => {
+    const invoke = vi.fn();
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'portable',
+      policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0 },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke, lifecycleCapability: { synchronousSpawnPermit: true } })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'review', cwd: '/workspace' },
+      preparedCandidateOperation: async () => ({
+        kind: 'failure',
+        result: {
+          success: false, exitCode: 1, providerUnavailable: true,
+          providerInvocationSkipped: true, readOnlyReviewUnavailable: true,
+          providerUnavailableReason: 'Provider codex read-only review mode is unavailable on linux: provider has no read-only review mode',
+          output: 'Provider codex read-only review mode is unavailable on linux: provider has no read-only review mode',
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      providerSetupExhaustion: { candidates: [{ provider: 'codex', capability: 'read-only-review-mode' }] },
+      attempts: [{ provider: 'codex', invoked: false, skipReason: 'setup-unavailable', setupCapability: 'read-only-review-mode' }],
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('preserves a custom member usage-limit wait after skipping an unavailable read-only candidate', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async () => ({
+      success: false, exitCode: 1, output: 'usage limit reached', rateLimited: true,
+      usageExhausted: true, waitSeconds: 600,
+    }));
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'portable',
+      policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: ['codex', 'claude'], model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0 },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke, lifecycleCapability: { synchronousSpawnPermit: true } }), runtime('claude', { invoke: claudeInvoke, lifecycleCapability: { synchronousSpawnPermit: true } })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'review', cwd: '/workspace' },
+      preparedCandidateOperation: async (context) => context.candidate.providerKey === 'codex'
+        ? {
+            kind: 'failure',
+            result: {
+              success: false, exitCode: 1, providerUnavailable: true,
+              providerInvocationSkipped: true, readOnlyReviewUnavailable: true,
+              providerUnavailableReason: 'Provider codex read-only review mode is unavailable on linux: sandbox helper is unavailable',
+              output: 'Provider codex read-only review mode is unavailable on linux: sandbox helper is unavailable',
+            },
+          }
+        : { kind: 'judged', result: await context.invoke() },
+    });
+
+    expect(result).toMatchObject({
+      success: false, rateLimited: true, usageExhausted: true, waitSeconds: 600,
+      attempts: [
+        { provider: 'codex', invoked: false, skipReason: 'setup-unavailable', setupCapability: 'read-only-review-mode' },
+        { provider: 'claude', invoked: true },
+      ],
+    });
+    expect(result.providerSetupExhaustion).toBeUndefined();
+    expect(codexInvoke).not.toHaveBeenCalled();
+    expect((result.attempts ?? []).filter((attempt) => attempt.provider === 'codex')).toHaveLength(1);
+    expect((result.attempts ?? []).filter((attempt) => attempt.provider === 'claude')).toHaveLength(1);
+    expect(claudeInvoke).toHaveBeenCalled();
   });
 
   it('does not advance after cleanup or safety failure, but does preserve typed setup exhaustion for auxiliary callers', async () => {
@@ -648,6 +953,38 @@ describe('executeProviderCandidates', () => {
       operationCalls: 1,
       providerCalls: 1,
     });
+  });
+
+  it('reports an elapsed deadline after judgment as a metered timeout, not a skipped cancellation', async () => {
+    const controller = new AbortController();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const tokenUsage = { input: 10, output: 20, numTurns: 1 };
+    const invoke = vi.fn(async (): Promise<InvokeResult> => {
+      clock.mockReturnValue(131_000);
+      controller.abort('build-review-candidate-deadline');
+      return { success: true, output: 'late judgment', exitCode: 0, tokenUsage };
+    });
+    try {
+      const result = await executeAuxiliaryProviderCandidates({
+        step: 'build_review', memberId: 'scope',
+        policy: {
+          enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
+          model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0,
+        },
+        runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+        sessions: new ProviderSessionScope(vi.fn().mockReturnValue('candidate-session')),
+        options: { prompt: 'review', cwd: '/workspace' },
+        deadlineAt: 121_000, abortSignal: controller.signal,
+        preparedCandidateOperation: async (context) => ({ kind: 'judged', result: await context.invoke() }),
+      });
+      expect(result.success).toBe(false);
+      expect(result.output).toContain('timed out');
+      expect(result.output).not.toContain('before judgment');
+      expect(result.attempts).toEqual([expect.objectContaining({ invoked: true, outcome: 'failure', tokenUsage })]);
+      expect(invoke).toHaveBeenCalledTimes(1);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('classifies a timed-out prepared candidate without invoking its operation', async () => {
@@ -1346,6 +1683,31 @@ describe('executeProviderCandidates', () => {
     }
   });
 
+  it('names the owning worktree for a schema scratch home when the invocation runs in another checkout', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-schema-scratch-owner-'));
+    const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
+      success: true, output: 'constrained result', exitCode: 0, finalStructuredResult: { version: 'v1' },
+    }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    try {
+      await executeProviderCandidates({
+        step: 'build_review', configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { nativeSchemaCapability: { nativeOutputSchema: true }, invoke })]),
+        sessions: new ProviderSessionScope(vi.fn().mockReturnValue('stored-session')),
+        runId: 'review-run', attempt: 1,
+        nativeSchemaScratch: { worktreeRoot, repository: 'acme/repo', featureSlug: 'feature' },
+        options: { prompt: 'Review.', cwd: '/read-only/review-snapshot', nativeSchema: { type: 'object' } },
+      });
+      expect(invoke.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+        cwd: '/read-only/review-snapshot',
+        nativeSchemaScratchHome: join(worktreeRoot, '.daemon', 'scratch', 'review-run', '1-codex'),
+        nativeSchemaScratchRoot: worktreeRoot,
+      }));
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
   it('retains an engine-owned native schema when candidate options attempt to clear it', async () => {
     const nativeSchema = { type: 'object', properties: { result: { type: 'string' } } };
     const invoke = vi.fn(async (): Promise<InvokeResult> => ({
@@ -1745,6 +2107,7 @@ describe('executeProviderCandidates', () => {
     expect(attempts as unknown as Record<string, unknown>[]).toMatchObject([
       { provider: 'codex', preferredProvider: 'codex', effort: 'high', tier: 'M' },
     ]);
+    expect(attempts[0]).not.toHaveProperty('skipReason');
   });
 
   it('wraps each resolved candidate through safety before fallback advances', async () => {

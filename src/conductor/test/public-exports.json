@@ -18,6 +18,7 @@
   "detectOverlapScanCommand",
   "overlapScanCommand",
   "parseArgs",
+  "probeInteractiveReadOnlyReviewCapabilities",
   "renderCanonicalFullHelp",
   "resolveCurrentBranch",
   "resolveDaemonProjectRoot",

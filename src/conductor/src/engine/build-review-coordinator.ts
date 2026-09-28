@@ -168,6 +168,14 @@ export interface BuildReviewCoordinationInput {
   ) => Promise<BuildReviewBranchArtifact>;
   /** Persist one bounded semantic judgement; skips and failures never reach this effect. */
   readonly writeCache: (entry: BuildReviewCacheEntry) => Promise<void>;
+  /**
+   * A custom-policy lap settles its own verdict: an empty test scope becomes
+   * a skipped testQuality branch that joins the custom outcomes and the
+   * whole-lap digest, never a stand-alone built-in PASS.
+   */
+  readonly joinsCustomPolicyLap?: boolean;
+  /** Announces the rubrics about to dispatch, before any of them is started. */
+  readonly onDispatchPlan?: (rubrics: readonly BuildReviewRubricId[]) => void;
   /** Engine-owned occurrence sink; callers connect this to the shared event emitter. */
   readonly emit?: (event: Extract<ConductorEvent, { type:
     | "build_review_rubric_started"
@@ -547,7 +555,7 @@ export async function coordinateBuildReviewRubrics(
   const hasConcreteCandidates = (typedScope?.candidates?.length ?? 0) > 0;
   const emptyTestQualityScope = !hasEstablishedTargets && !hasConcreteCandidates;
   const otherRubricEnabled = BUILD_REVIEW_RUBRICS.some((rubric) => rubric !== TEST_QUALITY_RUBRIC && input.config.rubrics[rubric]?.enabled);
-  if (input.config.enabled && testQualityPolicy?.enabled && emptyTestQualityScope && !otherRubricEnabled) {
+  if (input.config.enabled && testQualityPolicy?.enabled && emptyTestQualityScope && !otherRubricEnabled && !input.joinsCustomPolicyLap) {
     // An empty scope is still a settled scope assessment: publish its counts and
     // unresolved reasons on the same event as every judged settlement, so a
     // production-only refactor or pure move is observable rather than silent.
@@ -764,6 +772,8 @@ export async function coordinateBuildReviewRubrics(
     }
   }
 
+  // A custom-policy lap's integrity gate waits for exactly these members.
+  input.onDispatchPlan?.(misses.map((branch) => branch.rubric));
   const dispatched = await runAuxiliaryGroupBranches(misses.map((branch) => ({ memberId: branch.rubric, policy: branch })), input.config.maxParallel,
     async (rubric, branch) => {
       const projection = projections[rubric];
@@ -796,6 +806,8 @@ export async function coordinateBuildReviewRubrics(
               rubric,
               cacheWriteFailure ? 'cache-write-failed' : failure?.cause === 'native-schema-unsupported'
                 ? 'native-schema-unsupported'
+                : failure?.cause === 'read-only-review-unavailable'
+                ? 'read-only-review-unavailable'
                 : structuredResultWasRejected
                 ? 'invalid-structured-result'
                 : 'invalid-provider-result',
