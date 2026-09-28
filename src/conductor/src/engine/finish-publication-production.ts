@@ -44,6 +44,7 @@ import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisite
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
 import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
+import { maskProjectOwnedRegions } from './pr-body-regions.js';
 import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
@@ -192,8 +193,7 @@ function upsertReducedCoverageEvidence(body: string, section: string | undefined
   const heading = '## Reduced build-review coverage';
   // Project-owned regions are opaque. Mask them at identical byte offsets so
   // the engine never mistakes a project heading for its own section.
-  const searchable = body.replace(/<!-- ai-conductor:step [^\r\n]+ -->[\s\S]*?<!-- \/ai-conductor:step -->/g, (region) =>
-    region.replace(/[^\r\n]/g, ' '));
+  const searchable = maskProjectOwnedRegions(body);
   const start = searchable.indexOf(heading);
   const end = start === -1 ? -1 : searchable.indexOf('\n## ', start + heading.length);
   const withoutExisting = start === -1

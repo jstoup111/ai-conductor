@@ -2,6 +2,7 @@ import {
   rehydrateBuildReviewAcceptedRiskFinding,
   type BuildReviewDispositionRecord,
 } from './build-review-dispositions.js';
+import { maskProjectOwnedRegions } from './pr-body-regions.js';
 
 export const BUILD_REVIEW_ACCEPTED_RISK_START = '<!-- build-review-accepted-risk:start -->';
 export const BUILD_REVIEW_ACCEPTED_RISK_END = '<!-- build-review-accepted-risk:end -->';
@@ -52,9 +53,10 @@ export function renderBuildReviewAcceptedRisk(records: readonly BuildReviewDispo
 }
 
 function removeExistingSection(body: string): string | undefined {
-  const start = body.indexOf(BUILD_REVIEW_ACCEPTED_RISK_START);
+  const searchable = maskProjectOwnedRegions(body);
+  const start = searchable.indexOf(BUILD_REVIEW_ACCEPTED_RISK_START);
   if (start === -1) return body;
-  const end = body.indexOf(BUILD_REVIEW_ACCEPTED_RISK_END, start);
+  const end = searchable.indexOf(BUILD_REVIEW_ACCEPTED_RISK_END, start);
   if (end === -1) return undefined;
   const after = end + BUILD_REVIEW_ACCEPTED_RISK_END.length;
   return `${body.slice(0, start).trimEnd()}${body.slice(after).trimStart() ? '\n\n' : ''}${body.slice(after).trimStart()}`.trimEnd();

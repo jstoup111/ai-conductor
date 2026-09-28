@@ -49,3 +49,20 @@ export async function writeRegionCapture(
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
 }
+
+/** Drops one step's obsolete capture before that owner is dispatched again. */
+export async function discardRegionCapture(
+  worktree: string,
+  pullRequestUrl: string,
+  stepKey: string,
+): Promise<void> {
+  const path = capturePath(worktree);
+  const captures = await readCaptureFile(worktree);
+  const byStep = captures[pullRequestUrl];
+  if (byStep === undefined || !(stepKey in byStep)) return;
+  const { [stepKey]: _discarded, ...remaining } = byStep;
+  const next: CaptureFile = { ...captures };
+  if (Object.keys(remaining).length === 0) delete next[pullRequestUrl];
+  else next[pullRequestUrl] = remaining;
+  await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+}

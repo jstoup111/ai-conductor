@@ -40,6 +40,7 @@ import {
   NEEDS_REMEDIATION_BODY_MARKER,
 } from './pr-labels.js';
 import { runTrackerUrlRead } from './tracker-client.js';
+import { maskProjectOwnedRegions } from './pr-body-regions.js';
 
 export const NEEDS_REMEDIATION_TITLE_PREFIX = 'needs-remediation:';
 export const NEEDS_REMEDIATION_LABEL = 'needs-remediation';
@@ -131,7 +132,8 @@ function isRefusal(result: GithubOperationResult | { kind: 'refused'; reason: st
 
 function injectCloses(body: string, sourceRef: string | undefined | null): string {
   const ref = sourceRef?.trim();
-  if (!ref || /^(?:closes|fixes|resolves)\s+[^\s]*$/im.test(body) && body.includes(ref)) return body;
+  const searchable = maskProjectOwnedRegions(body);
+  if (!ref || /^(?:closes|fixes|resolves)\s+[^\s]*$/im.test(searchable) && searchable.includes(ref)) return body;
   return `${body.trim()}\n\nCloses ${ref}`.trim();
 }
 

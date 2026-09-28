@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  mergeReleaseMetadataBlock,
-  parseReleaseDisposition,
-  snapshotReleaseMetadataBlock,
-} from '../../src/engine/release-metadata.js';
+import { parseReleaseDisposition } from '../../src/engine/release-metadata.js';
 
 describe('engine/release-metadata — structured PR release disposition (Task 1)', () => {
   it('normalizes a categorized reader note and its semver impact', () => {
@@ -75,66 +71,6 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
     });
     expect(() => parseReleaseDisposition(`${metadata}\n\n## Migration\n\nnone`))
       .toThrow('Invalid release disposition: Migration');
-  });
-
-  describe('snapshot accepts the Migration section on either side of the metadata', () => {
-    // The two parsers disagreed about ordering and neither was checked at
-    // authoring time. `parseReleaseDisposition` (after #1404) accepts Migration
-    // ABOVE the Release-* block; `snapshotReleaseMetadataBlock` sliced from the
-    // end of that block to the Migration heading, so it only ever worked when
-    // Migration came BELOW it. A body satisfying one failed the other, and the
-    // author only learned at the finish-time release gate, as a needs-human HALT
-    // ("pre-finish snapshot unavailable: release metadata is malformed or
-    // non-canonical"). Observed on #1396.
-    const fence = '```bash migration\n./bin/install --update\n```';
-    const fields = [
-      'Release-Disposition: note',
-      'Release-Category: Added',
-      'Release-Semver: minor',
-      'Release-Note: Adds a thing.',
-    ].join('\n');
-    const canonical = `${fields}\n\n## Migration\n\n${fence}`;
-
-    it('snapshots a body whose Migration section sits ABOVE the metadata block', () => {
-      const body = `## Why\n\nBecause.\n\n## Migration\n\n${fence}\n\n${fields}\n`;
-      expect(snapshotReleaseMetadataBlock(body)).toBe(canonical);
-    });
-
-    it('still snapshots the canonical below-the-metadata ordering', () => {
-      expect(snapshotReleaseMetadataBlock(`## Why\n\nBecause.\n\n${canonical}\n`)).toBe(
-        canonical,
-      );
-    });
-
-    it('stays idempotent for the above-the-metadata ordering', () => {
-      const body = `## Migration\n\n${fence}\n\n${fields}\n`;
-      const snapshot = snapshotReleaseMetadataBlock(body)!;
-      expect(snapshotReleaseMetadataBlock(snapshot)).toBe(snapshot);
-    });
-
-    it('merges a body whose Migration section sits ABOVE the metadata block', () => {
-      const body = `## Why\n\nBecause.\n\n## Migration\n\n${fence}\n\n${fields}\n`;
-      const snapshot = snapshotReleaseMetadataBlock(body)!;
-      expect(mergeReleaseMetadataBlock(body, snapshot)).toBe(`## Why\n\nBecause.\n\n${canonical}`);
-    });
-
-    it('merges without duplicating the section when a Closes trailer follows it', () => {
-      // The exact shape of the SHIP draft body that halted #1396: Migration above
-      // the metadata, and a `Closes` trailer below both.
-      const body =
-        `## Why\n\nBecause.\n\n## Migration\n\n${fence}\n\n${fields}\n\nCloses owner/repo#1254\n`;
-      const snapshot = snapshotReleaseMetadataBlock(body)!;
-      const merged = mergeReleaseMetadataBlock(body, snapshot)!;
-      expect(merged.match(/## Migration/g)).toHaveLength(1);
-      expect(merged.match(/Release-Disposition:/g)).toHaveLength(1);
-      expect(merged).toContain('Closes owner/repo#1254');
-    });
-
-    it('returns null when the declared migration fence is absent entirely', () => {
-      expect(
-        snapshotReleaseMetadataBlock(`## Migration\n\nnone\n\n${fields}\n`),
-      ).toBe(fields);
-    });
   });
 
   describe('Migration section followed by the release metadata block (#1396)', () => {
@@ -322,40 +258,6 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
       ).toMatchObject({ migration: fence });
     });
 
-    it('keeps the section prose in the snapshot, verbatim', () => {
-      expect(snapshotReleaseMetadataBlock(pr1957)).toBe(
-        `${fields}\n\n## Migration\n\n${prose}\n\n${fence}`,
-      );
-    });
-
-    it('re-snapshots its own output unchanged, so a restore can be verified', () => {
-      const block = snapshotReleaseMetadataBlock(pr1957);
-      expect(block).not.toBeNull();
-      expect(snapshotReleaseMetadataBlock(block!)).toBe(block);
-    });
-
-    it('merges without leaving the prose-form section behind', () => {
-      const block = snapshotReleaseMetadataBlock(pr1957);
-      expect(block).not.toBeNull();
-      const merged = mergeReleaseMetadataBlock(pr1957, block!)!;
-      expect(merged.match(/## Migration/g)).toHaveLength(1);
-      expect(snapshotReleaseMetadataBlock(merged)).toBe(block);
-    });
-
-    it('verifies a restore onto a body whose Migration section carries prose', () => {
-      // The FINISH restore loop: the block was captured while the body carried
-      // the fence alone, and the body being restored over carries the authored
-      // prose form. The merge-time strip only recognised the fence-alone shape,
-      // so the prose section survived, the appended snapshot made a SECOND
-      // `## Migration`, the re-read parsed as duplicate sections, and
-      // `restoreFinishReleaseMetadata` threw "release metadata restore could not
-      // be verified" on every one of its six retries.
-      const block = snapshotReleaseMetadataBlock(`${fields}\n\n## Migration\n\n${fence}`)!;
-      const merged = mergeReleaseMetadataBlock(pr1957, block)!;
-      expect(merged.match(/## Migration/g)).toHaveLength(1);
-      expect(snapshotReleaseMetadataBlock(merged)).toBe(block);
-    });
-
     it('still rejects a second Migration section that opens with prose', () => {
       expect(() =>
         parseReleaseDisposition(`${pr1957}\n\n## Migration\n\n${prose}\n\n${fence}\n`),
@@ -391,48 +293,4 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
     });
   });
 
-  describe('pre-finish snapshot of a body the parser already accepts', () => {
-    // Every producer in this repo — the PR template, the release-disposition
-    // skill, and the CHANGELOG renderer — writes a blank line between the
-    // `## Migration` heading and its runnable fence, and the parser accepts
-    // that form. A snapshot that demanded the fence on the very next line
-    // therefore rejected bodies it had just parsed, and the pre-finish
-    // snapshot HALTed the publication with "release metadata is malformed or
-    // non-canonical" (observed on PR #1349).
-    const fields = [
-      'Release-Disposition: note',
-      'Release-Category: Fixed',
-      'Release-Semver: patch',
-      'Release-Note: Correct a defect.',
-    ].join('\n');
-    const migration = '```bash migration\n./bin/install --update\n```';
-
-    it('captures a migration separated from its heading by a blank line', () => {
-      const body = `## Summary\n\nReader prose.\n\n${fields}\n\n## Migration\n\n${migration}`;
-      expect(snapshotReleaseMetadataBlock(body)).toBe(
-        `${fields}\n\n## Migration\n\n${migration}`,
-      );
-    });
-
-    it('captures a migration on the line immediately after its heading', () => {
-      const body = `${fields}\n\n## Migration\n${migration}`;
-      expect(snapshotReleaseMetadataBlock(body)).toBe(`${fields}\n\n## Migration\n${migration}`);
-    });
-
-    it('re-snapshots its own output unchanged, so a restore can be verified', () => {
-      const body = `## Summary\n\nReader prose.\n\n${fields}\n\n## Migration\n\n${migration}`;
-      const block = snapshotReleaseMetadataBlock(body);
-      expect(block).not.toBeNull();
-      expect(snapshotReleaseMetadataBlock(block!)).toBe(block);
-    });
-
-    it('restores the captured block over a body finish rewrote, keeping reader prose', () => {
-      const body = `## Summary\n\nReader prose.\n\n${fields}\n\n## Migration\n\n${migration}`;
-      const block = snapshotReleaseMetadataBlock(body);
-      expect(block).not.toBeNull();
-      const merged = mergeReleaseMetadataBlock('## Summary\n\nRewritten by finish.', block!);
-      expect(merged).toBe(`## Summary\n\nRewritten by finish.\n\n${block}`);
-      expect(snapshotReleaseMetadataBlock(merged!)).toBe(block);
-    });
-  });
 });

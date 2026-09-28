@@ -62,6 +62,25 @@ export function isEmptyRegion(bytes: string): boolean {
   return bytes.replace(/<!--[\s\S]*?-->/g, '').trim().length === 0;
 }
 
+/**
+ * Reads one region's interior as opaque body bytes.  Unlike template parsing,
+ * this deliberately accepts engine-owned headings and any other author text.
+ */
+export function extractRegionBytes(body: string, key: string): string | undefined {
+  const { start, end } = markersFor(key);
+  const startIndex = body.indexOf(start);
+  if (startIndex === -1) return undefined;
+  const contentStart = startIndex + start.length;
+  const endIndex = body.indexOf(end, contentStart);
+  return endIndex === -1 ? undefined : body.slice(contentStart, endIndex);
+}
+
+/** Replace opaque regions with same-length whitespace for safe engine searches. */
+export function maskProjectOwnedRegions(body: string): string {
+  return body.replace(/<!-- ai-conductor:step [^\r\n]+ -->[\s\S]*?<!-- \/ai-conductor:step -->/g, (region) =>
+    region.replace(/[^\r\n]/g, ' '));
+}
+
 /** Parses project-owned, step-keyed regions without interpreting their contents. */
 export function parsePrTemplateRegions(template: string): ParsePrTemplateRegionsResult {
   const regions: PrTemplateRegion[] = [];

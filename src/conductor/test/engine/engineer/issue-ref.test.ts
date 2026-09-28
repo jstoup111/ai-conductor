@@ -179,6 +179,19 @@ describe('injectIssueRef', () => {
     expect(requests).toEqual([]);
   });
 
+  it('writes a closing reference outside a project-owned region', async () => {
+    const region = [
+      '<!-- ai-conductor:step release-disposition -->',
+      'Closes acme/app#49',
+      '<!-- /ai-conductor:step -->',
+    ].join('\n');
+    const { gh } = makeGh(`## Why\n\n${region}`);
+    const { operations, requests } = makeOperations();
+
+    await expect(injectIssueRef({ gh, operations, prUrl, keyword: 'Closes', sourceRef: 'acme/app#49', cwd })).resolves.toBe(true);
+    expect(editedBody(requests[0])).toBe(`## Why\n\n${region}\n\nCloses acme/app#49`);
+  });
+
   it('no-ops on an absent/garbled sourceRef (never edits)', async () => {
     const { gh, calls } = makeGh('body');
     expect(await injectIssueRef({ gh, prUrl: 'URL', keyword: 'Closes', sourceRef: undefined, cwd })).toBe(false);

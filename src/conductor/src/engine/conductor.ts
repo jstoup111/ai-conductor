@@ -469,8 +469,8 @@ import {
 } from './cost-rollup.js';
 import { openShipDraftPr } from './ship-draft-pr.js';
 import { createShipDraftPublicationDependencies } from './ship-draft-pr.js';
-import { isEmptyRegion, parsePrTemplateRegions, restoreRegion } from './pr-body-regions.js';
-import { readRegionCaptures, writeRegionCapture } from './pr-body-region-store.js';
+import { extractRegionBytes, isEmptyRegion, restoreRegion } from './pr-body-regions.js';
+import { discardRegionCapture, readRegionCaptures, writeRegionCapture } from './pr-body-region-store.js';
 import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
@@ -546,21 +546,35 @@ export function createFinishPresentationRepair(input: {
     // A capture has no template bytes at this boundary; reconstruct the marker
     // wrapper from its key and preserve the captured interior exactly.
     if (Object.keys(captures).length > 0) {
-      const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
-      const body = (JSON.parse(stdout) as { body?: unknown }).body;
-      if (typeof body !== 'string') throw new Error('region verification read returned no pull request body');
+      let body: string;
+      try {
+        const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
+        const value = (JSON.parse(stdout) as { body?: unknown }).body;
+        if (typeof value !== 'string') throw new Error('response has no string body');
+        body = value;
+      } catch (error) {
+        throw new Error(`region verification read failed for ${Object.keys(captures).join(', ')}: ${error instanceof Error ? error.message : String(error)}`);
+      }
       let next = body;
       for (const [key, bytes] of Object.entries(captures)) next = restoreRegion(next, { key, bytes });
       if (next !== body) {
         const target = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
-        if (!target || !input.operations) throw new Error('guarded region restore is unavailable');
+        const keys = Object.entries(captures).filter(([key, bytes]) => extractRegionBytes(body, key) !== bytes).map(([key]) => key);
+        if (!target || !input.operations) throw new Error(`guarded region restore unavailable for ${keys.join(', ') || 'unknown'}`);
         const result = await executeGithubOperation({ operation: 'pull-request.edit', repository: target[1], resource: { kind: 'pull-request', number: Number(target[2]) }, context: { actor: 'finish-region-restore' }, payload: { body: next } }, input.operations);
-        if (result.kind !== 'executed') throw new Error(`guarded region restore ${result.kind}`);
+        if (result.kind !== 'executed') throw new Error(`guarded region restore refused for ${keys.join(', ') || 'unknown'}: ${result.kind}`);
       }
-      const verified = (JSON.parse(await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body'])) as { body?: unknown }).body;
-      if (typeof verified !== 'string') throw new Error('region verification read returned no pull request body');
+      let verified: string;
+      try {
+        const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
+        const value = (JSON.parse(stdout) as { body?: unknown }).body;
+        if (typeof value !== 'string') throw new Error('response has no string body');
+        verified = value;
+      } catch (error) {
+        throw new Error(`region verification read failed for ${Object.keys(captures).join(', ')}: ${error instanceof Error ? error.message : String(error)}`);
+      }
       for (const [key, bytes] of Object.entries(captures)) {
-        if (!verified.includes(`<!-- ai-conductor:step ${key} -->${bytes}<!-- /ai-conductor:step -->`)) throw new Error(`region verification mismatch for ${key}`);
+        if (extractRegionBytes(verified, key) !== bytes) throw new Error(`region verification mismatch for ${key}`);
       }
     }
     try {
@@ -3277,11 +3291,22 @@ export class Conductor {
     if (bytes === undefined) return;
     const prUrl = await this.resolveRetainedShipDraftPrUrl(state.worktree_branch);
     if (!prUrl) throw new Error(`project-owned region for ${step} cannot be prepared: retained draft PR is missing`);
-    const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
-    const body = (JSON.parse(stdout) as { body?: unknown }).body;
-    if (typeof body !== 'string') throw new Error(`project-owned region for ${step} cannot be prepared: body read failed`);
+    let body: string;
+    try {
+      const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
+      const value = (JSON.parse(stdout) as { body?: unknown }).body;
+      if (typeof value !== 'string') throw new Error('response has no string body');
+      body = value;
+    } catch (error) {
+      throw new Error(`project-owned region for ${step} cannot be prepared: body read failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    // A present region belongs to its project author; never overwrite it with
+    // the template floor merely because the step is being retried.
+    if (extractRegionBytes(body, step) !== undefined) {
+      await discardRegionCapture(this.projectRoot, prUrl, step);
+      return;
+    }
     const next = restoreRegion(body, { key: step, bytes });
-    if (next === body) return;
     const publication = await this.resolveShipDraftPublicationDependencies({
       cwd: this.projectRoot, branch: state.worktree_branch, baseBranch: this.baseBranch,
       featureDesc: state.feature_desc, prUrl, git: this.git, gh: this.gh, events: this.events,
@@ -3294,6 +3319,7 @@ export class Conductor {
       context: { actor: 'step-region-prepare' }, payload: { body: next },
     }, publication.operations);
     if (result.kind !== 'executed') throw new Error(`project-owned region for ${step} cannot be prepared: guarded edit ${result.kind}`);
+    await discardRegionCapture(this.projectRoot, prUrl, step);
   }
 
   /** Capture the exact body bytes authored by a successful region-owning step. */
@@ -3301,15 +3327,19 @@ export class Conductor {
     if (this.config.pr_template_region_owners?.[step] === undefined) return;
     const prUrl = await this.resolveRetainedShipDraftPrUrl(state.worktree_branch);
     if (!prUrl) throw new Error(`project-owned region capture for ${step} failed: retained draft PR is missing`);
-    const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
-    const body = (JSON.parse(stdout) as { body?: unknown }).body;
-    if (typeof body !== 'string') throw new Error(`project-owned region capture for ${step} failed: body read failed`);
-    const parsed = parsePrTemplateRegions(body);
-    if (!parsed.ok) throw new Error(`project-owned region capture for ${step} failed: malformed region body`);
-    const region = parsed.regions.find((candidate) => candidate.key === step);
-    if (!region) throw new Error(`project-owned region capture for ${step} failed: region is missing`);
-    if (isEmptyRegion(region.bytes)) throw new Error(`project-owned region capture for ${step} failed: region is empty`);
-    await writeRegionCapture(this.projectRoot, prUrl, step, region.bytes);
+    let body: string;
+    try {
+      const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
+      const value = (JSON.parse(stdout) as { body?: unknown }).body;
+      if (typeof value !== 'string') throw new Error('response has no string body');
+      body = value;
+    } catch (error) {
+      throw new Error(`project-owned region capture for ${step} failed: body read failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const bytes = extractRegionBytes(body, step);
+    if (bytes === undefined) throw new Error(`project-owned region capture for ${step} failed: region is missing`);
+    if (isEmptyRegion(bytes)) throw new Error(`project-owned region capture for ${step} failed: region is empty`);
+    await writeRegionCapture(this.projectRoot, prUrl, step, bytes);
   }
 
   /** Restore every durable capture after a provider has rewritten PR prose. */
@@ -3332,7 +3362,12 @@ export class Conductor {
       operation: 'pull-request.edit', repository: target[1], resource: { kind: 'pull-request', number: Number(target[2]) },
       context: { actor: 'finish-region-restore' }, payload: { body: next },
     }, publication.operations);
-    if (result.kind !== 'executed') throw new Error(`project-owned region restore failed: guarded edit ${result.kind}`);
+    if (result.kind !== 'executed') {
+      const keys = Object.entries(captures)
+        .filter(([key, bytes]) => extractRegionBytes(body, key) !== bytes)
+        .map(([key]) => key);
+      throw new Error(`project-owned region restore failed for ${keys.join(', ') || 'unknown'}: guarded edit ${result.kind}`);
+    }
   }
 
   /**

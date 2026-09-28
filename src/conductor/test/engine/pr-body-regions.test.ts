@@ -5,7 +5,13 @@ import {
   BUILD_REVIEW_ACCEPTED_RISK_START,
   REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
 } from '../../src/engine/build-review-accepted-risk.js';
-import { isEmptyRegion, parsePrTemplateRegions, restoreRegion } from '../../src/engine/pr-body-regions.js';
+import {
+  extractRegionBytes,
+  isEmptyRegion,
+  maskProjectOwnedRegions,
+  parsePrTemplateRegions,
+  restoreRegion,
+} from '../../src/engine/pr-body-regions.js';
 
 describe('parsePrTemplateRegions', () => {
   it('returns each marked region with its key and exact bytes between the markers', () => {
@@ -160,5 +166,28 @@ describe('project-owned region restoration', () => {
   it('recognizes whitespace and HTML comments as an empty region', () => {
     expect(isEmptyRegion('\n  <!-- pending -->\n\t<!-- another comment -->\n')).toBe(true);
     expect(isEmptyRegion('\nAttested-By: security-bot\n')).toBe(false);
+  });
+
+  it('extracts runtime bytes opaquely even when template validation would reject them', () => {
+    const body = [
+      '<!-- ai-conductor:step compliance-attest -->',
+      BUILD_REVIEW_ACCEPTED_RISK_START,
+      'Attested-By: security-bot',
+      '<!-- /ai-conductor:step -->',
+    ].join('\n');
+
+    expect(extractRegionBytes(body, 'compliance-attest')).toBe(
+      `\n${BUILD_REVIEW_ACCEPTED_RISK_START}\nAttested-By: security-bot\n`,
+    );
+    expect(parsePrTemplateRegions(body)).toMatchObject({ ok: false });
+  });
+
+  it('masks region contents while retaining offsets and line endings for engine searches', () => {
+    const body = `Before\n${rendered}\nAfter`;
+    const masked = maskProjectOwnedRegions(body);
+    expect(masked).toHaveLength(body.length);
+    expect(masked).toContain('Before\n');
+    expect(masked).toContain('\nAfter');
+    expect(masked).not.toContain('Attested-By: security-bot');
   });
 });

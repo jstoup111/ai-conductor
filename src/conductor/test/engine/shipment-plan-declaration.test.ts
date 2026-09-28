@@ -123,4 +123,18 @@ describe('shipment plan declarations', () => {
     expect(upsertShipmentPlanDeclaration(stale, 'feature')).toBe(canonical);
     expect(upsertShipmentPlanDeclaration(canonical, 'feature')).toBe(canonical);
   });
+
+  it('does not replace a plan declaration inside a project-owned region', () => {
+    const region = [
+      '<!-- ai-conductor:step release-disposition -->',
+      'Plan: .docs/plans/project-authored.md',
+      '<!-- /ai-conductor:step -->',
+    ].join('\n');
+    const body = `Overview\n\n${region}\n`;
+
+    expect(extractShipmentPlanDeclarations(body)).toEqual([]);
+    expect(upsertShipmentPlanDeclaration(body, 'engine-owned')).toBe(
+      `${body}Plan: .docs/plans/engine-owned.md\n`,
+    );
+  });
 });

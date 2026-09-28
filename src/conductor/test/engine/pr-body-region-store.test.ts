@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  discardRegionCapture,
   PR_BODY_REGION_CAPTURES_PATH,
   readRegionCaptures,
   writeRegionCapture,
@@ -44,5 +45,19 @@ describe('PR body region capture store', () => {
     await writeRegionCapture(worktree, 'https://github.com/example/repo/pull/12', 'compliance-attest', '\nfirst PR\n');
 
     await expect(readRegionCaptures(worktree, 'https://github.com/example/repo/pull/13')).resolves.toEqual({});
+  });
+
+  it('discards only the redispatched owner capture', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'pr-body-region-store-'));
+    dirs.push(worktree);
+    const pullRequestUrl = 'https://github.com/example/repo/pull/12';
+    await writeRegionCapture(worktree, pullRequestUrl, 'first-owner', '\nfirst\n');
+    await writeRegionCapture(worktree, pullRequestUrl, 'second-owner', '\nsecond\n');
+
+    await discardRegionCapture(worktree, pullRequestUrl, 'first-owner');
+
+    await expect(readRegionCaptures(worktree, pullRequestUrl)).resolves.toEqual({
+      'second-owner': '\nsecond\n',
+    });
   });
 });
