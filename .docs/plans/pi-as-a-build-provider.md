@@ -7,7 +7,7 @@
 
 ## Summary
 
-Replaces every hardcoded claude/codex site with one built-in provider catalog, adds boot-time installation discovery that registers only installed providers and fails fast on a configured-but-missing one, and adds Pi as a third built-in adapter. 21 tasks.
+Replaces every hardcoded claude/codex site with one built-in provider catalog, adds boot-time installation discovery that registers only installed providers and fails fast on a configured-but-missing one, and adds Pi as a third built-in adapter. 22 tasks.
 
 ## Technical Approach
 
@@ -517,6 +517,30 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 
 **Dependencies:** 13
 
+### Task 22: Pi smoke leg runs over the shared live run body without self-host
+**Story:** 7
+**Type:** happy-path
+
+**Steps:**
+1. Write failing test: in `src/conductor/test/engine/live-e2e-shared-body.test.ts`, assert `daemon-e2e-live-pi.smoke.test.ts` supplies only its descriptor to `defineLiveE2EProviderSmoke`, and assert a descriptor without `selfHostExecutable` drives the shared run body with no self-host wrapper while the claude and codex descriptors still receive it.
+2. Verify test fails (RED) — the Pi leg invokes `PiProvider` directly and the run body requires a self-host executable.
+3. Implement: make `selfHostExecutable` optional on the live descriptor and apply the self-host wrapper in `test/fixtures/live-e2e-run-body.ts` only when it is present; rewrite `daemon-e2e-live-pi.smoke.test.ts` as a thin file that calls `defineLiveE2EProviderSmoke` with the pi descriptor. Pi still refuses the `selfHost` capability (Task 6); self-host Pi stays with #1887.
+4. Verify test passes (GREEN).
+5. Commit with message: "test(live): run the Pi smoke leg over the shared run body"
+
+**Done when:**
+- `daemon-e2e-live-pi.smoke.test.ts` supplies only its descriptor to `defineLiveE2EProviderSmoke`, the same shared run body the claude and codex legs use, and imports no provider adapter directly
+- a test asserts a live descriptor without `selfHostExecutable` drives the shared seed, provision, preflight, meter, `runDaemon`, assert sequence with no self-host wrapper, while the claude and codex descriptors still receive the self-host wrapper
+- a test asserts preparing a self-host provider home for pi still throws `ProviderCapabilityUnsupportedError` naming `#1887` after this change
+
+**Files likely touched:**
+- src/conductor/test/fixtures/live-e2e-run-body.ts — self-host wrapper conditional on descriptor
+- src/conductor/test/fixtures/live-e2e-providers.ts — optional self-host executable
+- src/conductor/test/engine/daemon-e2e-live-pi.smoke.test.ts — thin shared-body leg
+- src/conductor/test/engine/live-e2e-shared-body.test.ts — structural assertion
+
+**Dependencies:** 20
+
 ## Task Dependency Graph
 
 ```text
@@ -541,6 +565,7 @@ Task 18 <- 16
 Task 19 <- 18
 Task 20 <- 15
 Task 21 <- 13
+Task 22 <- 20
 ```
 
 ## Integration Points
