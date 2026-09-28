@@ -62,7 +62,7 @@ async function fixture(): Promise<string> {
   return root;
 }
 
-function harness(projectDir: string) {
+function harness(projectDir: string, featureDesc?: string) {
   const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
     success: true,
     output: 'review complete',
@@ -80,6 +80,7 @@ function harness(projectDir: string) {
   }]);
   const stepRunner = new DefaultStepRunner({ invoke: vi.fn() }, 'as-built-dispatch', projectDir, {
     mode: 'auto',
+    featureDesc,
     config: { llm_provider: 'claude', steps: { architecture_review_as_built: { llm_provider: 'claude' } } },
     configuredProviders: ['claude'],
     providerRuntimes: runtimes,
@@ -103,6 +104,20 @@ describe('architecture_review_as_built dispatch with the real input projection',
     expect(result.asBuiltFault).toBeUndefined();
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke.mock.calls[0]![0].prompt).toContain('c-big.ts');
+  });
+
+  it('projects the feature\'s own plan when the repository holds plans for other features', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'plans', 'other-feature.md'), '# Plan\n\n**Stories:** .docs/stories/missing.md\n');
+    await execFileAsync('git', ['-C', root, 'add', '.']);
+    await execFileAsync('git', ['-C', root, 'commit', '-m', 'another feature plan']);
+    const { invoke, stepRunner } = harness(root, 'feature');
+
+    const result = await stepRunner.run('architecture_review_as_built', { complexity_tier: 'M' });
+
+    expect(result.asBuiltFault).toBeUndefined();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke.mock.calls[0]![0].prompt).toContain('first done condition');
   });
 
   it('halts with an input fault and no provider dispatch when the sealed stories are unreadable', async () => {
