@@ -768,8 +768,8 @@ export async function pushRefreshedBranch(
     {
       cwd: '.',
       config: async (args) => ({ stdout: (await git(args)).stdout }),
-      runRemoteGit: async (args) => {
-        const result = await git(args);
+      runRemoteGit: async (args, opts) => {
+        const result = await git(args, opts);
         if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout || 'push failed');
         return { stdout: result.stdout };
       },

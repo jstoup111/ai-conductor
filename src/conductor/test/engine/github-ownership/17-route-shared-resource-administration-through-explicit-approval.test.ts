@@ -36,7 +36,7 @@ describe('engine/github-shared-operations — exact approved shared administrati
     });
     expect(transport).toHaveBeenCalledWith([
       'label', 'create', 'needs-triage', '-R', 'acme/widgets', '--color', '0e8a16',
-    ], { cwd: '/fixture/worktree' });
+    ], { cwd: '/fixture/worktree', credential: 'write' });
   });
 
   it.each([
@@ -141,7 +141,7 @@ describe('engine/github-shared-operations — exact approved shared administrati
     await approvedClient.createLabel('acme/widgets', 'needs-triage', '/fixture/worktree');
     expect(transport).toHaveBeenCalledWith([
       'label', 'create', 'needs-triage', '-R', 'acme/widgets',
-    ], { cwd: '/fixture/worktree' });
+    ], { cwd: '/fixture/worktree', credential: 'write' });
   });
 
   it('returns a failed shared result after terminal transport failure rather than success', async () => {
@@ -189,7 +189,7 @@ describe('engine/github-shared-operations — exact approved shared administrati
     expect(genericRunner.run).not.toHaveBeenCalled();
     expect(transport).toHaveBeenCalledWith([
       'label', 'create', 'needs-triage', '-R', 'acme/widgets', '--color', '0e8a16',
-    ], { cwd: '/fixture/worktree' });
+    ], { cwd: '/fixture/worktree', credential: 'write' });
     expect(write.mock.calls[0]?.[0]).toContain('"kind":"executed"');
   });
 });

@@ -29,6 +29,7 @@ import { mirrorIssueCriticalityLabels } from '../pr-criticality-labels.js';
 import type { GitRunner } from '../pr-labels.js';
 import {
   executeGithubOperation,
+  type GithubOperationEventEmitter,
   type GithubOperationRunner,
   type GithubOperationRefusalReason,
 } from '../github-operations.js';
@@ -100,6 +101,8 @@ export interface HandoffDeps {
      */
     readonly presentation?: (prUrl: string) => GithubOperationRunner | undefined;
   };
+  /** Existing event spine used by every guarded handoff mutation. */
+  events?: GithubOperationEventEmitter;
 }
 
 // ─── Result types (discriminated union) ───────────────────────────────────────
@@ -219,7 +222,7 @@ export async function openSpecPr(
     // Keep the event dependency explicit at this composition boundary. The
     // remote guard owns refusal-first delivery; handoff only preserves the
     // already-composed canonical emitter.
-    { ...deps.publication.remote, events: deps.publication.remote.events },
+    { ...deps.publication.remote, events: deps.events ?? deps.publication.remote.events },
   );
   if (push.kind === 'refused') return { kind: 'pr-refused', reason: push.reason };
   if (push.kind === 'failed') throw new Error(`openSpecPr: guarded push failed: ${push.error}`);

@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { sweep } from './sweep.js';
 import { createGithubTrackerClient, makeProductionGh as makeProductionGhRunner } from '../tracker-client.js';
 import { createGithubIntakeAuthorization } from '../engineer/intake/github-issues.js';
+import type { GithubOperationEventEmitter } from '../github-operations.js';
 
 export type HaltIssuesSweepCommand =
   | { kind: 'sweep'; dryRun: boolean; repoDir: string; monitorLog: string; ledger: string; ghRepo: string }
@@ -136,7 +137,11 @@ const productionClock = { now: () => new Date() };
  *   can be added without changing the call sites)
  * @returns Exit code (0 on success, even with recorded errors; non-zero only on unrecoverable failure)
  */
-export async function dispatchHaltIssuesSweep(cmd: HaltIssuesSweepCommand, cwd: string): Promise<number> {
+export async function dispatchHaltIssuesSweep(
+  cmd: HaltIssuesSweepCommand,
+  cwd: string,
+  opts: { readonly events?: GithubOperationEventEmitter } = {},
+): Promise<number> {
   void cwd;
 
   const helpText =
@@ -169,6 +174,8 @@ export async function dispatchHaltIssuesSweep(cmd: HaltIssuesSweepCommand, cwd: 
     const gh = createGithubTrackerClient(runner, {
       intake: createGithubIntakeAuthorization({ gh: runner, cwd: cmd.repoDir }),
       repository: cmd.ghRepo,
+      // D9: warned operator-credential fallback needs the canonical spine.
+      events: opts.events,
     });
     const fs = makeProductionFs();
 

@@ -62,7 +62,7 @@ import { classifyPrdWidening, classifyPrdWideningProjection } from './prd-wideni
 import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { createGithubTrackerClient } from './tracker-client.js';
-import { executeGithubOperation, type GithubOperationRunner } from './github-operations.js';
+import { executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
@@ -564,6 +564,7 @@ export function createProvenanceGuardedFinishPresentationRepair(input: {
   gh: GhRunner;
   baseBranch: string;
   log?: (message: string) => void;
+  events?: GithubOperationEventEmitter;
 }): (request: { prUrl: string; state: ConductState }) => Promise<void> {
   return async ({ prUrl, state }) => {
     const publication = await createShipDraftPublicationDependencies({
@@ -574,6 +575,7 @@ export function createProvenanceGuardedFinishPresentationRepair(input: {
       prUrl,
       git: input.git,
       gh: input.gh,
+      events: input.events,
     });
     if (!publication) {
       throw new Error('guarded finish presentation repair unavailable: committed feature provenance could not be resolved');
@@ -3693,6 +3695,7 @@ export class Conductor {
       const r = await this.escalateBuildFailure({
         projectRoot: this.projectRoot,
         failureReason: reason,
+        events: this.events,
       });
       return r?.prUrl;
     } catch {
@@ -12625,7 +12628,7 @@ export class Conductor {
                           {
                             creation: {
                               authority: featureCreationAuthority,
-                              operations: createIntakeFilingOperations(this.gh, this.projectRoot, featureCreationAuthority),
+                              operations: createIntakeFilingOperations(this.gh, this.projectRoot, featureCreationAuthority, this.events),
                             },
                           },
                         );

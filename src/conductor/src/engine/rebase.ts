@@ -13,6 +13,8 @@ import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
+import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
+import { classifyGitPushAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 import { saveStepStatus } from './state.js';
 import {
   classifyGateInvalidation,
@@ -56,7 +58,7 @@ import type { RebasePreservedCandidate } from './rebase-transition.js';
 
 /** Minimal git runner — injected so the helpers are unit-testable without a repo. */
 export interface GitRunner {
-  (args: string[], opts?: { input?: string }): Promise<GitResult>;
+  (args: string[], opts?: { input?: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }): Promise<GitResult>;
 }
 
 export interface GitResult {
@@ -90,29 +92,50 @@ async function classifyProspectiveMerge(
 
 /** A real git runner rooted at `cwd`, never throwing on non-zero exit. */
 export function makeGitRunner(cwd: string): GitRunner {
-  return async (args: string[], opts?: { input?: string }): Promise<GitResult> => {
+  return async (args: string[], opts?: { input?: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }): Promise<GitResult> => {
     try {
       // Engine bookkeeping marker (#505 Task 8): any `git commit` this runner
       // spawns is engine-authored (rebase mechanics, quarantine, etc.), never
       // dispatched implementation work — mark it so the commit-msg gate
       // exempts it from the Task: trailer requirement.
       const isCommit = args[0] === 'commit';
+      let env: NodeJS.ProcessEnv | undefined;
+      let botToken: string | undefined;
+      if (opts?.credential === 'write') {
+        const credential = await readGithubBotCredential();
+        if (credential.kind === 'configured') {
+          if (opts.endpoint === 'ssh') throw new GithubBotAuthRefusalError('unsupported-remote-transport');
+          const token = await readGithubBotToken(credential.tokenFile);
+          if (token.kind === 'unavailable') throw new GithubBotAuthRefusalError('token-unavailable');
+          botToken = token.token;
+          env = { ...process.env, GH_TOKEN: botToken, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' };
+        }
+      }
       const r = await execa('git', args, {
         cwd,
         reject: false,
-        ...(isCommit ? { env: withEngineCommitEnv() } : {}),
+        ...(env ? { env } : isCommit ? { env: withEngineCommitEnv() } : {}),
         ...(opts?.input !== undefined ? { input: opts.input } : {}),
       });
       // Tolerate odd/mocked results (no object, no exitCode) → treat as failure.
       if (!r || typeof r !== 'object') {
         return { exitCode: 1, stdout: '', stderr: '' };
       }
-      return {
+      const result = {
         exitCode: typeof r.exitCode === 'number' ? r.exitCode : 1,
         stdout: typeof r.stdout === 'string' ? r.stdout : '',
         stderr: typeof r.stderr === 'string' ? r.stderr : '',
       };
-    } catch {
+      if (botToken !== undefined && result.exitCode !== 0 && classifyGitPushAuthRefusal({ stderr: result.stderr })) {
+        throw new GithubBotAuthRefusalError('auth-refused');
+      }
+      return botToken === undefined ? result : {
+        ...result,
+        stdout: result.stdout.split(botToken).join('[redacted]'),
+        stderr: result.stderr.split(botToken).join('[redacted]'),
+      };
+    } catch (error) {
+      if (error instanceof GithubBotAuthRefusalError) throw error;
       return { exitCode: 1, stdout: '', stderr: '' };
     }
   };

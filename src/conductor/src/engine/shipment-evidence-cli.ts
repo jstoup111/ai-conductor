@@ -40,6 +40,7 @@ import {
 import {
   executeGithubOperation,
   type GithubOperationRunner,
+  type GithubOperationEventEmitter,
 } from './github-operations.js';
 
 export type ShipmentEvidenceCommand =
@@ -222,6 +223,7 @@ async function publishRecordOnlyRepair(input: {
   repo?: string;
   /** Read the spec from this commit instead of the `cwd` working tree. */
   specCommit?: string;
+  events?: GithubOperationEventEmitter;
 }): Promise<ShipmentRepairPublicationResult> {
   const { specCommit } = input;
   const expectedRecord = await expectedReconciledRecord(
@@ -267,6 +269,7 @@ async function publishRecordOnlyRepair(input: {
     evaluateEvidence: input.evaluateEvidence,
     repo: input.repo,
     remoteMutation,
+    events: input.events,
   }));
 }
 
@@ -283,6 +286,8 @@ export interface RecordRepairRequesterOptions {
   listPlanStems?: (cwd: string) => Promise<string[]>;
   evaluateEvidence?: NonNullable<ShipmentEvidenceRunners['evaluateEvidence']>;
   log?: (message: string) => void;
+  /** Existing event spine for guarded GitHub and Git credential fallback. */
+  events?: GithubOperationEventEmitter;
 }
 
 /**
@@ -355,6 +360,7 @@ export function makeRecordRepairRequester(
         evaluateEvidence,
         repo: await resolveRepairRepository(runGh, options.cwd),
         specCommit: baseCommit,
+        events: options.events,
       });
       log(
         result.kind === 'repair-published'
@@ -490,6 +496,7 @@ export function makeProductionRepairPublisher(input: {
   remoteMutation?: GithubMutationExecutionContext;
   /** Guarded mutations; absence refuses rather than falling back to raw gh writes. */
   operations?: GithubOperationRunner;
+  events?: GithubOperationEventEmitter;
 }): ShipmentRepairPublisher {
   const repo = input.repo ?? process.env.GITHUB_REPOSITORY;
   if (!repo) throw new Error('GITHUB_REPOSITORY is required for repair publication');
@@ -500,6 +507,7 @@ export function makeProductionRepairPublisher(input: {
     // owner/provenance readers but let their canonical repository targets bind
     // through the normal policy instead of mismatching that ref.
     mutation: mutationForRepositoryOperations(input.remoteMutation),
+    events: input.events,
   });
 
   // The fetched start point `ensureRepairBranch` resolved. The repair commit is
@@ -545,6 +553,7 @@ export function makeProductionRepairPublisher(input: {
               config: (args) => input.runGit(args, { cwd: worktree }),
               runRemoteGit: input.runGit,
               mutation: input.remoteMutation,
+              events: input.events,
             },
           );
           if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));

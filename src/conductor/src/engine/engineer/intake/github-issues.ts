@@ -26,7 +26,7 @@ import {
 } from '../../tracker-client.js';
 import { formatWorkRef, parseWorkRef, type WorkRef } from '../source-ref.js';
 import { sanitizeInboundText, type InboundSanitizeResult } from './sanitize-inbound.js';
-import type { GithubIntakeWriteOperationRequest, GithubOperationRunnerRefusal } from '../../github-operations.js';
+import type { GithubIntakeWriteOperationRequest, GithubOperationEventEmitter, GithubOperationRunnerRefusal } from '../../github-operations.js';
 import {
   hasExplicitGithubOperationApproval,
   requestExplicitGithubOperationApproval,
@@ -64,6 +64,8 @@ export interface GithubIssuesDeps {
   confirmation?: InteractiveGithubOperationConfirmation;
   /** Existing guarded intake seam; callers normally use the assignment-backed default below. */
   intakeAuthorization?: GithubIntakeMutationExecutionContext;
+  /** Existing event spine for bot credential fallback telemetry. */
+  events?: GithubOperationEventEmitter;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
@@ -231,7 +233,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
     resolveActor: deps.resolveActor,
     confirmation: deps.confirmation,
   });
-  const tracker: IntakeTrackerClient = createGithubTrackerClient(gh, { intake: intakeAuthorization });
+  const tracker: IntakeTrackerClient = createGithubTrackerClient(gh, { intake: intakeAuthorization, events: deps.events });
 
   // Per-instance write-back de-dup: a (sourceRef\0status) that has been posted
   // once in this process is not posted again. Cross-process duplicates cannot

@@ -39,6 +39,8 @@ import type {
   GithubMutationAuthorizationDependencies,
 } from './owner-gate/mutation-policy.js';
 import type { MutationProvenanceRequest } from './owner-gate/mutation-provenance.js';
+import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
+import { classifyGhAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 
 const execFileP = promisify(execFileCb);
 const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
@@ -48,7 +50,7 @@ const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
  */
 export type GhRunner = (
   args: string[],
-  opts: { cwd: string; timeout?: number; maxBuffer?: number },
+  opts: { cwd: string; timeout?: number; maxBuffer?: number; credential?: 'operator' | 'write' },
 ) => Promise<{ stdout: string }>;
 
 /**
@@ -279,7 +281,9 @@ export function createGuardedGithubOperationRunner(
   return {
     ...(options.events === undefined ? {} : { events: options.events }),
     async run(request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> {
-      if (request.access === 'read') {
+      if (request.access === undefined) {
+        return { kind: 'refused', reason: 'missing-provenance' };
+      } else if (request.access === 'read') {
         // Discovery reads need no ownership grant.
       } else if (options.creation) {
         const decision = await options.creation.authorize(request, options.cwd);
@@ -301,8 +305,22 @@ export function createGuardedGithubOperationRunner(
         }, options.mutation.dependencies);
         if (decision.kind === 'refused') return decision;
       }
-      const response = await transport(ghArgsFor(request), { cwd: options.cwd });
-      return options.creation?.complete?.(request, response) ?? {};
+      const credential = request.access === 'read' ? 'operator' : 'write';
+      try {
+        const response = await transport(ghArgsFor(request), { cwd: options.cwd, credential });
+        return options.creation?.complete?.(request, response) ?? {};
+      } catch (error) {
+        if (!(error instanceof GithubBotAuthRefusalError)) throw error;
+        const events = options.events ?? (transport as GhRunner & { events?: GithubOperationEventEmitter }).events;
+        if (!events) throw error;
+        try {
+          await events.emit({ type: 'github_write_credential_fallback', operation: request.operation, target: request.target, reason: error.reason });
+        } catch {
+          throw error;
+        }
+        const response = await transport(ghArgsFor(request), { cwd: options.cwd, credential: 'operator' });
+        return options.creation?.complete?.(request, response) ?? {};
+      }
     },
   };
 }
@@ -347,19 +365,42 @@ export function assertRealExecAllowed(bin: string): void {
 
 /** Construct the real gh runner used in production. */
 export function makeProductionGh(): GhRunner {
-  return async (args: string[], opts: { cwd: string; timeout?: number; maxBuffer?: number }) => {
+  return async (args: string[], opts: { cwd: string; timeout?: number; maxBuffer?: number; credential?: 'operator' | 'write' }) => {
     assertRealExecAllowed('gh');
+    let env: NodeJS.ProcessEnv | undefined;
+    let botToken: string | undefined;
+    if (opts.credential === 'write') {
+      const credential = await readGithubBotCredential();
+      if (credential.kind === 'configured') {
+        const token = await readGithubBotToken(credential.tokenFile);
+        if (token.kind === 'unavailable') throw new GithubBotAuthRefusalError('token-unavailable');
+        botToken = token.token;
+        env = { ...process.env, GH_TOKEN: botToken };
+      }
+    }
     try {
       const result = await execFileP('gh', args, {
         cwd: opts.cwd,
         maxBuffer: opts.maxBuffer ?? GH_STDOUT_MAX_BUFFER,
         timeout: opts.timeout,
+        ...(env === undefined ? {} : { env }),
       });
       return { stdout: String(result.stdout) };
     } catch (cause) {
       const field = unsupportedJsonField(cause);
       if (field) {
+        // A bot child may include GH_TOKEN in its diagnostic fields. Do not
+        // retain that raw error graph on a public capability error.
+        if (botToken !== undefined && cause instanceof Error) {
+          throw new GhCapabilityError(field, new Error(cause.message.split(botToken).join('[redacted]')));
+        }
         throw new GhCapabilityError(field, cause);
+      }
+      if (botToken !== undefined && classifyGhAuthRefusal(cause)) throw new GithubBotAuthRefusalError('auth-refused');
+      if (botToken !== undefined && cause instanceof Error) {
+        // Deliberately omit cause: Error.cause is observable through inspect
+        // and would otherwise retain the unredacted child diagnostics.
+        throw new Error(cause.message.split(botToken).join('[redacted]'));
       }
       throw cause;
     }
@@ -671,6 +712,9 @@ async function runTrackerIssueOperation(
       return result;
     } catch (err) {
       runnerError = new GhRunnerError(args, err);
+      // The guarded runner owns warning-first operator fallback (D9); it can
+      // only recognize the typed bot refusal when that refusal is not wrapped.
+      if (err instanceof GithubBotAuthRefusalError) throw err;
       throw runnerError;
     }
   };

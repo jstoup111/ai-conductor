@@ -433,7 +433,7 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
     expect(calls).toEqual([
       {
         args: ['issue', 'comment', '42', '-R', 'owner/repo', '--body', 'hello'],
-        opts: { cwd: '.' },
+        opts: { cwd: '.', credential: 'write' },
       },
     ]);
   });
@@ -447,7 +447,7 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
     expect(calls).toEqual([
       {
         args: ['issue', 'create', '-R', 'owner/repo', '--title', 'T', '--body', 'B'],
-        opts: { cwd: '.' },
+        opts: { cwd: '.', credential: 'write' },
       },
     ]);
     expect(url).toBe('https://github.com/owner/repo/issues/9');
@@ -474,7 +474,7 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
     expect(calls).toEqual([
       {
         args: ['api', '--method', 'POST', 'repos/owner/repo/issues/42/labels', '-f', 'labels[]=engineer:handled'],
-        opts: { cwd: '.' },
+        opts: { cwd: '.', credential: 'write' },
       },
     ]);
   });
@@ -486,7 +486,7 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
     await client.closeIssue('owner/repo', '12', '.');
 
     expect(calls).toEqual([
-      { args: ['issue', 'close', '12', '-R', 'owner/repo'], opts: { cwd: '.' } },
+      { args: ['issue', 'close', '12', '-R', 'owner/repo'], opts: { cwd: '.', credential: 'write' } },
     ]);
   });
 
@@ -497,7 +497,7 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
     await client.upsertIssueBody('owner/repo', '12', 'new body', '.');
 
     expect(calls).toEqual([
-      { args: ['issue', 'edit', '12', '--body', 'new body', '-R', 'owner/repo'], opts: { cwd: '.' } },
+      { args: ['issue', 'edit', '12', '--body', 'new body', '-R', 'owner/repo'], opts: { cwd: '.', credential: 'write' } },
     ]);
   });
 
@@ -508,7 +508,7 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
     await client.upsertIssueComment('owner/repo', '12', 'a comment', '.');
 
     expect(calls).toEqual([
-      { args: ['issue', 'comment', '12', '-R', 'owner/repo', '--body', 'a comment'], opts: { cwd: '.' } },
+      { args: ['issue', 'comment', '12', '-R', 'owner/repo', '--body', 'a comment'], opts: { cwd: '.', credential: 'write' } },
     ]);
   });
 
@@ -544,7 +544,7 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
     await client.createLabel('owner/repo', 'engineer:handled', '.');
 
     expect(calls).toEqual([
-      { args: ['label', 'create', 'engineer:handled', '-R', 'owner/repo'], opts: { cwd: '.' } },
+      { args: ['label', 'create', 'engineer:handled', '-R', 'owner/repo'], opts: { cwd: '.', credential: 'write' } },
     ]);
   });
 
@@ -557,7 +557,7 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
     expect(calls).toEqual([
       {
         args: ['api', '--method', 'DELETE', 'repos/owner/repo/issues/42/labels/engineer%3Ahandled'],
-        opts: { cwd: '.' },
+        opts: { cwd: '.', credential: 'write' },
       },
     ]);
   });

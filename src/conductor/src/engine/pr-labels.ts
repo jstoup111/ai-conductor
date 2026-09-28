@@ -32,6 +32,8 @@ import {
   type GhRunner,
 } from './tracker-client.js';
 import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
+import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
+import { classifyGitPushAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 export { makeProductionGh, assertRealExecAllowed, type GhRunner };
 
 /**
@@ -39,7 +41,7 @@ export { makeProductionGh, assertRealExecAllowed, type GhRunner };
  */
 export type GitRunner = (
   args: string[],
-  opts: { cwd: string },
+  opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' },
 ) => Promise<{ stdout: string }>;
 
 /**
@@ -115,13 +117,30 @@ async function runMutation(
 
 /** Construct the real git runner used in production. */
 export function makeProductionGit(): GitRunner {
-  return async (args: string[], opts: { cwd: string }) => {
+  return async (args: string[], opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }) => {
     assertRealExecAllowed('git');
-    const result = await execFileP('git', args, {
-      cwd: opts.cwd,
-      maxBuffer: 32 * 1024 * 1024,
-    });
-    return { stdout: String(result.stdout) };
+    let env: NodeJS.ProcessEnv | undefined;
+    let botToken: string | undefined;
+    if (opts.credential === 'write') {
+      const credential = await readGithubBotCredential();
+      if (credential.kind === 'configured') {
+        if (opts.endpoint === 'ssh') throw new GithubBotAuthRefusalError('unsupported-remote-transport');
+        const token = await readGithubBotToken(credential.tokenFile);
+        if (token.kind === 'unavailable') throw new GithubBotAuthRefusalError('token-unavailable');
+        botToken = token.token;
+        env = { ...process.env, GH_TOKEN: botToken, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' };
+      }
+    }
+    try {
+      const result = await execFileP('git', args, { cwd: opts.cwd, maxBuffer: 32 * 1024 * 1024, ...(env === undefined ? {} : { env }) });
+      return { stdout: String(result.stdout) };
+    } catch (error) {
+      if (botToken !== undefined && classifyGitPushAuthRefusal(error)) throw new GithubBotAuthRefusalError('auth-refused');
+      // Do not retain the raw child as Error.cause: inspect/error reporters
+      // traverse causes and could expose the bot token.
+      if (botToken !== undefined && error instanceof Error) throw new Error(error.message.split(botToken).join('[redacted]'));
+      throw error;
+    }
   };
 }
 

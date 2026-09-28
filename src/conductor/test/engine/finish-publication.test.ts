@@ -422,6 +422,7 @@ function draftPrFakes(ghHandler: (args: string[]) => { stdout: string } | Error)
           repository: 'acme/widget',
           kind: 'remote-ref' as const,
           ref: 'refs/heads/feat/widget',
+          endpoint: 'https' as const,
         }],
       }),
       operations,
@@ -2230,6 +2231,7 @@ describe('advanceFinishPublication concurrent mutation reconciliation', () => {
               repository: 'acme/widget',
               kind: 'remote-ref',
               ref: 'refs/heads/feat/widget',
+              endpoint: 'https',
             }],
           }),
           operations: {

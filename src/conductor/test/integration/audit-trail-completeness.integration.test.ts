@@ -115,6 +115,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // Ownership refusals remain durable in the event ledger and terminal, but
   // are deliberately outside the audit-trail friction vocabulary.
   github_operation_refused: 'not-audited-by-design',
+  github_write_credential_fallback: 'not-audited-by-design',
   provider_attempt: 'not-audited-by-design',
   // Daemon-only suppression durability is not an operator-friction record.
   provider_suppressed: 'not-audited-by-design',
@@ -368,6 +369,12 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     operation: 'issue.comment.create',
     reason: 'other-owner',
     remedy: 'ask-resource-owner',
+  },
+  github_write_credential_fallback: {
+    type: 'github_write_credential_fallback',
+    operation: 'issue.comment.create',
+    target: { repository: 'acme/repo', kind: 'issue', number: 1 },
+    reason: 'auth-refused',
   },
   provider_attempt: {
     type: 'provider_attempt',

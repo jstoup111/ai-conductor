@@ -68,6 +68,7 @@ import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead } from './tracker-client.js';
+import type { GithubOperationEventEmitter } from './github-operations.js';
 import { bindMutationToPullRequest } from './ship-draft-pr.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import {
@@ -467,6 +468,8 @@ export interface DispatchEngineerOpts {
   gh?: (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
   /** Test seam for fresh machine identity used by independently authorized intake writes. */
   intakeResolveActor?: () => Promise<OwnerResolution>;
+  /** Existing event spine for intake mutation fallback telemetry. */
+  events?: GithubOperationEventEmitter;
   /** Machine-level gh capability probe; injectable so entry refusal is testable. */
   probeGhVersion?: () => Promise<GhVersionFloorVerdict>;
   /** Injected git runner (for tests). */
@@ -599,6 +602,7 @@ export function initialSpecPublication(
   cwd: string,
   gh: NonNullable<DispatchEngineerOpts['gh']>,
   git: GitRunner,
+  events?: GithubOperationEventEmitter,
 ): NonNullable<HandoffDeps['publication']> {
   const repository = target.remote ? parseGhRepo(target.remote)?.toLowerCase() : null;
   if (!repository || !/^[^/\s]+\/[^/\s]+$/.test(repository)) {
@@ -633,12 +637,14 @@ export function initialSpecPublication(
       config: async (args) => git(args, { cwd }),
       runRemoteGit: git,
       mutation,
+      events,
     },
     // The branch provenance authorizes the push only. PR creation is an
     // independently bound repository target; later presentation rebinds the
     // created PR identity rather than reusing this repository context.
     operations: createGuardedGithubOperationRunner(gh, {
       cwd,
+      events,
       mutation: {
         ...mutation,
         provenance: { ...mutation.provenance, target: { repository, kind: 'repository' } },
@@ -648,7 +654,7 @@ export function initialSpecPublication(
     // (#2703); the repository binding above authorizes creation only.
     presentation: (prUrl: string) => {
       const bound = bindMutationToPullRequest(mutation, prUrl);
-      return bound ? createGuardedGithubOperationRunner(gh, { cwd, mutation: bound }) : undefined;
+      return bound ? createGuardedGithubOperationRunner(gh, { cwd, mutation: bound, events }) : undefined;
     },
   };
 }
@@ -773,6 +779,7 @@ export function buildIntake(deps: {
   printErr: (s: string) => void;
   missingRegistrationEpisodes?: Set<string>;
   resolveActor?: () => Promise<OwnerResolution>;
+  events?: GithubOperationEventEmitter;
 }): {
   reader: ReturnType<typeof createRegistryReader>;
   ledger: ReturnType<typeof createLedger>;
@@ -796,6 +803,7 @@ export function buildIntake(deps: {
     log: (m: string) => deps.printErr(m),
     missingRegistrationEpisodes: deps.missingRegistrationEpisodes,
     resolveActor: deps.resolveActor,
+    events: deps.events,
   });
   return { reader, ledger, queue, adapter };
 }
@@ -812,10 +820,12 @@ export async function prePollIntake(deps: {
   registryPath?: string;
   gh: NonNullable<DispatchEngineerOpts['gh']>;
   printErr: (s: string) => void;
+  events?: GithubOperationEventEmitter;
 }): Promise<number> {
   const { queue, adapter } = buildIntake({
     ...deps,
     missingRegistrationEpisodes,
+    events: deps.events,
   });
   const envelopes = await adapter.poll();
   for (const e of envelopes) {
@@ -924,6 +934,7 @@ export async function dispatchEngineer(
                 registryPath,
                 gh,
                 printErr,
+                events: opts.events,
               }));
 
       // Outer loop: ONE fresh `claude /composer` session per idea, so each idea
@@ -1193,7 +1204,7 @@ export async function dispatchEngineer(
       if (sourceRef) {
         const engDir = engineerDir ?? resolveEngineerDir({});
         const { ledger, adapter } = buildIntake({
-          engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor,
+          engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor, events: opts.events,
         });
         await reportRouted(
           { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
@@ -1226,9 +1237,14 @@ export async function dispatchEngineer(
       }
 
       let handoffResult: Awaited<ReturnType<typeof openSpecPr>>;
+      // Compose handoff is a separate CLI process, so it owns this canonical
+      // composer ledger for its guarded publication lifetime.
+      const events = new ConductorEventEmitter();
+      const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
       try {
+        persister.start();
         const publication = opts.handoffPublication
-          ?? (target.remote ? initialSpecPublication(target, branch, worktree, gh, git) : undefined);
+          ?? (target.remote ? initialSpecPublication(target, branch, worktree, gh, git, events) : undefined);
         handoffResult = await openSpecPr(target, branch, {
           gitRunner: git,
           runner: async (args, runnerOpts) => {
@@ -1243,6 +1259,7 @@ export async function dispatchEngineer(
           // close — the daemon's implementation PR closes it on merge).
           sourceRef,
           publication,
+          events,
           // Post-create writes are non-fatal; never let a refusal pass silently (#2703).
           log: (msg: string) => printErr(`engineer handoff: ${msg}`),
         });
@@ -1279,8 +1296,9 @@ export async function dispatchEngineer(
             // Continue — handoff still succeeds
           }
         }
-
         return 1;
+      } finally {
+        persister.stop();
       }
 
       if (handoffResult.kind === 'pr-refused') {
@@ -1311,7 +1329,7 @@ export async function dispatchEngineer(
         if (sourceRef) {
           const engDir = engineerDir ?? resolveEngineerDir({});
           const { ledger, adapter } = buildIntake({
-            engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor,
+            engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor, events: opts.events,
           });
           await reportDone(
             { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
@@ -1388,7 +1406,7 @@ export async function dispatchEngineer(
     // ledger dedups, so a double-poll enqueues nothing new.
     case 'poll': {
       const engDir = engineerDir ?? resolveEngineerDir({});
-      const { queue, adapter } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
+      const { queue, adapter } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr, events: opts.events });
 
       const envelopes = await adapter.poll();
       for (const e of envelopes) {
@@ -1408,7 +1426,7 @@ export async function dispatchEngineer(
     // and heal stale entries (duplicate envelopes, delivered PRs) transparently.
     case 'claim': {
       const engDir = engineerDir ?? resolveEngineerDir({});
-      const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
+      const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr, events: opts.events });
 
       // Resolve the project-level config (`.ai-conductor/config.yml` at cwd) so an
       // operator's `stale_claim_window_hours` override reaches the reap pass below —
@@ -1527,6 +1545,7 @@ export async function dispatchEngineer(
       if (dispatch.resolvedBy && parsedForget) {
         const tracker = createGithubTrackerClient(gh, {
           intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor }),
+          events: opts.events,
         });
         try {
           await tracker.commentOnIntakeIssue(
@@ -1561,6 +1580,7 @@ export async function dispatchEngineer(
         try {
           const tracker = createGithubTrackerClient(gh, {
             intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor }),
+            events: opts.events,
           });
           await tracker.removeIntakeIssueLabel(
             parsedForget.repo,
@@ -1823,6 +1843,7 @@ export async function dispatchEngineer(
       const operations = createGuardedGithubOperationRunner(gh, {
         cwd,
         intake: createGithubIntakeAuthorization({ gh, cwd, resolveActor }),
+        events: opts.events,
       });
       const result = await runMigration({
         gh,

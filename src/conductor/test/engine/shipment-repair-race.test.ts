@@ -133,6 +133,7 @@ describe('repair publisher never mutates the live root checkout', () => {
       return { stdout: '' };
     });
     const remoteGit = vi.fn(async () => ({ kind: 'executed' as const, targets: [] }));
+    const events = { emit: vi.fn(async () => undefined) };
     const publisher = makeProductionRepairPublisher({
       cwd: root,
       implementationPr: PR,
@@ -144,13 +145,14 @@ describe('repair publisher never mutates the live root checkout', () => {
       evaluateEvidence: vi.fn(),
       repo: 'acme/rocket',
       remoteGit,
+      events: events as never,
     });
-    return { publisher, gitCalls, remoteGit };
+    return { publisher, gitCalls, remoteGit, events };
   }
 
   it('builds and pushes the repair commit in a removed temporary worktree', async () => {
     const root = await rootCheckout();
-    const { publisher, gitCalls, remoteGit } = publisherFixture(root, null);
+    const { publisher, gitCalls, remoteGit, events } = publisherFixture(root, null);
 
     await publisher.ensureRepairBranch({ branch: 'shipment-repair/42/feature', base: 'main' });
     await expect(publisher.commitRecordOnly({
@@ -167,7 +169,7 @@ describe('repair publisher never mutates the live root checkout', () => {
     expect(gitCalls.filter(({ args }) => args[0] === 'commit').map(({ cwd }) => cwd)).toEqual([worktree]);
     expect(remoteGit).toHaveBeenCalledWith(
       ['push', 'origin', 'HEAD:refs/heads/shipment-repair/42/feature'],
-      expect.objectContaining({ cwd: worktree }),
+      expect.objectContaining({ cwd: worktree, events }),
     );
     expect(gitCalls.at(-1)).toEqual({ args: ['worktree', 'remove', '--force', worktree], cwd: root });
     await expect(access(worktree)).rejects.toThrow();

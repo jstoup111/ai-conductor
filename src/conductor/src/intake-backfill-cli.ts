@@ -15,6 +15,9 @@ import {
   type BacklogIssue,
 } from './engine/engineer/intake/backfill.js';
 import { runTrackerRepositoryRead } from './engine/tracker-client.js';
+import { ConductorEventEmitter } from './ui/events.js';
+import { EventPersister } from './engine/event-persister.js';
+import { join } from 'node:path';
 
 function parseRepoArg(argv: string[]): string | null {
   const i = argv.indexOf('--repo');
@@ -59,14 +62,22 @@ async function main(): Promise<void> {
   const gh = makeProductionGh();
   const cwd = '.';
   const issues = await listAssignedOpenIssues(gh, repo, cwd);
+  const events = new ConductorEventEmitter();
+  const persister = new EventPersister(join(cwd, '.pipeline', 'events.jsonl'), events);
 
-  const report = await backfillIntakeLabels(issues, {
-    gh,
-    cwd,
-    log: (msg) => console.error(msg),
-  });
+  try {
+    persister.start();
+    const report = await backfillIntakeLabels(issues, {
+      gh,
+      cwd,
+      log: (msg) => console.error(msg),
+      events,
+    });
 
-  console.log(renderBackfillReport(report));
+    console.log(renderBackfillReport(report));
+  } finally {
+    persister.stop();
+  }
 
   // Non-fatal: label-apply failures are reported, never raised as a process
   // failure — this is a best-effort sweep, not a gate.

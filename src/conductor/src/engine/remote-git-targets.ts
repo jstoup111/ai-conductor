@@ -7,6 +7,7 @@ export interface RemoteGitConfigReader {
 
 export type RemoteGitDestination = GithubRemoteRefTarget & {
   readonly operation: 'remote-ref.push' | 'remote-ref.delete';
+  readonly endpoint: 'https' | 'ssh';
 };
 
 export type RemoteGitTargetResolution =
@@ -43,12 +44,12 @@ function canonicalRepository(owner: string, name: string): string | undefined {
 }
 
 /** Resolve only GitHub's commonly configured HTTPS and SSH remote URL forms. */
-function repositoryFromRemoteUrl(value: string): string | undefined {
+function repositoryFromRemoteUrl(value: string): { repository: string; endpoint: 'https' | 'ssh' } | undefined {
   const url = value.trim();
   if (url === '' || /\s/.test(url)) return undefined;
 
   const scp = /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url);
-  if (scp) return canonicalRepository(scp[1], scp[2]);
+  if (scp) { const repository = canonicalRepository(scp[1], scp[2]); return repository ? { repository, endpoint: 'ssh' } : undefined; }
 
   let parsed: URL;
   try {
@@ -65,7 +66,8 @@ function repositoryFromRemoteUrl(value: string): string | undefined {
   const segments = parsed.pathname.split('/').filter(Boolean);
   if (segments.length !== 2) return undefined;
   const name = segments[1].endsWith('.git') ? segments[1].slice(0, -'.git'.length) : segments[1];
-  return canonicalRepository(segments[0], name);
+  const repository = canonicalRepository(segments[0], name);
+  return repository ? { repository, endpoint: parsed.protocol === 'https:' ? 'https' : 'ssh' } : undefined;
 }
 
 function isKnownPushOption(value: string): boolean {
@@ -134,7 +136,7 @@ function destinationForRefspec(refspec: string, deleteRequested: boolean): { ref
  * --push` applies both a remote's pushurl and pushInsteadOf rewrites, unlike a
  * direct read of the fetch URL configuration.
  */
-async function repositoryForRemote(remote: string, gitConfig: RemoteGitConfigReader): Promise<string | undefined> {
+async function repositoryForRemote(remote: string, gitConfig: RemoteGitConfigReader): Promise<{ repository: string; endpoint: 'https' | 'ssh' } | undefined> {
   let output: { readonly stdout: string };
   try {
     output = await gitConfig(['remote', 'get-url', '--push', remote]);
@@ -163,16 +165,17 @@ export async function resolveRemoteGitTargets(
   const destinations = parsed.refspecs.map((refspec) => destinationForRefspec(refspec, parsed.deleteRequested));
   if (destinations.some((destination) => !destination)) return invalidTarget();
 
-  const repository = await repositoryForRemote(parsed.remote, gitConfig);
-  if (!repository) return invalidTarget();
+  const remote = await repositoryForRemote(parsed.remote, gitConfig);
+  if (!remote) return invalidTarget();
   return {
     kind: 'resolved',
     remote: parsed.remote,
     targets: destinations.map((destination) => ({
       operation: destination!.operation,
-      repository,
+      repository: remote.repository,
       kind: 'remote-ref',
       ref: destination!.ref,
+      endpoint: remote.endpoint,
     })),
   };
 }

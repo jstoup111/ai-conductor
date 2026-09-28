@@ -339,7 +339,7 @@ export interface GithubOperationRunner {
 
 /** The existing event spine boundary needed to report a denied mutation. */
 export interface GithubOperationEventEmitter {
-  emit(event: Extract<ConductorEvent, { type: 'github_operation_refused' }>): Promise<void>;
+  emit(event: Extract<ConductorEvent, { type: 'github_operation_refused' | 'github_write_credential_fallback' }>): Promise<void>;
 }
 
 export interface GithubOperationExecutionOptions {
@@ -386,6 +386,13 @@ export function formatGithubOperationRefusal(
   event: Extract<ConductorEvent, { type: 'github_operation_refused' }>,
 ): string {
   return `GitHub operation refused: ${event.operation} on ${formatGithubOperationTarget(event.target)} (${event.reason}); remedy: ${event.remedy}`;
+}
+
+/** Secret-safe rendering of a warned operator-credential fallback: operation, target, reason only. */
+export function formatGithubCredentialFallback(
+  event: Extract<ConductorEvent, { type: 'github_write_credential_fallback' }>,
+): string {
+  return `GitHub bot credential fallback: ${event.operation} on ${formatGithubOperationTarget(event.target)} (${event.reason})`;
 }
 
 /**

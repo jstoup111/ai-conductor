@@ -24,6 +24,8 @@ import {
 } from '../../src/engine/halt-marker';
 import type { HaltClass } from '../../src/engine/halt-marker';
 import { ConductorEventEmitter } from '../../src/ui/events';
+import { GithubBotAuthRefusalError } from '../../src/engine/github-bot-auth-refusal.js';
+import { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 
 // These assertions are checked by `npm run typecheck:test`. They deliberately
 // live outside Vitest cases because they describe the TypeScript API contract,
@@ -78,6 +80,41 @@ describe('writeHaltMarker', () => {
       path: '.docs/halted/operator-decision.md',
       reason: 'invalid-target',
     })]);
+  });
+
+  it('uses the marker emitter for a halt-record push credential fallback', async () => {
+    ({ worktree: root, repositoryRoot } = await makeFeatureRepository());
+    const emitter = new ConductorEventEmitter();
+    const emitted: unknown[] = [];
+    emitter.on('github_write_credential_fallback', (event) => { emitted.push(event); });
+    const pushes: Array<string | undefined> = [];
+
+    await expect(writeHaltMarker(root, 'operator decision required\n', 'needs-human', emitter, {
+      mutation: {
+        provenance: {
+          repository: 'acme/repo', defaultBranch: 'main', specBranch: 'feat/operator-decision',
+          featureMarker: '.docs/intake/operator-decision.md', publication: 'merged',
+        },
+        dependencies: {
+          resolveMachineOwner: async () => ({ resolved: true, id: 'operator' }),
+          provenanceDiscovery: { readCommittedRecords: async () => [{ path: '.docs/intake/operator-decision.md', content: 'Owner: operator\n' }] },
+        },
+      },
+      remoteGit: (args, options) => executeRemoteGit(args, {
+        ...options,
+        config: async () => ({ stdout: 'https://github.com/acme/repo.git\n' }),
+        runRemoteGit: async (_args, remoteOptions) => {
+          pushes.push(remoteOptions.credential);
+          if (remoteOptions.credential === 'write') throw new GithubBotAuthRefusalError('auth-refused');
+          return { stdout: '' };
+        },
+      }),
+    })).resolves.toEqual({ status: 'written' });
+
+    expect(emitted).toEqual([expect.objectContaining({
+      type: 'github_write_credential_fallback', reason: 'auth-refused',
+    })]);
+    expect(pushes).toEqual(['write', 'operator']);
   });
 
   it('does not produce a record for a mechanical halt', async () => {

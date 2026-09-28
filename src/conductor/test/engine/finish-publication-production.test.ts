@@ -92,7 +92,7 @@ function remoteMutation(): GithubMutationExecutionContext {
 function guardedRemoteGit() {
   return vi.fn(async () => ({
     kind: 'executed' as const,
-    targets: [{ operation: 'remote-ref.push' as const, repository: 'acme/widget', kind: 'remote-ref' as const, ref: 'refs/heads/feat/feature' }],
+    targets: [{ operation: 'remote-ref.push' as const, repository: 'acme/widget', kind: 'remote-ref' as const, ref: 'refs/heads/feat/feature', endpoint: 'https' as const }],
   }));
 }
 

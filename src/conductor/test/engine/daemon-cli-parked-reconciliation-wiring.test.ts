@@ -38,7 +38,7 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
     expect(sweepBinding?.[1]).toBeDefined();
     // The ST-916 repair adapter is constructed from the real production factory,
     // not left `undefined` (which silently defers every record-missing park forever).
-    expect(sweepBinding?.[1]).toContain('requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log })');
+    expect(sweepBinding?.[1]).toContain('requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log, events })');
     // The disposer is the daemon-owned one handed in by runDaemon, never a local stub.
     expect(sweepBinding?.[1]).toContain('disposeHaltWatcher,');
     expect(source).toContain("import { makeRecordRepairRequester } from './engine/shipment-evidence-cli.js';");

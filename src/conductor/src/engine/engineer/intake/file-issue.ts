@@ -27,6 +27,7 @@ import type {
   GithubOperationRunner,
   GithubOperationRunnerRefusal,
   GithubOperationRunnerResponse,
+  GithubOperationEventEmitter,
 } from '../../github-operations.js';
 
 export interface FileIntakeIssueOpts {
@@ -141,6 +142,7 @@ export function createIntakeFilingOperations(
   gh: GhRunner,
   cwd: string,
   authority: GithubIssueCreationAuthority,
+  events?: GithubOperationEventEmitter,
 ): GithubOperationRunner {
   // Resolve before a feature authority is consumed by the transaction.  The
   // transaction independently resolves and binds it again before the first
@@ -152,6 +154,7 @@ export function createIntakeFilingOperations(
 
   const guarded = createGuardedGithubOperationRunner(gh, {
     cwd,
+    events,
     creation: {
       async authorize(request) {
         const resolved = await binding;

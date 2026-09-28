@@ -17,14 +17,16 @@
 //   - When no remote is detected, openSpecPr returns pr-skipped (non-fatal).
 //   - The authored key IS recorded even on pr-skipped (authoring happened; flywheel counts it).
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openSpecPr as openSpecPrProduction } from '../../../src/engine/engineer/handoff.js';
 import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
+import { initialSpecPublication } from '../../../src/engine/engineer-cli.js';
 import { readAuthoredKeys } from '../../../src/engine/engineer/authored-ledger.js';
 import type { TargetRepo } from '../../../src/engine/engineer/target.js';
+import { GithubBotAuthRefusalError } from '../../../src/engine/github-bot-auth-refusal.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -137,6 +139,72 @@ describe('openSpecPr', () => {
 
   afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('uses one event spine for bot fallback at push, PR creation, and presentation repair', async () => {
+    const branch = 'spec/add-auth';
+    const repository = 'acme/my-project';
+    await mkdir(join(tempDir, '.github'), { recursive: true });
+    await writeFile(join(tempDir, '.github', 'pull_request_template.md'), 'Release-Disposition: no-note\n');
+
+    const timeline: string[] = [];
+    const events = {
+      emit: async (event: { type: string; operation: string }) => {
+        timeline.push(`event:${event.operation}`);
+      },
+    };
+    const git: NonNullable<HandoffDeps['gitRunner']> = async (args, options) => {
+      if (args[0] === 'remote') return { stdout: `https://github.com/${repository}.git\n`, stderr: '' };
+      if (args[0] === 'show' && args[1]?.includes(':.docs/intake/')) return { stdout: 'Owner: alice\n', stderr: '' };
+      if (args[0] === 'show') return { stdout: 'Spec title\n\nBody\n', stderr: '' };
+      if (args[0] === 'push') {
+        timeline.push(`push:${options?.credential ?? 'operator'}`);
+        if (options?.credential === 'write') throw new GithubBotAuthRefusalError('auth-refused');
+      }
+      return { stdout: '', stderr: '' };
+    };
+    const gh = async (args: string[], options: { cwd: string; credential?: 'operator' | 'write' }) => {
+      if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
+      const operation = args[0] === 'pr' && args[1] === 'create'
+        ? 'pull-request.create'
+        : args[0] === 'pr' && args[1] === 'edit'
+          ? 'pull-request.edit'
+          : undefined;
+      if (operation) {
+        timeline.push(`${operation}:${options.credential ?? 'operator'}`);
+        if (options.credential === 'write') throw new GithubBotAuthRefusalError('auth-refused');
+      }
+      return { stdout: '' };
+    };
+    const machineIdentity = await import('../../../src/engine/owner-gate/machine-identity.js');
+    const owner = vi.spyOn(machineIdentity, 'readMachineOwnerConfig').mockResolvedValue({ spec_owner: 'alice' });
+    try {
+      const publication = initialSpecPublication(
+        { remote: `https://github.com/${repository}.git` }, branch, tempDir, gh, git, events,
+      );
+
+      await expect(openSpecPrProduction(makeTarget(tempDir), branch, {
+        runner: async (args) => ({
+          stdout: args[0] === 'pr' && args[1] === 'view'
+            ? args[2] === branch
+              ? JSON.stringify({ url: `https://github.com/${repository}/pull/42` })
+              : JSON.stringify({ body: '' })
+            : '',
+          stderr: '',
+        }),
+        gitRunner: git,
+        ledgerOpts: { engineerDir: tempDir },
+        publication,
+      })).resolves.toEqual({ kind: 'pr-opened', url: `https://github.com/${repository}/pull/42` });
+    } finally {
+      owner.mockRestore();
+    }
+
+    expect(timeline).toEqual([
+      'push:write', 'event:remote-ref.push', 'push:operator',
+      'pull-request.create:write', 'event:pull-request.create', 'pull-request.create:operator',
+      'pull-request.edit:write', 'event:pull-request.edit', 'pull-request.edit:operator',
+    ]);
   });
 
   // ── Happy path ────────────────────────────────────────────────────────────
