@@ -71,7 +71,7 @@ halt (#433's determinism holds even when an agent self-stamps).
 - **Then** `Task: 9` is preserved unchanged (today's behavior for manual commits is
   retained; the engine has no authoritative id to substitute).
 
-### Scenario 3b: no current-task, no trailer → unchanged
+### Scenario 3b: no current-task, no `Task:` trailer → no `Task:` stamp
 
 - **Given** `.pipeline/current-task` is absent and the message has no `Task:` trailer,
 - **When** the hook runs,

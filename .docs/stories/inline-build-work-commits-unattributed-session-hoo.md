@@ -119,7 +119,7 @@ create silently.
 - Given an empty commit carrying `Evidence: satisfied-by <sha>` with a resolvable sha,
   when committed during an active build, then it lands (existing rule unchanged).
 - Given an engine bookkeeping commit (`CONDUCT_ENGINE_COMMIT=1` in the environment),
-  when the engine commits during an active build, then it lands with no trailer and no
+  when the engine commits during an active build, then it lands with no `Task:` trailer and no
   rejection.
 - Given enforcement is INACTIVE (marker absent or cutover unmet), when a trailer-less
   content commit is created, then it lands exactly as today (fail-open compatibility).

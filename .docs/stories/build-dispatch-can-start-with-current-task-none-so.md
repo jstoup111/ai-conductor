@@ -86,7 +86,7 @@ stale stamp is ever left and no id is ever guessed.
 ### Scenario 3.1 (happy): hook abstention behavior unchanged
 - Given `.pipeline/current-task` absent at commit time
 - When prepare-commit-msg runs
-- Then it still abstains (no trailer, exit 0) — the fix adds engine-side detection, never
+- Then it still abstains (no `Task:` trailer, exit 0) — the fix adds engine-side detection, never
   hook-side guessing
 
 ### Scenario 3.2 (negative): no new stamp-guessing path

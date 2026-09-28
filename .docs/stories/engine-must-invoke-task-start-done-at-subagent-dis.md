@@ -174,7 +174,7 @@ stamp source ambiguous-by-design so that commits during parallelism abstain
   when the PreToolUse hook processes a dispatch carrying `Task: 9`, then row
   `9` becomes `in_progress`, the stamp file is REMOVED, and the hook exits 0.
 - Given two rows `in_progress` and no stamp file, when #452's
-  `prepare-commit-msg` runs for a commit, then it abstains (no trailer written)
+  `prepare-commit-msg` runs for a commit, then it abstains (no `Task:` trailer written)
   — asserted by an integration test chaining this feature's state onto the
   existing #452 hook.
 
