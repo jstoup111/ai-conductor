@@ -1,5 +1,3 @@
-import { BUILT_IN_PROVIDERS } from './provider-catalog.js';
-
 /**
  * Child-environment scrubbing shared by every seam that spawns a provider
  * session or a test/verification subprocess on the engine's behalf.
@@ -20,8 +18,3 @@ import { BUILT_IN_PROVIDERS } from './provider-catalog.js';
  */
 
 export { scrubTmuxEnvironment, TMUX_ENVIRONMENT_KEYS } from './tmux-environment.js';
-
-/** Provider-owned namespaces whose review environments must be scrubbed. */
-export const REVIEW_PROVIDER_PREFIXES = BUILT_IN_PROVIDERS.map(
-  (provider) => provider.environmentPrefix,
-);

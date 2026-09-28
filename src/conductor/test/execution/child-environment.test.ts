@@ -4,7 +4,6 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  REVIEW_PROVIDER_PREFIXES,
   scrubTmuxEnvironment,
   TMUX_ENVIRONMENT_KEYS,
 } from '../../src/execution/child-environment.js';
@@ -30,10 +29,6 @@ function expectScrubbed(env: NodeJS.ProcessEnv | undefined): void {
 }
 
 describe('scrubTmuxEnvironment', () => {
-  it('keeps the established Claude, Codex, and Pi review environment namespaces', () => {
-    expect(REVIEW_PROVIDER_PREFIXES).toEqual(['CLAUDE_', 'CODEX_', 'PI_']);
-  });
-
   it('masks TMUX and TMUX_PANE without mutating the input or dropping other keys', () => {
     const input: NodeJS.ProcessEnv = { ...TMUX_PARENT, PATH: '/usr/bin' };
     const scrubbed = scrubTmuxEnvironment(input);
