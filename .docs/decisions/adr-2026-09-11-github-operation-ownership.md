@@ -153,21 +153,28 @@ Supersede adr-2026-07-03-gated-writeback-announcements. Operator approved this s
 > 1. *Identity is derived through one bot-credential read.* The bot's `login` and numeric `id`
 >    come from one typed read operation through the guarded GitHub runner that asks for the bot
 >    credential and returns only the identity of that credential's own account. It is the one
->    exception to D9.3's rule that reads use the operator's credential. It never resolves the
->    operator's identity and never feeds authorization. The result is cached for the daemon
->    process. There is no configured login, email, or co-author override.
+>    exception to D9.3's rule that reads use the operator's credential, and equally to the
+>    statement in adr-2026-07-22-canonical-tracker-client-seam item 3 that `github` reads keep
+>    the existing auth. It never resolves the operator's identity and never feeds
+>    authorization. A resolved identity is cached for the daemon process; the read happens during
+>    daemon worktree preparation, never inside a halt or other commit path. There is no
+>    configured login, email, or co-author override.
 > 2. *Attribution, not authorship.* The trailer is
 >    `Co-authored-by: <login> <<id>+<login>@users.noreply.github.com>`, GitHub's no-reply form
 >    for the bot account. Git author and committer identity stay whatever the operator's git
 >    configuration supplies. The bot remains a credential and never an actor (D9.1).
-> 3. *Daemon commits only, through two existing seams.* Build-agent commits in daemon-prepared
->    worktrees get the trailer from the worktree `prepare-commit-msg` hook, which reads a
->    per-worktree co-author value that dispatch preparation writes. This extends the pure-bash
->    hook pattern of adr-2026-07-09-deterministic-evidence-attribution-enforcement Decision 2
->    alongside the `Task:` stamp. Engine bookkeeping commits get it from one shared engine
->    commit helper, including commits made in a temporary worktree that has no hooks. Commits
->    from operator-run CLIs and manual operator commits are never stamped. Consistent with D5,
->    local commits stay on their existing paths; only the message changes.
+> 3. *Daemon commits only, through two existing seams.* Agent commits in daemon-prepared
+>    worktrees, including feature-build, CI-fix, and rebase-resolution worktrees, get the trailer
+>    from the worktree `prepare-commit-msg` hook, which reads a per-worktree co-author value that
+>    daemon worktree preparation writes. This extends the pure-bash hook pattern of
+>    adr-2026-07-09-deterministic-evidence-attribution-enforcement Decision 2, independent of
+>    any `Task:` stamp (adr-2026-07-26-concurrent-task-telemetry-and-symmetric-self-host-isolation
+>    retired automatic `Task:` injection). Engine bookkeeping commits get it from one shared
+>    engine commit helper, including commits made in a temporary worktree that has no hooks.
+>    Commits from operator-run CLIs and manual operator commits outside daemon worktrees are
+>    never stamped; a hand commit inside a daemon worktree is treated like any other commit
+>    there. Consistent with D5, local commits stay on their existing paths; only the message
+>    changes.
 > 4. *Idempotent stamping.* A commit carries the bot trailer at most once, even when both seams
 >    see it or a message already names the bot. Amends and rebases keep whatever trailer the
 >    original commit had and are not re-stamped.
