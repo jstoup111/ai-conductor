@@ -26,7 +26,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-import { filterReviewChildEnvironment } from '../../src/execution/child-environment.js';
+import { scrubTmuxEnvironment } from '../../src/execution/child-environment.js';
 import { createGuardedGithubOperationRunner, makeProductionGh } from '../../src/engine/tracker-client.js';
 import { makeProductionGit } from '../../src/engine/pr-labels.js';
 import { provisionProviderHome } from '../../src/engine/self-host/provider-home.js';
@@ -115,7 +115,9 @@ describe('GitHub bot token confinement', () => {
     try {
       const children = [
         provider.childEnv(),
-        filterReviewChildEnvironment('codex', process.env),
+        // Since #2747 a Codex review child inherits the daemon env (execa
+        // extendEnv) under a tmux-scrubbed overlay; no review allowlist exists.
+        scrubTmuxEnvironment({ ...process.env }),
         build.childEnv(),
       ];
       for (const environment of children) expect(Object.values(environment)).not.toContain(sentinel);
