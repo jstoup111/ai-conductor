@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-28T17:46:20.632Z
 Slug: unpark-resumes-a-halted-feature-on-stable-main
 Class: needs-human
 Halting step: unknown
