@@ -209,6 +209,35 @@ describe('openShipDraftPr', () => {
     expect(body).toContain(SHIP_DRAFT_PR_NOTE);
   });
 
+  it('passes the template-seeded body unchanged to the guarded create invocation', async () => {
+    const { git } = aheadGit();
+    const { gh, calls } = createsGh();
+    const template = '<!-- ai-conductor:step attest -->\nAttested-By: security-bot\n<!-- /ai-conductor:step -->';
+
+    await openShipDraftPr({
+      gh, git, cwd: CWD, branch: BRANCH, baseBranch: BASE,
+      featureDesc: 'widget import flow', prTemplateBytes: template,
+    });
+
+    const create = calls.find((args) => args[1] === 'create')!;
+    const body = create[create.indexOf('--body') + 1]!;
+    expect(body.indexOf(PR_BODY_FLOOR_MARKER)).toBeLessThan(body.indexOf(template));
+    expect(body).toContain(template);
+    expect(body.indexOf(template)).toBeLessThan(body.indexOf('<!-- Closes <owner/repo#N>'));
+    expect(body.indexOf('<!-- Closes <owner/repo#N>')).toBeLessThan(body.indexOf(SHIP_DRAFT_PR_NOTE));
+  });
+
+  it('passes the legacy no-template body byte-identically to create', async () => {
+    const { git } = aheadGit();
+    const { gh, calls } = createsGh();
+    const featureDesc = 'widget import flow';
+
+    await openShipDraftPr({ gh, git, cwd: CWD, branch: BRANCH, baseBranch: BASE, featureDesc });
+
+    const create = calls.find((args) => args[1] === 'create')!;
+    expect(create[create.indexOf('--body') + 1]).toBe(shipDraftPrBody(featureDesc));
+  });
+
   it('reuses an already-open PR without preserving or choosing a release disposition', async () => {
     const { git } = aheadGit();
     const { gh, calls: ghCalls } = fakeGh((args) => {

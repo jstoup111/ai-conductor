@@ -1,8 +1,11 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 /** Durable captures are isolated to the feature worktree. */
 export const PR_BODY_REGION_CAPTURES_PATH = '.pipeline/pr-body-region-captures.json';
+/** Shared greppable durability warning for a .pipeline root lost mid-run. */
+export const MISSING_PIPELINE_ROOT_WARNING =
+  'WARNING: .pipeline root was missing mid-run and had to be recreated (the directory was likely deleted by concurrent cleanup or an unscoped deleter)';
 
 type CaptureFile = Record<string, Record<string, string>>;
 
@@ -26,6 +29,34 @@ async function readCaptureFile(worktree: string): Promise<CaptureFile> {
   }
 }
 
+async function writeCaptureFile(worktree: string, captures: CaptureFile): Promise<void> {
+  const path = capturePath(worktree);
+  const pipelineRoot = dirname(path);
+  let warned = false;
+  const recreateRoot = async () => {
+    if (!warned) {
+      console.warn(MISSING_PIPELINE_ROOT_WARNING);
+      warned = true;
+    }
+    await mkdir(pipelineRoot, { recursive: true });
+  };
+  try {
+    await stat(pipelineRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    await recreateRoot();
+  }
+  try {
+    await writeFile(path, `${JSON.stringify(captures, null, 2)}\n`, 'utf8');
+  } catch (error) {
+    // A concurrent cleanup can remove the root after the read (or after the
+    // existence check). Recreate once and complete the idempotent write.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    await recreateRoot();
+    await writeFile(path, `${JSON.stringify(captures, null, 2)}\n`, 'utf8');
+  }
+}
+
 /** Reads every step capture for one pull request, never crossing PR identities. */
 export async function readRegionCaptures(worktree: string, pullRequestUrl: string): Promise<Readonly<Record<string, string>>> {
   const captures = await readCaptureFile(worktree);
@@ -39,15 +70,13 @@ export async function writeRegionCapture(
   stepKey: string,
   bytes: string,
 ): Promise<void> {
-  const path = capturePath(worktree);
   const captures = await readCaptureFile(worktree);
   const byStep = captures[pullRequestUrl] ?? {};
   const next: CaptureFile = {
     ...captures,
     [pullRequestUrl]: { ...byStep, [stepKey]: bytes },
   };
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+  await writeCaptureFile(worktree, next);
 }
 
 /** Drops one step's obsolete capture before that owner is dispatched again. */
@@ -56,13 +85,17 @@ export async function discardRegionCapture(
   pullRequestUrl: string,
   stepKey: string,
 ): Promise<void> {
-  const path = capturePath(worktree);
   const captures = await readCaptureFile(worktree);
   const byStep = captures[pullRequestUrl];
-  if (byStep === undefined || !(stepKey in byStep)) return;
+  if (byStep === undefined || !(stepKey in byStep)) {
+    // Preserve the durable-write boundary even when the capture was already
+    // absent: a missing root is still a mid-run durability incident.
+    await writeCaptureFile(worktree, captures);
+    return;
+  }
   const { [stepKey]: _discarded, ...remaining } = byStep;
   const next: CaptureFile = { ...captures };
   if (Object.keys(remaining).length === 0) delete next[pullRequestUrl];
   else next[pullRequestUrl] = remaining;
-  await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+  await writeCaptureFile(worktree, next);
 }

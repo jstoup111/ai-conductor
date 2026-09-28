@@ -2,11 +2,12 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   discardRegionCapture,
   PR_BODY_REGION_CAPTURES_PATH,
+  MISSING_PIPELINE_ROOT_WARNING,
   readRegionCaptures,
   writeRegionCapture,
 } from '../../src/engine/pr-body-region-store.js';
@@ -59,5 +60,33 @@ describe('PR body region capture store', () => {
     await expect(readRegionCaptures(worktree, pullRequestUrl)).resolves.toEqual({
       'second-owner': '\nsecond\n',
     });
+  });
+
+  it('warns and persists when the pipeline root is missing during a capture write', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'pr-body-region-store-'));
+    dirs.push(worktree);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await writeRegionCapture(worktree, 'https://github.com/example/repo/pull/12', 'compliance-attest', '\nattested\n');
+      expect(warning).toHaveBeenCalledWith(MISSING_PIPELINE_ROOT_WARNING);
+      await expect(readRegionCaptures(worktree, 'https://github.com/example/repo/pull/12')).resolves.toEqual({
+        'compliance-attest': '\nattested\n',
+      });
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it('warns and recreates a missing pipeline root during discard', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'pr-body-region-store-'));
+    dirs.push(worktree);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await discardRegionCapture(worktree, 'https://github.com/example/repo/pull/12', 'compliance-attest');
+      expect(warning).toHaveBeenCalledWith(MISSING_PIPELINE_ROOT_WARNING);
+      await expect(readFile(join(worktree, PR_BODY_REGION_CAPTURES_PATH), 'utf8')).resolves.toBe('{}\n');
+    } finally {
+      warning.mockRestore();
+    }
   });
 });

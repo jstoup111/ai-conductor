@@ -15,6 +15,7 @@ import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-agg
 import type { BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import { routeFinishPublicationDisposition } from '../../src/engine/finish-publication.js';
 import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
+import { maskProjectOwnedRegions } from '../../src/engine/pr-body-regions.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import { recordSkipVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
@@ -2027,7 +2028,12 @@ describe('production FINISH publication composition', () => {
         'Attested-By: security-bot',
         '<!-- /ai-conductor:step -->',
       ].join('\n');
-      const bodyWithFinalRegion = `Reader-facing summary.\n\n${capturedRegion}`;
+      // A prior FINISH attempt left coverage before a region restored at the
+      // tail. Replacing that existing section must stop at the region opener.
+      let body = [
+        'Reader-facing summary.', '', '## Reduced build-review coverage', '',
+        'Stale reduced coverage.', '', capturedRegion,
+      ].join('\n');
       const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
       const finding = canonicalizeBuildReviewFindingIdentity({
         rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
@@ -2059,8 +2065,8 @@ describe('production FINISH publication composition', () => {
       const edits: string[][] = [];
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body: bodyWithFinalRegion, isDraft: true }) };
-        if (args[0] === 'pr' && args[1] === 'edit') { edits.push(args); return commandResult; }
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body, isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'edit') { body = args[args.indexOf('--body') + 1]!; edits.push(args); return commandResult; }
         throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
       });
       const coordinator = createProductionFinishPublicationCoordinator({
@@ -2092,20 +2098,21 @@ describe('production FINISH publication composition', () => {
       }
 
       expect(edits.length).toBe(1);
-      const body = edits[0][edits[0].indexOf('--body') + 1];
-      expect(body).toContain('Reader-facing summary.');
-      expect(body).toContain(capturedRegion);
-      expect(body).toContain('Accepted build-review risk');
-      expect(body).toContain('## Reduced build-review coverage');
-      const regionEnd = body.indexOf(capturedRegion) + capturedRegion.length;
-      expect(body.indexOf('## Reduced build-review coverage', regionEnd)).toBeGreaterThan(regionEnd);
-      expect(body.indexOf('## Accepted build-review risk', regionEnd)).toBeGreaterThan(regionEnd);
-      expect(body).toContain('Current diagnostic: provider unavailable');
-      expect(body).toContain(`- Finding: \`${finding.id}\` — rubric: testQuality`);
-      expect(body).not.toContain('**Rationale:**');
-      expect(body).not.toContain('reason');
-      expect(body).toContain('Operator: james');
-      expect(body).toContain('Decision time: 2026-08-20T00:00:00.000Z');
+      const publishedBody = edits[0][edits[0].indexOf('--body') + 1];
+      expect(publishedBody).toContain('Reader-facing summary.');
+      expect(publishedBody).toContain(capturedRegion);
+      expect(publishedBody).toContain('Accepted build-review risk');
+      expect(publishedBody).toContain('## Reduced build-review coverage');
+      const regionEnd = publishedBody.indexOf(capturedRegion) + capturedRegion.length;
+      expect(publishedBody.indexOf('## Reduced build-review coverage', regionEnd)).toBeGreaterThan(regionEnd);
+      expect(publishedBody.indexOf('## Accepted build-review risk', regionEnd)).toBeGreaterThan(regionEnd);
+      expect(publishedBody).toContain('Current diagnostic: provider unavailable');
+      expect(publishedBody).toContain(`- Finding: \`${finding.id}\` — rubric: testQuality`);
+      expect(publishedBody).not.toContain('**Rationale:**');
+      expect(publishedBody).not.toContain('reason');
+      expect(publishedBody).toContain('Operator: james');
+      expect(publishedBody).toContain('Decision time: 2026-08-20T00:00:00.000Z');
+      expect(maskProjectOwnedRegions(publishedBody).match(/## Reduced build-review coverage/g)).toHaveLength(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

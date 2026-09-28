@@ -1,4 +1,5 @@
 import { writeFile, access, readFile, readdir, mkdir, rename, rm, symlink } from 'node:fs/promises';
+import { MISSING_PIPELINE_ROOT_WARNING } from './pr-body-region-store.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { execa } from 'execa';
 import { isUtf8 } from 'node:buffer';
@@ -5041,10 +5042,7 @@ export class DefaultStepRunner implements StepRunner {
     // then this is a mid-run wipe. Warn with greppable text.
     // If wasSessionMarkerFoundOnInit is false, we're in first-provision (no prior session).
     if (!dirExists && this.wasSessionMarkerFoundOnInit) {
-      this.log(
-        'WARNING: .pipeline root was missing mid-run and had to be recreated ' +
-        '(the directory was likely deleted by concurrent cleanup or an unscoped deleter)',
-      );
+      this.log(MISSING_PIPELINE_ROOT_WARNING);
     }
 
     // Create the directory with recursive flag. Since we already checked existence,

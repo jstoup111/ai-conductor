@@ -195,7 +195,14 @@ function upsertReducedCoverageEvidence(body: string, section: string | undefined
   // the engine never mistakes a project heading for its own section.
   const searchable = maskProjectOwnedRegions(body);
   const start = searchable.indexOf(heading);
-  const end = start === -1 ? -1 : searchable.indexOf('\n## ', start + heading.length);
+  const nextHeading = start === -1 ? -1 : searchable.indexOf('\n## ', start + heading.length);
+  // The masked view deliberately hides project-owned regions, so it cannot be
+  // used alone to find the end of an engine-owned section: a region appended
+  // after the section would otherwise be included in the replacement span.
+  const nextRegion = start === -1 ? -1 : body.indexOf('\n<!-- ai-conductor:step ', start + heading.length);
+  const end = nextHeading === -1 ? nextRegion
+    : nextRegion === -1 ? nextHeading
+      : Math.min(nextHeading, nextRegion);
   const withoutExisting = start === -1
     ? body
     : `${body.slice(0, start).trimEnd()}${end === -1 ? '' : `\n\n${body.slice(end + 1).trimStart()}`}`.trimEnd();
