@@ -1143,11 +1143,12 @@ export class DefaultStepRunner implements StepRunner {
           },
         };
       }
+      const featurePlanPath = this.planPathOverride
+        ?? await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
       const projection = await buildAsBuiltProjection(this.projectDir, undefined, {
         tier: state.complexity_tier,
         config: this.config as import('./as-built-policy.js').AsBuiltPolicyConfig,
-      }, this.planPathOverride
-        ?? await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined));
+      }, featurePlanPath);
       if (!projection.ok) {
         const { dimension, detail, actual, limit } = projection.fault;
         const bounds = actual === undefined || limit === undefined
@@ -1216,7 +1217,7 @@ export class DefaultStepRunner implements StepRunner {
               output: `structured-result-rejected: ${validated.field}: ${validated.requirement}`,
             };
           }
-          const references = await resolveAsBuiltReferences(validated.verdict, this.projectDir);
+          const references = await resolveAsBuiltReferences(validated.verdict, this.projectDir, featurePlanPath);
           if (!references.ok) {
             return {
               ...this.toStepRunResult(step, result),

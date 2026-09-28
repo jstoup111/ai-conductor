@@ -398,6 +398,22 @@ describe('as-built verdict contract', () => {
     });
   });
 
+  it('resolves task references against the named feature plan when the repository holds several plans', async () => {
+    const root = await governingReferenceFixture();
+    await writeFile(join(root, '.docs', 'plans', 'other-feature.md'), '### Task 9: Elsewhere\n');
+    const verdict: AsBuiltVerdict = {
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [], driftNotes: [],
+      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Complete the second task.' }],
+      violations: 'The second task is unreached.',
+      resolution: 'Wire the second task.',
+    };
+
+    await expect(resolveAsBuiltReferences(verdict, root)).resolves.toMatchObject({ ok: false });
+    await expect(resolveAsBuiltReferences(verdict, root, '.docs/plans/feature.md')).resolves.toEqual({ ok: true, verdict });
+  });
+
   it('rejects a task absent from the active plan', async () => {
     const root = await governingReferenceFixture();
     const verdict: AsBuiltVerdict = {
