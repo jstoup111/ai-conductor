@@ -1120,7 +1120,8 @@ export class DefaultStepRunner implements StepRunner {
       const projection = await buildAsBuiltProjection(this.projectDir, undefined, {
         tier: state.complexity_tier,
         config: this.config as import('./as-built-policy.js').AsBuiltPolicyConfig,
-      });
+      }, this.planPathOverride
+        ?? await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined));
       if (!projection.ok) {
         const { dimension, detail, actual, limit } = projection.fault;
         const bounds = actual === undefined || limit === undefined

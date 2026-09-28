@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { basename, join, relative } from 'node:path';
+import { basename, isAbsolute, join, relative } from 'node:path';
 
 import { findArtifactFiles, adrApprovalStatus, extractAuthoritativeStoryCriteria, parseAdrDecisions } from './artifacts.js';
 import { resolveAsBuiltPolicy, type AsBuiltPolicy } from './as-built-policy.js';
@@ -229,6 +229,7 @@ export async function buildAsBuiltProjection(
   worktree: string,
   limitOverrides?: Partial<AsBuiltProjectionLimits>,
   policyInput?: { readonly tier?: ComplexityTier; readonly config?: Parameters<typeof resolveAsBuiltPolicy>[0]['config'] },
+  featurePlanPath?: string,
 ): Promise<AsBuiltProjectionResult> {
   const limits: AsBuiltProjectionLimits = { ...AS_BUILT_PROJECTION_LIMITS, ...limitOverrides };
   const pending = await readPendingAsBuiltRemediationFindings(worktree);
@@ -236,7 +237,11 @@ export async function buildAsBuiltProjection(
     return { ok: false, fault: { dimension: 'pending-findings', detail: pending.reason } };
   }
 
-  const planPaths = (await findArtifactFiles(worktree, 'plan')).sort();
+  // A repository holds every shipped feature's plan; the caller names this
+  // feature's. Without one, only an unambiguous single plan is projectable.
+  const planPaths = featurePlanPath !== undefined
+    ? [isAbsolute(featurePlanPath) ? featurePlanPath : join(worktree, featurePlanPath)]
+    : (await findArtifactFiles(worktree, 'plan')).sort();
   if (planPaths.length !== 1) {
     return { ok: false, fault: { dimension: 'plan', detail: `expected one plan artifact; found ${planPaths.length}` } };
   }
