@@ -120,6 +120,8 @@ export type GithubOperationPayload =
  */
 export const GITHUB_AMBIENT_READ_REGISTRY = {
   'ambient.identity.read': [['api', 'user'], ['auth', 'status']],
+  /** Bot attribution is deliberately the bare account document, not a general ambient read capability. */
+  'ambient.bot-identity.read': [['api', 'user']],
   'ambient.repository.read': [['repo', 'view']],
   'ambient.pull-request.read': [['pr', 'view'], ['pr', 'list']],
   'ambient.issue.read': [['issue', 'view']],
@@ -150,8 +152,11 @@ export function decodeGithubAmbientRead(
     return { kind: 'refused', reason: 'invalid-target' };
   }
   const shapes = GITHUB_AMBIENT_READ_REGISTRY[operation as GithubAmbientReadOperation];
-  const registered = shapes.some((shape) => shape.every((word, index) => args[index] === word)
-    && (shape.length > 1 || args.length === shape.length));
+  const registered = shapes.some((shape) => {
+    const exactShape = operation === 'ambient.bot-identity.read' || shape.length === 1;
+    return shape.every((word, index) => args[index] === word)
+      && (!exactShape || args.length === shape.length);
+  });
   const bound = args.some((arg) => AMBIENT_REPOSITORY_FLAG.test(arg) || /(?:^|\/)repos\//.test(arg));
   const writes = args[0] === 'api' && args.slice(2).some((arg) => AMBIENT_WRITE_FLAG.test(arg));
   if (!registered || bound || writes) return { kind: 'refused', reason: 'invalid-target' };
