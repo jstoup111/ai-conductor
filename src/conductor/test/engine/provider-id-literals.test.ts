@@ -1,4 +1,4 @@
-// Covers: task:8
+// Covers: task:8, task:rem-as-built-rem-pg1-1
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,8 +43,13 @@ function findProviderLiterals(
   const forbiddenLiterals = new Set<string>(BUILT_IN_PROVIDERS.flatMap(
     ({ id, displayName }) => [id, displayName],
   ));
-  const forbiddenIds = new Set<string>(BUILT_IN_PROVIDERS.map(({ id }) => id));
-  const adapter = BUILT_IN_PROVIDERS.find(({ adapterModule }) => adapterModule === module);
+  const adapter = adapterModules.has(module)
+    ? BUILT_IN_PROVIDERS.find(({ adapterModule }) => adapterModule === module)
+    : undefined;
+  const foreignProviders = adapter === undefined
+    ? BUILT_IN_PROVIDERS
+    : BUILT_IN_PROVIDERS.filter(({ id }) => id !== adapter.id);
+  const forbiddenIds = new Set<string>(foreignProviders.map(({ id }) => id));
   const findings: ProviderLiteralFinding[] = [];
   const report = (node: ts.Node, value: string): void => {
     findings.push({
@@ -75,13 +80,17 @@ function findProviderLiterals(
       || ts.isTemplateMiddle(node)
       || ts.isTemplateTail(node)) {
       if (adapter) {
-        if (hasDisplayName(node.text, adapter.displayName)) report(node, node.text);
+        if (forbiddenIds.has(node.text)
+          || foreignProviders.some(({ displayName }) => hasDisplayName(node.text, displayName))
+          || (node.text !== adapter.displayName && hasDisplayName(node.text, adapter.displayName))) {
+          report(node, node.text);
+        }
       } else if (forbiddenLiterals.has(node.text)
         || BUILT_IN_PROVIDERS.some(({ displayName }) => hasDisplayName(node.text, displayName))) {
         report(node, node.text);
       }
     }
-    if (!adapter && isDeclaredPropertyName(node)
+    if (isDeclaredPropertyName(node)
       && (ts.isIdentifier(node)
         || (ts.isComputedPropertyName(node) && ts.isIdentifier(node.expression)))) {
       const expression = ts.isComputedPropertyName(node) ? node.expression : undefined;
@@ -149,6 +158,32 @@ describe('structural: built-in provider literals', () => {
     expect(findProviderLiterals('execution/pi-provider.ts', source)).toEqual([
       { file: 'execution/pi-provider.ts', line: 1, value: 'Pi invocation aborted.' },
     ]);
+  });
+
+  it('reports foreign provider ids and display names inside a declared adapter', () => {
+    const source = ts.createSourceFile(
+      'fixtures/codex-adapter.ts',
+      "const provider = 'claude';\nconst providers = { claude: true };\nconst output = 'Claude';",
+      ts.ScriptTarget.Latest,
+      true,
+    );
+
+    expect(findProviderLiterals('execution/codex-provider.ts', source)).toEqual([
+      { file: 'execution/codex-provider.ts', line: 1, value: 'claude' },
+      { file: 'execution/codex-provider.ts', line: 2, value: 'claude' },
+      { file: 'execution/codex-provider.ts', line: 3, value: 'Claude' },
+    ]);
+  });
+
+  it('keeps an adapter’s own provider id and display name exempt', () => {
+    const source = ts.createSourceFile(
+      'fixtures/codex-adapter.ts',
+      "const provider = 'codex';\nconst displayName = 'Codex';",
+      ts.ScriptTarget.Latest,
+      true,
+    );
+
+    expect(findProviderLiterals('execution/codex-provider.ts', source)).toEqual([]);
   });
 
   it('has no built-in provider ids or display names outside the catalog and declared adapters', async () => {
