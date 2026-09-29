@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-29T20:22:20.114Z
 Slug: per-project-work-tracker-backend-selection-in-regi
 Class: needs-human
 Halting step: prd_audit
