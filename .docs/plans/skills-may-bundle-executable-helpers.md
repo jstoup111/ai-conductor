@@ -275,3 +275,11 @@ Task 1 ─┬─> Task 2
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-adr-001: docs/contributing/code-organization.md:27 — delete the `src/conductor/bin/` layout row (the directory is dead and slated for a separate removal feature; ADR D7); docs/contributing/code-organization.md:152 — change the `intake-file-cli.ts` row to say it is invoked by `skills/intake/scripts/intake-file` (the bundled helper, Task 1/Task 4); afterwards `git grep -n 'conductor/bin\|bin/intake-file' -- ':!.docs' ':!src/conductor/bin'` must return nothing
+**Gate:** as-built
+**Rationale:** ADR D7 (adr-2026-09-28-skills-may-bundle-executable-helpers:103-106) requires every reference to the retired entry point updated, including the dead src/conductor/bin/intake-file named in contributor docs; docs/contributing/code-organization.md:27 still lists src/conductor/bin/ as an active wrapper and :152 says intake-file-cli.ts is invoked by it. This is conforming documentation drift under an APPROVED ADR, so it routes to build. Task 4's Done-when grep is scoped to skills/src/.github and does not admit docs/, so existing-task does not apply. Sweep: `git grep 'conductor/bin|bin/intake-file' -- ':!.docs' ':!src/conductor/bin'` returns only these two lines. The src/conductor/bin/intake-file file itself stays on disk, because Task 4 step 4 and ADR D7 defer its deletion to a separate removal feature. Found and excluded: the drift notes at .docs/architecture/intake-only-enforcement.md:18 (another feature's sealed artifact, which needs its owning DECIDE step) and .docs/architecture/skills-may-bundle-executable-helpers.md:38 (sealed, non-blocking) are not edited here. Historical .docs/decisions and .docs/conflicts mentions are also excluded, because they are records.
+**Governing clause:** adr-2026-09-28-skills-may-bundle-executable-helpers decision 7
+**Done when:**
+- adr-2026-09-28-skills-may-bundle-executable-helpers decision 7 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-001 is complete.
