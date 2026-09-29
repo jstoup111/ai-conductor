@@ -10,6 +10,7 @@ import {
   sep,
 } from 'path';
 import { load as loadYaml } from 'js-yaml';
+import { validRange } from 'semver';
 import type {
   HarnessConfig,
   EffortLevel,
@@ -593,6 +594,18 @@ export function validateConfig(
   if (providerSelectionErr) return { ok: false, error: providerSelectionErr };
   const providerSubstitutionErr = validateProviderSubstitution(obj.provider_substitution, 'provider_substitution');
   if (providerSubstitutionErr) return { ok: false, error: providerSubstitutionErr };
+
+  if (Object.hasOwn(obj, 'harness_version')) {
+    if (typeof obj.harness_version !== 'string') {
+      return errVal('harness_version must be a string');
+    }
+    if (obj.harness_version.trim() === '') {
+      return errVal('harness_version must not be empty');
+    }
+    if (validRange(obj.harness_version) === null) {
+      return errVal(`harness_version "${obj.harness_version}" is not a valid version range`);
+    }
+  }
 
   // defaults
   if (obj.defaults !== undefined) {

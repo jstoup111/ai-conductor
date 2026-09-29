@@ -49,6 +49,33 @@ describe('project config load errors', () => {
   });
 });
 
+describe('harness_version validation', () => {
+  it.each([
+    ['a number', 1, /harness_version must be a string/],
+    ['an empty string', '', /harness_version must not be empty/],
+    ['a whitespace-only string', '  \t', /harness_version must not be empty/],
+    ['an invalid range', 'latest', /harness_version.*latest.*not a valid version range/i],
+  ])('rejects %s at the validation boundary', (_name, harnessVersion, diagnostic) => {
+    const result = validateConfig({ harness_version: harnessVersion });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatchObject({ type: 'validation_error' });
+    expect(result.error.message).toMatch(diagnostic);
+  });
+
+  it.each([
+    ['*'],
+    ['^1.2.0'],
+  ])('accepts the valid range %s without an installed version', (harnessVersion) => {
+    expect(validateConfig({ harness_version: harnessVersion })).toMatchObject({
+      ok: true,
+      config: { harness_version: harnessVersion },
+    });
+  });
+
+});
+
 describe('gate_code_validity project config', () => {
   it('loads enabled: false from YAML and preserves it through runtime resolution', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'gate-code-validity-config-'));

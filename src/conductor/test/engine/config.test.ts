@@ -130,6 +130,36 @@ steps:
       expect(result.error.message).toContain('>=2.0.0');
     });
 
+    it.each([
+      ['a number', 'harness_version: 1\n', /harness_version must be a string/],
+      ['an empty string', 'harness_version: ""\n', /harness_version must not be empty/],
+      ['an invalid range', 'harness_version: latest\n', /harness_version.*latest.*not a valid version range/i],
+    ])('returns a validation error through project config loading for %s', async (_name, contents, diagnostic) => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), contents);
+
+      const result = await loadConfig(tmpDir, '1.5.0');
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toMatchObject({ type: 'validation_error' });
+      expect(result.error.message).toMatch(diagnostic);
+    });
+
+    it('loads a wildcard range with an installed version', async () => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), 'harness_version: "*"\n');
+
+      await expect(loadConfig(tmpDir, '1.5.0')).resolves.toMatchObject({
+        ok: true,
+        config: { harness_version: '*' },
+      });
+    });
+
+    it.each(['1.5.0', '0.0.1'])('does not apply a version check when harness_version is absent (%s)', async (installedVersion) => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), '{}\n');
+
+      await expect(loadConfig(tmpDir, installedVersion)).resolves.toMatchObject({ ok: true });
+    });
+
     it('parses valid .ai-conductor/config.yml (new flat schema)', async () => {
       // Note: we write skill paths here pointing at files we don't create, so
       // the validator's skill-file-exists check would fail if projectRoot is
