@@ -30,7 +30,7 @@ import {
   CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
 } from '../src/engine/provider-model-policy.js';
-import { DEFAULT_STEP_MODELS } from '../src/engine/resolved-config.js';
+import { DEFAULT_PROVIDER, providerDescriptor } from '../src/execution/provider-catalog.js';
 import {
   SKILL_STEP_MAP,
   PIN_EXEMPT_SKILLS,
@@ -610,7 +610,9 @@ describe('buildPinsJson', () => {
     const pins = buildPinsJson();
 
     for (const [skill, step] of Object.entries(SKILL_STEP_MAP)) {
-      expect(pins[skill]).toEqual({ expected: DEFAULT_STEP_MODELS[step] });
+      expect(pins[skill]).toEqual({
+        expected: providerDescriptor(DEFAULT_PROVIDER).modelPolicy.stepModels[step],
+      });
     }
   });
 
@@ -632,7 +634,7 @@ describe('buildPinsJson', () => {
   it('a known mapped skill (rebase) resolves to its DEFAULT_STEP_MODELS value', () => {
     const pins = buildPinsJson();
     expect(pins['rebase']).toEqual({ expected: 'opus' });
-    expect(DEFAULT_STEP_MODELS.rebase).toBe('opus');
+    expect(providerDescriptor(DEFAULT_PROVIDER).modelPolicy.stepModels.rebase).toBe('opus');
   });
 
   it('a known exempt skill (code-review) is marked exempt, not expected', () => {

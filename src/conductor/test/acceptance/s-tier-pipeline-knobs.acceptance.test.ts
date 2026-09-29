@@ -8,27 +8,24 @@
  * resolved for a tier, then — on retry — escalated. Neither function's own
  * unit test proves the CHAIN works; that's the acceptance-level claim these
  * specs make. Per the plan (.docs/plans/s-tier-pipeline-knobs.md), this
- * feature adds S rows to `DEFAULT_STEP_TIER_OVERRIDES` (table data only) —
+ * feature adds S rows to the default provider policy's `stepTierOverrides` (table data only) —
  * no new step type, artifact, flow, or gate reader.
  *
  * Covers stories: S1 (lean base), S2 (M/L untouched), S5 (retry floor),
  * S6 (no gate weakened), S7 (escalation still fires). S3/S4/S8 are pinned
  * as unit/verify-only tests per the plan (T4, T3, T8) — not duplicated here.
  *
- * RED reason: `DEFAULT_STEP_TIER_OVERRIDES` has no `explore` or `build` rows
+ * RED reason: the default provider policy's `stepTierOverrides` has no `explore` or `build` rows
  * yet (resolved-config.ts:144-158) — the S1/S7 test fails today because
  * `resolveStepConfig('explore', 'DECIDE', undefined, { tier: 'S' })` returns
  * the unchanged base effort (`medium`), not the lean `low` the story requires.
  */
 
 import { describe, it, expect } from 'vitest';
-import {
-  resolveStepConfig,
-  DEFAULT_STEP_TIER_OVERRIDES,
-  DEFAULT_STEP_EFFORT,
-} from '../../src/engine/resolved-config.js';
+import { resolveStepConfig } from '../../src/engine/resolved-config.js';
 import { escalateAttempt } from '../../src/engine/escalation.js';
 import { shouldSkipForTier, getSkippableSteps } from '../../src/engine/steps.js';
+import { DEFAULT_PROVIDER, providerDescriptor } from '../../src/execution/provider-catalog.js';
 
 describe('S-tier pipeline knobs (#668)', () => {
   describe('Story 1 + Story 7 — an S explore step resolves lean, then still climbs the escalation ladder', () => {
@@ -45,7 +42,7 @@ describe('S-tier pipeline knobs (#668)', () => {
       //
       // CONFIDENCE NOTE (verify-claims): the story text reads "attempt 3
       // bumps the model tier", but `explore`'s base model is `fable`
-      // (DEFAULT_STEP_MODELS.explore, resolved-config.ts:30) — already the
+      // (the default provider policy's stepModels.explore) — already the
       // top rung of MODEL_TIER_ORDER (escalation.ts:29), so `bumpModel`
       // documents this exact case as a no-op ("a model already at the top
       // tier is a no-op", escalation.ts:53). VERIFIED (not a guess): asserting
@@ -67,8 +64,8 @@ describe('S-tier pipeline knobs (#668)', () => {
     it('leaves explore effort at the unchanged base for M and L', () => {
       const m = resolveStepConfig('explore', 'DECIDE', undefined, { tier: 'M' });
       const l = resolveStepConfig('explore', 'DECIDE', undefined, { tier: 'L' });
-      expect(m.effort).toBe(DEFAULT_STEP_EFFORT.explore);
-      expect(l.effort).toBe(DEFAULT_STEP_EFFORT.explore);
+      expect(m.effort).toBe(providerDescriptor(DEFAULT_PROVIDER).modelPolicy.stepEfforts.explore);
+      expect(l.effort).toBe(providerDescriptor(DEFAULT_PROVIDER).modelPolicy.stepEfforts.explore);
     });
 
     it('keeps the #668 S retry profile out of L while retaining the approved L build effort', () => {
@@ -82,7 +79,7 @@ describe('S-tier pipeline knobs (#668)', () => {
 
   describe('Story 5 (negative) — the #188 retry floor of 3 holds for every S row', () => {
     it('never lets a DEFAULT_STEP_TIER_OVERRIDES[*].S row set max_retries below 3', () => {
-      const sRows = Object.values(DEFAULT_STEP_TIER_OVERRIDES)
+      const sRows = Object.values(providerDescriptor(DEFAULT_PROVIDER).modelPolicy.stepTierOverrides)
         .map((byTier) => byTier?.S)
         .filter((row): row is NonNullable<typeof row> => row !== undefined);
       expect(sRows.length).toBeGreaterThan(0);

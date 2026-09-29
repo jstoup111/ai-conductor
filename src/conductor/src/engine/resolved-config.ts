@@ -27,13 +27,7 @@ import type { BuildReviewCustomReviewerPayload } from './build-review-domain.js'
 import type { BuildReviewCustomFindingIdentity } from './build-review-finding-identity.js';
 import type { BuildReviewFrozenInputScope } from './build-review-materialization.js';
 
-// Legacy aliases retained for existing consumers. New resolution accepts a
-// provider policy explicitly, so these never participate in provider-aware
-// resolution.
 const DEFAULT_PROVIDER_MODEL_POLICY = providerDescriptor(DEFAULT_PROVIDER).modelPolicy;
-
-export const DEFAULT_STEP_MODELS = DEFAULT_PROVIDER_MODEL_POLICY.stepModels;
-export const DEFAULT_STEP_EFFORT = DEFAULT_PROVIDER_MODEL_POLICY.stepEfforts;
 
 export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   bootstrap: 1,
@@ -97,8 +91,6 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   remediate: 'auto',       // conductor routes deterministically from remediation.json
   attribution_verify: 'auto', // automated verification of commit attribution metadata
 };
-
-export const DEFAULT_STEP_TIER_OVERRIDES = DEFAULT_PROVIDER_MODEL_POLICY.stepTierOverrides;
 
 export const FALLBACK_MODEL = 'sonnet';
 export const FALLBACK_EFFORT: EffortLevel = 'medium';
