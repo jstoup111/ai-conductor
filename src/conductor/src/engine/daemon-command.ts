@@ -32,6 +32,8 @@ export interface DaemonCommandOptions {
   maxIdlePolls?: number;
   /** Show completed features in status output. Aliases: `--completed`, `--all`. Default false. */
   showCompleted: boolean;
+  /** Daemon run flags forwarded to a replacement engine process. */
+  operatorFlagArgs?: string[];
 }
 
 /** Parse the value of a named flag (e.g. `--max-items 5`) from an argv array. */
@@ -234,6 +236,17 @@ export function detectDaemonCommand(argv: string[]): DaemonCommandOptions | null
   if (argv[3] === 'exit-witness') return null;
   if (MANAGEMENT_VERBS.has(argv[3])) return null;
 
+  const operatorFlagArgs: string[] = [];
+  for (const flag of ['--concurrency', '--max-items', '--max-cost', '--max-runtime', '--idle-poll', '--max-idle-polls']) {
+    if (!argv.includes(flag)) continue;
+    operatorFlagArgs.push(flag);
+    const value = flagValue(argv, flag);
+    if (value !== null) operatorFlagArgs.push(value);
+  }
+  for (const flag of ['--no-watch', '--completed', '--all']) {
+    if (argv.includes(flag)) operatorFlagArgs.push(flag);
+  }
+
   return {
     concurrency: intFlag(argv, '--concurrency', 1) ?? 1,
     concurrencyExplicit: argv.includes('--concurrency') || undefined,
@@ -245,5 +258,6 @@ export function detectDaemonCommand(argv: string[]): DaemonCommandOptions | null
     idlePollSeconds: intFlag(argv, '--idle-poll', 60),
     maxIdlePolls: intFlag(argv, '--max-idle-polls'),
     showCompleted: argv.includes('--completed') || argv.includes('--all'),
+    operatorFlagArgs,
   };
 }

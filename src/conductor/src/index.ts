@@ -227,6 +227,7 @@ import { runOverlapScan, renderReport as renderOverlapReport } from './engine/ov
 import { makeProductionGh } from './engine/pr-labels.js';
 import { buildDaemonExitWitnessCommand, hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveDaemonForegroundCommand } from './engine/daemon-supervisor-cli.js';
+import { shellQuote } from './engine/canonical-launcher.js';
 
 // ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
 
@@ -415,7 +416,11 @@ export async function buildDaemonModeOptions(
   const sessionName = deps.sessionNameForRepo(projectRoot);
   const triggerSelfRestart = (await deps.hasSession(sessionName))
     ? async () => {
-        const command = await (deps.resolveDaemonForegroundCommand ?? resolveDaemonForegroundCommand)(projectRoot);
+        const foregroundCommand = await (deps.resolveDaemonForegroundCommand ?? resolveDaemonForegroundCommand)(projectRoot);
+        const replayedFlags = daemonCmd.operatorFlagArgs?.length
+          ? ` ${daemonCmd.operatorFlagArgs.map(shellQuote).join(' ')}`
+          : '';
+        const command = `${foregroundCommand}${replayedFlags}`;
         const witnessCommand = (deps.buildDaemonExitWitnessCommand ?? buildDaemonExitWitnessCommand)(command, projectRoot);
         await deps.respawnPane(sessionName, undefined, witnessCommand);
       }
