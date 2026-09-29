@@ -335,3 +335,37 @@ Task 4 ────────────────────────�
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-ar001-1: src/conductor/src/intake-loop-cli.ts — add an optional `events?: IntakeEventEmitter` to DispatchIntakeLoopOpts and pass `events: opts.events` into the buildIntake call (line ~137); src/conductor/src/index.ts:853 — wrap dispatchIntakeLoop in startOperatorEventSpine(process.cwd()) exactly like the engineer root at index.ts:837-843 (pass spine.events, call spine.stop() in finally)
+**Gate:** as-built
+**Rationale:** Verified (99%, as-built reachability + source read): index.ts:853 calls dispatchIntakeLoop(intakeLoopCmd) with no emitter and intake-loop-cli.ts:137 calls buildIntake({engineerDir, registryPath, gh, printErr}) without events, so the composite's tracker_backend_unavailable emissions (intake-backend-composite.ts:73/:88/:125/:145) are skipped on the background poll path, violating adr-2026-07-22-canonical-tracker-client-seam D4; the approved architecture stays authoritative and the fix is conforming wiring that mirrors the engineer root (index.ts:837 startOperatorEventSpine), so this is build, not architecture_review or plan. Sibling sweep: the engineer path (index.ts:837-840) and prePollIntake (engineer-cli.ts:821) already thread events; no other buildIntake caller exists in src. No existing test or assertion is removed; Task 5 parity and Task 6-8 composite coverage are untouched.
+**Governing clause:** adr-2026-07-22-canonical-tracker-client-seam decision 4
+**Done when:**
+- adr-2026-07-22-canonical-tracker-client-seam decision 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ar001-1 is complete.
+
+### Task rem-as-built-rem-ar001-2: src/conductor/test/acceptance/background-intake-conduct-loop.test.ts — add a RED-first case: dispatchIntakeLoop with --once, a registry containing one jira-selected project, a scripted gh runner and a recording emitter passed as opts.events emits exactly one tracker_backend_unavailable {project, backend: 'jira', reason: 'no-adapter'} and records no gh argv for that project; assert it fails on the pre-change intake-loop-cli.ts
+**Gate:** as-built
+**Rationale:** Verified (99%, as-built reachability + source read): index.ts:853 calls dispatchIntakeLoop(intakeLoopCmd) with no emitter and intake-loop-cli.ts:137 calls buildIntake({engineerDir, registryPath, gh, printErr}) without events, so the composite's tracker_backend_unavailable emissions (intake-backend-composite.ts:73/:88/:125/:145) are skipped on the background poll path, violating adr-2026-07-22-canonical-tracker-client-seam D4; the approved architecture stays authoritative and the fix is conforming wiring that mirrors the engineer root (index.ts:837 startOperatorEventSpine), so this is build, not architecture_review or plan. Sibling sweep: the engineer path (index.ts:837-840) and prePollIntake (engineer-cli.ts:821) already thread events; no other buildIntake caller exists in src. No existing test or assertion is removed; Task 5 parity and Task 6-8 composite coverage are untouched.
+**Governing clause:** adr-2026-07-22-canonical-tracker-client-seam decision 4
+**Done when:**
+- adr-2026-07-22-canonical-tracker-client-seam decision 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ar001-2 is complete.
+
+### Task rem-as-built-rem-ar002-1: src/conductor/src/daemon-cli.ts:2936 — remove the unreachable `case 'tracker_backend_unavailable'` branch from renderDaemonEventUnsafe (falls through to the existing default); keep EVENT_SINKS tracker_backend_unavailable {render: true, persist: true} at src/conductor/src/engine/event-sinks.ts:150 unchanged so Task 4's Done-when and event-sinks.test.ts coverage survive
+**Gate:** as-built
+**Rationale:** Verified (97%, grep of src): the tracker_backend_unavailable case at daemon-cli.ts:2936 (added by commit 40155c5e3, outside every plan task's files) has no production producer because the daemon never calls buildIntake/prePollIntake — the only emitters are the engineer and intake-loop composites, which persist to .pipeline/events.jsonl via the operator spine and never reach daemon buses; Task 4's Done-when only requires the EVENT_SINKS row with render enabled (event-sinks.ts:150), which is preserved, and no test asserts the daemon line, so removing the dead branch drops no delivered coverage. The render obligation is made reachable instead on the intake-loop console, the process that actually produces the event after AR-001's wiring. Matched pair: event-sinks.ts:150 render:true and the renderer must agree — the new intake-loop renderer is the counterpart that keeps render:true truthful.
+**Parent task:** 4
+**Governing clause:** Task 4
+**Done when:**
+- Task 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ar002-1 is complete.
+
+### Task rem-as-built-rem-ar002-2: src/conductor/src/intake-loop-cli.ts — when opts.events is supplied, subscribe `tracker_backend_unavailable` on it and render one warning line through the loop's `log`/`printErr` (`tracker backend unavailable: <project> selected <backend> (<reason>)`), unsubscribing before return; add a test in src/conductor/test/acceptance/background-intake-conduct-loop.test.ts asserting that line is printed once for a jira-selected project on a --once tick and absent for an all-github registry
+**Gate:** as-built
+**Rationale:** Verified (97%, grep of src): the tracker_backend_unavailable case at daemon-cli.ts:2936 (added by commit 40155c5e3, outside every plan task's files) has no production producer because the daemon never calls buildIntake/prePollIntake — the only emitters are the engineer and intake-loop composites, which persist to .pipeline/events.jsonl via the operator spine and never reach daemon buses; Task 4's Done-when only requires the EVENT_SINKS row with render enabled (event-sinks.ts:150), which is preserved, and no test asserts the daemon line, so removing the dead branch drops no delivered coverage. The render obligation is made reachable instead on the intake-loop console, the process that actually produces the event after AR-001's wiring. Matched pair: event-sinks.ts:150 render:true and the renderer must agree — the new intake-loop renderer is the counterpart that keeps render:true truthful.
+**Parent task:** 4
+**Governing clause:** Task 4
+**Done when:**
+- Task 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ar002-2 is complete.
