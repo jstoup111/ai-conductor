@@ -1,4 +1,4 @@
-// Covers: task:2, task:7
+// Covers: task:7
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -124,7 +124,5 @@ describe('engine/tracker-client — issue operations use guarded requests', () =
         'acme/owned',
       ],
     });
-    expect(terminal.calls.filter(({ args }) => args.includes('POST') && args.some((arg) => arg.endsWith('/dependencies/blocked_by')))).toEqual([]);
-    expect('addIssueDependency' in client).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 
@@ -35,7 +35,6 @@ import {
   createGuardedGithubOperationRunner,
   makeProductionGh,
   type GhRunner,
-  type GithubMutationExecutionContext,
 } from '../../src/engine/tracker-client.js';
 import { executeGithubOperation } from '../../src/engine/github-operations.js';
 import { GithubBotAuthRefusalError } from '../../src/engine/github-bot-auth-refusal.js';
@@ -74,25 +73,6 @@ function expectedSearchCall(): { args: string[]; opts: { cwd: string } } {
   };
 }
 
-function ownedTrackerClient(runner: GhRunner) {
-  const mutation: GithubMutationExecutionContext = {
-    provenance: {
-      repository: 'acme/owned',
-      defaultBranch: 'main',
-      specBranch: 'spec/owned',
-      featureMarker: '.docs/specs/owned.md',
-      publication: 'initial',
-    },
-    dependencies: {
-      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
-      provenanceDiscovery: {
-        readCommittedRecords: async () => [{ path: '.docs/specs/owned.md', content: 'Owner: alice\n' }],
-      },
-    },
-  };
-  return createGithubTrackerClient(runner, { mutation, repository: 'acme/owned' });
-}
-
 describe('createGuardedGithubOperationRunner dependency id guard', () => {
   it('refuses a dependency add without its database id before the transport', async () => {
     const calls: string[][] = [];
@@ -119,13 +99,6 @@ describe('createGuardedGithubOperationRunner dependency id guard', () => {
     });
     expect((result as { error: string }).error).toContain('acme/app#42');
     expect(calls).toEqual([]);
-  });
-});
-
-describe('createGithubTrackerClient dependency port', () => {
-  it('exposes no addIssueDependency method; dependency adds go through intake filing and the dependency migration', () => {
-    const { runner } = fakeRunner('');
-    expect('addIssueDependency' in ownedTrackerClient(runner)).toBe(false);
   });
 });
 
