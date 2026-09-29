@@ -1,6 +1,5 @@
 import {
-  BUILD_REVIEW_ACCEPTED_RISK_START,
-  REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
+  ENGINE_OWNED_PR_BODY_TEXTS,
 } from './build-review-accepted-risk.js';
 
 export type PrTemplateRegion = {
@@ -94,8 +93,7 @@ export function parsePrTemplateRegions(template: string): ParsePrTemplateRegions
     if (marker === CLOSING_MARKER) {
       if (open === undefined) return { ok: false, error: { kind: 'unexpected-closing-marker' } };
       const bytes = template.slice(open.contentStart, markerStart);
-      const engineOwnedText = [REDUCED_BUILD_REVIEW_COVERAGE_HEADING, BUILD_REVIEW_ACCEPTED_RISK_START]
-        .find((text) => bytes.includes(text));
+      const engineOwnedText = ENGINE_OWNED_PR_BODY_TEXTS.find((text) => bytes.includes(text));
       if (engineOwnedText !== undefined) {
         return { ok: false, error: { kind: 'engine-owned-text', key: open.key, text: engineOwnedText } };
       }

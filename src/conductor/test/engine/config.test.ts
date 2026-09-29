@@ -25,6 +25,12 @@ import {
 } from '../../src/engine/resolved-config.js';
 import * as resolvedConfig from '../../src/engine/resolved-config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import {
+  BUILD_REVIEW_ACCEPTED_RISK_END,
+  BUILD_REVIEW_ACCEPTED_RISK_HEADING,
+  BUILD_REVIEW_ACCEPTED_RISK_START,
+  REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
+} from '../../src/engine/build-review-accepted-risk.js';
 
 describe('config', () => {
   let tmpDir: string;
@@ -151,8 +157,10 @@ describe('config', () => {
         ['a duplicate owner', `${region('compliance-attest')}\n${region('compliance-attest')}`, customStep('compliance-attest'), ['compliance-attest', 'owns more than one region']],
         ['an unclosed owner', '<!-- ai-conductor:step compliance-attest -->\nAttested', customStep('compliance-attest'), ['compliance-attest', 'unclosed']],
         ['nested owners', '<!-- ai-conductor:step compliance-attest -->\n<!-- ai-conductor:step release-disposition -->\n<!-- /ai-conductor:step -->\n<!-- /ai-conductor:step -->', customStep('compliance-attest') + customStep('release-disposition', 'compliance-attest'), ['compliance-attest', 'release-disposition', 'nested inside']],
-        ['engine-owned heading', region('compliance-attest', '## Reduced build-review coverage'), customStep('compliance-attest'), ['compliance-attest', '## Reduced build-review coverage']],
-        ['engine-owned accepted-risk marker', region('compliance-attest', '<!-- build-review-accepted-risk:start -->'), customStep('compliance-attest'), ['compliance-attest', '<!-- build-review-accepted-risk:start -->']],
+        ['engine-owned heading', region('compliance-attest', REDUCED_BUILD_REVIEW_COVERAGE_HEADING), customStep('compliance-attest'), ['compliance-attest', REDUCED_BUILD_REVIEW_COVERAGE_HEADING]],
+        ['engine-owned accepted-risk heading', region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_HEADING), customStep('compliance-attest'), ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_HEADING]],
+        ['engine-owned accepted-risk marker', region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_START), customStep('compliance-attest'), ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_START]],
+        ['engine-owned accepted-risk end marker', region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_END), customStep('compliance-attest'), ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_END]],
       ])('rejects %s', async (_caseName, template, steps, expectedMessageParts) => {
         for (const name of ['compliance-attest', 'release-disposition', 'late-attest']) {
           await writeCustomSkill(name);

@@ -7,7 +7,14 @@ import { maskProjectOwnedRegions } from './pr-body-regions.js';
 export const BUILD_REVIEW_ACCEPTED_RISK_START = '<!-- build-review-accepted-risk:start -->';
 export const BUILD_REVIEW_ACCEPTED_RISK_END = '<!-- build-review-accepted-risk:end -->';
 export const REDUCED_BUILD_REVIEW_COVERAGE_HEADING = '## Reduced build-review coverage';
-const SECTION = '## Accepted build-review risk';
+export const BUILD_REVIEW_ACCEPTED_RISK_HEADING = '## Accepted build-review risk';
+export const ENGINE_OWNED_PR_BODY_TEXTS = [
+  REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
+  BUILD_REVIEW_ACCEPTED_RISK_HEADING,
+  BUILD_REVIEW_ACCEPTED_RISK_START,
+  BUILD_REVIEW_ACCEPTED_RISK_END,
+] as const;
+const SECTION = BUILD_REVIEW_ACCEPTED_RISK_HEADING;
 const POINTER = "Details are retained in the feature's local build-review disposition store.";
 
 export type BuildReviewAcceptedRiskRenderResult =

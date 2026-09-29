@@ -2,6 +2,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BUILD_REVIEW_ACCEPTED_RISK_END,
+  BUILD_REVIEW_ACCEPTED_RISK_HEADING,
   BUILD_REVIEW_ACCEPTED_RISK_START,
   REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
 } from '../../src/engine/build-review-accepted-risk.js';
@@ -93,7 +95,9 @@ describe('parsePrTemplateRegions', () => {
 
   it.each([
     [REDUCED_BUILD_REVIEW_COVERAGE_HEADING],
+    [BUILD_REVIEW_ACCEPTED_RISK_HEADING],
     [BUILD_REVIEW_ACCEPTED_RISK_START],
+    [BUILD_REVIEW_ACCEPTED_RISK_END],
   ])('returns a typed error when a region contains engine-owned text %s', (engineOwnedText) => {
     expect(parsePrTemplateRegions([
       '<!-- ai-conductor:step compliance-attest -->',
