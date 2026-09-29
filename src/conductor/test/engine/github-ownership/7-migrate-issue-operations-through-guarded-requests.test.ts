@@ -1,4 +1,4 @@
-// Covers: task:7
+// Covers: task:2, task:7
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -24,6 +24,12 @@ function fakeTerminal(): {
       calls.push({ args, opts });
       if (args[0] === 'api' && args[1] === 'repos/acme/foreign/issues/42') {
         return { stdout: JSON.stringify({ labels: [{ name: 'foreign-read' }] }) };
+      }
+      if (args[0] === 'api' && args[1] === 'repos/acme/foreign/issues/99') {
+        return { stdout: JSON.stringify({ id: 99 }) };
+      }
+      if (args[0] === 'api' && args[1] === 'repos/acme/owned/issues/17') {
+        return { stdout: JSON.stringify({ id: 17 }) };
       }
       return { stdout: 'https://github.com/acme/owned/issues/18\n' };
     },

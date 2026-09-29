@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 
@@ -35,6 +35,7 @@ import {
   createGuardedGithubOperationRunner,
   makeProductionGh,
   type GhRunner,
+  type GithubMutationExecutionContext,
 } from '../../src/engine/tracker-client.js';
 import { executeGithubOperation } from '../../src/engine/github-operations.js';
 import { GithubBotAuthRefusalError } from '../../src/engine/github-bot-auth-refusal.js';
@@ -73,6 +74,25 @@ function expectedSearchCall(): { args: string[]; opts: { cwd: string } } {
   };
 }
 
+function ownedTrackerClient(runner: GhRunner) {
+  const mutation: GithubMutationExecutionContext = {
+    provenance: {
+      repository: 'acme/owned',
+      defaultBranch: 'main',
+      specBranch: 'spec/owned',
+      featureMarker: '.docs/specs/owned.md',
+      publication: 'initial',
+    },
+    dependencies: {
+      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
+      provenanceDiscovery: {
+        readCommittedRecords: async () => [{ path: '.docs/specs/owned.md', content: 'Owner: alice\n' }],
+      },
+    },
+  };
+  return createGithubTrackerClient(runner, { mutation, repository: 'acme/owned' });
+}
+
 describe('createGuardedGithubOperationRunner dependency id guard', () => {
   it('refuses a dependency add without its database id before the transport', async () => {
     const calls: string[][] = [];
@@ -99,6 +119,58 @@ describe('createGuardedGithubOperationRunner dependency id guard', () => {
     });
     expect((result as { error: string }).error).toContain('acme/app#42');
     expect(calls).toEqual([]);
+  });
+});
+
+describe('createGithubTrackerClient.addIssueDependency', () => {
+  it('reads the blocking issue id before posting the typed blocked-by dependency', async () => {
+    const { runner, calls } = fakeRunner(JSON.stringify({ id: 4242 }));
+
+    await ownedTrackerClient(runner).addIssueDependency!(
+      'acme/owned',
+      17,
+      { repo: 'acme/foreign', number: 99 },
+      '/worktree',
+    );
+
+    expect(calls).toEqual([
+      { args: ['api', 'repos/acme/foreign/issues/99'], opts: { cwd: '/worktree' } },
+      {
+        args: [
+          'api',
+          '--method',
+          'POST',
+          'repos/acme/owned/issues/17/dependencies/blocked_by',
+          '-F',
+          'issue_id=4242',
+        ],
+        opts: { cwd: '/worktree', credential: 'write' },
+      },
+    ]);
+  });
+
+  it.each([
+    ['an id-less response', async (): Promise<{ stdout: string }> => ({ stdout: '{}' })],
+    ['a response with an invalid numeric id', async (): Promise<{ stdout: string }> => (
+      { stdout: JSON.stringify({ id: 0 }) }
+    )],
+    ['a read failure', async (): Promise<{ stdout: string }> => {
+      throw new Error('blocking issue unavailable');
+    }],
+  ])('names both issues and does not post when the blocking id cannot be read from %s', async (_caseName, response) => {
+    const calls: string[][] = [];
+    const runner: GhRunner = async (args) => {
+      calls.push(args);
+      return response();
+    };
+
+    await expect(ownedTrackerClient(runner).addIssueDependency!(
+      'acme/owned',
+      17,
+      { repo: 'acme/foreign', number: 99 },
+      '/worktree',
+    )).rejects.toThrow(/acme\/owned#17.*acme\/foreign#99/);
+    expect(calls.filter((args) => args.includes('dependencies/blocked_by'))).toEqual([]);
   });
 });
 

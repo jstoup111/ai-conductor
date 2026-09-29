@@ -965,6 +965,28 @@ export function createGithubTrackerClient(
     },
 
     async addIssueDependency(repo, number, dependency, cwd) {
+      let dependencyDatabaseId: number;
+      try {
+        const stdout = await runTrackerRead(
+          runner,
+          cwd,
+          'issue.read',
+          dependency.repo,
+          { kind: 'issue', number: dependency.number },
+          ['api', `repos/${dependency.repo}/issues/${dependency.number}`],
+        );
+        const blockingIssue = parseJsonOrThrow<{ id?: unknown }>('addIssueDependency', stdout);
+        if (typeof blockingIssue.id !== 'number'
+          || !Number.isSafeInteger(blockingIssue.id)
+          || blockingIssue.id <= 0) {
+          throw new Error('blocking issue response has no valid database id');
+        }
+        dependencyDatabaseId = blockingIssue.id;
+      } catch {
+        throw new Error(
+          `Cannot add dependency from ${repo}#${number} to ${dependency.repo}#${dependency.number}: blocking issue has no readable valid database id.`,
+        );
+      }
       await runTrackerIssueOperation(
         runner,
         options,
@@ -972,7 +994,10 @@ export function createGithubTrackerClient(
         'issue.dependency.add',
         repo,
         { kind: 'issue', number },
-        { dependency: { repository: dependency.repo, resource: { kind: 'issue', number: dependency.number } } },
+        {
+          dependency: { repository: dependency.repo, resource: { kind: 'issue', number: dependency.number } },
+          dependencyDatabaseId,
+        },
       );
     },
 
