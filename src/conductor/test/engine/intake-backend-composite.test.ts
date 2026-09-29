@@ -442,4 +442,29 @@ describe('intake backend composite unavailable write-backs (Task 10)', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it('ignores an unparseable sourceRef through the GitHub adapter without a tracker event', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'intake-backend-composite-'));
+    try {
+      const calls: string[][] = [];
+      const events: unknown[] = [];
+      const logs: string[] = [];
+      const composite = createComposite({
+        projects: [],
+        selections: new Map(),
+        calls,
+        events,
+        logs,
+        ledgerPath: join(root, 'adapter.json'),
+        gh: writebackGh(calls),
+      });
+
+      await expect(composite.report('not a ref', 'routed')).resolves.toEqual({ ok: true });
+
+      expect(events).toEqual([]);
+      expect(calls).toEqual([]);
+      expect(logs).toEqual(['github-issues: report() ignoring unparseable sourceRef "not a ref"']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -117,11 +117,14 @@ export function createIntakeBackendComposite(deps: {
     poll: () => github.poll(),
     async report(sourceRef, status, meta) {
       const workRef = parseWorkRef(sourceRef);
-      if (workRef?.kind !== 'github') {
+      // An unparseable ref is not an unavailable backend: the GitHub adapter
+      // owns its ignore-and-log handling, and no tracker event is emitted.
+      if (!workRef) return github.report(sourceRef, status, meta);
+      if (workRef.kind === 'jira') {
         await deps.events?.emit({
           type: 'tracker_backend_unavailable',
           project: sourceRef,
-          backend: workRef?.kind === 'jira' ? 'jira' : 'github',
+          backend: 'jira',
           reason: 'no-adapter',
         });
         return { ok: true };
