@@ -104,7 +104,6 @@ import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
 import {
   BUILT_IN_PROVIDERS,
   CODEX_DISPLAY_NAME,
-  CLAUDE_PROVIDER,
   CODEX_PROVIDER,
   findBuiltInProviderDescriptor,
   providerDisplayName,

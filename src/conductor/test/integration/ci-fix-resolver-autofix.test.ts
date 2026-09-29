@@ -26,7 +26,7 @@
 // they are RED-phase scaffolding, not a frozen contract.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';

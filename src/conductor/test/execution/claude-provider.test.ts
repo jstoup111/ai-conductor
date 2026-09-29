@@ -38,7 +38,6 @@ import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import type { ClaudeProvider as ClaudeProviderInstance } from '../../src/execution/claude-provider.js';
 
-import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 
 /**
  * `execa`'s exported type is an intersection of several call-signature
