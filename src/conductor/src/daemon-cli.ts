@@ -1141,6 +1141,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     project: projectRoot,
     projectName: basename(projectRoot),
     workerName: resolveWorkerName(resolveOtelConfig(config ?? {}, join(projectRoot, '.pipeline'))),
+    harnessVersion: await resolveHarnessVersion(__dirname),
     rootEvents: events,
   });
   const rateLimitEpisode = createRateLimitEpisode();

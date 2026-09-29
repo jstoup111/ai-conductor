@@ -459,6 +459,7 @@ describe('daemon OTel visualizer wiring', () => {
       mainRoot: '/tmp/daemon-otel-root',
       project: '/tmp/daemon-otel-project',
       projectName: 'daemon-otel-project',
+      harnessVersion: '1.5.0',
       rootEvents,
     });
     await rootEvents.emit({
@@ -517,6 +518,8 @@ describe('daemon OTel visualizer wiring', () => {
         declaredAttributes(interactiveTraceResource, attributes),
       ],
     }).toEqual({ daemon: [attributes, attributes, attributes], interactive: [attributes, attributes, attributes] });
+    expect(daemonMetricResource?.['service.version']).toBe('1.5.0');
+    expect(interactiveMetricResource?.['service.version']).toBe('unresolved');
   });
 
   it('does not read OTEL_RESOURCE_ATTRIBUTES when no daemon attributes are declared', async () => {

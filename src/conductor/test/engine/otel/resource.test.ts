@@ -259,6 +259,7 @@ describe('buildResource', () => {
         'host.name',
         'service.instance.id',
         'service.name',
+        'service.version',
       ]);
     });
 
@@ -331,11 +332,22 @@ describe('buildResource', () => {
       expect(first.attributes).toEqual(second.attributes);
     });
 
-    it('two released harness versions yield an identical metric attribute set, so target_info gains no series', () => {
+    it('the metric scope carries the released harness version as service.version', () => {
       const first = buildResource({ ...ctx(), harnessVersion: '0.105.0' }, 'metrics');
       const second = buildResource({ ...ctx(), harnessVersion: '0.106.0' }, 'metrics');
 
-      expect(first.attributes).toEqual(second.attributes);
+      expect(first.attributes['service.version']).toBe('0.105.0');
+      expect(second.attributes['service.version']).toBe('0.106.0');
+      const { 'service.version': _first, ...firstRest } = first.attributes;
+      const { 'service.version': _second, ...secondRest } = second.attributes;
+      expect(firstRest).toEqual(secondRest);
+    });
+
+    it('the metric scope marks an omitted or unresolved harness version without throwing', () => {
+      const { harnessVersion: _drop, ...omitted } = ctx();
+
+      expect(buildResource(omitted, 'metrics').attributes['service.version']).toBe('not-supplied');
+      expect(buildResource({ ...ctx(), harnessVersion: undefined }, 'metrics').attributes['service.version']).toBe('unresolved');
     });
 
     it('an unwritable pipeline directory still builds both scopes without throwing', () => {
@@ -392,6 +404,7 @@ describe('buildResource', () => {
           'conductor.project': '/workspace/project-a',
           'conductor.worker': 'worker-a',
           'host.name': expect.any(String),
+          'service.version': '0.105.0',
         },
         traceWithoutAttributes: {
           'service.name': 'ai-conductor',
@@ -409,6 +422,7 @@ describe('buildResource', () => {
           'conductor.project': '/workspace/project-a',
           'conductor.worker': 'worker-a',
           'host.name': expect.any(String),
+          'service.version': '0.105.0',
         },
       });
     });
