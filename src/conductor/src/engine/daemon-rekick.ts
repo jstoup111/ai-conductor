@@ -190,7 +190,8 @@ export async function clearHaltForResume(
   try {
     const record = await deps.resolveCommittedRecord?.(deps.worktreePath, deps.slug);
     if (typeof record === 'object' && record !== null && 'kind' in record && record.kind === 'failed') {
-      deps.log?.(`kickback-budget ${deps.slug}: halt record not superseded (${String(record.reason)}) — halt retained`);
+      const reason = 'reason' in record && typeof record.reason === 'string' ? record.reason : 'unknown reason';
+      deps.log?.(`kickback-budget ${deps.slug}: halt record not superseded (${reason}) — halt retained`);
       return 'partial';
     }
   } catch (error) {
