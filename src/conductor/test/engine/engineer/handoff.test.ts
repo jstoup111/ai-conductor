@@ -145,6 +145,8 @@ describe('openSpecPr', () => {
   async function publishGeneratedSpecBranch(branch: string) {
     const repository = 'acme/my-project';
     const marker = `.docs/intake/${branch.slice('spec/'.length)}.md`;
+    await mkdir(join(tempDir, '.github'), { recursive: true });
+    await writeFile(join(tempDir, '.github', 'pull_request_template.md'), 'Release-Disposition: no-note\n');
     const gitCalls: string[][] = [];
     const githubCalls: string[][] = [];
     const runnerCalls: string[][] = [];
