@@ -117,6 +117,7 @@ import { resolveEngineVersion } from './engine/shipped-record.js';
 import {
   detectVersionCommand,
   dispatchVersionCommand,
+  installedHarnessVersionForConfig,
   resolveHarnessVersion,
 } from './engine/version-report.js';
 import { detectUpdateCommand, dispatchUpdateCommand } from './engine/update-cli.js';
@@ -1345,7 +1346,8 @@ async function main(): Promise<void> {
   const events = new ConductorEventEmitter();
 
   // Load config (optional — conductor works without it)
-  const configResult = await loadConfig(projectRoot);
+  const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
+  const configResult = await loadConfig(projectRoot, installedHarnessVersion);
   const config = configResult.ok ? configResult.config : undefined;
   if (configResult.ok && configResult.warnings.length > 0) {
     for (const w of configResult.warnings) {
@@ -1369,7 +1371,7 @@ async function main(): Promise<void> {
   // ~/.ai-conductor/config.yml is where `install` writes the chosen preset).
   // The host renders diagrams at the approval gate; best-effort, with a notice
   // on any skip/failure so the human knows to fall back to the raw Markdown.
-  const mergedResult = await loadMergedConfig(projectRoot);
+  const mergedResult = await loadMergedConfig(projectRoot, installedHarnessVersion);
   const mermaidCfg = mergedResult.ok ? mergedResult.config.mermaid_renderer : undefined;
   const renderDeps = defaultRenderDeps((m) => console.error(m));
   const promptHost = new TerminalPromptHost(liveRegion, {

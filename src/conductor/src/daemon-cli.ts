@@ -117,7 +117,7 @@ import {
   probeStampedShaBehindOrigin,
 } from './engine/engine-refresh.js';
 import { makeIsProcessed, resolveEngineVersion } from './engine/shipped-record.js';
-import { resolveHarnessVersion } from './engine/version-report.js';
+import { installedHarnessVersionForConfig, resolveHarnessVersion } from './engine/version-report.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
 import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerUrlRead } from './engine/tracker-client.js';
@@ -852,7 +852,8 @@ export function createForcedSetupPrepare(
  */
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
-  const configResult = await loadMergedConfig(projectRoot);
+  const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
+  const configResult = await loadMergedConfig(projectRoot, installedHarnessVersion);
   if (!configResult.ok && configResult.error.type !== 'missing') {
     throw new Error(`Config error: ${configResult.error.message}`);
   }
