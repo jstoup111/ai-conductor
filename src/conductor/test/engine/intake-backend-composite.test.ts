@@ -1,4 +1,4 @@
-// Covers: task:6, task:7
+// Covers: task:6, task:7, task:8
 
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -61,14 +61,16 @@ function createComposite(args: {
   calls: string[][];
   events: unknown[];
   ledgerPath: string;
+  gh?: GhRunner;
+  logs?: string[];
 }) {
   return createIntakeBackendComposite({
     backendFactories: { github: createGithubIssuesAdapter },
     resolveTrackerSelection: resolver(args.selections),
     registry: registry(args.projects),
     ledger: createLedger(args.ledgerPath),
-    gh: scriptedGh(args.calls),
-    log: () => {},
+    gh: args.gh ?? scriptedGh(args.calls),
+    log: (message) => { args.logs?.push(message); },
     events: recordingEmitter(args.events),
   });
 }
@@ -208,6 +210,83 @@ describe('intake backend composite tracker exclusion (Task 6)', () => {
           { type: 'tracker_backend_unavailable', project: 'owner/project-b', backend: 'jira', reason: 'no-adapter' },
         ],
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('intake backend composite tracker exclusion episodes (Task 8)', () => {
+  it('emits once per unavailable-backend episode and re-emits after the project becomes available', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'intake-backend-composite-'));
+    try {
+      const projectA = project('owner/project-a', join(root, 'project-a'));
+      const projectB = project('owner/project-b', join(root, 'project-b'));
+      await Promise.all([mkdir(projectA.path), mkdir(projectB.path)]);
+      const calls: string[][] = [];
+      const events: unknown[] = [];
+      const selections = new Map<string, TrackerSelectionResult>([
+        [projectB.path, { ok: true, selection: { backend: 'jira' } }],
+      ]);
+      const composite = createComposite({
+        projects: [projectA, projectB],
+        selections,
+        calls,
+        events,
+        ledgerPath: join(root, 'ledger.json'),
+      });
+
+      await composite.poll();
+      await composite.poll();
+      selections.set(projectB.path, { ok: true, selection: { backend: 'github' } });
+      await composite.poll();
+      selections.set(projectB.path, { ok: true, selection: { backend: 'jira' } });
+      await composite.poll();
+
+      expect(events).toEqual([
+        { type: 'tracker_backend_unavailable', project: 'owner/project-b', backend: 'jira', reason: 'no-adapter' },
+        { type: 'tracker_backend_unavailable', project: 'owner/project-b', backend: 'jira', reason: 'no-adapter' },
+      ]);
+      expect(calls.filter((argv) => argv.includes('owner/project-b'))).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('emits exclusions before preserving the GitHub adapter poll-failure path', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'intake-backend-composite-'));
+    try {
+      const projectA = project('owner/project-a', join(root, 'project-a'));
+      const projectB = project('owner/project-b', join(root, 'project-b'));
+      await Promise.all([mkdir(projectA.path), mkdir(projectB.path)]);
+      const calls: string[][] = [];
+      const events: unknown[] = [];
+      const logs: string[] = [];
+      const gh: GhRunner = async (argv) => {
+        calls.push(argv);
+        if (argv.includes('owner/project-a')) throw new Error('scripted GitHub failure');
+        return { stdout: '[]' };
+      };
+      const composite = createComposite({
+        projects: [projectA, projectB],
+        selections: new Map([[projectB.path, { ok: true, selection: { backend: 'jira' } }]]),
+        calls,
+        events,
+        ledgerPath: join(root, 'ledger.json'),
+        gh,
+        logs,
+      });
+
+      await expect(composite.poll()).resolves.toEqual([]);
+
+      expect(events).toEqual([
+        { type: 'tracker_backend_unavailable', project: 'owner/project-b', backend: 'jira', reason: 'no-adapter' },
+      ]);
+      expect(logs).toEqual([
+        expect.stringContaining('github-issues: poll failed for owner/project-a'),
+      ]);
+      expect(logs[0]).toContain('scripted GitHub failure');
+      expect(calls).toEqual([expect.arrayContaining(['-R', 'owner/project-a'])]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

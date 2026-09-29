@@ -56,6 +56,8 @@ export function createIntakeBackendComposite(deps: {
   resolveActor?: () => Promise<OwnerResolution>;
   events?: IntakeEventEmitter;
 }): IntakeBackend {
+  const excludedProjects = new Set<string>();
+
   const registry: IntakeRepoRegistry = {
     async list() {
       const projects = await deps.registry.listProjects();
@@ -65,21 +67,30 @@ export function createIntakeBackendComposite(deps: {
       })));
       for (const { project, selection } of selected) {
         if (!selection.ok) {
+          if (!excludedProjects.has(project.path)) {
+            excludedProjects.add(project.path);
+            await deps.events?.emit({
+              type: 'tracker_backend_unavailable',
+              project: project.name,
+              backend: 'github',
+              reason: 'invalid-config',
+            });
+          }
+          continue;
+        }
+        if (selection.selection.backend === 'github') {
+          excludedProjects.delete(project.path);
+          continue;
+        }
+        if (!excludedProjects.has(project.path)) {
+          excludedProjects.add(project.path);
           await deps.events?.emit({
             type: 'tracker_backend_unavailable',
             project: project.name,
-            backend: 'github',
-            reason: 'invalid-config',
+            backend: selection.selection.backend,
+            reason: 'no-adapter',
           });
-          continue;
         }
-        if (selection.selection.backend === 'github') continue;
-        await deps.events?.emit({
-          type: 'tracker_backend_unavailable',
-          project: project.name,
-          backend: selection.selection.backend,
-          reason: 'no-adapter',
-        });
       }
       return selected
         .filter(({ selection }) => selection.ok && selection.selection.backend === 'github')
