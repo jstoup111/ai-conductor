@@ -33,6 +33,7 @@ import {
   engineerLaunchArgs,
   missingRegistrationEpisodes,
   prePollIntake,
+  trackerExclusionEpisodes,
   type DispatchEngineerOpts,
 } from '../../../src/engine/engineer-cli.js';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
@@ -40,6 +41,7 @@ import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
 import { parseEnvelope } from '../../../src/engine/engineer/intake/port.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
+import type { ConductorEvent } from '../../../src/types/events.js';
 
 const execFile = promisify(execFileCb);
 const argv = (...rest: string[]) => ['node', 'conduct-ts', 'engineer', ...rest];
@@ -118,6 +120,7 @@ let engineerDir: string;
 
 beforeEach(async () => {
   missingRegistrationEpisodes.clear();
+  trackerExclusionEpisodes.clear();
   workDir = await mkdtemp(join(tmpdir(), 'cli-launch-intake-'));
   registryPath = join(workDir, 'registry.json');
   engineerDir = join(workDir, 'engineer');
@@ -126,6 +129,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(workDir, { recursive: true, force: true });
   missingRegistrationEpisodes.clear();
+  trackerExclusionEpisodes.clear();
 });
 
 async function writeRegistry(repos: Array<{ name: string; path?: string; remote?: string }>): Promise<void> {
@@ -288,6 +292,38 @@ describe('prePollIntake', () => {
 
     expect(logs).toEqual([`github-issues: skipping o/a: missing path ${missingPath}`]);
     expect(calls.filter(([group, command]) => group === 'issue' && command === 'list')).toHaveLength(0);
+  });
+
+  it('reports each tracker exclusion episode once across launch pre-polls', async () => {
+    await writeRegistry([{ name: 'o/a' }]);
+    const projectPath = join(workDir, 'o_a');
+    const configPath = join(projectPath, '.ai-conductor', 'config.yml');
+    await mkdir(join(projectPath, '.ai-conductor'), { recursive: true });
+    type TrackerBackendUnavailableEvent = Extract<ConductorEvent, { type: 'tracker_backend_unavailable' }>;
+    type IntakeEvent = Extract<ConductorEvent, {
+      type: 'github_operation_refused' | 'github_write_credential_fallback' | 'tracker_backend_unavailable';
+    }>;
+    const events: TrackerBackendUnavailableEvent[] = [];
+    const emitter = {
+      emit: async (event: IntakeEvent) => {
+        if (event.type === 'tracker_backend_unavailable') events.push(event);
+      },
+    };
+    const { gh } = makeGh();
+
+    await writeFile(configPath, 'tracker:\n  backend: jira\n', 'utf-8');
+    await prePollIntake({ engineerDir, registryPath, gh, printErr: () => {}, events: emitter });
+    await prePollIntake({ engineerDir, registryPath, gh, printErr: () => {}, events: emitter });
+    expect(events).toEqual([{ type: 'tracker_backend_unavailable', project: 'o/a', backend: 'jira', reason: 'no-adapter' }]);
+
+    await writeFile(configPath, 'tracker:\n  backend: github\n', 'utf-8');
+    await prePollIntake({ engineerDir, registryPath, gh, printErr: () => {}, events: emitter });
+    await writeFile(configPath, 'tracker:\n  backend: jira\n', 'utf-8');
+    await prePollIntake({ engineerDir, registryPath, gh, printErr: () => {}, events: emitter });
+    expect(events).toEqual([
+      { type: 'tracker_backend_unavailable', project: 'o/a', backend: 'jira', reason: 'no-adapter' },
+      { type: 'tracker_backend_unavailable', project: 'o/a', backend: 'jira', reason: 'no-adapter' },
+    ]);
   });
 });
 
