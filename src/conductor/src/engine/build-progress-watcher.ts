@@ -387,11 +387,20 @@ export class BuildProgressWatcher {
         const quietElapsed = this.now() - this.lastChangeAt;
         if (quietElapsed >= quietMs) {
           this.quietFired = true;
-          const heartbeat = await readStepHeartbeat(this.projectRoot);
-          const lastActivityAt = this.dispatchStartedAtMs !== null
-            && heartbeatBelongsToDispatch(heartbeat, this.step, this.dispatchStartedAtMs)
-            ? Date.parse(heartbeat!.ts)
-            : undefined;
+          let lastActivityAt: number | undefined;
+          try {
+            const heartbeat = await readStepHeartbeat(this.projectRoot);
+            if (
+              this.dispatchStartedAtMs !== null
+              && heartbeatBelongsToDispatch(heartbeat, this.step, this.dispatchStartedAtMs)
+            ) {
+              const timestamp = Date.parse(heartbeat!.ts);
+              if (Number.isFinite(timestamp)) lastActivityAt = timestamp;
+            }
+          } catch {
+            // Provider activity is optional display metadata. A read failure
+            // must not suppress the quiet warning or abort its poll tick.
+          }
           await this.events.emit({
             type: 'build_no_progress',
             step: this.step,
@@ -400,7 +409,7 @@ export class BuildProgressWatcher {
             total,
             currentTaskId: snapshot.currentTaskId,
             lastCommitAt: this.lastCommitAt,
-            lastActivityAt,
+            ...(lastActivityAt === undefined ? {} : { lastActivityAt }),
             featureSlug: this.featureSlug,
           });
         }

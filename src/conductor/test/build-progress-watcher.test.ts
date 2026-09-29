@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -954,11 +954,11 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
     await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
   }
 
-  async function writeHeartbeat(timestamp: number): Promise<void> {
+  async function writeHeartbeat(timestamp: number, step: string = 'build'): Promise<void> {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(
       join(dir, '.pipeline/step-heartbeat'),
-      JSON.stringify({ step: 'build', ts: new Date(timestamp).toISOString() }),
+      JSON.stringify({ step, ts: new Date(timestamp).toISOString() }),
     );
   }
 
@@ -1057,6 +1057,51 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
 
     expect(noProgressEvents()).toHaveLength(1);
     expect(noProgressEvents()[0].lastActivityAt).toBe(pulseAt);
+  });
+
+  it.each([
+    ['no heartbeat file', async () => {}],
+    ['a heartbeat for another step', async (startedAt: number) => writeHeartbeat(startedAt + 1_000, 'test_suite')],
+    ['a heartbeat stamped before this dispatch', async (startedAt: number) => writeHeartbeat(startedAt - 1)],
+    ['a malformed heartbeat file', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/step-heartbeat'), '{not json');
+    }],
+    ['a heartbeat path the reader cannot read', async () => {
+      await mkdir(join(dir, '.pipeline/step-heartbeat'), { recursive: true });
+    }],
+    ['a heartbeat with a non-finite timestamp', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/step-heartbeat'),
+        JSON.stringify({ step: 'build', ts: 'not-a-date' }),
+      );
+    }],
+  ])('emits the pre-activity quiet warning when there is %s', async (_scenario, arrangeHeartbeat) => {
+    await writeTasks(5, 21);
+    let clock = Date.UTC(2026, 8, 28, 12, 0, 0);
+    const watcher = makeWatcher(() => clock);
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    await arrangeHeartbeat(clock);
+    clock += 16 * 60 * 1000;
+    await expect(tick(watcher)).resolves.toBeUndefined();
+    watcher.stop();
+
+    expect(noProgressEvents()).toStrictEqual([
+      {
+        type: 'build_no_progress',
+        step: 'build',
+        quietMinutes: 16,
+        resolved: 5,
+        total: 21,
+        currentTaskId: undefined,
+        lastCommitAt: undefined,
+        featureSlug: 'my-feature',
+      },
+    ]);
   });
 
   it('re-arms after a change, firing again on a later quiet episode', async () => {
