@@ -135,6 +135,9 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 **Done when:**
 - a test asserts the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming provider `pi` and `reviewPolicyCatalog`, and that neither the claude nor the codex policy discovery stub was called
 - build-review read-only review and policy modules accept `ProviderWith` capability types, and the existing claude and codex build-review tests pass with unchanged assertions
+- the claude and codex catalog descriptors declare `readOnlyReview` and the pi descriptor does not, and the claude and codex adapter tests assert the engine's read-only review option maps to that provider's native read-only mode (ADR D2/D6 amendment by #2735)
+- the custom-policy read-only review admission check refuses a candidate whose provider lacks `readOnlyReview` or whose read-only review mode is unavailable, without invoking it, as asserted by the provider-execution read-only admission tests
+- no build_review launch path composes bubblewrap review containment: `src/conductor/src/engine/build-review-containment.ts` does not exist and no `build-review*` module under `src/conductor/src/engine` references `bwrap` (retired by adr-2026-09-10-portable-build-review-policy D5.1)
 
 **Files likely touched:**
 - src/conductor/src/engine/provider-execution.ts — read-only review admission via capability
