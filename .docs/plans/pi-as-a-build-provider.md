@@ -756,3 +756,19 @@ Task 22 <- 20
 **Done when:**
 - A custom-policy build_review ladder whose first candidate is a registered external plugin records provider_attempt invoked:false with skipReason setup-unavailable for it, throws nothing, and invokes the next capable catalog candidate, as asserted by the new plugin-candidate test.
 - No path under src/conductor/src/engine rethrows the Unknown built-in provider error for a custom-policy review candidate, and the existing catalog capability-refusal tests pass with unchanged assertions.
+
+### Task rem-as-built-rem-pg1-1: src/conductor/test/engine/provider-id-literals.test.ts (findProviderLiterals): narrow the adapter-module exemption so a declared adapter module is exempt only for its OWN provider id and its own displayName where the catalog does not already supply them; inside an adapter module, report every string literal, template span, and declared property name that equals ANOTHER catalog provider's id (for example 'claude' or a claude key in the codex adapter) and every literal or template span containing ANOTHER provider's displayName as a whole word, with file:line; add fixture tests proving a codex adapter-module fixture containing 'claude', a { claude: true } key, and the text 'Claude' are each reported, keeping the existing catalog, non-adapter, own-displayName and Task 8 fixture assertions unchanged; then remove any foreign id or display-name literals the extended scan reports in src/conductor/src/execution/claude-provider.ts, codex-provider.ts and pi-provider.ts by reading them from the catalog, keeping message text byte-identical.
+**Gate:** as-built
+**Rationale:** Plan gaps PG-1 and PG-2 (operator-approved plan correction, 2026-09-29): Task 8 exempted adapter modules wholesale and rem-prd-audit-rem-s1-5-1 checked only an adapter's own display name, so a foreign provider id or display name inside another provider's adapter passes, contrary to sealed criteria S1.4 and S1.5. This task supersedes both exemptions; the sealed criteria govern.
+**Governing clause:** Story 1 criteria S1.4 and S1.5
+**Done when:**
+- The provider-id-literals structural test reports, with file:line, a foreign catalog provider id literal, a foreign id used as a declared property name, and a foreign provider display name inside a declared adapter module, as asserted by the new codex-adapter fixture tests, while an adapter's own id and displayName remain exempt.
+- The structural test reports zero findings on production source, and the existing catalog, non-adapter and Task 8 fixture assertions pass unchanged.
+
+### Task rem-as-built-rem-ab15-1: src/conductor/src/engine/provider-runtime.ts:9 and src/conductor/src/execution/child-environment.ts:20: delete the unconsumed re-export of validateSpawnPermit from provider-runtime.ts and of TMUX_ENVIRONMENT_KEYS from child-environment.ts (keep the scrubTmuxEnvironment re-export); repoint test/engine/provider-runtime.test.ts and test/execution/child-environment.test.ts to import those symbols from src/conductor/src/execution/spawn-permit.ts and src/conductor/src/execution/tmux-environment.ts, keeping their assertions unchanged.
+**Gate:** as-built
+**Rationale:** As-built findings AB-15 and AB-16: both re-exports have no production caller (Claude, Codex and Pi import spawn-permit directly; production uses only scrubTmuxEnvironment), making them unreachable rungs.
+**Governing clause:** plan task rem-prd-audit-rem-s1-2-1 and plan task 23
+**Done when:**
+- src/conductor/src/engine/provider-runtime.ts no longer exports validateSpawnPermit and src/conductor/src/execution/child-environment.ts no longer exports TMUX_ENVIRONMENT_KEYS, and a repository search finds no import of either symbol through those modules.
+- The provider-runtime and child-environment test suites pass with unchanged assertions after importing from spawn-permit.ts and tmux-environment.ts.
