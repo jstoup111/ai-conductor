@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 describe('daemon bot co-author wiring', () => {
@@ -13,5 +13,15 @@ describe('daemon bot co-author wiring', () => {
     expect(install).toBeGreaterThan(emitter);
     expect(install).toBeLessThan(dispatch);
     expect(source.match(/installDaemonBotCoAuthor\(/g)).toHaveLength(1);
+  });
+
+  it('keeps resolver installation out of every operator-facing source entry point', async () => {
+    const engine = join(process.cwd(), 'src/engine');
+    const entries = await readdir(engine, { recursive: true });
+    const matches = await Promise.all(entries.filter((entry): entry is string => typeof entry === 'string' && entry.endsWith('.ts') && entry !== 'bot-co-author.ts').map(async entry => {
+      const path = join(engine, entry);
+      return (await readFile(path, 'utf8')).includes('installDaemonBotCoAuthor(') ? entry : undefined;
+    }));
+    expect(matches.filter(Boolean)).toEqual([]);
   });
 });

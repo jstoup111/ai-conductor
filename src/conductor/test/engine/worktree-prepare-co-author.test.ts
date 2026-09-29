@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
-import { access, chmod, mkdtemp, rm } from 'node:fs/promises';
+import { access, chmod, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -41,7 +41,7 @@ describe('engine/worktree-prepare co-author input', () => {
     installDaemonBotCoAuthor(resolver);
     await prepareWorktree(dir);
     const coAuthorPath = join(dir, '.pipeline', 'co-author');
-    expect(await access(coAuthorPath)).toBeUndefined();
+    expect(await readFile(coAuthorPath, 'utf8')).toBe(`${TRAILER}\n`);
 
     // Make the existing input unwritable. The resolver still resolves, so this
     // exercises the co-author write failure rather than an identity failure.
@@ -53,5 +53,18 @@ describe('engine/worktree-prepare co-author input', () => {
     expect(events).toContainEqual({ type: 'bot_co_author_skipped', reason: 'worktree-write-failed' });
     await git('commit', '--allow-empty', '-m', 'after failed refresh');
     expect(await git('log', '-1', '--format=%B')).not.toContain(TRAILER);
+  });
+
+  it('removes stale input for unavailable resolution and forwards the feature emitter', async () => {
+    const events: ConductorEvent[] = [];
+    const prepare = vi.fn(async (emitter?: { emit(event: ConductorEvent): Promise<void> }) => {
+      await emitter?.emit({ type: 'bot_co_author_skipped', reason: 'identity-read-failed' });
+      return { kind: 'unavailable' as const, reason: 'identity-read-failed' as const };
+    });
+    installDaemonBotCoAuthor({ prepare, current: () => undefined });
+    await prepareWorktree(dir, undefined, { events: { emit: async (event: ConductorEvent) => { events.push(event); } } as never });
+    await expect(access(join(dir, '.pipeline', 'co-author'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ emit: expect.any(Function) }));
+    expect(events).toContainEqual({ type: 'bot_co_author_skipped', reason: 'identity-read-failed' });
   });
 });

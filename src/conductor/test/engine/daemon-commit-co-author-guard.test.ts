@@ -54,5 +54,7 @@ describe('daemon commit co-author guard', () => {
   it('reports an unwrapped commit fixture with its file and line', () => {
     expect(scanCommitMessages("await git(['commit', '-m', 'unwrapped']);\n", 'fixture.ts'))
       .toEqual([{ file: 'fixture.ts', line: 1 }]);
+    expect(scanCommitMessages("await git(['commit-tree', 'tree']);\n", 'fixture.ts'))
+      .toEqual([{ file: 'fixture.ts', line: 1 }]);
   });
 });

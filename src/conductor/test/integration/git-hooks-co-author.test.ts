@@ -57,4 +57,33 @@ describe('integration/git-hooks-co-author', () => {
     expect(recorded.match(new RegExp(TRAILER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))).toHaveLength(1);
     expect(recorded).toContain('Co-authored-by: other <other@example.com>');
   });
+
+  it('never stamps amended or rebased commits', async () => {
+    await rm(join(dir, '.pipeline', 'co-author'));
+    await writeFile(join(dir, 'work.txt'), 'work\n', 'utf8');
+    await git('add', 'work.txt');
+    await git('commit', '-m', 'work');
+    const beforeAmend = await message();
+    await writeFile(join(dir, '.pipeline', 'co-author'), `${TRAILER}\n`, 'utf8');
+    await git('commit', '--amend', '--no-edit');
+    expect(await message()).toBe(beforeAmend);
+    expect(beforeAmend).not.toContain(TRAILER);
+
+    await writeFile(join(dir, 'rebase.txt'), 'rebase\n', 'utf8');
+    await git('add', 'rebase.txt');
+    await git('commit', '-m', 'rebase source');
+    const beforeRebase = await message();
+    await git('rebase', '--force-rebase', 'HEAD~1');
+    expect(await message()).toBe(beforeRebase);
+  });
+
+  it('leaves a commit byte-identical without co-author or task input', async () => {
+    await rm(join(dir, '.pipeline', 'co-author'));
+    await rm(join(dir, '.pipeline', 'current-task'), { force: true });
+    await writeFile(join(dir, 'plain.txt'), 'plain\n', 'utf8');
+    await git('add', 'plain.txt');
+    const supplied = 'plain message\n\nwith body';
+    await git('commit', '-m', supplied);
+    expect(await message()).toBe(supplied);
+  });
 });
