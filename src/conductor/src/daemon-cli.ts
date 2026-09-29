@@ -86,7 +86,12 @@ import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { LiveBoundaryCoordinator } from './engine/self-host/live-boundary-coordinator.js';
-import { loadMergedConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
+import {
+  emitDeprecatedConfigKeyEvents,
+  loadMergedConfig,
+  resolveMemoryProvider,
+  BUILD_PROGRESS_HALT_DEFAULTS,
+} from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
 import { readLastResolvedCount } from './engine/task-evidence.js';
 import { countResolvedTasks } from './engine/task-progress.js';
@@ -1137,6 +1142,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // Both daemon-only occurrences and forwarded feature events share one bus;
   // the sibling ledger deliberately persists only daemon-origin copies.
   const daemonEventPersistence = startDaemonEventPersistence(projectRoot, events, log);
+  await emitDeprecatedConfigKeyEvents(configResult, events);
   const daemonMemorySampler = startDaemonMemorySampler(events, heapDumpOptionsFromConfig(config));
   const daemonOtel = wireDaemonOtel(config ?? {}, {
     mainRoot: projectRoot,

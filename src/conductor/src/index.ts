@@ -1679,7 +1679,7 @@ async function main(): Promise<void> {
   const renderer = registry.get<UIRenderer>('ui_renderer', config?.ui_renderer ?? 'terminal');
   subscriber.start([renderer]);
 
-  await emitDeprecatedConfigKeyEvents(configResult, events);
+  await emitDeprecatedConfigKeyEvents(mergedResult, events);
   // Every foreground mode can reach build_review.  The daemon performs this
   // once at daemon start; foreground runs establish the same frozen evidence
   // before constructing their Conductor.
