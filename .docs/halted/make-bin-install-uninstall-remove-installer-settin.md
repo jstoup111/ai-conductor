@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-29T11:00:55.913Z
 Slug: make-bin-install-uninstall-remove-installer-settin
 Class: plan-gap
 Halting step: architecture_review_as_built
