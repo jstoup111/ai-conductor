@@ -164,8 +164,8 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
-45 top-level keys are allow-listed (plus one retired, no-op key — `wiring`, see
-[build_review](#build_review)). Everything else fails the load.
+45 top-level keys are allow-listed (plus the retired compatibility key `wiring`, which emits a
+deprecation warning and event; see [build_review](#build_review)). Everything else fails the load.
 
 | Key | Type | Default | Section |
 | --- | --- | --- | --- |
@@ -225,16 +225,14 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## harness_version
 
-Minimum harness version this config requires. Optional string. Checked only when `loadConfig` receives a
-`harnessVersion` argument (`config.ts:167-177`). A mismatch returns `{ type: 'version_mismatch' }`.
+Minimum harness version this config requires. Optional string containing a valid semver range. An empty
+string or invalid range fails config loading. The CLI and daemon resolve the installed harness version
+from the harness installation and pass it to their config loads; a mismatch returns
+`{ type: 'version_mismatch' }` before startup.
 
-`satisfiesVersion` (`config.ts:1730-1735`) matches exactly one grammar: `>=X.Y.Z` with three numeric
-components.
-
-> **Known limitation.** Any constraint string that does not match `/^>=(\d+\.\d+\.\d+)$/` returns `true`.
-> `^1.2.0`, `~1.2`, `1.2.3`, `<2.0.0`, and `>=1.2` all pass unconditionally, so the check they were
-> written to perform never happens. Tracked in
-> [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
+`satisfiesVersion` delegates to `semver.satisfies`. Comparator sets, caret and tilde ranges, hyphen
+ranges, and exact versions therefore use normal semver range semantics. When an installation's version
+cannot be identified, the compatibility check is skipped rather than blocking startup.
 
 `templates/ai-conductor-config.yml.template:8` ships `harness_version: ">=0.99.0"`, satisfiable by the
 repo's current pre-1.0 `VERSION`. (Formerly shipped an unsatisfiable `">=1.0.0"`; fixed in
@@ -367,10 +365,8 @@ There is no `||`, no `!=`, no `!`, and no parentheses. An empty string fails wit
 `when expression must not be empty`. Anything else fails with `unsupported when expression: "<expr>"`
 plus the list of supported forms.
 
-> **Known limitation.** `src/conductor/src/types/config.ts:157-162` documents `when` and `parallel` as
-> mutually exclusive, but the validator enforces exclusivity only between `skill` and `parallel`
-> (`config.ts:426-430`). Setting both `when` and `parallel` on one step loads without complaint.
-> Tracked in [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
+`when` also applies to parallel groups. When it evaluates false, the step and every branch are skipped,
+and each branch's synthetic state key is recorded as `skipped`.
 
 ### parallel
 
@@ -380,7 +376,7 @@ Splits one step into named branches. `parallel` must be an array and is mutually
 | Branch key | Type | Validation | Default |
 | --- | --- | --- | --- |
 | `name` | string | Non-empty and unique within the group; a duplicate is a hard error (`config.ts:447-451`) | required |
-| `skill` | string | Must be a string | none |
+| `skill` | string | Required and must be a string | none |
 | `model` | string | Must be a string | branch inherits the step's resolution |
 | `effort` | string | `low`\|`medium`\|`high`\|`xhigh`\|`max` | branch inherits |
 | `advisory` | boolean | Must be a boolean | `false` |
@@ -411,8 +407,9 @@ count (`src/conductor/src/engine/conductor.ts:6357`).
 `manual_test` is the only built-in step with `configDisableAllowed: true`
 (`src/conductor/src/engine/steps.ts:214`). Per-step enforcement values are listed in [steps](steps.md).
 
-The rejection message says that only advisory steps may be disabled. That wording describes the
-default rule; the explicitly opted-in `manual_test` exception remains valid.
+Rejections name the enforcement class: structural steps "can never be disabled"; gating steps may be
+disabled only when they explicitly allow configuration disabling. The corresponding `when` rejections
+use the same distinction and say whether the step may be conditional.
 
 ### Custom step registry contract
 
@@ -426,7 +423,7 @@ Six fields are custom-step-only:
 | Field | Required | Effect |
 | --- | --- | --- |
 | `after` | Yes | Insertion point. Must resolve to a built-in step name or a sibling custom step declared in the same file; self-reference does not count. Otherwise: `Custom step "<n>" references unknown after target: "<t>"` (`config.ts:496-510`) |
-| `skill` | Yes | Path to the `SKILL.md` to dispatch. Missing: `Custom step "<n>" requires 'skill: <path-to-SKILL.md>'`. The file must exist relative to the project root, else `Custom step "<n>" skill file not found: <path>` (`config.ts:511-525`) |
+| `skill` | Yes, unless `parallel` is a non-empty group | Path to the `SKILL.md` to dispatch. Without a non-empty parallel group, missing it returns `Custom step "<n>" requires 'skill: <path-to-SKILL.md>'`. The file must exist relative to the project root, else `Custom step "<n>" skill file not found: <path>` (`config.ts:511-525`) |
 | `enforcement` | No | `structural`, `advisory`, or `gating`. Defaults to `advisory` (`steps.ts:563`) |
 | `completion_artifact` | No | Path the step must write to be considered done; see below |
 | `gate` | No | Boolean. Overrides loop-gate membership; when omitted, inherits the `after` target's membership |
@@ -436,12 +433,13 @@ Six fields are custom-step-only:
 `llm_provider` use the same semantics as for built-in steps. A custom step's own enforcement controls
 whether it may be disabled or conditional: advisory is allowed; gating and structural are rejected.
 
-The YAML key is the step's lifecycle identity; the `skill` path supplies its invocation identity. At
-dispatch, the engine reads the configured `SKILL.md` frontmatter `name` and invokes that name using the
-selected host's native syntax: Claude Code uses `/name`; Codex uses `$name`. The two names may differ,
-which lets a configuration key describe its place in a workflow without requiring a same-named skill.
-If the configured file or its `name` field is unavailable when dispatch begins, the custom step fails
-with a diagnostic instead of falling back to the YAML key.
+The YAML key is the step's lifecycle identity. A serial step's `skill` path, or each parallel branch's
+required `skill` path, supplies its invocation identity. At dispatch, the engine reads the configured
+`SKILL.md` frontmatter `name` and invokes that name using the selected host's native syntax: Claude Code
+uses `/name`; Codex uses `$name`. The two names may differ, which lets a configuration key describe its
+place in a workflow without requiring a same-named skill. If a configured file or its `name` field is
+unavailable when dispatch begins, that dispatch fails with a diagnostic instead of falling back to the
+YAML key.
 
 The derived `StepDefinition` (`steps.ts:595-609`) sets `label = name`, inherits `phase` from the `after`
 target, sets `prerequisites = [after]`, `skippableForTiers = []`, `isCheckpoint = false`, and takes
@@ -532,8 +530,8 @@ merge. Existing configured channels and version pins are preserved by installer 
 
 ## markdown_viewer and mermaid_renderer
 
-Two blocks with identical shape, validated at `config.ts:1443-1485` and `:1486-1530`. Allow-list for
-both: `preset`, `command`, `args`, `mode`. An unknown key is a hard error.
+Both blocks allow only `preset`, `command`, `args`, and `mode`; an unknown key is a hard error. Their
+required fields differ: markdown can name a preset alone, while mermaid must name a preset.
 
 | Key | Type | Validation |
 | --- | --- | --- |
@@ -565,10 +563,10 @@ Mermaid renderer presets (`src/conductor/src/engine/mermaid-renderer-presets.ts:
 | `mmdc-svg` | `mmdc -i {file} -o {out}` | external | Needs Chromium |
 | `none` | `""` | external | Rendering disabled |
 
-> **Known limitation.** `MarkdownViewerConfig` and `MermaidRendererConfig` declare `command`, `args`, and
-> `mode` as required (`src/conductor/src/types/config.ts:217-219, 231-233`), but every validator check is
-> guarded by `!== undefined` (`config.ts:1459-1484, 1502-1530`). A block containing only `preset` passes
-> validation. Tracked in [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
+For `markdown_viewer`, a named non-`custom` preset may stand alone because the preset supplies the
+command, arguments, and mode. When `preset` is absent or is `custom`, `command`, `args`, and `mode` are
+all required. For `mermaid_renderer`, `preset` is always required; the other fields remain optional
+preset overrides.
 
 ## assess
 
@@ -837,7 +835,7 @@ each sample already represents the whole feature total at that moment.
 | `otel.exporter` | string | Yes, when the block exists | `otlp`, `file` | — |
 | `otel.endpoint` | string | Yes, when `exporter: otlp` | any URL | — |
 | `otel.file` | string | No | any path | `<pipelineDir>/otel.jsonl` |
-| `otel.protocol` | string | No | `http/protobuf`, `grpc` per the type | passed through unchecked; omitted when falsy |
+| `otel.protocol` | string | No | `http/protobuf`, `grpc` | omitted uses the exporter default |
 | `otel.headers` | mapping | No; non-empty mappings only with `exporter: otlp` and HTTP/protobuf | header name to `{ env: <non-empty variable name> }` | absent; no headers are sent |
 | `otel.project_name` | string | No | any non-blank name | project root basename |
 | `otel.worker_name` | string | No | any non-blank name | OS hostname |
@@ -845,7 +843,9 @@ each sample already represents the whole feature total at that moment.
 
 The failure mode is silent-disable-with-an-error-string, not a halt. An unknown exporter yields
 `{ enabled: false, error: "Unknown otel exporter '<x>'. Valid options: otlp, file." }`; `otlp` without an
-endpoint yields `{ enabled: false, error: "otel exporter='otlp' requires an 'endpoint' URL …" }`.
+endpoint yields `{ enabled: false, error: "otel exporter='otlp' requires an 'endpoint' URL …" }`. An
+unsupported `otel.protocol` also disables telemetry and reports the rejected value plus the accepted
+`http/protobuf` and `grpc` values.
 
 `otel.headers` supplies HTTP OTLP credentials by reference, never by value. Its only supported
 credential source in this slice is the process environment, using this shape:
@@ -899,11 +899,6 @@ otel:
     deployment.environment.name: staging
     team.name: platform
 ```
-
-> **Known limitation.** `otel.protocol` is passed through entirely unvalidated
-> (`otel-config.ts:60`) even though the type restricts it to `'http/protobuf' | 'grpc'`
-> (`src/conductor/src/types/config.ts:260`). A typo produces a misconfigured exporter, not an error.
-> Tracked in [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
 
 ## build_progress
 
@@ -1283,8 +1278,10 @@ the commit proceeds. Set it to `true` to make a verified violation return exit `
 `commit-msg` hook converts that result to Git exit `1` and refuses the commit without changing the
 working tree or index.
 
-The `wiring` top-level config key (distinct from `build_review.rubrics.wiring`) is also accepted and
-ignored, retained only so a pre-existing consumer config does not hard-fail on upgrade.
+The `wiring` top-level config key (distinct from `build_review.rubrics.wiring`) is retired. It remains
+accepted for compatibility, is removed from the resolved configuration, and emits a warning and one
+`config_deprecated_key` event naming
+`adr-2026-08-14-retire-build-review-wiring-rubric`.
 
 ## prd_audit
 
