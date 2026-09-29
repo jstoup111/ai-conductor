@@ -925,6 +925,11 @@ once.
 Consumed by `src/conductor/src/engine/build-progress-watcher.ts:206`; `.enabled` gates the build step's
 watcher at `src/conductor/src/engine/conductor.ts:3712`.
 
+When the watcher emits a quiet warning, the daemon log also shows `provider activity <age> ago` when
+the current build dispatch has a valid `step-heartbeat`. The age is display-only: a missing, stale,
+malformed, or unreadable heartbeat leaves the existing quiet warning unchanged and never affects the
+running provider's lifecycle.
+
 ## provider_stream
 
 Cadence for live `provider_stream_progress` events on the conductor event spine. The engine attaches
