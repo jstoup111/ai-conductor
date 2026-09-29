@@ -18,6 +18,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Authorized GitHub writes and HTTPS pushes now support an optional machine-scoped bot credential with safe operator fallback. ([implementation PR #2734](https://github.com/jstoup111/ai-conductor/pull/2734)).
 - Use Pi as a build provider for supported one-shot AI-conductor steps. ([implementation PR #2765](https://github.com/jstoup111/ai-conductor/pull/2765)).
 - Build reviews now block unapproved event-spine bypasses before they ship. ([implementation PR #2821](https://github.com/jstoup111/ai-conductor/pull/2821)).
+- Daemon operators see the age of the most recent provider activity in quiet-build warnings. ([implementation PR #2824](https://github.com/jstoup111/ai-conductor/pull/2824)).
 
 ### Changed
 
@@ -38,6 +39,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators now receive recovery guidance when unpark encounters a live feature halt. ([implementation PR #2775](https://github.com/jstoup111/ai-conductor/pull/2775)).
 - Provider output that mentions an expired or in-use session no longer triggers unbudgeted step retries; the unused stale-session recovery path and session-reuse override were removed. ([implementation PR #2784](https://github.com/jstoup111/ai-conductor/pull/2784)).
 - As-built review no longer rejects findings that cite a plan task as `task-N`, which had halted features with no verdict. ([implementation PR #2819](https://github.com/jstoup111/ai-conductor/pull/2819)).
+- Daemon recovery now retains halt state when its committed halt record cannot be cleared. ([implementation PR #2820](https://github.com/jstoup111/ai-conductor/pull/2820)).
 
 ## [1.5.0] - 2026-09-27
 
