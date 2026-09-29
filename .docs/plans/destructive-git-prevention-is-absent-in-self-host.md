@@ -487,3 +487,12 @@ Seventeen tasks deliver an engine-generated `git` argv guard, provisioned fail-c
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks naming its mechanism
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-s11-1: src/conductor/test/smoke/git-guard-claude.smoke.test.ts:12-15 and src/conductor/test/smoke/git-guard-codex.smoke.test.ts:49-50 — replace the hard-coded ANTHROPIC_API_KEY / CODEX_API_KEY skip gates with the credentialEnvVar and binaryName that liveCredentialedSmokeCapabilities() (live-e2e-providers.ts:13-19) registers for credentialed:claude / credentialed:codex, so each smoke file's skip gate and the runner's capability resolution come from one source; keep the smokeCapability declarations and existing skip handling (Task 16)
+**Gate:** prd-audit
+**Rationale:** git-guard-claude.smoke.test.ts:13 gates on ANTHROPIC_API_KEY while credentialed:claude resolves CLAUDE_CODE_OAUTH_TOKEN (live-e2e-providers.ts:17), so the leg self-skips under runner credentials; Task 16 Done-when bullet 1 admits the fix. Sibling swept: git-guard-codex.smoke.test.ts gates on CODEX_API_KEY, which matches today but is the same duplicated-literal shape, so both derive from the capability registry.
+**Criterion:** S11.1
+**Parent task:** 16
+**Done when:**
+- S11.1 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s11-1 is complete.
