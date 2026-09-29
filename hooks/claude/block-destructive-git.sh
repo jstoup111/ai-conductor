@@ -54,31 +54,24 @@ def arithmetic_expansion_spans(line, depth):
         spans.append((start, len(line)))
     return spans, depth
 
-delimiter = None
-strip_tabs = False
+delimiters = []
 arithmetic_depth = 0
 
 for line in os.environ["COMMAND"].splitlines(keepends=True):
-    if delimiter is not None:
+    if delimiters:
         candidate = line.rstrip("\n")
+        delimiter, strip_tabs = delimiters[0]
         if strip_tabs:
             candidate = candidate.lstrip("\t")
         if candidate == delimiter:
-            delimiter = None
+            delimiters.pop(0)
         continue
 
     print(line, end="")
     arithmetic_spans, arithmetic_depth = arithmetic_expansion_spans(line, arithmetic_depth)
-    match = next(
-        (
-            candidate for candidate in heredoc_start.finditer(line)
-            if not any(start <= candidate.start() < end for start, end in arithmetic_spans)
-        ),
-        None,
-    )
-    if match is not None:
-        delimiter = match.group("quoted") or match.group("bare")
-        strip_tabs = match.group("strip") == "-"
+    for match in heredoc_start.finditer(line):
+        if not any(start <= match.start() < end for start, end in arithmetic_spans):
+            delimiters.append((match.group("quoted") or match.group("bare"), match.group("strip") == "-"))
 PY
 )
 SCAN=$(printf '%s' "$SCAN" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")

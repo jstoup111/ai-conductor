@@ -336,10 +336,16 @@ export class CodexProvider implements LLMProvider {
         };
       }
     }
+    const invocationEnv = this.invocationEnv(options, authentication);
+    // execa extends this overlay with process.env. Materialize the inherited
+    // PATH once so the child environment and Codex's shell policy cannot drift.
+    const childEnv = guardDir
+      ? withGitGuardPath({ ...invocationEnv, PATH: invocationEnv.PATH ?? process.env.PATH }, guardDir)
+      : invocationEnv;
     const command = {
       executable: options.selfHost?.executable ?? this.executable,
-      args: [...this.selfHostArgs(options), ...this.buildArgs(options, !repl, schemaFile, guardDir)],
-      env: withGitGuardPath(this.invocationEnv(options, authentication), guardDir),
+      args: [...this.selfHostArgs(options), ...this.buildArgs(options, !repl, schemaFile, guardDir, childEnv.PATH)],
+      env: childEnv,
     };
     let streamedTokenUsage: TokenUsage | undefined;
 
@@ -983,7 +989,7 @@ export class CodexProvider implements LLMProvider {
     );
   }
 
-  private buildArgs(options: InvokeOptions, unattended: boolean, schemaFile?: string, guardDir?: string | null): string[] {
+  private buildArgs(options: InvokeOptions, unattended: boolean, schemaFile?: string, guardDir?: string | null, guardedPath?: string): string[] {
     const args = ['exec'];
 
     if (options.model) args.push('--model', options.model);
@@ -1021,10 +1027,7 @@ export class CodexProvider implements LLMProvider {
         if (memoryRoot) args.push('--add-dir', memoryRoot);
       }
     }
-    if (guardDir) {
-      const inheritedPath = this.invocationEnv(options, this.authentication).PATH ?? process.env.PATH ?? '';
-      args.push('--config', `shell_environment_policy.set.PATH="${guardDir}:${inheritedPath}"`);
-    }
+    if (guardDir && guardedPath !== undefined) args.push('--config', `shell_environment_policy.set.PATH=${JSON.stringify(guardedPath)}`);
     if (options.cwd) args.push('--cd', options.cwd);
     if (!options.interactive) args.push('--json');
     if (schemaFile) args.push('--output-schema', schemaFile);

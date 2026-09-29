@@ -72,6 +72,13 @@ describe('block-destructive-git hook force-push protection', () => {
     expect(denial.hookSpecificOutput?.permissionDecisionReason).toMatch(/force.*push/i);
   }
 
+  it('drops every heredoc body on a multi-heredoc command but scans later commands', () => {
+    const allowed = invoke("cat <<A <<'B'\ngit reset --hard\nA\ngit push --force\nB");
+    expect(allowed.status).toBe(0);
+    const refused = invoke("cat <<A <<'B'\nignored\nA\nignored\nB\ngit reset --hard");
+    expect(refused.status).toBe(2);
+  });
+
   const separators: Array<[string, string]> = [
     ['&&', ' && '],
     ['||', ' || '],

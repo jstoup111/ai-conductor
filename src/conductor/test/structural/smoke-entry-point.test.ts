@@ -31,6 +31,8 @@ const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
   'test/execution/codex-provider.smoke.test.ts': 'toolchain',
   'test/gh-version-floor.smoke.test.ts': 'toolchain',
   'test/smoke/claude-subagent-stream.smoke.test.ts': 'credentialed:claude',
+  'test/smoke/git-guard-claude.smoke.test.ts': 'credentialed:claude',
+  'test/smoke/git-guard-codex.smoke.test.ts': 'credentialed:codex',
   'test/smoke/finish-record.smoke.test.ts': 'hermetic',
   'test/smoke/publish-interrupted.smoke.test.ts': 'toolchain',
   'test/smoke/surgical-finish-retry.smoke.test.ts': 'hermetic',
@@ -462,6 +464,8 @@ describe('structural: smoke test entry point', () => {
         'test/gh-version-floor.smoke.test.ts',
         'test/smoke/claude-subagent-stream.smoke.test.ts',
         'test/smoke/finish-record.smoke.test.ts',
+        'test/smoke/git-guard-claude.smoke.test.ts',
+        'test/smoke/git-guard-codex.smoke.test.ts',
         'test/smoke/publish-interrupted.smoke.test.ts',
         'test/smoke/surgical-finish-retry.smoke.test.ts',
       ]);

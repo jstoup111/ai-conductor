@@ -9,7 +9,8 @@
 //
 // That blocker could not exist. The step ran under the `claude` provider, which
 // is dispatched with `--dangerously-skip-permissions`, no OS sandbox, and full
-// environment inheritance; and the only environmental control installed for it
+// environment inheritance; and its environmental controls are the write fence
+// plus the worktree-local git guard, whose narrow destructive forms are known.
 // is the write fence, whose generated script denies nothing but writes under the
 // live harness checkout outside the build worktree. The fabricated blocker
 // arrived formatted exactly like the four genuinely-verified gate results above
@@ -162,6 +163,15 @@ function detectClaims(output: string): RefutedEnvironmentClaim[] {
   return claims;
 }
 
+/** The guard refuses only genuinely bare force forms, wherever push puts them. */
+function isGuardRefusedForcePushClaim(claim: string): boolean {
+  const push = claim.match(/git\s+push\b([^`]*)/i);
+  if (!push) return false;
+  return push[1].trim().split(/\s+/).some((argument) =>
+    argument === '--force' || argument === '-f' || (argument.startsWith('+') && !argument.startsWith('++')),
+  );
+}
+
 function renderFacts(facts: DispatchEnvironmentFacts): string[] {
   const lines: string[] = [
     `  - provider: ${facts.provider} — dispatched with no OS sandbox and full environment inheritance; ` +
@@ -204,7 +214,7 @@ export function auditEnvironmentBlockerClaims(
     ? writeFenceDeniableOperations()
     : new Set<AuditedOperation>();
   const refuted = detectClaims(output).filter((claim) =>
-    !deniable.has(claim.operation) && !(claim.operation === 'git push' && /git\s+push\s+(?:--force\b|-f\b|\S*\+\S*:)/i.test(claim.claim)),
+    !deniable.has(claim.operation) && !(claim.operation === 'git push' && isGuardRefusedForcePushClaim(claim.claim)),
   );
   if (refuted.length === 0) return none;
 

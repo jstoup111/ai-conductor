@@ -21,14 +21,15 @@ args=("$@")
 i=0
 while [[ $i -lt \${#args[@]} ]]; do
   case "\${args[$i]}" in
-    -C|--git-dir|--work-tree|-c) ((i+=2)); continue ;;
-    --no-pager|--paginate) ((i++)); continue ;;
+    -C|--git-dir|--work-tree|-c|--namespace) ((i+=2)); continue ;;
+    -C*|-c*|--git-dir=*|--work-tree=*|--namespace=*|--exec-path=*) ((i++)); continue ;;
+    --exec-path|--no-pager|--paginate|-P|--no-optional-locks|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-replace-objects|--no-lazy-fetch|--no-advice|--bare) ((i++)); continue ;;
   esac
   break
 done
 command="\${args[$i]:-}"
-if [[ -n "$command" ]]; then
-  alias_value="$($real_git config --get "alias.$command" 2>/dev/null || true)"
+if [[ -n "$command" ]] && [[ ! "$command" =~ ^(status|log|diff|commit|rebase|config|rev-parse|for-each-ref|merge-base)$ ]]; then
+  alias_value="$($real_git "\${args[@]:0:$i}" config --get "alias.$command" 2>/dev/null || true)"
   if [[ -n "$alias_value" && "$alias_value" != '!'* ]]; then
     read -r -a expanded <<< "$alias_value"
     args=("\${args[@]:0:$i}" "\${expanded[@]}" "\${args[@]:$((i+1))}")
@@ -42,7 +43,7 @@ alternative=''
 case "$command" in
   push)
     for a in "\${args[@]:$((i+1))}"; do
-      [[ "$a" == --force || "$a" == -f || "$a" == +*:* ]] && { destructive=true; reason='bare force push can rewrite remote history'; alternative='git push --force-with-lease'; break; }
+      [[ "$a" == --force || "$a" == -f || "$a" == +* ]] && { destructive=true; reason='bare force push can rewrite remote history'; alternative='git push --force-with-lease'; break; }
     done ;;
   reset)
     for a in "\${args[@]:$((i+1))}"; do [[ "$a" == --hard ]] && { destructive=true; reason='hard reset discards working-tree changes'; alternative='git reset --keep <target>'; break; }; done ;;

@@ -20,6 +20,7 @@ const REFUSAL_CASES: Array<[string, string[], RegExp, RegExp]> = [
   ['force push', ['push', '--force', 'origin', 'main'], /bare force push/, /--force-with-lease/],
   ['short force push', ['push', '-f', 'origin', 'main'], /bare force push/, /--force-with-lease/],
   ['force refspec push', ['push', 'origin', '+HEAD:main'], /bare force push/, /--force-with-lease/],
+  ['short force refspec push', ['push', 'origin', '+feature'], /bare force push/, /--force-with-lease/],
   ['force beside lease push', ['push', '--force-with-lease', '--force', 'origin', 'main'], /bare force push/, /--force-with-lease/],
   ['hard reset', ['reset', '--hard', 'HEAD~1'], /hard reset/, /reset --keep/],
   ['force branch delete', ['branch', '-D', 'unreachable'], /commits unreachable/, /branch -d/],
@@ -98,5 +99,12 @@ esac
     expect(result.stdout).toBe('');
     expect(result.stderr).toBe('non-fast-forward: remote rejected update\n');
     expect(await recordedCommands()).toEqual(['config', 'push']);
+  });
+
+  it('passes a safe built-in through with exactly one real-git invocation', async () => {
+    const result = invoke(['status']);
+
+    expect(result.status).toBe(0);
+    expect(await recordedCommands()).toEqual(['status']);
   });
 });

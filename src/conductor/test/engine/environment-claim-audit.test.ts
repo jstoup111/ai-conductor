@@ -140,6 +140,21 @@ describe('environment claim audit', () => {
     });
   });
 
+  it('leaves only guard-refused bare force-push claims unrefuted', () => {
+    const cases = [
+      ['The sandbox blocks `git push origin --force`.', true],
+      ['The sandbox blocks `git push -f origin main`.', true],
+      ['The sandbox blocks `git push origin +feature`.', true],
+      ['The sandbox blocks `git push --force-with-lease origin main`.', false],
+      ['The sandbox blocks `git push --force-if-includes origin main`.', false],
+      ['The sandbox blocks `git push origin main`.', false],
+    ] as const;
+    expect(cases.map(([output, exempt]) => {
+      const audit = auditEnvironmentBlockerClaims(output, CLAUDE_DISPATCH);
+      return (audit.message === null) === exempt;
+    })).toEqual(cases.map(() => true));
+  });
+
   it('leaves ordinary sandbox prose that blames nothing alone', () => {
     const chatter = [
       'The self-build sandbox provisioned a throwaway CLAUDE_CONFIG_DIR.',

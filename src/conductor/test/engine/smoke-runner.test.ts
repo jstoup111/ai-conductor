@@ -78,6 +78,20 @@ describe('discoverSmokeFiles', () => {
 });
 
 describe('runSmokeCli selection', () => {
+  it('names a missing guard-smoke credential in advisory mode and fails in full gate mode', async () => {
+    const guardFile = 'test/smoke/git-guard-codex.smoke.test.ts';
+    const options = {
+      discover: async () => [{ file: guardFile, source: "const smokeCapability = 'credentialed:codex';" }],
+      runVitest: vi.fn(async () => ({ executedAssertions: true, output: '' })),
+      hasCommand: () => true,
+      environment: {},
+      selectedFile: guardFile,
+    };
+    const emit = vi.fn();
+    await expect(runSmokeCli('vitest.smoke.config.ts', { ...options, emit, mode: 'advisory' })).resolves.toBeUndefined();
+    expect(emit).toHaveBeenCalledWith(expect.stringContaining('CODEX_API_KEY'));
+  });
+
   it('maps the production CLI config and one matrix smoke file to the runner selection', async () => {
     const runner = vi.fn(async () => {});
     const selectedFile = 'test/engine/daemon-e2e-live-codex.smoke.test.ts';
