@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-29T15:56:09.480Z
 Slug: link-intake-depends-on-with-a-typed-issue-id
 Class: needs-human
 Halting step: prd_audit
