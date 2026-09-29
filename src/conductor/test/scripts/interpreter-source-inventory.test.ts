@@ -1,9 +1,9 @@
 import { chmod, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execa } from 'execa';
 import { afterEach, describe, expect, it } from 'vitest';
-import { checkInventory } from '../../scripts/check-interpreter-source.mts';
+import { checkInventory, interpreterSourceInventory } from '../../scripts/check-interpreter-source.mts';
 
 describe('interpreter-source inventory', () => {
   const roots: string[] = [];
@@ -21,6 +21,49 @@ describe('interpreter-source inventory', () => {
   function modules(gitHooks: Record<string, unknown> = { SAFE: '#!/bin/sh\ntrue\n' }, sessionHooks: Record<string, unknown> = { SAFE: '#!/bin/sh\ntrue\n' }) {
     return { 'git-hook-assets': gitHooks, 'session-hook-assets': sessionHooks };
   }
+
+  it('includes bundled skill helpers alongside every shipped bin and hook shell asset', async () => {
+    await expect(interpreterSourceInventory(resolve(process.cwd(), '../..'))).resolves.toEqual([
+      'bin/ai-conductor',
+      'bin/generate-docs-guard-hook',
+      'bin/generate-model-table',
+      'bin/install',
+      'bin/intake-backfill',
+      'bin/intake-file',
+      'bin/lib/harness-common.sh',
+      'bin/migrate',
+      'bin/quarantine-engineer-signals',
+      'bin/setup',
+      'bin/update',
+      'hooks/claude/block-destructive-git.sh',
+      'hooks/claude/diagram-coverage-check.sh',
+      'hooks/claude/docs-guard.sh',
+      'hooks/claude/lint-after-edit.sh',
+      'hooks/claude/post-commit-derive-feedback.sh',
+      'hooks/claude/rate-limit-wait.sh',
+      'hooks/claude/session-start-context.sh',
+      'hooks/claude/spec-coverage-check.sh',
+      'hooks/claude/stop-memory-reminder.sh',
+      'hooks/claude/tdd-commit-gate.sh',
+      'hooks/pre-commit-tdd-gate.sh',
+      'skills/intake/scripts/intake-file',
+    ]);
+  });
+
+  it('reports an unsafe bundled skill helper', async () => {
+    const directory = await root();
+    await mkdir(join(directory, 'skills', 'demo', 'scripts'), { recursive: true });
+    await writeFile(join(directory, 'skills', 'demo', 'scripts', 'tool'), '#!/bin/sh\npython3 -c "print($SECRET)"\n');
+    await expect(checkInventory(directory, modules())).resolves.toEqual([
+      expect.objectContaining({ sourceName: 'skills/demo/scripts/tool', line: 2 }),
+    ]);
+  });
+
+  it('succeeds for bin and hook assets when skills is absent', async () => {
+    const directory = await root();
+    await writeFile(join(directory, 'hooks', 'safe-hook'), '#!/bin/sh\ntrue\n');
+    await expect(checkInventory(directory, modules())).resolves.toEqual([]);
+  });
 
   it('scans unsafe shipped files but excludes documentation and test specimens', async () => {
     const directory = await root();
