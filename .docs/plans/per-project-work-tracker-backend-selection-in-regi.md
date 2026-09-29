@@ -369,3 +369,21 @@ Task 4 ────────────────────────�
 **Done when:**
 - Task 4 is satisfied by this task.
 - Re-run as-built and confirm task rem-as-built-rem-ar002-2 is complete.
+
+### Task rem-prd-audit-rem-s34-1: src/conductor/src/engine/intake-backend-composite.ts:64 — accept an optional `trackerExclusionEpisodes?: Set<string>` dep and use `deps.trackerExclusionEpisodes ?? new Set<string>()` for excludedProjects (per-composite default preserves Task 8 Done-when); src/conductor/src/engine/engineer-cli.ts — add a module-level exported `trackerExclusionEpisodes = new Set<string>()` beside missingRegistrationEpisodes (line ~773), add the optional field to buildIntake deps and forward it to createIntakeBackendComposite, and pass it from prePollIntake (line ~832) alongside missingRegistrationEpisodes
+**Gate:** prd-audit
+**Rationale:** Verified (85%, source read): intake-backend-composite.ts:64 scopes excludedProjects to one composite, but prePollIntake (engineer-cli.ts:832) rebuilds the composite on every compose-launcher session, so a jira-selected project re-emits tracker_backend_unavailable each pre-poll, violating S3.4's one-event-per-episode in a long-running process; Task 8's Steps name the missingRegistrationEpisodes process-lifetime pattern (engineer-cli.ts:773, threaded through buildIntake exactly so episodes survive this rebuild) as the model, so this is conforming build work under Task 8/Story 3, not a plan miss. The per-composite default is kept so Task 8's three Done-when tests (intake-backend-composite.test.ts:255 and neighbours) are preserved unchanged. Matched pair: the new episode set is threaded through the same two seams as missingRegistrationEpisodes (composite deps and buildIntake deps) so the two episode mechanisms cannot diverge. Sibling sweep: intake-loop-cli.ts:132 builds its composite once per process (already correct, no change); land/handoff buildIntake calls are single-shot per process (one write-back each), found-and-excluded because S3.4 concerns polling and no episode spans them.
+**Criterion:** S3.4
+**Parent task:** 8
+**Done when:**
+- S3.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s34-1 is complete.
+
+### Task rem-prd-audit-rem-s34-2: src/conductor/test/engine/engineer/engineer-cli-launch-intake.test.ts — RED-first: call prePollIntake twice with the same recording events emitter over a registry holding one jira-selected project and assert exactly one tracker_backend_unavailable {backend: 'jira', reason: 'no-adapter'} in total, then flip the project to github for one call and back to jira and assert one new event; clear trackerExclusionEpisodes in the existing beforeEach/afterEach next to missingRegistrationEpisodes.clear() (lines 120, 128); prove it fails against the pre-change engineer-cli.ts
+**Gate:** prd-audit
+**Rationale:** Verified (85%, source read): intake-backend-composite.ts:64 scopes excludedProjects to one composite, but prePollIntake (engineer-cli.ts:832) rebuilds the composite on every compose-launcher session, so a jira-selected project re-emits tracker_backend_unavailable each pre-poll, violating S3.4's one-event-per-episode in a long-running process; Task 8's Steps name the missingRegistrationEpisodes process-lifetime pattern (engineer-cli.ts:773, threaded through buildIntake exactly so episodes survive this rebuild) as the model, so this is conforming build work under Task 8/Story 3, not a plan miss. The per-composite default is kept so Task 8's three Done-when tests (intake-backend-composite.test.ts:255 and neighbours) are preserved unchanged. Matched pair: the new episode set is threaded through the same two seams as missingRegistrationEpisodes (composite deps and buildIntake deps) so the two episode mechanisms cannot diverge. Sibling sweep: intake-loop-cli.ts:132 builds its composite once per process (already correct, no change); land/handoff buildIntake calls are single-shot per process (one write-back each), found-and-excluded because S3.4 concerns polling and no episode spans them.
+**Criterion:** S3.4
+**Parent task:** 8
+**Done when:**
+- S3.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s34-2 is complete.
