@@ -1,3 +1,4 @@
+// Covers: task:1
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 
@@ -31,9 +32,11 @@ vi.mock('../../src/engine/github-bot-credential.js', () => ({
 
 import {
   createGithubTrackerClient,
+  createGuardedGithubOperationRunner,
   makeProductionGh,
   type GhRunner,
 } from '../../src/engine/tracker-client.js';
+import { executeGithubOperation } from '../../src/engine/github-operations.js';
 import { GithubBotAuthRefusalError } from '../../src/engine/github-bot-auth-refusal.js';
 
 const EFFECT_MARKER = '<!-- ai-conductor:remediation-effect:effect-123 -->';
@@ -69,6 +72,35 @@ function expectedSearchCall(): { args: string[]; opts: { cwd: string } } {
     opts: { cwd: '/worktree' },
   };
 }
+
+describe('createGuardedGithubOperationRunner dependency id guard', () => {
+  it('refuses a dependency add without its database id before the transport', async () => {
+    const calls: string[][] = [];
+    const result = await executeGithubOperation({
+      operation: 'intake.issue.dependency.add',
+      access: 'intake-write',
+      repository: 'acme/app',
+      resource: { kind: 'issue', number: 300 },
+      context: { actor: 'intake' },
+      payload: {
+        dependency: { repository: 'acme/app', resource: { kind: 'issue', number: 42 } },
+      },
+    }, createGuardedGithubOperationRunner(async (args) => {
+      calls.push(args);
+      return { stdout: '' };
+    }, {
+      cwd: '/worktree',
+      intake: { authorize: async () => ({}) },
+    }));
+
+    expect(result).toMatchObject({
+      kind: 'failed',
+      error: expect.stringContaining('dependency database id'),
+    });
+    expect((result as { error: string }).error).toContain('acme/app#42');
+    expect(calls).toEqual([]);
+  });
+});
 
 describe('createGithubTrackerClient.findIssueByEffectMarker', () => {
   it('returns an open issue with the exact marker and searches every issue state in the configured repository', async () => {

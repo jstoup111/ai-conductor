@@ -1,3 +1,4 @@
+// Covers: task:1
 // Test: deterministic dependency-edge parser (issue-dep-migration.ts)
 //
 // Task 22 scope ONLY: given an issue's source ref + body prose, deterministically
@@ -280,7 +281,10 @@ describe('createDependencyLinks (writer)', () => {
     expect(posts.length).toBe(1);
     expect(posts[0].args).toContain('repos/acme/app/issues/230/dependencies/blocked_by');
     // Live contract (#260): payload is the blocking issue's database id, not its ref/number.
+    expect(posts[0].args).toContain('-F');
     expect(posts[0].args).toContain('issue_id=1000217');
+    expect(posts[0].args.indexOf('-F') + 1).toBe(posts[0].args.indexOf('issue_id=1000217'));
+    expect(posts[0].args).not.toContain('-f');
     expect(posts[0].args.some((a) => a.startsWith('issue='))).toBe(false);
   });
 

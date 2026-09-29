@@ -198,9 +198,12 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
       const databaseId = request.payload && 'dependencyDatabaseId' in request.payload
         ? request.payload.dependencyDatabaseId
         : undefined;
+      if (typeof databaseId !== 'number' || !Number.isSafeInteger(databaseId) || databaseId <= 0) {
+        throw new Error(`Registered dependency add is missing a valid dependency database id for ${dependency.repository}#${dependency.number}.`);
+      }
       return [
-        'api', '--method', 'POST', `repos/${repository}/issues/${issueNumber(request)}/dependencies/blocked_by`, '-f',
-        databaseId === undefined ? `issue_number=${dependency.number}` : `issue_id=${databaseId}`,
+        'api', '--method', 'POST', `repos/${repository}/issues/${issueNumber(request)}/dependencies/blocked_by`, '-F',
+        `issue_id=${databaseId}`,
       ];
     }
     case 'issue.dependency.remove': {

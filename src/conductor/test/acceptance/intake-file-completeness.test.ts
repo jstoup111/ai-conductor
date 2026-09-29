@@ -1,3 +1,4 @@
+// Covers: task:1
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Agent/operator gh issue create files are born
 // complete" (Story 2, FR-2; #695 intake-only-enforcement).
@@ -235,7 +236,11 @@ describe('Story 2 — bundled intake helper files criteria-complete issues', () 
       expect(linkCall).toBeDefined();
       expect(linkCall!.args).toContain('POST');
       expect(linkCall!.args).not.toContain('PUT');
-      expect(linkCall!.args.some((a) => a === 'issue_id=1000300')).toBe(true);
+      expect(linkCall!.args).toContain('-F');
+      expect(linkCall!.args).toContain('issue_id=1000300');
+      expect(linkCall!.args.indexOf('-F') + 1).toBe(linkCall!.args.indexOf('issue_id=1000300'));
+      expect(linkCall!.args).not.toContain('-f');
+      expect(linkCall!.args.some((a) => a.startsWith('issue_number='))).toBe(false);
       expect(linkCall!.args.some((a) => a.includes('#'))).toBe(false);
     });
   });
