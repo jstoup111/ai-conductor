@@ -17,7 +17,6 @@ import { formatFeatureUsageTotal } from '../execution/provider-diagnostics.js';
 import { renderedEventTypes } from '../engine/event-sinks.js';
 import { resolveExecutionIdentity } from '../engine/execution-identity.js';
 import { formatGithubCredentialFallback, formatGithubOperationRefusal } from '../engine/github-operations.js';
-import { formatBotCoAuthorSkipped } from '../engine/bot-co-author.js';
 
 export interface TerminalRendererOptions {
   stateFilePath: string;
@@ -199,10 +198,6 @@ export class TerminalRenderer implements UIRenderer {
 
       case 'github_write_credential_fallback':
         this.region.log(chalk.yellow(`  ↻ ${formatGithubCredentialFallback(event)}`));
-        break;
-
-      case 'bot_co_author_skipped':
-        this.region.log(chalk.yellow(`  ↻ ${formatBotCoAuthorSkipped(event)}`));
         break;
 
       case 'step_retry': {

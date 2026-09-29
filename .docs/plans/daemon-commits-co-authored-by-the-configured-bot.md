@@ -62,15 +62,15 @@ When a GitHub bot is configured (`github_bot.token_file`, spec #158), every comm
 **Steps:**
 1. Write failing tests in `src/conductor/test/engine/bot-co-author-event.test.ts`.
 2. Verify RED.
-3. Add the `BotCoAuthorSkippedEvent` variant to the `ConductorEvent` union in `src/conductor/src/types/events.ts` with only `type` and a closed `reason`. Declare it in `EVENT_SINKS` (`src/conductor/src/engine/event-sinks.ts`) exactly as `github_write_credential_fallback` is declared. Add `formatBotCoAuthorSkipped` to a new `src/conductor/src/engine/bot-co-author.ts`, and route the variant through it in `src/conductor/src/ui/terminal-renderer.ts` and the daemon log renderer in `src/conductor/src/daemon-cli.ts`, next to the existing `github_write_credential_fallback` cases.
+3. Add the `BotCoAuthorSkippedEvent` variant to the `ConductorEvent` union in `src/conductor/src/types/events.ts` with only `type` and a closed `reason`. Declare it in `EVENT_SINKS` (`src/conductor/src/engine/event-sinks.ts`) exactly as `github_write_credential_fallback` is declared. Add `formatBotCoAuthorSkipped` to a new `src/conductor/src/engine/bot-co-author.ts`, and route the variant through it in the daemon log renderer in `src/conductor/src/daemon-cli.ts`, next to the existing `github_write_credential_fallback` case. Every producer is daemon-only, so the foreground `TerminalRenderer` carries no dedicated branch; its generic fallback summarizes the event.
 4. Verify GREEN and commit.
 
 **Done when:**
 - The `ConductorEvent` union has a `bot_co_author_skipped` variant whose only field besides `type` is `reason`, typed as the closed set `token-unavailable`, `identity-read-failed`, `worktree-write-failed`.
 - `EVENT_SINKS` declares `bot_co_author_skipped` with the same render, persist, audit, and otel flags as `github_write_credential_fallback`, as asserted in `test/engine/bot-co-author-event.test.ts`.
-- `formatBotCoAuthorSkipped` renders each of the three reasons to a fixed sentence containing no path, and both the terminal renderer and the daemon log renderer route the variant through it.
+- `formatBotCoAuthorSkipped` renders each of the three reasons to a fixed sentence containing no path, and the daemon log renderer routes the variant through it; the foreground terminal renderer has no dedicated branch because every producer is daemon-only.
 
-**Files:** src/conductor/src/types/events.ts; src/conductor/src/engine/event-sinks.ts; src/conductor/src/engine/bot-co-author.ts; src/conductor/src/ui/terminal-renderer.ts; src/conductor/src/daemon-cli.ts; src/conductor/test/engine/bot-co-author-event.test.ts
+**Files:** src/conductor/src/types/events.ts; src/conductor/src/engine/event-sinks.ts; src/conductor/src/engine/bot-co-author.ts; src/conductor/src/daemon-cli.ts; src/conductor/test/engine/bot-co-author-event.test.ts
 
 **Dependencies:** none
 
