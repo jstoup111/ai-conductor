@@ -25,6 +25,7 @@
 # Usage:
 #   test/lint_shell.sh           # check; non-zero exit on any finding
 #   test/lint_shell.sh --list    # print the enumerated file set, one per line
+#   test/lint_shell.sh --syntax  # parse every enumerated script with bash -n
 #
 # DECLARED_EXCLUSIONS is the only sanctioned way to keep a shell file out of
 # both lint gates. Paths are repo-relative and exact; never rely on a glob
@@ -86,6 +87,17 @@ fi
 if [ "${1:-}" = "--list" ]; then
   printf '%s\n' "${SCRIPTS[@]}"
   exit 0
+fi
+
+if [ "${1:-}" = "--syntax" ]; then
+  syntax_status=0
+  for script in "${SCRIPTS[@]}"; do
+    if ! bash -n "$script" 2>/dev/null; then
+      printf '%s\n' "$script"
+      syntax_status=1
+    fi
+  done
+  exit "$syntax_status"
 fi
 
 if ! command -v shellcheck >/dev/null 2>&1; then
