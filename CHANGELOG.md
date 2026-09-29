@@ -41,6 +41,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - As-built review no longer rejects findings that cite a plan task as `task-N`, which had halted features with no verdict. ([implementation PR #2819](https://github.com/jstoup111/ai-conductor/pull/2819)).
 - Daemon recovery now retains halt state when its committed halt record cannot be cleared. ([implementation PR #2820](https://github.com/jstoup111/ai-conductor/pull/2820)).
 - The as-built architecture review no longer rejects valid verdicts that carry Codex strict-mode filler prose, which had exhausted its retries and halted features. ([implementation PR #2826](https://github.com/jstoup111/ai-conductor/pull/2826)).
+- The coverage_binding judge now answers with short claim ids instead of copying 64-character digests, so a judge that mistypes a digest no longer halts the feature. ([implementation PR #2830](https://github.com/jstoup111/ai-conductor/pull/2830)).
 
 ## [1.5.0] - 2026-09-27
 
