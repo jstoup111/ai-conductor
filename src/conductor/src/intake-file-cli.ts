@@ -145,6 +145,11 @@ async function main(): Promise<void> {
     }
     for (const w of result.warnings) console.error(`[intake-file] warning: ${w}`);
     for (const bad of result.badRefs) console.error(`[intake-file] warning: bad --depends-on ref "${bad}"`);
+    for (const dependency of result.unlinked) {
+      console.error(
+        `[intake-file] NOT LINKED: ${result.issueUrl} is not blocked by ${dependency.ref} (${dependency.reason})`,
+      );
+    }
   } finally {
     persister?.stop();
     rl?.close();

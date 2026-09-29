@@ -198,9 +198,12 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
       const databaseId = request.payload && 'dependencyDatabaseId' in request.payload
         ? request.payload.dependencyDatabaseId
         : undefined;
+      if (typeof databaseId !== 'number' || !Number.isSafeInteger(databaseId) || databaseId <= 0) {
+        throw new Error(`Registered dependency add is missing a valid dependency database id for ${dependency.repository}#${dependency.number}.`);
+      }
       return [
-        'api', '--method', 'POST', `repos/${repository}/issues/${issueNumber(request)}/dependencies/blocked_by`, '-f',
-        databaseId === undefined ? `issue_number=${dependency.number}` : `issue_id=${databaseId}`,
+        'api', '--method', 'POST', `repos/${repository}/issues/${issueNumber(request)}/dependencies/blocked_by`, '-F',
+        `issue_id=${databaseId}`,
       ];
     }
     case 'issue.dependency.remove': {
@@ -442,13 +445,6 @@ export interface TrackerClient {
   viewerIdentity(cwd: string): Promise<string>;
   /** `gh api repos/<repo>/issues/<number>/dependencies/blocked_by` — raw JSON. */
   getBlockedBy(repo: string, number: number, cwd: string): Promise<unknown>;
-  /** Add one blocking issue to this issue without mutating the referenced issue. */
-  addIssueDependency?(
-    repo: string,
-    number: number,
-    dependency: { repo: string; number: number },
-    cwd: string,
-  ): Promise<void>;
   /** Remove one blocking issue from this issue without mutating the referenced issue. */
   removeIssueDependency?(
     repo: string,
@@ -980,18 +976,6 @@ export function createGithubTrackerClient(
         ['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`],
       );
       return parseJsonOrThrow('getBlockedBy', stdout);
-    },
-
-    async addIssueDependency(repo, number, dependency, cwd) {
-      await runTrackerIssueOperation(
-        runner,
-        options,
-        cwd,
-        'issue.dependency.add',
-        repo,
-        { kind: 'issue', number },
-        { dependency: { repository: dependency.repo, resource: { kind: 'issue', number: dependency.number } } },
-      );
     },
 
     async removeIssueDependency(repo, number, dependency, cwd) {

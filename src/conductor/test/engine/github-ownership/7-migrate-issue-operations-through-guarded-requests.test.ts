@@ -78,7 +78,6 @@ describe('engine/tracker-client — issue operations use guarded requests', () =
     await client.closeIssue('acme/owned', '17', '/fixture');
     await client.addIssueLabel('acme/owned', 17, 'owned-label', '/fixture');
     await client.removeIssueLabel('acme/owned', 17, 'owned-label', '/fixture');
-    await client.addIssueDependency!('acme/owned', 17, { repo: 'acme/foreign', number: 99 }, '/fixture');
     await client.removeIssueDependency!('acme/owned', 17, { repo: 'acme/foreign', number: 99 }, '/fixture');
 
     const foreignLabels = await client.getIssueLabels('acme/foreign', 42, '/fixture');
@@ -90,7 +89,6 @@ describe('engine/tracker-client — issue operations use guarded requests', () =
       client.closeIssue('acme/foreign', '42', '/fixture'),
       client.addIssueLabel('acme/foreign', 42, 'foreign-label', '/fixture'),
       client.removeIssueLabel('acme/foreign', 42, 'foreign-label', '/fixture'),
-      client.addIssueDependency!('acme/foreign', 42, { repo: 'acme/owned', number: 17 }, '/fixture'),
       client.removeIssueDependency!('acme/foreign', 42, { repo: 'acme/owned', number: 17 }, '/fixture'),
     ];
     await Promise.all(foreignMutations.map(async (mutation) => {
@@ -114,10 +112,8 @@ describe('engine/tracker-client — issue operations use guarded requests', () =
         'identity', 'provenance',
         'identity', 'provenance',
         'identity', 'provenance',
-        'identity', 'provenance',
       ],
       terminalMutationRepositories: [
-        'acme/owned',
         'acme/owned',
         'acme/owned',
         'acme/owned',
