@@ -13,6 +13,13 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execa } from 'execa';
 import { join } from 'node:path';
 import { ENGINEER_SUBCOMMANDS } from '../src/engine/engineer-cli.js';
+import { DEFAULT_PROVIDER, requireProviderCapability } from '../src/execution/provider-catalog.js';
+
+function defaultComposerArgs(env: NodeJS.ProcessEnv, idea?: string): string[] {
+  const host = requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch');
+  const prompt = `${host.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
+  return host.interactiveLaunch.argv(prompt, env);
+}
 
 // ─── 1. Structural: `createProgram()` registers a `engineer` subcommand ──────────
 
@@ -237,18 +244,16 @@ describe('dispatchEngineer — routes to engineer entry', () => {
 
 // ─── 4. Launch argv: never plan mode (the engineer must be able to write) ────────
 
-describe('engineerLaunchArgs — permission mode', () => {
+describe('catalog interactive launch argv — permission mode', () => {
   it('uses the canonical composer prompt with the default writable mode', async () => {
-    const { engineerLaunchArgs } = await import('../src/engine/engineer-cli.js');
-    const args = engineerLaunchArgs({});
+    const args = defaultComposerArgs({});
     expect(args).toEqual(['--permission-mode', 'default', '/composer']);
     // Hard invariant: a launched composer is never read-only.
     expect(args).not.toContain('plan');
   });
 
   it('appends a compose idea to the canonical composer prompt', async () => {
-    const { engineerLaunchArgs } = await import('../src/engine/engineer-cli.js');
-    expect(engineerLaunchArgs({}, 'add a CSV export')).toEqual([
+    expect(defaultComposerArgs({}, 'add a CSV export')).toEqual([
       '--permission-mode',
       'default',
       '/composer add a CSV export',
@@ -256,8 +261,7 @@ describe('engineerLaunchArgs — permission mode', () => {
   });
 
   it('honors CONDUCT_ENGINEER_PERMISSION_MODE override', async () => {
-    const { engineerLaunchArgs } = await import('../src/engine/engineer-cli.js');
-    expect(engineerLaunchArgs({ CONDUCT_ENGINEER_PERMISSION_MODE: 'acceptEdits' })).toEqual([
+    expect(defaultComposerArgs({ CONDUCT_ENGINEER_PERMISSION_MODE: 'acceptEdits' })).toEqual([
       '--permission-mode',
       'acceptEdits',
       '/composer',
@@ -265,8 +269,7 @@ describe('engineerLaunchArgs — permission mode', () => {
   });
 
   it('coerces an explicit "plan" override back to default (plan would defeat the loop)', async () => {
-    const { engineerLaunchArgs } = await import('../src/engine/engineer-cli.js');
-    expect(engineerLaunchArgs({ CONDUCT_ENGINEER_PERMISSION_MODE: 'plan' })).toEqual([
+    expect(defaultComposerArgs({ CONDUCT_ENGINEER_PERMISSION_MODE: 'plan' })).toEqual([
       '--permission-mode',
       'default',
       '/composer',

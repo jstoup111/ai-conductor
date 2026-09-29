@@ -1,11 +1,11 @@
 // `ai-conductor compose` command handler (Phase 9.3, ADR-008 conformance rework).
 //
 // AGENT-HOSTED EXECUTION MODEL (ADR-008):
-//   The composer subsystem is driven by the /composer host-agent skill in a Claude
-//   Code session. The bare `ai-conductor compose` command is the FRONT DOOR: it launches
-//   an INTERACTIVE `claude /composer` session (stdio inherited, operator present),
+//   The composer subsystem is driven by the /composer host-agent skill in an interactive
+//   host session. The bare `ai-conductor compose` command is the FRONT DOOR: it launches
+//   an interactive host session (stdio inherited, operator present),
 //   dropping the operator into the human-in-the-loop idea→spec loop. This is NOT the
-//   forbidden `claude -p` substrate — that was a headless subprocess doing autonomous
+//   forbidden headless subprocess substrate — that was doing autonomous
 //   routing/authoring (ADR-008 removes it). Launching an interactive, operator-driven
 //   session is the entrypoint, not automation; routing/authoring still happen in-chat.
 //
@@ -14,14 +14,14 @@
 //   routing/authoring.
 //
 // Subcommands:
-//   ai-conductor compose                → {kind:'launch'}   — launch interactive `claude /composer`
+//   ai-conductor compose                → {kind:'launch'}   — launch interactive host /composer
 //   ai-conductor compose projects       → {kind:'projects'} — list registry to stdout as JSON
 //   ai-conductor compose land           → {kind:'land'}     — commit pre-written artifacts to spec branch
 //   ai-conductor compose handoff        → {kind:'handoff'}  — open spec PR + ensureRunning
 //   (malformed subcommand / missing flags → {kind:'guide'} — print usage)
 
 import { spawn } from 'node:child_process';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRegistryReader } from './registry.js';
 import { ConductorEventEmitter } from '../ui/events.js';
@@ -29,7 +29,8 @@ import { EventPersister } from './event-persister.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo, TargetPathMissingError } from './engineer/target.js';
 import { classifyLandGateRejection, landSpec } from './engineer/land-spec.js';
-import { loadConfig } from './config.js';
+import { loadConfig, loadMergedConfig, type ConfigResult } from './config.js';
+import { userConfigPath } from './user-config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { openSpecPr, type HandoffDeps } from './engineer/handoff.js';
@@ -82,7 +83,12 @@ import {
   probeGhVersion,
   type GhVersionFloorVerdict,
 } from './gh-version-floor.js';
-import { CLAUDE_DISPLAY_NAME, CLAUDE_PROVIDER, resolveProviderExecutable } from '../execution/provider-catalog.js';
+import {
+  DEFAULT_PROVIDER,
+  requireProviderCapability,
+  resolveProviderExecutable,
+} from '../execution/provider-catalog.js';
+import { resolveComposeLaunchHost } from './compose-launch-host.js';
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
@@ -125,7 +131,7 @@ export const ENGINEER_SUBCOMMANDS = [
  * argv[2] is neither 'engineer' nor 'compose'.
  *
  * Subcommand grammar (argv[3]):
- *   absent / undefined   → {kind:'launch'}   (drop into interactive `claude /composer`)
+ *   absent / undefined   → {kind:'launch'}   (drop into an interactive host /composer)
  *   'projects'           → {kind:'projects'}
  *   'land'               → {kind:'land', project, idea}  (--project <n> --idea <i>)
  *   'handoff'            → {kind:'handoff', project, branch}  (--project <n> --branch <b>)
@@ -497,10 +503,16 @@ export interface DispatchEngineerOpts {
   ensureRunningOpts?: Omit<EnsureRunningOpts, 'onReclaim'>;
   /**
    * Injected interactive launcher (for tests). When provided, the 'launch' kind
-   * calls this instead of spawning a real `claude` process and returns its exit code.
+   * calls this instead of spawning a real host process and returns its exit code.
    * Receives the resolved one-shot idea (CLI-supplied) for the first session, if any.
    */
   launchInteractive?: (idea?: string) => number | Promise<number>;
+  /** Load the merged configuration for the directory from which launch was requested. */
+  loadLaunchConfig?: (launchingDirectory: string) => Promise<ConfigResult>;
+  /** Spawn the selected interactive host; injectable so tests never launch a real host. */
+  spawnHost?: (executable: string, argv: string[], cwd: string) => Promise<number>;
+  /** Environment used to form host-owned interactive argv. */
+  env?: NodeJS.ProcessEnv;
   /** CLI-owned provider boot that must succeed before an interactive launch spawns. */
   beforeLaunch?: () => Promise<void>;
   /**
@@ -520,9 +532,9 @@ export interface DispatchEngineerOpts {
    */
   brainLoopAlive?: () => boolean;
   /**
-   * Whether we are already inside a Claude Code session (default: reads CLAUDECODE).
+   * Whether we are already inside the legacy default host session.
    * When true, the 'launch' kind prints an in-session note instead of spawning a
-   * nested interactive `claude` (which would recurse).
+   * nested interactive host (which would recurse).
    */
   insideClaudeSession?: boolean;
   /**
@@ -534,38 +546,24 @@ export interface DispatchEngineerOpts {
 }
 
 /**
- * Build the argv for the interactive engineer launch. Exported for testing.
- *
- * The engineer MUST author DECIDE artifacts, create the `spec/<slug>` branch, and run
- * the `land`/`handoff` git/gh primitives — so it must NOT start in `plan` mode (read-only).
- * Many users set `"defaultMode": "plan"` globally; the explicit `--permission-mode` flag
- * overrides that so the launched session can do its work. Defaults to `default` (normal
- * permission prompts — safe), overridable via `CONDUCT_ENGINEER_PERMISSION_MODE` for a
- * lower-friction mode (`acceptEdits`, `bypassPermissions`, …). `plan` is rejected (it would
- * defeat the loop) and coerced back to `default`.
+ * Spawn an interactive host with the operator's terminal attached.
  */
-export function engineerLaunchArgs(env: NodeJS.ProcessEnv = process.env, idea?: string): string[] {
-  const requested = (env.CONDUCT_ENGINEER_PERMISSION_MODE || '').trim();
-  const mode = requested && requested !== 'plan' ? requested : 'default';
-  // The slash command is the initial prompt; a CLI-supplied idea is appended so
-  // the skill receives it directly instead of prompting in chat. With no idea the
-  // prompt is exactly `/composer`.
-  const trimmed = (idea ?? '').trim();
-  const prompt = trimmed ? `/composer ${trimmed}` : '/composer';
-  return ['--permission-mode', mode, prompt];
-}
-
-/**
- * Default interactive launcher: drop the operator into `claude /composer`, inheriting
- * the terminal so the human drives the loop. Resolves with the child's exit code.
- * Rejects on spawn error (e.g. `claude` not on PATH) so the caller can fall back.
- */
-function launchClaudeEngineer(cwd: string, idea?: string): Promise<number> {
+function spawnInteractiveHost(executable: string, argv: string[], cwd: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(resolveProviderExecutable(CLAUDE_PROVIDER), engineerLaunchArgs(process.env, idea), { stdio: 'inherit', cwd });
+    const child = spawn(executable, argv, { stdio: 'inherit', cwd });
     child.on('error', reject);
     child.on('exit', (code) => resolve(code ?? 0));
   });
+}
+
+async function loadLaunchConfig(launchingDirectory: string): Promise<ConfigResult> {
+  const result = await loadMergedConfig(launchingDirectory);
+  if (result.ok || result.error.type !== 'missing') return result;
+
+  const userOnly = await loadMergedConfig(dirname(dirname(userConfigPath())));
+  return !userOnly.ok && userOnly.error.type === 'missing'
+    ? { ok: true, config: {}, warnings: [] }
+    : userOnly;
 }
 
 /**
@@ -746,7 +744,7 @@ export const SUBCOMMAND_HELP = {
 function printGuide(print: (s: string) => void): void {
   print(
     'Compose is the agent-hosted idea→spec loop. Run `ai-conductor compose` (no\n' +
-      'subcommand) to drop into an interactive `claude /composer` session and drive it\n' +
+      'subcommand) to drop into an interactive host /composer session and drive it\n' +
       'with a human in the loop. `conduct-ts engineer` remains a deprecated alias. The\n' +
       'subcommands below are the deterministic primitives\n' +
       'the /composer skill calls in-chat:\n' +
@@ -835,7 +833,7 @@ export function buildIntake(deps: {
 /**
  * Pre-poll the github-issues source and enqueue new ideas into the durable inbox,
  * returning the count enqueued. This is the launch-time half of intake: the bare
- * `ai-conductor compose` primes the inbox here so the spawned `claude /composer`
+ * `ai-conductor compose` primes the inbox here so the spawned interactive host
  * session can `claim` an idea instead of starting blank. Idempotent — the ledger
  * dedups, so a re-poll enqueues nothing new. Exported for direct testing.
  */
@@ -864,9 +862,9 @@ export async function prePollIntake(deps: {
 /**
  * Dispatch an engineer command.
  *
- * The bare `launch` kind spawns an INTERACTIVE `claude /composer` session (the front
+ * The bare `launch` kind spawns an interactive host session (the front
  * door — operator present, drives the loop). The `projects`/`land`/`handoff` primitives
- * are deterministic and spawn no claude: no Node readline REPL, and no `claude -p`
+ * are deterministic and spawn no host: no Node readline REPL and no headless subprocess
  * subprocess for routing or authoring (those happen in-chat in the launched session).
  */
 export async function dispatchEngineer(
@@ -927,23 +925,46 @@ export async function dispatchEngineer(
     // ── launch ──────────────────────────────────────────────────────────────────
     // Bare `ai-conductor compose`: drop the operator into the interactive /composer loop.
     case 'launch': {
-      const launchOne =
-        opts.launchInteractive ?? ((idea?: string) => launchClaudeEngineer(process.cwd(), idea));
+      const launchingDirectory = process.cwd();
       const confirmAnother = opts.confirmAnother ?? promptAnother;
 
-      // Real-spawn path only: if we're already inside a Claude Code session, don't
-      // nest a second interactive claude (it would recurse). When a launcher is
+      // Real-spawn path only: if we're already inside the default host session, don't
+      // nest a second interactive host (it would recurse). When a launcher is
       // injected (tests), there is no real nesting, so skip this guard.
       if (!opts.launchInteractive) {
-        const inside = opts.insideClaudeSession ?? Boolean(process.env.CLAUDECODE);
+        const defaultHost = requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch');
+        const inside = opts.insideClaudeSession ?? defaultHost.interactiveLaunch.sessionMarkers
+          .some((marker) => Boolean(process.env[marker]));
         if (inside) {
           print(
-            `You're already inside a ${CLAUDE_DISPLAY_NAME} Code session — run /composer directly to start ` +
+            `You're already inside a ${defaultHost.displayName} session — run ${defaultHost.invocationPrefix}composer directly to start ` +
               'the idea→spec loop (no need to launch a nested session).',
           );
           return 0;
         }
       }
+
+      const loadedConfig = opts.launchInteractive
+        ? undefined
+        : await (opts.loadLaunchConfig ?? loadLaunchConfig)(launchingDirectory);
+      if (loadedConfig && !loadedConfig.ok) {
+        printErr(`compose: ${loadedConfig.error.message}`);
+        return 1;
+      }
+      const host = loadedConfig
+        ? requireProviderCapability(
+          resolveComposeLaunchHost({ providerFlag: dispatch.provider, config: loadedConfig.config }),
+          'interactiveLaunch',
+        )
+        : undefined;
+      const launchOne = opts.launchInteractive ?? ((idea?: string) => {
+        const prompt = `${host!.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
+        return (opts.spawnHost ?? spawnInteractiveHost)(
+          resolveProviderExecutable(host!.id),
+          host!.interactiveLaunch.argv(prompt, opts.env ?? process.env),
+          launchingDirectory,
+        );
+      });
 
       await opts.beforeLaunch?.();
 
@@ -970,7 +991,7 @@ export async function dispatchEngineer(
                 events: opts.events,
               }));
 
-      // Outer loop: ONE fresh `claude /composer` session per idea, so each idea
+      // Outer loop: one fresh interactive host session per idea, so each idea
       // starts with clean context. Durable state (registry, lessons, processed
       // markers) is file-backed, so a fresh process loses nothing. The skill delivers
       // a single idea's spec then asks the operator to `/quit`; on exit we offer to
@@ -1001,9 +1022,9 @@ export async function dispatchEngineer(
           lastCode = await launchOne(pendingIdea);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
+          const displayName = host?.displayName ?? requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch').displayName;
           printErr(
-            `engineer: could not launch an interactive ${CLAUDE_DISPLAY_NAME} session (${msg}). ` +
-              'Is the `claude` CLI installed and on your PATH?',
+            `engineer: could not launch an interactive ${displayName} session (${msg}).`,
           );
           printGuide(print);
           return 1;
