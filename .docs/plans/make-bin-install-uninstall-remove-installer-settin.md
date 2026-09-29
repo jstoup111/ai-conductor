@@ -6,7 +6,7 @@
 
 ## Summary
 
-Extend `uninstall()` in `bin/install` so it removes the harness hook and permission entries from `~/.claude/settings.json`, removes the harness rate-card link, reports the `~/.ai-conductor/` state it keeps, and supports a guarded `--purge`. The work is eight TDD tasks in one script and one new shell test.
+Extend `uninstall()` in `bin/install` so it removes the harness hook and permission entries from `~/.claude/settings.json`, removes the harness rate-card link, reports the `~/.ai-conductor/` state it keeps, and supports a guarded `--purge`. The work is nine TDD tasks in one script and one new shell test.
 
 ## Technical Approach
 
@@ -207,10 +207,33 @@ Extend `uninstall()` in `bin/install` so it removes the harness hook and permiss
 
 **Dependencies:** Task 1, Task 4, Task 6
 
+### Task 9: Leave the symlink target untouched, including its rate-card link, under --purge
+
+**Story:** 3
+**Type:** happy-path
+
+**Steps:**
+1. Write a failing test. Case U4 is an installed `HOME` whose `$HOME/.ai-conductor` is a symlink to `$TMP_ROOT/state-u4`, a directory holding `keep.txt` and `rate-card.json`, a symlink whose `readlink` equals `$CHECKOUT/.ai-conductor/rate-card.json` (the harness-owned link). Snapshot the target with `find "$TMP_ROOT/state-u4" -printf '%p %y %s %l\n' | sort` plus checksums of its regular files. Run `bin/install --uninstall --purge` and assert that `$HOME/.ai-conductor` no longer exists, that `$TMP_ROOT/state-u4/rate-card.json` is still a symlink whose `readlink` equals `$CHECKOUT/.ai-conductor/rate-card.json`, that `keep.txt` is `cmp`-identical, and that the snapshot is identical.
+2. Verify RED: today the rate-card step at `bin/install` (the `rate_card="${HOME}/.ai-conductor/rate-card.json"` block) removes the link through the `~/.ai-conductor` symlink before the purge step unlinks it, so the target directory loses `rate-card.json`.
+3. Implement: in `uninstall()`, when `PURGE` is true and `"${HOME}/.ai-conductor"` is a symlink, skip the rate-card removal (print an info line that the rate card inside the symlinked state directory is left in place) so that nothing inside the symlink target is changed; the purge step then removes only the symlink. Plain uninstall (no `--purge`) and a real-directory `~/.ai-conductor` keep their existing rate-card behavior.
+4. Verify GREEN, and confirm cases R1, U1 and U2 still pass.
+5. Commit: `fix(install): purge leaves a symlinked state directory's target untouched`.
+
+**Done when:**
+- Case U4: after `bin/install --uninstall --purge` with `$HOME/.ai-conductor` a symlink to `$TMP_ROOT/state-u4`, the `$HOME/.ai-conductor` symlink is removed and `$TMP_ROOT/state-u4/rate-card.json` is still a symlink whose `readlink` equals `$CHECKOUT/.ai-conductor/rate-card.json`.
+- Case U4: the sorted `find` listing plus file checksums of `$TMP_ROOT/state-u4` are identical before and after, and `$TMP_ROOT/state-u4/keep.txt` is `cmp`-identical.
+- Cases R1, U1 and U2 still pass unchanged after this task.
+
+**Files likely touched:**
+- `bin/install` — symlinked-state guard on the rate-card step in `uninstall()`
+- `test/test_install_uninstall.sh` — case U4
+
+**Dependencies:** Task 7
+
 ## Task Dependency Graph
 
 ```
-Task 1 → Task 2 → Task 4 → Task 5 → Task 3 → Task 6 → Task 7
+Task 1 → Task 2 → Task 4 → Task 5 → Task 3 → Task 6 → Task 7 → Task 9
 Task 1, Task 4, Task 6 → Task 8
 ```
 
@@ -241,7 +264,7 @@ The chain is serial because every task edits `uninstall()` and the shared test f
 | Story 2 negative: Given `~/.ai-conductor/rate-card.json` is a symlink to a path outside this checkout, when uninstall runs, then the link is preserved and uninstall warns that it points elsewhere. | 4 | "the foreign symlink still resolves via `readlink` to `/elsewhere/rate-card.json` after uninstall and output contains a warning with `points elsewhere`" | diff-local |
 | Story 2 negative: Given `~/.ai-conductor/` does not exist, when uninstall runs, then uninstall creates nothing there, prints no kept-state line for it, and still exits 0. | 5 | "uninstall exits 0, `$HOME/.ai-conductor` still does not exist afterwards, and output contains no `Kept` line" | diff-local |
 | Story 3 happy: Given an installed harness with a populated `~/.ai-conductor/`, when `bin/install --uninstall --purge` runs, then everything plain uninstall removes is removed, `~/.ai-conductor/` no longer exists, and the output reports that it was purged. | 6 | "after `bin/install --uninstall --purge`, `$HOME/.ai-conductor` does not exist, output contains `Purged`, and every plain-uninstall removal also happened: the settings file has no harness hooks or permissions, the harness skill symlinks are gone, the harness rate-card link is gone, and the three seeded `$HOME/.local/bin` launcher links are gone" | diff-local |
-| Story 3 happy: Given `~/.ai-conductor` is a symlink to a directory, when `--uninstall --purge` runs, then the symlink is removed and the directory it points to is left unchanged. | 6 | "the `$HOME/.ai-conductor` symlink is removed and `$TMP_ROOT/state/keep.txt` is `cmp`-identical afterwards" | diff-local |
+| Story 3 happy: Given `~/.ai-conductor` is a symlink to a directory, when `--uninstall --purge` runs, then the symlink is removed and the directory it points to is left unchanged. | 9 | "the `$HOME/.ai-conductor` symlink is removed and `$TMP_ROOT/state-u4/rate-card.json` is still a symlink whose `readlink` equals `$CHECKOUT/.ai-conductor/rate-card.json`" | diff-local |
 | Story 3 negative: Given `--purge` is passed without `--uninstall`, when `bin/install` runs, then it prints the usage text, exits 1, and changes nothing on disk. | 7 | "`bin/install --purge` exits 1, prints the `usage()` text, and the sorted `find` listing plus file checksums of the test `HOME` are identical before and after" | diff-local |
 | Story 3 negative: Given `HOME` is unset or empty, when `bin/install --uninstall --purge` runs, then no directory is deleted, the purge is refused with a message naming the unresolved home directory, and the command exits non-zero. | 7 | "with `HOME` empty, `bin/install --uninstall --purge` exits non-zero, prints `Refusing --purge: HOME is unset or empty` before any removal, and the sentinel `.ai-conductor` directory still exists" | diff-local |
 | Story 3 negative: Given `~/.ai-conductor/` does not exist, when `--uninstall --purge` runs, then uninstall reports that there is nothing to purge and exits 0. | 6 | "with no `$HOME/.ai-conductor`, `--uninstall --purge` prints `Nothing to purge` and exits 0" | diff-local |
