@@ -596,9 +596,10 @@ not telemetry: it supplies the configured bot's `Co-authored-by:` trailer to bui
 removed when no bot identity is available. The root checkout and operator-created worktrees never
 receive this hook input.
 
-The engine's trailer parser recognizes exactly two keys: `Task:` and `Evidence:`. There is no `Owner:`
-commit trailer (`Owner:` is a line inside `.docs/intake/<slug>.md`), no `Shipped-Record:` trailer, and
-no `Co-Authored-By` handling anywhere in the engine.
+The engine's Task/Evidence trailer parser recognizes exactly two keys: `Task:` and `Evidence:`. There
+is no `Owner:` commit trailer (`Owner:` is a line inside `.docs/intake/<slug>.md`) or
+`Shipped-Record:` trailer. `Co-authored-by:` is hook input only; it is not interpreted as task or
+evidence telemetry.
 
 **`Task: <id>`** is auto-stamped by `prepare-commit-msg` from `.pipeline/current-task`, but only when no
 explicit trailer is already present. A leading `T` before a digit is folded, so `Task: T3` and `Task: 3`
