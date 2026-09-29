@@ -2,12 +2,17 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { scanInheritedState } from '../daemon-dashboard.js';
 import { HALT_MARKER, readHaltClass, type HaltDisposition } from '../halt-marker.js';
+import { isOperatorParked } from '../park-marker.js';
 
 export interface ProjectHalt {
   project: string;
   slug: string;
   reason: string;
   haltClass: HaltDisposition;
+}
+
+export interface HaltInventoryDeps {
+  isOperatorParked: (projectRoot: string, slug: string) => Promise<boolean>;
 }
 
 function firstHaltLine(contents: string): string {
@@ -55,7 +60,10 @@ async function unreadableHaltSlugs(worktreeBase: string, knownSlugs: Set<string>
  * deliberately read beside each live entry because it is not part of the
  * dashboard's halted-entry shape.
  */
-export async function enumerateProjectHalts(projectRoot: string): Promise<ProjectHalt[]> {
+export async function enumerateProjectHalts(
+  projectRoot: string,
+  deps: HaltInventoryDeps = { isOperatorParked },
+): Promise<ProjectHalt[]> {
   const worktreeBase = join(projectRoot, '.worktrees');
   const state = await scanInheritedState({
     worktreeBase,
@@ -64,8 +72,9 @@ export async function enumerateProjectHalts(projectRoot: string): Promise<Projec
   });
 
   const knownSlugs = new Set(state.halted.map(({ slug }) => slug));
-  const halted = await Promise.all(state.halted.map(async ({ slug }) => {
+  const halted = (await Promise.all(state.halted.map(async ({ slug }) => {
     const worktreePath = join(worktreeBase, slug);
+    if (await deps.isOperatorParked(projectRoot, slug)) return null;
     try {
       return {
         project: projectRoot,
@@ -81,11 +90,12 @@ export async function enumerateProjectHalts(projectRoot: string): Promise<Projec
         haltClass: await readHaltClass(worktreePath),
       };
     }
-  }));
+  }))).filter((halt): halt is ProjectHalt => halt !== null);
 
   const unreadable = await unreadableHaltSlugs(worktreeBase, knownSlugs);
-  const unreadableEntries = await Promise.all(unreadable.map(async (slug) => {
+  const unreadableEntries = (await Promise.all(unreadable.map(async (slug) => {
     const worktreePath = join(worktreeBase, slug);
+    if (await deps.isOperatorParked(projectRoot, slug)) return null;
     let reason = 'HALT marker unreadable';
     try {
       await readFile(join(worktreePath, HALT_MARKER), 'utf-8');
@@ -98,7 +108,7 @@ export async function enumerateProjectHalts(projectRoot: string): Promise<Projec
       reason,
       haltClass: await readHaltClass(worktreePath),
     };
-  }));
+  }))).filter((halt): halt is ProjectHalt => halt !== null);
 
   return [...halted, ...unreadableEntries];
 }
