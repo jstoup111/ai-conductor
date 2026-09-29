@@ -122,55 +122,10 @@ describe('createGuardedGithubOperationRunner dependency id guard', () => {
   });
 });
 
-describe('createGithubTrackerClient.addIssueDependency', () => {
-  it('reads the blocking issue id before posting the typed blocked-by dependency', async () => {
-    const { runner, calls } = fakeRunner(JSON.stringify({ id: 4242 }));
-
-    await ownedTrackerClient(runner).addIssueDependency!(
-      'acme/owned',
-      17,
-      { repo: 'acme/foreign', number: 99 },
-      '/worktree',
-    );
-
-    expect(calls).toEqual([
-      { args: ['api', 'repos/acme/foreign/issues/99'], opts: { cwd: '/worktree' } },
-      {
-        args: [
-          'api',
-          '--method',
-          'POST',
-          'repos/acme/owned/issues/17/dependencies/blocked_by',
-          '-F',
-          'issue_id=4242',
-        ],
-        opts: { cwd: '/worktree', credential: 'write' },
-      },
-    ]);
-  });
-
-  it.each([
-    ['an id-less response', async (): Promise<{ stdout: string }> => ({ stdout: '{}' })],
-    ['a response with an invalid numeric id', async (): Promise<{ stdout: string }> => (
-      { stdout: JSON.stringify({ id: 0 }) }
-    )],
-    ['a read failure', async (): Promise<{ stdout: string }> => {
-      throw new Error('blocking issue unavailable');
-    }],
-  ])('names both issues and does not post when the blocking id cannot be read from %s', async (_caseName, response) => {
-    const calls: string[][] = [];
-    const runner: GhRunner = async (args) => {
-      calls.push(args);
-      return response();
-    };
-
-    await expect(ownedTrackerClient(runner).addIssueDependency!(
-      'acme/owned',
-      17,
-      { repo: 'acme/foreign', number: 99 },
-      '/worktree',
-    )).rejects.toThrow(/acme\/owned#17.*acme\/foreign#99/);
-    expect(calls.filter((args) => args.includes('dependencies/blocked_by'))).toEqual([]);
+describe('createGithubTrackerClient dependency port', () => {
+  it('exposes no addIssueDependency method; dependency adds go through intake filing and the dependency migration', () => {
+    const { runner } = fakeRunner('');
+    expect('addIssueDependency' in ownedTrackerClient(runner)).toBe(false);
   });
 });
 

@@ -443,13 +443,6 @@ export interface TrackerClient {
   viewerIdentity(cwd: string): Promise<string>;
   /** `gh api repos/<repo>/issues/<number>/dependencies/blocked_by` — raw JSON. */
   getBlockedBy(repo: string, number: number, cwd: string): Promise<unknown>;
-  /** Add one blocking issue to this issue without mutating the referenced issue. */
-  addIssueDependency?(
-    repo: string,
-    number: number,
-    dependency: { repo: string; number: number },
-    cwd: string,
-  ): Promise<void>;
   /** Remove one blocking issue from this issue without mutating the referenced issue. */
   removeIssueDependency?(
     repo: string,
@@ -962,43 +955,6 @@ export function createGithubTrackerClient(
         ['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`],
       );
       return parseJsonOrThrow('getBlockedBy', stdout);
-    },
-
-    async addIssueDependency(repo, number, dependency, cwd) {
-      let dependencyDatabaseId: number;
-      try {
-        const stdout = await runTrackerRead(
-          runner,
-          cwd,
-          'issue.read',
-          dependency.repo,
-          { kind: 'issue', number: dependency.number },
-          ['api', `repos/${dependency.repo}/issues/${dependency.number}`],
-        );
-        const blockingIssue = parseJsonOrThrow<{ id?: unknown }>('addIssueDependency', stdout);
-        if (typeof blockingIssue.id !== 'number'
-          || !Number.isSafeInteger(blockingIssue.id)
-          || blockingIssue.id <= 0) {
-          throw new Error('blocking issue response has no valid database id');
-        }
-        dependencyDatabaseId = blockingIssue.id;
-      } catch {
-        throw new Error(
-          `Cannot add dependency from ${repo}#${number} to ${dependency.repo}#${dependency.number}: blocking issue has no readable valid database id.`,
-        );
-      }
-      await runTrackerIssueOperation(
-        runner,
-        options,
-        cwd,
-        'issue.dependency.add',
-        repo,
-        { kind: 'issue', number },
-        {
-          dependency: { repository: dependency.repo, resource: { kind: 'issue', number: dependency.number } },
-          dependencyDatabaseId,
-        },
-      );
     },
 
     async removeIssueDependency(repo, number, dependency, cwd) {
