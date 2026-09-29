@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7
+# Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:8
 #
 # Public-entry-point RED coverage for uninstalling the settings entries written
 # by bin/install.  Every invocation uses a throwaway HOME and a copied harness
@@ -9,6 +9,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+INSTALL_SOURCE="${TEST_INSTALL_SOURCE:-$HARNESS_DIR/bin/install}"
 TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
@@ -30,6 +31,7 @@ check() {
 
 mkdir -p "$CHECKOUT" "$STUBS" "$NO_PYTHON_STUBS"
 cp -R "$HARNESS_DIR/bin" "$HARNESS_DIR/skills" "$HARNESS_DIR/hooks" "$CHECKOUT/"
+cp "$INSTALL_SOURCE" "$CHECKOUT/bin/install"
 cp "$HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/ARCHITECTURE.md" "$HARNESS_DIR/VERSION" "$CHECKOUT/"
 mkdir -p "$CHECKOUT/.ai-conductor"
 cp "$HARNESS_DIR/.ai-conductor/rate-card.json" "$CHECKOUT/.ai-conductor/"
@@ -219,6 +221,55 @@ import json, sys
 settings = json.load(open(sys.argv[1]))
 assert settings['hooks'] == {}
 assert settings['permissions']['allow'] == []
+PY
+}
+
+seed_round_trip_settings() {
+  local home=$1 saved_json=$2
+  mkdir -p "$home/.claude"
+  "$PYTHON3" - "$(settings_file "$home")" "$saved_json" <<'PY'
+import json, sys
+settings_path, saved_path = sys.argv[1:3]
+settings = {
+    'hooks': {'PreToolUse': [{'matcher': 'Bash', 'hooks': [
+        {'type': 'command', 'command': '/opt/operator/pre-tool.sh'}
+    ]}]},
+    'permissions': {'allow': ['Bash(operator:*)']},
+    'theme': 'operator-dark',
+}
+with open(settings_path, 'w') as f:
+    json.dump(settings, f, indent=2)
+    f.write('\n')
+with open(saved_path, 'w') as f:
+    json.dump(settings, f, sort_keys=True)
+PY
+}
+
+assert_settings_matches_saved_json() {
+  "$PYTHON3" - "$(settings_file "$1")" "$2" <<'PY'
+import json, sys
+actual_path, saved_path = sys.argv[1:3]
+assert json.load(open(actual_path)) == json.load(open(saved_path))
+PY
+}
+
+assert_no_harness_symlinks() {
+  local home=$1 directory link resolved
+  for directory in "$home/.claude/skills" "$home/.agents/skills" "$home/.local/bin"; do
+    [ -d "$directory" ] || continue
+    while IFS= read -r -d '' link; do
+      resolved=$(readlink -f "$link" 2>/dev/null || true)
+      case "$resolved" in
+        "$CHECKOUT"|"$CHECKOUT"/*) return 1 ;;
+      esac
+    done < <(find "$directory" -type l -print0)
+  done
+}
+
+assert_empty_settings() {
+  "$PYTHON3" - "$(settings_file "$1")" <<'PY'
+import json, sys
+assert json.load(open(sys.argv[1])) == {}
 PY
 }
 
@@ -480,6 +531,45 @@ check 'P continues with every later uninstall step' assert_later_uninstall_steps
 check 'P reports an incomplete uninstall without a complete summary' \
   sh -c '! grep -Fq "Uninstall complete." "$1" && grep -Fq "Uninstall incomplete" "$1"' sh "$TMP_ROOT/case-p.out"
 check 'P exits non-zero when python3 is unavailable' test "$CASE_P_EXIT" -ne 0
+
+# T1: a clean install then purged uninstall restores operator settings and
+# removes every link the installer created.
+CASE_T1="$TMP_ROOT/case-t1"
+seed_round_trip_settings "$CASE_T1" "$TMP_ROOT/case-t1-settings-before.json"
+run_install "$CASE_T1" "$TMP_ROOT/case-t1-install.out" --providers claude,codex || true
+run_uninstall_purge "$CASE_T1" "$TMP_ROOT/case-t1.out"
+CASE_T1_EXIT=$?
+check 'T1 install then purge restores parsed operator settings' \
+  assert_settings_matches_saved_json "$CASE_T1" "$TMP_ROOT/case-t1-settings-before.json"
+check 'T1 install then purge leaves no harness skill or launcher symlink' \
+  assert_no_harness_symlinks "$CASE_T1"
+check 'T1 install then purge removes harness state' \
+  sh -c 'test ! -e "$1" && test ! -L "$1"' sh "$CASE_T1/.ai-conductor"
+check 'T1 purge uninstall exits successfully' test "$CASE_T1_EXIT" -eq 0
+
+# T2: plain uninstall has the same cleanup contract but keeps state and says so.
+CASE_T2="$TMP_ROOT/case-t2"
+seed_round_trip_settings "$CASE_T2" "$TMP_ROOT/case-t2-settings-before.json"
+run_install "$CASE_T2" "$TMP_ROOT/case-t2-install.out" --providers claude,codex || true
+run_uninstall "$CASE_T2" "$TMP_ROOT/case-t2.out"
+CASE_T2_EXIT=$?
+check 'T2 install then uninstall restores parsed operator settings' \
+  assert_settings_matches_saved_json "$CASE_T2" "$TMP_ROOT/case-t2-settings-before.json"
+check 'T2 install then uninstall leaves no harness skill or launcher symlink' \
+  assert_no_harness_symlinks "$CASE_T2"
+check 'T2 plain uninstall keeps harness state' test -e "$CASE_T2/.ai-conductor"
+check 'T2 reports exact kept-state guidance' \
+  grep -Fq "Kept $CASE_T2/.ai-conductor: operator configuration and runtime data (project registry, memory). Re-run with --uninstall --purge to remove it." "$TMP_ROOT/case-t2.out"
+check 'T2 plain uninstall exits successfully' test "$CASE_T2_EXIT" -eq 0
+
+# T3: install creates settings from an absent file and uninstall returns it to {}.
+CASE_T3="$TMP_ROOT/case-t3"
+mkdir -p "$CASE_T3"
+run_install "$CASE_T3" "$TMP_ROOT/case-t3-install.out" --providers claude,codex || true
+run_uninstall "$CASE_T3" "$TMP_ROOT/case-t3.out"
+CASE_T3_EXIT=$?
+check 'T3 install then uninstall leaves empty settings JSON' assert_empty_settings "$CASE_T3"
+check 'T3 uninstall exits successfully' test "$CASE_T3_EXIT" -eq 0
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
