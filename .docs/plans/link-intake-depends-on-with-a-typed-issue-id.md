@@ -26,6 +26,7 @@ Tests follow `.agents/skills/write-tests/SKILL.md`: unit and integration tests i
 - Verified: `issue-dep-migration.ts` `resolveIssueDatabaseId` documents that the endpoint requires `issue_id` and rejects issue-number forms; `createDependencyLinks` always passes `dependencyDatabaseId`, and `label-sync.ts` links through `createDependencyLinks`.
 - Verified: `createIntakeFilingOperations` in `file-issue.ts` reads `repos/<repo>/issues/<n>` and passes `dependencyDatabaseId` before the guarded run.
 - Verified: the tracker client's `addIssueDependency` passes only `{ dependency: { repository, resource } }` to `runTrackerIssueOperation`; its only callers are tests (`test/engine/github-ownership/7-migrate-issue-operations-through-guarded-requests.test.ts`).
+> **Amended 2026-09-29 by #2714:** Operator decision: `addIssueDependency` stays a test-only tracker-port primitive with no production caller. Intake filing (`createIntakeFilingOperations`) and the dependency migration (`createDependencyLinks`) keep their own guarded dependency-add paths, which Task 1 fixes; rerouting either through this method would change their operation and access semantics. The as-built reachability finding for `createGithubTrackerClient.addIssueDependency` is accepted and waived by the operator; it is not remediation work.
 - Verified: `github-operations.ts` normalizes a dependency payload's optional positive safe-integer `dependencyDatabaseId`.
 - Verified: `fileIntakeIssue` catches dependency failures as `depends-on link failed for "<ref>": <error>` metadata failures and warnings, with `ok` true once the issue is created; `intake-file-cli.ts` prints warnings then bad refs to stderr and sets a non-zero exit only on a thrown error.
 - Verified: existing tests `test/acceptance/intake-file-completeness.test.ts`, `test/engine/engineer/issue-dep-migration.test.ts`, `test/engine/tracker-client.test.ts`, and `test/file-issue.test.ts` exist; no test pins the `-F` flag today.
@@ -57,6 +58,8 @@ Tests follow `.agents/skills/write-tests/SKILL.md`: unit and integration tests i
 **Type:** happy-path
 **Files:** src/conductor/src/engine/tracker-client.ts, src/conductor/test/engine/tracker-client.test.ts, src/conductor/test/engine/github-ownership/7-migrate-issue-operations-through-guarded-requests.test.ts
 **Dependencies:** 1
+
+> **Amended 2026-09-29 by #2714:** This task hardens a test-only primitive by operator decision; wiring a production caller is out of scope, and the as-built reachability finding against `addIssueDependency` is waived (see the amended verified claim in Technical Approach).
 
 **Steps:**
 1. In `tracker-client.test.ts`, drive `createGithubTrackerClient(...).addIssueDependency` over a recording runner that answers `api repos/acme/foreign/issues/99` with `{"id": 4242}`. Assert the read of the blocking issue happens, then exactly one blocked-by POST on the owned issue with `-F` and `issue_id=4242`.
