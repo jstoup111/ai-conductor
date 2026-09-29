@@ -100,6 +100,45 @@ D8. Order and scope of the startup check. Validation of configured provider name
 > refusal that `build-review-containment.ts` used to. Every other statement in D2 and D6 is
 > unchanged.
 
+> **Amended 2026-09-28 by #1007:** The bare `ai-conductor compose` launcher is a consumer of this
+> catalog. It stops spawning a hardcoded `claude`. D1 through D8 are unchanged; the decisions below
+> add to them.
+>
+> D9. The launched session is an operator-hosted agent session under ADR-008. It is not engine
+> provider dispatch, so adr-2026-08-24-one-dispatch-member-on-the-provider-contract's single
+> `invoke` member does not govern it, and the adapters are not changed. D2 gains an
+> `interactiveLaunch` capability, with the same fail-closed default: a descriptor
+> that omits it is unsupported. A descriptor that declares it also supplies two things. The first is
+> the argv for an interactive session that opens a named skill, optionally followed by an idea. Claude
+> uses `--permission-mode «mode»` and `/«skill» [idea]`. Codex takes one positional initial prompt,
+> `$«skill» [idea]`, and adds no sandbox or approval overrides, so the operator's own Codex
+> configuration governs the session. The second is the env var names that mark a process already
+> running inside that host's session: `CLAUDECODE` for Claude, and `CODEX_THREAD_ID` and `CODEX_SESSION_ID` for Codex. Claude
+> and Codex declare the capability. Pi does not, so launching Pi is refused with the D2 refusal,
+> naming the provider, `interactiveLaunch`, and #1007.
+>
+> D10. Launcher host selection takes the first source that is present:
+> - an explicit `--provider «id»` flag;
+> - the first entry of the provider selection that the launching directory's merged configuration
+>   (user level plus project level) resolves for the `explore` step, whether it is a single value or
+>   a fallback ladder. That selection is the step-level pin when one is present and the run-level
+>   `llm_provider` otherwise, resolved through the existing provider-selection resolver.
+> - `DEFAULT_PROVIDER`.
+>
+> `explore` is used because the composer session opens with it and hosts the whole DECIDE loop.
+> Without this rule, a project that pins DECIDE to one host while its run-level ladder prefers
+> another would launch the wrong host. An interactive, human-driven session never falls back to a
+> later ladder entry. A name that is not a catalog id keeps today's unknown-provider error. The flag
+> is accepted identically under the `compose` verb and its deprecated `engineer` alias.
+>
+> D11. The launcher does not run D3 boot discovery; D8's non-probing rule for `compose` still
+> holds. It resolves only the selected host's executable through `resolveProviderExecutable`. A
+> spawn failure because the executable is missing becomes an explicit error naming the provider,
+> the executable, its override env var, and the in-session alternative (`/composer` or
+> `$composer`). Before resolving a host, the launcher checks the session markers of every descriptor
+> that declares `interactiveLaunch`. When it finds one, it refuses to nest. It tells the operator to
+> run that host's in-session invocation, rendered with the host's own skill-invocation prefix.
+
 ## Consequences
 
 - Adding a fourth provider is one descriptor plus one adapter. The structural test fails if a new id literal appears elsewhere.
