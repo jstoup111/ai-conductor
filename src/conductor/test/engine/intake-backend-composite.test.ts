@@ -1,4 +1,4 @@
-// Covers: task:6, task:7, task:8, task:9
+// Covers: task:6, task:7, task:8, task:9, task:10
 
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -388,6 +388,56 @@ describe('intake backend composite write-back routing (Task 9)', () => {
       if (status === 'done') {
         expect(compositeCalls).toContainEqual(expect.arrayContaining(['api', '--method', 'POST', 'repos/owner/repo/issues/12/labels', '-f', 'labels[]=engineer:handled']));
       }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('intake backend composite unavailable write-backs (Task 10)', () => {
+  it.each([
+    ['routed' as const, 'ENG-42', undefined],
+    ['done' as const, 'owner/jira-project#42', 'owner/jira-project'],
+  ])('skips %s write-back for %s while advancing the ledger', async (status, sourceRef, jiraProject) => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'intake-backend-composite-'));
+    try {
+      const registered = jiraProject ? project(jiraProject, join(root, 'jira-project')) : undefined;
+      if (registered) await mkdir(registered.path);
+      const calls: string[][] = [];
+      const events: unknown[] = [];
+      const composite = createComposite({
+        projects: registered ? [registered] : [],
+        selections: registered
+          ? new Map([[registered.path, { ok: true, selection: { backend: 'jira' } }]])
+          : new Map(),
+        calls,
+        events,
+        ledgerPath: join(root, 'adapter.json'),
+        gh: writebackGh(calls),
+        resolveActor: async () => ({ resolved: true as const, id: 'operator' }),
+      });
+      const ledgerPath = join(root, 'ledger.json');
+      const entries = await writebackParity({ port: composite, ledgerPath, sourceRef, status });
+
+      expect(calls).toEqual([]);
+      expect(events).toEqual([
+        {
+          type: 'tracker_backend_unavailable',
+          project: registered?.name ?? sourceRef,
+          backend: 'jira',
+          reason: 'no-adapter',
+        },
+      ]);
+      expect(ledgerEffects(entries)).toEqual([
+        expect.objectContaining({
+          sourceRef,
+          status,
+          ...(status === 'done'
+            ? { prUrl: 'https://github.com/owner/repo/pull/99', branch: 'spec/task-9' }
+            : {}),
+        }),
+      ]);
+      expect(entries[0]?.writebackPending).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

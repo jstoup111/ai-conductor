@@ -117,7 +117,15 @@ export function createIntakeBackendComposite(deps: {
     poll: () => github.poll(),
     async report(sourceRef, status, meta) {
       const workRef = parseWorkRef(sourceRef);
-      if (workRef?.kind !== 'github') return github.report(sourceRef, status, meta);
+      if (workRef?.kind !== 'github') {
+        await deps.events?.emit({
+          type: 'tracker_backend_unavailable',
+          project: sourceRef,
+          backend: workRef?.kind === 'jira' ? 'jira' : 'github',
+          reason: 'no-adapter',
+        });
+        return { ok: true };
+      }
 
       const projects = await deps.registry.listProjects();
       const owner = projects.find((project) =>
@@ -130,7 +138,13 @@ export function createIntakeBackendComposite(deps: {
         return github.report(sourceRef, status, meta);
       }
 
-      return github.report(sourceRef, status, meta);
+      await deps.events?.emit({
+        type: 'tracker_backend_unavailable',
+        project: owner.name,
+        backend: selection.ok ? selection.selection.backend : 'github',
+        reason: selection.ok ? 'no-adapter' : 'invalid-config',
+      });
+      return { ok: true };
     },
   };
 }
