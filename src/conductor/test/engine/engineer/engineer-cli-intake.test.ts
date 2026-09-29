@@ -151,7 +151,7 @@ describe('engineer poll (T22, FR-32)', () => {
   it('double poll enqueues no duplicates (ledger dedups)', async () => {
     await writeRegistry([{ name: 'o/a' }]);
     const { gh } = makeGh({ 'o/a': [{ number: 1, title: 'Idea', body: 'body' }] });
-    const { out, err, opts } = captureOut();
+    const { out, opts } = captureOut();
 
     await dispatchEngineer({ kind: 'poll' }, opts({ gh }));
     out.length = 0;

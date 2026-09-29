@@ -298,7 +298,12 @@ function sameSourceManifest(
   });
 }
 
-function validateBundleLimits(manifest: readonly CapturedReviewPolicyBundleEntry[]): void {
+/**
+ * Reject complete packages that exceed the bounded review-policy capture
+ * contract. Exported so the boundary arithmetic can be verified without a
+ * fixture that creates and then copies thousands of files.
+ */
+export function validateReviewPolicyBundleLimits(manifest: readonly CapturedReviewPolicyBundleEntry[]): void {
   if (manifest.length > MAX_POLICY_BUNDLE_FILES) {
     throw new Error(`Policy package exceeds ${MAX_POLICY_BUNDLE_FILES} files`);
   }
@@ -324,7 +329,7 @@ export async function captureInstalledReviewPolicyBundle(
     bytes: entry.bytes,
     ...(entry.symbolicLinkTargets === undefined ? {} : { symbolicLinkTargets: entry.symbolicLinkTargets }),
   }));
-  validateBundleLimits(manifest);
+  validateReviewPolicyBundleLimits(manifest);
   validateRequiredResources(policy, manifest);
   await options.captureBoundary?.('source-captured');
 
