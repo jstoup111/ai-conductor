@@ -161,6 +161,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 - A duplicate enumeration of one feature collapses to exactly one queue entry. A halt marker co-present with the reclaimable completion marker is not offered as halted.
 - While a session is open for an item, no second entry for that item is produced by any subsequent pass. While a queue of three halts is worked, exactly one item is open, and so exactly one guided session exists, at any moment.
 - No module persists queue membership: a static check asserts the queue type is constructed per pass and never read from disk. Two monitors over the same project each derive membership independently and each offer the halt, neither writing state the other reads, so the redundant offer is a duplicate prompt and never a data fault.
+- While a two-item queue is being worked, a third feature that halts is included in the ordering by the next membership recomputation, which then orders all three items.
 
 **Files likely touched:**
 - `src/conductor/src/engine/monitor/queue.ts`
@@ -341,6 +342,8 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 - A three-item queue is worked to completion without the monitor being restarted. When the last item's session ends and no halts remain, the monitor reports an empty queue and stays active.
 - Membership is recomputed after each session ends, so a halt resolved inside the session is absent from the next offer.
 - A session that changed nothing leaves its halt in the recomputed queue.
+- When the head item's session ends normally, membership is recomputed and the next item in the recomputed order is offered; the session is not required to resolve its halt, and an unresolved head halt stays in the recomputed queue without being re-offered ahead of the remaining items.
+- With a queue of three halts, as each session ends in turn all three items are offered in queue order, and the monitor is never restarted.
 
 **Files likely touched:**
 - `src/conductor/src/engine/monitor/loop.ts`
@@ -406,6 +409,8 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 - An interrupt during an open guided session exits without writing a deferral or a resolution for that item. After the interrupt the monitor reports that it stopped, and when it is started again with that feature still halted the item is offered again.
 - A feature that halts after an empty pass is reported on the next pass without a restart.
 - The stop condition is injectable, so the loop is tested without sending a real signal.
+- Starting with at least one halted feature reports that halt as work to resolve and offers it, and the monitor does not exit.
+- An interrupt while no guided session is open stops the monitor, and the monitor then reports that it stopped.
 
 **Files likely touched:**
 - `src/conductor/src/engine/monitor/loop.ts`
