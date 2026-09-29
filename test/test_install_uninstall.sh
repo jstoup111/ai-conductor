@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Covers: task:1, task:2, task:3, task:4, task:5, task:6
+# Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7
 #
 # Public-entry-point RED coverage for uninstalling the settings entries written
 # by bin/install.  Every invocation uses a throwaway HOME and a copied harness
@@ -84,6 +84,34 @@ run_uninstall_without_python() {
     HOME="$home" PATH="$NO_PYTHON_STUBS" \
       timeout 15s /bin/bash "$CHECKOUT/bin/install" --uninstall --allow-worktree-root </dev/null
   ) >"$output" 2>&1
+}
+
+run_uninstall_purge_with_empty_home() {
+  local output=$1
+  (
+    cd "$CHECKOUT" || exit 1
+    HOME= PATH="$STUBS:/usr/bin:/bin" \
+      timeout 15s "$CHECKOUT/bin/install" --uninstall --purge --allow-worktree-root </dev/null
+  ) >"$output" 2>&1
+}
+
+run_uninstall_purge_without_home() {
+  local output=$1
+  (
+    cd "$CHECKOUT" || exit 1
+    env -u HOME PATH="$STUBS:/usr/bin:/bin" \
+      timeout 15s "$CHECKOUT/bin/install" --uninstall --purge --allow-worktree-root </dev/null
+  ) >"$output" 2>&1
+}
+
+snapshot_home() {
+  local home=$1 snapshot=$2 file
+  {
+    find "$home" -printf '%p %y %s %l\n' | LC_ALL=C sort
+    while IFS= read -r file; do
+      sha256sum "$file"
+    done < <(find "$home" -type f -print | LC_ALL=C sort)
+  } >"$snapshot"
 }
 
 make_case_home() {
@@ -376,6 +404,43 @@ CASE_U3_EXIT=$?
 check 'U3 purge exits successfully without harness state' test "$CASE_U3_EXIT" -eq 0
 check 'U3 reports the exact absent state directory' \
   grep -Fq "Nothing to purge $CASE_U3/.ai-conductor" "$TMP_ROOT/case-u3.out"
+
+# X1: --purge is valid only with --uninstall and must not begin an install.
+CASE_X1="$TMP_ROOT/case-x1"
+make_case_home "$CASE_X1"
+snapshot_home "$CASE_X1" "$TMP_ROOT/case-x1-before.snapshot"
+run_install "$CASE_X1" "$TMP_ROOT/case-x1.out" --purge
+CASE_X1_EXIT=$?
+snapshot_home "$CASE_X1" "$TMP_ROOT/case-x1-after.snapshot"
+check 'X1 misplaced purge exits 1' test "$CASE_X1_EXIT" -eq 1
+check 'X1 misplaced purge prints usage' \
+  grep -Fq 'Usage: ./bin/install' "$TMP_ROOT/case-x1.out"
+check 'X1 misplaced purge leaves the HOME tree and file checksums unchanged' \
+  cmp -s "$TMP_ROOT/case-x1-before.snapshot" "$TMP_ROOT/case-x1-after.snapshot"
+
+# X2: an empty HOME must stop purge before any uninstall removal.
+CASE_X2_SENTINEL="$TMP_ROOT/.ai-conductor"
+mkdir -p "$CASE_X2_SENTINEL"
+printf 'keep this state\n' > "$CASE_X2_SENTINEL/keep.txt"
+run_uninstall_purge_with_empty_home "$TMP_ROOT/case-x2.out"
+CASE_X2_EXIT=$?
+check 'X2 empty HOME purge exits non-zero' test "$CASE_X2_EXIT" -ne 0
+check 'X2 empty HOME purge reports the refusal' \
+  grep -Fq 'Refusing --purge: HOME is unset or empty' "$TMP_ROOT/case-x2.out"
+check 'X2 empty HOME purge preserves the external harness-state sentinel' \
+  test -d "$CASE_X2_SENTINEL" -a -f "$CASE_X2_SENTINEL/keep.txt"
+
+# X3: an unset HOME fails under nounset before any uninstall directory removal.
+CASE_X3_SENTINEL="$TMP_ROOT/case-x3-sentinel"
+mkdir -p "$CASE_X3_SENTINEL"
+printf 'keep this state\n' > "$CASE_X3_SENTINEL/keep.txt"
+run_uninstall_purge_without_home "$TMP_ROOT/case-x3.out"
+CASE_X3_EXIT=$?
+check 'X3 unset HOME purge exits non-zero' test "$CASE_X3_EXIT" -ne 0
+check 'X3 unset HOME purge output names HOME' \
+  grep -Fq 'HOME' "$TMP_ROOT/case-x3.out"
+check 'X3 unset HOME purge preserves the external sentinel directory' \
+  test -d "$CASE_X3_SENTINEL" -a -f "$CASE_X3_SENTINEL/keep.txt"
 
 run_help "$CASE_U3" "$TMP_ROOT/help.out"
 HELP_EXIT=$?

@@ -1559,6 +1559,14 @@ install() {
 # ─── Uninstall ────────────────────────────────────────────────────────────────
 
 uninstall() {
+  # A purge with an empty HOME would resolve owned paths at the filesystem
+  # root. Refuse before settings, links, or any other uninstall target is read
+  # or removed. An unset HOME is already rejected by nounset during startup.
+  if [ "$PURGE" = true ] && [ -z "${HOME:-}" ]; then
+    fail "Refusing --purge: HOME is unset or empty"
+    return 1
+  fi
+
   local document reference_source reference_label settings_file perms_file settings_cleanup_output settings_cleanup_status rate_card rate_card_source
 
   UNINSTALL_FAILURE=""
@@ -1891,6 +1899,13 @@ fi
 
 set -- ${_filtered_args[@]+"${_filtered_args[@]}"}
 unset _filtered_args
+
+# Purge is meaningful only as part of uninstall. Check the selected mode before
+# dispatch so it cannot start an ordinary install (or any other mode).
+if [ "$PURGE" = true ] && [ "${1:-}" != "--uninstall" ]; then
+  usage
+  exit 1
+fi
 
 case "${1:-}" in
   --check)     check_installation; exit $? ;;
