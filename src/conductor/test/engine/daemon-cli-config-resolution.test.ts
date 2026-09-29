@@ -5,14 +5,6 @@ import { tmpdir } from 'node:os';
 import { runDaemonMode } from '../../src/daemon-cli.js';
 import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
-vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../../src/engine/ci-fix.js')>();
-  return {
-    ...original,
-    defaultCiFixProbe: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
-  };
-});
-
 vi.mock('../../src/engine/daemon-lock.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../src/engine/daemon-lock.js')>();
   return {

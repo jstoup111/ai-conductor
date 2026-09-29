@@ -884,8 +884,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // `log` goes to the console only.
   let logSink: DaemonLogSink | null = null;
 
-  // ci-fix startup preflight (CF-5/CF-6) result is disabled below, right
-  // after `log` is defined.
   let ciFixEnabled = true;
 
   // Task 4 (#521): own the halt-PR reconciliation outcome cache for the lifetime

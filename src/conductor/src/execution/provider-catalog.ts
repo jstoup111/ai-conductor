@@ -53,6 +53,10 @@ export interface BuiltInProviderDescriptor {
   readonly homeVariable: string;
   readonly defaultHome: string;
   readonly modelPolicy: ProviderModelPolicy;
+  /** Additional provider-owned model ids to include in rate-card refreshes. */
+  readonly optInModelIds: readonly string[];
+  /** Whether unattended provider commands run in an OS sandbox. */
+  readonly osSandbox: boolean;
   readonly capabilities: ProviderCapabilityFlags;
   /** Known machine-envelope formats, ordered by the adapter's native output. */
   readonly diagnosticEnvelopes: readonly ProviderDiagnosticEnvelope[];
@@ -96,6 +100,8 @@ export const BUILT_IN_PROVIDERS = [
     homeVariable: 'CLAUDE_CONFIG_DIR',
     defaultHome: '.claude',
     modelPolicy: CLAUDE_MODEL_POLICY,
+    optInModelIds: [],
+    osSandbox: false,
     capabilities: {
       selfHost: true,
       readOnlyReview: true,
@@ -127,6 +133,8 @@ export const BUILT_IN_PROVIDERS = [
     homeVariable: 'CODEX_HOME',
     defaultHome: '.codex',
     modelPolicy: CODEX_MODEL_POLICY,
+    optInModelIds: ['gpt-6-astra'],
+    osSandbox: true,
     capabilities: {
       readiness: true,
       selfHost: true,
@@ -151,6 +159,8 @@ export const BUILT_IN_PROVIDERS = [
     homeVariable: 'PI_HOME',
     defaultHome: '.pi',
     modelPolicy: PI_MODEL_POLICY,
+    optInModelIds: [],
+    osSandbox: false,
     capabilities: {
       supportsSessionResume: false,
     } as const satisfies ProviderCapabilityFlags,

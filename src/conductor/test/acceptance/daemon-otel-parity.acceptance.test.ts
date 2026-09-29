@@ -26,10 +26,6 @@ const fixture = vi.hoisted(() => ({
 const buildExporters = vi.hoisted(() => vi.fn());
 vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters }));
 vi.mock('../../src/engine/self-host/daemon-build-token.js', () => ({ readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })) }));
-vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../src/engine/ci-fix.js')>()),
-  defaultCiFixProbe: vi.fn(async () => ({ exitCode: 0, stdout: 'claude 1.0.0', stderr: '' })),
-}));
 vi.mock('../../src/engine/daemon-deps.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/daemon-deps.js')>();
   return { ...actual, resolveDaemonBaseSha: vi.fn(async () => 'a'.repeat(40)) };

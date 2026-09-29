@@ -27,13 +27,6 @@ vi.mock('../../src/engine/self-host/daemon-build-token.js', async (importOrigina
   };
 });
 
-vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/engine/ci-fix.js')>();
-  return {
-    ...actual,
-    defaultCiFixProbe: vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '' })),
-  };
-});
 vi.mock('../../src/engine/daemon-deps.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/daemon-deps.js')>();
   return { ...actual, resolveDaemonBaseSha: vi.fn(async () => 'a'.repeat(40)) };

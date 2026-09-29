@@ -29,6 +29,11 @@ import { validateSpawnPermit } from './spawn-permit.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schema.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
+import { providerDescriptor } from './provider-catalog.js';
+
+function codexDisplayName(): string {
+  return providerDescriptor('codex').displayName;
+}
 
 // These are deliberately Codex-specific rather than reusing Claude's error
 // vocabulary. The CLIs report different messages for the same failure class.
@@ -67,10 +72,10 @@ function countToolProcessCreationFailures(output: string): number {
 }
 
 function toolProcessCreationFailureMessage(failures: number): string {
-  return `Codex could not create a process for ${failures} shell tool call${failures === 1 ? '' : 's'} `
+  return `${codexDisplayName()} could not create a process for ${failures} shell tool call${failures === 1 ? '' : 's'} `
     + '(its tool router reported `exec_command failed ... CreateProcess`). The dispatch had no working '
     + 'command execution, so its answer is not evidence-backed and is not reported as a success. '
-    + "Recovery action: verify this host lets Codex's sandbox create a process (bubblewrap / "
+    + `Recovery action: verify this host lets ${codexDisplayName()}'s sandbox create a process (bubblewrap / `
     + 'unprivileged user namespaces), then retry.';
 }
 
@@ -316,7 +321,7 @@ export class CodexProvider implements LLMProvider {
       } catch (error) {
         return {
           success: false,
-          output: `Codex native schema setup failed: ${error instanceof Error ? error.message : String(error)}`,
+          output: `${codexDisplayName()} native schema setup failed: ${error instanceof Error ? error.message : String(error)}`,
           exitCode: 1,
         };
       }
@@ -450,7 +455,7 @@ export class CodexProvider implements LLMProvider {
       ? validateSpawnPermit(spawnPermit)
       : validateSpawnPermit(spawnPermit, purpose);
     if (!permit.permitted) {
-      throw new Error(`Codex process spawn denied: ${permit.reason}`);
+      throw new Error(`${codexDisplayName()} process spawn denied: ${permit.reason}`);
     }
   }
 
@@ -488,7 +493,7 @@ export class CodexProvider implements LLMProvider {
       facts.parserRejection && `parserRejection=${facts.parserRejection}`,
     ].filter((fact): fact is string => typeof fact === 'string');
     diagnosticLog(
-      `Codex readiness probe failed: ${kind}${renderedFacts.length > 0 ? ` (${renderedFacts.join(', ')})` : ''}.`,
+      `${codexDisplayName()} readiness probe failed: ${kind}${renderedFacts.length > 0 ? ` (${renderedFacts.join(', ')})` : ''}.`,
     );
   }
 
@@ -563,7 +568,7 @@ export class CodexProvider implements LLMProvider {
     if (strictMachineEnvelope && exitCode === 0 && !parsedRaw.hasTerminalResult) {
       return {
         success: false,
-        output: 'Codex provider parse failure: missing terminal result record.',
+        output: `${codexDisplayName()} provider parse failure: missing terminal result record.`,
         exitCode,
         authentication: readyReadiness ?? this.authenticationResult(source, 'ready'),
       };
@@ -601,7 +606,7 @@ export class CodexProvider implements LLMProvider {
     if (requiresNativeSchema && exitCode === 0 && finalStructuredResult === undefined) {
       return {
         success: false,
-        output: `Codex provider parse failure: terminal result record is missing its structured result. Transcript: ${output}`,
+        output: `${codexDisplayName()} provider parse failure: terminal result record is missing its structured result. Transcript: ${output}`,
         exitCode,
         authentication,
         structuredResultFailure: 'malformed',
@@ -610,9 +615,9 @@ export class CodexProvider implements LLMProvider {
     return {
       success: exitCode === 0 && toolProcessCreationFailures === 0,
       output: authFailure
-        ? `Codex authentication failed using the selected ${source} source.`
+        ? `${codexDisplayName()} authentication failed using the selected ${source} source.`
         : permissionDenied
-          ? 'Codex automatic permission review was denied or unavailable. Verify the review policy or permissions, then retry.'
+          ? `${codexDisplayName()} automatic permission review was denied or unavailable. Verify the review policy or permissions, then retry.`
         : toolProcessCreationFailures > 0
           ? toolProcessCreationFailureMessage(toolProcessCreationFailures)
         : output,
@@ -644,7 +649,7 @@ export class CodexProvider implements LLMProvider {
   private async writeNativeSchema(options: InvokeOptions): Promise<string> {
     const homeDir = options.nativeSchemaScratchHome ?? options.selfHost?.env.CODEX_HOME;
     if (typeof homeDir !== 'string' || homeDir.length === 0) {
-      throw new Error('requested native schema requires an owned Codex scratch home');
+      throw new Error(`requested native schema requires an owned ${codexDisplayName()} scratch home`);
     }
     return writeScratchSchema({
       worktreeRoot: (options.nativeSchemaScratchHome === undefined ? undefined : options.nativeSchemaScratchRoot)
@@ -657,7 +662,7 @@ export class CodexProvider implements LLMProvider {
   private readinessFailure(readiness: AuthenticationReadiness): InvokeResult {
     return {
       success: false,
-      output: readiness.remediation ?? 'Codex authentication is not ready.',
+      output: readiness.remediation ?? `${codexDisplayName()} authentication is not ready.`,
       exitCode: 1,
       authFailure: true,
       executionDisposition: 'not-started',
@@ -881,12 +886,12 @@ export class CodexProvider implements LLMProvider {
   ): AuthenticationReadiness {
     const action = source === 'api-key'
       ? 'Replace CODEX_API_KEY and restart the daemon.'
-      : 'Sign in to Codex and retry.';
+      : `Sign in to ${codexDisplayName()} and retry.`;
     const reason = state === 'missing'
-      ? 'The selected Codex authentication source is not configured.'
+      ? `The selected ${codexDisplayName()} authentication source is not configured.`
       : state === 'unusable'
-        ? 'The selected Codex authentication source was rejected.'
-        : 'Codex authentication readiness could not be verified.';
+        ? `The selected ${codexDisplayName()} authentication source was rejected.`
+        : `${codexDisplayName()} authentication readiness could not be verified.`;
     return { provider: 'codex', source, state, remediation: `${reason} ${action}` };
   }
 
@@ -1051,7 +1056,7 @@ export class CodexProvider implements LLMProvider {
   private selfHostArgs(options: InvokeOptions): readonly string[] {
     const args = options.selfHost?.args ?? [];
     if (args.some((arg) => arg.length > 512)) {
-      throw new Error('Codex self-host arguments exceed the 512-character per-argument provider contract.');
+      throw new Error(`${codexDisplayName()} self-host arguments exceed the 512-character per-argument provider contract.`);
     }
     return args;
   }

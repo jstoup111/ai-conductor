@@ -490,6 +490,8 @@ export async function probeInteractiveReadOnlyReviewCapabilities(options: {
 export const CLI_PROVIDER_DISPATCHING_COMMANDS: ReadonlySet<string> = new Set([
   'inline',
   'daemon',
+  'compose',
+  'engineer',
 ]);
 
 /**
@@ -526,6 +528,20 @@ export async function bootDispatchingCliProviders(options: {
     registeredProviders: options.registry.list('llm_provider'),
   });
   return subscriber;
+}
+
+/** Boot the interactive compose/engineer provider before its launcher can spawn. */
+export async function bootComposeEngineerLaunch(options: {
+  readonly command: 'compose' | 'engineer';
+  readonly registry: PluginRegistry;
+  readonly events: ConductorEventEmitter;
+  readonly config: HarnessConfig | undefined;
+  readonly rendererOpts: TerminalRendererOptions;
+  readonly launch: () => Promise<number>;
+  readonly providerDiscoveryRunner?: ProviderVersionProbeRunner;
+}): Promise<number> {
+  await bootDispatchingCliProviders(options);
+  return options.launch();
 }
 
 // Harness VERSION lookup for the migration check. Probes the invocation cwd
@@ -931,7 +947,36 @@ async function main(): Promise<void> {
     const spine = startOperatorEventSpine(process.cwd());
     let code: number;
     try {
-      code = await dispatchEngineer(engineerCmd, { events: spine.events });
+      const projectRoot = process.cwd();
+      let launchBoot: Promise<void> | undefined;
+      code = await dispatchEngineer(engineerCmd, {
+        events: spine.events,
+        ...(engineerCmd.kind === 'launch' ? {
+          beforeLaunch: async () => {
+            launchBoot ??= (async () => {
+              const configResult = await loadConfig(projectRoot);
+              if (!configResult.ok && configResult.error.type !== 'missing') {
+                throw new Error(`Config error: ${configResult.error.message}`);
+              }
+              const registry = new PluginRegistry();
+              await bootComposeEngineerLaunch({
+                command: process.argv[2] === 'engineer' ? 'engineer' : 'compose',
+                registry,
+                events: spine.events,
+                config: configResult.ok ? configResult.config : undefined,
+                rendererOpts: {
+                  stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+                  steps: [],
+                  readStateFn: async () => ({ ok: true, value: {} }),
+                  projectRoot,
+                },
+                launch: async () => 0,
+              });
+            })();
+            await launchBoot;
+          },
+        } : {}),
+      });
     } finally {
       spine.stop();
     }

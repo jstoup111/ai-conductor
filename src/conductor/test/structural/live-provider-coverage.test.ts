@@ -21,6 +21,18 @@ function providersRequiringLiveCoverage(registry: PluginRegistry): string[] {
   ])].sort();
 }
 
+function liveCoverageGaps(
+  registry: PluginRegistry,
+  legs: readonly { capability: string | undefined }[],
+): string[] {
+  const descriptorKeys = new Set(LIVE_E2E_PROVIDERS.map(({ providerKey }) => providerKey));
+  const legCapabilities = new Set(legs.map(({ capability }) => capability));
+  return providersRequiringLiveCoverage(registry).flatMap((id) => {
+    if (!descriptorKeys.has(id)) return [`${id}: missing live descriptor`];
+    return legCapabilities.has(`credentialed:${id}`) ? [] : [`${id}: missing smoke leg`];
+  });
+}
+
 describe('structural: live provider coverage', () => {
   // Covers: task:20
   it('keeps every catalog provider, descriptor, credentialed capability, and smoke leg in one mapping without discovery', async () => {
@@ -35,7 +47,7 @@ describe('structural: live provider coverage', () => {
       source: await readFile(join(enginePath, name), 'utf8'),
     })));
 
-    expect({
+    const actual = {
       registeredProviders: registry.list('llm_provider').sort(),
       providersRequiringCoverage: providersRequiringLiveCoverage(registry),
       descriptors: LIVE_E2E_PROVIDERS.map(({ id, providerKey, credentialEnvVar }) => ({
@@ -51,7 +63,8 @@ describe('structural: live provider coverage', () => {
         delegatesToSharedBody: /import\s*\{\s*defineLiveE2EProviderSmoke,?\s*}\s*from\s*'\.\.\/fixtures\/live-e2e-run-body\.js';/s.test(source) &&
           /^defineLiveE2EProviderSmoke\(provider\);$/m.test(source),
       })),
-    }).toEqual({
+    };
+    expect(actual).toEqual({
       registeredProviders: [],
       providersRequiringCoverage: ['claude', 'codex', 'pi'],
       descriptors: [
@@ -81,6 +94,7 @@ describe('structural: live provider coverage', () => {
         },
       ],
     });
+    expect(liveCoverageGaps(registry, actual.legs)).toEqual([]);
   });
 
   // Covers: task:20
@@ -93,6 +107,18 @@ describe('structural: live provider coverage', () => {
       'codex',
       'fixture-live-provider',
       'pi',
+    ]);
+  });
+
+  it('names an enumerated external provider without a live descriptor or smoke leg', () => {
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'fixture-live-provider', { invoke: async () => ({}) });
+
+    expect(liveCoverageGaps(registry, [])).toEqual([
+      'claude: missing smoke leg',
+      'codex: missing smoke leg',
+      'fixture-live-provider: missing live descriptor',
+      'pi: missing smoke leg',
     ]);
   });
 });

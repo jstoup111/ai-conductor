@@ -105,6 +105,30 @@ describe('PiProvider', () => {
     expect(classifyMetering(result.tokenUsage)).toBe('cost-unmetered');
   });
 
+  it('counts terminal assistant turns and accepts usage on a terminal event', async () => {
+    spawn.mockResolvedValue({
+      stdout: [
+        JSON.stringify({
+          type: 'message_end',
+          message: { role: 'assistant', content: 'First turn.' },
+          usage: { input: 9, output: 4 },
+        }),
+        JSON.stringify({
+          type: 'message_end',
+          message: { role: 'assistant', content: 'Second turn.' },
+        }),
+      ].join('\n'),
+      stderr: '',
+      exitCode: 0,
+    } as ExecaResult);
+
+    await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
+      success: true,
+      output: 'Second turn.',
+      tokenUsage: { input: 9, output: 4, numTurns: 2 },
+    });
+  });
+
   it('ignores a malformed JSONL line and still returns the terminal assistant message', async () => {
     spawn.mockResolvedValue({
       stdout: await readFixture('malformed-before-terminal.jsonl'),

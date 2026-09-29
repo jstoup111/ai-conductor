@@ -2,7 +2,6 @@ import { BUILT_IN_PROVIDERS } from '../execution/provider-catalog.js';
 import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
-  deepFreezePolicy,
   type ProviderModelPolicy,
 } from './provider-model-policy-defaults.js';
 
@@ -17,8 +16,9 @@ export const BUILT_IN_PROVIDER_MODEL_POLICIES: Readonly<Record<string, ProviderM
     BUILT_IN_PROVIDERS.map((provider) => [provider.id, provider.modelPolicy]),
   ));
 
-const BUILT_IN_PROVIDER_OPT_IN_MODEL_IDS: Readonly<Record<string, readonly string[]>> =
-  deepFreezePolicy({ codex: ['gpt-6-astra'] });
+const BUILT_IN_PROVIDER_OPT_IN_MODEL_IDS: Readonly<Record<string, readonly string[]>> = Object.freeze(
+  Object.fromEntries(BUILT_IN_PROVIDERS.map((provider) => [provider.id, provider.optInModelIds])),
+);
 
 export function hasBuiltInProviderModelPolicy(providerKey: string): boolean {
   return Object.hasOwn(BUILT_IN_PROVIDER_MODEL_POLICIES, providerKey);

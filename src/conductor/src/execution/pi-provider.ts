@@ -2,6 +2,7 @@ import { execa, type Options as ExecaOptions } from 'execa';
 import type { InvokeOptions, InvokeResult, LLMProvider, TokenUsage } from './llm-provider.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { validateSpawnPermit } from './spawn-permit.js';
+import { providerDescriptor } from './provider-catalog.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -35,10 +36,15 @@ type PiJsonEvent = {
   };
 };
 
+/** Resolve lazily because the catalog constructs this adapter. */
+function piDisplayName(): string {
+  return providerDescriptor('pi').displayName;
+}
+
 function abortedInvocationResult(): InvokeResult {
   return {
     success: false,
-    output: 'Pi invocation aborted.',
+    output: `${piDisplayName()} invocation aborted.`,
     exitCode: 1,
   };
 }
@@ -65,6 +71,7 @@ export function parsePiJsonl(stdout: string): {
   let output = '';
   let tokenUsage: TokenUsage | undefined;
   let hasTerminalAssistantMessage = false;
+  let assistantTurns = 0;
 
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -72,9 +79,11 @@ export function parsePiJsonl(stdout: string): {
       const event = JSON.parse(line) as PiJsonEvent;
       if (event.type === 'message_end' && event.message?.role === 'assistant') {
         hasTerminalAssistantMessage = true;
+        assistantTurns += 1;
         output = terminalAssistantText(event.message.content);
       }
-      if (event.type === 'message_update' && event.usage) {
+      if ((event.type === 'message_update'
+        || (event.type === 'message_end' && event.message?.role === 'assistant')) && event.usage) {
         const { input, output: outputTokens, cacheRead, cacheWrite } = event.usage;
         if (typeof input === 'number' && Number.isFinite(input)
           && typeof outputTokens === 'number' && Number.isFinite(outputTokens)) {
@@ -89,6 +98,10 @@ export function parsePiJsonl(stdout: string): {
     } catch {
       // Pi reserves stdout for JSONL, but retain valid records when a diagnostic leaks into it.
     }
+  }
+
+  if (assistantTurns > 0) {
+    tokenUsage = { ...(tokenUsage ?? { input: 0, output: 0 }), numTurns: assistantTurns };
   }
 
   return { output, tokenUsage, hasTerminalAssistantMessage };
@@ -110,7 +123,7 @@ export class PiProvider implements LLMProvider {
     if (abortSignal?.aborted) return abortedInvocationResult();
     const permit = validateSpawnPermit(options.spawnPermit);
     if (!permit.permitted) {
-      throw new Error(`Pi process spawn denied: ${permit.reason}`);
+      throw new Error(`${piDisplayName()} process spawn denied: ${permit.reason}`);
     }
 
     const subprocess = this.subprocessFactory(this.executable, ['-p', '--no-session', '--mode', 'json'], {
@@ -142,7 +155,7 @@ export class PiProvider implements LLMProvider {
     // Missing-binary classification is anchored to structural process signals.
     // Never infer provider-wide unavailability from arbitrary stderr prose.
     if (result.code === 'ENOENT' || exitCode === 127) {
-      const reason = "LLM provider 'pi' not found. Install it or check your PATH.";
+      const reason = `LLM provider '${piDisplayName().toLowerCase()}' not found. Install it or check your PATH.`;
       return {
         success: false,
         output: reason,
@@ -156,7 +169,7 @@ export class PiProvider implements LLMProvider {
     if (exitCode === 0 && !parsed.hasTerminalAssistantMessage) {
       return {
         success: false,
-        output: 'Pi provider parse failure: missing terminal assistant message.',
+        output: `${piDisplayName()} provider parse failure: missing terminal assistant message.`,
         exitCode,
       };
     }

@@ -31,10 +31,6 @@ vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters }));
 vi.mock('../../src/engine/self-host/daemon-build-token.js', () => ({
   readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })),
 }));
-vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../src/engine/ci-fix.js')>()),
-  defaultCiFixProbe: vi.fn(async () => ({ exitCode: 0, stdout: 'claude 1.0.0', stderr: '' })),
-}));
 vi.mock('../../src/engine/daemon-runner.js', () => ({
   makeRunFeature: (deps: {
     beginFeatureRun: (

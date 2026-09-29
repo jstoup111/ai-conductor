@@ -487,6 +487,8 @@ export interface DispatchEngineerOpts {
    * Receives the resolved one-shot idea (CLI-supplied) for the first session, if any.
    */
   launchInteractive?: (idea?: string) => number | Promise<number>;
+  /** CLI-owned provider boot that must succeed before an interactive launch spawns. */
+  beforeLaunch?: () => Promise<void>;
   /**
    * Injected pre-poll hook (for tests). When provided, the 'launch' kind calls this
    * before each fresh session (unless a CLI idea was supplied) to prime the intake
@@ -914,6 +916,8 @@ export async function dispatchEngineer(
           return 0;
         }
       }
+
+      await opts.beforeLaunch?.();
 
       // Intake pre-poll: prime the durable inbox before launching so the spawned
       // /composer session can `claim` a github-issue idea. Defaults to a real sweep

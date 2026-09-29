@@ -7,6 +7,7 @@ import { EventPersister } from '../../src/engine/event-persister.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import {
   CLI_PROVIDER_DISPATCHING_COMMANDS,
+  bootComposeEngineerLaunch,
   bootDispatchingCliProviders,
   dispatchNonDispatchingCliCommand,
 } from '../../src/index.js';
@@ -268,7 +269,7 @@ describe('runDaemonMode provider discovery at boot', () => {
       commandResults,
       discoveryCalls: discovery.mock.calls.length,
     }).toEqual({
-      commands: expect.arrayContaining(['inline', 'daemon']),
+      commands: expect.arrayContaining(['inline', 'daemon', 'compose', 'engineer']),
       commandResults: [0, 0, 0],
       discoveryCalls: 0,
     });
@@ -281,5 +282,23 @@ describe('runDaemonMode provider discovery at boot', () => {
     expect(CLI_PROVIDER_DISPATCHING_COMMANDS).not.toContain('rate-card');
     expect(CLI_PROVIDER_DISPATCHING_COMMANDS).not.toContain('overlap-scan');
     expect(CLI_PROVIDER_DISPATCHING_COMMANDS).not.toContain('render-diagrams');
+  });
+
+  it('refuses a missing Claude before the compose launch callback can spawn', async () => {
+    const launch = vi.fn(async () => 0);
+
+    await expect(bootComposeEngineerLaunch({
+      command: 'compose',
+      registry: new PluginRegistry(),
+      events: new ConductorEventEmitter(),
+      config: { llm_provider: 'claude' },
+      rendererOpts: { stateFilePath: '/tmp/state.json', steps: [], readStateFn: async () => ({ ok: true, value: {} }), projectRoot: '/tmp' },
+      launch,
+      providerDiscoveryRunner: async (executable) => {
+        if (executable === 'claude') throw Object.assign(new Error('missing claude'), { code: 'ENOENT' });
+        return { exitCode: 0 };
+      },
+    })).rejects.toThrow(/claude.*not installed.*not-found/i);
+    expect(launch).not.toHaveBeenCalled();
   });
 });

@@ -38,19 +38,56 @@ function findProviderLiterals(
   source: ts.SourceFile,
   adapterModules = declaredAdapterModules(),
 ): readonly ProviderLiteralFinding[] {
-  if (module === catalogModule || adapterModules.has(module)) return [];
+  if (module === catalogModule) return [];
 
   const forbiddenLiterals = new Set<string>(BUILT_IN_PROVIDERS.flatMap(
     ({ id, displayName }) => [id, displayName],
   ));
+  const forbiddenIds = new Set(BUILT_IN_PROVIDERS.map(({ id }) => id));
+  const adapter = BUILT_IN_PROVIDERS.find(({ adapterModule }) => adapterModule === module);
   const findings: ProviderLiteralFinding[] = [];
+  const report = (node: ts.Node, value: string): void => {
+    findings.push({
+      file: module,
+      line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+      value,
+    });
+  };
+  const isDeclaredPropertyName = (node: ts.Node): node is ts.PropertyName => {
+    const parent = node.parent;
+    const parentOwnsName = (parent as ts.NamedDeclaration).name === node;
+    return parentOwnsName && (
+      ts.isPropertyAssignment(parent)
+      || ts.isPropertyDeclaration(parent)
+      || ts.isPropertySignature(parent)
+      || ts.isMethodDeclaration(parent)
+      || ts.isMethodSignature(parent)
+      || ts.isGetAccessorDeclaration(parent)
+      || ts.isSetAccessorDeclaration(parent)
+    );
+  };
+  const hasDisplayName = (text: string, displayName: string): boolean =>
+    new RegExp(`\\b${displayName.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`).test(text);
   const visit = (node: ts.Node): void => {
-    if (ts.isStringLiteral(node) && forbiddenLiterals.has(node.text)) {
-      findings.push({
-        file: module,
-        line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
-        value: node.text,
-      });
+    if (ts.isStringLiteral(node)
+      || ts.isNoSubstitutionTemplateLiteral(node)
+      || ts.isTemplateHead(node)
+      || ts.isTemplateMiddle(node)
+      || ts.isTemplateTail(node)) {
+      if (adapter) {
+        if (hasDisplayName(node.text, adapter.displayName)) report(node, node.text);
+      } else if (forbiddenLiterals.has(node.text)) {
+        report(node, node.text);
+      }
+    }
+    if (!adapter && isDeclaredPropertyName(node)
+      && (ts.isIdentifier(node)
+        || (ts.isComputedPropertyName(node) && ts.isIdentifier(node.expression)))) {
+      const expression = ts.isComputedPropertyName(node) ? node.expression : undefined;
+      const value = expression === undefined
+        ? node.text
+        : ts.isIdentifier(expression) ? expression.text : undefined;
+      if (value && forbiddenIds.has(value)) report(node, value);
     }
     ts.forEachChild(node, visit);
   };
@@ -81,6 +118,22 @@ describe('structural: built-in provider literals', () => {
 
     expect(findProviderLiterals('fixtures/provider-display-literal.ts', source, new Set())).toEqual([
       { file: 'fixtures/provider-display-literal.ts', line: 1, value: 'Codex' },
+    ]);
+  });
+
+  it('reports a fixture provider id used as a property name with its file and line', () => {
+    const source = ts.createSourceFile('fixtures/provider-id-key.ts', 'const providers = { codex: true };', ts.ScriptTarget.Latest, true);
+
+    expect(findProviderLiterals('fixtures/provider-id-key.ts', source, new Set())).toEqual([
+      { file: 'fixtures/provider-id-key.ts', line: 1, value: 'codex' },
+    ]);
+  });
+
+  it('reports a declared adapter display name embedded in user-facing text', () => {
+    const source = ts.createSourceFile('fixtures/pi-adapter.ts', "const output = 'Pi invocation aborted.';", ts.ScriptTarget.Latest, true);
+
+    expect(findProviderLiterals('execution/pi-provider.ts', source)).toEqual([
+      { file: 'execution/pi-provider.ts', line: 1, value: 'Pi invocation aborted.' },
     ]);
   });
 

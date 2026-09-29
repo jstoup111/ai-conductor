@@ -28,6 +28,11 @@ import {
   scaleRateLimitDurationSeconds,
 } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
+import { providerDescriptor } from './provider-catalog.js';
+
+function claudeDisplayName(): string {
+  return providerDescriptor('claude').displayName;
+}
 
 /** Print-mode sessions must not leave background tasks outstanding (#2599). */
 const FOREGROUND_ONLY_ENV = { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } as const;
@@ -582,7 +587,7 @@ export class ClaudeProvider implements LLMProvider {
     const { diagnosticLog, onActivity, onProviderStream, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
     const permit = validateSpawnPermit(spawnPermit);
     if (!permit.permitted) {
-      throw new Error(`Claude process spawn denied: ${permit.reason}`);
+      throw new Error(`${claudeDisplayName()} process spawn denied: ${permit.reason}`);
     }
     const subprocess = this.subprocessFactory(selfHost?.executable ?? this.executable, args, {
       ...execaOptions,
@@ -664,7 +669,7 @@ export class ClaudeProvider implements LLMProvider {
     if (options.nativeSchema !== undefined && options.interactive) {
       return {
         success: false,
-        output: 'Claude native output schema is unsupported for interactive Claude invocation. Recovery action: dispatch the schema request in non-interactive print mode.',
+        output: `${claudeDisplayName()} native output schema is unsupported for interactive ${claudeDisplayName()} invocation. Recovery action: dispatch the schema request in non-interactive print mode.`,
         exitCode: 1,
         nativeSchemaUnsupported: true,
       };
@@ -759,8 +764,8 @@ export class ClaudeProvider implements LLMProvider {
       return {
         success: false,
         output: !terminalResult
-          ? 'Claude provider parse failure: missing terminal result record.'
-          : 'Claude provider parse failure: terminal result record is missing its result field.',
+          ? `${claudeDisplayName()} provider parse failure: missing terminal result record.`
+          : `${claudeDisplayName()} provider parse failure: terminal result record is missing its result field.`,
         exitCode,
         observedIntervals: [observedInterval],
       };
@@ -801,8 +806,8 @@ export class ClaudeProvider implements LLMProvider {
       return {
         success: false,
         output: structuredResult.kind === 'malformed'
-          ? 'Claude provider parse failure: terminal result record has malformed structured result JSON.'
-          : 'Claude provider parse failure: terminal result record is missing its structured result.',
+          ? `${claudeDisplayName()} provider parse failure: terminal result record has malformed structured result JSON.`
+          : `${claudeDisplayName()} provider parse failure: terminal result record is missing its structured result.`,
         exitCode,
         structuredResultFailure: structuredResult.kind === 'absent' ? 'missing' : 'malformed',
         observedIntervals: [observedInterval],

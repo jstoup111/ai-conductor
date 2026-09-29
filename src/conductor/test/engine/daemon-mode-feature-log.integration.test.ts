@@ -9,9 +9,6 @@ const daemonLogSpy = vi.hoisted(() => ({
     featureOwned ? `[daemon]${message}` : `[daemon] ${message}`,
   ),
 }));
-const ciFixProbeSpy = vi.hoisted(() => ({
-  defaultCiFixProbe: vi.fn(async () => ({ exitCode: 0, stdout: 'claude 1.0.0', stderr: '' })),
-}));
 const buildAuthSpy = vi.hoisted(() => ({
   readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })),
 }));
@@ -21,10 +18,6 @@ vi.mock('../../src/engine/daemon-log.js', async (importOriginal) => {
   return { ...actual, formatDaemonActivityLine: daemonLogSpy.formatDaemonActivityLine };
 });
 
-vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/engine/ci-fix.js')>();
-  return { ...actual, defaultCiFixProbe: ciFixProbeSpy.defaultCiFixProbe };
-});
 vi.mock('../../src/engine/daemon-deps.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/daemon-deps.js')>();
   return { ...actual, resolveDaemonBaseSha: vi.fn(async () => 'a'.repeat(40)) };
@@ -86,7 +79,6 @@ let dirs: string[] = [];
 beforeEach(() => {
   dirs = [];
   daemonLogSpy.formatDaemonActivityLine.mockClear();
-  ciFixProbeSpy.defaultCiFixProbe.mockClear();
   buildAuthSpy.readDaemonBuildToken.mockClear();
 });
 
