@@ -772,3 +772,27 @@ Task 22 <- 20
 **Done when:**
 - src/conductor/src/engine/provider-runtime.ts no longer exports validateSpawnPermit and src/conductor/src/execution/child-environment.ts no longer exports TMUX_ENVIRONMENT_KEYS, and a repository search finds no import of either symbol through those modules.
 - The provider-runtime and child-environment test suites pass with unchanged assertions after importing from spawn-permit.ts and tmux-environment.ts.
+
+### Task rem-as-built-rem-pg3-1: src/conductor/test/engine/provider-id-literals.test.ts (findProviderLiterals and its adapter fixtures): remove the own-displayName exemption that rem-as-built-rem-pg1-1 kept, so any string literal or template span containing ANY catalog provider displayName as a whole word is reported in every module except the catalog, including the provider's own adapter; keep only the adapter's own provider id exempt inside its adapter module; update the fixture that asserted an adapter's own displayName passes so it now asserts 'Codex' inside the codex adapter fixture is reported with file:line; then replace every own-displayName literal the scan reports in src/conductor/src/execution/claude-provider.ts, codex-provider.ts and pi-provider.ts with the catalog descriptor displayName, keeping message text byte-identical so adapter tests pass with unchanged assertions.
+**Gate:** as-built
+**Rationale:** Plan gap PG-3 (operator-approved plan correction, 2026-09-29): rem-as-built-rem-pg1-1 wrongly required an adapter's own displayName to stay exempt, contradicting sealed Story 1 which requires every user-facing provider display string to originate from the catalog. The sealed criterion governs; this task supersedes that exemption.
+**Governing clause:** Story 1 criterion S1.5
+**Done when:**
+- The provider-id-literals structural test reports, with file:line, the literal 'Codex' inside the codex adapter fixture and any catalog displayName literal in any non-catalog module, as asserted by the updated adapter fixture test.
+- The structural test reports zero findings on production source, and the claude, codex and pi adapter test suites pass with unchanged assertions.
+
+### Task rem-as-built-rem-ab17-1: src/conductor/src/execution/provider-catalog.ts:46,89,120,152 and src/conductor/test/engine/provider-id-literals.test.ts: remove the adapterModule field from BuiltInProviderDescriptor and the three catalog entries, and move the adapter-module ownership map into the structural test as a test-local constant keyed by provider id (claude to execution/claude-provider.ts, codex to execution/codex-provider.ts, pi to execution/pi-provider.ts) with an assertion that every catalog id has exactly one entry and that each listed file exists.
+**Gate:** as-built
+**Rationale:** As-built finding AB-17: adapterModule is populated in production but has no production reader; its only consumer is the structural test.
+**Governing clause:** plan task rem-as-built-rem-pg1-1
+**Done when:**
+- BuiltInProviderDescriptor declares no adapterModule field and a repository search finds no adapterModule reference under src/conductor/src.
+- The structural test's local adapter map covers every catalog id exactly once, each listed file exists, and the structural test passes.
+
+### Task rem-as-built-rem-ab18-1: src/conductor/src/index.ts:536-557 (bootComposeEngineerLaunch) and its caller at src/conductor/src/index.ts:965-990: collapse bootComposeEngineerLaunch into a validation-only helper that takes only the event emitter and an optional discovery runner, runs discoverInstalledProviders, and throws the existing ProviderNotInstalledError when claude is not installed, returning nothing; drop the unread command, registry, config, rendererOpts and launch parameters and the no-op launch callback at the caller, and rename it to reflect validation only; update src/conductor/test/engine/daemon-provider-boot.test.ts to the new signature keeping its claude-missing non-zero exit and never-spawns assertions unchanged.
+**Gate:** as-built
+**Rationale:** As-built finding AB-18: bootComposeEngineerLaunch accepts command, registry, config and rendererOpts it never reads, and production passes a no-op launch callback whose result is ignored while the real spawn happens later in launchClaudeEngineer.
+**Governing clause:** plan task rem-as-built-rem-ab8-1
+**Done when:**
+- The compose/engineer pre-launch helper accepts only the event emitter and optional discovery runner, and the production caller passes no launch callback, registry, config or renderer options.
+- With discovery reporting claude missing, the compose/engineer entry exits non-zero naming claude and never calls the spawn stub, as asserted by the existing daemon-provider-boot test.
