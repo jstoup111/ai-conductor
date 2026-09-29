@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-29T20:36:05.901Z
 Slug: link-intake-depends-on-with-a-typed-issue-id
 Class: needs-human
 Halting step: architecture_review_as_built
