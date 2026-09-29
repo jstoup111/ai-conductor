@@ -242,12 +242,15 @@ export async function prepareWorktree(
   // Write git hooks before setup so they exist even if setup fails
   await writeGitHooksAndWire(worktreePath, log);
   const coAuthor = daemonBotCoAuthorResolver();
+  const target = join(worktreePath, '.pipeline', 'co-author');
   try {
     const result = coAuthor ? await coAuthor.prepare(opts?.events) : undefined;
-    const target = join(worktreePath, '.pipeline', 'co-author');
     if (result?.kind === 'resolved') await writeFile(target, `${result.trailer}\n`, 'utf8');
     else await rm(target, { force: true });
   } catch {
+    // A failed refresh must fail open: never leave an earlier worktree's
+    // attribution input available to the hook.
+    await rm(target, { force: true }).catch(() => undefined);
     await opts?.events?.emit({ type: 'bot_co_author_skipped', reason: 'worktree-write-failed' });
   }
   await ensureSessionHooks(worktreePath, log);

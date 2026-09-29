@@ -2,6 +2,7 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import type { ConductorEvent } from '../types/events.js';
 import { readGithubBotCredential, readGithubBotToken, type GithubBotCredential, type GithubBotToken } from './github-bot-credential.js';
 import { runBotIdentityRead, type GhRunner } from './tracker-client.js';
+import { GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 
 export type BotCoAuthorResult =
   | { readonly kind: 'unconfigured' }
@@ -47,7 +48,12 @@ export function createBotCoAuthorResolver(input: { runner: GhRunner; cwd: string
         cachedTokenFile = credential.tokenFile;
         return (last = { kind: 'resolved', login, id, trailer: `Co-authored-by: ${login} <${id}+${login}@users.noreply.github.com>` });
       } catch (error) {
-        const reason = error instanceof Error && error.name === 'GithubBotAuthRefusalError' ? 'token-unavailable' : 'identity-read-failed';
+        // Token availability is determined before starting the bot identity
+        // read. Once that read has started, including a 401/403 refusal, its
+        // failure is an identity-read failure rather than a second token probe.
+        const reason = error instanceof GithubBotAuthRefusalError && error.reason === 'token-unavailable'
+          ? 'token-unavailable'
+          : 'identity-read-failed';
         last = { kind: 'unavailable', reason };
         await events?.emit({ type: 'bot_co_author_skipped', reason });
         return last;

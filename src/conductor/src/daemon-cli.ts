@@ -858,7 +858,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     throw new Error(`Config error: ${configResult.error.message}`);
   }
   const config = configResult.ok ? configResult.config : undefined;
-  installDaemonBotCoAuthor(createBotCoAuthorResolver({ runner: makeProductionGh(), cwd: projectRoot }));
   const daemonConcurrency = resolveDaemonCommandConcurrency(opts, config?.daemon_concurrency);
 
   // Backstop for every daemon launch path: refuse to run on a stale harness
@@ -1135,6 +1134,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // One daemon-wide forwarding bus keeps rendering global. Each feature owns a
   // local persistence bus plus provider runtime/session state; rate limits remain shared.
   const events = new ConductorEventEmitter();
+  installDaemonBotCoAuthor(createBotCoAuthorResolver({ runner: makeProductionGh(), cwd: projectRoot, events }));
   // Both daemon-only occurrences and forwarded feature events share one bus;
   // the sibling ledger deliberately persists only daemon-origin copies.
   const daemonEventPersistence = startDaemonEventPersistence(projectRoot, events, log);
