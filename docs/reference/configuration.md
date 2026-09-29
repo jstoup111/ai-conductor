@@ -1563,6 +1563,12 @@ be read, GitHub refuses it, or a write uses an SSH remote, the authorized operat
 Other failures do not trigger a fallback. The event records only the operation, target, and reason;
 it never includes the token, token-file path, or command output.
 
+The daemon also reads this token once while preparing a worktree to resolve the bot's GitHub
+identity. When that succeeds, daemon-created commits carry a `Co-authored-by:` trailer for that
+identity; the operator remains the commit author. An unavailable token or identity read simply
+omits the trailer and emits a secret-safe `bot_co_author_skipped` event. Operator-run commits are
+never stamped.
+
 ## spec_owner
 
 The daemon operator identity used by the owner gate. Optional string.

@@ -93,6 +93,7 @@ describe('GitHub invocation audit', () => {
       expect.objectContaining({ line: 3, message: 'unresolvable mutable GitHub command forwarding outside guarded adapter' }),
     ]);
     expect(auditGithubInvocationSource('engine/tracker-client.ts', forwarded('runTrackerRead'))).toEqual([]);
+    expect(auditGithubInvocationSource('engine/tracker-client.ts', forwarded('runBotIdentityRead'))).toEqual([]);
     expect(auditGithubInvocationSource('engine/tracker-client.ts', forwarded('runTrackerGraphqlRead'))).toEqual([]);
     expect(auditGithubInvocationSource('engine/shipment-audit.ts', forwarded('graphqlPage'))).toEqual([
       expect.objectContaining({ line: 3, message: 'unresolvable mutable GitHub command forwarding outside guarded adapter' }),

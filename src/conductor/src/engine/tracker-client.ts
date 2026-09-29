@@ -364,17 +364,19 @@ export function assertRealExecAllowed(bin: string): void {
 
 /** Construct the real gh runner used in production. */
 export function makeProductionGh(): GhRunner {
-  return async (args: string[], opts: { cwd: string; timeout?: number; maxBuffer?: number; credential?: 'operator' | 'write' }) => {
+  return async (args: string[], opts: { cwd: string; timeout?: number; maxBuffer?: number; credential?: 'operator' | 'write' | 'bot' }) => {
     assertRealExecAllowed('gh');
     let env: NodeJS.ProcessEnv | undefined;
     let botToken: string | undefined;
-    if (opts.credential === 'write') {
+    if (opts.credential === 'write' || opts.credential === 'bot') {
       const credential = await readGithubBotCredential();
       if (credential.kind === 'configured') {
         const token = await readGithubBotToken(credential.tokenFile);
         if (token.kind === 'unavailable') throw new GithubBotAuthRefusalError('token-unavailable');
         botToken = token.token;
         env = { ...process.env, GH_TOKEN: botToken };
+      } else if (opts.credential === 'bot') {
+        throw new GithubBotAuthRefusalError('token-unavailable');
       }
     }
     try {
@@ -798,6 +800,25 @@ export async function runTrackerAmbientRead(
   const decoded = decodeGithubAmbientRead({ operation, args });
   if (decoded.kind === 'refused') throw new GithubTrackerOperationRefusalError(operation, decoded.reason);
   const { stdout } = await runner([...decoded.request.args], { cwd, ...runnerOpts });
+  return stdout;
+}
+
+/** Run the one bot-authenticated ambient operation admitted for commit attribution. */
+export async function runBotIdentityRead(
+  runner: GhRunner,
+  cwd: string,
+): Promise<string> {
+  const operation = 'ambient.bot-identity.read' as const;
+  const args = ['api', 'user'];
+  const decoded = decodeGithubAmbientRead({ operation, args });
+  if (decoded.kind === 'refused') throw new GithubTrackerOperationRefusalError(operation, decoded.reason);
+  // `bot` is an internal capability of the production runner. Keeping it out
+  // of the general injectable seam preserves existing read/write test fakes.
+  const botRunner = runner as unknown as (
+    args: string[],
+    opts: { cwd: string; timeout?: number; maxBuffer?: number; credential: 'bot' },
+  ) => Promise<{ stdout: string }>;
+  const { stdout } = await botRunner([...decoded.request.args], { cwd, credential: 'bot' });
   return stdout;
 }
 

@@ -67,6 +67,10 @@ export interface GithubWriteCredentialFallbackEvent {
   target: GithubOperationTarget;
   reason: GithubBotAuthRefusalReason;
 }
+export interface BotCoAuthorSkippedEvent {
+  type: 'bot_co_author_skipped';
+  reason: 'token-unavailable' | 'identity-read-failed' | 'worktree-write-failed';
+}
 
 /** Daemon-lifetime backlog dimensions. Kept closed so metric cardinality is bounded. */
 export type BacklogState = 'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked';
@@ -309,6 +313,7 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
 };
 
 export type ConductorEvent =
+  | BotCoAuthorSkippedEvent
   | {
       type: 'daemon_backlog_snapshot';
       counts: Record<BacklogState, number>;

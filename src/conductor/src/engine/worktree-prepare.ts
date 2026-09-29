@@ -54,6 +54,7 @@ import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 import { resolveDispatchStartTimeoutSeconds } from './resolved-config.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import type { ConductorEvent } from '../types/events.js';
+import { refreshWorktreeCoAuthor } from './bot-co-author.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
@@ -240,6 +241,7 @@ export async function prepareWorktree(
   await writeNamespaceEnv(worktreePath, namespace, log);
   // Write git hooks before setup so they exist even if setup fails
   await writeGitHooksAndWire(worktreePath, log);
+  await refreshWorktreeCoAuthor(worktreePath, opts?.events);
   await ensureSessionHooks(worktreePath, log);
   await excludeEngineArtifacts(worktreePath, log);
   const decision = await setupDecision(worktreePath, opts?.baseSha, opts?.force ?? false);

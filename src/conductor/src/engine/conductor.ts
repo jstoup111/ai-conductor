@@ -62,6 +62,7 @@ import { classifyPrdWideningProjection } from './prd-widening-classification.js'
 import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { createGithubTrackerClient } from './tracker-client.js';
+import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
@@ -5419,7 +5420,7 @@ export class Conductor {
               const commit = await git([
                 'commit',
                 '-m',
-                'chore(plan): record appended remediation tasks',
+                withDaemonCoAuthorTrailer('chore(plan): record appended remediation tasks'),
                 '--no-verify',
                 '--',
                 planPath,

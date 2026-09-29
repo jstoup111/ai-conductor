@@ -351,11 +351,12 @@ function guardedMutationRunnerCall(file: string, node: ts.CallExpression): boole
 
 /** Every dynamic GhRunner forwarding exemption is bound to its real owner. */
 const GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS: Readonly<Record<
-  'runTrackerRead' | 'runTrackerAmbientRead' | 'runTrackerGraphqlRead' | 'runTrackerIssueOperation' | 'guardedPrRunner',
+  'runTrackerRead' | 'runTrackerAmbientRead' | 'runBotIdentityRead' | 'runTrackerGraphqlRead' | 'runTrackerIssueOperation' | 'guardedPrRunner',
   readonly string[]
 >> = {
   runTrackerRead: ['engine/tracker-client.ts'],
   runTrackerAmbientRead: ['engine/tracker-client.ts'],
+  runBotIdentityRead: ['engine/tracker-client.ts'],
   runTrackerGraphqlRead: ['engine/tracker-client.ts'],
   runTrackerIssueOperation: ['engine/tracker-client.ts'],
   guardedPrRunner: ['engine/gate-writeback.ts', 'engine/pr-labels.ts'],
@@ -365,7 +366,7 @@ const GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS: Readonly<Record<
 function guardedDynamicRunnerForwarding(file: string, node: ts.CallExpression): boolean {
   const owner = enclosingFunctionName(node);
   if (isCanonicalGuardedAdapterTransportCall(file, node)) return true;
-  if (owner === 'runTrackerRead' || owner === 'runTrackerAmbientRead' || owner === 'runTrackerGraphqlRead' || owner === 'runTrackerIssueOperation') {
+  if (owner === 'runTrackerRead' || owner === 'runTrackerAmbientRead' || owner === 'runBotIdentityRead' || owner === 'runTrackerGraphqlRead' || owner === 'runTrackerIssueOperation') {
     return GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS[owner].includes(normalizedFile(file));
   }
   if (owner !== 'guardedPrRunner') return false;
