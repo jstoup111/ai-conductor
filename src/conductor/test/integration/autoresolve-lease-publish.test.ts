@@ -33,6 +33,12 @@ const permittedRemoteGit: typeof executeRemoteGit = async (args, dependencies) =
 
 const execFile = promisify(execFileCb);
 
+/** Keep fixture cleanup independent of Git's background maintenance process. */
+async function disableAutomaticGitMaintenance(cwd: string): Promise<void> {
+  await execFile('git', ['config', 'gc.auto', '0'], { cwd });
+  await execFile('git', ['config', 'maintenance.auto', 'false'], { cwd });
+}
+
 describe('integration/autoresolve — lease-protected publish', () => {
   let origin: string;
   let work: string; // the "resolution worktree" checkout that pushes back to origin
@@ -44,10 +50,12 @@ describe('integration/autoresolve — lease-protected publish', () => {
   beforeEach(async () => {
     origin = await mkdtemp(join(tmpdir(), 'autoresolve-lease-origin-'));
     await execFile('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: origin });
+    await disableAutomaticGitMaintenance(origin);
 
     // Seed origin via a throwaway checkout.
     const seed = await mkdtemp(join(tmpdir(), 'autoresolve-lease-seed-'));
     await execFile('git', ['init', '-q', '-b', 'main'], { cwd: seed });
+    await disableAutomaticGitMaintenance(seed);
     await execFile('git', ['config', 'user.email', 't@t.com'], { cwd: seed });
     await execFile('git', ['config', 'user.name', 'T'], { cwd: seed });
     await execFile('git', ['config', 'commit.gpgsign', 'false'], { cwd: seed });
@@ -68,6 +76,7 @@ describe('integration/autoresolve — lease-protected publish', () => {
     // wants to publish it back with a lease).
     work = await mkdtemp(join(tmpdir(), 'autoresolve-lease-work-'));
     await execFile('git', ['clone', '-q', origin, work]);
+    await disableAutomaticGitMaintenance(work);
     await execFile('git', ['checkout', '-q', 'feat/widget'], { cwd: work });
     await execFile('git', ['config', 'user.email', 't@t.com'], { cwd: work });
     await execFile('git', ['config', 'user.name', 'T'], { cwd: work });
@@ -79,6 +88,7 @@ describe('integration/autoresolve — lease-protected publish', () => {
     // An independent second clone, used to simulate a concurrent operator push.
     outsider = await mkdtemp(join(tmpdir(), 'autoresolve-lease-outsider-'));
     await execFile('git', ['clone', '-q', origin, outsider]);
+    await disableAutomaticGitMaintenance(outsider);
     await execFile('git', ['checkout', '-q', 'feat/widget'], { cwd: outsider });
     await execFile('git', ['config', 'user.email', 'o@o.com'], { cwd: outsider });
     await execFile('git', ['config', 'user.name', 'O'], { cwd: outsider });

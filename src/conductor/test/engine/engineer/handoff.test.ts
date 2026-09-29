@@ -158,7 +158,7 @@ describe('openSpecPr', () => {
       }
       return { stdout: '', stderr: '' };
     };
-    const gh = async (args: string[], options: { credential?: 'operator' | 'write' }) => {
+    const gh = async (args: string[], options: { cwd: string; credential?: 'operator' | 'write' }) => {
       githubCalls.push([...args]);
       if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
       if (options.credential === 'write') throw new GithubBotAuthRefusalError('auth-refused');
