@@ -76,17 +76,17 @@ instead of looping.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given no prior as-built remediation lap, when tasks within the growth allowance are appended, then the ledger records one lap under the as-built gate key and the growth record's byGate breakdown gains the as-built key
+- Given no prior as-built remediation lap, when tasks within the growth allowance are appended and build dispatches on them, then at that dispatch the ledger records one lap under the as-built gate key and the growth record's byGate breakdown gains the as-built key
 
 #### Negative Paths
-- Given one as-built lap already recorded, when the gate returns any BLOCKED outcome again, then no tasks are appended and the feature halts with class kickback-cap, the halt body listing every finding with its class and clause
-- Given the requested task count exceeds the remaining shared growth allowance, when admission runs, then no tasks are appended and the feature halts with class kickback-cap naming the allowance and the findings
+- Given one as-built lap already recorded, when the gate returns an all-REMEDIABLE BLOCKED outcome again, then its tasks are appended as pending, the feature halts with class kickback-cap at the build transition, no lap or growth is charged, and the halt body listing every finding with its class and clause
+- Given the requested task count exceeds the remaining shared growth allowance, when admission runs, then the tasks are appended as pending and the feature halts with class kickback-cap at the build transition naming the allowance and the findings, with no lap or growth charged
 - Given a remediation lap whose rebuild produced no tree movement or net resolved-task progress and whose effective review still fails unchanged, when the no-op escalation check runs for the as-built gate, then the lap escalates to a halt instead of re-dispatching; a passing effective review ends the cycle even without tree movement
 - Given an as-built lap is recorded, when the ledger is inspected, then build_review's cumulative counter and prd_audit's lap counter are unchanged (isolation test)
 
 ### Done When
 - [ ] The as-built gate has its own lap cap config key (default 1) resolved through the per-gate cap function, validated in config, and documented
-- [ ] Ledger tests prove lap recording under the as-built gate key, growth byGate accounting, cap and allowance halts with class kickback-cap, and counter isolation
+- [ ] Ledger tests prove lap recording under the as-built gate key at build dispatch, growth byGate accounting at build dispatch, cap and allowance halts with class kickback-cap at the build transition with nothing charged, and counter isolation
 - [ ] The capture/check no-op escalation pair is armed for the as-built gate with a test for the zero-progress halt
 
 ## Story 5: Design findings and mixed reports still halt for a human

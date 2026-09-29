@@ -215,13 +215,13 @@ As an operator, I want prd_audit's fix-up work capped by settings I control so t
 - Given settings raising the cap to 8 tasks and 50%, when a 20-task plan gets six FIXABLE findings, then six tasks are added
 
 #### Negative Paths
-- Given a feature that already used its one fix lap, when prd_audit fails again, then the run stops for a human as "kickback cap", lists every finding, and adds nothing
+- Given a feature that already used its one fix lap, when prd_audit fails again, then its fix tasks are appended as pending and the run stops for a human as "kickback cap" at the build dispatch, lists every finding, and builds and charges nothing
 - Given a setting of zero fix laps, when the config is loaded, then it is rejected and the setting is named
-- Given more FIXABLE findings than the cap allows, when prd_audit fails, then no tasks are added at all (not the first few) and the stop lists all of them
+- Given more FIXABLE findings than the cap allows, when prd_audit fails, then the tasks are appended as pending and the build dispatch builds and charges all or none of them (not the first few), and the stop lists all of them
 - Given a plan that already had `rem-*` tasks before this change, when the baseline is computed, then those count as authored and do not use up the cap
 
 ### Done When
-- [ ] The cap is checked before any task is added; going over adds nothing and stops the run
+- [ ] The cap is checked at the build dispatch that would build the appended tasks; going over builds nothing, charges nothing, and stops the run
 - [ ] Every task prd_audit adds carries a Done when: block, so Story 5's close rule applies to it
 - [ ] The lap count lives in the per-gate kickback ledger; cap settings must be at least 1
 
