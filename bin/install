@@ -1532,7 +1532,7 @@ install() {
 # ─── Uninstall ────────────────────────────────────────────────────────────────
 
 uninstall() {
-  local document reference_source reference_label settings_file perms_file settings_cleanup_output settings_cleanup_status
+  local document reference_source reference_label settings_file perms_file settings_cleanup_output settings_cleanup_status rate_card rate_card_source
 
   settings_file="${HOME}/.claude/settings.json"
   if [ ! -e "$settings_file" ]; then
@@ -1628,6 +1628,19 @@ PYEOF
     else
       warn "Could not remove harness settings entries from ${settings_file}"
     fi
+  fi
+
+  rate_card="${HOME}/.ai-conductor/rate-card.json"
+  rate_card_source="${HARNESS_DIR}/.ai-conductor/rate-card.json"
+  if [ -L "$rate_card" ]; then
+    if [ "$(readlink "$rate_card")" = "$rate_card_source" ]; then
+      rm -- "$rate_card"
+      ok "Removed global rate card link ${rate_card}"
+    else
+      warn "Global rate card ${rate_card} points elsewhere, skipping"
+    fi
+  elif [ -e "$rate_card" ]; then
+    warn "Global rate card ${rate_card} is not a harness link, skipping"
   fi
 
   echo -e "${BOLD}${CYAN}Uninstalling AI Conductor Harness${NC}"

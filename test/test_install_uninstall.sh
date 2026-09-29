@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Covers: task:1, task:2
+# Covers: task:1, task:2, task:4
 #
 # Public-entry-point RED coverage for uninstalling the settings entries written
 # by bin/install.  Every invocation uses a throwaway HOME and a copied harness
@@ -30,6 +30,8 @@ check() {
 mkdir -p "$CHECKOUT" "$STUBS"
 cp -R "$HARNESS_DIR/bin" "$HARNESS_DIR/skills" "$HARNESS_DIR/hooks" "$CHECKOUT/"
 cp "$HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/ARCHITECTURE.md" "$HARNESS_DIR/VERSION" "$CHECKOUT/"
+mkdir -p "$CHECKOUT/.ai-conductor"
+cp "$HARNESS_DIR/.ai-conductor/rate-card.json" "$CHECKOUT/.ai-conductor/"
 mkdir -p "$CHECKOUT/src/conductor/dist"
 : > "$CHECKOUT/src/conductor/dist/index.js"
 for tool in rtk npm node claude codex uv; do
@@ -61,6 +63,7 @@ make_case_home() {
 }
 
 settings_file() { printf '%s/.claude/settings.json' "$1"; }
+rate_card_file() { printf '%s/.ai-conductor/rate-card.json' "$1"; }
 
 expect_removal_report() {
   local home=$1 output=$2 hooks=$3 permissions=$4
@@ -204,6 +207,38 @@ check 'F uninstall exits successfully when settings are absent' test "$CASE_F_EX
 check 'F uninstall does not create an absent settings file' test ! -e "$(settings_file "$CASE_F")"
 check 'F reports that the settings file was not found' \
   grep -Fq "Settings: no settings entries to remove ($(settings_file "$CASE_F") not found)" "$TMP_ROOT/case-f.out"
+
+# R1: uninstall removes only the rate-card symlink this checkout installed.
+CASE_R1="$TMP_ROOT/case-r1"
+make_case_home "$CASE_R1"
+run_uninstall "$CASE_R1" "$TMP_ROOT/case-r1.out" || true
+check 'R1 removes the harness global rate-card link' \
+  test ! -e "$(rate_card_file "$CASE_R1")" -a ! -L "$(rate_card_file "$CASE_R1")"
+check 'R1 reports removal of the harness global rate-card link' \
+  grep -Fq "Removed global rate card link $(rate_card_file "$CASE_R1")" "$TMP_ROOT/case-r1.out"
+
+# R2: an operator-owned regular file is not a harness link and stays byte-identical.
+CASE_R2="$TMP_ROOT/case-r2"
+make_case_home "$CASE_R2"
+rm "$(rate_card_file "$CASE_R2")"
+printf '{"operator":"rate-card"}\n' > "$(rate_card_file "$CASE_R2")"
+cp "$(rate_card_file "$CASE_R2")" "$TMP_ROOT/case-r2-before.json"
+run_uninstall "$CASE_R2" "$TMP_ROOT/case-r2.out" || true
+check 'R2 preserves an operator-owned global rate-card file byte-identically' \
+  cmp -s "$(rate_card_file "$CASE_R2")" "$TMP_ROOT/case-r2-before.json"
+check 'R2 warns that a regular global rate card is not a harness link' \
+  grep -Fq "Global rate card $(rate_card_file "$CASE_R2") is not a harness link" "$TMP_ROOT/case-r2.out"
+
+# R3: a symlink owned by another checkout remains untouched.
+CASE_R3="$TMP_ROOT/case-r3"
+make_case_home "$CASE_R3"
+rm "$(rate_card_file "$CASE_R3")"
+ln -s /elsewhere/rate-card.json "$(rate_card_file "$CASE_R3")"
+run_uninstall "$CASE_R3" "$TMP_ROOT/case-r3.out" || true
+check 'R3 preserves a foreign global rate-card symlink' \
+  test "$(readlink "$(rate_card_file "$CASE_R3")")" = /elsewhere/rate-card.json
+check 'R3 warns that a global rate-card symlink points elsewhere' \
+  grep -Fq "Global rate card $(rate_card_file "$CASE_R3") points elsewhere" "$TMP_ROOT/case-r3.out"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
