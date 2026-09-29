@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-29T03:33:06.985Z
 Slug: pi-as-a-build-provider
 Class: needs-human
 Halting step: prd_audit
