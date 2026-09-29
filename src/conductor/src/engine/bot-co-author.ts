@@ -3,7 +3,7 @@ import type { ConductorEvent } from '../types/events.js';
 import { readGithubBotCredential, readGithubBotToken, type GithubBotCredential, type GithubBotToken } from './github-bot-credential.js';
 import { runBotIdentityRead, type GhRunner } from './tracker-client.js';
 import { GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
-import { rm, writeFile } from 'node:fs/promises';
+import { access, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export type BotCoAuthorResult =
@@ -78,11 +78,25 @@ export async function refreshWorktreeCoAuthor(worktreePath: string, events?: Con
   const emitter = events ?? resolver?.eventEmitter?.();
   const target = join(worktreePath, '.pipeline', 'co-author');
   try {
+    await rm(target, { force: true });
+    await access(target).then(
+      () => { throw new Error(`stale co-author file remains at ${target}`); },
+      (error: unknown) => {
+        if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+      },
+    );
+  } catch (error) {
+    throw new Error(`unable to remove stale co-author file at ${target}`, { cause: error });
+  }
+  try {
     const result = resolver ? await resolver.prepare(emitter) : undefined;
-    if (result?.kind === 'resolved') await writeFile(target, `${result.trailer}\n`, 'utf8');
-    else await rm(target, { force: true });
+    if (result?.kind === 'resolved') {
+      const temporaryTarget = `${target}.tmp`;
+      await writeFile(temporaryTarget, `${result.trailer}\n`, 'utf8');
+      await rename(temporaryTarget, target);
+    }
   } catch {
-    await rm(target, { force: true }).catch(() => undefined);
+    await rm(`${target}.tmp`, { force: true }).catch(() => undefined);
     await emitter?.emit({ type: 'bot_co_author_skipped', reason: 'worktree-write-failed' });
   }
 }
