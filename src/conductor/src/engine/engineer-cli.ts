@@ -773,6 +773,12 @@ export { makeProductionGh };
 export const missingRegistrationEpisodes = new Set<string>();
 
 /**
+ * Unavailable tracker-selection episodes shared by composites rebuilt during a
+ * long-running engineer process.
+ */
+export const trackerExclusionEpisodes = new Set<string>();
+
+/**
  * Composition root for the github-issues intake: wires the registry reader, the
  * durable ledger + file queue, and the adapter (IntakeSource + IntakePort) over an
  * injected gh runner. The engineer loop must NOT import a concrete adapter (FR-13);
@@ -788,6 +794,7 @@ export function buildIntake(deps: {
   gh: GhRunner;
   printErr: (s: string) => void;
   missingRegistrationEpisodes?: Set<string>;
+  trackerExclusionEpisodes?: Set<string>;
   resolveActor?: () => Promise<OwnerResolution>;
   /** Injectable only to observe lazy per-project backend resolution in tests. */
   resolveTrackerSelection?: typeof resolveTrackerSelection;
@@ -809,6 +816,7 @@ export function buildIntake(deps: {
     gh: deps.gh,
     log: (m: string) => deps.printErr(m),
     missingRegistrationEpisodes: deps.missingRegistrationEpisodes,
+    trackerExclusionEpisodes: deps.trackerExclusionEpisodes,
     resolveActor: deps.resolveActor,
     events: deps.events,
   });
@@ -832,6 +840,7 @@ export async function prePollIntake(deps: {
   const { queue, adapter } = buildIntake({
     ...deps,
     missingRegistrationEpisodes,
+    trackerExclusionEpisodes,
     events: deps.events,
   });
   const envelopes = await adapter.poll();

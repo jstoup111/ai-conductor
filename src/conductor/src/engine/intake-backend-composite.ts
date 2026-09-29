@@ -58,10 +58,11 @@ export function createIntakeBackendComposite(deps: {
   gh: GhRunner;
   log: (message: string) => void;
   missingRegistrationEpisodes?: Set<string>;
+  trackerExclusionEpisodes?: Set<string>;
   resolveActor?: () => Promise<OwnerResolution>;
   events?: IntakeEventEmitter;
 }): IntakeBackend {
-  const excludedProjects = new Set<string>();
+  const excludedProjects = deps.trackerExclusionEpisodes ?? new Set<string>();
 
   const registry: IntakeRepoRegistry = {
     async list() {
