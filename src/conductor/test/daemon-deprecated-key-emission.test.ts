@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemonMode } from '../src/daemon-cli.js';
+import { allInstalledProviderDiscoveryRunner } from './engine/boot-test-helpers.js';
 
 const dirs: string[] = [];
 let previousHome: string | undefined;
@@ -44,6 +45,7 @@ async function daemonDeprecatedKeys(
     baseBranch: 'main',
     ensureFresh: async () => {},
     probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+    providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
     workSource: { discover: async () => [] },
     watch: false,
   });

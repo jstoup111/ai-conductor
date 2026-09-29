@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { allInstalledProviderDiscoveryRunner } from './engine/boot-test-helpers.js';
 
 type InstalledHarnessVersionForConfig = typeof import('../src/engine/version-report.js').installedHarnessVersionForConfig;
 
@@ -41,6 +42,7 @@ async function runWithConstraint(constraint: string): Promise<Error | undefined>
       baseBranch: 'main',
       ensureFresh: async () => {},
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
       workSource: { discover: async () => [] },
       watch: false,
     });
