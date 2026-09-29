@@ -47,10 +47,11 @@ print_unless_excluded() {
 }
 
 # Enumerate the same surface integrity check 1 syntax-checks: every bash script
-# under bin/, hooks/, test/, and .github/scripts/. bin/ holds extensionless
-# executables, so it is selected by shebang rather than by suffix.
+# under bin/, hooks/, test/, .github/scripts/, and skills/*/scripts/. bin/ and
+# bundled skill helpers hold extensionless executables, so they are selected by
+# shebang rather than by suffix.
 collect_scripts() {
-  local script
+  local script scripts_dir
   while IFS= read -r -d '' script; do
     head -1 "$script" | grep -qE '^#!.*(bash|sh)' || continue
     print_unless_excluded "$script"
@@ -59,6 +60,13 @@ collect_scripts() {
     print_unless_excluded "$script"
   done < <(find "${HARNESS_DIR}/hooks" "${HARNESS_DIR}/test" "${HARNESS_DIR}/.github/scripts" \
     -type f -name '*.sh' -print0 2>/dev/null)
+  for scripts_dir in "${HARNESS_DIR}"/skills/*/scripts; do
+    [ -d "$scripts_dir" ] || continue
+    while IFS= read -r -d '' script; do
+      head -1 "$script" | grep -qE '^#!.*(bash|sh)' || continue
+      print_unless_excluded "$script"
+    done < <(find -L "$scripts_dir" -type f -print0 2>/dev/null)
+  done
 }
 
 # Sort for stable, reviewable output ordering across machines.

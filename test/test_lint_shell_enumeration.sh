@@ -25,7 +25,8 @@ assert() {
 fixture_root() {
   local name=$1
   local root="$TMP_ROOT/$name"
-  mkdir -p "$root/test" "$root/bin/nested/deeper" "$root/hooks" "$root/.github/scripts"
+  mkdir -p "$root/test" "$root/bin/nested/deeper" "$root/hooks" "$root/.github/scripts" \
+    "$root/skills/demo/scripts"
   cp "$LINTER_SOURCE" "$root/test/lint_shell.sh"
   chmod +x "$root/test/lint_shell.sh"
   printf '%s\n' "$root"
@@ -70,12 +71,20 @@ assert_integrity_uses_shared_list() {
 root="$(fixture_root nested)"
 printf '#!/usr/bin/env bash\necho nested\n' > "$root/bin/nested/deeper/tool"
 printf '#!/usr/bin/env bash\necho sibling\n' > "$root/bin/sibling"
+printf '#!/usr/bin/env bash\necho hook\n' > "$root/hooks/hook.sh"
+printf '#!/usr/bin/env bash\necho test\n' > "$root/test/helper.sh"
+printf '#!/usr/bin/env bash\necho github\n' > "$root/.github/scripts/helper.sh"
+printf '#!/usr/bin/env bash\necho skill helper\n' > "$root/skills/demo/scripts/tool"
 ln -s ../sibling "$root/bin/nested/linked-tool"
 printf '#!/usr/bin/env python3\nprint("python")\n' > "$root/bin/nested/deeper/python.sh"
 printf 'echo no-shebang\n' > "$root/bin/nested/deeper/no-shebang.sh"
 list="$(list_scripts "$root")"
 assert_list_has 'nested bin shell file is listed' "$list" "$root/bin/nested/deeper/tool"
 assert_list_has 'symlinked bin shell file is listed' "$list" "$root/bin/nested/linked-tool"
+assert_list_has 'hooks shell file is listed' "$list" "$root/hooks/hook.sh"
+assert_list_has 'test shell file is listed' "$list" "$root/test/helper.sh"
+assert_list_has 'GitHub shell file is listed' "$list" "$root/.github/scripts/helper.sh"
+assert_list_has 'bundled skill shell helper is listed' "$list" "$root/skills/demo/scripts/tool"
 assert_list_lacks 'nested Python file is excluded' "$list" "$root/bin/nested/deeper/python.sh"
 assert_list_lacks 'nested shebang-less file is excluded' "$list" "$root/bin/nested/deeper/no-shebang.sh"
 
@@ -97,6 +106,7 @@ assert_list_has 'declared exclusion retains other shell files' "$excluded_list" 
 
 real_list="$("$LINTER_SOURCE" --list)"
 assert_list_has 'real tree lists shared bin library' "$real_list" "$REPO_ROOT/bin/lib/harness-common.sh"
+assert_list_has 'real tree lists bundled intake helper' "$real_list" "$REPO_ROOT/skills/intake/scripts/intake-file"
 
 if assert_integrity_uses_shared_list "$INTEGRITY_SOURCE"; then
   assert 'real syntax-check section uses shared list' 0
