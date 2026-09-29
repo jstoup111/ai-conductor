@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBotCoAuthorResolver, installDaemonBotCoAuthor, withDaemonCoAuthorTrailer } from '../../src/engine/bot-co-author.js';
+import type { ConductorEvent } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/tracker-client.js';
 
 describe('daemon bot co-author resolver', () => {
@@ -21,10 +22,10 @@ describe('daemon bot co-author resolver', () => {
 
   it('does not invoke the identity runner when a token is unavailable', async () => {
     const runner = vi.fn() as unknown as GhRunner;
-    const events: unknown[] = [];
+    const events: ConductorEvent[] = [];
     const resolver = createBotCoAuthorResolver({
       runner, cwd: '/fixture', readCredential: async () => ({ kind: 'configured', tokenFile: '/missing' }),
-      readToken: async () => ({ kind: 'unavailable' }), events: { emit: async (event) => { events.push(event); } } as never,
+      readToken: async () => ({ kind: 'unavailable' }), events: { emit: async (event: ConductorEvent) => { events.push(event); } } as never,
     });
     await expect(resolver.prepare()).resolves.toEqual({ kind: 'unavailable', reason: 'token-unavailable' });
     expect(runner).not.toHaveBeenCalled();

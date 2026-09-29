@@ -119,6 +119,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // are deliberately outside the audit-trail friction vocabulary.
   github_operation_refused: 'not-audited-by-design',
   github_write_credential_fallback: 'not-audited-by-design',
+  bot_co_author_skipped: 'not-audited-by-design',
   provider_discovery: 'not-audited-by-design',
   provider_attempt: 'not-audited-by-design',
   // Daemon-only suppression durability is not an operator-friction record.
@@ -394,6 +395,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     target: { repository: 'acme/repo', kind: 'issue', number: 1 },
     reason: 'auth-refused',
   },
+  bot_co_author_skipped: { type: 'bot_co_author_skipped', reason: 'token-unavailable' },
   provider_discovery: {
     type: 'provider_discovery',
     installed: ['claude', 'codex'],
