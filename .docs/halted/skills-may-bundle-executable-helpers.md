@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-29T01:20:58.992Z
 Slug: skills-may-bundle-executable-helpers
 Class: needs-human
 Halting step: unknown
