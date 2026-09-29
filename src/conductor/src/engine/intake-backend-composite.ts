@@ -6,6 +6,7 @@ import type { TrackerSelectionResult } from './tracker-selection.js';
 import type { Ledger } from './engineer/intake/ledger.js';
 import type { IntakePort } from './engineer/intake/port.js';
 import type { IntakeSource } from './engineer/intake/source.js';
+import { parseWorkRef } from './engineer/source-ref.js';
 
 export interface IntakeRepoRegistry {
   list(): Promise<Array<{ name: string; path: string; ghRepo?: string }>>;
@@ -102,7 +103,7 @@ export function createIntakeBackendComposite(deps: {
     },
   };
 
-  return deps.backendFactories.github({
+  const github = deps.backendFactories.github({
     gh: deps.gh,
     registry,
     ledger: deps.ledger,
@@ -111,4 +112,25 @@ export function createIntakeBackendComposite(deps: {
     resolveActor: deps.resolveActor,
     events: deps.events,
   });
+
+  return {
+    poll: () => github.poll(),
+    async report(sourceRef, status, meta) {
+      const workRef = parseWorkRef(sourceRef);
+      if (workRef?.kind !== 'github') return github.report(sourceRef, status, meta);
+
+      const projects = await deps.registry.listProjects();
+      const owner = projects.find((project) =>
+        (project.remote ? parseGhRepo(project.remote) ?? project.name : project.name) === workRef.repo,
+      );
+      if (!owner) return github.report(sourceRef, status, meta);
+
+      const selection = await deps.resolveTrackerSelection(owner.path);
+      if (selection.ok && selection.selection.backend === 'github') {
+        return github.report(sourceRef, status, meta);
+      }
+
+      return github.report(sourceRef, status, meta);
+    },
+  };
 }

@@ -1,4 +1,4 @@
-// Covers: task:6, task:7, task:8
+// Covers: task:6, task:7, task:8, task:9
 
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -10,6 +10,7 @@ import {
 } from '../../src/engine/intake-backend-composite.js';
 import { createLedger } from '../../src/engine/engineer/intake/ledger.js';
 import { createGithubIssuesAdapter } from '../../src/engine/engineer/intake/github-issues.js';
+import { reportDone, reportRouted } from '../../src/engine/engineer/intake/writeback.js';
 import type { ProjectRecord, RegistryReader } from '../../src/engine/registry.js';
 import type { GhRunner } from '../../src/engine/tracker-client.js';
 import type { TrackerSelectionResult } from '../../src/engine/tracker-selection.js';
@@ -63,16 +64,50 @@ function createComposite(args: {
   ledgerPath: string;
   gh?: GhRunner;
   logs?: string[];
+  resolveActor?: () => Promise<{ resolved: true; id: string }>;
+  resolveTrackerSelection?: (projectPath: string) => Promise<TrackerSelectionResult>;
 }) {
   return createIntakeBackendComposite({
     backendFactories: { github: createGithubIssuesAdapter },
-    resolveTrackerSelection: resolver(args.selections),
+    resolveTrackerSelection: args.resolveTrackerSelection ?? resolver(args.selections),
     registry: registry(args.projects),
     ledger: createLedger(args.ledgerPath),
     gh: args.gh ?? scriptedGh(args.calls),
     log: (message) => { args.logs?.push(message); },
     events: recordingEmitter(args.events),
+    resolveActor: args.resolveActor,
   });
+}
+
+function writebackGh(calls: string[][]): GhRunner {
+  return async (argv) => {
+    calls.push(argv);
+    if (argv[0] === 'issue' && argv[1] === 'view') {
+      return { stdout: JSON.stringify({ assignees: [{ login: 'operator' }] }) };
+    }
+    return { stdout: '' };
+  };
+}
+
+async function writebackParity(args: {
+  port: ReturnType<typeof createGithubIssuesAdapter>;
+  ledgerPath: string;
+  sourceRef: string;
+  status: 'routed' | 'done';
+}) {
+  const ledger = createLedger(args.ledgerPath);
+  await ledger.record({ source: 'github-issues', sourceRef: args.sourceRef });
+  const target = { source: 'github-issues', sourceRef: args.sourceRef, port: args.port, ledger };
+  if (args.status === 'routed') {
+    await reportRouted(target, 'owner/target');
+  } else {
+    await reportDone(target, 'https://github.com/owner/repo/pull/99', 'spec/task-9');
+  }
+  return ledger.list();
+}
+
+function ledgerEffects(entries: Awaited<ReturnType<typeof writebackParity>>) {
+  return entries.map(({ capturedAt: _capturedAt, lastSeenAt: _lastSeenAt, ...entry }) => entry);
 }
 
 describe('intake backend composite tracker exclusion (Task 6)', () => {
@@ -287,6 +322,72 @@ describe('intake backend composite tracker exclusion episodes (Task 8)', () => {
       ]);
       expect(logs[0]).toContain('scripted GitHub failure');
       expect(calls).toEqual([expect.arrayContaining(['-R', 'owner/project-a'])]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('intake backend composite write-back routing (Task 9)', () => {
+  it.each([
+    ['routed' as const, 'owner/repo#12'],
+    ['done' as const, 'owner/repo#12'],
+    ['routed' as const, 'owner/unregistered#12'],
+  ])('preserves GitHub write-back argv and ledger effects for %s %s', async (status, sourceRef) => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'intake-backend-composite-'));
+    try {
+      const registered = project('owner/repo', join(root, 'repo'));
+      await mkdir(registered.path);
+      const directCalls: string[][] = [];
+      const compositeCalls: string[][] = [];
+      const selectionCalls: string[] = [];
+      const resolveActor = async () => ({ resolved: true as const, id: 'operator' });
+      const direct = createGithubIssuesAdapter({
+        gh: writebackGh(directCalls),
+        registry: { list: async () => [{ name: registered.name, path: registered.path }] },
+        ledger: createLedger(join(root, 'direct-adapter.json')),
+        resolveActor,
+      });
+      const composite = createComposite({
+        projects: [registered],
+        selections: new Map(),
+        calls: compositeCalls,
+        events: [],
+        ledgerPath: join(root, 'composite-adapter.json'),
+        gh: writebackGh(compositeCalls),
+        resolveActor,
+        resolveTrackerSelection: async (projectPath) => {
+          selectionCalls.push(projectPath);
+          return { ok: true, selection: { backend: 'github' } };
+        },
+      });
+
+      const directLedger = await writebackParity({
+        port: direct,
+        ledgerPath: join(root, 'direct-ledger.json'),
+        sourceRef,
+        status,
+      });
+      const compositeLedger = await writebackParity({
+        port: composite,
+        ledgerPath: join(root, 'composite-ledger.json'),
+        sourceRef,
+        status,
+      });
+
+      expect({ calls: compositeCalls, ledger: ledgerEffects(compositeLedger) }).toEqual({
+        calls: directCalls,
+        ledger: ledgerEffects(directLedger),
+      });
+      // The adapter resolves its report cwd through the composite registry;
+      // an owned ref also requires the composite's routing resolution.
+      expect(selectionCalls).toEqual(sourceRef === 'owner/repo#12'
+        ? [registered.path, registered.path]
+        : [registered.path]);
+      expect(compositeCalls).toContainEqual(expect.arrayContaining(['issue', 'comment', '12', '-R', sourceRef.split('#')[0]]));
+      if (status === 'done') {
+        expect(compositeCalls).toContainEqual(expect.arrayContaining(['api', '--method', 'POST', 'repos/owner/repo/issues/12/labels', '-f', 'labels[]=engineer:handled']));
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
