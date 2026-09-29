@@ -85,6 +85,10 @@ property is preserved by construction, not by trusting a prompt. Reusing the
 >
 > **D1** Declared test-only drops satisfy FR-9. On the sweep path only, FR-9 additionally excuses a missing feature commit when the resolver's verdict declares it superseded, the engine confirms it is a commit this rebase replayed, and every path that commit touched is a test path. Any other missing commit, an undeclared one, a declared one touching a non-test path, or a declared one the rebase never replayed, fails FR-9 exactly as before. FR-8 and the finish-time predicate are unchanged.
 
+> **Amended 2026-09-29 by #2498 (first-parent flattening, adr-2026-09-29-automatic-rebase-flattens-merge-bearing-history):** FR-9 compares pre-rebase subjects from `{onto}..ORIG_HEAD`, which includes merge commits and side-lineage commits. A flattened replay deliberately never replays those one by one, so every merge-bearing branch would fail FR-9 by construction. The #2607 D1 exception stays as it is.
+>
+> **D2** On a flattened replay, FR-9 compares against the engine-written replay list. When the shared replay primitive flattened the branch (on the `performRebase` path or the open-PR autoresolve path), the expected subjects are those of the picked first-parent commits and of the flattened merge commits (each carrying its merge's subject). Ancestry-only merges and side-lineage commits are expected-absent, because the engine recorded them in the flatten audit before the rebase started and proved their content present by tree identity. A subject the replay list expected that is missing afterward fails FR-9 exactly as before. The FR-8 predicate, the #2607 D1 exception, and the unflattened path are unchanged.
+
 ## Consequences
 
 ### Positive
