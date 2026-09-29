@@ -2959,9 +2959,6 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'bot_co_author_skipped':
       log(`${dot} ${chalk.yellow('↻')} ${chalk.yellow(formatBotCoAuthorSkipped(event))}`);
       break;
-    case 'tracker_backend_unavailable':
-      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`tracker backend unavailable: ${event.project} selected ${event.backend} (${event.reason})`)}`);
-      break;
     case 'step_retry': {
       const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
       const deltaFragment = delta ? ' ' + delta : '';

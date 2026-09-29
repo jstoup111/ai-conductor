@@ -986,7 +986,13 @@ async function main(): Promise<void> {
   // mirroring the engineer/registry subcommand pattern.
   const intakeLoopCmd = detectIntakeLoopCommand(process.argv);
   if (intakeLoopCmd) {
-    const code = await dispatchIntakeLoop(intakeLoopCmd);
+    const spine = startOperatorEventSpine(process.cwd());
+    let code: number;
+    try {
+      code = await dispatchIntakeLoop(intakeLoopCmd, { events: spine.events });
+    } finally {
+      spine.stop();
+    }
     process.exit(code);
   }
 

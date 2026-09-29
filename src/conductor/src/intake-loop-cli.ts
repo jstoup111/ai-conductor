@@ -26,9 +26,11 @@ import { runIntakeLoop, type IntakeLoopDeps } from './engine/engineer/intake/int
 import { createNotifier } from './engine/engineer/intake/notifier.js';
 import { reconcileClosedIssues, type GetIssueState } from './engine/engineer/intake/reconcile-closed-issues.js';
 import { buildIntake, makeProductionGh } from './engine/engineer-cli.js';
+import type { IntakeEventEmitter } from './engine/intake-backend-composite.js';
 import { runTrackerRepositoryRead } from './engine/tracker-client.js';
 import { resolveEngineerDir } from './engine/engineer-store.js';
 import { sendNotification } from './ui/notifications.js';
+import type { EventHandler } from './ui/events.js';
 
 /** Default poll interval between intake ticks, in milliseconds. */
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
@@ -88,6 +90,8 @@ export interface DispatchIntakeLoopOpts {
   printErr?: (msg: string) => void;
   /** Injected for tests: overrides the real `gh` CLI runner used for polling and issue-state probes. */
   gh?: ReturnType<typeof makeProductionGh>;
+  /** Existing operator event spine for tracker-backend exclusion telemetry. */
+  events?: IntakeEventEmitter;
   engineerDir?: string;
   registryPath?: string;
 }
@@ -139,7 +143,15 @@ export async function dispatchIntakeLoop(
     registryPath: opts.registryPath,
     gh,
     printErr,
+    events: opts.events,
   });
+
+  const renderBackendUnavailable: EventHandler = (event) => {
+    if (event.type === 'tracker_backend_unavailable') {
+      printErr(`tracker backend unavailable: ${event.project} selected ${event.backend} (${event.reason})`);
+    }
+  };
+  opts.events?.on?.('tracker_backend_unavailable', renderBackendUnavailable);
 
   // Brain sweep (Task 16): reconcile the intake ledger against closed GitHub
   // issues so a closed issue can't be claimed again. Reuses the same `gh`
@@ -190,6 +202,10 @@ export async function dispatchIntakeLoop(
     reconcile,
   };
 
-  await loop(deps, { intervalMs: cmd.intervalMs, once: cmd.once });
-  return 0;
+  try {
+    await loop(deps, { intervalMs: cmd.intervalMs, once: cmd.once });
+    return 0;
+  } finally {
+    opts.events?.off?.('tracker_backend_unavailable', renderBackendUnavailable);
+  }
 }

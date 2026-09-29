@@ -1,4 +1,5 @@
 import type { ConductorEvent } from '../types/events.js';
+import type { EventHandler } from '../ui/events.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import type { RegistryReader } from './registry.js';
 import type { GhRunner } from './tracker-client.js';
@@ -19,6 +20,9 @@ export interface IntakeEventEmitter {
   emit(event: Extract<ConductorEvent, {
     type: 'github_operation_refused' | 'github_write_credential_fallback' | 'tracker_backend_unavailable';
   }>): Promise<void>;
+  /** Optional subscription surface used by CLI composition roots that render intake events. */
+  on?(type: 'tracker_backend_unavailable', handler: EventHandler): void;
+  off?(type: 'tracker_backend_unavailable', handler: EventHandler): void;
 }
 
 /**
