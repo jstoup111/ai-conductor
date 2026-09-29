@@ -7,6 +7,8 @@ import {
   requireProviderCapability,
   resolveProviderExecutable,
   supportsProviderCapability,
+  type BuiltInProviderDescriptor,
+  type ProviderCapability,
   type ProviderCapabilityFlags,
   type ProviderWith,
 } from '../../src/execution/provider-catalog.js';
@@ -28,6 +30,47 @@ describe('built-in provider catalog', () => {
   it('declares the existing built-in provider ids and default provider', () => {
     expect(BUILT_IN_PROVIDERS.map(({ id }) => id)).toEqual(['claude', 'codex', 'pi']);
     expect(DEFAULT_PROVIDER).toBe('claude');
+  });
+
+  it('declares interactive launch mechanics without changing read-only review admission', () => {
+    const providers = BUILT_IN_PROVIDERS as readonly BuiltInProviderDescriptor[];
+    const provider = (id: string) => providers.find((candidate) => candidate.id === id)!;
+    const unsupportedMessage = (capability: ProviderCapability) => {
+      try {
+        requireProviderCapability('pi', capability);
+      } catch (error) {
+        return (error as Error).message;
+      }
+      return undefined;
+    };
+
+    expect({
+      interactiveLaunch: providers.map((candidate) =>
+        supportsProviderCapability(candidate, 'interactiveLaunch')),
+      interactiveLaunchUnsupported: unsupportedMessage('interactiveLaunch'),
+      sessionMarkers: providers.map((candidate) => candidate.interactiveLaunch?.sessionMarkers),
+      claudeArgv: [
+        provider('claude').interactiveLaunch!.argv('/composer', {}),
+        provider('claude').interactiveLaunch!.argv('/composer', {
+          CONDUCT_ENGINEER_PERMISSION_MODE: 'plan',
+        }),
+      ],
+      codexArgv: provider('codex').interactiveLaunch!.argv('$composer', {}),
+      readOnlyReview: providers.map((candidate) =>
+        supportsProviderCapability(candidate, 'readOnlyReview')),
+      readOnlyReviewUnsupported: unsupportedMessage('readOnlyReview'),
+    }).toEqual({
+      interactiveLaunch: [true, true, false],
+      interactiveLaunchUnsupported: expect.stringMatching(/pi.*interactiveLaunch.*#1007/),
+      sessionMarkers: [['CLAUDECODE'], ['CODEX_THREAD_ID', 'CODEX_SESSION_ID'], undefined],
+      claudeArgv: [
+        ['--permission-mode', 'default', '/composer'],
+        ['--permission-mode', 'default', '/composer'],
+      ],
+      codexArgv: ['$composer'],
+      readOnlyReview: [true, true, false],
+      readOnlyReviewUnsupported: expect.stringMatching(/pi.*readOnlyReview.*#1886/),
+    });
   });
 
   it.each([
