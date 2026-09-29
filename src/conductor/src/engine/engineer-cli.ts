@@ -514,8 +514,6 @@ export interface DispatchEngineerOpts {
   spawnHost?: (executable: string, argv: string[], cwd: string) => Promise<number>;
   /** Environment used to form host-owned interactive argv. */
   env?: NodeJS.ProcessEnv;
-  /** CLI-owned provider boot that must succeed before an interactive launch spawns. */
-  beforeLaunch?: () => Promise<void>;
   /**
    * Injected pre-poll hook (for tests). When provided, the 'launch' kind calls this
    * before each fresh session (unless a CLI idea was supplied) to prime the intake
@@ -977,8 +975,6 @@ export async function dispatchEngineer(
           launchingDirectory,
         );
       });
-
-      await opts.beforeLaunch?.();
 
       // Intake pre-poll: prime the durable inbox before launching so the spawned
       // /composer session can `claim` a github-issue idea. Defaults to a real sweep

@@ -28,6 +28,5 @@
   "runShipmentReconcileAction",
   "selectVisualizers",
   "stopVisualizers",
-  "validateComposeEngineerClaudeInstallation",
   "wireOtelVisualizer"
 ]

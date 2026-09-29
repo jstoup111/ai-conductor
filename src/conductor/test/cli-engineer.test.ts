@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execa } from 'execa';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ENGINEER_SUBCOMMANDS } from '../src/engine/engineer-cli.js';
 import { DEFAULT_PROVIDER, requireProviderCapability } from '../src/execution/provider-catalog.js';
@@ -51,6 +52,17 @@ describe('legacy engineer CLI alias — process dispatch boundary', () => {
     expect(engineer.stdout).toBe(compose.stdout);
     expect(compose.stderr).toBe('');
     expect(engineer.stderr).toBe('Warning: `engineer` is deprecated; use `compose` instead.\n');
+  });
+
+  it('wires compose launch directly to the engineer dispatcher without provider discovery', async () => {
+    const source = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
+    const engineerDispatch = source.slice(
+      source.indexOf('const engineerCmd = detectEngineerCommand(process.argv);'),
+      source.indexOf('// Intake-loop subcommand'),
+    );
+
+    expect(engineerDispatch).toContain('code = await dispatchEngineer(engineerCmd, {\n        events: spine.events,\n      });');
+    expect(engineerDispatch).not.toMatch(/beforeLaunch|discoverInstalledProviders|validateComposeEngineerClaudeInstallation/);
   });
 });
 
