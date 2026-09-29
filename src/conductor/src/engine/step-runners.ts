@@ -18,6 +18,7 @@ import {
   CLAUDE_DISPLAY_NAME,
   CODEX_DISPLAY_NAME,
   ProviderCapabilityUnsupportedError,
+  findBuiltInProviderDescriptor,
   requireProviderCapability,
   type BuiltInProviderId,
   type ProviderWith,
@@ -851,6 +852,18 @@ function unavailableReviewCapabilityResult(
   providerKey: string,
   capability: 'readOnlyReview' | 'reviewPolicyCatalog',
 ): InvokeResult | undefined {
+  if (findBuiltInProviderDescriptor(providerKey) === undefined) {
+    const detail = `Provider ${providerKey} does not declare the built-in ${capability} capability required for custom-policy review.`;
+    return {
+      success: false,
+      exitCode: 1,
+      providerUnavailable: true,
+      providerInvocationSkipped: true,
+      readOnlyReviewUnavailable: true,
+      providerUnavailableReason: detail,
+      output: detail,
+    };
+  }
   try {
     requireProviderCapability(providerKey as BuiltInProviderId, capability);
     return undefined;
