@@ -16,6 +16,7 @@ import { executeSharedGithubOperation } from './github-shared-operations.js';
 import { createGithubIntakeAuthorization } from './engineer/intake/github-issues.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation, type RemoteGitCommandRunner } from './remote-git-operations.js';
 import { makeProductionGit, type GitRunner } from './pr-labels.js';
+import { DAEMON_BRANCH_PREFIX } from './daemon-halt-pr-operations.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import {
   createGuardedGithubOperationRunner,
@@ -81,7 +82,7 @@ async function featureMutationForRequest(
   const { stdout } = await git(['branch', '--show-current'], { cwd: input.cwd });
   const branch = stdout.trim();
   if (!branch) return { kind: 'unavailable' };
-  const slug = branch.replace(/^spec\//, '');
+  const slug = branch.startsWith(DAEMON_BRANCH_PREFIX) ? branch.slice(DAEMON_BRANCH_PREFIX.length) : branch.replace(/^spec\//, '');
   if (request.context.feature !== undefined && request.context.feature !== slug) {
     return { kind: 'refused', reason: 'invalid-target' };
   }
