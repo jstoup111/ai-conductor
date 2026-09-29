@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-29T22:47:44.529Z
 Slug: daemon-commits-co-authored-by-the-configured-bot
 Class: needs-human
 Halting step: unknown
