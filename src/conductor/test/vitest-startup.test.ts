@@ -3,10 +3,10 @@
 // fake Vitest binary, so this test observes its real pre-spawn environment.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -14,7 +14,10 @@ const CONDUCTOR_ROOT = fileURLToPath(new URL('../', import.meta.url));
 let fixtureRoot: string;
 let observationPath: string;
 
-async function launch(env: NodeJS.ProcessEnv = {}) {
+async function launch(
+  env: NodeJS.ProcessEnv = {},
+  path = `${join(fixtureRoot, 'bin')}${delimiter}${dirname(process.execPath)}`,
+) {
   const childEnv = { ...process.env, ...env };
   for (const key of [
     'AI_CONDUCTOR_TEST_TMP_ROOT',
@@ -30,11 +33,31 @@ async function launch(env: NodeJS.ProcessEnv = {}) {
     extendEnv: false,
     env: {
       ...childEnv,
-      PATH: `${join(fixtureRoot, 'bin')}${delimiter}${process.env.PATH ?? ''}`,
+      PATH: path,
       RUNNER_OBSERVATION_PATH: observationPath,
     },
     reject: false,
   });
+}
+
+async function writeFakeVitest(path: string, binary: string) {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, [
+    '#!/usr/bin/env node',
+    "import { writeFile } from 'node:fs/promises';",
+    "await writeFile(process.env.RUNNER_OBSERVATION_PATH, JSON.stringify({",
+    `  binary: '${binary}',`,
+    '  argv: process.argv.slice(2),',
+    '  tmpdir: process.env.TMPDIR,',
+    '  root: process.env.AI_CONDUCTOR_TEST_TMP_ROOT,',
+    '  scope: process.env.AI_CONDUCTOR_TEST_TMP_SCOPE,',
+    '  originalTmpdir: process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR,',
+    '  gitCeiling: process.env.GIT_CEILING_DIRECTORIES,',
+    '}), \'utf8\');',
+    'process.exitCode = Number(process.env.FAKE_VITEST_EXIT_CODE ?? 0);',
+    '',
+  ].join('\n'), 'utf8');
+  await chmod(path, 0o755);
 }
 
 beforeEach(async () => {
@@ -51,22 +74,7 @@ beforeEach(async () => {
     join(CONDUCTOR_ROOT, 'scripts', 'vitest-temp.mjs'),
     join(fixtureRoot, 'scripts', 'vitest-temp.mjs'),
   );
-  const fakeVitest = join(fixtureRoot, 'bin', 'vitest');
-  await writeFile(fakeVitest, [
-    '#!/usr/bin/env node',
-    "import { writeFile } from 'node:fs/promises';",
-    "await writeFile(process.env.RUNNER_OBSERVATION_PATH, JSON.stringify({",
-    '  argv: process.argv.slice(2),',
-    '  tmpdir: process.env.TMPDIR,',
-    '  root: process.env.AI_CONDUCTOR_TEST_TMP_ROOT,',
-    '  scope: process.env.AI_CONDUCTOR_TEST_TMP_SCOPE,',
-    '  originalTmpdir: process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR,',
-    '  gitCeiling: process.env.GIT_CEILING_DIRECTORIES,',
-    '}), \'utf8\');',
-    'process.exitCode = Number(process.env.FAKE_VITEST_EXIT_CODE ?? 0);',
-    '',
-  ].join('\n'), 'utf8');
-  await chmod(fakeVitest, 0o755);
+  await writeFakeVitest(join(fixtureRoot, 'bin', 'vitest'), 'path');
 });
 
 afterEach(async () => {
@@ -74,6 +82,36 @@ afterEach(async () => {
 });
 
 describe('run-vitest startup', () => {
+  it('prefers the package-local Vitest binary without a Vitest command on PATH', async () => {
+    await writeFakeVitest(join(fixtureRoot, 'node_modules', '.bin', 'vitest'), 'package-local');
+
+    const result = await launch({}, dirname(process.execPath));
+    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
+
+    expect(result.exitCode).toBe(0);
+    expect(observation.binary).toBe('package-local');
+    expect(observation.argv).toEqual(['run', 'selected.test.ts']);
+    expect(observation.tmpdir).toBe(observation.root);
+  });
+
+  it('falls back to the PATH Vitest binary when no package-local binary exists', async () => {
+    const result = await launch();
+    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
+
+    expect(result.exitCode).toBe(0);
+    expect(observation.binary).toBe('path');
+  });
+
+  it('fails without either Vitest binary and reclaims its run root', async () => {
+    await rm(join(fixtureRoot, 'bin', 'vitest'));
+
+    const result = await launch({}, dirname(process.execPath));
+
+    expect(result.exitCode).not.toBe(0);
+    expect(existsSync(observationPath)).toBe(false);
+    expect(await readdir(join(fixtureRoot, '.vitest-tmp'))).toEqual([]);
+  });
+
   it('installs its default fixture-local scope before launching Vitest', async () => {
     const originalTmpdir = join(fixtureRoot, 'original-tmpdir');
     const result = await launch({ TMPDIR: originalTmpdir });

@@ -42,7 +42,9 @@ node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800
 `AGGREGATE_TEST_SUITE_PASS` is a human-readable shell success indicator. The pre-SHIP `test_suite`
 gate classifies the aggregate command's exit code and records its evidence; it does not inspect this
 sentinel. The package script is also the containment boundary that creates the run-scoped temp root
-before Vitest loads, so use `npm test -- <selectors>` rather than invoking `vitest run` directly.
+before Vitest loads, so use `npm test -- <selectors>` rather than invoking `vitest run` directly. The
+runner launches the package-local Vitest binary when available, so direct `node scripts/run-vitest.mjs`
+invocations need no PATH changes.
 
 ### The engine-dist guard
 
