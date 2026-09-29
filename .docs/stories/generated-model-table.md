@@ -7,7 +7,9 @@
 **Tier:** M
 
 > **Provider-aware amendment (#902, approved 2026-07-23):** Engine-step rows
-> now source and label both built-in provider policies. References below to the
+> now source and label every catalog provider's policy, one model and effort column
+> pair per provider, with the explicit sentinels `config-required` and `n/a` for a
+> provider whose policy ships no models. References below to the
 > original `DEFAULT_STEP_MODELS`, `DEFAULT_STEP_EFFORT`, and
 > `DEFAULT_STEP_TIER_OVERRIDES` source mean the corresponding exhaustive
 > provider-policy records after the #902 refactor. `SKILL.md` pins,
