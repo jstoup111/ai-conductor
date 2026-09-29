@@ -3,6 +3,7 @@ import { hostname } from 'node:os';
 import type { HarnessConfig } from '../../types/config.js';
 
 const VALID_EXPORTERS = ['otlp', 'file'] as const;
+const VALID_OTLP_PROTOCOLS = ['http/protobuf', 'grpc'] as const;
 const DEFAULT_FILE = 'otel.jsonl';
 const MAX_ATTRIBUTES = 16;
 
@@ -143,6 +144,12 @@ export function resolveOtelConfig(
         error:
           "otel exporter='otlp' requires an 'endpoint' URL (e.g. http://localhost:4318). " +
           'No endpoint was provided.',
+      };
+    }
+    if (protocol !== undefined && !VALID_OTLP_PROTOCOLS.includes(protocol as (typeof VALID_OTLP_PROTOCOLS)[number])) {
+      return {
+        enabled: false,
+        error: `Unsupported otel.protocol '${protocol}'. Valid options: ${VALID_OTLP_PROTOCOLS.join(', ')}.`,
       };
     }
     if (headers !== undefined && !isPlainObject(headers)) {
