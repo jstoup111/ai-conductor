@@ -475,7 +475,7 @@ one-turn fix.
    subagent sees exactly what the gate sees. Number the claims.
 2. Dispatch one subagent with fresh context through the selected host's available subagent facility.
    Instruct it to apply `skills/coverage-binding/SKILL.md` exactly — its judgement policy and its
-   result contract, using the claim numbers as digests — and to read nothing beyond the supplied
+   result contract, using the claim numbers as claim ids — and to read nothing beyond the supplied
    claims. If the host has no subagent facility, stop and tell the operator; do not judge in the
    authoring context.
 3. For each `does-not-assert`, change the cited task's checks so they require the stated missing

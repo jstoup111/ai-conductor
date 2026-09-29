@@ -198,9 +198,28 @@ export function parseJudgePayload(payload: string): { ok: true; value: CoverageB
   return parseJudgePayloadValue(parsed);
 }
 
+/** Two issued ids may name one digest; their verdicts must then agree. */
+function agreesWithRecorded(recorded: unknown, verdict: unknown): boolean {
+  return recorded === undefined || JSON.stringify(recorded) === JSON.stringify(verdict);
+}
+
+/**
+ * Issues the short opaque ids a judge batch echoes back in place of claim
+ * digests. LLM judges cannot reliably copy 64-hex digests, so the engine keeps
+ * the id-to-digest mapping and resolves verdicts to digests before validation.
+ */
+export function issueJudgeClaimIds(
+  digests: readonly string[],
+  kind: 'criterion' | 'amendment',
+): ReadonlyMap<string, string> {
+  const prefix = kind === 'criterion' ? 'c' : 'a';
+  return new Map(digests.map((digest, index) => [`${prefix}${index + 1}`, digest]));
+}
+
+/** Parses a criterion batch keyed by issued claim id and returns its verdicts keyed by digest. */
 export function parseJudgeBatchPayload(
   payload: string,
-  issuedDigests: readonly string[],
+  issuedIds: ReadonlyMap<string, string>,
 ): { ok: true; verdicts: ReadonlyMap<string, CoverageBindingJudgePayload> } | { ok: false; reason: string } {
   let parsed: unknown;
   try {
@@ -219,33 +238,38 @@ export function parseJudgeBatchPayload(
     return { ok: false, reason: 'batch payload verdicts must be an array' };
   }
 
-  const issued = new Set(issuedDigests);
+  const answered = new Set<string>();
   const verdicts = new Map<string, CoverageBindingJudgePayload>();
   for (const entry of batch.verdicts) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
       return { ok: false, reason: 'batch verdict entry must be a JSON object' };
     }
     const candidate = entry as Record<string, unknown>;
-    if (!text(candidate.digest)) {
-      return { ok: false, reason: 'batch verdict entry requires a non-empty digest' };
+    if (!text(candidate.id)) {
+      return { ok: false, reason: 'batch verdict entry requires a non-empty claim id' };
     }
-    if (!issued.has(candidate.digest)) {
-      return { ok: false, reason: `batch verdict has foreign digest ${candidate.digest}` };
+    const digest = issuedIds.get(candidate.id);
+    if (digest === undefined) {
+      return { ok: false, reason: `batch verdict has unknown claim id ${candidate.id}` };
     }
-    if (verdicts.has(candidate.digest)) {
-      return { ok: false, reason: `batch verdict repeats digest ${candidate.digest}` };
+    if (answered.has(candidate.id)) {
+      return { ok: false, reason: `batch verdict repeats claim id ${candidate.id}` };
     }
-    const { digest, ...judgePayload } = candidate;
+    const { id, ...judgePayload } = candidate;
     const parsedEntry = parseJudgePayloadValue(judgePayload);
     if (!parsedEntry.ok) {
-      return { ok: false, reason: `batch verdict for digest ${digest}: ${parsedEntry.reason}` };
+      return { ok: false, reason: `batch verdict for claim id ${id as string}: ${parsedEntry.reason}` };
     }
+    if (!agreesWithRecorded(verdicts.get(digest), parsedEntry.value)) {
+      return { ok: false, reason: `batch verdict for claim id ${id as string} conflicts with another verdict for digest ${digest}` };
+    }
+    answered.add(candidate.id);
     verdicts.set(digest, parsedEntry.value);
   }
 
-  for (const digest of issued) {
-    if (!verdicts.has(digest)) {
-      return { ok: false, reason: `batch verdict is missing issued digest ${digest}` };
+  for (const [id, digest] of issuedIds) {
+    if (!answered.has(id)) {
+      return { ok: false, reason: `batch verdict is missing issued claim id ${id} (${digest})` };
     }
   }
   return { ok: true, verdicts };
@@ -286,10 +310,13 @@ function parseAmendmentJudgePayloadValue(
   return { ok: false, reason: 'amendment payload verdict must be carried, not-carried, or no-plan-obligation with only its permitted fields' };
 }
 
-/** Parses one complete amendment batch and rejects every verdict if any member is unsafe. */
+/**
+ * Parses one complete amendment batch keyed by issued claim id, returns its
+ * verdicts keyed by digest, and rejects every verdict if any member is unsafe.
+ */
 export function parseAmendmentBatchPayload(
   payload: string,
-  issuedDigests: readonly string[],
+  issuedIds: ReadonlyMap<string, string>,
   issuedTaskIds: readonly string[],
   issuedCompletedTaskIds: readonly string[],
 ): { ok: true; verdicts: ReadonlyMap<string, CoverageBindingAmendmentJudgeVerdict> } | { ok: false; reason: string } {
@@ -302,20 +329,23 @@ export function parseAmendmentBatchPayload(
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed) || !exactKeys(parsed as Record<string, unknown>, ['verdicts']) || !Array.isArray((parsed as Record<string, unknown>).verdicts)) {
     return { ok: false, reason: 'amendment batch payload must contain only a verdicts array' };
   }
-  const issued = new Set(issuedDigests);
+  const answered = new Set<string>();
   const verdicts = new Map<string, CoverageBindingAmendmentJudgeVerdict>();
   for (const entry of (parsed as { verdicts: unknown[] }).verdicts) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return { ok: false, reason: 'amendment batch verdict entry must be a JSON object' };
     const candidate = entry as Record<string, unknown>;
-    if (!text(candidate.digest)) return { ok: false, reason: 'amendment batch verdict entry requires a non-empty digest' };
-    if (!issued.has(candidate.digest)) return { ok: false, reason: `amendment batch verdict has foreign digest ${candidate.digest}` };
-    if (verdicts.has(candidate.digest)) return { ok: false, reason: `amendment batch verdict repeats digest ${candidate.digest}` };
-    const { digest, ...verdictPayload } = candidate;
+    if (!text(candidate.id)) return { ok: false, reason: 'amendment batch verdict entry requires a non-empty claim id' };
+    const digest = issuedIds.get(candidate.id);
+    if (digest === undefined) return { ok: false, reason: `amendment batch verdict has unknown claim id ${candidate.id}` };
+    if (answered.has(candidate.id)) return { ok: false, reason: `amendment batch verdict repeats claim id ${candidate.id}` };
+    const { id, ...verdictPayload } = candidate;
     const verdict = parseAmendmentJudgePayloadValue(verdictPayload, new Set(issuedTaskIds), new Set(issuedCompletedTaskIds));
-    if (!verdict.ok) return { ok: false, reason: `amendment batch verdict for digest ${digest}: ${verdict.reason}` };
+    if (!verdict.ok) return { ok: false, reason: `amendment batch verdict for claim id ${id as string}: ${verdict.reason}` };
+    if (!agreesWithRecorded(verdicts.get(digest), verdict.value)) return { ok: false, reason: `amendment batch verdict for claim id ${id as string} conflicts with another verdict for digest ${digest}` };
+    answered.add(candidate.id);
     verdicts.set(digest, verdict.value);
   }
-  for (const digest of issued) if (!verdicts.has(digest)) return { ok: false, reason: `amendment batch verdict is missing issued digest ${digest}` };
+  for (const [id, digest] of issuedIds) if (!answered.has(id)) return { ok: false, reason: `amendment batch verdict is missing issued claim id ${id} (${digest})` };
   return { ok: true, verdicts };
 }
 

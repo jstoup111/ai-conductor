@@ -78,12 +78,12 @@ function coverageBindingBatchOutput(
   verdict: 'asserts' | 'does-not-assert' = 'asserts',
 ): string {
   const body = prompt.slice(prompt.lastIndexOf('\n\n{') + 2);
-  const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+  const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
   return JSON.stringify({
-    verdicts: claims.map(({ digest }) => verdict === 'asserts'
-      ? { digest, verdict }
+    verdicts: claims.map(({ id }) => verdict === 'asserts'
+      ? { id, verdict }
       : {
-          digest,
+          id,
           verdict,
           missingAssertion: 'The pair does not prove the criterion.',
         }),

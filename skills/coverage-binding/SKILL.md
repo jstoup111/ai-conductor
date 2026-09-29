@@ -42,8 +42,8 @@ Do not read files, inspect a diff, use a transcript, or infer facts beyond the s
 Return exactly one JSON object and no surrounding prose:
 
 ```json
-{ "verdicts": [ { "digest": "...", "verdict": "asserts" }, { "digest": "...", "verdict": "does-not-assert", "missingAssertion": "..." } ] }
+{ "verdicts": [ { "id": "c1", "verdict": "asserts" }, { "id": "c2", "verdict": "does-not-assert", "missingAssertion": "..." } ] }
 ```
 
-Return one entry per supplied claim, keyed by the supplied `digest`. `verdict` is closed to `asserts`
+Return one entry per supplied claim, keyed by the supplied claim `id` copied exactly. `verdict` is closed to `asserts`
 or `does-not-assert`. Include a non-empty `missingAssertion` only with `does-not-assert`.
