@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-29T18:18:57.201Z
 Slug: carry-daemon-cli-flags-across-stale-engine-restart
 Class: needs-human
 Halting step: prd_audit
