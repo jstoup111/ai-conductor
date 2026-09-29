@@ -887,7 +887,7 @@ export function validateConfig(
             `Custom step "${name}" references unknown after target: "${afterTarget}"`,
           );
         }
-        if (cfg.parallel === undefined && typeof cfg.skill !== 'string') {
+        if ((!Array.isArray(cfg.parallel) || cfg.parallel.length === 0) && typeof cfg.skill !== 'string') {
           return errVal(`Custom step "${name}" requires 'skill: <path-to-SKILL.md>'`);
         }
         if (cfg.enforcement !== undefined && !VALID_ENFORCEMENTS.has(cfg.enforcement as EnforcementLevel)) {

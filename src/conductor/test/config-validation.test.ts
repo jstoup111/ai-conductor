@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:5
+// Covers: task:3, task:4, task:5, task:10
 import { describe, it, expect } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -154,6 +154,25 @@ describe('custom parallel step validation', () => {
       error: {
         type: 'validation_error',
         message: 'steps.parallel_review.parallel[0].skill is required',
+      },
+    });
+  });
+
+  it('rejects an empty parallel group without a top-level skill', () => {
+    const result = validateConfig({
+      steps: {
+        parallel_review: {
+          after: 'build',
+          parallel: [],
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        type: 'validation_error',
+        message: 'Custom step "parallel_review" requires \'skill: <path-to-SKILL.md>\'',
       },
     });
   });
