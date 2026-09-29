@@ -87,6 +87,15 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
+  it('renders unavailable tracker-backend exclusions', () => {
+    expect(lines({
+      type: 'tracker_backend_unavailable',
+      project: 'acme/jira-project',
+      backend: 'jira',
+      reason: 'no-adapter',
+    })).toEqual(['· ⚠ tracker backend unavailable: acme/jira-project selected jira (no-adapter)']);
+  });
+
   it('renders an unavailable read-only review capability with its provider, platform, and reason', () => {
     expect(lines({
       type: 'build_review_read_only_capability',
