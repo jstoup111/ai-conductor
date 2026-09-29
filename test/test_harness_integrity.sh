@@ -67,17 +67,29 @@ warn_check() {
 echo ""
 echo -e "${BOLD}1. Bash syntax${NC}"
 
+set +e
+syntax_output=$(bash "${HARNESS_DIR}/test/lint_shell.sh" --syntax 2>&1)
+syntax_exit=$?
+set -e
+
 syntax_script_count=0
 while IFS= read -r script; do
   [ -n "$script" ] || continue
   name="${script#"${HARNESS_DIR}/"}"
-  bash -n "$script" 2>/dev/null
-  assert "${name}" $?
+  if grep -Fxq "$script" <<<"$syntax_output"; then
+    assert "${name}" 1
+  else
+    assert "${name}" 0
+  fi
   syntax_script_count=$((syntax_script_count + 1))
 done < <(bash "${HARNESS_DIR}/test/lint_shell.sh" --list)
 
 if [ "$syntax_script_count" -eq 0 ]; then
   assert "shell syntax enumeration returned no files (remediation: fix test/lint_shell.sh)" 1
+fi
+
+if [ "$syntax_exit" -eq 2 ]; then
+  assert "shell syntax check refused an empty enumeration (remediation: fix test/lint_shell.sh)" 1
 fi
 
 # ── 1b. ShellCheck static analysis ───────────────────────────────────────────

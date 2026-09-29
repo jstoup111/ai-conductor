@@ -240,7 +240,7 @@ describe('as-built verdict contract', () => {
       version: AS_BUILT_VERDICT_CONTRACT_VERSION,
       verdict: 'BLOCKED',
       reachability: [
-        { primitive: 'fileIntakeIssue', callerChain: ['bin/intake-file:21', 'intake-file-cli.ts:119'] },
+        { primitive: 'fileIntakeIssue', callerChain: ['skills/intake/scripts/intake-file:12', 'intake-file-cli.ts:119'] },
         { primitive: 'createGithubTrackerClient().addIssueDependency', callerChain: [] },
       ],
       driftNotes: [],

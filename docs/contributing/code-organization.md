@@ -24,8 +24,7 @@ notice and links the required branch, validation, documentation, and release-met
 | `src/conductor/src/` | Engine source. Five directories plus seven entry-point files. |
 | `src/conductor/test/` | Vitest suite. See [testing](testing.md). |
 | `src/conductor/scripts/` | `publish-engine.mjs` (the build), `publish-guard.mjs`, `intake-label-sync-apply.mts`. |
-| `src/conductor/bin/` | `intake-file` — a `tsx` shebang wrapper over `src/intake-file-cli.ts`. |
-| `bin/` | Repo-root bash wrappers: `ai-conductor`, `install`, `setup`, `update`, `migrate`, `generate-model-table`, `generate-docs-guard-hook`, `intake-file`, `intake-backfill`, `quarantine-engineer-signals`. |
+| `bin/` | Repo-root bash wrappers: `ai-conductor`, `install`, `setup`, `update`, `migrate`, `generate-model-table`, `generate-docs-guard-hook`, `intake-backfill`, `quarantine-engineer-signals`. |
 | `skills/` | Skill catalog. See [skills reference](../reference/skills.md). |
 | `agents/`, `templates/`, `tech-context/` | Prompt templates, scaffolding, stack knowledge. |
 | `hooks/claude/` | Hook scripts. See [settings and hooks](../reference/settings-and-hooks.md). |
@@ -149,7 +148,7 @@ Seven files sit at the top level of `src/conductor/src/`.
 | `cli.ts` | The commander declaration surface. Builds the help text; most subcommands declared here are help-only. |
 | `daemon-cli.ts` | The daemon runtime. Registers zero commander commands; entered through `runDaemonMode` at `:491`, lazily imported from `index.ts` so non-daemon paths never load it. |
 | `intake-loop-cli.ts` | `detectIntakeLoopCommand` `:49` / `dispatchIntakeLoop` `:106`, wired into `index.ts`. |
-| `intake-file-cli.ts` | Standalone `main()`; invoked by `src/conductor/bin/intake-file`. |
+| `intake-file-cli.ts` | Standalone `main()`; invoked by `skills/intake/scripts/intake-file`. |
 | `intake-backfill-cli.ts` | Standalone `main()`; invoked by `bin/intake-backfill`. |
 | `quarantine-engineer-signals-cli.ts` | Standalone `main()`; wraps `engine/engineer/quarantine.ts`. |
 

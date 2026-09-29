@@ -27,8 +27,8 @@ Node `>=26.0.0` when the asdf override is unavailable.
 | `dist` symlink unresolvable or not a regular file | `ai-conductor: dist symlink is broken (…)` | 1 |
 | Uncaught engine error | `Fatal: <message>` | 1 |
 
-`bin/intake-file`, `bin/intake-backfill`, and `bin/quarantine-engineer-signals` are separate entry
-points, not `ai-conductor` subcommands.
+The bundled `skills/intake/scripts/intake-file` helper, `bin/intake-backfill`, and
+`bin/quarantine-engineer-signals` are separate entry points, not `ai-conductor` subcommands.
 
 ## `ai-conductor --version`
 

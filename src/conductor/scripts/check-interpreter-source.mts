@@ -1,4 +1,5 @@
 import { readdir, readFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkInterpreterSource, type InterpreterSourceFinding } from './interpreter-source-check.js';
@@ -24,6 +25,31 @@ export async function shellFiles(root: string, directory: string): Promise<strin
   return paths;
 }
 
+async function shellFilesIfDirectory(root: string, directory: string): Promise<string[]> {
+  try {
+    return await shellFiles(root, directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+/** Every repository shell asset whose interpreter source must be checked. */
+export async function interpreterSourceInventory(root: string): Promise<string[]> {
+  const assets = [...await shellFiles(root, 'bin'), ...await shellFiles(root, 'hooks')];
+  let skills: Dirent[];
+  try {
+    skills = await readdir(join(root, 'skills'), { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return assets.sort();
+    throw error;
+  }
+  for (const skill of skills) {
+    if (skill.isDirectory()) assets.push(...await shellFilesIfDirectory(root, join('skills', skill.name, 'scripts')));
+  }
+  return assets.sort();
+}
+
 type GeneratedModules = Record<string, Record<string, unknown>>;
 type ModuleLoader = () => Promise<GeneratedModules>;
 const expectedGeneratedModules = ['git-hook-assets', 'session-hook-assets'] as const;
@@ -33,7 +59,7 @@ export async function checkInventory(
   modules: GeneratedModules = { 'git-hook-assets': gitHooks, 'session-hook-assets': sessionHooks },
   loadModules?: ModuleLoader,
 ): Promise<InterpreterSourceFinding[]> {
-  const assets = [...await shellFiles(root, 'bin'), ...await shellFiles(root, 'hooks')].sort();
+  const assets = await interpreterSourceInventory(root);
   if (assets.length === 0) throw new Error('interpreter-source inventory is empty');
   const findings: InterpreterSourceFinding[] = [];
   for (const asset of assets) findings.push(...checkInterpreterSource(relative(root, join(root, asset)), await readFile(join(root, asset), 'utf8')));
