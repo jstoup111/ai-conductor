@@ -80,6 +80,15 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    > (adr-2026-08-25-as-built-remediable-findings-bounded-build-route decision 9). It routes to
    > BUILD without the append seam, adds no tasks, and is bounded by the gate's lap cap alone;
    > the 5-task and 25% caps continue to govern appending dispositions only.
+   > **Amended 2026-09-29 by #2753:** The caps above are enforced where the repair would dispatch
+   > BUILD, not where it appends. Admitted `FIXABLE` tasks (and `existing-task` bindings) are
+   > appended, committed and re-staged `pending` first, and the lap and growth are charged when
+   > BUILD next dispatches. An exhausted allowance halts there, still with the `kickback-cap` class and
+   > listing every finding, and leaves BUILD not done so that a consumed `kickback-budget raise`
+   > resumes directly into BUILD on the same tasks instead of re-auditing. The one-lap, five-task
+   > and 25% bounds are unchanged; only their enforcement point moves. A halt with no appended or
+   > bound repair keeps the prior behavior.
+
 6. **Growth ledger.** The kickback ledger gains a per-feature `growth` record:
    `{authored, added, byGate, remaining}`; pre-existing `rem-*` tasks found in a plan at first read
    count toward `authored`. Surfaced by `conduct-ts` status output and emitted on the spine.
@@ -88,6 +97,16 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
 
    > **Amended 2026-08-31 by #2119:** An `existing-task` disposition leaves `added` and
    > `remaining` untouched by design — a plan that did not grow records no growth.
+   > **Amended 2026-09-29 by #2753:** The ledger gains an optional, non-lap-counting
+   > `pendingRepair` record (receipt id, per-gate lap and growth charges, task ids). It is written
+   > in the append's lease and settled atomically at BUILD dispatch, which charges every gate or
+   > none. Growth derivation and reconciliation subtract its uncharged task count, so appended but
+   > unsettled tasks are never reclassified as `authored`. It survives rebase credit, clears with
+   > a genuinely fresh session, and reads as absent with no version bump. A present but malformed
+   > `pendingRepair` fails closed (adr-2026-08-31-kickback-ledger-read-fails-closed D1): the
+   > `prd_audit` and `architecture_review_as_built` allowances and the growth allowance read as
+   > exhausted, and that invalidity is scoped to those gates and the growth record.
+
 7. **PLAN_GAP.** Happy-path criterion unmet with no owning task → HALT (class `plan-gap`); negative/
    edge criterion → recorded in the verdict and the shipped record, ships, unless configuration
    requires a halt. Never a kickback; the daemon DECIDE-halt rule is unchanged.
