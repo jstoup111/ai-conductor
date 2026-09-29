@@ -36,7 +36,9 @@ import { classifyGitPushAuthRefusal, GithubBotAuthRefusalError } from './github-
 import {
   HALT_PR_BANNER_SENTINEL,
   NEEDS_REMEDIATION_BODY_MARKER,
+  engineBodyIncludes,
   maskProjectOwnedRegions,
+  removeEngineBodyMarker,
 } from './pr-body-engine-markers.js';
 export {
   HALT_PR_BANNER_SENTINEL,
@@ -1240,12 +1242,12 @@ export async function removeBodyMarker(
 ): Promise<PrMutationResult | undefined> {
   try {
     // Check if marker is present; if not, idempotent-exit
-    if (!currentBody.includes(NEEDS_REMEDIATION_BODY_MARKER)) {
+    if (!engineBodyIncludes(currentBody, NEEDS_REMEDIATION_BODY_MARKER)) {
       return undefined;
     }
 
     // Strip the marker and submit the same guarded edit primitive.
-    const newBody = currentBody.replace(NEEDS_REMEDIATION_BODY_MARKER, '').trim();
+    const newBody = removeEngineBodyMarker(currentBody, NEEDS_REMEDIATION_BODY_MARKER).trim();
     const target = prTarget(prUrl);
     if (!target) return refused('pull-request.edit', 'invalid-target');
     return await runMutation(runGh, 'pull-request.edit', target.repository, target, { body: newBody });

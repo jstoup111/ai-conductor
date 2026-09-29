@@ -19,3 +19,29 @@ export function maskProjectOwnedRegions(body: string): string {
   return body.replace(/<!-- ai-conductor:step [^\r\n]+ -->[\s\S]*?<!-- \/ai-conductor:step -->/g, (region) =>
     region.replace(/[^\r\n]/g, ' '));
 }
+
+/** True when `needle` occurs in engine-owned body text (outside every project-owned region). */
+export function engineBodyIncludes(body: string, needle: string): boolean {
+  return maskProjectOwnedRegions(body).includes(needle);
+}
+
+/**
+ * Remove the first engine-owned occurrence of `needle`, never touching bytes
+ * inside a project-owned region. Masking preserves offsets, so the masked
+ * index addresses the same bytes in the original body.
+ */
+export function removeEngineBodyMarker(body: string, needle: string): string {
+  const index = maskProjectOwnedRegions(body).indexOf(needle);
+  if (index < 0) return body;
+  return body.slice(0, index) + body.slice(index + needle.length);
+}
+
+/**
+ * Split `body` into lines paired with their masked form, so line filters can
+ * decide on engine-owned text while keeping region lines byte-for-byte.
+ */
+export function engineBodyLines(body: string): Array<{ line: string; masked: string }> {
+  const lines = body.split('\n');
+  const masked = maskProjectOwnedRegions(body).split('\n');
+  return lines.map((line, i) => ({ line, masked: masked[i] ?? '' }));
+}

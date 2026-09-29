@@ -41,7 +41,12 @@ import {
 } from './pr-labels.js';
 import { runTrackerUrlRead } from './tracker-client.js';
 import { maskProjectOwnedRegions } from './pr-body-regions.js';
-import { PR_BODY_FLOOR_MARKER } from './pr-body-engine-markers.js';
+import {
+  PR_BODY_FLOOR_MARKER,
+  engineBodyIncludes,
+  engineBodyLines,
+  removeEngineBodyMarker,
+} from './pr-body-engine-markers.js';
 export { PR_BODY_FLOOR_MARKER } from './pr-body-engine-markers.js';
 
 export const NEEDS_REMEDIATION_TITLE_PREFIX = 'needs-remediation:';
@@ -174,7 +179,7 @@ export async function rehabilitateHaltPr(
     if (!deps.preserveDraft && view.isDraft) {
       mutations.push(() => rehabilitateMutation(deps.operations, prUrl, 'pull-request.ready'));
     }
-    const repairedBody = injectCloses((view.body ?? '').replace(NEEDS_REMEDIATION_BODY_MARKER, '').trim(), sourceRef);
+    const repairedBody = injectCloses(removeEngineBodyMarker(view.body ?? '', NEEDS_REMEDIATION_BODY_MARKER).trim(), sourceRef);
     if (repairedBody !== (view.body ?? '').trim()) {
       mutations.push(() => rehabilitateMutation(deps.operations, prUrl, 'pull-request.edit', { body: repairedBody }));
     }
@@ -215,7 +220,7 @@ export async function clearHaltStateForResume(
   }
 
   const hasLabel = view.labels.includes(NEEDS_REMEDIATION_LABEL);
-  const hasMarker = (view.body ?? '').includes(NEEDS_REMEDIATION_BODY_MARKER);
+  const hasMarker = engineBodyIncludes(view.body ?? '', NEEDS_REMEDIATION_BODY_MARKER);
   if (!hasLabel && !hasMarker) {
     log(`[halt-pr-rehab] resume clear found no halt state for ${prUrl}`);
     return 'not-halted';
@@ -231,7 +236,7 @@ export async function clearHaltStateForResume(
         operations,
         prUrl,
         'pull-request.edit',
-        { body: (view.body ?? '').replace(NEEDS_REMEDIATION_BODY_MARKER, '').trim() },
+        { body: removeEngineBodyMarker(view.body ?? '', NEEDS_REMEDIATION_BODY_MARKER).trim() },
       ));
     }
     // A denied clear must not become a successful-clear result and must not
@@ -661,9 +666,9 @@ export async function postHaltHistoryComment(
     parts.push('', `**Halt label at rehabilitation:** \`${NEEDS_REMEDIATION_LABEL}\``);
   }
   if (hasHaltBanner) {
-    const banner = body
-      .split('\n')
-      .filter((line) => (HALT_PR_BANNER_LINES as readonly string[]).includes(line))
+    const banner = engineBodyLines(body)
+      .filter(({ masked }) => (HALT_PR_BANNER_LINES as readonly string[]).includes(masked))
+      .map(({ line }) => line)
       .join('\n');
     parts.push('', '**Original halt banner:**', '', '> ' + banner.split('\n').join('\n> '));
   }
@@ -715,8 +720,8 @@ export function hasHaltSignal(view: PrViewState): boolean {
   return (
     view.title.toLowerCase().startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ||
     view.labels.includes(NEEDS_REMEDIATION_LABEL) ||
-    (view.body ?? '').includes(NEEDS_REMEDIATION_BODY_MARKER) ||
-    (view.body ?? '').includes(HALT_PR_BANNER_SENTINEL)
+    engineBodyIncludes(view.body ?? '', NEEDS_REMEDIATION_BODY_MARKER) ||
+    engineBodyIncludes(view.body ?? '', HALT_PR_BANNER_SENTINEL)
   );
 }
 
@@ -886,9 +891,8 @@ export async function bodyFloor(
   }
 
   const bannerLines: readonly string[] = HALT_PR_BANNER_LINES;
-  const stripped = body
-    .split('\n')
-    .filter((line) => !bannerLines.includes(line));
+  const strippedLines = engineBodyLines(body).filter(({ masked }) => !bannerLines.includes(masked));
+  const stripped = strippedLines.map(({ line }) => line);
 
   // Collapse runs of 2+ consecutive blank lines down to a single blank line.
   const collapsed: string[] = [];
@@ -911,7 +915,7 @@ export async function bodyFloor(
   // SHIP-entry draft body does, and it has no `## Summary` heading), so keying
   // "already floored" on the heading alone would stack a SECOND floor block on
   // top of it.
-  if (!remainingBody.includes('## Summary') && !remainingBody.includes(PR_BODY_FLOOR_MARKER)) {
+  if (!engineBodyIncludes(remainingBody, '## Summary') && !engineBodyIncludes(remainingBody, PR_BODY_FLOOR_MARKER)) {
     const featureDesc = opts.featureDesc?.trim() || 'rehabilitated PR';
     // The floor never narrates remediation into the body: a shipped PR body
     // must read exactly like a clean first-pass finish produced it. Halt
@@ -947,7 +951,7 @@ export async function bodyFloor(
 
       const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
       const verifyBody = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
-      if (!verifyBody.includes(HALT_PR_BANNER_SENTINEL)) {
+      if (!engineBodyIncludes(verifyBody, HALT_PR_BANNER_SENTINEL)) {
         return 'floored';
       }
 
