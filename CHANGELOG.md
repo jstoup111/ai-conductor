@@ -49,6 +49,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The as-built architecture review now accepts a BLOCKED verdict that records an unreachable primitive with an empty caller chain, instead of rejecting it until the feature halts. ([implementation PR #2840](https://github.com/jstoup111/ai-conductor/pull/2840)).
 - Daemon FINISH no longer halts when the PR prose author edits the PR through the guarded github-operation CLI from a feat/daemon-<slug> worktree. ([implementation PR #2845](https://github.com/jstoup111/ai-conductor/pull/2845)).
 - Daemon restarts preserve the operator’s selected run flags. ([implementation PR #2837](https://github.com/jstoup111/ai-conductor/pull/2837)).
+- Harness users now receive clear validation for version constraints, viewer settings, telemetry protocols, and custom parallel steps. ([implementation PR #2829](https://github.com/jstoup111/ai-conductor/pull/2829)).
 
 ## [1.5.0] - 2026-09-27
 
