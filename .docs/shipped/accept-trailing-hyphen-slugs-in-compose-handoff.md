@@ -4,6 +4,12 @@ spec_hash: a764e151fd603a820388886ab8d7cb00b62b082e493916dd0c489c5e1091780b
 pr: https://github.com/jstoup111/ai-conductor/pull/2828
 shipped: 2026-09-29
 engine_version: 20260929T105729Z-f7dec31e6e68
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/engine/event-spine-rubric-config.test.ts:45 — expected eventSpine model changed from opus to sonnet (commit 68b3c37e6)"
+    accepted: true
 ---
 
 ## Cost
