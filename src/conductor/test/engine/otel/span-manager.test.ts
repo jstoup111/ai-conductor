@@ -1271,3 +1271,125 @@ describe('T20: incomplete-span close (FR-9 unit coverage)', () => {
     expect(span.attributes['conductor.step.status']).toBe('incomplete');
   });
 });
+
+// ── Context-free provider attempts inside explicit executions ───────────────
+//
+// Sequences reproduced from a live daemon's `.pipeline/events.jsonl`: the step
+// span is opened under an explicit lifecycle execution context, but a
+// sub-dispatch (SHIP-tail rebase resolver, a custom build_review rubric, or
+// the out-of-band `remediate` planner) emits its `provider_attempt` without
+// one. The legacy correlation key never matched, so the visualizer warned and
+// dropped the attempt's dispatch attribution.
+
+describe('context-free provider attempts within an explicit execution', () => {
+  const lifecycle = (executionId: string, step: StepName) => ({
+    executionId,
+    subject: { kind: 'lifecycle-step' as const, step },
+  });
+
+  it('attributes a context-free rebase resolver attempt to the open rebase execution span', async () => {
+    const warnings: string[] = [];
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (m) => warnings.push(m));
+    vis.start(emitter);
+    const rebase = lifecycle('980f9692-1bc7-4257-b352-439ead44695a', 'rebase');
+
+    await emitter.emit({ type: 'step_started', step: 'rebase', index: 19, executionContext: rebase });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'rebase', provider: 'provider-lifecycle', outcome: 'success', invoked: false,
+      lifecycle: { phase: 'preparing', attemptId: 'run:rebase:10', recoveryCount: 0 },
+    });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'rebase', provider: 'claude', preferredProvider: 'claude',
+      model: 'opus', effort: 'high', outcome: 'success', invoked: true,
+      observedIntervals: [{ startedAtMs: 1_790_686_154_170, durationMs: 79_779 }],
+    });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'rebase', provider: 'provider-lifecycle', outcome: 'success', invoked: false,
+      lifecycle: { phase: 'settled', attemptId: 'run:rebase:10', recoveryCount: 0, outcome: 'completed' },
+    });
+    await emitter.emit({ type: 'step_completed', step: 'rebase', status: 'done', executionContext: rebase });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'rebase')!;
+    expect({ warnings, attributes: span.attributes }).toMatchObject({
+      warnings: [],
+      attributes: { 'conductor.provider': 'claude', 'conductor.model': 'opus', 'conductor.effort': 'high' },
+    });
+  });
+
+  it('attributes a context-free custom rubric attempt to the open build_review execution span', async () => {
+    const warnings: string[] = [];
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (m) => warnings.push(m));
+    vis.start(emitter);
+    const review = lifecycle('d1104f95-5305-442e-9bf9-ae87445869a9', 'build_review');
+
+    await emitter.emit({ type: 'step_started', step: 'build_review', index: 16, executionContext: review });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build_review', executionContext: review, provider: 'claude',
+      preferredProvider: 'claude', model: 'opus', effort: 'high', tier: 'M', outcome: 'success', invoked: true,
+    });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build_review', provider: 'claude', preferredProvider: 'claude',
+      model: 'sonnet', effort: 'low', tier: 'M', outcome: 'success', invoked: true,
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build_review', status: 'done', executionContext: review });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'build_review')!;
+    expect({ warnings, provider: span.attributes['conductor.provider'] }).toEqual({
+      warnings: [],
+      provider: 'claude',
+    });
+  });
+
+  it('records an out-of-band remediate attempt on the run span instead of warning', async () => {
+    const warnings: string[] = [];
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (m) => warnings.push(m));
+    vis.start(emitter);
+    const audit = lifecycle('748a46e2-5631-4bdf-b012-95536b5432fc', 'prd_audit');
+
+    await emitter.emit({ type: 'step_started', step: 'prd_audit', index: 17, executionContext: audit });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'remediate', provider: 'claude', preferredProvider: 'claude',
+      model: 'opus', effort: 'medium', tier: 'M', outcome: 'success', invoked: true,
+    });
+    await emitter.emit({ type: 'step_completed', step: 'prd_audit', status: 'done', executionContext: audit });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const run = spanExporter.getFinishedSpans().find((s) => s.name === 'conductor.run')!;
+    const audited = spanExporter.getFinishedSpans().find((s) => s.name === 'prd_audit')!;
+    expect({
+      warnings,
+      runEvents: run.events.map((e) => ({ name: e.name, attributes: e.attributes })),
+      auditModel: audited.attributes['conductor.model'],
+    }).toEqual({
+      warnings: [],
+      runEvents: [{
+        name: 'provider_attempt',
+        attributes: {
+          step: 'remediate', provider: 'claude', preferredProvider: 'claude',
+          model: 'opus', effort: 'medium', tier: 'M', outcome: 'success',
+        },
+      }],
+      auditModel: undefined,
+    });
+  });
+
+  it('still warns for a context-free attempt when two open executions share the step', async () => {
+    const warnings: string[] = [];
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (m) => warnings.push(m));
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'rebase', index: 19, executionContext: lifecycle('a', 'rebase') });
+    await emitter.emit({ type: 'step_started', step: 'rebase', index: 19, executionContext: lifecycle('b', 'rebase') });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'rebase', provider: 'claude', model: 'opus', outcome: 'success', invoked: true,
+    });
+    await vis.stop();
+
+    expect(warnings).toEqual(["provider_attempt for 'rebase' received but no open span exists — ignoring"]);
+  });
+});
