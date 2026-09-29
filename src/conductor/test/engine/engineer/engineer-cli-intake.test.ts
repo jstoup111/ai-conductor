@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:11
+// Covers: task:1, task:2, task:3
 // `conduct-ts engineer poll` + `engineer forget` CLI primitives (Phase 9.3b, T22/T23).
 // FR-32 (poll-on-launch primitive) + FR-40 (manual forget). gh is injected — no network.
 
@@ -18,6 +18,7 @@ import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
 import { parseEnvelope } from '../../../src/engine/engineer/intake/port.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
+import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
 
 const execFile = promisify(execFileCb);
 
@@ -163,6 +164,7 @@ describe('engineer poll (T22, FR-32)', () => {
 });
 
 describe('engineer land tracker write-back (Task 11)', () => {
+  // Covers: task:11
   it('reports a Jira source ref as a successful no-op through the CLI event spine', async () => {
     const repoPath = join(workDir, 'tracker-project');
     await mkdir(repoPath, { recursive: true });
@@ -240,11 +242,104 @@ describe('engineer land tracker write-back (Task 11)', () => {
 
     expect(code, err.join('\n')).toBe(0);
     expect(JSON.parse(out[0])).toMatchObject({ branch: 'spec/jira-writeback' });
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([]); // no GitHub write-back argv
     expect(events).toEqual([{
       type: 'tracker_backend_unavailable', project: sourceRef, backend: 'jira', reason: 'no-adapter',
     }]);
     expect(await ledger.get('github-issues', sourceRef)).toMatchObject({ status: 'routed' });
+    expect((await ledger.get('github-issues', sourceRef))?.writebackPending).toBeUndefined();
+  });
+
+  // Covers: task:11
+  it('reports a Jira handoff as a successful no-op through the CLI event spine', async () => {
+    const repoPath = join(workDir, 'tracker-handoff-project');
+    await mkdir(repoPath, { recursive: true });
+    const git = async (args: string[], cwd = repoPath) => (await execFile('git', args, { cwd })).stdout.trim();
+    await git(['init', '-b', 'main', '-q']);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test']);
+    await writeFile(join(repoPath, 'README.md'), '# tracker project\n');
+    await mkdir(join(repoPath, '.ai-conductor'), { recursive: true });
+    await writeFile(join(repoPath, '.ai-conductor', 'config.yml'), 'tracker:\n  backend: jira\n');
+    await git(['add', 'README.md', '.ai-conductor/config.yml']);
+    await git(['commit', '-m', 'initial']);
+    await writeFile(registryPath, JSON.stringify([{
+      schemaVersion: 1,
+      name: 'tracker-handoff-project',
+      path: repoPath,
+      remote: 'https://github.com/acme/tracker-handoff-project.git',
+      status: 'registered',
+      registeredAt: '2026-09-28T00:00:00.000Z',
+    }]));
+
+    const worktree = (await createEngineerWorktree(repoPath, 'jira handoff')).worktreePath;
+    await Promise.all(['specs', 'stories', 'plans'].map((directory) => mkdir(join(worktree, '.docs', directory), { recursive: true })));
+    await writeFile(join(worktree, '.docs', 'specs', 'jira-handoff.md'), '# PRD: Jira handoff\n\nApproved.\n');
+    await writeFile(join(worktree, '.docs', 'stories', 'jira-handoff.md'), [
+      '# Stories: Jira handoff', '', '**Status:** Accepted', '', '## Story 1: Jira handoff',
+      '### Acceptance Criteria', '#### Happy Path', '- Given X, when Y, then Z.', '',
+      '#### Negative Paths', '- Given invalid input, when Y, then it is refused.', '',
+    ].join('\n'));
+    await writeFile(join(worktree, '.docs', 'plans', 'jira-handoff.md'), [
+      '# Implementation Plan: Jira handoff', '', '**Stories:** .docs/stories/jira-handoff.md', '',
+      '## Task Dependency Graph', '```', '1', '```', '',
+    ].join('\n'));
+    const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktree);
+    // A GitHub-shaped ref still resolves through the owning project's Jira
+    // selection, rather than falling back to the GitHub write-back adapter.
+    const sourceRef = 'acme/tracker-handoff-project#43';
+    const prUrl = 'https://github.com/acme/tracker-handoff-project/pull/43';
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef });
+    await ledger.transition('github-issues', sourceRef, 'claimed', {});
+    const calls: string[][] = [];
+    const events: unknown[] = [];
+    const gh = async (args: string[]) => {
+      calls.push(args);
+      throw new Error(`unexpected gh write-back call: ${args.join(' ')}`);
+    };
+    const featureMarker = `.docs/intake/${branch.slice('spec/'.length)}.md`;
+    const handoffPublication: NonNullable<HandoffDeps['publication']> = {
+      repository: 'acme/tracker-handoff-project',
+      remote: {
+        cwd: repoPath,
+        config: async () => ({ stdout: 'https://github.com/acme/tracker-handoff-project.git' }),
+        runRemoteGit: async () => ({ stdout: '', stderr: '' }),
+        mutation: {
+          provenance: { repository: 'acme/tracker-handoff-project', defaultBranch: 'main', specBranch: branch, featureMarker, publication: 'initial' },
+          dependencies: {
+            resolveMachineOwner: async () => ({ resolved: true as const, id: 'test-owner' }),
+            provenanceDiscovery: { readCommittedRecords: async () => [{ path: featureMarker, content: 'Owner: test-owner\n' }] },
+          },
+        },
+      },
+      operations: { async run() { return { created: { repository: 'acme/tracker-handoff-project', kind: 'pull-request' as const, number: 43 } }; } },
+    };
+    const { out, err, opts } = captureOut();
+    const code = await dispatchEngineer(
+      { kind: 'handoff', project: 'tracker-handoff-project', branch, worktree, sourceRef },
+      opts({
+        gh: gh as DispatchEngineerOpts['gh'],
+        git: async () => ({ stdout: '', stderr: '' }),
+        handoffPublication,
+        ensureRunningLaunch: async () => {},
+        events: { emit: async (event) => { events.push(event); } },
+      }),
+    );
+
+    expect(code, err.join('\n')).toBe(0);
+    expect(JSON.parse(out[0])).toEqual({ kind: 'pr-opened', url: prUrl });
+    const writebackCalls = calls.filter((args) =>
+      (args[0] === 'issue' && args[1] === 'comment')
+      || (args[0] === 'api' && args.some((arg) => arg.includes('labels[]=engineer:handled'))),
+    );
+    expect(writebackCalls).toEqual([]); // PR metadata reads are not write-backs
+    expect(events).toEqual([{
+      type: 'tracker_backend_unavailable', project: 'tracker-handoff-project', backend: 'jira', reason: 'no-adapter',
+    }]);
+    expect(await ledger.get('github-issues', sourceRef)).toMatchObject({
+      status: 'done', prUrl, branch,
+    });
     expect((await ledger.get('github-issues', sourceRef))?.writebackPending).toBeUndefined();
   });
 });
