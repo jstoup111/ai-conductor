@@ -68,12 +68,17 @@ export async function ensureGitGuardForDispatch(cwd: string | undefined): Promis
   const target = gitGuardPath(cwd);
   let valid = false;
   try {
-    const [content, info, scriptRegular, realRegular, commonRegular] = await Promise.all([
-      readFile(target, 'utf8'), stat(target), isRegularFile(target),
+    const [content, info, realGit, commonDir, scriptRegular, realRegular, commonRegular] = await Promise.all([
+      readFile(target, 'utf8'), stat(target),
+      readFile(join(pipeline(cwd), 'git-guard', 'real-git'), 'utf8'),
+      readFile(join(pipeline(cwd), 'git-guard', 'common-dir'), 'utf8'),
+      isRegularFile(target),
       isRegularFile(join(pipeline(cwd), 'git-guard', 'real-git')),
       isRegularFile(join(pipeline(cwd), 'git-guard', 'common-dir')),
     ]);
-    valid = content === GIT_GUARD_SCRIPT && scriptRegular && realRegular && commonRegular && (info.mode & 0o777) === 0o755;
+    valid = content === GIT_GUARD_SCRIPT && scriptRegular && realRegular && commonRegular &&
+      isAbsolute(realGit.trim()) && !realGit.includes(join('.pipeline', 'bin')) && isAbsolute(commonDir.trim()) &&
+      (info.mode & 0o777) === 0o755;
   } catch { /* repair */ }
   if (!valid) await writeGitGuard(cwd);
   const [info, regular] = await Promise.all([stat(target), isRegularFile(target)]);
