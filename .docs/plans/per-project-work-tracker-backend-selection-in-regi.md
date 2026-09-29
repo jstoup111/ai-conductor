@@ -123,7 +123,7 @@ None. #846 (`engine/tracker-client.ts`) and #847 (`parseWorkRef`) are on main; n
 **Steps:**
 1. Write failing parity test. It drives `buildIntake` and a pre-change reference composition, which constructs the GitHub issues adapter directly with today's registry mapping. Both get the same registry and the same scripted gh runner. Cover four registry shapes: projects without `tracker`; a project with no config file; a project with an invalid unrelated key; a project with explicit `tracker: { backend: github }`. Record envelopes, ledger entries, gh argv, and emitted events.
 2. Verify test fails (RED)
-3. Implement a new intake-backend composite module that does not import any concrete adapter (FR-13). It takes a backend factory map, `resolveTrackerSelection`, the registry reader and an events emitter. It builds the GitHub adapter once with a registry `list()` that resolves each project lazily and returns only github-selected projects, mapped exactly as today (`parseGhRepo` name/ghRepo/path). `buildIntake` keeps its synchronous signature and return fields; it passes `{ github: createGithubIssuesAdapter }` and widens its `events` parameter to an emitter that also admits `tracker_backend_unavailable`.
+3. Implement a new intake-backend composite module that does not import any concrete adapter (FR-13). It takes a backend factory map, `resolveTrackerSelection`, the registry reader and an events emitter. It builds the GitHub adapter once with a registry `list()` that resolves each project lazily and returns only github-selected projects, mapped exactly as today (`parseGhRepo` name/ghRepo/path). `buildIntake` keeps its synchronous signature and return fields; it passes `{ github: createGithubIssuesAdapter }` and widens its `events` parameter to an emitter that also admits `tracker_backend_unavailable`. Composition stays in `engineer-cli.ts` over the canonical `GhRunner` seam of `tracker-client.ts`; the removed `engineer/loop.ts` harness is not reintroduced.
 4. Verify test passes (GREEN)
 5. Commit with message: "feat(intake): tracker-aware composite at the intake composition root"
 
@@ -132,7 +132,7 @@ None. #846 (`engine/tracker-client.ts`) and #847 (`parseWorkRef`) are on main; n
 - the recorded gh argv sequence of the composite-backed poll equals the reference sequence exactly for the same registry
 - a project with no config.yml and a project whose config.yml has an invalid unrelated key are both polled through the GitHub adapter, and zero tracker_backend_unavailable events are emitted for the whole registry
 - a project with explicit `tracker: { backend: github }` yields envelopes and gh argv identical to the same project with no tracker key
-- buildIntake keeps its synchronous signature and constructing it performs no config read, asserted by a spy on resolveTrackerSelection that records zero calls before poll
+- buildIntake keeps its synchronous signature and constructing it performs no config read, asserted by a spy on resolveTrackerSelection that records zero calls before poll. The live engineer tracker composition happens only in `engineer-cli.ts` `buildIntake`, which hands the composite's GitHub adapter the canonical `GhRunner` runner from `tracker-client.ts`, and no source or test file under src/conductor imports or references `engineer/loop.ts`.
 
 **Files likely touched:**
 - src/conductor/src/engine/intake-backend-composite.ts — new composite source/port
@@ -267,6 +267,7 @@ None. #846 (`engine/tracker-client.ts`) and #847 (`parseWorkRef`) are on main; n
 - dispatchEngineer land with --source-ref ENG-42 exits 0, prints its normal JSON result, records zero gh argv for the write-back, advances the ledger to routed without a pending write-back, and emits tracker_backend_unavailable with reason no-adapter on the supplied spine emitter
 - dispatchEngineer handoff with a GitHub source ref owned by a jira-selected project makes no gh write for the write-back, emits the event, advances the ledger to done with the PR URL and branch without a pending write-back, and still prints the pr-opened result
 - the production engineer dispatch passes spine.events into buildIntake so the event reaches the persisted event spine, and the buildIntake events parameter type admits the tracker_backend_unavailable variant
+- the land and handoff integration tests obtain their tracker composition from `engineer-cli.ts` `buildIntake` with a scripted runner typed as `tracker-client.ts` `GhRunner`, and `src/conductor/src/engine/engineer/loop.ts` does not exist in the worktree
 
 **Files likely touched:**
 - src/conductor/src/engine/engineer-cli.ts — events threading if needed
