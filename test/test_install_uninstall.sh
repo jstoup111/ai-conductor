@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:8
+# Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:8, task:9
 #
 # Public-entry-point RED coverage for uninstalling the settings entries written
 # by bin/install.  Every invocation uses a throwaway HOME and a copied harness
@@ -455,6 +455,30 @@ CASE_U3_EXIT=$?
 check 'U3 purge exits successfully without harness state' test "$CASE_U3_EXIT" -eq 0
 check 'U3 reports the exact absent state directory' \
   grep -Fq "Nothing to purge $CASE_U3/.ai-conductor" "$TMP_ROOT/case-u3.out"
+
+# U4: purge must unlink state without changing anything in a symlink target.
+CASE_U4="$TMP_ROOT/case-u4"
+STATE_U4="$TMP_ROOT/state-u4"
+mkdir -p "$CASE_U4" "$STATE_U4"
+printf 'keep this state\n' > "$STATE_U4/keep.txt"
+ln -s "$CHECKOUT/.ai-conductor/rate-card.json" "$STATE_U4/rate-card.json"
+cp "$STATE_U4/keep.txt" "$TMP_ROOT/case-u4-keep-before.txt"
+snapshot_home "$STATE_U4" "$TMP_ROOT/case-u4-before.snapshot"
+ln -s "$STATE_U4" "$CASE_U4/.ai-conductor"
+run_uninstall_purge "$CASE_U4" "$TMP_ROOT/case-u4.out"
+CASE_U4_EXIT=$?
+snapshot_home "$STATE_U4" "$TMP_ROOT/case-u4-after.snapshot"
+check 'U4 purge exits successfully for a harness-state symlink with a rate card' \
+  test "$CASE_U4_EXIT" -eq 0
+check 'U4 removes only the harness-state symlink' \
+  sh -c 'test ! -e "$1" && test ! -L "$1"' sh "$CASE_U4/.ai-conductor"
+check 'U4 preserves the harness rate-card symlink in the target' \
+  sh -c 'test -L "$1" && test "$(readlink "$1")" = "$2"' sh \
+  "$STATE_U4/rate-card.json" "$CHECKOUT/.ai-conductor/rate-card.json"
+check 'U4 preserves the target keep file byte-identically' \
+  cmp -s "$STATE_U4/keep.txt" "$TMP_ROOT/case-u4-keep-before.txt"
+check 'U4 preserves the target listing and regular-file checksums' \
+  cmp -s "$TMP_ROOT/case-u4-before.snapshot" "$TMP_ROOT/case-u4-after.snapshot"
 
 # X1: --purge is valid only with --uninstall and must not begin an install.
 CASE_X1="$TMP_ROOT/case-x1"

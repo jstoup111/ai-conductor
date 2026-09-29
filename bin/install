@@ -1672,7 +1672,9 @@ PYEOF
 
   rate_card="${HOME}/.ai-conductor/rate-card.json"
   rate_card_source="${HARNESS_DIR}/.ai-conductor/rate-card.json"
-  if [ -L "$rate_card" ]; then
+  if [ "$PURGE" = true ] && [ -L "${HOME}/.ai-conductor" ]; then
+    info "Rate card inside symlinked state directory left in place (${rate_card})"
+  elif [ -L "$rate_card" ]; then
     if [ "$(readlink "$rate_card")" = "$rate_card_source" ]; then
       rm -- "$rate_card"
       ok "Removed global rate card link ${rate_card}"
