@@ -1,5 +1,5 @@
 /**
- * Covers: task:4
+ * Covers: task:4, task:2
  *
  * FR-9 — daemon self-restart on tmux respawn: production wiring coverage.
  *
@@ -192,6 +192,96 @@ describe('FR-9 — buildDaemonModeOptions (real index.ts dispatch logic)', () =>
       cmd: expect.stringContaining('daemon exit-witness'),
     }]);
     expect(respawnPaneCalls[0].cmd).toContain('--max-old-space-size=6144');
+  });
+
+  it('replays captured daemon flags through the exit witness and respawn pane', async () => {
+    const witnessedCommands: string[] = [];
+    const respawnedCommands: string[] = [];
+    const options = await buildDaemonModeOptions('/fake/repo/replay', {
+      ...baseCmd,
+      operatorFlagArgs: ['--concurrency', '3', '--max-runtime', '3600'],
+    }, {
+      sessionNameForRepo: () => 'cc-daemon-fake-replay',
+      hasSession: async () => true,
+      respawnPane: async (_name, _run, command) => {
+        respawnedCommands.push(command ?? '');
+        return { scrollbackPreserved: true };
+      },
+      resolveDaemonForegroundCommand: async () => 'conduct daemon --continuous',
+      buildDaemonExitWitnessCommand: (command) => {
+        witnessedCommands.push(command ?? '');
+        return `witness ${command ?? ''}`;
+      },
+    });
+
+    await options.triggerSelfRestart!();
+
+    expect(witnessedCommands).toEqual([
+      "conduct daemon --continuous '--concurrency' '3' '--max-runtime' '3600'",
+    ]);
+    expect(respawnedCommands).toEqual([
+      "witness conduct daemon --continuous '--concurrency' '3' '--max-runtime' '3600'",
+    ]);
+  });
+
+  it('keeps the resolved command byte-for-byte when captured flags are empty', async () => {
+    const witnessedCommands: string[] = [];
+    const options = await buildDaemonModeOptions('/fake/repo/empty-flags', {
+      ...baseCmd,
+      operatorFlagArgs: [],
+    }, {
+      sessionNameForRepo: () => 'cc-daemon-fake-empty',
+      hasSession: async () => true,
+      respawnPane: async () => ({ scrollbackPreserved: true }),
+      resolveDaemonForegroundCommand: async () => 'NODE_OPTIONS=--max-old-space-size=6144 conduct daemon --continuous',
+      buildDaemonExitWitnessCommand: (command) => {
+        witnessedCommands.push(command ?? '');
+        return command ?? '';
+      },
+    });
+
+    await options.triggerSelfRestart!();
+
+    expect(witnessedCommands).toEqual(['NODE_OPTIONS=--max-old-space-size=6144 conduct daemon --continuous']);
+  });
+
+  it('keeps the resolved command byte-for-byte when captured flags are absent', async () => {
+    const witnessedCommands: string[] = [];
+    const options = await buildDaemonModeOptions('/fake/repo/absent-flags', baseCmd, {
+      sessionNameForRepo: () => 'cc-daemon-fake-absent',
+      hasSession: async () => true,
+      respawnPane: async () => ({ scrollbackPreserved: true }),
+      resolveDaemonForegroundCommand: async () => 'conduct daemon --continuous',
+      buildDaemonExitWitnessCommand: (command) => {
+        witnessedCommands.push(command ?? '');
+        return command ?? '';
+      },
+    });
+
+    await options.triggerSelfRestart!();
+
+    expect(witnessedCommands).toEqual(['conduct daemon --continuous']);
+  });
+
+  it('single-quotes a captured value containing shell metacharacters', async () => {
+    const witnessedCommands: string[] = [];
+    const options = await buildDaemonModeOptions('/fake/repo/quoted-flags', {
+      ...baseCmd,
+      operatorFlagArgs: ['--max-runtime', '1;touch pwned'],
+    }, {
+      sessionNameForRepo: () => 'cc-daemon-fake-quoted',
+      hasSession: async () => true,
+      respawnPane: async () => ({ scrollbackPreserved: true }),
+      resolveDaemonForegroundCommand: async () => 'conduct daemon --continuous',
+      buildDaemonExitWitnessCommand: (command) => {
+        witnessedCommands.push(command ?? '');
+        return command ?? '';
+      },
+    });
+
+    await options.triggerSelfRestart!();
+
+    expect(witnessedCommands).toEqual(["conduct daemon --continuous '--max-runtime' '1;touch pwned'"]);
   });
 
   it('omits triggerSelfRestart entirely when hasSession resolves false', async () => {
