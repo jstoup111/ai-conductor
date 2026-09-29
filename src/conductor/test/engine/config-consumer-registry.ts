@@ -26,6 +26,7 @@ const STEPS = 'src/conductor/src/engine/steps.ts';
 const DAEMON_CLI = 'src/conductor/src/daemon-cli.ts';
 const STEP_RUNNERS = 'src/conductor/src/engine/step-runners.ts';
 const AUTORESOLVE = 'src/conductor/src/engine/autoresolve.ts';
+const CONFIG_LOADER = 'src/conductor/src/engine/config.ts';
 const AS_BUILT_POLICY = 'src/conductor/src/engine/as-built-policy.ts';
 const PROJECT_PRELUDE = 'src/conductor/src/engine/project-prelude.ts';
 const BUILD_PROGRESS_WATCHER = 'src/conductor/src/engine/build-progress-watcher.ts';
@@ -43,7 +44,8 @@ const OTEL_CONFIG = 'src/conductor/src/engine/otel/otel-config.ts';
  */
 export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   // ── Top-level keys ────────────────────────────────────────────────────────
-  harness_version: consumer(PROJECT_PRELUDE),
+  // loadProjectConfig's satisfiesVersion gate consumes the installed constraint.
+  harness_version: consumer(CONFIG_LOADER),
   defaults: consumer(RESOLVED_CONFIG),
   phases: consumer(RESOLVED_CONFIG),
   steps: consumer(STEPS),
