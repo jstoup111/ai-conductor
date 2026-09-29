@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:5
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
@@ -20,6 +20,8 @@ type DeferralDeps = {
   rename(from: string, to: string): Promise<void>;
   readFile(path: string, encoding: 'utf-8'): Promise<string>;
   rm(path: string, options: { force: true }): Promise<void>;
+  copyFile?(from: string, to: string): Promise<void>;
+  report?(message: string): void;
 };
 
 const SOURCE_ROOT = resolve(import.meta.dirname, '../../../src');
@@ -40,6 +42,121 @@ function collectTsFiles(dir: string): string[] {
 }
 
 describe('Task 4 — recorded deferrals', () => {
+  it('does not apply a deferral when the current halt identity changed', async () => {
+    const { isDeferred } = await import('../../../src/engine/monitor/deferrals.js') as {
+      isDeferred(deferrals: DeferralKey[], current: DeferralKey): boolean;
+    };
+    const deferred: DeferralKey = {
+      project: '/projects/payments',
+      feature: 'release-gate',
+      haltIdentity: { present: true, mtimeMs: 1_726_754_400_000, size: 86 },
+    };
+
+    expect(isDeferred([deferred], {
+      ...deferred,
+      haltIdentity: { present: true, mtimeMs: 1_726_754_500_000, size: 92 },
+    })).toBe(false);
+  });
+
+  it('does not apply a deferral when the current halt identity cannot be established', async () => {
+    const { isDeferred } = await import('../../../src/engine/monitor/deferrals.js') as {
+      isDeferred(deferrals: DeferralKey[], current: DeferralKey): boolean;
+    };
+    const deferred: DeferralKey = {
+      project: '/projects/payments',
+      feature: 'release-gate',
+      haltIdentity: { present: true, mtimeMs: 1_726_754_400_000, size: 86 },
+    };
+
+    expect(isDeferred([deferred], {
+      ...deferred,
+      haltIdentity: { present: false, mtimeMs: 0, size: 0 },
+    })).toBe(false);
+  });
+
+  it('copies an unparseable record aside and continues with no deferrals', async () => {
+    const files = new Map([
+      ['/projects/payments/.daemon/deferrals.json', '{not json'],
+    ]);
+    const copyFile = vi.fn(async (from: string, to: string) => {
+      files.set(to, files.get(from) ?? '');
+    });
+    const report = vi.fn();
+    const deps: DeferralDeps = {
+      resolveMainRoot: vi.fn(async () => '/projects/payments'),
+      mkdir: vi.fn(async () => undefined),
+      writeFile: vi.fn(async () => undefined),
+      rename: vi.fn(async () => undefined),
+      readFile: vi.fn(async path => files.get(path) ?? ''),
+      rm: vi.fn(async () => undefined),
+      copyFile,
+      report,
+    };
+    const { readDeferrals } = await import('../../../src/engine/monitor/deferrals.js') as {
+      readDeferrals(startCwd: string, deps: DeferralDeps): Promise<DeferralKey[]>;
+    };
+
+    await expect(readDeferrals('/projects/payments/.worktrees/release-gate', deps)).resolves.toEqual([]);
+
+    expect(copyFile).toHaveBeenCalledWith(
+      '/projects/payments/.daemon/deferrals.json',
+      expect.stringMatching(/deferrals\.json\.corrupt-/),
+    );
+    expect(files.get('/projects/payments/.daemon/deferrals.json')).toBe('{not json');
+    expect(report).toHaveBeenCalledWith(expect.stringContaining('deferral record unreadable'));
+  });
+
+  it('treats an absent deferral record as empty without reporting corruption', async () => {
+    const copyFile = vi.fn(async () => undefined);
+    const report = vi.fn();
+    const deps: DeferralDeps = {
+      resolveMainRoot: vi.fn(async () => '/projects/payments'),
+      mkdir: vi.fn(async () => undefined),
+      writeFile: vi.fn(async () => undefined),
+      rename: vi.fn(async () => undefined),
+      readFile: vi.fn(async () => {
+        throw Object.assign(new Error('missing record'), { code: 'ENOENT' });
+      }),
+      rm: vi.fn(async () => undefined),
+      copyFile,
+      report,
+    };
+    const { readDeferrals } = await import('../../../src/engine/monitor/deferrals.js') as {
+      readDeferrals(startCwd: string, deps: DeferralDeps): Promise<DeferralKey[]>;
+    };
+
+    await expect(readDeferrals('/projects/payments/.worktrees/release-gate', deps)).resolves.toEqual([]);
+
+    expect(copyFile).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it('reports an unwritable deferral directory and leaves monitoring able to continue', async () => {
+    const report = vi.fn();
+    const deps: DeferralDeps = {
+      resolveMainRoot: vi.fn(async () => '/projects/payments'),
+      mkdir: vi.fn(async () => {
+        throw new Error('permission denied');
+      }),
+      writeFile: vi.fn(async () => undefined),
+      rename: vi.fn(async () => undefined),
+      readFile: vi.fn(async () => '[]'),
+      rm: vi.fn(async () => undefined),
+      report,
+    };
+    const { recordDeferralSafely } = await import('../../../src/engine/monitor/deferrals.js') as {
+      recordDeferralSafely(startCwd: string, key: DeferralKey, deps: DeferralDeps): Promise<boolean>;
+    };
+
+    await expect(recordDeferralSafely('/projects/payments/.worktrees/release-gate', {
+      project: '/projects/payments',
+      feature: 'release-gate',
+      haltIdentity: { present: true, mtimeMs: 1_726_754_400_000, size: 86 },
+    }, deps)).resolves.toBe(false);
+
+    expect(report).toHaveBeenCalledWith(expect.stringContaining('deferral record unavailable'));
+  });
+
   it('atomically persists the first deferral when no record exists yet', async () => {
     const files = new Map<string, string>();
     const deps: DeferralDeps = {
