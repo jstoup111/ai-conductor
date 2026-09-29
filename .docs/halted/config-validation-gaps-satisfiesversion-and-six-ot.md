@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-29T11:02:26.937Z
 Slug: config-validation-gaps-satisfiesversion-and-six-ot
 Class: plan-gap
 Halting step: build
