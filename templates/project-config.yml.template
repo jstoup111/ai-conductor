@@ -16,6 +16,11 @@
 # Default: unset; each step then uses its provider policy model and effort, its built-in retry budget, and escalate true.
 # Changing it: shifts every lifecycle step at once, so it is the broadest and most cost-sensitive override.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: tracker — selects the work-tracker backend for this project’s engineer intake and write-backs.
+# Allowed: an object with backend github, or backend jira with optional transport (api or mcp), credentials, site (an https URL), and project_key.
+# Default: unset; GitHub remains the selected backend.
+# Changing it: selecting jira excludes this project from intake until a Jira adapter is installed, rather than falling back to GitHub.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
 # Controls: defaults.model — the model every step uses unless a phase or step overrides it.
 # Allowed: any string the provider accepts (for Claude: fable, opus, sonnet, haiku); the value is not enum-checked at load.
 # Default: unset; each step uses the model its provider policy assigns.
