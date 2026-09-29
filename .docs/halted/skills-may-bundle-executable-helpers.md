@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-29T15:56:09.480Z
+Status: halted
 Slug: skills-may-bundle-executable-helpers
 Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-skills-may-bundle-executable-helpers
-Head SHA: 29215b8db073bae747f73fd137fa9d5a870bdb0a
-Halted at: 2026-09-29T02:57:34.028Z
+Head SHA: 357c99e8b1208c14dc95968f3bf7fc2d21d78ad6
+Halted at: 2026-09-29T17:05:42.139Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: branch "architecture_review_as_built" produced no-verdict after 3 attempts (structured-result-rejected: resolution: only version, verdict, reachability, and driftNotes are permitted for an APPROVED WITH DRIFT NOTES verdict).
+A FINISH publication transition did not change the state it owns. Next action: Inspect the listed transition and state, resolve why it is unchanged, then retry FINISH. Detail: The author_pr_prose transition left pr.prose unchanged at placeholder.
 ```
