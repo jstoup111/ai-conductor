@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-29T15:56:09.480Z
 Slug: skills-may-bundle-executable-helpers
 Class: needs-human
 Halting step: prd_audit
