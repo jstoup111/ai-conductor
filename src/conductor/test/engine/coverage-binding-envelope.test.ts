@@ -11,6 +11,7 @@ import {
   parseAmendmentBatchPayload,
   parseJudgeBatchPayload,
   parseJudgePayload,
+  issueJudgeClaimIds,
   readCoverageBindingEnvelope,
   writeCoverageBindingEnvelope,
   type CoverageBindingEnvelope,
@@ -152,31 +153,41 @@ describe('coverage binding envelope', () => {
     ]);
   });
 
-  it('accepts a batch only when it returns each issued digest once with engine-safe verdict data', () => {
+  it('issues short opaque per-batch claim ids in place of digests', () => {
+    const digests = [`sha256:${'a'.repeat(64)}`, `sha256:${'b'.repeat(64)}`];
+
+    expect([...issueJudgeClaimIds(digests, 'criterion')]).toEqual([['c1', digests[0]], ['c2', digests[1]]]);
+    expect([...issueJudgeClaimIds(digests, 'amendment')]).toEqual([['a1', digests[0]], ['a2', digests[1]]]);
+  });
+
+  it('resolves a batch answered with issued claim ids to the issued digests', () => {
+    const first = `sha256:${'1'.repeat(64)}`;
+    const second = `sha256:${'2'.repeat(64)}`;
     const parsed = parseJudgeBatchPayload(JSON.stringify({
       verdicts: [
-        { digest: 'sha256:first', verdict: 'asserts' },
-        { digest: 'sha256:second', verdict: 'does-not-assert', missingAssertion: 'The Done when checks omit the required emission.' },
+        { id: 'c1', verdict: 'asserts' },
+        { id: 'c2', verdict: 'does-not-assert', missingAssertion: 'The Done when checks omit the required emission.' },
       ],
-    }), ['sha256:first', 'sha256:second']);
+    }), issueJudgeClaimIds([first, second], 'criterion'));
 
     expect(parsed).toEqual({
       ok: true,
       verdicts: new Map([
-        ['sha256:first', { verdict: 'asserts' }],
-        ['sha256:second', { verdict: 'does-not-assert', missingAssertion: 'The Done when checks omit the required emission.' }],
+        [first, { verdict: 'asserts' }],
+        [second, { verdict: 'does-not-assert', missingAssertion: 'The Done when checks omit the required emission.' }],
       ]),
     });
   });
 
-  it('accepts amendment verdicts with only their permitted payloads', () => {
+  it('resolves an amendment batch answered with issued claim ids to the issued digests', () => {
+    const digests = ['sha256:carried', 'sha256:not-carried', 'sha256:no-obligation'];
     expect(parseAmendmentBatchPayload(JSON.stringify({
       verdicts: [
-        { digest: 'sha256:carried', verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['2'] },
-        { digest: 'sha256:not-carried', verdict: 'not-carried', missingObligation: 'The task omits the amendment obligation.' },
-        { digest: 'sha256:no-obligation', verdict: 'no-plan-obligation' },
+        { id: 'a1', verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['2'] },
+        { id: 'a2', verdict: 'not-carried', missingObligation: 'The task omits the amendment obligation.' },
+        { id: 'a3', verdict: 'no-plan-obligation' },
       ],
-    }), ['sha256:carried', 'sha256:not-carried', 'sha256:no-obligation'], ['1', '2'], ['2'])).toEqual({
+    }), issueJudgeClaimIds(digests, 'amendment'), ['1', '2'], ['2'])).toEqual({
       ok: true,
       verdicts: new Map([
         ['sha256:carried', { verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['2'] }],
@@ -187,39 +198,51 @@ describe('coverage binding envelope', () => {
   });
 
   it.each([
-    ['a carried foreign task id', { digest: 'sha256:first', verdict: 'carried', taskIds: ['foreign'] }, 'foreign'],
-    ['an empty carried task list', { digest: 'sha256:first', verdict: 'carried', taskIds: [] }, 'taskIds'],
-    ['an empty missing obligation', { digest: 'sha256:first', verdict: 'not-carried', missingObligation: '' }, 'missingObligation'],
-    ['a foreign completed contradiction', { digest: 'sha256:first', verdict: 'no-plan-obligation', contradictsCompleted: ['foreign'] }, 'foreign'],
+    ['a carried foreign task id', { id: 'a1', verdict: 'carried', taskIds: ['foreign'] }, 'foreign'],
+    ['an empty carried task list', { id: 'a1', verdict: 'carried', taskIds: [] }, 'taskIds'],
+    ['an empty missing obligation', { id: 'a1', verdict: 'not-carried', missingObligation: '' }, 'missingObligation'],
+    ['a foreign completed contradiction', { id: 'a1', verdict: 'no-plan-obligation', contradictsCompleted: ['foreign'] }, 'foreign'],
   ])('rejects an amendment batch with %s', (_kind, verdict, reason) => {
-    expect(parseAmendmentBatchPayload(JSON.stringify({ verdicts: [verdict] }), ['sha256:first'], ['1'], ['2'])).toEqual({
+    expect(parseAmendmentBatchPayload(JSON.stringify({ verdicts: [verdict] }), issueJudgeClaimIds(['sha256:first'], 'amendment'), ['1'], ['2'])).toEqual({
       ok: false,
       reason: expect.stringContaining(reason),
     });
   });
 
   it.each([
-    ['missing', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts' }] }, ['sha256:first', 'sha256:second'], 'sha256:second'],
-    ['foreign', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts' }, { digest: 'sha256:foreign', verdict: 'asserts' }] }, ['sha256:first', 'sha256:second'], 'sha256:foreign'],
-    ['duplicate', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts' }, { digest: 'sha256:first', verdict: 'asserts' }] }, ['sha256:first'], 'sha256:first'],
-  ])('rejects a %s digest-set mismatch', (_kind, payload, issuedDigests, reason) => {
-    expect(parseJudgeBatchPayload(JSON.stringify(payload), issuedDigests)).toEqual({
+    ['missing', { verdicts: [{ id: 'c1', verdict: 'asserts' }] }, 'is missing issued claim id c2'],
+    ['unknown', { verdicts: [{ id: 'c1', verdict: 'asserts' }, { id: 'c3', verdict: 'asserts' }] }, 'has unknown claim id c3'],
+    ['repeated', { verdicts: [{ id: 'c1', verdict: 'asserts' }, { id: 'c1', verdict: 'asserts' }] }, 'repeats claim id c1'],
+    ['digest-echoing', { verdicts: [{ id: 'sha256:first', verdict: 'asserts' }, { id: 'c2', verdict: 'asserts' }] }, 'has unknown claim id sha256:first'],
+  ])('fails a %s claim id closed, naming the id', (_kind, payload, reason) => {
+    expect(parseJudgeBatchPayload(JSON.stringify(payload), issueJudgeClaimIds(['sha256:first', 'sha256:second'], 'criterion'))).toEqual({
       ok: false,
       reason: expect.stringContaining(reason),
     });
   });
 
   it.each([
-    ['unknown verdict', { verdicts: [{ digest: 'sha256:first', verdict: 'maybe' }] }, 'verdict'],
-    ['missingAssertion on asserts', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts', missingAssertion: 'not allowed' }] }, 'asserts'],
-    ['empty missingAssertion', { verdicts: [{ digest: 'sha256:first', verdict: 'does-not-assert', missingAssertion: '' }] }, 'missingAssertion'],
+    ['missing', { verdicts: [{ id: 'a1', verdict: 'no-plan-obligation' }] }, 'is missing issued claim id a2'],
+    ['unknown', { verdicts: [{ id: 'a1', verdict: 'no-plan-obligation' }, { id: 'c2', verdict: 'no-plan-obligation' }] }, 'has unknown claim id c2'],
+    ['repeated', { verdicts: [{ id: 'a1', verdict: 'no-plan-obligation' }, { id: 'a1', verdict: 'no-plan-obligation' }] }, 'repeats claim id a1'],
+  ])('fails a %s amendment claim id closed, naming the id', (_kind, payload, reason) => {
+    expect(parseAmendmentBatchPayload(JSON.stringify(payload), issueJudgeClaimIds(['sha256:first', 'sha256:second'], 'amendment'), ['1'], [])).toEqual({
+      ok: false,
+      reason: expect.stringContaining(reason),
+    });
+  });
+
+  it.each([
+    ['unknown verdict', { verdicts: [{ id: 'c1', verdict: 'maybe' }] }, 'verdict'],
+    ['missingAssertion on asserts', { verdicts: [{ id: 'c1', verdict: 'asserts', missingAssertion: 'not allowed' }] }, 'asserts'],
+    ['empty missingAssertion', { verdicts: [{ id: 'c1', verdict: 'does-not-assert', missingAssertion: '' }] }, 'missingAssertion'],
     ['non-object payload', [], 'object'],
     ['missing verdicts array', {}, 'verdicts'],
     ['non-array verdicts', { verdicts: {} }, 'array'],
-    ['extra top-level key', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts' }], extra: true }, 'only verdicts'],
-    ['extra entry key', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts', extra: true }] }, 'asserts'],
+    ['extra top-level key', { verdicts: [{ id: 'c1', verdict: 'asserts' }], extra: true }, 'only verdicts'],
+    ['extra entry key', { verdicts: [{ id: 'c1', verdict: 'asserts', extra: true }] }, 'asserts'],
   ])('rejects a batch payload with %s', (_kind, payload, reason) => {
-    expect(parseJudgeBatchPayload(JSON.stringify(payload), ['sha256:first'])).toEqual({
+    expect(parseJudgeBatchPayload(JSON.stringify(payload), issueJudgeClaimIds(['sha256:first'], 'criterion'))).toEqual({
       ok: false,
       reason: expect.stringContaining(reason),
     });

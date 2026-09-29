@@ -94,11 +94,11 @@ function expectUniqueFreshSessionIds(sessionIds: ReadonlyArray<string | undefine
 
 function coverageBindingBatchOutput(options: InvokeOptions, verdict: 'asserts' | 'does-not-assert' = 'asserts'): string {
   const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-  const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+  const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
   return JSON.stringify({
-    verdicts: claims.map(({ digest }) => verdict === 'asserts'
-      ? { digest, verdict }
-      : { digest, verdict, missingAssertion: 'No check requires emission.' }),
+    verdicts: claims.map(({ id }) => verdict === 'asserts'
+      ? { id, verdict }
+      : { id, verdict, missingAssertion: 'No check requires emission.' }),
   });
 }
 
@@ -691,10 +691,10 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
       const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+      const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
       return {
         success: true,
-        output: JSON.stringify({ verdicts: [{ digest: claims[0]!.digest, verdict: 'carried', taskIds: ['foreign-task'] }] }),
+        output: JSON.stringify({ verdicts: [{ id: claims[0]!.id, verdict: 'carried', taskIds: ['foreign-task'] }] }),
         exitCode: 0,
       };
     });
@@ -752,8 +752,8 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
       const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
-      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ digest }) => ({ digest, ...payload })) }), exitCode: 0 };
+      const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
+      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ id }) => ({ id, ...payload })) }), exitCode: 0 };
     });
     const events = new ConductorEventEmitter();
     const observed: unknown[] = [];
@@ -770,6 +770,34 @@ describe('DefaultStepRunner', () => {
     }
   });
 
+  it('issues amendment claims to the judge by short id and records the real digest', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-ids-'));
+    const featureDesc = 'coverage-binding-amendment-ids';
+    const planPath = await writeAmendmentCoverageInputs(projectDir, featureDesc);
+    const provider = createMockProvider();
+    let prompt = '';
+    (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+      prompt = options.prompt;
+      const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
+      const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
+      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ id }) => ({ id, verdict: 'no-plan-obligation' })) }), exitCode: 0 };
+    });
+    const runner = new DefaultStepRunner(provider, 'coverage-run-amendment-ids', projectDir, {
+      featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    try {
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      const { claims } = JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n{') + 2)) as { claims: Array<Record<string, unknown>> };
+      expect(claims.map(({ id }) => id)).toEqual(['a1']);
+      expect(prompt).not.toContain('sha256:');
+      expect(JSON.parse(await readFile(join(projectDir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({
+        status: 'done', entries: [{ kind: 'amendment', digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/), verdict: 'no-plan-obligation' }],
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a not-carried amendment with its artifact, text, and missing obligation', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-amendment-refusal-'));
     const featureDesc = 'coverage-binding-amendment-refusal';
@@ -777,8 +805,8 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
       const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
-      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ digest }) => ({ digest, verdict: 'not-carried', missingObligation: 'Add a preservation task.' })) }), exitCode: 0 };
+      const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
+      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ id }) => ({ id, verdict: 'not-carried', missingObligation: 'Add a preservation task.' })) }), exitCode: 0 };
     });
     const runner = new DefaultStepRunner(provider, 'coverage-run-amendment-refusal', projectDir, {
       featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
@@ -801,8 +829,8 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
       const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
-      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ digest }) => ({ digest, verdict: 'not-carried', missingObligation: 'X' })) }), exitCode: 0 };
+      const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
+      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ id }) => ({ id, verdict: 'not-carried', missingObligation: 'X' })) }), exitCode: 0 };
     });
     const runner = new DefaultStepRunner(provider, 'coverage-run-amendment-cached-refusal', projectDir, {
       featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
@@ -826,8 +854,8 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
       const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
-      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ digest }) => ({ digest, verdict: 'carried', taskIds: ['1'] })) }), exitCode: 0 };
+      const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
+      return { success: true, output: JSON.stringify({ verdicts: claims.map(({ id }) => ({ id, verdict: 'carried', taskIds: ['1'] })) }), exitCode: 0 };
     });
     const enabled = new DefaultStepRunner(provider, 'coverage-run-amendment-cache', projectDir, {
       featureDesc, planPath, config: { coverage_binding: { judge: { enabled: true } } },
@@ -859,13 +887,13 @@ describe('DefaultStepRunner', () => {
     let issuedCompletedTaskIds: string[] | undefined;
     (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
       const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims, completedTaskIds } = JSON.parse(body) as { claims: Array<{ digest: string; amendment?: string }>; completedTaskIds?: string[] };
+      const { claims, completedTaskIds } = JSON.parse(body) as { claims: Array<{ id: string; amendment?: string }>; completedTaskIds?: string[] };
       if (claims[0]?.amendment !== undefined) issuedCompletedTaskIds = completedTaskIds;
       return {
         success: true,
-        output: JSON.stringify({ verdicts: claims.map(({ digest, amendment }) => amendment === undefined
-          ? { digest, verdict: 'asserts' }
-          : { digest, verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['3'] }) }),
+        output: JSON.stringify({ verdicts: claims.map(({ id, amendment }) => amendment === undefined
+          ? { id, verdict: 'asserts' }
+          : { id, verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['3'] }) }),
         exitCode: 0,
       };
     });
@@ -1037,13 +1065,13 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
       const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
-      const { claims, completedTaskIds } = JSON.parse(body) as { claims: Array<{ digest: string; amendment?: string }>; completedTaskIds?: string[] };
+      const { claims, completedTaskIds } = JSON.parse(body) as { claims: Array<{ id: string; amendment?: string }>; completedTaskIds?: string[] };
       if (claims[0]?.amendment !== undefined) issuedCompletedTaskIds = completedTaskIds;
       return {
         success: true,
-        output: JSON.stringify({ verdicts: claims.map(({ digest, amendment }) => amendment === undefined
-          ? { digest, verdict: 'asserts' }
-          : { digest, verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['3'] }) }),
+        output: JSON.stringify({ verdicts: claims.map(({ id, amendment }) => amendment === undefined
+          ? { id, verdict: 'asserts' }
+          : { id, verdict: 'carried', taskIds: ['1'], contradictsCompleted: ['3'] }) }),
         exitCode: 0,
       };
     });

@@ -21,7 +21,7 @@ import { readFile } from 'node:fs/promises';
 const FRESH_SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface PromptClaim {
-  readonly digest: string;
+  readonly id: string;
   readonly criterion: string;
   readonly taskIds: readonly string[];
   readonly doneWhen: readonly (readonly string[])[];
@@ -30,6 +30,11 @@ interface PromptClaim {
 function promptClaims(options: InvokeOptions): PromptClaim[] {
   const body = options.prompt.slice(options.prompt.lastIndexOf('\n\n{') + 2);
   return (JSON.parse(body) as { claims: PromptClaim[] }).claims;
+}
+
+/** The engine-side identity of a claim the judge was shown by opaque id. */
+function promptDigest(claim: PromptClaim): string {
+  return claimDigest({ criterion: claim.criterion, doneWhen: claim.doneWhen });
 }
 
 function planText(count: number): string {
@@ -90,7 +95,7 @@ async function runBatches(count: number, batchSize: number, options: {
     lifecycleCapability: { synchronousSpawnPermit: true },
     invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => ({
       success: true,
-      output: JSON.stringify({ verdicts: promptClaims(options).map(({ digest }) => ({ digest, verdict: 'asserts' })) }),
+      output: JSON.stringify({ verdicts: promptClaims(options).map(({ id }) => ({ id, verdict: 'asserts' })) }),
       exitCode: 0,
     })),
   };
@@ -126,7 +131,7 @@ describe('coverage-binding runner batches', () => {
     }
   });
 
-  it('dispatches digest-stamped claim batches through fresh sessions', async () => {
+  it('dispatches claim batches under short per-batch ids with no digest in the judge prompt', async () => {
     const { projectDir, provider, runner } = await runBatches(20, 8);
     try {
       await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
@@ -141,9 +146,10 @@ describe('coverage-binding runner batches', () => {
       expect(calls.every((options) => options.prompt.startsWith('/coverage-binding\n\n'))).toBe(true);
       for (const options of calls) {
         for (const claim of promptClaims(options)) {
-          expect(Object.keys(claim).sort()).toEqual(['criterion', 'digest', 'doneWhen', 'taskIds']);
-          expect(claim.digest).toBe(claimDigest(claim));
+          expect(Object.keys(claim).sort()).toEqual(['criterion', 'doneWhen', 'id', 'taskIds']);
         }
+        expect(promptClaims(options).map(({ id }) => id)).toEqual(promptClaims(options).map((_, index) => `c${index + 1}`));
+        expect(options.prompt).not.toContain('sha256:');
       }
     } finally {
       await rm(projectDir, { recursive: true, force: true });
@@ -182,7 +188,7 @@ describe('coverage-binding runner batches', () => {
           expect.objectContaining({ digest: claimDigest({ criterion: 'Criterion 14', doneWhen: [] }), verdict: 'not-applicable' }),
         ]) });
         expect(checkpoint?.entries).toHaveLength(14);
-        return { success: true, output: JSON.stringify({ verdicts: promptClaims(options).map(({ digest }) => ({ digest, verdict: 'asserts' })) }), exitCode: 0 };
+        return { success: true, output: JSON.stringify({ verdicts: promptClaims(options).map(({ id }) => ({ id, verdict: 'asserts' })) }), exitCode: 0 };
       });
       await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
       expect(provider.invoke).toHaveBeenCalledTimes(1);
@@ -202,7 +208,7 @@ describe('coverage-binding runner batches', () => {
           expect(checkpoint).toMatchObject({ status: 'partial' });
           expect(checkpoint?.entries).toHaveLength(8);
         }
-        return { success: true, output: JSON.stringify({ verdicts: promptClaims(options).map(({ digest }) => ({ digest, verdict: 'asserts' })) }), exitCode: 0 };
+        return { success: true, output: JSON.stringify({ verdicts: promptClaims(options).map(({ id }) => ({ id, verdict: 'asserts' })) }), exitCode: 0 };
       });
       await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
       expect(envelope.writes.map(({ status, entries }) => [status, entries.length])).toEqual([
@@ -242,30 +248,30 @@ describe('coverage-binding runner batches', () => {
       (provider.invoke as ReturnType<typeof vi.fn>)
         .mockImplementationOnce(async (options: InvokeOptions) => ({
           success: true,
-          output: JSON.stringify({ verdicts: promptClaims(options).map(({ digest }) => ({ digest, verdict: 'asserts' })) }),
+          output: JSON.stringify({ verdicts: promptClaims(options).map(({ id }) => ({ id, verdict: 'asserts' })) }),
           exitCode: 0,
         }))
         .mockImplementationOnce(async (options: InvokeOptions) => ({
           success: true,
-          output: JSON.stringify({ verdicts: promptClaims(options).slice(0, 7).map(({ digest }) => ({ digest, verdict: 'asserts' })) }),
+          output: JSON.stringify({ verdicts: promptClaims(options).slice(0, 7).map(({ id }) => ({ id, verdict: 'asserts' })) }),
           exitCode: 0,
         }));
 
       const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
-      const missingDigest = promptClaims((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[1]![0] as InvokeOptions)[7]!.digest;
+      const missingId = promptClaims((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[1]![0] as InvokeOptions)[7]!.id;
 
       expect(result).toMatchObject({
         success: false,
         infrastructureFailure: expect.any(CoverageBindingPayloadError),
-        output: expect.stringContaining(missingDigest),
+        output: expect.stringContaining(missingId),
       });
-      expect((result.infrastructureFailure as Error | undefined)?.message).toContain(missingDigest);
+      expect((result.infrastructureFailure as Error | undefined)?.message).toContain(missingId);
       expect(result).not.toHaveProperty('refusal');
       expect(provider.invoke).toHaveBeenCalledTimes(2);
       expect(envelope.writes.at(-1)).toMatchObject({ status: 'failed' });
       expect(envelope.writes.at(-1)?.entries).toHaveLength(8);
       expect(envelope.writes.at(-1)?.entries.map(({ digest }) => digest)).toEqual(
-        promptClaims((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0]![0] as InvokeOptions).map(({ digest }) => digest),
+        promptClaims((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0]![0] as InvokeOptions).map(promptDigest),
       );
     } finally {
       await rm(projectDir, { recursive: true, force: true });
@@ -279,7 +285,7 @@ describe('coverage-binding runner batches', () => {
       (provider.invoke as ReturnType<typeof vi.fn>)
         .mockImplementationOnce(async (options: InvokeOptions) => ({
           success: true,
-          output: JSON.stringify({ verdicts: promptClaims(options).map(({ digest }) => ({ digest, verdict: 'asserts' })) }),
+          output: JSON.stringify({ verdicts: promptClaims(options).map(({ id }) => ({ id, verdict: 'asserts' })) }),
           exitCode: 0,
         }))
         .mockResolvedValueOnce({ success: false, output: 'provider unavailable', exitCode: 1 });
@@ -298,7 +304,7 @@ describe('coverage-binding runner batches', () => {
       expect(envelope.writes.at(-1)).toMatchObject({ status: 'failed' });
       expect(envelope.writes.at(-1)?.entries).toHaveLength(8);
       expect(envelope.writes.at(-1)?.entries.map(({ digest }) => digest)).toEqual(
-        promptClaims((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0]![0] as InvokeOptions).map(({ digest }) => digest),
+        promptClaims((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0]![0] as InvokeOptions).map(promptDigest),
       );
     } finally {
       await rm(projectDir, { recursive: true, force: true });
@@ -315,10 +321,10 @@ describe('coverage-binding runner batches', () => {
         return {
           success: true,
           output: JSON.stringify({
-            verdicts: claims.map(({ digest }, index) =>
+            verdicts: claims.map(({ id }, index) =>
               secondBatch && index === 0
-                ? { digest, verdict: 'does-not-assert', missingAssertion: 'The check omits the criterion.' }
-                : { digest, verdict: 'asserts' },
+                ? { id, verdict: 'does-not-assert', missingAssertion: 'The check omits the criterion.' }
+                : { id, verdict: 'asserts' },
             ),
           }),
           exitCode: 0,
@@ -339,7 +345,7 @@ describe('coverage-binding runner batches', () => {
       expect(envelope.writes.at(-1)?.entries).toHaveLength(20);
       expect(envelope.writes.at(-1)?.entries).toEqual(expect.arrayContaining([
         expect.objectContaining({
-          digest: refused.digest,
+          digest: promptDigest(refused),
           verdict: 'does-not-assert',
           missingAssertion: 'The check omits the criterion.',
         }),
@@ -364,7 +370,7 @@ describe('coverage-binding runner batches', () => {
       await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
 
       expect(provider.invoke).toHaveBeenCalledTimes(1);
-      expect(promptClaims((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0]![0] as InvokeOptions).map(({ digest }) => digest)).toEqual(
+      expect(promptClaims((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0]![0] as InvokeOptions).map(promptDigest)).toEqual(
         Array.from({ length: 8 }, (_, index) => entryFor(index + 9).digest),
       );
     } finally {
