@@ -100,8 +100,9 @@ linking as part of filing, instead of relying on prose to remember the labels.
   handles it, then it reports the issue URL and the un-applied label as a warning
   and exits **success** (the issue exists; completeness is reconciled on the next
   form edit or backfill) — it never leaves the caller with a hard failure.
-- Given `--depends-on` is omitted, when filing, then linking is recorded as an
-  explicit "no dependencies" acknowledgement, not left undecided.
+- Given `--depends-on` is omitted and the filing has no undecided linkable overlap
+  suggestion, when filing, then linking is recorded as an explicit "no dependencies"
+  acknowledgement, not left undecided.
 
 ### Done When
 - [ ] An intake-filing test asserts create + label + link in one filing, prompt
@@ -161,8 +162,9 @@ downstream blocker verdict.
 #### Happy Path
 - Given a `Depends on #N` form field or `--depends-on N` helper arg, when the issue
   is filed, then its `blocked_by` set is recorded at intake.
-- Given no dependency is stated, when filing, then an explicit "no dependencies"
-  acknowledgement is recorded — the linking decision exists, it is not left blank.
+- Given no dependency is stated and the filing has no undecided linkable overlap
+  suggestion, when filing, then an explicit "no dependencies" acknowledgement is
+  recorded — the linking decision exists, it is not left blank.
 
 #### Negative Paths
 - Given a `Depends on` reference to a non-existent issue, when linking is recorded,
