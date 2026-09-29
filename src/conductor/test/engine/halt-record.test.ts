@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { execa } from 'execa';
 import {
   HALT_RECORD_DIR,
@@ -14,6 +14,7 @@ import {
   supersedeHaltRecordText,
   type HaltRecordRemoteOptions,
 } from '../../src/engine/halt-record.js';
+import { clearHaltForResume } from '../../src/engine/daemon-rekick.js';
 import type { RemoteGitExecutionResult } from '../../src/engine/remote-git-operations.js';
 
 const input = {
@@ -137,6 +138,49 @@ describe('halt record supersession', () => {
   });
 });
 
+describe('kickback halt clear record composition', () => {
+  it('confirms and clears the marker when no committed halt record exists', async () => {
+    const root = await makeFeatureRepository();
+    const before = await commitCount(root);
+    const cleared: string[] = [];
+
+    await expect(clearComposedHalt(root, cleared)).resolves.toBe('confirmed');
+
+    expect(cleared).toEqual([root]);
+    await expect(readFile(join(root, haltRecordPath(input.slug)), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await commitCount(root)).toBe(before);
+  });
+
+  it('resolves the committed record before clearing the marker', async () => {
+    const root = await makeFeatureRepository();
+    await expect(recordHalt(root, input, successfulRemote())).resolves.toEqual({ kind: 'written' });
+    await expect(readFile(join(root, haltRecordPath(input.slug)), 'utf8')).resolves.toContain('Status: halted');
+    const before = await commitCount(root);
+    const cleared: string[] = [];
+
+    await expect(clearComposedHalt(root, cleared)).resolves.toBe('confirmed');
+
+    expect(cleared).toEqual([root]);
+    await expect(readFile(join(root, haltRecordPath(input.slug)), 'utf8')).resolves.toContain('Status: resolved');
+    await expect(readFile(join(root, haltRecordPath(input.slug)), 'utf8')).resolves.toContain('Resolution cause: kickback-budget');
+    expect(await commitCount(root)).toBe(before + 1);
+  });
+
+  it('retains the marker and reports the directory read failure', async () => {
+    const root = await makeFeatureRepository();
+    await mkdir(join(root, haltRecordPath(input.slug)), { recursive: true });
+    const cleared: string[] = [];
+    const logs: string[] = [];
+
+    await expect(clearComposedHalt(root, cleared, logs)).resolves.toBe('partial');
+
+    expect(cleared).toEqual([]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('halt record not superseded');
+    expect(logs[0]).toContain('EISDIR');
+  });
+});
+
 const scratchRoots: string[] = [];
 
 afterEach(async () => {
@@ -192,7 +236,7 @@ async function makeScratchRepository(): Promise<string> {
 
 async function makeFeatureRepository(): Promise<string> {
   const root = await makeScratchRepository();
-  const worktree = join(root, '..', `${input.slug}-feature-worktree`);
+  const worktree = join(root, '..', `${basename(root)}-feature-worktree`);
   scratchRoots.push(worktree);
   await execa('git', ['worktree', 'add', '-q', '-b', input.branch, worktree], { cwd: root });
   return worktree;
@@ -207,4 +251,15 @@ function successfulRemote(): HaltRecordRemoteOptions {
   return {
     remoteGit: async (): Promise<RemoteGitExecutionResult> => ({ kind: 'executed', targets: [] }),
   };
+}
+
+function clearComposedHalt(worktreePath: string, cleared: string[], logs: string[] = []) {
+  return clearHaltForResume({
+    worktreePath,
+    slug: input.slug,
+    clearMarker: async (path) => { cleared.push(path); },
+    resolveCommittedRecord: (path, slug) =>
+      supersedeHaltRecord(path, slug, 'kickback-budget', successfulRemote()),
+    log: (message) => { logs.push(message); },
+  });
 }
