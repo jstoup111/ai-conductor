@@ -21,6 +21,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon operators see the age of the most recent provider activity in quiet-build warnings. ([implementation PR #2824](https://github.com/jstoup111/ai-conductor/pull/2824)).
 - Harness uninstall now removes its settings and offers an opt-in `--purge` cleanup for its state directory. ([implementation PR #2808](https://github.com/jstoup111/ai-conductor/pull/2808)).
 - Intake skill users can file issues through a bundled helper that works from installed skill directories. ([implementation PR #2823](https://github.com/jstoup111/ai-conductor/pull/2823)).
+- Daemon commits now credit the configured GitHub bot as a co-author when its identity is available. ([implementation PR #2839](https://github.com/jstoup111/ai-conductor/pull/2839)).
 
 ### Changed
 
