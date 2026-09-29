@@ -19,7 +19,10 @@ vi.mock('node:child_process', async (importOriginal) => {
     execFile: vi.fn((_file, args: string[], options: Record<string, unknown>, callback) => {
       boundary.calls.push({ args, options });
       const env = options.env as NodeJS.ProcessEnv | undefined;
-      queueMicrotask(() => callback(null, { stdout: env?.GH_TOKEN === 'bot-token' ? '{"login":"conductor-bot"}' : 'operator-login\n', stderr: '' }));
+      const stdout = args[0] === 'issue'
+        ? '[]'
+        : env?.GH_TOKEN === 'bot-token' ? '{"login":"conductor-bot"}' : 'operator-login\n';
+      queueMicrotask(() => callback(null, { stdout, stderr: '' }));
       return {};
     }),
   };
@@ -27,7 +30,8 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 import { decodeGithubAmbientRead } from '../../src/engine/github-operations.js';
 import { GithubBotAuthRefusalError } from '../../src/engine/github-bot-auth-refusal.js';
-import { makeProductionGh, runBotIdentityRead } from '../../src/engine/tracker-client.js';
+import { ghLoginOwner } from '../../src/engine/owner-gate/identity.js';
+import { createGithubTrackerClient, makeProductionGh, runBotIdentityRead } from '../../src/engine/tracker-client.js';
 
 describe('bot identity read transport', () => {
   let root: string;
@@ -78,5 +82,24 @@ describe('bot identity read transport', () => {
   it('keeps the existing operator identity read on the ambient operator credential', async () => {
     await expect(makeProductionGh()(['api', 'user', '--jq', '.login'], { cwd: root, credential: 'operator' })).resolves.toEqual({ stdout: 'operator-login\n' });
     expect(boundary.calls).toEqual([{ args: ['api', 'user', '--jq', '.login'], options: expect.not.objectContaining({ env: expect.anything() }) }]);
+  });
+
+  it('keeps ownership and assigned-issue reads on the operator credential after resolving the bot identity', async () => {
+    const gh = makeProductionGh();
+
+    await expect(runBotIdentityRead(gh, root)).resolves.toBe('{"login":"conductor-bot"}');
+    await expect(ghLoginOwner(gh, root)).resolves.toEqual({ resolved: true, id: 'operator-login' });
+    await expect(createGithubTrackerClient(gh).listAssignedIssues('acme/widgets', root)).resolves.toEqual([]);
+
+    expect(boundary.calls.map(({ args }) => args)).toEqual([
+      ['api', 'user'],
+      ['api', 'user', '--jq', '.login'],
+      ['issue', 'list', '--assignee', '@me', '--state', 'open', '--json', 'number,title,body,labels', '--limit', '1000', '-R', 'acme/widgets'],
+    ]);
+    expect(boundary.calls[0]?.options).toEqual(expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'bot-token' }) }));
+    for (const { options } of boundary.calls.slice(1)) {
+      expect(options).not.toHaveProperty('env');
+    }
+    expect(process.env.GH_TOKEN).toBe('operator-token');
   });
 });
