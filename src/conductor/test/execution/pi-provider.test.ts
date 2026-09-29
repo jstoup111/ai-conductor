@@ -78,7 +78,7 @@ describe('PiProvider', () => {
       defaultExecutable: 'pi',
       executableOverrideEnv: 'PI_EXECUTABLE',
       versionArgv: ['--version'],
-      capabilities: { supportsSessionResume: false },
+      capabilities: {},
     });
     expect(pi.modelPolicy.modelFallbackLadder).toEqual(['']);
     expect(Object.values(pi.modelPolicy.stepModels)).toEqual(

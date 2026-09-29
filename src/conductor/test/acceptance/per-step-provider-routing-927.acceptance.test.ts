@@ -379,9 +379,7 @@ describe('ST-927-1/ST-927-8 — scalar built-in compatibility', () => {
         actualProvider: providerKey,
       });
       expect(warnings).toEqual(
-        providerKey === 'codex'
-          ? ['Step build: provider codex does not support session resume; using a fresh session.']
-          : [],
+        [`Step build: provider ${providerKey} does not support session resume; using a fresh session.`],
       );
     },
   );
