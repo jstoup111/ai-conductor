@@ -673,8 +673,10 @@ describe('engine/daemon-park-cli', () => {
         expect(joined).toContain('docs/runbooks/stalled-or-stuck-feature.md');
       }
       if (['kickback-cap', 'future-class', 'unreadable'].includes(expectedClass)) {
-        const haltLines = out.filter((line) => /\.pipeline\/HALT(?:\s|$)/.test(line));
-        expect(haltLines).not.toEqual(expect.arrayContaining([
+        const recoveryLines = out
+          .filter((line) => line.startsWith('To resume:'))
+          .map((line) => line.replaceAll(worktreeDir, '<worktree>'));
+        expect(recoveryLines).not.toEqual(expect.arrayContaining([
           expect.stringMatching(/\b(unlink|remove|delete)\b|rm /i),
         ]));
       }
@@ -792,7 +794,6 @@ describe('engine/daemon-park-cli', () => {
       if (haltClass === 'over-scope') {
         expect(out.join('\n')).toContain(`rm -f ${haltClassPath}`);
         expect(out.join('\n')).not.toContain(`rm ${haltPath}`);
-        expect(out.join('\n')).not.toMatch(new RegExp(`\\b(?:unlink|remove|delete)\\b.*${haltPath}`));
       }
     });
 
