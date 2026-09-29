@@ -51,6 +51,10 @@ CHANNEL_SOURCE=""
 # conduct-ts entirely absent.
 CONDUCT_TS_FAILURE=""
 
+# UNINSTALL_FAILURE records settings cleanup that could not complete without
+# preventing the remaining owned links and rate card from being removed.
+UNINSTALL_FAILURE=""
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -1534,9 +1538,13 @@ install() {
 uninstall() {
   local document reference_source reference_label settings_file perms_file settings_cleanup_output settings_cleanup_status rate_card rate_card_source
 
+  UNINSTALL_FAILURE=""
   settings_file="${HOME}/.claude/settings.json"
   if [ ! -e "$settings_file" ]; then
     ok "Settings: no settings entries to remove (${settings_file} not found)"
+  elif ! command -v python3 &>/dev/null; then
+    UNINSTALL_FAILURE="python3 not found — harness hooks and permissions remain in ${settings_file}"
+    warn "$UNINSTALL_FAILURE"
   else
     perms_file=$(mktemp)
     printf '%s\n' "${HARNESS_PERMISSIONS[@]}" > "$perms_file"
@@ -1626,7 +1634,8 @@ PYEOF
         ok "Settings: removed ${removed_hook_commands} harness hook commands and ${removed_permissions} permissions from ${settings_file}"
       fi
     else
-      warn "Could not remove harness settings entries from ${settings_file}"
+      UNINSTALL_FAILURE="Could not remove harness settings from ${settings_file}"
+      warn "$UNINSTALL_FAILURE"
     fi
   fi
 
@@ -1750,6 +1759,11 @@ PYEOF
   done
 
   echo ""
+  if [ -n "$UNINSTALL_FAILURE" ]; then
+    echo -e "${RED}${BOLD}Uninstall incomplete.${NC}"
+    fail "$UNINSTALL_FAILURE"
+    return 1
+  fi
   echo -e "${GREEN}${BOLD}Uninstall complete.${NC}"
 }
 

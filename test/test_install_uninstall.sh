@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Covers: task:1, task:2, task:4, task:5
+# Covers: task:1, task:2, task:3, task:4, task:5
 #
 # Public-entry-point RED coverage for uninstalling the settings entries written
 # by bin/install.  Every invocation uses a throwaway HOME and a copied harness
@@ -14,6 +14,7 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 
 CHECKOUT="$TMP_ROOT/checkout"
 STUBS="$TMP_ROOT/stubs"
+NO_PYTHON_STUBS="$TMP_ROOT/no-python-stubs"
 TEMPLATE_HOME="$TMP_ROOT/template-home"
 PYTHON3="$(python3 -c 'import sys; print(sys.executable)')"
 PASS=0
@@ -27,7 +28,7 @@ check() {
   if "$@"; then pass "$description"; else fail "$description"; fi
 }
 
-mkdir -p "$CHECKOUT" "$STUBS"
+mkdir -p "$CHECKOUT" "$STUBS" "$NO_PYTHON_STUBS"
 cp -R "$HARNESS_DIR/bin" "$HARNESS_DIR/skills" "$HARNESS_DIR/hooks" "$CHECKOUT/"
 cp "$HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/ARCHITECTURE.md" "$HARNESS_DIR/VERSION" "$CHECKOUT/"
 mkdir -p "$CHECKOUT/.ai-conductor"
@@ -37,8 +38,12 @@ mkdir -p "$CHECKOUT/src/conductor/dist"
 for tool in rtk npm node claude codex uv; do
   printf '#!/usr/bin/env bash\nexit 0\n' > "$STUBS/$tool"
   chmod +x "$STUBS/$tool"
+  ln -s "$STUBS/$tool" "$NO_PYTHON_STUBS/$tool"
 done
 ln -s "$PYTHON3" "$STUBS/python3"
+for tool in basename dirname readlink rm bash timeout; do
+  ln -s "$(command -v "$tool")" "$NO_PYTHON_STUBS/$tool"
+done
 
 run_install() {
   local home=$1 output=$2
@@ -54,6 +59,16 @@ run_install() {
 run_uninstall() {
   local home=$1 output=$2
   run_install "$home" "$output" --uninstall
+}
+
+run_uninstall_without_python() {
+  local home=$1 output=$2
+  mkdir -p "$home"
+  (
+    cd "$CHECKOUT" || exit 1
+    HOME="$home" PATH="$NO_PYTHON_STUBS" \
+      timeout 15s /bin/bash "$CHECKOUT/bin/install" --uninstall --allow-worktree-root </dev/null
+  ) >"$output" 2>&1
 }
 
 make_case_home() {
@@ -72,6 +87,27 @@ expect_removal_report() {
 
 has_no_kept_line() {
   ! grep -Fq 'Kept ' "$1"
+}
+
+seed_launcher_links() {
+  local home=$1 entrypoint
+  mkdir -p "$home/.local/bin"
+  for entrypoint in conduct conduct-ts ai-conductor; do
+    rm -f "$home/.local/bin/$entrypoint"
+    ln -s "$CHECKOUT/bin/ai-conductor" "$home/.local/bin/$entrypoint"
+  done
+}
+
+assert_later_uninstall_steps() {
+  local home=$1 output=$2 skill_dir entrypoint
+  for skill_dir in "$CHECKOUT"/skills/*; do
+    test ! -e "$home/.claude/skills/$(basename "$skill_dir")" || return 1
+  done
+  for entrypoint in conduct conduct-ts ai-conductor; do
+    test ! -e "$home/.local/bin/$entrypoint" || return 1
+  done
+  test ! -e "$(rate_card_file "$home")" &&
+    grep -Fq "Kept $home/.ai-conductor: operator configuration and runtime data (project registry, memory). Re-run with --uninstall --purge to remove it." "$output"
 }
 
 assert_case_a() {
@@ -270,6 +306,39 @@ check 'K2 uninstall exits successfully without harness state' test "$CASE_K2_EXI
 check 'K2 does not create absent harness state' test ! -e "$CASE_K2/.ai-conductor"
 check 'K2 does not report kept state when none exists' \
   has_no_kept_line "$TMP_ROOT/case-k2.out"
+
+# M: malformed settings cannot be cleaned, but every later uninstall step runs.
+CASE_M="$TMP_ROOT/case-m"
+make_case_home "$CASE_M"
+printf '{"hooks": [\n' > "$(settings_file "$CASE_M")"
+cp "$(settings_file "$CASE_M")" "$TMP_ROOT/case-m-before.json"
+seed_launcher_links "$CASE_M"
+run_uninstall "$CASE_M" "$TMP_ROOT/case-m.out"
+CASE_M_EXIT=$?
+check 'M leaves malformed settings byte-identical' \
+  cmp -s "$(settings_file "$CASE_M")" "$TMP_ROOT/case-m-before.json"
+check 'M warns that harness settings could not be removed' \
+  grep -Fq "Could not remove harness settings from $(settings_file "$CASE_M")" "$TMP_ROOT/case-m.out"
+check 'M continues with every later uninstall step' assert_later_uninstall_steps "$CASE_M" "$TMP_ROOT/case-m.out"
+check 'M reports an incomplete uninstall without a complete summary' \
+  sh -c '! grep -Fq "Uninstall complete." "$1" && grep -Fq "Uninstall incomplete" "$1"' sh "$TMP_ROOT/case-m.out"
+check 'M exits non-zero when malformed settings cannot be cleaned' test "$CASE_M_EXIT" -ne 0
+
+# P: absence of python3 leaves settings untouched and does not stop cleanup.
+CASE_P="$TMP_ROOT/case-p"
+make_case_home "$CASE_P"
+cp "$(settings_file "$CASE_P")" "$TMP_ROOT/case-p-before.json"
+seed_launcher_links "$CASE_P"
+run_uninstall_without_python "$CASE_P" "$TMP_ROOT/case-p.out"
+CASE_P_EXIT=$?
+check 'P leaves settings byte-identical without python3' \
+  cmp -s "$(settings_file "$CASE_P")" "$TMP_ROOT/case-p-before.json"
+check 'P warns that harness settings remain when python3 is unavailable' \
+  grep -Fq "python3 not found — harness hooks and permissions remain in $(settings_file "$CASE_P")" "$TMP_ROOT/case-p.out"
+check 'P continues with every later uninstall step' assert_later_uninstall_steps "$CASE_P" "$TMP_ROOT/case-p.out"
+check 'P reports an incomplete uninstall without a complete summary' \
+  sh -c '! grep -Fq "Uninstall complete." "$1" && grep -Fq "Uninstall incomplete" "$1"' sh "$TMP_ROOT/case-p.out"
+check 'P exits non-zero when python3 is unavailable' test "$CASE_P_EXIT" -ne 0
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
