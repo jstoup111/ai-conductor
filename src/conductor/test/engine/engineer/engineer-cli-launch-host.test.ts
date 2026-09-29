@@ -1,4 +1,4 @@
-// Covers: task:4, task:5, task:6
+// Covers: task:4, task:5, task:6, task:7
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -31,6 +31,99 @@ afterEach(() => {
 });
 
 describe('dispatchEngineer interactive host launch', () => {
+  it('refuses a nested codex session before loading config, polling, or spawning', async () => {
+    const spawnHost = vi.fn(async () => 0);
+    const prePoll = vi.fn(async () => 0);
+    const loadLaunchConfig = vi.fn(async () => ({ ok: true as const, config: {}, warnings: [] }));
+    const gh = vi.fn(async () => ({ stdout: '' }));
+    const print = vi.fn();
+
+    const code = await dispatchEngineer({ kind: 'launch' }, {
+      ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost, { CODEX_THREAD_ID: 'thread' }),
+      loadLaunchConfig,
+      prePoll,
+      gh,
+      print,
+    });
+
+    expect({ code, output: print.mock.calls.flat(), spawnCalls: spawnHost.mock.calls, prePollCalls: prePoll.mock.calls, configCalls: loadLaunchConfig.mock.calls, ghCalls: gh.mock.calls })
+      .toEqual({
+        code: 0,
+        output: expect.arrayContaining([expect.stringContaining('$composer')]),
+        spawnCalls: [],
+        prePollCalls: [],
+        configCalls: [],
+        ghCalls: [],
+      });
+  });
+
+  it.each([
+    [{ CLAUDECODE: '1' }, '/composer'],
+    [{ CODEX_SESSION_ID: 'session' }, '$composer'],
+  ])('refuses each interactive host marker %o before polling or spawning', async (env, invocation) => {
+    const spawnHost = vi.fn(async () => 0);
+    const prePoll = vi.fn(async () => 0);
+    const print = vi.fn();
+
+    const code = await dispatchEngineer({ kind: 'launch' }, {
+      ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost, env),
+      prePoll,
+      print,
+    });
+
+    expect({ code, output: print.mock.calls.flat(), spawnCalls: spawnHost.mock.calls, prePollCalls: prePoll.mock.calls })
+      .toEqual({
+        code: 0,
+        output: expect.arrayContaining([expect.stringContaining(invocation)]),
+        spawnCalls: [],
+        prePollCalls: [],
+      });
+  });
+
+  it('uses a detected codex marker even when a different provider flag is supplied', async () => {
+    const spawnHost = vi.fn(async () => 0);
+    const print = vi.fn();
+
+    const code = await dispatchEngineer({ kind: 'launch', provider: 'claude' }, {
+      ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost, { CODEX_THREAD_ID: 'thread' }),
+      print,
+    });
+
+    expect({ code, output: print.mock.calls.flat(), spawnCalls: spawnHost.mock.calls }).toEqual({
+      code: 0,
+      output: expect.arrayContaining([expect.stringContaining('$composer')]),
+      spawnCalls: [],
+    });
+  });
+
+  it('maps the legacy nested-session seam to the default host marker', async () => {
+    const spawnHost = vi.fn(async () => 0);
+    const print = vi.fn();
+
+    const code = await dispatchEngineer({ kind: 'launch' }, {
+      ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost),
+      insideClaudeSession: true,
+      print,
+    });
+
+    expect({ code, output: print.mock.calls.flat(), spawnCalls: spawnHost.mock.calls }).toEqual({
+      code: 0,
+      output: expect.arrayContaining([expect.stringContaining('/composer')]),
+      spawnCalls: [],
+    });
+  });
+
+  it('launches the selected host when no interactive session marker is present', async () => {
+    const spawnHost = vi.fn(async () => 0);
+
+    await dispatchEngineer(
+      { kind: 'launch', provider: 'codex' },
+      launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost),
+    );
+
+    expect(spawnHost).toHaveBeenCalledTimes(1);
+  });
+
   it('reports a missing selected executable without discovery or fallback', async () => {
     const missing = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' });
     const spawnHost = vi.fn(async () => Promise.reject(missing));
@@ -261,6 +354,7 @@ describe('dispatchEngineer interactive host launch', () => {
     try {
       await dispatchEngineer({ kind: 'launch' }, {
         spawnHost,
+        env: {},
         prePoll: async () => 0,
         confirmAnother: () => false,
         probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),

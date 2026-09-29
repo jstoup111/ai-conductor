@@ -84,6 +84,7 @@ import {
   type GhVersionFloorVerdict,
 } from './gh-version-floor.js';
 import {
+  BUILT_IN_PROVIDERS,
   DEFAULT_PROVIDER,
   requireProviderCapability,
   resolveProviderExecutable,
@@ -927,17 +928,21 @@ export async function dispatchEngineer(
     case 'launch': {
       const launchingDirectory = process.cwd();
       const confirmAnother = opts.confirmAnother ?? promptAnother;
+      const launchEnv = opts.env ?? process.env;
 
-      // Real-spawn path only: if we're already inside the default host session, don't
-      // nest a second interactive host (it would recurse). When a launcher is
-      // injected (tests), there is no real nesting, so skip this guard.
+      // Real-spawn path only: don't nest any interactive host session. When a launcher
+      // is injected (tests), there is no real nesting, so skip this guard.
       if (!opts.launchInteractive) {
-        const defaultHost = requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch');
-        const inside = opts.insideClaudeSession ?? defaultHost.interactiveLaunch.sessionMarkers
-          .some((marker) => Boolean(process.env[marker]));
-        if (inside) {
+        const guardEnv = opts.insideClaudeSession === true
+          ? { ...launchEnv, CLAUDECODE: '1' }
+          : opts.insideClaudeSession === false ? {} : launchEnv;
+        const nestedHost = BUILT_IN_PROVIDERS.find((candidate) =>
+          'interactiveLaunch' in candidate
+          && candidate.interactiveLaunch.sessionMarkers.some((marker) => Boolean(guardEnv[marker])),
+        );
+        if (nestedHost && 'interactiveLaunch' in nestedHost) {
           print(
-            `You're already inside a ${defaultHost.displayName} session — run ${defaultHost.invocationPrefix}composer directly to start ` +
+            `You are already inside a ${nestedHost.displayName} session — run ${nestedHost.invocationPrefix}composer directly to start ` +
               'the idea→spec loop (no need to launch a nested session).',
           );
           return 0;
@@ -967,7 +972,7 @@ export async function dispatchEngineer(
         const prompt = `${host!.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
         return (opts.spawnHost ?? spawnInteractiveHost)(
           resolveProviderExecutable(host!.id),
-          host!.interactiveLaunch.argv(prompt, opts.env ?? process.env),
+          host!.interactiveLaunch.argv(prompt, launchEnv),
           launchingDirectory,
         );
       });
