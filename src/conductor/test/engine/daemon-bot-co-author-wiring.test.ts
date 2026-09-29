@@ -24,4 +24,17 @@ describe('daemon bot co-author wiring', () => {
     }));
     expect(matches.filter(Boolean)).toEqual([]);
   });
+
+  it('keeps default rebase-resolution and CI-fix preparation on the installed resolver path', async () => {
+    const root = join(process.cwd(), 'src/engine');
+    const [autoresolve, ciFix, prepare] = await Promise.all([
+      readFile(join(root, 'autoresolve.ts'), 'utf8'),
+      readFile(join(root, 'ci-fix.ts'), 'utf8'),
+      readFile(join(root, 'worktree-prepare.ts'), 'utf8'),
+    ]);
+
+    expect(autoresolve).toContain('const prepare = prepareWorktree ?? defaultPrepareWorktree;');
+    expect(ciFix).toContain('}, deps.prepareWorktree, deps.liveness ?? {});');
+    expect(prepare).toContain('await refreshWorktreeCoAuthor(worktreePath, opts?.events);');
+  });
 });

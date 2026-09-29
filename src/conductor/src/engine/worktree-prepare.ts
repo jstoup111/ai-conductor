@@ -54,7 +54,7 @@ import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 import { resolveDispatchStartTimeoutSeconds } from './resolved-config.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import type { ConductorEvent } from '../types/events.js';
-import { daemonBotCoAuthorResolver } from './bot-co-author.js';
+import { refreshWorktreeCoAuthor } from './bot-co-author.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
@@ -241,18 +241,7 @@ export async function prepareWorktree(
   await writeNamespaceEnv(worktreePath, namespace, log);
   // Write git hooks before setup so they exist even if setup fails
   await writeGitHooksAndWire(worktreePath, log);
-  const coAuthor = daemonBotCoAuthorResolver();
-  const target = join(worktreePath, '.pipeline', 'co-author');
-  try {
-    const result = coAuthor ? await coAuthor.prepare(opts?.events) : undefined;
-    if (result?.kind === 'resolved') await writeFile(target, `${result.trailer}\n`, 'utf8');
-    else await rm(target, { force: true });
-  } catch {
-    // A failed refresh must fail open: never leave an earlier worktree's
-    // attribution input available to the hook.
-    await rm(target, { force: true }).catch(() => undefined);
-    await opts?.events?.emit({ type: 'bot_co_author_skipped', reason: 'worktree-write-failed' });
-  }
+  await refreshWorktreeCoAuthor(worktreePath, opts?.events);
   await ensureSessionHooks(worktreePath, log);
   await excludeEngineArtifacts(worktreePath, log);
   const decision = await setupDecision(worktreePath, opts?.baseSha, opts?.force ?? false);

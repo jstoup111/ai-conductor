@@ -3,6 +3,8 @@ import type { ConductorEvent } from '../types/events.js';
 import { readGithubBotCredential, readGithubBotToken, type GithubBotCredential, type GithubBotToken } from './github-bot-credential.js';
 import { runBotIdentityRead, type GhRunner } from './tracker-client.js';
 import { GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
+import { rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 export type BotCoAuthorResult =
   | { readonly kind: 'unconfigured' }
@@ -12,6 +14,8 @@ export type BotCoAuthorResult =
 export interface BotCoAuthorResolver {
   prepare(events?: ConductorEventEmitter): Promise<BotCoAuthorResult>;
   current(): BotCoAuthorResult | undefined;
+  /** The daemon-wide fallback for transient worktrees without feature events. */
+  eventEmitter?(): ConductorEventEmitter | undefined;
 }
 
 const LOGIN = /^(?=.{1,39}$)[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/;
@@ -60,12 +64,28 @@ export function createBotCoAuthorResolver(input: { runner: GhRunner; cwd: string
       }
     },
     current: () => last,
+    eventEmitter: () => input.events,
   };
 }
 
 let installedResolver: BotCoAuthorResolver | undefined;
 export function installDaemonBotCoAuthor(resolver: BotCoAuthorResolver | undefined): void { installedResolver = resolver; }
 export function daemonBotCoAuthorResolver(): BotCoAuthorResolver | undefined { return installedResolver; }
+
+/** Refresh the hook input without allowing an attribution failure to stop setup. */
+export async function refreshWorktreeCoAuthor(worktreePath: string, events?: ConductorEventEmitter): Promise<void> {
+  const resolver = daemonBotCoAuthorResolver();
+  const emitter = events ?? resolver?.eventEmitter?.();
+  const target = join(worktreePath, '.pipeline', 'co-author');
+  try {
+    const result = resolver ? await resolver.prepare(emitter) : undefined;
+    if (result?.kind === 'resolved') await writeFile(target, `${result.trailer}\n`, 'utf8');
+    else await rm(target, { force: true });
+  } catch {
+    await rm(target, { force: true }).catch(() => undefined);
+    await emitter?.emit({ type: 'bot_co_author_skipped', reason: 'worktree-write-failed' });
+  }
+}
 
 export function withDaemonCoAuthorTrailer(message: string): string {
   const current = installedResolver?.current();

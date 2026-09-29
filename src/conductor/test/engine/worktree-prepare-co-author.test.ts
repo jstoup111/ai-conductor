@@ -55,6 +55,24 @@ describe('engine/worktree-prepare co-author input', () => {
     expect(await git('log', '-1', '--format=%B')).not.toContain(TRAILER);
   });
 
+  it('uses the resolver emitter for a write failure without feature events', async () => {
+    const events: ConductorEvent[] = [];
+    const resolver: BotCoAuthorResolver = {
+      prepare: vi.fn(async () => ({ kind: 'resolved' as const, login: 'conductor-bot', id: 4242, trailer: TRAILER })),
+      current: () => undefined,
+      eventEmitter: () => ({ emit: async (event: ConductorEvent) => { events.push(event); } } as never),
+    };
+    installDaemonBotCoAuthor(resolver);
+    await prepareWorktree(dir);
+    const coAuthorPath = join(dir, '.pipeline', 'co-author');
+    await chmod(coAuthorPath, 0o444);
+
+    await prepareWorktree(dir);
+
+    await expect(access(coAuthorPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(events).toEqual([{ type: 'bot_co_author_skipped', reason: 'worktree-write-failed' }]);
+  });
+
   it('removes stale input for unavailable resolution and forwards the feature emitter', async () => {
     const events: ConductorEvent[] = [];
     const prepare = vi.fn(async (emitter?: { emit(event: ConductorEvent): Promise<void> }) => {
