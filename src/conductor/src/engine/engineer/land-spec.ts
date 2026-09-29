@@ -457,7 +457,7 @@ export async function landSpec(
   // the misnamed one it is looking straight past. Validate it here, through the
   // same feature-stem contract as every other feature-scoped family, so no
   // artifact family keeps a private naming path.
-  const coherenceFile = await pickIdeaFile(join(worktreePath, '.docs', 'coherence'), featureFiles);
+  await pickIdeaFile(join(worktreePath, '.docs', 'coherence'), featureFiles);
 
   // Validate EVERY current-feature file in each feature-scoped family, not the
   // single `pickIdeaFile` pick. The picks above deliberately reduce a family to

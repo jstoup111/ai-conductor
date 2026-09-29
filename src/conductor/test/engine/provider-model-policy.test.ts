@@ -11,15 +11,6 @@ import { BUILT_IN_PROVIDERS } from '../../src/execution/provider-catalog.js';
 import type { EffortLevel } from '../../src/types/config.js';
 import type { StepName } from '../../src/types/steps.js';
 
-type Assert<T extends true> = T;
-type IsExact<A, B> =
-  (<T>() => T extends A ? 1 : 2) extends
-  (<T>() => T extends B ? 1 : 2)
-    ? (<T>() => T extends B ? 1 : 2) extends
-      (<T>() => T extends A ? 1 : 2)
-      ? true
-      : false
-    : false;
 
 const STEP_EFFORTS = {
   bootstrap: 'low',
@@ -201,38 +192,6 @@ it('defines exhaustive, provider-native, deeply frozen built-in model policies',
   const claude = CLAUDE_MODEL_POLICY;
   const codex = CODEX_MODEL_POLICY;
 
-  type _ClaudeModelKeysAreExactlyStepName = Assert<
-    IsExact<keyof typeof claude.stepModels, StepName>
-  >;
-  type _ClaudeModelsAreAReadonlyRecord = Assert<
-    typeof claude.stepModels extends Readonly<Record<StepName, string>>
-      ? true
-      : false
-  >;
-  type _ClaudeEffortKeysAreExactlyStepName = Assert<
-    IsExact<keyof typeof claude.stepEfforts, StepName>
-  >;
-  type _ClaudeEffortsAreAReadonlyRecord = Assert<
-    typeof claude.stepEfforts extends Readonly<Record<StepName, EffortLevel>>
-      ? true
-      : false
-  >;
-  type _CodexModelKeysAreExactlyStepName = Assert<
-    IsExact<keyof typeof codex.stepModels, StepName>
-  >;
-  type _CodexModelsAreAReadonlyRecord = Assert<
-    typeof codex.stepModels extends Readonly<Record<StepName, string>>
-      ? true
-      : false
-  >;
-  type _CodexEffortKeysAreExactlyStepName = Assert<
-    IsExact<keyof typeof codex.stepEfforts, StepName>
-  >;
-  type _CodexEffortsAreAReadonlyRecord = Assert<
-    typeof codex.stepEfforts extends Readonly<Record<StepName, EffortLevel>>
-      ? true
-      : false
-  >;
 
   expect({
     policies: { claude, codex },

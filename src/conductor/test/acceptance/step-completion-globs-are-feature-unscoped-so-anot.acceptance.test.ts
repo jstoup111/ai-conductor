@@ -448,7 +448,7 @@ describe('#993 call site 2 — interactive artifact review never presents a neig
 
 class CaptureStream extends Writable {
   chunks: string[] = [];
-  _write(chunk: Buffer | string, _e: string, cb: (err?: Error | null) => void): void {
+  override _write(chunk: Buffer | string, _e: string, cb: (err?: Error | null) => void): void {
     this.chunks.push(chunk.toString());
     cb();
   }

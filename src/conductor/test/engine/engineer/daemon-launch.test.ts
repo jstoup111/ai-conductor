@@ -10,7 +10,7 @@
 // The supervisor is injectable via opts.supervisor so the test verifies the exact
 // delegation without spawning real tmux.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';

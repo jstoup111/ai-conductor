@@ -35,7 +35,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { build } from 'tsup';
-import { mkdtemp, rm, writeFile, readFile, unlink } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -231,7 +231,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
 
   // ── #369 Story 2: stale verdict logs carry both identities ────────────────
   it('idle-tick stale verdict: the log line carries BOTH the captured and target identities, logged before the restart request', async () => {
-    await withLockedRepo(async (repoPath) => {
+    await withLockedRepo(async (_repoPath) => {
       const identityMod = await load(IDENTITY_MOD);
       const captureEngineIdentity = requireFn(identityMod, 'captureEngineIdentity');
       const createStaleEngineChecker = requireFn(identityMod, 'createStaleEngineChecker');
@@ -574,7 +574,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
   });
 
   it('negative: an indeterminate verdict (re-hash failure) never requests a restart and never spams the warning', async () => {
-    await withLockedRepo(async (repoPath) => {
+    await withLockedRepo(async (_repoPath) => {
       const identityMod = await load(IDENTITY_MOD);
       const captureEngineIdentity = requireFn(identityMod, 'captureEngineIdentity');
       const createStaleEngineChecker = requireFn(identityMod, 'createStaleEngineChecker');

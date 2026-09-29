@@ -1,22 +1,17 @@
 // Tests for Task T32 — fleet restart with per-repo outcomes (FR-3/FR-17/FR-18).
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir } from 'fs/promises';
+import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { writeRegistry, type ProjectRecord } from '../../src/engine/registry.js';
 import { dispatchDaemonSupervisor } from '../../src/engine/daemon-supervisor-cli.js';
-import { writeRestartPending, consumeOnBoot } from '../../src/engine/restart-marker.js';
+import { consumeOnBoot } from '../../src/engine/restart-marker.js';
 import { isPaused } from '../../src/engine/pause-marker.js';
 
 let root: string;
 let registryPath: string;
 
-async function repo(name: string): Promise<string> {
-  const p = join(root, name);
-  await mkdir(p, { recursive: true });
-  return p;
-}
 
 function record(name: string, path: string): ProjectRecord {
   return {
@@ -216,7 +211,7 @@ describe('restart verb dispatch through the fleet selector (FR-3/FR-17/FR-18, Ta
     const idle = await tempRepo();
     const busy = await tempRepo();
     const stopped = await tempRepo();
-    const broken = await tempRepo();
+    await tempRepo();
     const brokenPath = join(stopped, 'nested', 'doesnotexist');
     await writeRegistry(registryPath, [
       record('idle', idle),

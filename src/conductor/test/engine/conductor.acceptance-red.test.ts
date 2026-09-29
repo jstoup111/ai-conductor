@@ -324,7 +324,7 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
   it('falls through to the existing retry/HALT behavior unchanged when the heal fails', async () => {
     selfHealAcceptanceRedMock.mockResolvedValue({ healed: false, reason: 'run contract missing: x' });
 
-    const { conductor, log, reasons } = runConductor();
+    const { conductor, log } = runConductor();
     await conductor.run();
 
     expect(selfHealAcceptanceRedMock).toHaveBeenCalledTimes(1);

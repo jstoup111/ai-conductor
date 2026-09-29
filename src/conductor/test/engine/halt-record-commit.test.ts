@@ -123,15 +123,7 @@ async function configureBareRemote(worktree: string): Promise<string> {
   return remote;
 }
 
-async function readRemoteFile(remote: string, branch: string, path: string): Promise<string> {
-  const { stdout } = await execa('git', ['--git-dir', remote, 'show', `${branch}:${path}`]);
-  return stdout;
-}
 
-async function remoteUrl(worktree: string): Promise<string> {
-  const { stdout } = await execa('git', ['remote', 'get-url', 'origin'], { cwd: worktree });
-  return stdout;
-}
 
 function successfulRemote(pushes: string[][] = []): HaltRecordRemoteOptions {
   return {

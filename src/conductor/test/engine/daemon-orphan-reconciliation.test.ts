@@ -19,7 +19,6 @@ import type { Supervisor } from '../../src/engine/daemon-tmux.js';
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SUPERVISOR_MOD = '../../src/engine/daemon-supervisor-cli.js';
-const LOCK_MOD = '../../src/engine/daemon-lock.js';
 
 async function load(): Promise<Record<string, unknown>> {
   return (await import(SUPERVISOR_MOD)) as Record<string, unknown>;
@@ -87,7 +86,6 @@ function makeFakeSupervisor(throwOn?: { method: string; error: Error }): {
   };
 }
 
-const CWD = '/repo/my-project';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // T34.1: Restart with live process but no session → orphan terminated + lock reclaimed
@@ -144,7 +142,7 @@ describe('dispatchDaemonSupervisor: orphaned-process reconciliation (restart pat
   // ───────────────────────────────────────────────────────────────────────────
   it('orphan termination reclaims the pidfile lock for the fresh daemon', async () => {
     const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
-    const { writePidRecord, readPidRecord } = await import('../../src/engine/daemon-lock.js');
+    const { writePidRecord } = await import('../../src/engine/daemon-lock.js');
     const repo = await tempRepo();
 
     const oldPid = 999_999_999; // a non-existent pid
@@ -222,14 +220,14 @@ describe('dispatchDaemonSupervisor: orphaned-process reconciliation (restart pat
       startedAt: new Date().toISOString(),
     });
 
-    const { calls, supervisor } = makeFakeSupervisor({
+    const { supervisor } = makeFakeSupervisor({
       method: 'hasSession',
       error: new TmuxNotInstalledError(),
     });
     const out: string[] = [];
 
     // Mock kill that treats our test pid as alive (never throws ESRCH)
-    const mockKill = (pid: number, signal: number | string): void => {
+    const mockKill = (pid: number, _signal: number | string): void => {
       if (pid === testPid) {
         // Pretend the process is alive — don't throw
         return;

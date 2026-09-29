@@ -2,7 +2,7 @@
 // RED until intake/ledger.ts exists. Also asserts C2: intake/idempotency.ts is gone.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { fork, type ChildProcess } from 'node:child_process';
 import { tmpdir } from 'node:os';

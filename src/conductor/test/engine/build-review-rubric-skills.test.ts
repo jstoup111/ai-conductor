@@ -142,7 +142,7 @@ describe('build-review rubric skill catalog', () => {
       judgedSecurityFixture('docs/design.md'),
     ];
 
-    expect(fixtures).toEqual(fixtures.map((fixture) => expect.objectContaining({ verdict: 'PASS', findings: [] })));
+    expect(fixtures).toEqual(fixtures.map((_fixture) => expect.objectContaining({ verdict: 'PASS', findings: [] })));
   });
 
   it('anchors an unchanged-sink exposure to its changed hunk', () => {

@@ -75,21 +75,6 @@ describe('InvokeResult provider-unavailable contract', () => {
   });
 
   it('accepts InvokeOptions with and without an optional stream consumer', () => {
-    const optionsWithoutStreamConsumer: InvokeOptions = {
-      prompt: 'contract check',
-      sessionId: 'streamless-session',
-      resume: false,
-    };
-    const streamConsumer: ProviderStreamCandidateObserver = {
-      onProviderStream: () => {},
-      close: () => {},
-    };
-    const optionsWithStreamConsumer: InvokeOptions = {
-      prompt: 'contract check',
-      sessionId: 'streaming-session',
-      resume: false,
-      streamConsumer,
-    };
 
     expectTypeOf<InvokeOptions['streamConsumer']>().toEqualTypeOf<
       ProviderStreamCandidateObserver | undefined

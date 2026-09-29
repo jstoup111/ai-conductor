@@ -13,7 +13,6 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { execa } from 'execa';
 import type { TaskEvidence } from './task-evidence.js';
 import type { GitRunner } from './rebase.js';
 import { filesForCommit } from './autoheal.js';

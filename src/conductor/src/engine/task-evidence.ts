@@ -1,6 +1,5 @@
 import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import * as crypto from 'node:crypto';
 
 /**
  * Stamp structure supporting semantic verification (Task 10).

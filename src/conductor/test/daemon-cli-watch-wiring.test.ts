@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { join } from 'node:path';
 
 /**
  * Tests for Task 14: daemon-cli watcher wiring
@@ -22,7 +21,6 @@ describe('daemon-cli — watchHaltCleared wiring', () => {
   it('by default (watch=true), watchHaltCleared is wired', () => {
     // Simulate the options from the CLI
     const opts: { watch: boolean | undefined } = { watch: undefined };
-    const worktreeBase = '/tmp/.worktrees';
 
     // Simulate the wiring logic (lines 759-763 in daemon-cli.ts)
     const watch = opts.watch ?? true;

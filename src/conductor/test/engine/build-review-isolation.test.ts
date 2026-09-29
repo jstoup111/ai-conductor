@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
 
 import {
   assembleBuildReviewInputs,
@@ -34,7 +33,6 @@ vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) =
 const TASK_STATUS_SENTINEL = 'TASK_STATUS_SENTINEL_12345';
 const TRANSCRIPT_SENTINEL = 'TRANSCRIPT_SENTINEL_12345';
 const MAKER_SUMMARY_SENTINEL = 'MAKER_SUMMARY_SENTINEL_12345';
-const REPOSITORY_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const execFileAsync = promisify(execFile);
 const CURRENT_PROOF = {
   status: 'CURRENT',

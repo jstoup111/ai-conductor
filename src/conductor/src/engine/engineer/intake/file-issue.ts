@@ -23,7 +23,6 @@ import {
 import type {
   GithubFeatureWriteOperationRequest,
   GithubIssueTarget,
-  GithubOperationRequest,
   GithubOperationRunner,
   GithubOperationRunnerRefusal,
   GithubOperationRunnerResponse,

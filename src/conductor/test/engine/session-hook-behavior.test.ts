@@ -326,7 +326,6 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', { prompt });
 
       let exitCode = 0;
-      let stderr = '';
       try {
         execFileSync('bash', [hookPath], {
           input: JSON.stringify(payload),
@@ -336,7 +335,6 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       } catch (err) {
         const execErr = err as { status?: number; stderr?: Buffer };
         exitCode = execErr.status ?? 1;
-        stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
       }
 
       expect(exitCode).toBe(0);
@@ -455,7 +453,6 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       writeFileSync(currentTaskPath, '1', 'utf-8');
 
       // But task-status.json is absent
-      const statusPath = join(pipelineDir, 'task-status.json');
 
       const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
       writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
@@ -494,7 +491,6 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       const currentTaskPath = join(pipelineDir, 'current-task');
 
       // And task-status.json is absent
-      const statusPath = join(pipelineDir, 'task-status.json');
 
       const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
       writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });

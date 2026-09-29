@@ -418,7 +418,7 @@ describe('engine/setup-triage — quarantine (TS-2 negative, preservation failur
 
 describe('engine/setup-triage — retryPrepareAfterQuarantine (TS-2 happy path: retry passes)', () => {
   it('quarantines dirty tree, retries full prepare once post-quarantine, returns quarantined-pass on success', async () => {
-    const { git, calls } = fakeGit([
+    const { git } = fakeGit([
       // Initial status check before quarantine
       {
         match: ['status', '--porcelain'],
@@ -450,7 +450,7 @@ describe('engine/setup-triage — retryPrepareAfterQuarantine (TS-2 happy path: 
 
     // Mock runPrepare that succeeds on first (and only) call
     let prepareCallCount = 0;
-    const runPrepare = async (worktreePath: string) => {
+    const runPrepare = async (_worktreePath: string) => {
       prepareCallCount++;
       // Setup succeeds
     };
@@ -490,7 +490,7 @@ describe('engine/setup-triage — retryPrepareAfterQuarantine (TS-2 happy path: 
 
     let prepareCallCount = 0;
     const setupOutput = 'test error message\nmore output\nTAIL';
-    const runPrepare = async (worktreePath: string) => {
+    const runPrepare = async (_worktreePath: string) => {
       prepareCallCount++;
       const err = new Error('setup failed');
       (err as any).output = setupOutput;
@@ -584,7 +584,7 @@ describe('engine/setup-triage — runTriage (Task 8: zero-touch guarantees)', ()
   });
 
   it('TS-2 happy path: runTriage with SetupFailureError on dirty tree quarantines and retries', async () => {
-    const { git, calls } = fakeGit([
+    const { git } = fakeGit([
       // Quarantine: check if branch exists (first call in quarantine)
       {
         match: ['rev-parse', '--verify', 'wip/setup-quarantine-test-slug'],
@@ -637,9 +637,8 @@ describe('engine/setup-triage — runTriage (Task 8: zero-touch guarantees)', ()
   });
 
   it('TS-2 negative: no side effects on happy path (no SetupFailureError, runTriage never runs)', () => {
-    const { git, calls } = fakeGit([]);
+    const { calls } = fakeGit([]);
     const logs: string[] = [];
-    const fakeLogger = { log: (msg: string) => logs.push(msg) };
 
     // When prepare succeeds (no SetupFailureError), runTriage should not be called
     // So there should be no side effects:
@@ -651,7 +650,7 @@ describe('engine/setup-triage — runTriage (Task 8: zero-touch guarantees)', ()
   });
 
   it('TS-1 happy: runTriage constructs and executes only with valid SetupFailureError', async () => {
-    const { git, calls } = fakeGit([
+    const { git } = fakeGit([
       // Quarantine: check if branch exists (first call in quarantine would be, but tree is clean so no quarantine)
       // But classifyTree is called first, which calls status
       {
@@ -680,7 +679,7 @@ describe('engine/setup-triage — runTriage (Task 8: zero-touch guarantees)', ()
 // quarantine contract, which intentionally no longer accepts a dirty repair.
 describe.skip('engine/setup-triage — legacy fixSession (pre-#1346)', () => {
   it('(a) happy path: dispatchFixSession succeeds, runPrepare passes, porcelain empty → fixed-pass', async () => {
-    const { git, calls } = fakeGit([
+    const { git } = fakeGit([
       // Final porcelain check after prepare
       {
         match: ['status', '--porcelain'],
@@ -708,7 +707,7 @@ describe.skip('engine/setup-triage — legacy fixSession (pre-#1346)', () => {
   });
 
   it('(b) negative: seam resolves but runPrepare still fails → park with contractOutcome setup-still-failing', async () => {
-    const { git, calls } = fakeGit([]);
+    const { git } = fakeGit([]);
 
     let dispatchCalled = false;
     const dispatchFixSession = async () => {
@@ -730,7 +729,7 @@ describe.skip('engine/setup-triage — legacy fixSession (pre-#1346)', () => {
   });
 
   it('(c) negative: runPrepare passes but porcelain dirty → park with distinct dirty-tree-uncleaned outcome, quarantined, no "setup failed"', async () => {
-    const { git, calls } = fakeGit([
+    const { git } = fakeGit([
       // Porcelain check shows dirty tree, including a tracked file and an untracked file
       {
         match: ['status', '--porcelain'],
@@ -834,7 +833,7 @@ describe.skip('engine/setup-triage — legacy fixSession (pre-#1346)', () => {
   });
 
   it('(d) negative: dispatchFixSession throws → park, seam called exactly once', async () => {
-    const { git, calls } = fakeGit([]);
+    const { git } = fakeGit([]);
 
     let dispatchCallCount = 0;
     const dispatchError = new Error('LLM session failed');
@@ -1186,7 +1185,7 @@ describe('engine/setup-triage — quarantine sentinel surfacing (Task 14)', () =
     ]);
 
     let prepareCallCount = 0;
-    const runPrepare = async (worktreePath: string) => {
+    const runPrepare = async (_worktreePath: string) => {
       prepareCallCount++;
       // Setup succeeds on the retry after quarantine
     };

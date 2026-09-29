@@ -11,7 +11,7 @@ vi.mock('../../src/engine/rebase.js', async () => {
   return { ...actual, performRebase: vi.fn().mockResolvedValue({ kind: 'noop' }) };
 });
 
-import type { ConductState, StepDefinition, StepName } from '../../src/types/index.js';
+import type { ConductState, StepDefinition } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';

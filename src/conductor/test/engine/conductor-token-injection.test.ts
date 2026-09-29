@@ -20,7 +20,6 @@ import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine
 import type { ConductorEvent } from '../../src/types/events.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
-type AuthResult = StepRunResult & { authFailure?: boolean };
 
 const READY_STATE: ConductState = {
   worktree: 'done',

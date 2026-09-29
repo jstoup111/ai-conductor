@@ -25,8 +25,6 @@ import { describe, it, expect } from 'vitest';
 import { publishResolution } from '../../src/engine/autoresolve.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
-import { NEEDS_REMEDIATION_MARKER } from '../../src/engine/pr-labels.js';
-import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 
 const PR_URL = 'https://github.com/foo/bar/pull/42';
@@ -55,13 +53,6 @@ function fakeGh(
   return { gh, calls };
 }
 
-const baseEntry: WatchEntry = {
-  prUrl: PR_URL,
-  slug: 'foo/bar',
-  repoCwd: '/repo',
-  resolveAttempts: 1,
-  lastResolveAt: undefined,
-};
 
 // The lease tests own push behavior, not ownership authorization. This still
 // reaches the injected process boundary, while dedicated ownership coverage

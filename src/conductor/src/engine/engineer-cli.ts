@@ -38,7 +38,6 @@ import {
   removeEngineerWorktree,
 } from './engineer/worktree-authoring.js';
 import { INTAKE_OUTCOMES_RELATIVE_PATH } from './engineer/outcome-staging.js';
-import { recordAuthoredKey } from './engineer/authored-ledger.js';
 import { ensureRunning, type EnsureRunningOpts } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter used by
 // deterministic engineer commands and the interactive launch pre-poll.
@@ -66,7 +65,7 @@ import { createDeliveryGuardedQueue, getIssueState } from './engineer/intake/del
 import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
-import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
+import { runMigration } from './engineer/issue-dep-migration.js';
 import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead } from './tracker-client.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
 import { bindMutationToPullRequest } from './ship-draft-pr.js';

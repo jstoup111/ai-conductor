@@ -1,6 +1,6 @@
 // Covers: task:4
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile, unlink } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -16,7 +16,6 @@ import {
   writeStallHalt,
   HALT_MARKER_RELATIVE,
 } from '../../src/engine/task-progress.js';
-import { CUSTOM_COMPLETION_PREDICATES } from '../../src/engine/artifacts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import {
   detectTaskCommand,

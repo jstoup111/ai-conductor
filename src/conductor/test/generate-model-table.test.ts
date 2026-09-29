@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import {
   spliceGeneratedRegion,
   assertNoDuplicateRowNames,
@@ -50,7 +49,6 @@ const PROSE_BEFORE = '# Harness Behavioral Rules\n\nSome hand-authored prose abo
 const PROSE_AFTER =
   '\n\n> Interim fallback note (#186): survives byte-identical outside the region.\n' +
   '\nTwo enforcement paths: engine defaults and SKILL.md pins.\n';
-const harnessRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 const STALE_TABLE =
   '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |\n' +

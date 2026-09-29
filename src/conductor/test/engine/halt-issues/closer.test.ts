@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { stampIssue, StampResult, closeIssue, CloseResult, renderCloseComment } from '../../../src/engine/halt-issues/closer';
+import { stampIssue, closeIssue, renderCloseComment } from '../../../src/engine/halt-issues/closer';
 import { LedgerEntry } from '../../../src/engine/halt-issues/ledger';
 import { TrackerClient, GhRunnerError } from '../../../src/engine/tracker-client';
 

@@ -263,7 +263,7 @@ describe('Task T30 — Bare-Run Pending Restart — Clean Exit', () => {
       },
     };
 
-    const result = await runDaemon(deps, {
+    await runDaemon(deps, {
       concurrency: 1,
       once: true,
     });

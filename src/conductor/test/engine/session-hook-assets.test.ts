@@ -1,5 +1,5 @@
 // Covers: task:1, task:2
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,

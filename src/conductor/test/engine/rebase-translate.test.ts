@@ -465,7 +465,6 @@ describe('applyMapToStores (RED — not implemented yet, Task 5)', () => {
   const OLD_FULL_A = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
   const NEW_FULL_A = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
   const OLD_SHORT_A = OLD_FULL_A.slice(0, 7);
-  const NEW_SHORT_A = NEW_FULL_A.slice(0, 7);
 
   const OLD_FULL_B = 'cccccccccccccccccccccccccccccccccccccccc'.slice(0, 40);
   const NEW_FULL_B = 'dddddddddddddddddddddddddddddddddddddddd'.slice(0, 40);

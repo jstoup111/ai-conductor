@@ -230,7 +230,7 @@ describe('rate-limit-episode', () => {
 
     const baseTime = 1000;
     let capturedDelay = -1;
-    const setTimer = (fn: () => void, delayMs: number) => {
+    const setTimer = (_fn: () => void, delayMs: number) => {
       capturedDelay = delayMs;
       return { cancel: () => {} };
     };
@@ -248,9 +248,7 @@ describe('rate-limit-episode', () => {
     const create = requireFn(mod, 'create');
 
     const baseTime = 1000;
-    let timerArmed = false;
-    const setTimer = (fn: () => void, delayMs: number) => {
-      timerArmed = true;
+    const setTimer = (_fn: () => void, _delayMs: number) => {
       return { cancel: () => {} };
     };
 
@@ -274,7 +272,7 @@ describe('rate-limit-episode', () => {
 
     const baseTime = 1000;
     const timers: Array<() => void> = [];
-    const setTimer = (fn: () => void, delayMs: number) => {
+    const setTimer = (fn: () => void, _delayMs: number) => {
       timers.push(fn);
       return { cancel: () => timers.splice(timers.indexOf(fn), 1) };
     };
@@ -323,9 +321,7 @@ describe('rate-limit-episode', () => {
 
     const baseTime = 1000;
     const deadline = baseTime + 100; // Only 100ms
-    let timerArmed = false;
-    const setTimer = (fn: () => void, delayMs: number) => {
-      timerArmed = true;
+    const setTimer = (_fn: () => void, _delayMs: number) => {
       return { cancel: () => {} };
     };
 
@@ -576,7 +572,6 @@ describe('rate-limit-episode', () => {
 
     const baseTime = 1000;
     const deadline = baseTime + 1000; // 1 second episode
-    const maxJitterMs = 500;
 
     const rng = () => 0.99; // Close to max
     const timers: Array<{ fn: () => void; delayMs: number }> = [];
@@ -603,7 +598,7 @@ describe('rate-limit-episode', () => {
     const rng = () => 0.5;
 
     let capturedDelay = -1;
-    const setTimer = (fn: () => void, delayMs: number) => {
+    const setTimer = (_fn: () => void, delayMs: number) => {
       capturedDelay = delayMs;
       return { cancel: () => {} };
     };
@@ -657,7 +652,7 @@ describe('rate-limit-episode', () => {
     const rng = () => 0; // No jitter
 
     let capturedDelay = -1;
-    const setTimer = (fn: () => void, delayMs: number) => {
+    const setTimer = (_fn: () => void, delayMs: number) => {
       capturedDelay = delayMs;
       return { cancel: () => {} };
     };
@@ -680,7 +675,7 @@ describe('rate-limit-episode', () => {
     const rng = () => 0.999; // Near max
 
     let capturedDelay = -1;
-    const setTimer = (fn: () => void, delayMs: number) => {
+    const setTimer = (_fn: () => void, delayMs: number) => {
       capturedDelay = delayMs;
       return { cancel: () => {} };
     };

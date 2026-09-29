@@ -26,6 +26,8 @@ Run everything from `src/conductor` unless stated otherwise.
 | Type check (`src/` only) | `cd src/conductor && npm run typecheck` |
 | Type check including `test/` | `cd src/conductor && npm run typecheck:test` |
 | Lint TypeScript | `cd src/conductor && npm run lint` (`npm run lint:fix` to autofix) |
+| Type check a plugin | `cd plugins/<name> && npm ci && npm run typecheck` |
+| Lint a plugin | `cd plugins/<name> && ../../src/conductor/node_modules/.bin/eslint --max-warnings=0 "**/*.ts"` |
 | Lint shell scripts | `bash test/lint_shell.sh` (from the repo root) |
 | Check documentation links | `lychee --config lychee.toml docs README.md AGENT_INSTRUCTIONS.md src/conductor/README.md` |
 | Build the engine | `cd src/conductor && npm run build` |
@@ -193,6 +195,11 @@ smoke fixtures set `maxWorkers: 1`.
 `"exclude": ["node_modules", "dist", "test"]`. `npm run typecheck:test` (`tsconfig.test.json`) covers
 `src/` **and** `test/`, and CI runs both. Use it to check the test you just wrote; Vitest transpiles
 without type-checking, so it will happily run a test that does not compile.
+
+Beyond `strict: true`, both conductor configs and each plugin's `tsconfig.json` enable
+`noImplicitOverride`, `noUnusedLocals`, and `noUnusedParameters`. Prefix a parameter that must stay
+in a signature with `_`. `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` are tracked
+separately in #2792.
 
 ## Isolation policy
 
@@ -475,8 +482,11 @@ For where `test_suite` sits in the flow and what happens when it fails, see
    `bash test/test_harness_integrity.sh`.
 3. `shellcheck` — skipped when `docs_only` is true; runs `bash test/lint_shell.sh`, the same script
    integrity check 1b calls.
-4. `lint` — skipped when `docs_only` is true; `npm ci` then `npm run lint` in `src/conductor`.
-5. `typecheck` — `npm ci` then `npm run typecheck` in `src/conductor`.
+4. `lint` — skipped when `docs_only` is true; `npm ci` then `npm run lint` in `src/conductor`, then
+   each `plugins/*/` is installed and linted with its own `eslint.config.mjs`, which shares the
+   engine's rule set.
+5. `typecheck` — `npm ci`, `npm run typecheck`, and `npm run typecheck:test` in `src/conductor`, then
+   `npm ci` and `npm run typecheck` in each `plugins/*/`.
 6. `conductor` — `npm ci`, `npm run build`, `npm test` in `src/conductor`.
 7. `links` — **never skipped.** Checks documentation links via `lycheeverse/lychee-action`.
 8. `ci-gate` — `if: always()`; fails when any of the above is `failure` or `cancelled`. This is the

@@ -223,10 +223,6 @@ const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
   'rebase_resolution_exhausted',
 ] satisfies Array<ConductorEvent['type']>;
 
-const buildMemberSettleDecisionEventTypes = new Set<ConductorEvent['type']>(
-  BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
-);
-
 const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
   'gate_verdict',
   'step_retry',

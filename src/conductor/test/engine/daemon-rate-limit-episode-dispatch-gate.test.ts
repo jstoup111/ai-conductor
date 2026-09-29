@@ -278,7 +278,7 @@ describe('daemon rate-limit episode dispatch gate (Task 7)', () => {
       },
     };
 
-    const result = await runDaemon(deps, { concurrency: 1, once: true });
+    await runDaemon(deps, { concurrency: 1, once: true });
     expect(dispatched).toEqual(['f0']);
   });
 });

@@ -5,7 +5,6 @@ import { join } from 'path';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from '../../src/engine/plugin-loader.js';
-import { PluginNotFoundError } from '../../src/types/plugin.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import {
   CLAUDE_MODEL_POLICY,
@@ -30,7 +29,6 @@ describe('Integration: plugin defaults', () => {
 
   it('Conductor with minimal/blank config uses ClaudeProvider by default', async () => {
     // Blank config: no llm_provider field specified
-    const config = {};
 
     // Initialize plugin registry and discover plugins (no external plugins in temp dir)
     const registry = new PluginRegistry();

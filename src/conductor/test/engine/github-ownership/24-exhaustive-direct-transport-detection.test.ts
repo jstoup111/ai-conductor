@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 import { auditGithubInvocationSource, findGithubInvocationSites } from '../../../src/engine/github-invocation-audit.js';
 
 const READ = 'direct GitHub read outside guarded adapter';
-const MUTATION = 'direct GitHub mutation outside guarded adapter';
 const INJECTED_READ = 'direct injected GitHub read outside guarded adapter';
 const INJECTED_MUTATION = 'direct injected GitHub mutation outside guarded adapter';
 const UNRESOLVABLE = 'unresolvable executable command construction for gh';

@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PREPARE_COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';

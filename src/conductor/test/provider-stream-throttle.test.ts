@@ -10,7 +10,7 @@ import {
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import { validateConfig } from '../src/engine/config.js';
 import type { ProviderExecutionResult } from '../src/engine/provider-execution.js';
-import type { InvokeOptions, ProviderStreamObservation } from '../src/execution/llm-provider.js';
+import type { InvokeOptions } from '../src/execution/llm-provider.js';
 import type { StepName } from '../src/types/index.js';
 
 const providerResult = (output = 'done'): ProviderExecutionResult => ({

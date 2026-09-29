@@ -11,7 +11,7 @@
  * returns `verified`; unavailable or unproven evidence must HALT.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
+import { describe, it, expect, vi, afterEach, type MockInstance } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile, access } from 'node:fs/promises';
 import { dirname, join } from 'node:path';

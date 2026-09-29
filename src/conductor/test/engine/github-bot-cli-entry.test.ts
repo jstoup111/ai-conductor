@@ -118,7 +118,7 @@ describe('GitHub bot CLI entry points', () => {
 
   it('emits the intake creation bot refusal before its one operator retry', async () => {
     const trace: string[] = [];
-    const gh = vi.fn(async (args: string[], options: { credential?: string }) => {
+    const gh = vi.fn(async (_args: string[], options: { credential?: string }) => {
       trace.push(String(options.credential));
       if (options.credential === 'write') throw new GithubBotAuthRefusalError('auth-refused');
       return { stdout: 'https://github.com/acme/repo/issues/2\n' };

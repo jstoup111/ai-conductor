@@ -3511,7 +3511,7 @@ describe('engine/conductor', () => {
   it('marks step in_progress before running', async () => {
     const statusesDuringRun: Record<string, string | undefined> = {};
     const runner: StepRunner = {
-      run: async (step: StepName, state: ConductState) => {
+      run: async (step: StepName, _state: ConductState) => {
         // Capture the state at the time the runner is called
         const stateResult = await readState(statePath);
         if (stateResult.ok) {
@@ -5593,7 +5593,7 @@ describe('engine/conductor', () => {
 
     it('/remediate: routes an autonomous gap to its target step with the gap in the hint', async () => {
       await seedToPrdAudit();
-      const { runner, calls } = remediateRunner(
+      const { runner } = remediateRunner(
         [
           '**PRD:** present',
           '',
@@ -6969,7 +6969,7 @@ describe('engine/conductor', () => {
       let buildAttemptCount = 0;
       const remediateCallCount: number[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, _opts?: { retryReason?: string }) => {
           if (step === 'build') {
             buildAttemptCount++;
             // Always write a stall marker to trigger remediation dispatch
@@ -7034,7 +7034,7 @@ describe('engine/conductor', () => {
       let buildAttemptCount = 0;
       const remediateCallCount: number[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, _opts?: { retryReason?: string }) => {
           if (step === 'build') {
             buildAttemptCount++;
             // Always write a stall marker to trigger remediation dispatch
@@ -8455,10 +8455,6 @@ describe('engine/conductor', () => {
     // treated as unsatisfied. Stale overrides verdict (same gateSatisfied rule the loop
     // tail uses), so the clamp selects the stale step, not skipping past it.
 
-    const kickback: GateVerdict['kickback'] = {
-      from: 'rebase',
-      evidence: 'rebase changed code/test paths: src/engine/foo.ts',
-    };
 
     // Seed state: all steps before build done, build is marked 'stale' (not 'done'),
     // rebase also done. last_step is finish (prior run completed).
@@ -9870,7 +9866,7 @@ describe('engine/conductor', () => {
       let prdAuditDone = false;
       const neverResolve = new Promise<void>(() => {});
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, _options?: StepRunOptions) => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
@@ -9979,7 +9975,6 @@ describe('engine/conductor', () => {
       finish: 'done',
     } as ConductState;
 
-    const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
     const PRD_AUDIT_PASS =
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
@@ -11605,12 +11600,12 @@ describe('engine/conductor', () => {
     // Create a runner that blocks on the 3rd step so we can trigger SIGINT
     let stepCount = 0;
     let resolveBlock: (() => void) | undefined;
-    const blockPromise = new Promise<void>((resolve) => {
+    void new Promise<void>((resolve) => {
       resolveBlock = resolve;
     });
 
     const runner: StepRunner = {
-      run: async (step: StepName) => {
+      run: async (_step: StepName) => {
         stepCount++;
         if (stepCount === 3) {
           // Trigger SIGINT while we're "running" step 3
@@ -12052,12 +12047,12 @@ describe('engine/conductor', () => {
     // Create a runner that blocks on the 3rd step so we can trigger SIGTERM
     let stepCount = 0;
     let resolveBlock: (() => void) | undefined;
-    const blockPromise = new Promise<void>((resolve) => {
+    void new Promise<void>((resolve) => {
       resolveBlock = resolve;
     });
 
     const runner: StepRunner = {
-      run: async (step: StepName) => {
+      run: async (_step: StepName) => {
         stepCount++;
         if (stepCount === 3) {
           // Trigger SIGTERM while we're "running" step 3
@@ -14463,7 +14458,7 @@ describe('engine/conductor', () => {
 
   describe('auth-failure handling', () => {
     beforeEach(async () => {
-      const { waitForCredentialsChange } = await import(
+      await import(
         '../../src/engine/self-host/operator-credentials.js'
       );
       vi.clearAllMocks();
@@ -16577,9 +16572,8 @@ describe('build-step stall circuit breaker', () => {
     await writeTaskStatus(2, 5); // 2/5 done — incomplete, should trigger gate miss and retry
     // No halt marker — conductor should retry and emit step_retry events
 
-    let buildAttempts = 0;
     const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
-      run: vi.fn(async (step: StepName) => {
+      run: vi.fn(async (_step: StepName) => {
         // Build step is incomplete, returns success but gate will fail
         return { success: true };
       }),
@@ -16634,13 +16628,9 @@ describe('build-step stall circuit breaker', () => {
 // is logged and halts. Single plan with no path uses it as fallback.
 describe('engine/conductor: engine-recorded plan path controls seed discovery (H8)', () => {
   let dir: string;
-  let statePath: string;
-  let events: ConductorEventEmitter;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'conductor-plan-path-test-'));
-    statePath = join(dir, 'conduct-state.json');
-    events = new ConductorEventEmitter();
   });
 
   afterEach(async () => {
@@ -18760,8 +18750,6 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
 
   it('positions the group after build review in ALL_STEPS ordering', () => {
     const buildReviewIdx = ALL_STEPS.findIndex((s) => s.name === 'build_review');
-    const wiringCheckIdx = ALL_STEPS.findIndex((s) => s.name === 'test_suite');
-    const testSuiteIdx = ALL_STEPS.findIndex((s) => s.name === 'test_suite');
     const firstMemberIdx = ALL_STEPS.findIndex((s) => s.name === VALIDATION_GROUP.members[0]);
     expect(firstMemberIdx).toBe(buildReviewIdx + 1);
 

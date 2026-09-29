@@ -47,7 +47,6 @@ function resolveMainRef(): string | null {
 }
 
 const DEPENDENCY_CLAIM_PATH = 'src/conductor/src/engine/engineer/intake/dependency-claim.ts';
-const GITHUB_ISSUES_PATH = 'src/conductor/src/engine/engineer/intake/github-issues.ts';
 const CI_YML_PATH = '.github/workflows/ci.yml';
 
 describe('intake-only enforcement: no downstream criteria gate (Task 7, FR-6)', () => {

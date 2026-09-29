@@ -68,7 +68,7 @@ export function boundCiRepairDiagnostic(event: ConductorEvent): ConductorEvent {
 export class EventPersistError extends Error {
   constructor(
     public readonly filePath: string,
-    public readonly cause?: unknown,
+    public override readonly cause?: unknown,
   ) {
     super(
       `EventPersister failed to write to ${filePath}: ${cause instanceof Error ? cause.message : String(cause)}`,

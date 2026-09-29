@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { existsSync } from 'node:fs';
@@ -572,10 +572,8 @@ describe('Task 14 — RestartRequester: marker → release → exit ordering', (
       throw new Error('InstallStaleError: relink failed');
     });
 
-    let releaseSyncCalled = false;
     const mockLock = {
       releaseSync: () => {
-        releaseSyncCalled = true;
         callOrder.push('release');
       },
     };
@@ -960,7 +958,7 @@ describe('Task 4 (RED) — RestartRequester returns { fired: boolean }', () => {
     };
 
     const mockProcess = {
-      exit: (code: number) => {
+      exit: (_code: number) => {
         exitCalled = true;
         // RED phase: do NOT throw
       },
@@ -1010,7 +1008,7 @@ describe('Task 4 (RED) — RestartRequester returns { fired: boolean }', () => {
     };
 
     const mockProcess = {
-      exit: (code: number) => {
+      exit: (_code: number) => {
         exitCalled = true;
         // RED phase: do NOT throw
       },
@@ -1151,7 +1149,7 @@ describe('Task 4 (RED) — RestartRequester returns { fired: boolean }', () => {
     };
 
     const mockProcess = {
-      exit: (code: number) => {
+      exit: (_code: number) => {
         exitCalled = true;
         // RED phase: do NOT throw
       },

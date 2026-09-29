@@ -26,7 +26,6 @@ import {
   lstat,
   readFile,
   readdir,
-  writeFile,
 } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';

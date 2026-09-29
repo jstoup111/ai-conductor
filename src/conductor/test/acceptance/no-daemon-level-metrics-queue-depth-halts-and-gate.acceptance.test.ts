@@ -8,7 +8,7 @@ import {
   MeterProvider,
 } from '@opentelemetry/sdk-metrics';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
-import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
+import { runDaemon } from '../../src/engine/daemon.js';
 import { localWorkSource } from '../../src/engine/daemon-work-source.js';
 import { readHaltSidecarClassification } from '../../src/engine/halt-marker.js';
 import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';

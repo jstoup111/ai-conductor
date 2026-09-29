@@ -1873,7 +1873,7 @@ describe('operator park boundary contract', () => {
     const releaseSuite = deferred();
     const settled: StepName[] = [];
     let parked = false;
-    const run = vi.fn<StepRunner['run']>(async (step) => {
+    const run = vi.fn<StepRunner['run']>(async (_step) => {
       return { success: true };
     });
     const ensure = vi.fn(async () => {
@@ -1967,7 +1967,7 @@ describe('operator park boundary contract', () => {
 
     const result = await conductor.run();
 
-    const persisted = await readState(statePath);
+    await readState(statePath);
     expect({ result, runnerCalls: run.mock.calls }).toEqual({
       result: {
         kind: 'operator-parked',

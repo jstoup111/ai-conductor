@@ -322,7 +322,7 @@ describe('integration/gate-loop', () => {
 
     const ran: string[] = [];
     const runner: StepRunner = {
-      run: async (step, _state, options) => {
+      run: async (step, _state, _options) => {
         ran.push(step);
         return { success: true };
       },
@@ -390,7 +390,7 @@ describe('integration/gate-loop', () => {
         }
       });
       const runner: StepRunner = {
-        run: async (step, _state, options) => {
+        run: async (step, _state, _options) => {
           ran.push(step);
           if (step === customStep && evidence === 'fresh') {
             await writeFile(join(root, marker), 'PASS\n');

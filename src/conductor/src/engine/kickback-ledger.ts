@@ -446,22 +446,6 @@ function isSettlementReceipts(value: unknown): value is Record<string, { gates: 
       ));
 }
 
-function isKickbackLedger(value: unknown): value is PersistedKickbackLedger {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-
-  const ledger = value as Record<string, unknown>;
-  if (ledger.version !== 1 || typeof ledger.gates !== 'object' || ledger.gates === null || Array.isArray(ledger.gates)) {
-    return false;
-  }
-
-  return Object.values(ledger.gates).every(isKickbackGateEntry) &&
-    (ledger.growth === undefined || isPlanGrowthRecord(ledger.growth)) &&
-    (ledger.effectiveGrowthCap === undefined || isPositiveSafeInteger(ledger.effectiveGrowthCap)) &&
-    (
-      ledger.pendingAsBuiltRemediationFindings === undefined ||
-      isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
-    ) && (ledger.settlementReceipts === undefined || isSettlementReceipts(ledger.settlementReceipts));
-}
 
 /** Atomically record one admitted round's gate charges; replay is a no-op. */
 export async function settleRemediationRound(

@@ -41,7 +41,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import type { ConductState, StepName } from '../../src/types/index.js';
+import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 async function seedOnlyAcceptanceSpecs(statePath: string): Promise<void> {

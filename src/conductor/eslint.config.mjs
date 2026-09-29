@@ -14,6 +14,40 @@
 // tool. `npm run lint` additionally passes `--max-warnings=0`.
 import tseslint from 'typescript-eslint';
 
+export { tseslint };
+
+// Shared with every plugins/*/eslint.config.mjs so each TypeScript tree in the
+// repository is linted against the same rule set.
+export const promiseSafetyRules = {
+  // A promise created and never consumed. This is the rule the whole config
+  // exists for: it is the silent-stall bug class, and the baseline is clean,
+  // so it is enforced at `error` to keep it that way.
+  '@typescript-eslint/no-floating-promises': 'error',
+
+  // `await` on a non-thenable — always either a bug or dead code.
+  '@typescript-eslint/await-thenable': 'error',
+
+  // `checksVoidReturn.arguments` is disabled deliberately. With it on, the rule
+  // fires 90 times, and every single hit is the same shape: an async callback
+  // handed to a void-return API (`process.on('SIGINT', asyncHandler)`,
+  // commander `.action()`). Node genuinely ignores those return values, so the
+  // only available "fix" is a `void` wrapper that changes nothing at runtime
+  // and hides the rejection path instead of handling it. The remaining
+  // sub-checks (conditionals, spreads, return positions) stay on — those are
+  // unambiguous bugs. See PR body for the deferred-count breakdown.
+  '@typescript-eslint/no-misused-promises': [
+    'error',
+    { checksVoidReturn: { arguments: false } },
+  ],
+
+  // NOT enabled: `require-await`. It reports 40 times, and the dominant shape
+  // is an `async` function that conforms to an awaited interface without
+  // needing `await` itself (`onCheckpoint ?? (async () => 'continue')`,
+  // `async function hasSession(): Promise<boolean>`). Dropping `async` there
+  // would change the declared contract, not fix a defect.
+  // '@typescript-eslint/require-await': 'error',
+};
+
 export default tseslint.config(
   {
     ignores: [
@@ -46,34 +80,6 @@ export default tseslint.config(
       // here; they refer to rules this config does not enable.
       reportUnusedDisableDirectives: 'off',
     },
-    rules: {
-      // A promise created and never consumed. This is the rule the whole config
-      // exists for: it is the silent-stall bug class, and the baseline is clean,
-      // so it is enforced at `error` to keep it that way.
-      '@typescript-eslint/no-floating-promises': 'error',
-
-      // `await` on a non-thenable — always either a bug or dead code.
-      '@typescript-eslint/await-thenable': 'error',
-
-      // `checksVoidReturn.arguments` is disabled deliberately. With it on, the rule
-      // fires 90 times, and every single hit is the same shape: an async callback
-      // handed to a void-return API (`process.on('SIGINT', asyncHandler)`,
-      // commander `.action()`). Node genuinely ignores those return values, so the
-      // only available "fix" is a `void` wrapper that changes nothing at runtime
-      // and hides the rejection path instead of handling it. The remaining
-      // sub-checks (conditionals, spreads, return positions) stay on — those are
-      // unambiguous bugs. See PR body for the deferred-count breakdown.
-      '@typescript-eslint/no-misused-promises': [
-        'error',
-        { checksVoidReturn: { arguments: false } },
-      ],
-
-      // NOT enabled: `require-await`. It reports 40 times, and the dominant shape
-      // is an `async` function that conforms to an awaited interface without
-      // needing `await` itself (`onCheckpoint ?? (async () => 'continue')`,
-      // `async function hasSession(): Promise<boolean>`). Dropping `async` there
-      // would change the declared contract, not fix a defect.
-      // '@typescript-eslint/require-await': 'error',
-    },
+    rules: promiseSafetyRules,
   },
 );

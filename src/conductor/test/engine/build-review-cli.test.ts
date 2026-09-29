@@ -312,7 +312,7 @@ describe('build-review findings CLI', () => {
     // fall into the outer refusal path, so the operator saw a failure for a
     // recovery that had actually succeeded — and the retry they were told to
     // make then refused as a duplicate, leaving the command unusable.
-    const appendReducedCoverageIfCurrent = vi.fn(async (input: never, validate: never) => {
+    const appendReducedCoverageIfCurrent = vi.fn(async (_input: never, validate: never) => {
       await (validate as unknown as (r: unknown[]) => Promise<boolean>)([]);
       return {
         ok: true as const,

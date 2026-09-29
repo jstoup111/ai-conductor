@@ -44,14 +44,6 @@ describe('acceptance: main-checkout leak auto-heal + escalation (#380, TR-2/TR-3
     return stdout.trim();
   }
 
-  async function gitAllowFail(args: string[], cwd: string = repoDir) {
-    try {
-      const { stdout } = await execFile('git', args, { cwd });
-      return { exitCode: 0, stdout: stdout.trim() };
-    } catch (e: any) {
-      return { exitCode: typeof e.code === 'number' ? e.code : 1, stdout: '' };
-    }
-  }
 
   beforeEach(async () => {
     originDir = await mkdtemp(join(tmpdir(), 'origin-leak-'));

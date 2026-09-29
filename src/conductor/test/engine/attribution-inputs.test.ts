@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir } from 'fs/promises';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
@@ -57,7 +57,7 @@ describe('collectCandidateCommits', () => {
 
     await writeFile(join(gitDir, 'file2.txt'), 'content2');
     await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
-    const commit2Log = await execa('git', ['commit', '-m', 'feat: second commit'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: second commit'], { cwd: gitDir });
 
     // Get the initial commit SHA to create a range
     const allLogs = await execa('git', ['log', '--format=%H'], { cwd: gitDir });
@@ -301,7 +301,7 @@ This is task 3 description.
       'utf-8'
     );
 
-    const evidence = await createTaskEvidence(gitDir);
+    await createTaskEvidence(gitDir);
     const candidates = [
       { sha: 'abc123', subject: 'feat: change 1', diff: 'diff content 1' },
       { sha: 'def456', subject: 'feat: change 2', diff: 'diff content 2' },

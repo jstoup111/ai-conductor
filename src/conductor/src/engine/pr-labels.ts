@@ -12,7 +12,6 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { extractPrUrl } from './state.js';
 import type { ParsedIssueRef } from './engineer/issue-ref.js';
 import {
   executeGithubOperation,
@@ -200,7 +199,7 @@ export function restRemoveLabelArgs(repo: string, number: string, name: string):
  */
 export async function ensureLabel(
   runGh: PrRunner = makeProductionGh(),
-  cwd: string,
+  _cwd: string,
   name: string,
   color: string,
   log?: (msg: string) => void,
@@ -222,7 +221,7 @@ export async function ensureLabel(
  */
 export async function addLabel(
   runGh: PrRunner = makeProductionGh(),
-  cwd: string,
+  _cwd: string,
   prUrl: string,
   name: string,
   log?: (msg: string) => void,
@@ -243,7 +242,7 @@ export async function addLabel(
  */
 export async function removeLabel(
   runGh: PrRunner = makeProductionGh(),
-  cwd: string,
+  _cwd: string,
   prUrl: string,
   name: string,
   log?: (msg: string) => void,
@@ -729,7 +728,7 @@ export async function resolveSpecPrUrl(
  */
 export async function comment(
   runGh: PrRunner = makeProductionGh(),
-  cwd: string,
+  _cwd: string,
   prUrl: string,
   body: string,
   log?: (msg: string) => void,
@@ -904,7 +903,7 @@ export async function postSupersessionAudit(
  */
 export async function issueComment(
   runGh: PrRunner = makeProductionGh(),
-  cwd: string,
+  _cwd: string,
   issueUrl: string,
   body: string,
   log?: (msg: string) => void,
@@ -987,7 +986,7 @@ export async function upsertIssueComment(
  */
 export async function setReady(
   runGh: PrRunner = makeProductionGh(),
-  cwd: string,
+  _cwd: string,
   prUrl: string,
   log?: (msg: string) => void,
 ): Promise<PrMutationResult> {
@@ -1004,7 +1003,7 @@ export async function setReady(
  */
 export async function convertToDraft(
   runGh: PrRunner = makeProductionGh(),
-  cwd: string,
+  _cwd: string,
   prUrl: string,
   log?: (msg: string) => void,
 ): Promise<PrMutationResult> {
@@ -1159,7 +1158,6 @@ export async function ensureHaltPresentation(
 
     // ── Step 4: add the needs-remediation label with retry logic ──────────
     const maxAttempts = 3;
-    let labelConfirmed = false;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // Add the label
@@ -1169,7 +1167,6 @@ export async function ensureHaltPresentation(
       // Re-read to check if label is present
       const afterAdd = await readHaltPresentation(runGh, cwd, prUrl, log);
       if (afterAdd?.labels.includes('needs-remediation')) {
-        labelConfirmed = true;
         break;
       }
 
@@ -1224,14 +1221,14 @@ export async function ensureHaltPresentation(
  * Swallows all errors and never throws.
  *
  * @param runGh - Injectable gh runner (defaults to production)
- * @param cwd - Working directory for gh operations
+ * @param _cwd - Working directory for gh operations
  * @param prUrl - URL of the PR to edit
  * @param currentBody - The current body content to check and edit
  * @param log - Optional logging callback
  */
 export async function removeBodyMarker(
   runGh: PrRunner = makeProductionGh(),
-  cwd: string,
+  _cwd: string,
   prUrl: string,
   currentBody: string,
   log?: (msg: string) => void,
@@ -1299,7 +1296,6 @@ export async function cleanupHaltPresentation(
     const hasLabel = beforeCleanup.labels.includes('needs-remediation');
     if (hasLabel) {
       const maxAttempts = 3;
-      let labelRemovalConfirmed = false;
 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         // Remove the label (best-effort, non-throwing)
@@ -1308,7 +1304,6 @@ export async function cleanupHaltPresentation(
         // Re-read to check if label is gone
         const afterRemove = await readHaltPresentation(runGh, cwd, prUrl, log);
         if (afterRemove && !afterRemove.labels.includes('needs-remediation')) {
-          labelRemovalConfirmed = true;
           break;
         }
 

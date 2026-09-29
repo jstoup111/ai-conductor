@@ -137,7 +137,7 @@ export function applyParkTeardownDecision(diff: ParkedMarkersDiff): void {
  */
 export function applyEngineerSignalsTeardownDecision(
   diff: EngineerSignalsDiff,
-  logger: (message: string) => void = console.error
+  _logger: (message: string) => void = console.error
 ): void {
   if (diff.addedTestProjectLines > 0) {
     throw new Error(

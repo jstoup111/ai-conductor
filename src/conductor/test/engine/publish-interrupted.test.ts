@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readdir, readlink, lstat } from 'fs/promises';
+import { mkdtemp, rm, writeFile, readdir, readlink, lstat } from 'fs/promises';
 import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
 import { publish } from '../../scripts/publish-engine.mjs';

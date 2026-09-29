@@ -25,7 +25,7 @@
 // The two renders and the two `pickEligible` picks must be byte-identical.
 // The handshake must be wired through daemon-cli's real entry, verified by spy.
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

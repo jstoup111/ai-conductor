@@ -6,7 +6,7 @@ import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/conduct
  * Error thrown when RecorderProvider fails to write to the recording file.
  */
 export class RecorderProviderError extends Error {
-  constructor(message: string, public readonly cause?: unknown) {
+  constructor(message: string, public override readonly cause?: unknown) {
     super(message);
     this.name = 'RecorderProviderError';
   }

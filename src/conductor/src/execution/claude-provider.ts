@@ -332,8 +332,8 @@ export function parseRateLimitWaitSeconds(
  * Handles timezone-aware deadline calculation with a caller-supplied cap.
  *
  * @param now Current UTC time
- * @param timezone Timezone string (e.g., "America/New_York")
- * @param dateInTz Current date components in the timezone
+ * @param _timezone Timezone string (e.g., "America/New_York")
+ * @param _dateInTz Current date components in the timezone
  * @param timeInTz Current time components in the timezone
  * @param resetHour Reset hour in 24-hour format
  * @param resetMinute Reset minute
@@ -342,8 +342,8 @@ export function parseRateLimitWaitSeconds(
  */
 function calculateDeadlineInTimezone(
   now: Date,
-  timezone: string,
-  dateInTz: { year: number; month: number; day: number },
+  _timezone: string,
+  _dateInTz: { year: number; month: number; day: number },
   timeInTz: { hours: number; minutes: number; seconds: number },
   resetHour: number,
   resetMinute: number,
@@ -439,35 +439,6 @@ export function detectsModelUnavailable(output: string): boolean {
   return MODEL_UNAVAILABLE_RE.test(output);
 }
 
-/**
- * Scan stdout lines for a stream-json usage event and extract token counts.
- * Returns undefined when no usage event is found or parsing fails.
- */
-function parseTokenUsage(stdout: string): TokenUsage | undefined {
-  for (const line of stdout.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-      if (parsed.type === 'usage' && typeof parsed.input_tokens === 'number' && typeof parsed.output_tokens === 'number') {
-        const usage: TokenUsage = {
-          input: parsed.input_tokens as number,
-          output: parsed.output_tokens as number,
-        };
-        if (typeof parsed.cache_read_input_tokens === 'number') {
-          usage.cacheRead = parsed.cache_read_input_tokens as number;
-        }
-        if (typeof parsed.cache_creation_input_tokens === 'number') {
-          usage.cacheCreation = parsed.cache_creation_input_tokens as number;
-        }
-        return usage;
-      }
-    } catch {
-      // Not valid JSON — skip line
-    }
-  }
-  return undefined;
-}
 
 /**
  * Parse a terminal result object selected from `claude --print --output-format

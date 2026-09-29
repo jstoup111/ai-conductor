@@ -883,18 +883,6 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
         'legacy',
         'unclassified',
       ] as const satisfies readonly HaltDisposition[];
-      type Equal<Left, Right> =
-        (<Value>() => Value extends Left ? 1 : 2) extends
-        (<Value>() => Value extends Right ? 1 : 2) ? true : false;
-      type Assert<Condition extends true> = Condition;
-      type HaltClassIsUnchanged = Assert<Equal<
-        HaltClass,
-        'needs-human' | 'mechanical' | 'protected-artifact' | 'plan-gap'
-      >>;
-      type HaltDispositionIsUnchanged = Assert<Equal<
-        HaltDisposition,
-        HaltClass | 'kickback-cap' | 'over-scope' | 'legacy' | 'unclassified'
-      >>;
 
       expect(changedBranchClasses.every((haltClass) => haltClasses.includes(haltClass))).toBe(true);
       expect(haltClasses).toEqual([

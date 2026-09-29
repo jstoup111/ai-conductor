@@ -31,7 +31,6 @@ import {
 } from './accepted-widenings.js';
 import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
 import {
-  classifyPrdWidening,
   classifyPrdWideningProjection,
   type PrdWideningClassification,
 } from './prd-widening-classification.js';
@@ -1874,9 +1873,6 @@ async function coherenceArtifactHasCriterionRows(dir: string, ctx: CompletionCon
   }
 }
 
-function escapeDispositionRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 /**
  * Ground disposition-only evidence in the feature's authoritative artifacts
@@ -2790,9 +2786,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           reason: 'missing .pipeline/task-status.json — the pipeline skill must create it',
         };
       }
-      let parsed: unknown;
       try {
-        parsed = JSON.parse(raw);
+        JSON.parse(raw);
       } catch {
         return { done: false, reason: 'invalid JSON in .pipeline/task-status.json' };
       }

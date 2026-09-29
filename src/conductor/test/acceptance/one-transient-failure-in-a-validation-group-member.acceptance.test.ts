@@ -325,7 +325,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       await new Conductor({
         stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir,
         mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1, fromStep: 'prd_audit',
-        stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
+        stepRunner: { run: vi.fn(async (step: StepName, _state, _options) => {
           recoveryCalls.push(step);
           if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
           return { success: true } as StepRunResult;
@@ -382,7 +382,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const conductor = new Conductor({
         stateFilePath: statePath, events, projectRoot: dir, mode: 'auto', daemon: true,
         verifyArtifacts: true, maxRetries: 2, fromStep: 'manual_test',
-        stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
+        stepRunner: { run: vi.fn(async (step: StepName, _state, _options) => {
           calls.push(step);
           if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           return { success: true } as StepRunResult;
@@ -647,7 +647,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
   });
 
   it.each([
-    ['no-verdict', async (dir: string, step: StepName) => {
+    ['no-verdict', async (_dir: string, step: StepName) => {
       if (step === 'manual_test') throw new Error('validator crashed');
       return { success: true } as StepRunResult;
     }],

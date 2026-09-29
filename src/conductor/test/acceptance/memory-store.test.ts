@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile, readdir, lstat, readlink, realpath } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, readdir, lstat, realpath } from 'fs/promises';
 import { join } from 'path';
-import { tmpdir, homedir } from 'os';
+import { tmpdir } from 'os';
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 

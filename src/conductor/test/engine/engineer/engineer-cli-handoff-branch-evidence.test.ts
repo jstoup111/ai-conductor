@@ -61,7 +61,6 @@ let workDir: string;
 let registryPath: string;
 let engineerDir: string;
 let repoPath: string;
-let defaultBranch: string;
 
 async function git(args: string[], cwd = repoPath): Promise<string> {
   const { stdout } = await execFile('git', args, { cwd });
@@ -177,7 +176,6 @@ beforeEach(async () => {
   await writeFile(join(repoPath, 'README.md'), '# repo\n');
   await git(['add', 'README.md']);
   await git(['commit', '-m', 'init']);
-  defaultBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
   await writeRegistry();
 });
 
@@ -579,7 +577,7 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
     // Assert: ledger entry is updated to 'done' with prUrl (via reportDone)
     // NOTE: This is the existing behavior we're NOT changing — just verifying
     // the pr-opened path still works as before.
-    const afterHandoff = await ledger.get('github-issues', sourceRef);
+    await ledger.get('github-issues', sourceRef);
     // The reportDone call would set status to 'done' and prUrl, but that's
     // beyond the scope of this test — we just verify we didn't break the pr-opened output.
     expect(result.url).toBe(PR_URL);
@@ -611,9 +609,8 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
 
     // Mock the createLedger to throw on transition (for the branch evidence recording path)
     const ledgerModule = await import('../../../src/engine/engineer/intake/ledger.js');
-    const originalCreateLedger = ledgerModule.createLedger;
     let transitionThrowCount = 0;
-    vi.spyOn(ledgerModule, 'createLedger').mockImplementation((path: string) => {
+    vi.spyOn(ledgerModule, 'createLedger').mockImplementation((_path: string) => {
       // Return a mock ledger that throws on transition
       return {
         async known() { return false; },
@@ -684,7 +681,7 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
     // Mock createLedger to return a ledger that throws on transition
     const ledgerModule = await import('../../../src/engine/engineer/intake/ledger.js');
     let transitionThrowCount = 0;
-    vi.spyOn(ledgerModule, 'createLedger').mockImplementation((path: string) => {
+    vi.spyOn(ledgerModule, 'createLedger').mockImplementation((_path: string) => {
       return {
         async known() { return false; },
         async record() {},
@@ -823,7 +820,7 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
       return { stdout: JSON.stringify({}) };
     };
 
-    const { out, err, opts } = captureOpts({
+    const { out, opts } = captureOpts({
       gh: gh as any,
       git: noOpGit,
       handoffPublication: authorizedPublication(gh as any, branch, 'o/f', 888),
@@ -853,7 +850,6 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
     // Assert: stderr may show the gh failures from reportDone (advisory)
     // But the key is: even though reportDone gh fails, the ledger is still updated to done
     // (because reportDone itself doesn't throw, it swallows errors internally)
-    const stderrText = err.join('\n');
     // Note: reportDone swallows the errors, so we may or may not see them in stderr
     // The important thing is we don't fail the handoff
 

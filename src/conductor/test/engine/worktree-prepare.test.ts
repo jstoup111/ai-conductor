@@ -13,7 +13,6 @@ import {
   DISPATCH_START_SCRIPT,
   NAMESPACE_VAR,
   SetupFailureError,
-  OPERATOR_ONLY_SKILLS,
   runProjectTeardown,
   hashSetupScript,
   readSetupMarker,

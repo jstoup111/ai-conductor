@@ -130,7 +130,7 @@ interface LaunchResult {
  * Launch the REAL daemon entry point against an isolated user + project config
  * pair and report every observable artifact of that launch.
  */
-async function launchDaemon(home: string, projectRoot: string): Promise<LaunchResult> {
+async function launchDaemon(_home: string, projectRoot: string): Promise<LaunchResult> {
   const discover = vi.fn(async () => []);
   const consoleLines: string[] = [];
   const originalLog = console.log;
