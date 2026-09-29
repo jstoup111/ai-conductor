@@ -4,6 +4,12 @@ spec_hash: 5aa13db27b0294ffcc20ea8527879c19156eb03af77ed455cabe97e978eb10de
 pr: https://github.com/jstoup111/ai-conductor/pull/2827
 shipped: 2026-09-29
 engine_version: 20260929T105729Z-f7dec31e6e68
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/engine/event-spine-rubric-config.test.ts:45,62 — fixture expectation changed from model opus to sonnet, outside the planned file set"
+    accepted: true
 ---
 
 ## Cost
