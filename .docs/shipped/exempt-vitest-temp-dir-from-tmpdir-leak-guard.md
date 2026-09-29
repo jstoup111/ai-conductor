@@ -4,12 +4,6 @@ spec_hash: 5aa13db27b0294ffcc20ea8527879c19156eb03af77ed455cabe97e978eb10de
 pr: https://github.com/jstoup111/ai-conductor/pull/2827
 shipped: 2026-09-29
 engine_version: 20260929T105729Z-f7dec31e6e68
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "src/conductor/test/engine/event-spine-rubric-config.test.ts:45,62 — fixture expectation changed from model opus to sonnet, outside the planned file set"
-    accepted: true
 ---
 
 ## Cost
@@ -28,8 +22,10 @@ providers:
   claude: input: 30, output: 7941, cache_read: 526453, cache_creation: 90884, cost_usd: 0.9219, dispatches: 3, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","9ee9577f-3535-411c-92a4-8c15697a2b5a","lifecycle-step","finish"]
+state: measured
+active_ms: 4181362
+provider_active_ms: 1934828
+no_provider_active_ms: 2246534
 
 ## Build Review
 laps_to_pass: 1
