@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.5.1] - 2026-09-29
+## [1.6.0] - 2026-09-29
 
 ### Added
 
@@ -22,6 +22,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Harness uninstall now removes its settings and offers an opt-in `--purge` cleanup for its state directory. ([implementation PR #2808](https://github.com/jstoup111/ai-conductor/pull/2808)).
 - Intake skill users can file issues through a bundled helper that works from installed skill directories. ([implementation PR #2823](https://github.com/jstoup111/ai-conductor/pull/2823)).
 - Daemon commits now credit the configured GitHub bot as a co-author when its identity is available. ([implementation PR #2839](https://github.com/jstoup111/ai-conductor/pull/2839)).
+- Project configuration now selects a work-tracker backend, preserving GitHub behavior and safely excluding unsupported Jira projects. ([implementation PR #2825](https://github.com/jstoup111/ai-conductor/pull/2825)).
 
 ### Changed
 
@@ -51,6 +52,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon FINISH no longer halts when the PR prose author edits the PR through the guarded github-operation CLI from a feat/daemon-<slug> worktree. ([implementation PR #2845](https://github.com/jstoup111/ai-conductor/pull/2845)).
 - Daemon restarts preserve the operator’s selected run flags. ([implementation PR #2837](https://github.com/jstoup111/ai-conductor/pull/2837)).
 - Harness users now receive clear validation for version constraints, viewer settings, telemetry protocols, and custom parallel steps. ([implementation PR #2829](https://github.com/jstoup111/ai-conductor/pull/2829)).
+- Intake filers now receive typed dependency links and explicit notices for links GitHub cannot record. ([implementation PR #2831](https://github.com/jstoup111/ai-conductor/pull/2831)).
 
 ## [1.5.0] - 2026-09-27
 
