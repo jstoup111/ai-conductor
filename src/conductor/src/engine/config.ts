@@ -2647,11 +2647,22 @@ function validateMarkdownViewerBlock(raw: unknown): ConfigError | null {
       };
     }
   }
-  if (obj.mode !== undefined && !VALID_MARKDOWN_VIEWER_MODES.has(obj.mode as MarkdownViewerConfig['mode'])) {
+  if (obj.mode !== undefined && !VALID_MARKDOWN_VIEWER_MODES.has(obj.mode as NonNullable<MarkdownViewerConfig['mode']>)) {
     return {
       type: 'validation_error',
       message: 'markdown_viewer.mode must be inline|blocking|external',
     };
+  }
+  if (obj.preset === undefined || obj.preset === 'custom') {
+    if (obj.command === undefined) {
+      return { type: 'validation_error', message: 'markdown_viewer.command is required when no preset or custom preset is named' };
+    }
+    if (obj.args === undefined) {
+      return { type: 'validation_error', message: 'markdown_viewer.args is required when no preset or custom preset is named' };
+    }
+    if (obj.mode === undefined) {
+      return { type: 'validation_error', message: 'markdown_viewer.mode is required when no preset or custom preset is named' };
+    }
   }
   return null;
 }

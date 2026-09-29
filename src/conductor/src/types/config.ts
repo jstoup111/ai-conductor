@@ -199,9 +199,9 @@ export interface ConductorConfig {
  */
 export interface MarkdownViewerConfig {
   preset?: string;
-  command: string;
-  args: string[];
-  mode: 'inline' | 'blocking' | 'external';
+  command?: string;
+  args?: string[];
+  mode?: 'inline' | 'blocking' | 'external';
 }
 
 /**

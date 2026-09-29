@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:4
 import { describe, it, expect } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -101,6 +101,27 @@ describe('retired top-level wiring configuration', () => {
     expect(result).toMatchObject({ ok: true, warnings: [] });
     if (!result.ok) return;
     expect(result.deprecatedKeys).not.toContainEqual(expect.objectContaining({ key: 'wiring' }));
+  });
+});
+
+describe('markdown_viewer configuration', () => {
+  it.each([
+    ['a preset-only viewer', { preset: 'glow' }],
+    ['a complete custom viewer', { preset: 'custom', command: 'bat', args: ['{file}'], mode: 'inline' }],
+    ['a complete preset-less viewer', { command: 'bat', args: ['{file}'], mode: 'blocking' }],
+  ])('accepts %s', (_name, markdown_viewer) => {
+    expect(validateConfig({ markdown_viewer })).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ['an empty viewer', {}, /markdown_viewer\.command.*required/i],
+    ['a custom viewer without args', { preset: 'custom', command: 'bat', mode: 'inline' }, /markdown_viewer\.args.*required/i],
+    ['a preset-less viewer without mode', { command: 'bat', args: ['{file}'] }, /markdown_viewer\.mode.*required/i],
+    ['viewer args without the file placeholder', { preset: 'glow', args: ['-p'] }, /markdown_viewer\.args.*include.*\{file\}/i],
+  ])('rejects %s', (_name, markdown_viewer, diagnostic) => {
+    const result = validateConfig({ markdown_viewer });
+
+    expect(result.ok ? 'accepted invalid markdown viewer' : result.error.message).toMatch(diagnostic);
   });
 });
 
