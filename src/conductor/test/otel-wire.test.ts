@@ -7,7 +7,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConductorEventEmitter } from '../src/ui/events.js';
-import { wireOtelVisualizer } from '../src/engine/otel/wire.js';
+import { createOtelVisualizerRegistry, wireOtelVisualizer } from '../src/engine/otel/wire.js';
 
 const buildExporters = vi.hoisted(() => vi.fn());
 
@@ -115,6 +115,11 @@ describe('wireOtelVisualizer', () => {
     } finally {
       await rm(pipelineDir, { recursive: true, force: true });
     }
+  });
+
+  it('registers no built-in llm providers in its throwaway visualizer registry', () => {
+    const events = new ConductorEventEmitter();
+    expect(createOtelVisualizerRegistry(events).list('llm_provider')).toEqual([]);
   });
 
   it('exports omitted resolution inputs as not-supplied while retaining explicit unresolved values', async () => {

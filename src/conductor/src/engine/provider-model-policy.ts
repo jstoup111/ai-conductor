@@ -1,4 +1,4 @@
-import { BUILT_IN_PROVIDERS } from '../execution/provider-catalog.js';
+import { BUILT_IN_PROVIDERS, CLAUDE_PROVIDER, providerDescriptor } from '../execution/provider-catalog.js';
 import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
@@ -33,7 +33,7 @@ export function resolveProviderModelPolicy(
   }
 
   warn?.(
-    `Unknown provider "${providerKey}": Claude-compatible model defaults are being used; add a provider model policy for "${providerKey}".`,
+    `Unknown provider "${providerKey}": ${providerDescriptor(CLAUDE_PROVIDER).displayName}-compatible model defaults are being used; add a provider model policy for "${providerKey}".`,
   );
   return CLAUDE_MODEL_POLICY;
 }

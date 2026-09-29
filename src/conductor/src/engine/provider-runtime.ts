@@ -59,6 +59,8 @@ export class ProviderRuntimeSet {
   /** Resolves the selected adapter's declared native output-schema capability. */
   nativeSchemaCapabilityFor(key: string): ProviderNativeSchemaCapability | undefined {
     const runtime = this.runtimes.get(key);
+    const descriptor = findBuiltInProviderDescriptor(key);
+    if (descriptor && !supportsProviderCapability(descriptor, 'nativeSchema')) return undefined;
     return runtime?.nativeSchemaCapability ?? runtime?.provider.nativeSchemaCapability;
   }
 

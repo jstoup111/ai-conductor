@@ -15,6 +15,9 @@ import type {
 import { ModelAvailability } from './model-availability.js';
 import {
   DEFAULT_PROVIDER,
+  CLAUDE_DISPLAY_NAME,
+  CODEX_DISPLAY_NAME,
+  ProviderCapabilityUnsupportedError,
   requireProviderCapability,
   type BuiltInProviderId,
   type ProviderWith,
@@ -843,6 +846,28 @@ function readOnlyReviewUnavailableFailure(
 
 /** Gate placeholder until the built-in coordinator announces its dispatch plan. */
 const BUILTIN_DISPATCH_PLAN_MEMBER = '@builtin-dispatch-plan';
+
+function unavailableReviewCapabilityResult(
+  providerKey: string,
+  capability: 'readOnlyReview' | 'reviewPolicyCatalog',
+): InvokeResult | undefined {
+  try {
+    requireProviderCapability(providerKey as BuiltInProviderId, capability);
+    return undefined;
+  } catch (error) {
+    if (!(error instanceof ProviderCapabilityUnsupportedError)) throw error;
+    const detail = error.message;
+    return {
+      success: false,
+      exitCode: 1,
+      providerUnavailable: true,
+      providerInvocationSkipped: true,
+      readOnlyReviewUnavailable: true,
+      providerUnavailableReason: detail,
+      output: detail,
+    };
+  }
+}
 
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
@@ -3157,6 +3182,8 @@ export class DefaultStepRunner implements StepRunner {
       abortSignal: controller.signal, deadlineAt,
       ...(Array.isArray(entry.policy.llm_provider) && entry.policy.llm_provider.length > 1 ? { prepareCandidateBaseline: async ({ candidate, prepared }) => {
         if (lapGate?.hasOpened) return;
+        if (unavailableReviewCapabilityResult(candidate.providerKey, 'readOnlyReview') !== undefined
+          || unavailableReviewCapabilityResult(candidate.providerKey, 'reviewPolicyCatalog') !== undefined) return;
         const capability = await readOnlyReviewCapabilityFor?.(candidate.providerKey);
         if (capability?.status !== 'available') return;
         const catalogProvider = requireProviderCapability(
@@ -3175,10 +3202,14 @@ export class DefaultStepRunner implements StepRunner {
         await lapGate?.registerPolicy(bundle.materialPath, policy.packageRoot);
       } } : {}),
       preparedCandidateOperation: async (context) => {
+        const missingReadOnlyReview = unavailableReviewCapabilityResult(context.candidate.providerKey, 'readOnlyReview');
+        if (missingReadOnlyReview !== undefined) return { kind: 'failure' as const, result: missingReadOnlyReview };
         const readOnlyReviewProvider = requireProviderCapability(
           context.candidate.providerKey as BuiltInProviderId,
           'readOnlyReview',
         );
+        const missingPolicyCatalog = unavailableReviewCapabilityResult(context.candidate.providerKey, 'reviewPolicyCatalog');
+        if (missingPolicyCatalog !== undefined) return { kind: 'failure' as const, result: missingPolicyCatalog };
         const catalogProvider = requireProviderCapability(
           context.candidate.providerKey as BuiltInProviderId,
           'reviewPolicyCatalog',
@@ -3926,6 +3957,8 @@ export class DefaultStepRunner implements StepRunner {
             ...(customPolicyLap ? { prepareCandidateBaseline: async ({ candidate, prepared }) => {
               if (lapGate?.hasOpened) return;
               if (!customPolicyLap) return;
+              if (unavailableReviewCapabilityResult(candidate.providerKey, 'readOnlyReview') !== undefined
+                || unavailableReviewCapabilityResult(candidate.providerKey, 'reviewPolicyCatalog') !== undefined) return;
               const capability = await readOnlyReviewCapabilityFor?.(candidate.providerKey);
               if (capability?.status !== 'available') return;
               const catalogProvider = requireProviderCapability(
@@ -3949,10 +3982,8 @@ export class DefaultStepRunner implements StepRunner {
               // admission seam as custom members so a peer cannot select an
               // unprobed provider independently.
               if (customPolicyLap) {
-                requireProviderCapability(
-                  context.candidate.providerKey as BuiltInProviderId,
-                  'readOnlyReview',
-                );
+                const missingReadOnlyReview = unavailableReviewCapabilityResult(context.candidate.providerKey, 'readOnlyReview');
+                if (missingReadOnlyReview !== undefined) return { kind: 'failure' as const, result: missingReadOnlyReview };
                 const capability = await readOnlyReviewCapabilityFor?.(context.candidate.providerKey);
                 if (capability?.status !== 'available') {
                   const platform = capability?.platform ?? process.platform;
@@ -3994,6 +4025,8 @@ export class DefaultStepRunner implements StepRunner {
               // contract as custom policies. The harness-root digest is only
               // an approximation of what the prepared provider loaded.
               const builtinEntry = { id: branch.rubric, kind: 'builtin' as const, policy: branch.policy };
+              const missingPolicyCatalog = unavailableReviewCapabilityResult(context.candidate.providerKey, 'reviewPolicyCatalog');
+              if (missingPolicyCatalog !== undefined) return { kind: 'failure' as const, result: missingPolicyCatalog };
               const catalogProvider = requireProviderCapability(
                 context.candidate.providerKey as BuiltInProviderId,
                 'reviewPolicyCatalog',
@@ -4195,7 +4228,7 @@ export class DefaultStepRunner implements StepRunner {
         rejection,
       });
     }
-    if (!initial.success && initial.output?.startsWith('Codex native schema scratch home failed:')) {
+    if (!initial.success && initial.output?.startsWith(`${CODEX_DISPLAY_NAME} native schema scratch home failed:`)) {
       return makeBuildReviewDispatchFailure(initial.output ?? 'build_review provider invocation failed without a diagnostic');
     }
     if (!initial.success) return undefined;
@@ -5116,7 +5149,7 @@ export class DefaultStepRunner implements StepRunner {
           `The prior prose judge's objection is:\n> ${revisionGuidance}\n\n` +
           'Revise the retained PR title and body in place to address that objection. Read the full diff of this ' +
           'feature branch against its base branch, plus the feature specification, plan, and story artifacts, then ' +
-          'follow this repository\'s PR authoring contract — the `pr` skill (Claude Code invokes it as `/pr`; Codex ' +
+          `follow this repository's PR authoring contract — the \`pr\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/pr\`; ${CODEX_DISPLAY_NAME} ` +
           'invokes it as `$pr`). Keep the template section shape (`## Why`, `## What Changed`, `## Testing`, and the ' +
           '`Closes` reference), preserve any release metadata already present, and make the prose specific to the ' +
           'delivered behavior. Change nothing else: do not create, push, merge, or ready a pull request, do not alter ' +
@@ -5131,7 +5164,7 @@ export class DefaultStepRunner implements StepRunner {
         'placeholder body, so there is no prose to judge yet. Write it. Read the full diff of this ' +
         'feature branch against its base branch, plus the feature specification, plan, and story ' +
         'artifacts, then rewrite the retained PR title and body in place following this repository\'s ' +
-        'PR authoring contract — the `pr` skill (Claude Code invokes it as `/pr`; Codex invokes it as ' +
+          `PR authoring contract — the \`pr\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/pr\`; ${CODEX_DISPLAY_NAME} invokes it as ` +
         '`$pr`). Keep the template section shape (`## Why`, `## What Changed`, `## Testing`, and the ' +
         '`Closes` reference), replace every "not yet authored" marker and the body-floor marker with ' +
         'specific reader-facing content, and preserve any release metadata already present. Change ' +

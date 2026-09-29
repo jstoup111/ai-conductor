@@ -76,7 +76,7 @@ import {
   probeGhVersion,
   type GhVersionFloorVerdict,
 } from './gh-version-floor.js';
-import { CLAUDE_PROVIDER, resolveProviderExecutable } from '../execution/provider-catalog.js';
+import { CLAUDE_DISPLAY_NAME, CLAUDE_PROVIDER, resolveProviderExecutable } from '../execution/provider-catalog.js';
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
@@ -910,7 +910,7 @@ export async function dispatchEngineer(
         const inside = opts.insideClaudeSession ?? Boolean(process.env.CLAUDECODE);
         if (inside) {
           print(
-            "You're already inside a Claude Code session — run /composer directly to start " +
+            `You're already inside a ${CLAUDE_DISPLAY_NAME} Code session — run /composer directly to start ` +
               'the idea→spec loop (no need to launch a nested session).',
           );
           return 0;
@@ -974,7 +974,7 @@ export async function dispatchEngineer(
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
           printErr(
-            `engineer: could not launch an interactive Claude session (${msg}). ` +
+            `engineer: could not launch an interactive ${CLAUDE_DISPLAY_NAME} session (${msg}). ` +
               'Is the `claude` CLI installed and on your PATH?',
           );
           printGuide(print);

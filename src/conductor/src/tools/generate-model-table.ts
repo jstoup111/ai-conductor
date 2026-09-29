@@ -17,6 +17,8 @@ import {
 import {
   CLAUDE_PROVIDER,
   CODEX_PROVIDER,
+  CLAUDE_DISPLAY_NAME,
+  CODEX_DISPLAY_NAME,
   providerDisplayName,
 } from '../execution/provider-catalog.js';
 import {
@@ -391,7 +393,7 @@ export function buildExtraRows(
 }
 
 const TABLE_HEADER =
-  '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |';
+  `| Skill/Agent | Execution path | ${CLAUDE_DISPLAY_NAME} model | ${CLAUDE_DISPLAY_NAME} effort | ${CODEX_DISPLAY_NAME} model | ${CODEX_DISPLAY_NAME} effort | Why |`;
 const TABLE_SEPARATOR = '|---|---|---|---|---|---|---|';
 
 function renderRow(row: ModelTableRow): string {

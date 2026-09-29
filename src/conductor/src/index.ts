@@ -44,9 +44,11 @@ import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
 import {
   normalizeProviderSelection,
+  ProviderNotInstalledError,
   validateProviderInstallation,
   validateRegisteredProviderSelections,
 } from './engine/provider-selection.js';
+import { CLAUDE_PROVIDER } from './execution/provider-catalog.js';
 import {
   discoverInstalledProviders,
   type ProviderVersionProbeRunner,
@@ -540,7 +542,14 @@ export async function bootComposeEngineerLaunch(options: {
   readonly launch: () => Promise<number>;
   readonly providerDiscoveryRunner?: ProviderVersionProbeRunner;
 }): Promise<number> {
-  await bootDispatchingCliProviders(options);
+  const discovery = await discoverInstalledProviders({
+    events: options.events,
+    ...(options.providerDiscoveryRunner ? { runner: options.providerDiscoveryRunner } : {}),
+  });
+  if (!discovery.installed.includes(CLAUDE_PROVIDER)) {
+    const reason = discovery.missing.find(({ id }) => id === CLAUDE_PROVIDER)?.reason ?? 'version-failed';
+    throw new ProviderNotInstalledError(CLAUDE_PROVIDER, 'compose/engineer launch', reason);
+  }
   return options.launch();
 }
 

@@ -1,5 +1,5 @@
 import { mkdir } from 'node:fs/promises';
-import { CLAUDE_PROVIDER, CODEX_PROVIDER, resolveProviderExecutable } from '../execution/provider-catalog.js';
+import { CLAUDE_PROVIDER, CODEX_PROVIDER, providerDescriptor, resolveProviderExecutable } from '../execution/provider-catalog.js';
 
 /** Process boundary for the provider-owned read-only review capability probe. */
 export type ReadOnlyReviewCapabilityProcess = (
@@ -108,7 +108,7 @@ async function probeClaude(options: ProbeReadOnlyReviewCapabilityOptions): Promi
   const missing = CLAUDE_READ_ONLY_FLAGS.find((flag) => !result.stdout.includes(flag));
   return missing === undefined
     ? { provider: options.provider, platform: options.platform, status: 'available' }
-    : unavailable(options, `Claude help does not list ${missing}`);
+    : unavailable(options, `${providerDescriptor(CLAUDE_PROVIDER).displayName} help does not list ${missing}`);
 }
 
 /**

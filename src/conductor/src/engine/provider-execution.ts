@@ -47,6 +47,11 @@ import {
 } from './provider-setup-failure.js';
 import { acquireScratchHome, releaseScratchHome } from './self-host/provider-scratch.js';
 import type { SelfHostProviderId } from './self-host/provider-home.js';
+import {
+  CODEX_DISPLAY_NAME,
+  findBuiltInProviderDescriptor,
+  supportsProviderCapability,
+} from '../execution/provider-catalog.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -583,8 +588,10 @@ export async function invokeProviderCandidate({
   invokedModel?: string;
   sessionPolicySuppression?: SessionPolicySuppression;
 }> {
-  const suppressForUnsupportedCapability =
-    runtime.provider.supportsSessionResume !== true;
+  const descriptor = findBuiltInProviderDescriptor(providerKey);
+  const suppressForUnsupportedCapability = descriptor
+    ? !supportsProviderCapability(descriptor, 'supportsSessionResume')
+    : runtime.provider.supportsSessionResume !== true;
   // Fresh session per invocation, never a store-derived id. Session reuse was
   // removed by design; the 2026-08-14 incident (rubric branches appending to a
   // shared ~1.28M-token conversation) proved a reused id resumes the prior
@@ -1031,17 +1038,21 @@ export async function executeProviderCandidates({
     try {
       result = requiresLifecycleCapability && !supportsLifecycleCapability
         ? unsupportedLifecycleProviderResult(providerKey)
-        : requiresNativeSchemaCapability && !supportsNativeSchemaCapability
-          ? unsupportedNativeSchemaProviderResult(providerKey)
-          : withCandidateSafety
+        : preparedCandidateOperation
+          ? withCandidateSafety
             ? await withCandidateSafety(candidate, invoke)
-            : await invoke();
+            : await invoke()
+          : requiresNativeSchemaCapability && !supportsNativeSchemaCapability
+            ? unsupportedNativeSchemaProviderResult(providerKey)
+            : withCandidateSafety
+              ? await withCandidateSafety(candidate, invoke)
+              : await invoke();
     } catch (error) {
       if (nativeSchemaScratchFailure === undefined) throw error;
       result = {
         success: false,
         exitCode: 1,
-        output: `Codex native schema scratch home failed: ${nativeSchemaScratchFailure instanceof Error
+        output: `${CODEX_DISPLAY_NAME} native schema scratch home failed: ${nativeSchemaScratchFailure instanceof Error
           ? nativeSchemaScratchFailure.message
           : String(nativeSchemaScratchFailure)}`,
       };

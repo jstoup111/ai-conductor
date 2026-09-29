@@ -59,6 +59,13 @@ export interface OtelVisualizerStartContext extends VisualizerStartContext {
   harnessVersion: string | undefined;
 }
 
+export function createOtelVisualizerRegistry(events: ConductorEventEmitter): PluginRegistry {
+  const registry = new PluginRegistry();
+  registerBuiltins(registry, events, () => {}, undefined, 10, new Set());
+  registry.markInitialized();
+  return registry;
+}
+
 /**
  * Create and start the OTel visualizer for one event stream.
  *
@@ -73,9 +80,7 @@ export function wireOtelVisualizer(
 ): VisualizerPlugin | null {
   if (!resolveOtelConfig(config, context.pipelineDir).enabled) return null;
 
-  const registry = new PluginRegistry();
-  registerBuiltins(registry, events, () => {});
-  registry.markInitialized();
+  const registry = createOtelVisualizerRegistry(events);
   const factory = registry.get<VisualizerFactory>('visualizer', 'otel');
   const visualizer = factory({
     config,

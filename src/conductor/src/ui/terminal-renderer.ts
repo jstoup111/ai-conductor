@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { CODEX_DISPLAY_NAME } from '../execution/provider-catalog.js';
 import ora, { type Ora } from 'ora';
 import type { ConductorEvent, ConductState, StepDefinition, StepName } from '../types/index.js';
 import type { StateResult } from '../types/state.js';
@@ -252,8 +253,8 @@ export class TerminalRenderer implements UIRenderer {
         this.region.log(
           chalk.yellow(
             event.degradation === 'probe-failure'
-              ? `  Codex ${event.source} credentials: ${event.readiness} (${event.degradation}: ${event.probeFailureKind}${event.parserRejection === undefined ? '' : `, parser-rejection: ${event.parserRejection}`}); waiting ${event.elapsedSeconds}s, next disposition: ${event.nextDisposition}`
-              : `  Codex ${event.source} credentials: ${event.readiness} (${event.degradation}); waiting ${event.elapsedSeconds}s, next check in ${event.nextProbeDelaySeconds}s`,
+              ? `  ${CODEX_DISPLAY_NAME} ${event.source} credentials: ${event.readiness} (${event.degradation}: ${event.probeFailureKind}${event.parserRejection === undefined ? '' : `, parser-rejection: ${event.parserRejection}`}); waiting ${event.elapsedSeconds}s, next disposition: ${event.nextDisposition}`
+              : `  ${CODEX_DISPLAY_NAME} ${event.source} credentials: ${event.readiness} (${event.degradation}); waiting ${event.elapsedSeconds}s, next check in ${event.nextProbeDelaySeconds}s`,
           ),
         );
         break;

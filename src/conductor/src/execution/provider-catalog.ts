@@ -161,9 +161,7 @@ export const BUILT_IN_PROVIDERS = [
     modelPolicy: PI_MODEL_POLICY,
     optInModelIds: [],
     osSandbox: false,
-    capabilities: {
-      supportsSessionResume: false,
-    } as const satisfies ProviderCapabilityFlags,
+    capabilities: {} as const satisfies ProviderCapabilityFlags,
     diagnosticEnvelopes: [],
   },
 ] as const satisfies readonly BuiltInProviderDescriptor[];
@@ -174,6 +172,8 @@ export const DEFAULT_PROVIDER: BuiltInProviderId = 'claude';
 export const CLAUDE_PROVIDER = BUILT_IN_PROVIDERS[0].id;
 export const CODEX_PROVIDER = BUILT_IN_PROVIDERS[1].id;
 export const PI_PROVIDER = BUILT_IN_PROVIDERS[2].id;
+export const CLAUDE_DISPLAY_NAME = BUILT_IN_PROVIDERS[0].displayName;
+export const CODEX_DISPLAY_NAME = BUILT_IN_PROVIDERS[1].displayName;
 
 /** Catalog lookup that keeps plugin callers on their existing generic path. */
 export function findBuiltInProviderDescriptor(

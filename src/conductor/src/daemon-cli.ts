@@ -53,6 +53,7 @@ import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
+import { CODEX_PROVIDER, providerDescriptor } from './execution/provider-catalog.js';
 import { createProviderAvailability, restoreProviderAvailabilityFromDaemonLedger } from './engine/provider-availability.js';
 import {
   normalizeProviderSelection,
@@ -3134,8 +3135,8 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(
         chalk.yellow(
           event.degradation === 'probe-failure'
-            ? `Codex ${event.source} credentials: ${event.readiness} (${event.degradation}: ${event.probeFailureKind}${event.parserRejection === undefined ? '' : `, parser-rejection: ${event.parserRejection}`}); waiting ${event.elapsedSeconds}s, next disposition: ${event.nextDisposition}`
-            : `Codex ${event.source} credentials: ${event.readiness} (${event.degradation}); waiting ${event.elapsedSeconds}s, next check in ${event.nextProbeDelaySeconds}s`,
+            ? `${providerDescriptor(CODEX_PROVIDER).displayName} ${event.source} credentials: ${event.readiness} (${event.degradation}: ${event.probeFailureKind}${event.parserRejection === undefined ? '' : `, parser-rejection: ${event.parserRejection}`}); waiting ${event.elapsedSeconds}s, next disposition: ${event.nextDisposition}`
+            : `${providerDescriptor(CODEX_PROVIDER).displayName} ${event.source} credentials: ${event.readiness} (${event.degradation}); waiting ${event.elapsedSeconds}s, next check in ${event.nextProbeDelaySeconds}s`,
         ),
       );
       break;

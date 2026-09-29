@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { CLAUDE_DISPLAY_NAME } from '../../execution/provider-catalog.js';
 import * as readline from 'node:readline';
 import type {
   StepName,
@@ -207,7 +208,7 @@ export class TerminalPromptHost implements UIPromptHost {
 
   async complexityAssessment(recommended: ComplexityTier | null): Promise<ComplexityTier> {
     if (recommended) {
-      this.log(`\nClaude recommends complexity tier: ${recommended}`);
+      this.log(`\n${CLAUDE_DISPLAY_NAME} recommends complexity tier: ${recommended}`);
       const answer = await this.ask(
         `  [enter=accept ${recommended} / S / M / L to override]: `,
       );
@@ -219,7 +220,7 @@ export class TerminalPromptHost implements UIPromptHost {
       return recommended;
     }
 
-    this.log('\n(Claude did not return a tier recommendation — choose manually.)');
+    this.log(`\n(${CLAUDE_DISPLAY_NAME} did not return a tier recommendation — choose manually.)`);
     while (true) {
       const answer = await this.ask('  Classify complexity [S/M/L]: ');
       if (answer === 's') return 'S';

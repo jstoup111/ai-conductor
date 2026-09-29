@@ -15,7 +15,7 @@ import {
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import type { AuthenticationReadiness } from '../../src/execution/llm-provider.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import { validateSpawnPermit } from '../../src/engine/provider-runtime.js';
+import { ProviderRuntimeSet as RuntimeSet, validateSpawnPermit } from '../../src/engine/provider-runtime.js';
 
 interface ClassifiedInvokeResult extends InvokeResult {
   timedOut?: boolean;
@@ -86,6 +86,25 @@ function provider(): LLMProvider {
 }
 
 describe('ProviderRuntimeSet', () => {
+  it('refuses native schema from a Pi adapter when its descriptor omits nativeSchema', () => {
+    const runtimes = new RuntimeSet([{
+      key: 'pi',
+      provider: { ...provider(), nativeSchemaCapability: { nativeOutputSchema: true } },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      policy: CLAUDE_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+    }]);
+
+    expect(runtimes.nativeSchemaCapabilityFor('pi')).toBeUndefined();
+  });
+
+  it('treats a Pi descriptor without writeFence as unfenced', async () => {
+    const { writeFenceInstalledForProvider } = await import('../../src/engine/conductor.js');
+
+    expect(writeFenceInstalledForProvider('pi')).toBe(false);
+  });
+
   it('exposes a provider-declared synchronous spawn-permit capability', async () => {
     const capable = {
       ...provider(),

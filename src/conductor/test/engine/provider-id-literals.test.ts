@@ -43,7 +43,7 @@ function findProviderLiterals(
   const forbiddenLiterals = new Set<string>(BUILT_IN_PROVIDERS.flatMap(
     ({ id, displayName }) => [id, displayName],
   ));
-  const forbiddenIds = new Set(BUILT_IN_PROVIDERS.map(({ id }) => id));
+  const forbiddenIds = new Set<string>(BUILT_IN_PROVIDERS.map(({ id }) => id));
   const adapter = BUILT_IN_PROVIDERS.find(({ adapterModule }) => adapterModule === module);
   const findings: ProviderLiteralFinding[] = [];
   const report = (node: ts.Node, value: string): void => {
@@ -76,7 +76,8 @@ function findProviderLiterals(
       || ts.isTemplateTail(node)) {
       if (adapter) {
         if (hasDisplayName(node.text, adapter.displayName)) report(node, node.text);
-      } else if (forbiddenLiterals.has(node.text)) {
+      } else if (forbiddenLiterals.has(node.text)
+        || BUILT_IN_PROVIDERS.some(({ displayName }) => hasDisplayName(node.text, displayName))) {
         report(node, node.text);
       }
     }
@@ -85,7 +86,7 @@ function findProviderLiterals(
         || (ts.isComputedPropertyName(node) && ts.isIdentifier(node.expression)))) {
       const expression = ts.isComputedPropertyName(node) ? node.expression : undefined;
       const value = expression === undefined
-        ? node.text
+        ? (ts.isIdentifier(node) ? node.text : undefined)
         : ts.isIdentifier(expression) ? expression.text : undefined;
       if (value && forbiddenIds.has(value)) report(node, value);
     }
@@ -118,6 +119,19 @@ describe('structural: built-in provider literals', () => {
 
     expect(findProviderLiterals('fixtures/provider-display-literal.ts', source, new Set())).toEqual([
       { file: 'fixtures/provider-display-literal.ts', line: 1, value: 'Codex' },
+    ]);
+  });
+
+  it('reports a provider display name embedded in a non-adapter template span', () => {
+    const source = ts.createSourceFile(
+      'fixtures/provider-display-template.ts',
+      'const output = `Codex ${credentials} credentials`;',
+      ts.ScriptTarget.Latest,
+      true,
+    );
+
+    expect(findProviderLiterals('fixtures/provider-display-template.ts', source, new Set())).toEqual([
+      { file: 'fixtures/provider-display-template.ts', line: 1, value: 'Codex ' },
     ]);
   });
 

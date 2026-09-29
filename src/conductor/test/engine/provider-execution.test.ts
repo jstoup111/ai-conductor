@@ -33,6 +33,7 @@ import {
   executeAuxiliaryProviderCandidates,
   executeProviderCandidates,
   formatProviderCapabilityGapMessages,
+  invokeProviderCandidate,
   type ProviderAttemptMetadata,
 } from '../../src/engine/provider-execution.js';
 import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
@@ -138,6 +139,26 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('suppresses session resume for a Pi adapter when its descriptor omits supportsSessionResume', async () => {
+    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: 'done' }));
+    const result = await invokeProviderCandidate({
+      providerKey: 'pi',
+      runtime: {
+        key: 'pi',
+        provider: { invoke, supportsSessionResume: true },
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      },
+      sessions: new ProviderSessionScope(vi.fn()),
+      resolved: { model: 'model', effort: 'medium' },
+      options: { prompt: 'run', cwd: '/workspace' },
+    });
+
+    expect(result.sessionPolicySuppression).toMatchObject({ provider: 'pi' });
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+
   it('keeps dispatch-derived admission refusal records readable by the existing event reader', async () => {
     const codexInvoke = vi.fn(async () => {
       throw new Error('refused provider must not reach spawn');

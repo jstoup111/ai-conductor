@@ -103,6 +103,7 @@ import { formatProviderCapabilityGapMessages } from './provider-execution.js';
 import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
 import {
   BUILT_IN_PROVIDERS,
+  CODEX_DISPLAY_NAME,
   CLAUDE_PROVIDER,
   CODEX_PROVIDER,
   findBuiltInProviderDescriptor,
@@ -3739,9 +3740,9 @@ export class Conductor {
       return {
         success: false,
         output:
-          'Codex cached-login recovery trial for the attribution verifier failed authentication ' +
+          `${CODEX_DISPLAY_NAME} cached-login recovery trial for the attribution verifier failed authentication ` +
           `after the readiness probe was unavailable (${formatProbeFailureClassification(park.probeFailure)}). ` +
-          'Refresh the Codex login, then re-queue this feature.',
+          `Refresh the ${CODEX_DISPLAY_NAME} login, then re-queue this feature.`,
       };
     }
     return trial;
@@ -6590,7 +6591,7 @@ export class Conductor {
     // instead of the fabricated blocker parking finished work.
     const claimAudit = auditEnvironmentBlockerClaims(withNotices.output, {
       provider: candidate.providerKey,
-      writeFenceInstalled: candidate.providerKey === CLAUDE_PROVIDER,
+      writeFenceInstalled: writeFenceInstalledForProvider(candidate.providerKey),
     });
     if (claimAudit.message === null) return withNotices;
     return {
@@ -8517,9 +8518,9 @@ export class Conductor {
                   // through parkOnAuthFailure; do not include provider output
                   // in this secret-safe diagnostic.
                   const haltReason =
-                    `Codex cached-login recovery trial for grouped member "${failedMember.name}" ` +
+                    `${CODEX_DISPLAY_NAME} cached-login recovery trial for grouped member "${failedMember.name}" ` +
                     `failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(park.probeFailure)}).\n` +
-                    'Refresh the Codex login, then re-queue this feature.';
+                    `Refresh the ${CODEX_DISPLAY_NAME} login, then re-queue this feature.`;
                   await closeSettledMembers(outcomes, haltReason);
                   await this.writeHaltMarker(haltReason + '\n', 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -10619,8 +10620,8 @@ export class Conductor {
               // unavailable probe. Do not recurse into another probe; keep the
               // halt secret-safe by excluding arbitrary provider output.
               const haltReason =
-                `Codex cached-login recovery trial failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(recoveryProbeFailure!)}).\n` +
-                'Refresh the Codex login, then re-queue this feature.';
+                `${CODEX_DISPLAY_NAME} cached-login recovery trial failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(recoveryProbeFailure!)}).\n` +
+                `Refresh the ${CODEX_DISPLAY_NAME} login, then re-queue this feature.`;
               await stampNoVerdict();
               await this.closeOpenExecutions();
               await this.writeHaltMarker(haltReason + '\n', 'needs-human');
@@ -15273,6 +15274,11 @@ export class Conductor {
     return findResumeIndex(state, steps);
   }
 
+}
+
+export function writeFenceInstalledForProvider(providerKey: string): boolean {
+  const descriptor = findBuiltInProviderDescriptor(providerKey);
+  return descriptor !== undefined && supportsProviderCapability(descriptor, 'writeFence');
 }
 
 /**
