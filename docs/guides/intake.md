@@ -18,13 +18,14 @@ to DECIDE.
 | Requirement | Check |
 | --- | --- |
 | `gh` authenticated for the target repo | `gh auth status` |
-| A harness checkout containing `bin/intake-file` | `<harness-checkout>/bin/intake-file` (prints usage, exit 1) |
+| An installed intake skill with its bundled helper | `<this skill's directory>/scripts/intake-file` (prints usage, exit 1) |
 
-`bin/install` symlinks only `ai-conductor` (and the legacy `conduct`) into `~/.local/bin`, so
-`intake-file` is never on `PATH`. Run it from the harness checkout, or call it by absolute path
-from anywhere. It always executes inside the harness's own engine directory, so a bare invocation
-files into the harness repo — pass `--repo <owner>/<repo>` to target any other repo, including the
-project you are standing in.
+`bin/install` symlinks only `ai-conductor` (and the legacy `conduct`) into `~/.local/bin`, so the
+bundled helper is never on `PATH`. Invoke
+`<this skill's directory>/scripts/intake-file` from the loaded intake skill: Claude uses its
+injected loaded-skill base directory; Codex uses the directory of the listed `SKILL.md` path. The
+helper preserves your current working directory when it calls `gh`, so an invocation from a project
+uses that project's repository; pass `--repo <owner>/<repo>` to target another repository.
 
 Filing from the GitHub web or mobile UI works too: the issue form at
 `.github/ISSUE_TEMPLATE/intake.yml` scaffolds the same shape. Anything filed with a bare
@@ -33,7 +34,7 @@ Filing from the GitHub web or mobile UI works too: the issue form at
 The two routes are labelled by different owners, and only one of them defaults. A form submission
 arrives with no labels, so the `intake-label-sync` Action reads its Priority and Size fields and
 stamps them — falling back to `priority: medium` / `size: M` when a field is blank or unparsable.
-An issue filed with `bin/intake-file` is already labelled by the command itself, so the Action
+An issue filed with the bundled intake helper is already labelled by the command itself, so the Action
 recognises it as a non-form body and skips it. Without that skip the Action's defaults would be
 *added* alongside the filer's choice rather than replacing it, leaving the issue carrying two
 contradictory bands.
@@ -196,10 +197,10 @@ Filing is one atomic operation: it creates the issue, applies the `priority:` an
 records a `--depends-on` link — or an explicit "no dependencies" decision — in a single call, so
 there is never a window where an issue exists unlabelled.
 
-Run this from the harness checkout, or substitute its absolute path for `bin/intake-file`.
+Run the bundled helper from the loaded intake skill directory.
 
 ```bash
-bin/intake-file \
+<this skill's directory>/scripts/intake-file \
   --title "<symptom-or-outcome title>" \
   --body "$(cat <<'EOF'
 ## Observed
@@ -243,7 +244,7 @@ create the issue itself is a hard error. Report the URL and any warnings to the 
 ## Redaction before publication
 
 Filing publishes the title and body to a tracker that may be public. The filer scrubs both before
-the issue is created, at the one choke point every route through `bin/intake-file` passes:
+the issue is created, at the one choke point every route through the bundled intake helper passes:
 
 | Redacted | Recognized by |
 | --- | --- |
