@@ -316,11 +316,14 @@ kill-switches:
   `indeterminate` one is logged non-fatally.
 - The real engineer signals store — a `test-project`-tagged line that leaked into it throws.
 - The original temporary directory's top-level entries — anything that appeared during the run
-  and is neither known concurrent-tooling noise (`self-host-*`, `claude-*`, …) throws
+  and is neither Vitest's own direct project-temp entry nor known concurrent-tooling noise
+  (`self-host-*`, `claude-*`, …) throws
   `tmpdir-leak-guard: N temp entry/entries leaked into the REAL tmpdir …`. That is a temp dir the
   `TMPDIR` redirect did not contain: a hardcoded `/tmp`, an `os.tmpdir()` value cached before the
-  redirect, or a subprocess spawned without the inherited env. Fix the call site; widening
-  `IGNORED_TMPDIR_PREFIXES` is only for a genuine false positive from a new concurrent tool.
+  redirect, or a subprocess spawned without the inherited env. The Vitest exemption is exact: it
+  applies only to the project directory created directly under the real temporary directory, not
+  to its contents or any other entry. Fix the call site; widening `IGNORED_TMPDIR_PREFIXES` is
+  only for a genuine false positive from a new concurrent tool.
 
 The parked-marker leak guard (#1251) runs last of all, after the tmpdir check, so any more specific
 guard failure still throws first. It resolves the real repository's `.daemon/parked` directory (via
