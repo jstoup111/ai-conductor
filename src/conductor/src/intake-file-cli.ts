@@ -1,4 +1,5 @@
-// intake-file-cli.ts — production entry point for `bin/intake-file`.
+// intake-file-cli.ts — production entry point for the bundled
+// `skills/intake/scripts/intake-file` helper.
 //
 // One atomic filing: create the GitHub intake issue, resolve size/priority
 // (given ▸ prompt ▸ infer ▸ default), apply the `priority:`/`size:` labels,

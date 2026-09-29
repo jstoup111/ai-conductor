@@ -14,7 +14,7 @@
 //     fields (Task 2).
 //   - `.github/workflows/intake-label-sync.yml` does not exist (Task 3).
 //   - There is no shared label-sync module the workflow's inline script,
-//     `bin/intake-file`, and `bin/intake-backfill` can all call.
+//     the bundled intake helper and `bin/intake-backfill` can all call.
 //
 // ASSUMED SEAM (not settled fact — the implementation task must fill this in):
 // the plan (Task 3) leaves the Action's implementation shape open ("reuse the
@@ -291,7 +291,7 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Source discrimination: the Action must default ONLY for issue-form
-// submissions. An issue filed by `bin/intake-file` carries a hand-authored
+// submissions. An issue filed by the bundled intake helper carries a hand-authored
 // markdown body with no field headings and already has the operator's chosen
 // priority:/size: labels; since `addLabel` is additive, defaulting over it
 // stamps a second, contradictory band (observed on #1076: `size: S` + `size: M`,
@@ -327,7 +327,7 @@ const FORM_BODY = [
   'M',
 ].join('\n');
 
-/** A body in the shape `bin/intake-file` writes — plain markdown, no fields. */
+/** A body in the shape the bundled intake helper writes — plain markdown, no fields. */
 const CLI_BODY = [
   '## Observed',
   '',
@@ -362,7 +362,7 @@ describe('label-sync only defaults for issue-form submissions', () => {
   });
 
   describe('Negative paths', () => {
-    it('a bin/intake-file body is NOT a form submission — its labels are owned by the filer', async () => {
+    it('a bundled intake helper body is NOT a form submission — its labels are owned by the filer', async () => {
       const isIssueFormSubmission = requireFormPredicate(await loadLabelSyncModule());
       expect(isIssueFormSubmission(CLI_BODY)).toBe(false);
     });

@@ -14,7 +14,8 @@ name: intake-label-sync
 #
 # Source discrimination: this defaulting applies ONLY to issue-form
 # submissions, detected by the presence of the `### Priority` / `### Size`
-# field headings. An issue filed by `bin/intake-file` has a hand-authored
+# field headings. An issue filed by the bundled
+# `skills/intake/scripts/intake-file` helper has a hand-authored
 # markdown body with no field headings and already carries the labels the
 # filer chose, so the apply script skips it entirely rather than stamping a
 # second, contradictory band over it.

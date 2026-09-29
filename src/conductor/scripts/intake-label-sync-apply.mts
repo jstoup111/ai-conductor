@@ -4,7 +4,7 @@
 //
 // Delegates to the shared, acceptance-tested seam `syncIssueLabels`
 // (src/engine/engineer/intake/label-sync.ts) — the same module used by
-// bin/intake-file and bin/intake-backfill — so this script is a thin,
+// bundled skills/intake/scripts/intake-file helper and bin/intake-backfill — so this script is a thin,
 // side-effecting shell: read the event payload -> extract issue-form fields
 // -> hand off to syncIssueLabels, which owns label auto-create/apply and
 // blocked_by dependency linking via the real `gh` CLI.
@@ -88,7 +88,7 @@ async function main(): Promise<void> {
   const body: string = issue.body ?? '';
 
   // Only issue-form submissions have fields to sync. An issue filed by
-  // bin/intake-file has no field headings and already carries the operator's
+  // the bundled skills/intake/scripts/intake-file helper has no field headings and already carries the operator's
   // chosen priority:/size: labels — defaulting over it would ADD a second,
   // contradictory band (addLabel is additive).
   if (!isIssueFormSubmission(body)) {

@@ -29,7 +29,6 @@ describe('interpreter-source inventory', () => {
       'bin/generate-model-table',
       'bin/install',
       'bin/intake-backfill',
-      'bin/intake-file',
       'bin/lib/harness-common.sh',
       'bin/migrate',
       'bin/quarantine-engineer-signals',

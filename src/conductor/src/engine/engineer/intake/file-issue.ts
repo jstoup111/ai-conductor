@@ -1,6 +1,7 @@
 // engineer/intake/file-issue.ts — deterministic-completeness issue filer.
 //
-// `bin/intake-file` delegates to `fileIntakeIssue` here: create the GitHub
+// The bundled `skills/intake/scripts/intake-file` helper delegates to
+// `fileIntakeIssue` here: create the GitHub
 // issue, resolve size/priority (prompt ▸ infer ▸ default), apply the
 // `priority:`/`size:` labels, and record a `--depends-on` link (or an
 // explicit "no dependencies" acknowledgement) — all as ONE atomic filing
