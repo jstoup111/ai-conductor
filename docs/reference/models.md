@@ -51,7 +51,7 @@ not a tuning knob.
 
 ## Engine step defaults
 
-26 steps appear in every policy record. Effort is **shared** between the two providers: both
+26 steps appear in every harness model-policy record. Effort is **shared** between Claude and Codex: both
 `CLAUDE_MODEL_POLICY` and `CODEX_MODEL_POLICY` point at the same `STEP_EFFORTS` object
 (`src/conductor/src/engine/provider-model-policy.ts:90-117, 141, 157`).
 

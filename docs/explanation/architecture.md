@@ -21,7 +21,7 @@ Read it when working on those concerns; ordinary lifecycle execution does not re
 | --- | --- | --- | --- |
 | operator | the human running the harness | intent, approvals, merges, halt recovery | step order, gate verdicts |
 | engine | the TypeScript conductor under `src/conductor/` | step order, prerequisite checks, gate verdicts, run state, worktrees, git mechanics, provider dispatch | judgement about a spec or a diff |
-| host agent | the LLM session the engine dispatches (`claude` or `codex`) | authoring and judgement — specs, code, reviews, verdict documents | whether its own work passed |
+| host agent | the LLM session or headless provider the engine dispatches (`claude`, `codex`, or `pi`) | authoring and judgement — specs, code, reviews, verdict documents | whether its own work passed |
 | daemon | the background build/ship loop (`ai-conductor daemon`) | the backlog, the worker pool, per-feature isolation, PR opening | authoring specs |
 | composer loop | the interactive idea→spec loop (`ai-conductor compose`) | DECIDE-phase authoring for one idea, and the spec PR | building or shipping code |
 
@@ -55,12 +55,14 @@ to do; agent personas under `agents/` define *who* does it. The catalog is in
 [skills](../reference/skills.md).
 
 The host agent's output is always a file — a spec, a plan, code and commits, a review verdict document. It
-never reports "done" to the engine as a fact the engine acts on. Two hosts exist, `claude` and `codex`,
-selected by the `llm_provider` config key; an ordered array makes it a fallback ladder.
+never reports "done" to the engine as a fact the engine acts on. Three built-in providers exist:
+`claude`, `codex`, and `pi`, selected by the `llm_provider` config key; an ordered array makes it a
+fallback ladder. Pi is headless; it receives one fresh prompt per invocation and returns its terminal
+assistant message from JSONL output.
 
 ### Per-step session capability contract
 
-Every provider dispatch starts a fresh session, including every within-step retry. Both built-in providers
+Every provider dispatch starts a fresh session, including every within-step retry. All built-in providers
 declare `supportsSessionResume: false`; the retained capability seam is fail-closed for adapters that omit
 the declaration. Retries retain task context through committed artifacts and the `RETRY:`-prefixed full step
 prompt rather than a resumed conversation.

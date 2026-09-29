@@ -6,16 +6,18 @@ nav_order: 6
 
 # Choose and configure the LLM host
 
-Select which host executes your steps — `claude`, `codex`, or an ordered fallback between them —
+Select which provider executes your steps — `claude`, `codex`, `pi`, or an ordered fallback —
 and verify the selection took effect. For operators who have installed the harness and registered a
 project.
 
-Exactly two hosts are built in. They are registered by the engine at startup as
-`llm_provider:claude` and `llm_provider:codex`. Anything else is a plugin.
+Three providers are built in: `claude`, `codex`, and `pi`. At a dispatching command's boot, the
+engine probes each provider CLI and registers only those whose `--version` command succeeds.
+Anything else is a plugin.
 
 ## Prerequisites
 
-- The host CLI you intend to use is on `PATH`: `claude --version`, `codex --version`, or both.
+- The provider CLI you intend to use is on `PATH`: `claude --version`, `codex --version`, or
+  `pi --version`.
 - The project is registered and has a project root you can write `.ai-conductor/config.yml` into.
 - For `codex`, an authenticated Codex login or `CODEX_API_KEY` in the environment.
 
@@ -67,8 +69,14 @@ existing config byte-for-byte. Every key is documented in
 llm_provider names unknown provider "gpt". Available registered providers: claude, codex
 ```
 
+If a configured built-in is not installed, startup instead names the config path and probe reason:
+
+```text
+llm_provider names built-in provider "pi", but it is not installed (discovery reason: not-found). Install it or select an installed provider.
+```
+
 The same validation runs against every `steps.<step>.llm_provider` entry, reporting the offending
-path.
+path. Discovery is skipped for commands that never dispatch a provider.
 
 ## 3. Add a fallback ladder
 
@@ -151,21 +159,22 @@ If every configured candidate is suppressed, the step waits and retries without 
 budget. Authentication and expired-session recovery do not suppress a provider. The event ledger
 records the exhausted provider and deadline; see [artifacts](../reference/artifacts.md).
 
-## What differs between the two hosts
+## What differs between the built-in providers
 
-| Aspect | `claude` | `codex` |
-| --- | --- | --- |
-| Executable | `claude` (fixed) | `$CODEX_EXECUTABLE`, default `codex` |
-| Skill catalog | `~/.claude/skills` | `~/.agents/skills` |
-| Project instruction file | `CLAUDE.md` | `AGENTS.md` |
-| Skill invocation syntax | `/skill-name` | `$skill-name` |
-| Explicit-only metadata | `disable-model-invocation: true` in `SKILL.md` | `policy.allow_implicit_invocation: false` in `agents/openai.yaml` |
-| Interactive steps | a real REPL | none — `codex exec` is one-shot, streamed as JSONL |
-| Readiness check | none; failures are classified from process signals and output | explicit `codex doctor --json --summary` before every dispatch, failing closed |
-| Isolated-home variable | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` |
-| Model table | Claude-specific | Codex-specific |
+| Aspect | `claude` | `codex` | `pi` |
+| --- | --- | --- | --- |
+| Executable | `$CLAUDE_EXECUTABLE`, default `claude` | `$CODEX_EXECUTABLE`, default `codex` | `$PI_EXECUTABLE`, default `pi` |
+| Skill catalog | `~/.claude/skills` | `~/.agents/skills` | none |
+| Project instruction file | `CLAUDE.md` | `AGENTS.md` | n/a |
+| Skill invocation syntax | `/skill-name` | `$skill-name` | prompt is passed on standard input |
+| Explicit-only metadata | `disable-model-invocation: true` in `SKILL.md` | `policy.allow_implicit_invocation: false` in `agents/openai.yaml` | n/a |
+| Interactive steps | a real REPL | none — `codex exec` is one-shot, streamed as JSONL | none — one-shot JSONL output |
+| Readiness check | none; failures are classified from process signals and output | explicit `codex doctor --json --summary` before every dispatch, failing closed | none; boot probes `pi --version` |
+| Isolated-home variable | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` | unsupported |
+| Model selection | harness model table | harness model table | Pi CLI's configured default model |
+| Provider-specific features | self-host and custom build-review policies | self-host and custom build-review policies | unsupported; the engine refuses before spawning |
 
-Both hosts share one skill corpus; only the invocation syntax and the discovery directory differ.
+Claude and Codex share one skill corpus; Pi is a headless build provider and does not load skills.
 Model and effort resolution per host is owned by [../reference/models.md](../reference/models.md);
 the environment variables above are enumerated in
 [../reference/environment.md](../reference/environment.md).
@@ -176,8 +185,8 @@ select them merely because their description resembles an unrelated request. The
 same-session dependencies intentionally omits both host controls; the exhaustive classification and
 its rationale are in [the skills reference](../reference/skills.md#invocation-policy).
 
-`--interactive` is honored differently as a consequence: under `codex` there is no REPL to open, so
-conversational steps stream a single one-shot run instead of handing you a prompt.
+`--interactive` is honored differently as a consequence: under `codex` and `pi` there is no REPL to
+open, so conversational steps stream a single one-shot run instead of handing you a prompt.
 
 ### The Codex skills directory moved
 
@@ -204,8 +213,11 @@ cd <harness-checkout>
 ./bin/install --check
 ```
 
-It reports a found/not-found line for each host named by `--providers` (defaulting to `claude`),
+It reports a found/not-found line for each Claude or Codex host named by `--providers` (defaulting to `claude`),
 plus the state of both skill catalogs. Exit codes are in [../quickstart.md](../quickstart.md).
+
+`--providers` remains the installer’s Claude/Codex catalog-readiness option; it does not probe Pi.
+Verify Pi directly with `pi --version` before selecting `llm_provider: pi`.
 
 A missing binary surfaces at dispatch time with a symmetric message from either host:
 
