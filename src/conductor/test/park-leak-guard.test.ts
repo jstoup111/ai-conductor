@@ -285,6 +285,7 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
       sweepStaleRunTmpRoots: async () => ({ reaped: [], retained: [], failures: [] }),
       snapshotTmpdirEntries: async () => ({ exists: true, entries: new Set() }),
       diffTmpdirEntries: () => ({ stray: [], ignored: [] }),
+      vitestOwnTmpdirEntries: () => [],
     }));
     vi.doMock('./tmux-leak-guard.js', () => ({
       snapshotDaemonSessions: () => ({ exists: true, sessions: new Map() }),
