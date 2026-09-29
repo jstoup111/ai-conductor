@@ -1334,6 +1334,13 @@ export type ConductorEvent =
       prUrl?: string;
     }
   | {
+      /** A project's selected tracker backend has no configured adapter. */
+      type: 'tracker_backend_unavailable';
+      project: string;
+      backend: 'github' | 'jira';
+      reason: 'no-adapter' | 'invalid-config';
+    }
+  | {
       /** Recorded OVER_SCOPE decisions and any evidentiary defects from one clear. */
       type: 'over_scope_decision';
       /** Blocking criteria considered while harvesting this clear. */

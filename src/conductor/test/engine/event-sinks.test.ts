@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:4, task:6, task:8, task:10, task:11, task:15, task:17, task:23
+// Covers: task:4, task:1, task:3, task:6, task:8, task:10, task:11, task:15, task:17, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -149,6 +149,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'remediation_case_refuted',
   'build_review_stale_aggregate',
   'loop_halt',
+  'tracker_backend_unavailable',
   'halt_marker_write_failed',
   'halt_record_written',
   'halt_record_write_failed',
@@ -928,6 +929,39 @@ describe('event sink subscriptions', () => {
     }
   });
 
+  it('persists and renders unavailable tracker backend events', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'tracker-backend-unavailable-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const event = {
+      type: 'tracker_backend_unavailable' as const,
+      project: 'project-b',
+      backend: 'jira' as const,
+      reason: 'no-adapter' as const,
+    } satisfies ConductorEvent;
+
+    try {
+      persister.start();
+      await events.emit(event);
+      persister.stop();
+
+      expect({
+        sink: EVENT_SINKS.tracker_backend_unavailable,
+        persisted: persistedEventTypes().includes(event.type),
+        rendered: renderedEventTypes().includes(event.type),
+        ledger: JSON.parse(await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8')),
+      }).toMatchObject({
+        sink: { render: true, persist: true, audit: false, otel: false },
+        persisted: true,
+        rendered: true,
+        ledger: { ...event, ts: expect.any(String) },
+      });
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('persists a kickback to the event ledger without changing its audit record', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'kickback-event-sinks-'));
     const events = new ConductorEventEmitter();
@@ -1219,9 +1253,10 @@ describe('event sink subscriptions', () => {
     ]));
   });
 
-  it('derives the daemon-rendered set from the switch-handled event types', () => {
+  it('derives the daemon-rendered set from switch-handled and declarative render event types', () => {
     expect(new Set(renderedEventTypes())).toEqual(new Set([
       ...DAEMON_SWITCH_HANDLED_EVENT_TYPES,
+      'tracker_backend_unavailable',
       'halt_marker_write_failed',
       'halt_record_written',
       'halt_record_write_failed',
