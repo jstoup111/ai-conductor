@@ -733,10 +733,13 @@ of the same harness release. For daemon dispatches, the branch is the dispatched
 branch rather than the primary checkout's branch. Branch, engine-version, and harness-version identity use a non-empty resolved value;
 an explicitly attempted but unavailable value is `unresolved`, while a caller that did not supply the
 property is `not-supplied`. The metric Resource uses daemon-stable identity: `service.name`,
-`service.instance.id` (`<project>/<worker>`), `conductor.project`, `conductor.worker`, and
-`host.name`. It has no feature, branch, run-id, or engine-version attributes. Metric data points
+`service.instance.id` (`<project>/<worker>`), `conductor.project`, `conductor.worker`,
+`host.name`, and `service.version` (the released harness version, resolved once at meter start).
+It has no feature, branch, run-id, or engine-version attributes. Metric data points
 carry `project` and `worker`; feature-scoped instruments also carry `feature`. A new dispatch
-therefore does not create a new metric Resource series for the same daemon worker.
+therefore does not create a new metric Resource series for the same daemon worker; a new release
+adds one `target_info` series per worker. Join `target_info` on `(job, instance)` to group metrics
+by `service_version`.
 
 Event coverage is checked separately for the shared metrics listener and the trace visualizer.
 The sink registry's `otel` flag drives the metrics listener's complete handler table; an

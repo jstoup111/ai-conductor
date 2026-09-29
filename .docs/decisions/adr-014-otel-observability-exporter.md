@@ -477,6 +477,17 @@ Relevant existing facts (evidence):
 >
 > Existing terminal ownership remains: `feature_complete` or `loop_halt` records `conductor.run.outcomes` with its own event tier through `closeFeature`; the later `feature_dispatch_ended` retains its current duplicate suppression and records its own halt metric. Dispatch-end still records an outcome when no preceding terminal event did. Interactive runs retain terminal outcome reporting without a daemon dispatch-end. No listener cache, inference, new event type, or policy-default tier is introduced. A production-order regression must prove exactly one tier-bearing outcome for completion and halt, plus tierless and interactive cases; an isolated dispatch-end fixture alone is insufficient. The nine-instrument boundary and documented re-tier series split remain mandatory, including a `max by (feature, tier)` last-value query and its historical-tier double-count caveat in the configuration reference.
 
+> **Amended 2026-09-28 by operator hotfix (released harness version on the metric Resource):** the
+> metric Resource now also carries `service.version`, the released harness version, resolved once
+> when the daemon-lifetime meter and the interactive meter start. This supersedes the "unchanged
+> metric Resource identity" scope of the 2026-09-06 release-stamping slice (#2235 Story 3), whose
+> goal was to keep run-varying values off the metric label path. The release is not run-varying:
+> it changes only when the daemon restarts onto a new release, so it adds one `target_info` series
+> per worker per release — bounded by release count, not by run or dispatch count. The 2026-08-28
+> rule stands for every run- and dispatch-varying value: `conductor.run.id` and
+> `conductor.engine.version` remain trace-only. Omitted and unresolved versions use the same
+> `not-supplied` / `unresolved` markers as the trace Resource.
+
 ## Consequences
 
 **Positive**

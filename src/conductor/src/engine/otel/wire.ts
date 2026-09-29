@@ -92,7 +92,7 @@ export function wireOtelVisualizer(
 /** Daemon-lifetime meter: one recorder/listener survives feature process exits. */
 export function wireDaemonOtel(
   config: HarnessConfig,
-  context: { mainRoot: string; project: string; projectName: string; workerName?: string; rootEvents: ConductorEventEmitter },
+  context: { mainRoot: string; project: string; projectName: string; workerName?: string; harnessVersion?: string; rootEvents: ConductorEventEmitter },
 ): { flush: () => Promise<void>; stop: () => Promise<void> } | null {
   const resolved = resolveOtelConfig(config, join(context.mainRoot, '.pipeline'));
   if (!resolved.enabled) return null;
@@ -106,6 +106,7 @@ export function wireDaemonOtel(
     attributes: resolved.attributes,
     pipelineDir: join(context.mainRoot, '.pipeline'), project: context.project,
     projectName: resolved.projectName ?? context.projectName ?? basename(context.mainRoot), workerName,
+    ...(Object.prototype.hasOwnProperty.call(context, 'harnessVersion') ? { harnessVersion: context.harnessVersion } : {}),
   }, 'metrics'), readers: [reader] });
   const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('conductor', '1.0.0'), {
     project: resolved.projectName ?? context.projectName ?? 'unknown', worker: workerName,
@@ -146,6 +147,7 @@ export function wireInteractiveOtelMetrics(
       project: context.project,
       projectName,
       workerName,
+      harnessVersion: context.harnessVersion,
     }, 'metrics'),
     readers: [new PeriodicExportingMetricReader({
       exporter: warnOnceMetricExporter(exporters.metricExporter, events),

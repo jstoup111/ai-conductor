@@ -79,6 +79,9 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
     'conductor.project': project,
     'conductor.worker': workerName,
     'host.name': resolveHostName(),
+    // A release changes once per daemon restart, not per run, so it costs one
+    // `target_info` series per worker per release (adr-014 2026-09-28 amendment).
+    'service.version': normalizeIdentity(ctx, 'harnessVersion'),
   });
 
   return resourceFromAttributes({
