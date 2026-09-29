@@ -28,24 +28,24 @@ As an operator filing intake with `--depends-on`, I want the blocked-by link sen
 - [ ] The intake filing and dependency migration fixtures observe the id as a typed `-F issue_id=<id>` pair at the GitHub boundary.
 - [ ] A dependency-add request with no id reaches no blocked-by call and fails with an error naming the missing id.
 
-## Story 2: The tracker client resolves the blocking issue id
+## Story 2: The tracker client exposes no unused dependency-add method
 
-As an engine caller of the tracker client's dependency add, I want it to record the link the same way intake filing does so that no caller depends on a rejected request form.
+As an engine maintainer, I want the tracker client's unused dependency-add method removed so that no unreachable path can send a rejected request form.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- Given the tracker client is asked to add a blocking issue whose id resolves, when it adds the dependency, then it reads that issue's id and posts the link with the typed id.
+- Given the GitHub tracker client is constructed, when a caller inspects it, then it exposes no addIssueDependency method.
 
 #### Negative Paths
 
-- Given the blocking issue's id cannot be resolved, when the tracker client adds the dependency, then it rejects with an error naming both issues and sends no blocked-by request.
+- Given the guarded issue-mutation suite runs against owned and foreign issues, when it completes, then the transport records no blocked-by POST from the tracker client.
 
 ### Done When
 
-- [ ] A tracker-client fixture observes the id read of the blocking issue followed by one typed-id blocked-by POST.
-- [ ] An unresolvable-id fixture rejects naming both issue references and records no blocked-by call.
+- [ ] A tracker-client fixture asserts the constructed client has no addIssueDependency method.
+- [ ] The guarded issue-mutation fixture records no blocked-by POST.
 
 ## Story 3: The filer names every missing link
 
@@ -69,4 +69,4 @@ As an operator reading the filer's output, I want a failed dependency link to be
 
 ## Negative-category review
 
-Invalid input: a request without a resolved id is refused before transport (Story 1). Dependency unavailability and network errors: an unreadable blocking issue fails the tracker-client add (Story 2) and is reported by the filer (Story 3). Partial failure: the issue is already created when a link fails, so there is no rollback; the filer reports the missing link and keeps the created issue (Story 3). Auth/permission: the existing guarded-runner ownership refusals are unchanged and already covered. Concurrency, resource exhaustion, deletion, immutability, and idempotency are inapplicable: each filing posts each link once and deletes nothing.
+Invalid input: a request without a resolved id is refused before transport (Story 1). Dependency unavailability and network errors: an unreadable blocking issue is reported by the filer (Story 3). Partial failure: the issue is already created when a link fails, so there is no rollback; the filer reports the missing link and keeps the created issue (Story 3). Auth/permission: the existing guarded-runner ownership refusals are unchanged and already covered. Concurrency, resource exhaustion, deletion, immutability, and idempotency are inapplicable: each filing posts each link once and deletes nothing.
