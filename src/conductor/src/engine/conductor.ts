@@ -63,7 +63,7 @@ import type { RemediationCasePrdWideningRecord } from './remediation-case-store.
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
-import { type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
+import { executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';

@@ -55,8 +55,6 @@ import { Conductor as ProductionConductor, createFinishPresentationRepair } from
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
-import { HALT_PR_BANNER_LINES, NEEDS_REMEDIATION_BODY_MARKER } from '../../src/engine/pr-labels.js';
-import { HALT_HISTORY_COMMENT_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import type { CompletionContext } from '../../src/engine/artifacts.js';
