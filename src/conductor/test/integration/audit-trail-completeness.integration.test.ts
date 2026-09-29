@@ -185,6 +185,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_member_evidence_recomputed: 'not-audited-by-design',
   kickback: 'friction-mapped',
   loop_halt: 'friction-mapped',
+  tracker_backend_unavailable: 'not-audited-by-design',
   over_scope_decision: 'not-audited-by-design',
   halt_marker_write_failed: 'friction-mapped',
   halt_record_written: 'friction-mapped',
@@ -653,6 +654,9 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   kickback: { type: 'kickback', from: 'conflict_check', to: 'architecture_review', evidence: 'missing seam', count: 1 },
   loop_halt: { type: 'loop_halt', reason: 'kickback cap exceeded' },
+  tracker_backend_unavailable: {
+    type: 'tracker_backend_unavailable', project: 'project-b', backend: 'jira', reason: 'no-adapter',
+  },
   over_scope_decision: {
     type: 'over_scope_decision',
     criteria: ['S2.1'],
