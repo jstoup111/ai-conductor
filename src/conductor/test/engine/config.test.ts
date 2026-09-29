@@ -105,6 +105,45 @@ steps:
       expect(result.ok).toBe(true);
     });
 
+    it.each([
+      '^1.2.0',
+      '~1.5.0',
+      '>=1.0.0 <2.0.0',
+      '1.5.0',
+      '>=0.99.0',
+    ])('loads a satisfied harness version constraint: %s', async (constraint) => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        `harness_version: "${constraint}"\n`,
+      );
+
+      await expect(loadConfig(tmpDir, '1.5.0')).resolves.toMatchObject({ ok: true });
+    });
+
+    it.each([
+      '^2.0.0',
+      '~1.4.0',
+      '>=2.0.0 <3.0.0',
+      '1.4.0',
+      '>=1.6.0',
+    ])('rejects an unsatisfied harness version constraint: %s', async (constraint) => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        `harness_version: "${constraint}"\n`,
+      );
+
+      const result = await loadConfig(tmpDir, '1.5.0');
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'version_mismatch',
+          message: expect.stringContaining('1.5.0'),
+        },
+      });
+      if (!result.ok) expect(result.error.message).toContain(constraint);
+    });
+
     it('loads OTel attributes without an unknown-key warning', async () => {
       await writeFile(
         join(tmpDir, '.ai-conductor', 'config.yml'),

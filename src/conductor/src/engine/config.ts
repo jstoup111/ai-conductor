@@ -10,7 +10,7 @@ import {
   sep,
 } from 'path';
 import { load as loadYaml } from 'js-yaml';
-import { validRange } from 'semver';
+import { satisfies, validRange } from 'semver';
 import type {
   HarnessConfig,
   EffortLevel,
@@ -2984,20 +2984,7 @@ function validateProviderSubstitution(value: unknown, path: string): ConfigError
 }
 
 export function satisfiesVersion(installed: string, constraint: string): boolean {
-  const match = constraint.match(/^>=(\d+\.\d+\.\d+)$/);
-  if (!match) return true;
-  const required = match[1];
-  return compareVersions(installed, required) >= 0;
-}
-
-function compareVersions(a: string, b: string): number {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    if (pa[i] > pb[i]) return 1;
-    if (pa[i] < pb[i]) return -1;
-  }
-  return 0;
+  return satisfies(installed, constraint);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
