@@ -23,6 +23,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Plans now pass an independent coverage judgement before they land, so coverage_binding refusals are fixed during planning instead of halting the build. ([implementation PR #2763](https://github.com/jstoup111/ai-conductor/pull/2763)).
 - Operators can inspect and raise exhausted remediation plan-growth budgets with clearer recovery guidance. ([implementation PR #2719](https://github.com/jstoup111/ai-conductor/pull/2719)).
 - Coverage binding rechecks resealed DECIDE changes before BUILD and reopens only contradicted completed tasks. ([implementation PR #2745](https://github.com/jstoup111/ai-conductor/pull/2745)).
+- OTel metrics now carry the released harness version as the `service.version` Resource attribute, so metric dashboards can group by release. ([implementation PR #2798](https://github.com/jstoup111/ai-conductor/pull/2798)).
 
 ### Fixed
 
