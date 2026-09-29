@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-29T22:44:28.900Z
 Slug: carry-daemon-cli-flags-across-stale-engine-restart
 Class: needs-human
 Halting step: unknown
