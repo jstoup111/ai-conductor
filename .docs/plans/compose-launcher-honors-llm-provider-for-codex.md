@@ -281,3 +281,43 @@ Task 3 (flag) ─────┘                    ├──▶ Task 6 (missing
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-ar2-1: src/conductor/src/engine/engineer-cli.ts:552-560 — when loadMergedConfig reports a missing project config, build the user-only config from readUserConfig() (engine/user-config.ts:26) validated with validateConfig(..., { source: 'merged' }) (the same path loadMergedConfig uses at config.ts:2882-2897) instead of re-opening the user file via loadMergedConfig as a project config; keep a missing user file yielding {} and a user parse error yielding the existing config error. In src/conductor/test/engine/engineer/engineer-cli-launch-host.test.ts keep the Task 4 no-project-config/HOME-user-config-codex test unchanged and add a case where the HOME user config also sets user-only keys (conductor, spec_owner, github_bot) and asserts spawnHost receives codex with exit 0
+**Gate:** as-built
+**Rationale:** engineer-cli.ts:552-560 loadLaunchConfig falls back to loadMergedConfig(dirname(dirname(userConfigPath()))), which reads ~/.ai-conductor/config.yml through loadProjectConfig (config.ts:2879) and so rejects legitimate user-only keys (conductor, spec_owner, github_bot) before ADR-2026-09-24 D10's user-level provider selection applies; the approved architecture (plan Architecture 'When the directory has no project config file, user configuration alone applies') is unchanged and Task 4's Done-when ('default config loader over a temporary project with no llm_provider and a HOME whose user config sets codex') admits the fix, so this is conforming implementation drift routed to build. Task 4's existing no-project/HOME-codex test is kept and extended, not replaced.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 10
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 10 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ar2-1 is complete.
+
+### Task rem-as-built-rem-ar4-1: src/conductor/src/engine/engineer-cli.ts:500-550,957-966 — add an injectable DispatchEngineerOptions seam (e.g. isAttachedTerminal, default () => Boolean(process.stdin.isTTY && process.stdout.isTTY)) and, in the launch case after the nested-session guard and before config load, intake pre-poll, and every spawnHost/launchOne call, refuse with a non-zero exit and a message stating an interactive terminal is required when it returns false; apply it provider-agnostically for every interactiveLaunch host. Update src/conductor/test/engine/engineer/engineer-cli-launch-host.test.ts (and src/conductor/test/cli-engineer.test.ts launch cases) to pass isAttachedTerminal: () => true so Task 4-8 assertions are preserved unchanged, and add tests that with isAttachedTerminal: () => false both claude and codex selections exit non-zero, print the terminal-required message, and record zero spawnHost and zero prePoll calls
+**Gate:** as-built
+**Rationale:** ADR-2026-09-20 D4 (decisions file line 137) requires the operator-launch seam to refuse structurally when no interactive terminal is attached, but engineer-cli.ts:544-550 spawnInteractiveHost and the launch path at engineer-cli.ts:957-966 spawn the selected host with no stdin/stdout TTY check; the approved architecture is authoritative and the fix is a determinable guard at the seam, so this is conforming implementation drift routed to build (no ADR change needed). No existing test or assertion is removed; existing launch-host tests gain an attached-terminal stub so their Task 4-8 coverage survives.
+**Governing clause:** adr-2026-09-20-operator-launched-sessions-retain-conductor-authority decision 4
+**Done when:**
+- adr-2026-09-20-operator-launched-sessions-retain-conductor-authority decision 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ar4-1 is complete.
+
+### Task rem-as-built-rem-ar5-1: src/conductor/src/engine/engineer-cli.ts:1021-1025 — name the resolved `executable` variable (engineer-cli.ts:957, the value actually passed to spawnHost) in the ENOENT message instead of host.defaultExecutable, falling back to host.defaultExecutable only if executable is undefined. In src/conductor/test/engine/engineer/engineer-cli-launch-host.test.ts keep the Task 6 ENOENT tests unchanged and add one with env CODEX_EXECUTABLE=/opt/missing/codex whose spawnHost rejects ENOENT, asserting non-zero exit and a message containing /opt/missing/codex, CODEX_EXECUTABLE, and $composer
+**Gate:** as-built
+**Rationale:** engineer-cli.ts:1021-1025 builds the ENOENT message from host.defaultExecutable while engineer-cli.ts:957 spawns resolveProviderExecutable(host.id), so a missing CODEX_EXECUTABLE custom path is not named, contrary to ADR-2026-09-24 D11; Task 6's Done-when (message containing the executable) admits the fix and the approved architecture is unchanged, so this is build. Task 6's existing default-path assertions (message contains codex, the executable codex, CODEX_EXECUTABLE, $composer; single spawn; confirmAnother once) are kept.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 11
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 11 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ar5-1 is complete.
+
+### Task rem-as-built-rem-ar6-1: skills/composer/SKILL.md:24-27,50-52 — replace the 'Claude-only launcher' / 'do not imply that this launcher creates a Codex session' / '#759 deferred' text with the shipped behavior: `ai-conductor compose` launches the host selected by --provider, else steps.explore.llm_provider, else run-level llm_provider, else claude, for any provider declaring interactiveLaunch (claude via `claude /composer`, codex via `codex $composer`; pi is refused naming #1007), and relaunch for follow-on ideas stays on the host selected at start
+**Gate:** as-built
+**Rationale:** skills/composer/SKILL.md:24-27 and :50-52 still call `ai-conductor compose` a Claude-only launcher that must not imply Codex launch, and docs/reference/environment.md:39 plus docs/guides/engineer-loop.md:21,315 describe only the claude launch, contradicting ADR-2026-09-24 D9 and the approved architecture review's commitment to replace that text; this is documentation drift that preserves the approved architecture, so build. Sibling sweep: docs/quickstart.md:351 refers to ~/.claude/settings.json, not the launcher, and is excluded; no sealed DECIDE artifact is touched (the non-blocking diagram drift notes live in sealed feature artifacts and are not tasked here).
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 9
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 9 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ar6-1 is complete.
+
+### Task rem-as-built-rem-ar6-2: docs/guides/engineer-loop.md:21,315 and docs/reference/environment.md:39 — state the launcher starts the selected interactiveLaunch host (claude or codex), list `codex` on PATH / CODEX_EXECUTABLE as the codex prerequisite beside `claude --version`, update the ENOENT troubleshooting entry to the new descriptor-driven message naming the provider, executable, override env var, and in-session command, and note CONDUCT_ENGINEER_PERMISSION_MODE applies only to the claude host
+**Gate:** as-built
+**Rationale:** skills/composer/SKILL.md:24-27 and :50-52 still call `ai-conductor compose` a Claude-only launcher that must not imply Codex launch, and docs/reference/environment.md:39 plus docs/guides/engineer-loop.md:21,315 describe only the claude launch, contradicting ADR-2026-09-24 D9 and the approved architecture review's commitment to replace that text; this is documentation drift that preserves the approved architecture, so build. Sibling sweep: docs/quickstart.md:351 refers to ~/.claude/settings.json, not the launcher, and is excluded; no sealed DECIDE artifact is touched (the non-blocking diagram drift notes live in sealed feature artifacts and are not tasked here).
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 9
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 9 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ar6-2 is complete.
