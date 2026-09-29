@@ -471,6 +471,7 @@ import { openShipDraftPr } from './ship-draft-pr.js';
 import { createShipDraftPublicationDependencies } from './ship-draft-pr.js';
 import { extractRegionBytes, isEmptyRegion, restoreRegion } from './pr-body-regions.js';
 import { discardRegionCapture, readRegionCaptures, writeRegionCapture } from './pr-body-region-store.js';
+import { RegionRestoreError } from './region-restore-error.js';
 import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
@@ -562,7 +563,7 @@ export function createFinishPresentationRepair(input: {
         const keys = Object.entries(captures).filter(([key, bytes]) => extractRegionBytes(body, key) !== bytes).map(([key]) => key);
         if (!target || !input.operations) throw new Error(`guarded region restore unavailable for ${keys.join(', ') || 'unknown'}`);
         const result = await executeGithubOperation({ operation: 'pull-request.edit', repository: target[1], resource: { kind: 'pull-request', number: Number(target[2]) }, context: { actor: 'finish-region-restore' }, payload: { body: next } }, input.operations);
-        if (result.kind !== 'executed') throw new Error(`guarded region restore refused for ${keys.join(', ') || 'unknown'}: ${result.kind}`);
+        if (result.kind !== 'executed') throw new RegionRestoreError('refused', keys, result.kind);
       }
       let verified: string;
       try {
@@ -574,7 +575,7 @@ export function createFinishPresentationRepair(input: {
         throw new Error(`region verification read failed for ${Object.keys(captures).join(', ')}: ${error instanceof Error ? error.message : String(error)}`);
       }
       for (const [key, bytes] of Object.entries(captures)) {
-        if (extractRegionBytes(verified, key) !== bytes) throw new Error(`region verification mismatch for ${key}`);
+        if (extractRegionBytes(verified, key) !== bytes) throw new RegionRestoreError('mismatch', [key]);
       }
     }
     try {
@@ -3374,7 +3375,12 @@ export class Conductor {
       const keys = Object.entries(captures)
         .filter(([key, bytes]) => extractRegionBytes(body, key) !== bytes)
         .map(([key]) => key);
-      throw new Error(`project-owned region restore failed for ${keys.join(', ') || 'unknown'}: guarded edit ${result.kind}`);
+      throw new RegionRestoreError(
+        'refused',
+        keys,
+        result.kind,
+        `project-owned region restore failed for ${keys.join(', ') || 'unknown'}: guarded edit ${result.kind}`,
+      );
     }
   }
 

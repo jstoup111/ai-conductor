@@ -15,6 +15,7 @@ vi.mock('../../src/engine/owner-gate/machine-identity.js', async (importOriginal
 });
 
 import { createProvenanceGuardedFinishPresentationRepair } from '../../src/engine/conductor.js';
+import { advanceFinishPublication, type PublicationSnapshot } from '../../src/engine/finish-publication.js';
 
 const engineTestDir = dirname(fileURLToPath(import.meta.url));
 const sourceRoot = join(engineTestDir, '..', '..', 'src');
@@ -32,6 +33,20 @@ type RepairFixtureOptions = {
   persistRestore?: boolean;
   capture?: boolean;
 };
+
+function readySnapshot(): PublicationSnapshot {
+  return {
+    mode: 'daemon',
+    intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+    implementationEvidence: 'valid',
+    shipEvidence: 'valid',
+    releaseReadiness: 'valid',
+    branchPushed: 'valid',
+    shippedRecord: 'valid',
+    outcomeRecord: 'missing',
+    pr: { identity: 'one', url: PR_URL, prose: 'accepted', ready: false },
+  };
+}
 
 async function repairFixture(options: RepairFixtureOptions = {}) {
   const root = await mkdtemp(join(tmpdir(), 'finish-production-wiring-'));
@@ -132,7 +147,7 @@ describe('production FINISH coordinator wiring', () => {
 
     const repairStart = conductor.indexOf('export function createFinishPresentationRepair');
     const restore = conductor.indexOf('const captures = await readRegionCaptures', repairStart);
-    const verify = conductor.indexOf('region verification mismatch for ${key}', restore);
+    const verify = conductor.indexOf("new RegionRestoreError('mismatch', [key])", restore);
     const ready = conductor.indexOf('const outcome = await ensureShipReady', verify);
     expect(repairStart).toBeGreaterThanOrEqual(0);
     expect(restore).toBeGreaterThan(repairStart);
@@ -183,6 +198,28 @@ describe('production FINISH coordinator wiring', () => {
     }
   });
 
+  it('halts the real FINISH coordinator with the owner and guarded-edit refusal', async () => {
+    const fixture = await repairFixture();
+    machineOwner.id = 'bob';
+    try {
+      const result = await advanceFinishPublication({
+        observe: async () => readySnapshot(),
+        effects: {
+          dispatchJudgment: async () => ({ kind: 'accepted' }),
+          repairPresentation: () => fixture.repair(fixture.request),
+        },
+      });
+      expect(result).toMatchObject({
+        kind: 'human_required', reason: 'region_restore_refused', detail: expect.stringContaining(OWNER),
+      });
+      expect((result as { detail: string }).detail).toContain('refused');
+      expect(fixture.pr.isDraft).toBe(true);
+      expect(fixture.calls).not.toContain('ready');
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it('keeps the draft on a persistent region verification mismatch', async () => {
     const fixture = await repairFixture({ persistRestore: true });
     try {
@@ -190,6 +227,27 @@ describe('production FINISH coordinator wiring', () => {
       expect(fixture.pr.isDraft).toBe(true);
       expect(fixture.calls).not.toContain('ready');
       expect(fixture.calls.slice(-3)).toEqual(['body-read', 'restore', 'body-read']);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('halts the real FINISH coordinator with the owner and verification mismatch', async () => {
+    const fixture = await repairFixture({ persistRestore: true });
+    try {
+      const result = await advanceFinishPublication({
+        observe: async () => readySnapshot(),
+        effects: {
+          dispatchJudgment: async () => ({ kind: 'accepted' }),
+          repairPresentation: () => fixture.repair(fixture.request),
+        },
+      });
+      expect(result).toMatchObject({
+        kind: 'human_required', reason: 'region_verification_mismatch', detail: expect.stringContaining(OWNER),
+      });
+      expect((result as { detail: string }).detail).toContain('verification mismatch');
+      expect(fixture.pr.isDraft).toBe(true);
+      expect(fixture.calls).not.toContain('ready');
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
