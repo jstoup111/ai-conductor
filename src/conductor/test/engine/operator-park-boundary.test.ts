@@ -1329,7 +1329,10 @@ describe('operator park boundary contract', () => {
         validation_concurrency: 2,
         steps: {
           memory: {
-            parallel: [{ name: 'alpha' }, { name: 'beta' }],
+            parallel: [
+              { name: 'alpha', skill: 'skills/memory/SKILL.md' },
+              { name: 'beta', skill: 'skills/memory/SKILL.md' },
+            ],
           },
         },
       },
@@ -1401,7 +1404,10 @@ describe('operator park boundary contract', () => {
       stateFilePath: statePath,
       stepRunner: { run },
       events,
-      config: { steps: { memory: { max_retries: 2, parallel: [{ name: 'parked-member' }, { name: 'passing-member' }] } } },
+      config: { steps: { memory: { max_retries: 2, parallel: [
+        { name: 'parked-member', skill: 'skills/memory/SKILL.md' },
+        { name: 'passing-member', skill: 'skills/memory/SKILL.md' },
+      ] } } },
       fromStep: 'memory',
       mode: 'auto',
       daemon: true,
@@ -1473,7 +1479,10 @@ describe('operator park boundary contract', () => {
       events,
       config: { validation_concurrency: 2, steps: { memory: {
         max_retries: 2,
-        parallel: [{ name: 'parked-member' }, { name: 'failed-member' }],
+        parallel: [
+          { name: 'parked-member', skill: 'skills/memory/SKILL.md' },
+          { name: 'failed-member', skill: 'skills/memory/SKILL.md' },
+        ],
       } } },
       fromStep: 'memory',
       mode: 'auto',
@@ -1544,13 +1553,13 @@ describe('operator park boundary contract', () => {
         steps: {
           memory: {
             parallel: [
-              { name: 'successful' },
-              { name: 'failed-advisory', advisory: true },
+              { name: 'successful', skill: 'skills/memory/SKILL.md' },
+              { name: 'failed-advisory', skill: 'skills/memory/SKILL.md', advisory: true },
             ],
           },
           explore: {
             when: 'tier == L',
-            parallel: [{ name: 'skipped' }],
+            parallel: [{ name: 'skipped', skill: 'skills/explore/SKILL.md' }],
           },
         },
       },
