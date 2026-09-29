@@ -1,10 +1,15 @@
-// Covers: task:4, task:5
+// Covers: task:4, task:5, task:6
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { dispatchEngineer, type DispatchEngineerOpts } from '../../../src/engine/engineer-cli.js';
 import type { ConfigResult } from '../../../src/engine/config.js';
+import { discoverInstalledProviders } from '../../../src/engine/provider-discovery.js';
+
+vi.mock('../../../src/engine/provider-discovery.js', () => ({
+  discoverInstalledProviders: vi.fn(),
+}));
 
 function launchOptions(
   config: ConfigResult,
@@ -26,6 +31,75 @@ afterEach(() => {
 });
 
 describe('dispatchEngineer interactive host launch', () => {
+  it('reports a missing selected executable without discovery or fallback', async () => {
+    const missing = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' });
+    const spawnHost = vi.fn(async () => Promise.reject(missing));
+    const printErr = vi.fn();
+
+    const code = await dispatchEngineer(
+      { kind: 'launch', provider: 'codex' },
+      { ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost), printErr },
+    );
+
+    expect({
+      code,
+      diagnostics: printErr.mock.calls.flat(),
+      spawnCalls: spawnHost.mock.calls,
+      discoveryCalls: vi.mocked(discoverInstalledProviders).mock.calls,
+    }).toEqual({
+      code: 1,
+      diagnostics: expect.arrayContaining([
+        expect.stringContaining('codex'),
+        expect.stringContaining('CODEX_EXECUTABLE'),
+        expect.stringContaining('$composer'),
+      ]),
+      spawnCalls: [['codex', ['$composer'], process.cwd()]],
+      discoveryCalls: [],
+    });
+  });
+
+  it('launches the selected host without a discovery or version probe', async () => {
+    const spawnHost = vi.fn(async () => 0);
+
+    const code = await dispatchEngineer(
+      { kind: 'launch', provider: 'claude' },
+      launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost),
+    );
+
+    expect({ code, spawnCalls: spawnHost.mock.calls, discoveryCalls: vi.mocked(discoverInstalledProviders).mock.calls })
+      .toEqual({
+        code: 0,
+        spawnCalls: [['claude', ['--permission-mode', 'default', '/composer'], process.cwd()]],
+        discoveryCalls: [],
+      });
+  });
+
+  it('keeps the selected host when a later loop spawn is missing', async () => {
+    const missing = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' });
+    const spawnHost = vi.fn()
+      .mockResolvedValueOnce(0)
+      .mockRejectedValueOnce(missing);
+    const confirmAnother = vi.fn(async () => true);
+    const printErr = vi.fn();
+
+    const code = await dispatchEngineer(
+      { kind: 'launch', provider: 'codex' },
+      {
+        ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost),
+        confirmAnother,
+        printErr,
+      },
+    );
+
+    expect({ code, diagnostics: printErr.mock.calls.flat(), spawnCalls: spawnHost.mock.calls, confirmCalls: confirmAnother.mock.calls })
+      .toEqual({
+        code: 1,
+        diagnostics: expect.arrayContaining([expect.stringContaining('CODEX_EXECUTABLE')]),
+        spawnCalls: [['codex', ['$composer'], process.cwd()], ['codex', ['$composer'], process.cwd()]],
+        confirmCalls: [[]],
+      });
+  });
+
   it('refuses a configured provider without interactive launch capability before spawning', async () => {
     const spawnHost = vi.fn(async () => 0);
     const printErr = vi.fn();
