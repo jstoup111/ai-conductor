@@ -1,5 +1,7 @@
 // Covers: task:4
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 
 type DeferralKey = {
   project: string;
@@ -19,6 +21,23 @@ type DeferralDeps = {
   readFile(path: string, encoding: 'utf-8'): Promise<string>;
   rm(path: string, options: { force: true }): Promise<void>;
 };
+
+const SOURCE_ROOT = resolve(import.meta.dirname, '../../../src');
+const DEFERRALS_MODULE = 'engine/monitor/deferrals.ts';
+const DEFERRAL_RECORD_PATH_RE = /(?:deferrals\.json|\.daemon\/deferrals)/;
+
+function collectTsFiles(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const file = join(dir, entry);
+    if (statSync(file).isDirectory()) {
+      files.push(...collectTsFiles(file));
+    } else if (entry.endsWith('.ts') && !entry.endsWith('.d.ts')) {
+      files.push(file);
+    }
+  }
+  return files;
+}
 
 describe('Task 4 — recorded deferrals', () => {
   it('round-trips project, feature, and halt identity as separate fields', async () => {
@@ -128,5 +147,58 @@ describe('Task 4 — recorded deferrals', () => {
 
     expect(files.get('/projects/payments/.daemon/deferrals.json')).toBeUndefined();
     expect(files.get('/projects/payments/.daemon/deferrals.json.tmp')).toEqual(expect.any(String));
+  });
+
+  it('retains distinct records when the same feature halts again with a new identity', async () => {
+    const files = new Map<string, string>();
+    const deps: DeferralDeps = {
+      resolveMainRoot: vi.fn(async () => '/projects/payments'),
+      mkdir: vi.fn(async () => undefined),
+      writeFile: vi.fn(async (path, contents) => {
+        files.set(path, contents);
+      }),
+      rename: vi.fn(async (from, to) => {
+        files.set(to, files.get(from) ?? '');
+      }),
+      readFile: vi.fn(async path => files.get(path) ?? '[]'),
+      rm: vi.fn(async () => undefined),
+    };
+    const { recordDeferral, readDeferrals } = await import('../../../src/engine/monitor/deferrals.js') as {
+      recordDeferral(startCwd: string, key: DeferralKey, deps: DeferralDeps): Promise<void>;
+      readDeferrals(startCwd: string, deps: DeferralDeps): Promise<DeferralKey[]>;
+    };
+    const startCwd = '/projects/payments/.worktrees/release-gate';
+    const firstHalt: DeferralKey = {
+      project: '/projects/payments',
+      feature: 'release-gate',
+      haltIdentity: { present: true, mtimeMs: 1_726_754_400_000, size: 86 },
+    };
+    const rehalted: DeferralKey = {
+      project: '/projects/payments',
+      feature: 'release-gate',
+      haltIdentity: { present: true, mtimeMs: 1_726_754_500_000, size: 92 },
+    };
+
+    await recordDeferral(startCwd, firstHalt, deps);
+    await recordDeferral(startCwd, rehalted, deps);
+
+    const records = await readDeferrals(startCwd, deps);
+    expect(records).toEqual([firstHalt, rehalted]);
+    expect(records[0]).not.toEqual(records[1]);
+  });
+
+  it('keeps deferral record and path literals inside the deferrals boundary module', () => {
+    const owner = resolve(SOURCE_ROOT, DEFERRALS_MODULE);
+    const violations: string[] = [];
+
+    for (const file of collectTsFiles(SOURCE_ROOT)) {
+      if (file === owner) continue;
+      if (DEFERRAL_RECORD_PATH_RE.test(readFileSync(file, 'utf8'))) {
+        violations.push(relative(SOURCE_ROOT, file).split('\\').join('/'));
+      }
+    }
+
+    expect(readFileSync(owner, 'utf8')).toMatch(DEFERRAL_RECORD_PATH_RE);
+    expect(violations).toEqual([]);
   });
 });
