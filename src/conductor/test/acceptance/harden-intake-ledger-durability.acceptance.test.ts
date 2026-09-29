@@ -143,6 +143,7 @@ describe('Story 5 — corrupt ledger stops the launch-time intake flow', () => {
           launches += 1;
           return 0;
         },
+        isAttachedTerminal: () => true,
         confirmAnother: () => false,
       },
     );
@@ -170,6 +171,7 @@ describe('Story 5 — corrupt ledger stops the launch-time intake flow', () => {
           launches += 1;
           return 0;
         },
+        isAttachedTerminal: () => true,
         confirmAnother: () => false,
       },
     );

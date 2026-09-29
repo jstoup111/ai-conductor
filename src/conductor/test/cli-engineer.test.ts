@@ -75,6 +75,7 @@ describe('legacy engineer CLI alias — process dispatch boundary', () => {
       loadLaunchConfig,
       env: {},
       prePoll,
+      isAttachedTerminal: () => true,
       confirmAnother: () => false,
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
     });
@@ -209,7 +210,7 @@ describe('dispatchEngineer — routes to engineer entry', () => {
     const mod = await import('../src/engine/engineer-cli.js');
     // Injected launcher stands in for spawning a real `claude /composer`.
     const launchInteractive = vi.fn().mockResolvedValue(0);
-    const code = await mod.dispatchEngineer({ kind: 'launch' }, { launchInteractive });
+    const code = await mod.dispatchEngineer({ kind: 'launch' }, { launchInteractive, isAttachedTerminal: () => true });
     expect(launchInteractive).toHaveBeenCalledOnce();
     expect(code).toBe(0);
   });
@@ -238,7 +239,7 @@ describe('dispatchEngineer — routes to engineer entry', () => {
     const launchInteractive = vi.fn().mockResolvedValue(0);
     const answers = [true, true, false];
     const confirmAnother = vi.fn().mockImplementation(() => answers.shift());
-    const code = await mod.dispatchEngineer({ kind: 'launch' }, { launchInteractive, confirmAnother });
+    const code = await mod.dispatchEngineer({ kind: 'launch' }, { launchInteractive, confirmAnother, isAttachedTerminal: () => true });
     expect(launchInteractive).toHaveBeenCalledTimes(3);
     expect(confirmAnother).toHaveBeenCalledTimes(3);
     expect(code).toBe(0);
@@ -251,7 +252,7 @@ describe('dispatchEngineer — routes to engineer entry', () => {
     const out: string[] = [];
     const code = await mod.dispatchEngineer(
       { kind: 'launch' },
-      { launchInteractive, confirmAnother, printErr: (s) => out.push(s) },
+      { launchInteractive, confirmAnother, printErr: (s) => out.push(s), isAttachedTerminal: () => true },
     );
     expect(code).toBe(1);
     // A launch failure must NOT keep looping.

@@ -10,6 +10,7 @@ describe('dispatchEngineer — gh version floor', () => {
       { kind: 'launch' },
       {
         launchInteractive,
+        isAttachedTerminal: () => true,
         printErr,
         probeGhVersion: async () => ({ kind: 'below-floor', version: { major: 2, minor: 14, patch: 1 } }),
       },
@@ -26,6 +27,7 @@ describe('dispatchEngineer — gh version floor', () => {
     await expect(dispatchEngineer({ kind: 'launch' }, {
       printErr: absent,
       launchInteractive: async () => 0,
+      isAttachedTerminal: () => true,
       probeGhVersion: async () => ({ kind: 'absent' }),
     })).resolves.toBe(1);
     expect(absent).toHaveBeenCalledWith(expect.stringContaining('not installed'));
@@ -33,6 +35,7 @@ describe('dispatchEngineer — gh version floor', () => {
     const launchInteractive = vi.fn(async () => 0);
     await expect(dispatchEngineer({ kind: 'launch' }, {
       launchInteractive,
+      isAttachedTerminal: () => true,
       confirmAnother: () => false,
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
     })).resolves.toBe(0);

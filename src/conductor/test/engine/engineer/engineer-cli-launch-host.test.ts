@@ -19,6 +19,7 @@ function launchOptions(
   return {
     loadLaunchConfig: async () => config,
     spawnHost,
+    isAttachedTerminal: () => true,
     env,
     prePoll: async () => 0,
     confirmAnother: () => false,
@@ -195,6 +196,24 @@ describe('dispatchEngineer interactive host launch', () => {
       spawnCalls: [['codex', ['$composer'], process.cwd()]],
       discoveryCalls: [],
     });
+  });
+
+  it('reports the resolved CODEX_EXECUTABLE when it is missing', async () => {
+    vi.stubEnv('CODEX_EXECUTABLE', '/opt/missing/codex');
+    const missing = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' });
+    const spawnHost = vi.fn(async () => Promise.reject(missing));
+    const printErr = vi.fn();
+
+    const code = await dispatchEngineer(
+      { kind: 'launch', provider: 'codex' },
+      { ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost), printErr },
+    );
+
+    expect([code, printErr.mock.calls.flat(), spawnHost.mock.calls]).toEqual([
+      1,
+      expect.arrayContaining([expect.stringContaining('/opt/missing/codex'), expect.stringContaining('CODEX_EXECUTABLE'), expect.stringContaining('$composer')]),
+      [['/opt/missing/codex', ['$composer'], process.cwd()]],
+    ]);
   });
 
   it('launches the selected host without a discovery or version probe', async () => {
@@ -383,6 +402,7 @@ describe('dispatchEngineer interactive host launch', () => {
       },
       confirmAnother: () => false,
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      isAttachedTerminal: () => true,
     });
 
     expect([code, launchInteractive.mock.calls.length, spawnHost.mock.calls.length]).toEqual([7, 1, 0]);
@@ -407,6 +427,7 @@ describe('dispatchEngineer interactive host launch', () => {
         prePoll: async () => 0,
         confirmAnother: () => false,
         probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        isAttachedTerminal: () => true,
       });
     } finally {
       process.chdir(originalDirectory);
@@ -414,5 +435,66 @@ describe('dispatchEngineer interactive host launch', () => {
     }
 
     expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], project);
+  });
+
+  it('accepts user-only configuration keys when the launching project has none', async () => {
+    const originalDirectory = process.cwd();
+    const root = await mkdtemp(join(tmpdir(), 'compose-launch-user-'));
+    const project = join(root, 'project');
+    const home = join(root, 'home');
+    await mkdir(project, { recursive: true });
+    await mkdir(join(home, '.ai-conductor'), { recursive: true });
+    await writeFile(join(home, '.ai-conductor', 'config.yml'), [
+      'llm_provider: codex',
+      'conductor:',
+      '  update_channel: stable',
+      'spec_owner: operator',
+      'github_bot:',
+      '  token_file: ~/bot-token',
+      '',
+    ].join('\n'));
+    vi.stubEnv('HOME', home);
+    process.chdir(project);
+    const spawnHost = vi.fn(async () => 0);
+
+    try {
+      const code = await dispatchEngineer({ kind: 'launch' }, {
+        spawnHost,
+        env: {},
+        prePoll: async () => 0,
+        confirmAnother: () => false,
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        isAttachedTerminal: () => true,
+      });
+      expect(code).toBe(0);
+    } finally {
+      process.chdir(originalDirectory);
+      await rm(root, { recursive: true, force: true });
+    }
+
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], project);
+  });
+
+  it.each(['claude', 'codex'] as const)('refuses %s without an attached terminal before configuration, polling, or spawning', async (provider) => {
+    const spawnHost = vi.fn(async () => 0);
+    const prePoll = vi.fn(async () => 0);
+    const loadLaunchConfig = vi.fn(async () => ({ ok: true as const, config: {}, warnings: [] }));
+    const printErr = vi.fn();
+
+    const code = await dispatchEngineer({ kind: 'launch', provider }, {
+      ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost),
+      isAttachedTerminal: () => false,
+      loadLaunchConfig,
+      prePoll,
+      printErr,
+    });
+
+    expect([code, printErr.mock.calls.flat(), spawnHost.mock.calls, prePoll.mock.calls, loadLaunchConfig.mock.calls]).toEqual([
+      1,
+      expect.arrayContaining([expect.stringContaining('interactive terminal is required')]),
+      [],
+      [],
+      [],
+    ]);
   });
 });

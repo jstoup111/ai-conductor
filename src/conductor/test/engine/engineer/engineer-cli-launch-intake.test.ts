@@ -151,6 +151,7 @@ function baseOpts(extra: Partial<DispatchEngineerOpts>): DispatchEngineerOpts {
     engineerDir,
     print: () => {},
     printErr: () => {},
+    isAttachedTerminal: () => true,
     intakeResolveActor: async () => ({ resolved: true, id: 'test-owner' }),
     ...extra,
   };

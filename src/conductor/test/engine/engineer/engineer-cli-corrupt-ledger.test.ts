@@ -39,6 +39,7 @@ describe('engineer claim: corrupt intake ledger', () => {
           launches += 1;
           return 0;
         },
+        isAttachedTerminal: () => true,
         confirmAnother: () => false,
       },
     );

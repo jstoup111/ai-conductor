@@ -284,7 +284,7 @@ describe('dispatchEngineer({kind:"launch"})', () => {
   it('invokes the injected interactive launcher and returns its exit code', async () => {
     const { dispatchEngineer } = await import('../../src/engine/engineer-cli.js');
     const launchInteractive = vi.fn().mockResolvedValue(0);
-    const code = await dispatchEngineer({ kind: 'launch' }, { launchInteractive, probeGhVersion: supportedGhVersion });
+    const code = await dispatchEngineer({ kind: 'launch' }, { launchInteractive, isAttachedTerminal: () => true, probeGhVersion: supportedGhVersion });
     expect(launchInteractive).toHaveBeenCalledOnce();
     expect(code).toBe(0);
   });

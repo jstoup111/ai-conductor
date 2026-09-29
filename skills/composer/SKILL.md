@@ -22,9 +22,9 @@ operator idea ─▶ [COMPOSER: route → DECIDE → spec PR → nudge]
 ```
 
 Inside a live supported host-agent session, Claude Code invokes `/composer`; Codex invokes
-`$composer`. The `ai-conductor compose` terminal launcher is a **Claude-only launcher**: it opens
-an interactive `claude /composer` session. Native persistent-session launch and recovery for other
-hosts is deferred to **#759**; do not imply that this launcher creates a Codex session.
+`$composer`. The `ai-conductor compose` terminal launcher starts the selected provider that declares
+`interactiveLaunch`: `--provider`, then `steps.explore.llm_provider`, then run-level `llm_provider`,
+then Claude. It launches Claude with `claude /composer` and Codex with `codex $composer`; Pi is refused with its `interactiveLaunch` capability owner (#1007).
 
 This is the idea→plan loop, not the execution loop. The per-repo daemon scans **merged** spec PRs
 and builds them; the only coupling is the merged spec PR and a fire-and-forget `ensureRunning`
@@ -47,9 +47,8 @@ for registry reads, guarded commits, PR opening, and daemon nudges, and runs DEC
 ## The Loop
 
 **Handle exactly ONE idea per session, then end.** File-backed registry, lessons, and processed
-markers let the next fresh supported host-agent session recover the durable state. The Claude-only
-launcher (`ai-conductor compose`) relaunches Claude Code with clean context; other-host persistent
-session launch/recovery remains deferred to #759.
+markers let the next fresh supported host-agent session recover the durable state. The launcher
+relaunches the host selected at session start with clean context for follow-on ideas.
 
 ### 1. Capture the idea
 

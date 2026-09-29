@@ -21,7 +21,7 @@
 //   (malformed subcommand / missing flags → {kind:'guide'} — print usage)
 
 import { spawn } from 'node:child_process';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRegistryReader } from './registry.js';
 import { ConductorEventEmitter } from '../ui/events.js';
@@ -29,8 +29,8 @@ import { EventPersister } from './event-persister.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo, TargetPathMissingError } from './engineer/target.js';
 import { classifyLandGateRejection, landSpec } from './engineer/land-spec.js';
-import { loadConfig, loadMergedConfig, type ConfigResult } from './config.js';
-import { userConfigPath } from './user-config.js';
+import { loadConfig, loadMergedConfig, validateConfig, type ConfigResult } from './config.js';
+import { readUserConfig } from './user-config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { openSpecPr, type HandoffDeps } from './engineer/handoff.js';
@@ -512,6 +512,8 @@ export interface DispatchEngineerOpts {
   loadLaunchConfig?: (launchingDirectory: string) => Promise<ConfigResult>;
   /** Spawn the selected interactive host; injectable so tests never launch a real host. */
   spawnHost?: (executable: string, argv: string[], cwd: string) => Promise<number>;
+  /** Whether stdin and stdout are attached to an operator terminal. */
+  isAttachedTerminal?: () => boolean;
   /** Environment used to form host-owned interactive argv. */
   env?: NodeJS.ProcessEnv;
   /**
@@ -559,10 +561,14 @@ async function loadLaunchConfig(launchingDirectory: string): Promise<ConfigResul
   const result = await loadMergedConfig(launchingDirectory);
   if (result.ok || result.error.type !== 'missing') return result;
 
-  const userOnly = await loadMergedConfig(dirname(dirname(userConfigPath())));
-  return !userOnly.ok && userOnly.error.type === 'missing'
-    ? { ok: true, config: {}, warnings: [] }
-    : userOnly;
+  const userResult = await readUserConfig();
+  if (userResult.parseError) {
+    return {
+      ok: false,
+      error: { type: 'parse_error', message: `user config parse error: ${userResult.parseError}` },
+    };
+  }
+  return validateConfig(userResult.config, launchingDirectory, { source: 'merged' });
 }
 
 /**
@@ -947,6 +953,11 @@ export async function dispatchEngineer(
         }
       }
 
+      if (!(opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))()) {
+        printErr('compose: an interactive terminal is required to launch the composer session.');
+        return 1;
+      }
+
       const loadedConfig = opts.launchInteractive
         ? undefined
         : await (opts.loadLaunchConfig ?? loadLaunchConfig)(launchingDirectory);
@@ -1032,7 +1043,7 @@ export async function dispatchEngineer(
           const msg = err instanceof Error ? err.message : String(err);
           if ((err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT' && host) {
             printErr(
-              `engineer: could not launch ${host.id} executable ${host.defaultExecutable} (${msg}). ` +
+              `engineer: could not launch ${host.id} executable ${executable ?? host.defaultExecutable} (${msg}). ` +
                 `Install it or set ${host.executableOverrideEnv}; if already in a session, run ` +
                 `${host.invocationPrefix}composer directly.`,
             );

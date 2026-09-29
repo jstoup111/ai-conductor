@@ -347,11 +347,17 @@ require_max_lines 'engineer remains a thin compatibility delegate' 30 "$engineer
 require_pattern 'composer makes the host-agent session model provider-neutral' \
   'live supported host-agent session|supported host-agent session|host-agent session' \
   "$composer_skill"
-require_pattern 'composer scopes Claude launcher claims to Claude-only behavior' \
-  'Claude-only.*(launcher|session)|(launcher|session).*Claude-only' \
+require_pattern 'composer describes provider-aware interactive launcher selection' \
+  'interactiveLaunch.*--provider.*steps\.explore\.llm_provider.*llm_provider' \
   "$composer_skill"
-require_pattern 'composer defers native persistent-session launching to issue 759' \
-  '(#759|issue 759).*(defer|deferred)|(defer|deferred).*#759' \
+require_pattern 'composer names Claude and Codex launcher commands' \
+  'Claude with `claude /composer` and Codex with `codex \$composer`' \
+  "$composer_skill"
+require_pattern 'composer refuses Pi interactive launch with its owner' \
+  'Pi is.*#1007' \
+  "$composer_skill"
+require_pattern 'composer retains the selected host for follow-on ideas' \
+  'relaunches the host selected at session start' \
   "$composer_skill"
 require_pattern 'composer scopes /quit to Claude Code sessions' \
   'Claude Code.*`/quit`|`/quit`.*Claude Code' \
