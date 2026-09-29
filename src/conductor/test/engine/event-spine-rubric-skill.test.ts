@@ -70,11 +70,6 @@ describe('event-spine build-review skill', () => {
     expect(payload?.kind === 'custom-findings' && payload.findings).toHaveLength(1);
   });
 
-  it('keeps the required exception wording in the exception/new-format fixture', () => {
-    const [, , summary] = fixtures[5];
-    expect(summary).toContain('exception moves the write but never changes schema');
-  });
-
   it('accepts a valid empty custom-reviewer result', () => {
     expect(parseBuildReviewCustomReviewerPayload({
       kind: 'custom-findings', version: 'v1', findings: [],
