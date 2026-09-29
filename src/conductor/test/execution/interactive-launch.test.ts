@@ -32,34 +32,16 @@ describe('provider-agnostic interactive launch', () => {
     spawnProcess.mockReset();
   });
 
-  it.each([
-    {
-      provider: 'claude',
-      exitCode: 0,
-      executable: 'claude',
-      args: ['--permission-mode', 'default', openingPrompt],
-    },
-    {
-      provider: 'codex',
-      exitCode: 23,
-      executable: 'codex',
-      args: [openingPrompt],
-    },
-  ])('uses $provider\'s interactive invocation form and resolves its exit', async ({
-    provider,
-    exitCode,
-    executable,
-    args,
-  }) => {
-    const spawn = vi.fn<InteractiveLaunchProcess>().mockResolvedValue({ exitCode });
+  it('preserves Claude\'s REPL invocation form and resolves its exit', async () => {
+    const spawn = vi.fn<InteractiveLaunchProcess>().mockResolvedValue({ exitCode: 0 });
 
-    await expect(launchInteractiveSession(request(provider), { spawn })).resolves.toEqual({
+    await expect(launchInteractiveSession(request('claude'), { spawn })).resolves.toEqual({
       kind: 'exited',
-      exitCode,
+      exitCode: 0,
     });
 
     expect(spawn).toHaveBeenCalledTimes(1);
-    expect(spawn).toHaveBeenCalledWith(executable, args, {
+    expect(spawn).toHaveBeenCalledWith('claude', ['--permission-mode', 'default', openingPrompt], {
       cwd: '/workspace/harness/.worktrees/repair-halt',
       stdio: 'inherit',
     });
@@ -68,6 +50,35 @@ describe('provider-agnostic interactive launch', () => {
     expect(spawnedOptions).not.toHaveProperty('input');
     expect(spawnedOptions).not.toHaveProperty('streamConsumer');
     expect(spawnedOptions).not.toHaveProperty('resume');
+  });
+
+  it('launches the default Codex adapter as bounded exec with its opening prompt on stdin', async () => {
+    const stdin = { end: vi.fn(), write: vi.fn() };
+    const child = Object.assign(new EventEmitter(), { stdin });
+    spawnProcess.mockReturnValue(child);
+
+    const launch = launchInteractiveSession(request('codex'));
+
+    try {
+      expect({
+        executable: spawnProcess.mock.calls[0]?.[0],
+        args: spawnProcess.mock.calls[0]?.[1],
+        options: spawnProcess.mock.calls[0]?.[2],
+        promptWrites: [...stdin.write.mock.calls, ...stdin.end.mock.calls],
+      }).toEqual({
+        executable: 'codex',
+        args: ['exec'],
+        options: {
+          cwd: '/workspace/harness/.worktrees/repair-halt',
+          stdio: ['pipe', 'inherit', 'inherit'],
+        },
+        promptWrites: expect.arrayContaining([[openingPrompt]]),
+      });
+    } finally {
+      child.emit('exit', 0);
+      child.emit('close', 0);
+      await launch;
+    }
   });
 
   it('reports an unregistered provider and never reaches the process boundary', async () => {
@@ -100,15 +111,17 @@ describe('provider-agnostic interactive launch', () => {
   });
 
   it('reports ENOENT from the mocked default process adapter without treating it as an exit', async () => {
-    const child = new EventEmitter();
+    const child = Object.assign(new EventEmitter(), {
+      stdin: { end: vi.fn(), write: vi.fn() },
+    });
     const report = vi.fn();
     spawnProcess.mockReturnValue(child);
 
     const launch = launchInteractiveSession(request('codex'), { report });
 
-    expect(spawnProcess).toHaveBeenCalledWith('codex', [openingPrompt], {
+    expect(spawnProcess).toHaveBeenCalledWith('codex', ['exec'], {
       cwd: '/workspace/harness/.worktrees/repair-halt',
-      stdio: 'inherit',
+      stdio: ['pipe', 'inherit', 'inherit'],
     });
     child.emit('error', Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }));
 

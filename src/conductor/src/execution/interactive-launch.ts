@@ -8,7 +8,7 @@ export interface InteractiveLaunchRequest {
 
 export interface InteractiveLaunchOptions {
   readonly cwd: string;
-  readonly stdio: 'inherit';
+  readonly stdio: 'inherit' | ['pipe', 'inherit', 'inherit'];
 }
 
 export interface InteractiveLaunchResult {
@@ -26,26 +26,45 @@ export type InteractiveLaunchOutcome =
   | { readonly kind: 'exited'; readonly exitCode: number }
   | { readonly kind: 'unavailable'; readonly provider: string };
 
+interface InteractiveInvocation {
+  readonly executable: string;
+  readonly args: string[];
+  readonly stdio: InteractiveLaunchOptions['stdio'];
+  readonly stdin?: string;
+}
+
 export interface LaunchInteractiveSessionOptions {
   readonly spawn?: InteractiveLaunchProcess;
   readonly report?: (message: string) => void;
 }
 
-const interactiveInvocations = {
+const interactiveInvocations: Record<string, (prompt: string) => InteractiveInvocation> = {
   claude: (prompt: string) => ({
     executable: 'claude',
     args: ['--permission-mode', 'default', prompt],
+    stdio: 'inherit',
   }),
   codex: (prompt: string) => ({
     executable: 'codex',
-    args: [prompt],
+    args: ['exec'],
+    stdio: ['pipe', 'inherit', 'inherit'],
+    stdin: prompt,
   }),
 } as const;
 
-const defaultSpawn: InteractiveLaunchProcess = (executable, args, options) => new Promise((resolve, reject) => {
+const defaultSpawn = (
+  executable: string,
+  args: string[],
+  options: InteractiveLaunchOptions,
+  stdin?: string,
+) => new Promise<InteractiveLaunchResult>((resolve, reject) => {
   const child = spawn(executable, args, options);
   child.once('error', reject);
   child.once('exit', (code) => resolve({ exitCode: code ?? 0 }));
+  if (stdin !== undefined) {
+    child.stdin?.write(stdin);
+    child.stdin?.end();
+  }
 });
 
 /**
@@ -68,10 +87,17 @@ export async function launchInteractiveSession(
   }
 
   try {
-    const result = await (options.spawn ?? defaultSpawn)(
-      invocation(request.openingPrompt).executable,
-      invocation(request.openingPrompt).args,
-      { cwd: request.cwd, stdio: 'inherit' },
+    const launch = invocation(request.openingPrompt);
+    const spawnProcess = options.spawn ?? ((executable, args, spawnOptions) => defaultSpawn(
+      executable,
+      args,
+      spawnOptions,
+      launch.stdin,
+    ));
+    const result = await spawnProcess(
+      launch.executable,
+      launch.args,
+      { cwd: request.cwd, stdio: launch.stdio },
     );
     return { kind: 'exited', exitCode: result.exitCode };
   } catch (error) {
