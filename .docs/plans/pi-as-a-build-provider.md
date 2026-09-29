@@ -748,3 +748,11 @@ Task 22 <- 20
 **Done when:**
 - adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 8 is satisfied by this task.
 - Re-run as-built and confirm task rem-as-built-rem-ab8-1 is complete.
+
+### Task rem-as-built-rem-ab14-1: src/conductor/src/engine/step-runners.ts:850-870 (unavailableReviewCapabilityResult) and the custom-policy candidate paths that rethrow at src/conductor/src/engine/provider-execution.ts:1050-1051: when a custom-policy build_review candidate's provider key is not a catalog id (a registered external plugin, for which providerDescriptor throws Unknown built-in provider), return the same setup-unavailable skip result used for a catalog provider lacking readOnlyReview or reviewPolicyCatalog instead of rethrowing, so the executor records provider_attempt invoked:false with skipReason setup-unavailable and advances to the next candidate; in the existing custom-policy build_review candidate test suite add a test registering an external plugin candidate 'fixture-plugin-reviewer' ahead of a capable catalog candidate and asserting no throw, one provider_attempt with invoked:false and skipReason setup-unavailable for the plugin, and the catalog candidate invoked next, keeping existing catalog-capability refusal assertions unchanged (Task 5 Done-when).
+**Gate:** as-built
+**Rationale:** Operator decision 2026-09-29 (James) on AB-14 and NC.1: follow approved adr-2026-09-10-portable-build-review-policy D5.5 (skip an unavailable custom-policy candidate and try the next) and rescind the 2026-09-28 accepted widening NC.2 that treated the Unknown built-in provider throw as intended. Admitted by Task 5 (custom-policy read-only admission refuses a candidate without invoking it).
+**Governing clause:** adr-2026-09-10-portable-build-review-policy decision 5
+**Done when:**
+- A custom-policy build_review ladder whose first candidate is a registered external plugin records provider_attempt invoked:false with skipReason setup-unavailable for it, throws nothing, and invokes the next capable catalog candidate, as asserted by the new plugin-candidate test.
+- No path under src/conductor/src/engine rethrows the Unknown built-in provider error for a custom-policy review candidate, and the existing catalog capability-refusal tests pass with unchanged assertions.
