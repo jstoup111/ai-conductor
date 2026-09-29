@@ -33,6 +33,14 @@ import {
 import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
 import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
 import { classifyGitPushAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
+import {
+  HALT_PR_BANNER_SENTINEL,
+  NEEDS_REMEDIATION_BODY_MARKER,
+} from './pr-body-engine-markers.js';
+export {
+  HALT_PR_BANNER_SENTINEL,
+  NEEDS_REMEDIATION_BODY_MARKER,
+} from './pr-body-engine-markers.js';
 export { makeProductionGh, assertRealExecAllowed, type GhRunner };
 
 /**
@@ -752,8 +760,6 @@ export const NEEDS_REMEDIATION_MARKER = '<!-- conductor:needs-remediation -->';
  * Distinct from {@link NEEDS_REMEDIATION_MARKER} which is embedded in comments.
  * Used for marking the PR body when a HALT marks a PR as needing remediation.
  */
-export const NEEDS_REMEDIATION_BODY_MARKER = '<!-- conductor:needs-remediation -->';
-
 /**
  * Stable hidden marker identifying the single harness-authored owner-gate
  * status comment on a PR for a spec that is currently owner-gated. Embedded
@@ -768,8 +774,6 @@ export const OWNER_GATED_MARKER = '<!-- conductor:owner-gated -->';
  * Stable sentinel: its presence in a PR body is a stateless halt signal
  * (issue #632).
  */
-export const HALT_PR_BANNER_SENTINEL =
-  'This PR was opened automatically after an irrecoverable daemon HALT.';
 export const HALT_PR_BANNER_LINES = [
   HALT_PR_BANNER_SENTINEL,
   'Manual remediation is required to unblock this feature.',

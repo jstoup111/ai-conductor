@@ -41,6 +41,8 @@ import {
 } from './pr-labels.js';
 import { runTrackerUrlRead } from './tracker-client.js';
 import { maskProjectOwnedRegions } from './pr-body-regions.js';
+import { PR_BODY_FLOOR_MARKER } from './pr-body-engine-markers.js';
+export { PR_BODY_FLOOR_MARKER } from './pr-body-engine-markers.js';
 
 export const NEEDS_REMEDIATION_TITLE_PREFIX = 'needs-remediation:';
 export const NEEDS_REMEDIATION_LABEL = 'needs-remediation';
@@ -455,8 +457,6 @@ export async function readStaleHaltBanner(
  * remains a deterministic signal that no `/pr`-authored prose was ever written
  * for this PR.
  */
-export const PR_BODY_FLOOR_MARKER = '<!-- conductor:pr-body-floor -->';
-
 /**
  * Per-section "nobody wrote this yet" text the SHIP-entry draft body stamps
  * into every template slot, and the reader note that same body carries. Both

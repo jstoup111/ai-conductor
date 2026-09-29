@@ -3256,24 +3256,28 @@ export class Conductor {
       mode: this.mode,
       daemon: this.daemon,
       dispatchJudgment: async (request) => {
-        const result = await this.stepRunner.run('finish', state, { ...options, finishProsePass: 'judge' });
-        if (result.success) await this.restoreCapturedRegions(state, request.pullRequestUrl);
-        return result;
+        try {
+          return await this.stepRunner.run('finish', state, { ...options, finishProsePass: 'judge' });
+        } finally {
+          await this.restoreCapturedRegions(state, request.pullRequestUrl);
+        }
       },
       // The authoring pass is the same FINISH dispatch under a different
       // mandate: the step runner selects the authoring instruction block, so
       // the provider is told to write the prose from the diff rather than to
       // grade prose that was never written.
       dispatchAuthoring: async (request) => {
-        const result = await this.stepRunner.run('finish', state, {
-          ...options,
-          finishProsePass: 'author',
-          ...(request.revisionGuidance === undefined
-            ? {}
-            : { revisionGuidance: request.revisionGuidance }),
-        });
-        if (result.success) await this.restoreCapturedRegions(state, request.pullRequestUrl);
-        return result;
+        try {
+          return await this.stepRunner.run('finish', state, {
+            ...options,
+            finishProsePass: 'author',
+            ...(request.revisionGuidance === undefined
+              ? {}
+              : { revisionGuidance: request.revisionGuidance }),
+          });
+        } finally {
+          await this.restoreCapturedRegions(state, request.pullRequestUrl);
+        }
       },
       emit: async (event) => this.events.emit(event),
     });

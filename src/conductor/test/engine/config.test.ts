@@ -31,6 +31,11 @@ import {
   BUILD_REVIEW_ACCEPTED_RISK_START,
   REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
 } from '../../src/engine/build-review-accepted-risk.js';
+import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
+import {
+  HALT_PR_BANNER_SENTINEL,
+  NEEDS_REMEDIATION_BODY_MARKER,
+} from '../../src/engine/pr-labels.js';
 
 describe('config', () => {
   let tmpDir: string;
@@ -161,6 +166,9 @@ describe('config', () => {
         ['engine-owned accepted-risk heading', region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_HEADING), customStep('compliance-attest'), ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_HEADING]],
         ['engine-owned accepted-risk marker', region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_START), customStep('compliance-attest'), ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_START]],
         ['engine-owned accepted-risk end marker', region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_END), customStep('compliance-attest'), ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_END]],
+        ['engine-owned floor marker', region('compliance-attest', PR_BODY_FLOOR_MARKER), customStep('compliance-attest'), ['compliance-attest', PR_BODY_FLOOR_MARKER]],
+        ['engine-owned remediation-body marker', region('compliance-attest', NEEDS_REMEDIATION_BODY_MARKER), customStep('compliance-attest'), ['compliance-attest', NEEDS_REMEDIATION_BODY_MARKER]],
+        ['engine-owned halt sentinel', region('compliance-attest', HALT_PR_BANNER_SENTINEL), customStep('compliance-attest'), ['compliance-attest', HALT_PR_BANNER_SENTINEL]],
       ])('rejects %s', async (_caseName, template, steps, expectedMessageParts) => {
         for (const name of ['compliance-attest', 'release-disposition', 'late-attest']) {
           await writeCustomSkill(name);

@@ -7,6 +7,11 @@ import {
   BUILD_REVIEW_ACCEPTED_RISK_START,
   REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
 } from '../../src/engine/build-review-accepted-risk.js';
+import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
+import {
+  HALT_PR_BANNER_SENTINEL,
+  NEEDS_REMEDIATION_BODY_MARKER,
+} from '../../src/engine/pr-labels.js';
 import {
   extractRegionBytes,
   isEmptyRegion,
@@ -98,6 +103,9 @@ describe('parsePrTemplateRegions', () => {
     [BUILD_REVIEW_ACCEPTED_RISK_HEADING],
     [BUILD_REVIEW_ACCEPTED_RISK_START],
     [BUILD_REVIEW_ACCEPTED_RISK_END],
+    [PR_BODY_FLOOR_MARKER],
+    [NEEDS_REMEDIATION_BODY_MARKER],
+    [HALT_PR_BANNER_SENTINEL],
   ])('returns a typed error when a region contains engine-owned text %s', (engineOwnedText) => {
     expect(parsePrTemplateRegions([
       '<!-- ai-conductor:step compliance-attest -->',
