@@ -1,0 +1,11 @@
+# Track: Stage wrapped Desired-outcome bullets in full
+
+Track: technical
+
+Scope boundary: Small fix for #2620, approved by the operator on 2026-09-28 (delegated). The staging extractor that copies an intake issue's Desired-outcome section into the worktree's gitignored staging file folds each bullet's continuation lines into that bullet and writes it as one physical line. Because the land-time intake marker copies the staged section verbatim and every reader parses one bullet per line, the full text then reaches the committed marker and the coherence outcome comparison with no reader change. Out of scope: the story-criterion extractor wrapping loss (#2138), any shared folding helper for it, rewriting historical truncated intake markers, and the coherence row splitter's pipe handling.
+
+Approach choice (conventional default, approved by the operator on 2026-09-28, delegated): normalize at the single writer rather than teach the three per-line readers to fold. The readers also parse committed markers and hand-written staging files, where an inbound armor closing line can directly follow the last bullet; leaving them unchanged is what keeps already-landed truncated markers landing with their existing outcome rows. Nested sub-bullets keep today's count: an indented dash line is its own outcome, exactly as the current per-line filter already counts it.
+
+Scope check: A — harness-repo-only (the engineer intake staging and land coherence mechanism exists only in this repository's engine); B — n/a (no new skill); C — provider-agnostic. No catalog registration is required. Event-spine: no event, metric, span, or report is added or changed.
+
+Verified foundation: outcome-staging.ts extractDesiredOutcomeSection keeps only lines matching a leading dash and trims them, so continuation lines are dropped; readStagedIntakeOutcomes and readCommittedIntakeOutcomes parse with the same per-line filter. intake-marker.ts extractOutcomesSection copies the staged armored block or Desired-outcome section verbatim into the marker. land-spec.ts passes the staged (or committed-fallback) bullets to runCoherenceGate, whose checkOutcomeCoverage compares each outcome row quote to its bullet after collapsing whitespace. The existing coherence acceptance test already drives landSpec with outcomes staged by the real createEngineerWorktree writer.
