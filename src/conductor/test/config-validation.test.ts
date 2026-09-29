@@ -1,3 +1,4 @@
+// Covers: task:3
 import { describe, it, expect } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -74,6 +75,48 @@ describe('harness_version validation', () => {
     });
   });
 
+});
+
+describe('retired top-level wiring configuration', () => {
+  it.each([
+    { entry_points: ['src/cli.ts'] },
+    { entry_points: ['src/cli.ts'], bogus: 1 },
+    5,
+  ])('accepts and omits retired wiring value %#', (wiring) => {
+    const result = validateConfig({ wiring });
+
+    expect(result).toMatchObject({
+      ok: true,
+      config: {},
+      warnings: [expect.stringMatching(/wiring.*retired.*ignored.*adr-2026-08-14-retire-build-review-wiring-rubric/i)],
+      deprecatedKeys: [{ key: 'wiring', adr: 'adr-2026-08-14-retire-build-review-wiring-rubric' }],
+    });
+    if (!result.ok) return;
+    expect(result.config).not.toHaveProperty('wiring');
+  });
+
+  it('does not report wiring when it is absent', () => {
+    const result = validateConfig({});
+
+    expect(result).toMatchObject({ ok: true, warnings: [] });
+    if (!result.ok) return;
+    expect(result.deprecatedKeys).not.toContainEqual(expect.objectContaining({ key: 'wiring' }));
+  });
+});
+
+describe('custom parallel step validation', () => {
+  it('accepts when on a parallel group without a top-level skill per ADR 004-when-parallel-workflow-dsl', () => {
+    expect(validateConfig({
+      steps: {
+        parallel_review: {
+          after: 'build',
+          enforcement: 'advisory',
+          when: 'tier == L',
+          parallel: [{ name: 'review', skill: 'project-review' }],
+        },
+      },
+    })).toMatchObject({ ok: true });
+  });
 });
 
 describe('gate_code_validity project config', () => {

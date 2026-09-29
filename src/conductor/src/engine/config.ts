@@ -169,6 +169,8 @@ const DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET = new Set<string>(
 );
 const DEPRECATED_BUILD_REVIEW_ADR =
   'adr-2026-08-22-build-review-opt-in-rubric-container';
+const DEPRECATED_WIRING_ADR =
+  'adr-2026-08-14-retire-build-review-wiring-rubric';
 
 /** Default hard floor for live provider-stream observation emission. */
 export const DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS = 5_000;
@@ -607,6 +609,12 @@ export function validateConfig(
     }
   }
 
+  if (Object.hasOwn(obj, 'wiring')) {
+    warnings.push(`wiring is retired and ignored (${DEPRECATED_WIRING_ADR}).`);
+    deprecatedKeys.push({ key: 'wiring', adr: DEPRECATED_WIRING_ADR });
+    delete obj.wiring;
+  }
+
   // defaults
   if (obj.defaults !== undefined) {
     const err = validateEffortAndModelBag(obj.defaults, 'defaults', false);
@@ -860,7 +868,7 @@ export function validateConfig(
           if (normalize(artifact) !== artifact) return errVal(`${field} must be normalized`);
         }
 
-        // Custom steps need both `after` and `skill`.
+        // Custom steps need `after` and either a top-level skill or parallel branches.
         if (typeof cfg.after !== 'string') {
           return errVal(`Custom step "${name}" requires 'after: <existing-step>'`);
         }
@@ -872,7 +880,7 @@ export function validateConfig(
             `Custom step "${name}" references unknown after target: "${afterTarget}"`,
           );
         }
-        if (typeof cfg.skill !== 'string') {
+        if (cfg.parallel === undefined && typeof cfg.skill !== 'string') {
           return errVal(`Custom step "${name}" requires 'skill: <path-to-SKILL.md>'`);
         }
         if (cfg.enforcement !== undefined && !VALID_ENFORCEMENTS.has(cfg.enforcement as EnforcementLevel)) {

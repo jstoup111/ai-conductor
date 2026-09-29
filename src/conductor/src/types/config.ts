@@ -64,8 +64,8 @@ export interface ParallelBranch {
  * back through phases > defaults > hardcoded baselines.
  *
  * Built-in steps (those declared in ALL_STEPS) may set any subset of keys.
- * Custom steps (not in ALL_STEPS) MUST set both `after` and `skill` so the
- * registry knows where and how to insert them.
+ * Custom steps (not in ALL_STEPS) MUST set `after` plus either `skill` or a
+ * `parallel` group so the registry knows where and how to insert them.
  */
 export interface StepConfig {
   /** Provider selection for this step. Unset steps inherit the first run-level entry. */
@@ -134,7 +134,8 @@ export interface StepConfig {
   /**
    * Boolean expression evaluated against current conductor state. When the
    * expression evaluates to false the step is skipped and a `when_skip` event
-   * is emitted. Mutually exclusive with `parallel`.
+   * is emitted. On a `parallel` group, this skips every branch (ADR
+   * `004-when-parallel-workflow-dsl`).
    *
    * Supported forms:
    *   tier == L
@@ -699,7 +700,6 @@ export interface HarnessConfig {
    * Malformed values also resolve to enabled without throwing.
    */
   ci_watch?: CiWatchConfig;
-  /** Entry points supplied to the build_review wiring rubric. */
 }
 
 /**
