@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:11
 // `conduct-ts engineer poll` + `engineer forget` CLI primitives (Phase 9.3b, T22/T23).
 // FR-32 (poll-on-launch primitive) + FR-40 (manual forget). gh is injected — no network.
 
@@ -6,6 +6,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 
 import {
   detectEngineerCommand,
@@ -15,6 +17,9 @@ import {
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
 import { parseEnvelope } from '../../../src/engine/engineer/intake/port.js';
+import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
+
+const execFile = promisify(execFileCb);
 
 // ── fake gh: issue list + edit (label strip) ──────────────────────────────────
 
@@ -132,10 +137,10 @@ describe('engineer poll (T22, FR-32)', () => {
   it('polls issues and enqueues envelopes into the inbox', async () => {
     await writeRegistry([{ name: 'o/a' }]);
     const { gh } = makeGh({ 'o/a': [{ number: 1, title: 'Idea', body: 'body' }] });
-    const { out, opts } = captureOut();
+    const { out, err, opts } = captureOut();
 
     const code = await dispatchEngineer({ kind: 'poll' }, opts({ gh }));
-    expect(code).toBe(0);
+    expect(code, err.join('\n')).toBe(0);
     expect(JSON.parse(out[0])).toMatchObject({ kind: 'poll', enqueued: 1, sourceRefs: ['o/a#1'] });
 
     const inbox = await readdir(join(engineerDir, 'inbox'));
@@ -145,7 +150,7 @@ describe('engineer poll (T22, FR-32)', () => {
   it('double poll enqueues no duplicates (ledger dedups)', async () => {
     await writeRegistry([{ name: 'o/a' }]);
     const { gh } = makeGh({ 'o/a': [{ number: 1, title: 'Idea', body: 'body' }] });
-    const { out, opts } = captureOut();
+    const { out, err, opts } = captureOut();
 
     await dispatchEngineer({ kind: 'poll' }, opts({ gh }));
     out.length = 0;
@@ -154,6 +159,93 @@ describe('engineer poll (T22, FR-32)', () => {
     expect(JSON.parse(out[0])).toMatchObject({ kind: 'poll', enqueued: 0 });
     const inbox = await readdir(join(engineerDir, 'inbox'));
     expect(inbox.filter((f) => f.endsWith('.json')).length).toBe(1); // still just the one
+  });
+});
+
+describe('engineer land tracker write-back (Task 11)', () => {
+  it('reports a Jira source ref as a successful no-op through the CLI event spine', async () => {
+    const repoPath = join(workDir, 'tracker-project');
+    await mkdir(repoPath, { recursive: true });
+    const git = async (args: string[], cwd = repoPath) => (await execFile('git', args, { cwd })).stdout.trim();
+    await git(['init', '-b', 'main', '-q']);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test']);
+    await writeFile(join(repoPath, 'README.md'), '# tracker project\n');
+    await mkdir(join(repoPath, '.ai-conductor'), { recursive: true });
+    await writeFile(join(repoPath, '.ai-conductor', 'config.yml'), 'tracker:\n  backend: jira\n');
+    await git(['add', 'README.md', '.ai-conductor/config.yml']);
+    await git(['commit', '-m', 'initial']);
+    await writeFile(registryPath, JSON.stringify([{
+      schemaVersion: 1,
+      name: 'tracker-project',
+      path: repoPath,
+      status: 'registered',
+      registeredAt: '2026-09-28T00:00:00.000Z',
+    }]));
+
+    const worktree = (await createEngineerWorktree(repoPath, 'jira writeback')).worktreePath;
+    await Promise.all(['specs', 'stories', 'plans', 'coherence'].map((directory) => mkdir(join(worktree, '.docs', directory), { recursive: true })));
+    await writeFile(join(worktree, '.docs', 'specs', 'jira-writeback.md'), '# PRD: Jira writeback\n\nApproved.\n');
+    await writeFile(join(worktree, '.docs', 'stories', 'jira-writeback.md'), [
+      '# Stories: Jira writeback', '', '**Status:** Accepted', '', '## Story 1: Jira writeback',
+      '### Acceptance Criteria', '#### Happy Path', '- Given X, when Y, then Z.', '',
+      '#### Negative Paths', '- Given invalid input, when Y, then it is refused.', '',
+    ].join('\n'));
+    await writeFile(join(worktree, '.docs', 'plans', 'jira-writeback.md'), [
+      '# Implementation Plan: Jira writeback', '', '**Stories:** .docs/stories/jira-writeback.md', '',
+      '### Task 1: Route Jira write-backs', '', '**Story:** 1', '', '**Done when:**', '- Jira write-backs are no-ops.', '- The ledger advances after the no-op.', '',
+      '## Task Dependency Graph', '```', '1', '```', '',
+    ].join('\n'));
+    await writeFile(join(worktree, '.docs', 'coherence', 'jira-writeback.md'), [
+      '# Coherence: Jira writeback', '', 'Track: technical', 'Tier: M', 'Verdict: covered', '',
+      '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Quote / Notes |',
+      '| --- | --- | --- | --- | --- |',
+      '| story | story-1 | task-1 | covered | Jira writeback |',
+      '| task | task-1 | story-1 | covered | Jira write-backs are no-ops. |', '',
+      '## Criterion mapping', '',
+      '| Row class | Criterion | Task id(s) | Verdict | Done when quote | Disposition |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| criterion | Story 1 happy: Given X, when Y, then Z. | task-1 | covered | Jira write-backs are no-ops. | diff-local |',
+      '| criterion | Story 1 negative: Given invalid input, when Y, then it is refused. | task-1 | covered | The ledger advances after the no-op. | diff-local |', '',
+    ].join('\n'));
+
+    const sourceRef = 'ENG-42';
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef });
+    const calls: string[][] = [];
+    const events: unknown[] = [];
+    const gh = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'api' && args[1] === 'user') return { stdout: 'test-owner' };
+      throw new Error(`unexpected gh call: ${args.join(' ')}`);
+    };
+    const { out, err, opts } = captureOut();
+    const fakeHome = join(workDir, 'home');
+    await mkdir(join(fakeHome, '.ai-conductor'), { recursive: true });
+    await writeFile(join(fakeHome, '.ai-conductor', 'config.yml'), 'spec_owner: test-owner\n');
+    const savedHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+    let code: number;
+    try {
+      code = await dispatchEngineer(
+        { kind: 'land', project: 'tracker-project', idea: 'jira writeback', worktree, sourceRef },
+        opts({
+          gh: gh as DispatchEngineerOpts['gh'],
+          events: { emit: async (event) => { events.push(event); } },
+        }),
+      );
+    } finally {
+      process.env.HOME = savedHome;
+    }
+
+    expect(code, err.join('\n')).toBe(0);
+    expect(JSON.parse(out[0])).toMatchObject({ branch: 'spec/jira-writeback' });
+    expect(calls).toEqual([]);
+    expect(events).toEqual([{
+      type: 'tracker_backend_unavailable', project: sourceRef, backend: 'jira', reason: 'no-adapter',
+    }]);
+    expect(await ledger.get('github-issues', sourceRef)).toMatchObject({ status: 'routed' });
+    expect((await ledger.get('github-issues', sourceRef))?.writebackPending).toBeUndefined();
   });
 });
 
