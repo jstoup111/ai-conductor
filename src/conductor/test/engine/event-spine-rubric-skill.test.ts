@@ -17,14 +17,6 @@ const fixtures = [
   ['exception with new format', 'exception-changes-schema', 'The exception moves the write but never changes schema; this new format violates that limit.', '.pipeline/external-events.jsonl', 6],
 ] as const;
 
-const nonFindingFixtures = [
-  ['new ConductorEvent variant', 'A new ConductorEvent variant is emitted through ConductorEventEmitter.'],
-  ['same-schema sibling ledger', 'A single-writer sibling ledger uses the ConductorEvent schema and is merged by the existing reader under exceptions A and B.'],
-  ['gate evidence artifact', 'The gate evidence artifact is durable state under exception C.'],
-  ['committed design doc', 'The committed design doc is durable state under exception C.'],
-  ['test fixture write', 'The write is confined to a test fixture.'],
-] as const;
-
 const DRAFT_ADR_CHANNEL = {
   concernId: 'unapproved-channel-adr',
   summary: 'The review IPC endpoint has a DRAFT ADR; missing approval, consumers, and reconciliation story.',
@@ -83,7 +75,7 @@ describe('event-spine build-review skill', () => {
     expect(summary).toContain('exception moves the write but never changes schema');
   });
 
-  it.each(nonFindingFixtures)('parses %s as a zero-finding event-spine result', (_name, _description) => {
+  it('accepts a valid empty custom-reviewer result', () => {
     expect(parseBuildReviewCustomReviewerPayload({
       kind: 'custom-findings', version: 'v1', findings: [],
     })).toEqual({ kind: 'custom-findings', version: 'v1', findings: [] });
@@ -95,6 +87,5 @@ describe('event-spine build-review skill', () => {
     })).toEqual({
       kind: 'custom-findings', version: 'v1', findings: [DRAFT_ADR_CHANNEL],
     });
-    expect(DRAFT_ADR_CHANNEL.summary).toMatch(/IPC endpoint.*approval.*consumers.*reconciliation story/i);
   });
 });
