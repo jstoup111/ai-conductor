@@ -546,6 +546,10 @@ export async function bootComposeEngineerLaunch(options: {
     events: options.events,
     ...(options.providerDiscoveryRunner ? { runner: options.providerDiscoveryRunner } : {}),
   });
+  // Compose/engineer launches Claude directly, independently of the selected
+  // build provider. Check that executable only: validating the configured
+  // selection here would reject an otherwise-launchable external plugin or a
+  // missing provider this entry point never dispatches.
   if (!discovery.installed.includes(CLAUDE_PROVIDER)) {
     const reason = discovery.missing.find(({ id }) => id === CLAUDE_PROVIDER)?.reason ?? 'version-failed';
     throw new ProviderNotInstalledError(CLAUDE_PROVIDER, 'compose/engineer launch', reason);

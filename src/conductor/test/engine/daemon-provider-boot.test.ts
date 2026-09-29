@@ -286,11 +286,14 @@ describe('runDaemonMode provider discovery at boot', () => {
 
   it('refuses a missing Claude before the compose launch callback can spawn', async () => {
     const launch = vi.fn(async () => 0);
+    const events = new ConductorEventEmitter();
+    const discoveries: unknown[] = [];
+    events.on('provider_discovery', async (event) => { discoveries.push(event); });
 
     await expect(bootComposeEngineerLaunch({
       command: 'compose',
       registry: new PluginRegistry(),
-      events: new ConductorEventEmitter(),
+      events,
       config: { llm_provider: 'claude' },
       rendererOpts: { stateFilePath: '/tmp/state.json', steps: [], readStateFn: async () => ({ ok: true, value: {} }), projectRoot: '/tmp' },
       launch,
@@ -300,6 +303,13 @@ describe('runDaemonMode provider discovery at boot', () => {
       },
     })).rejects.toThrow(/claude.*not installed.*not-found/i);
     expect(launch).not.toHaveBeenCalled();
+    expect({ discoveries }).toEqual({
+      discoveries: [{
+        type: 'provider_discovery',
+        installed: ['codex', 'pi'],
+        missing: [{ id: 'claude', reason: 'not-found' }],
+      }],
+    });
   });
 
   it('requires Claude for compose even when the configured provider is installed Pi', async () => {

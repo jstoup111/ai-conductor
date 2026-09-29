@@ -168,7 +168,8 @@ export const BUILT_IN_PROVIDERS = [
 
 export type BuiltInProviderId = (typeof BUILT_IN_PROVIDERS)[number]['id'];
 
-export const DEFAULT_PROVIDER: BuiltInProviderId = 'claude';
+/** The first catalog descriptor remains the default provider selection. */
+export const DEFAULT_PROVIDER: BuiltInProviderId = BUILT_IN_PROVIDERS[0].id;
 export const CLAUDE_PROVIDER = BUILT_IN_PROVIDERS[0].id;
 export const CODEX_PROVIDER = BUILT_IN_PROVIDERS[1].id;
 export const PI_PROVIDER = BUILT_IN_PROVIDERS[2].id;
