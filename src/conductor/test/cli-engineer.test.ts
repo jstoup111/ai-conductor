@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:6
 // Specs for the `conduct engineer` subcommand wiring (Phase 9.3, ADR-008 conformance).
 //
 // Mirrors the structural detection pattern used by the registry-cli tests:
@@ -11,10 +11,14 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execa } from 'execa';
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ENGINEER_SUBCOMMANDS } from '../src/engine/engineer-cli.js';
 import { DEFAULT_PROVIDER, requireProviderCapability } from '../src/execution/provider-catalog.js';
+import { discoverInstalledProviders } from '../src/engine/provider-discovery.js';
+
+vi.mock('../src/engine/provider-discovery.js', () => ({
+  discoverInstalledProviders: vi.fn(),
+}));
 
 function defaultComposerArgs(env: NodeJS.ProcessEnv, idea?: string): string[] {
   const host = requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch');
@@ -54,15 +58,33 @@ describe('legacy engineer CLI alias — process dispatch boundary', () => {
     expect(engineer.stderr).toBe('Warning: `engineer` is deprecated; use `compose` instead.\n');
   });
 
-  it('wires compose launch directly to the engineer dispatcher without provider discovery', async () => {
-    const source = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
-    const engineerDispatch = source.slice(
-      source.indexOf('const engineerCmd = detectEngineerCommand(process.argv);'),
-      source.indexOf('// Intake-loop subcommand'),
-    );
+  it('launches compose once without provider discovery or a version probe', async () => {
+    const { detectEngineerCommand, dispatchEngineer } = await import('../src/engine/engineer-cli.js');
+    const dispatch = detectEngineerCommand(['node', 'conduct', 'compose']);
+    const spawnHost = vi.fn(async () => 0);
+    const loadLaunchConfig = vi.fn(async () => ({
+      ok: true as const,
+      config: { llm_provider: 'codex' },
+      warnings: [],
+    }));
+    const prePoll = vi.fn(async () => 0);
 
-    expect(engineerDispatch).toContain('code = await dispatchEngineer(engineerCmd, {\n        events: spine.events,\n      });');
-    expect(engineerDispatch).not.toMatch(/beforeLaunch|discoverInstalledProviders|validateComposeEngineerClaudeInstallation/);
+    expect(dispatch).toEqual({ kind: 'launch' });
+    const code = await dispatchEngineer(dispatch!, {
+      spawnHost,
+      loadLaunchConfig,
+      env: {},
+      prePoll,
+      confirmAnother: () => false,
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+    });
+
+    expect(code).toBe(0);
+    expect(loadLaunchConfig).toHaveBeenCalledOnce();
+    expect(prePoll).toHaveBeenCalledOnce();
+    expect(spawnHost).toHaveBeenCalledOnce();
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], process.cwd());
+    expect(vi.mocked(discoverInstalledProviders)).not.toHaveBeenCalled();
   });
 });
 
