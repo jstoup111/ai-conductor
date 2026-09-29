@@ -4,19 +4,6 @@ spec_hash: 96b9db000520e36804f0e7aa0abeea1c3c4e8f0abfcf78f0c52f6568dd4c5196
 pr: https://github.com/jstoup111/ai-conductor/pull/2823
 shipped: 2026-09-29
 engine_version: 20260929T224340Z-3ed99833a1db
-findings:
-  - gate: architecture_review_as_built
-    finding: ADR-D7-stale-entry-point-references
-    class: REMEDIABLE
-    governing_clause: "adr-2026-09-28-skills-may-bundle-executable-helpers decision 7"
-    outcome: remediated
-    summary: "Verified at 99% confidence from current source: docs/contributing/code-organization.md:27 still presents src/conductor/bin/intake-file as an active wrapper, and line 152 still says it invokes intake-file-cli.ts. Decision 7 requires every reference to that retired entry point to be updated."
-  - gate: architecture_review_as_built
-    finding: ADR-D7-stale-entry-point-test-reference
-    class: REMEDIABLE
-    governing_clause: "adr-2026-09-28-skills-may-bundle-executable-helpers decision 7"
-    outcome: remediated
-    summary: "Verified at 99% confidence: src/conductor/test/as-built-contract.test.ts:243 still cites bin/intake-file:21. ADR Decision 7 requires every reference to the removed entry point to be updated, and the active remediation task's prescribed grep still returns this line."
 ---
 
 ## Cost
@@ -35,8 +22,10 @@ providers:
   claude: input: 116, output: 45280, cache_read: 3146102, cache_creation: 592491, cost_usd: 7.0291, dispatches: 10, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","68a91438-3d8f-47de-8481-57b415a5fe0b","lifecycle-step","finish"]
+state: measured
+active_ms: 8806941
+provider_active_ms: 7636258
+no_provider_active_ms: 1170683
 
 ## Build Review
 laps_to_pass: 1
