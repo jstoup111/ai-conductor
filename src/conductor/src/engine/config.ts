@@ -674,9 +674,13 @@ export function validateConfig(
       }
 
       if (key === 'disable') {
-        return `Cannot disable ${def.enforcement} step: "${name}". Only advisory steps may be disabled.`;
+        return def.enforcement === 'structural'
+          ? `Cannot disable structural step: "${name}". Structural steps can never be disabled.`
+          : `Cannot disable gating step: "${name}". Only advisory steps and gating steps that allow config disabling may be disabled.`;
       }
-      return `Cannot condition ${def.enforcement} step: "${name}" with when:. Only advisory steps may be conditional.`;
+      return def.enforcement === 'structural'
+        ? `Cannot condition structural step: "${name}" with when:. Structural steps can never be conditional.`
+        : `Cannot condition gating step: "${name}" with when:. Only advisory steps and gating steps that allow config disabling may be conditional.`;
     };
     // Collect all custom-step names up-front so a custom can legally point
     // `after` at a sibling custom (chain ordering). Validation still rejects
@@ -2684,6 +2688,9 @@ function validateMermaidRendererBlock(raw: unknown): ConfigError | null {
   if (obj.preset !== undefined && typeof obj.preset !== 'string') {
     return { type: 'validation_error', message: 'mermaid_renderer.preset must be a string' };
   }
+  if (obj.preset === undefined) {
+    return { type: 'validation_error', message: 'mermaid_renderer.preset is required' };
+  }
   if (obj.command !== undefined && typeof obj.command !== 'string') {
     return { type: 'validation_error', message: 'mermaid_renderer.command must be a string' };
   }
@@ -2703,7 +2710,7 @@ function validateMermaidRendererBlock(raw: unknown): ConfigError | null {
   }
   if (
     obj.mode !== undefined &&
-    !VALID_MERMAID_RENDERER_MODES.has(obj.mode as MermaidRendererConfig['mode'])
+    !VALID_MERMAID_RENDERER_MODES.has(obj.mode as NonNullable<MermaidRendererConfig['mode']>)
   ) {
     return {
       type: 'validation_error',

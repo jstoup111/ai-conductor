@@ -213,9 +213,9 @@ export interface MarkdownViewerConfig {
  */
 export interface MermaidRendererConfig {
   preset?: string;
-  command: string;
-  args: string[];
-  mode: 'inline' | 'blocking' | 'external';
+  command?: string;
+  args?: string[];
+  mode?: 'inline' | 'blocking' | 'external';
 }
 
 /**

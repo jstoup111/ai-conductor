@@ -1,4 +1,4 @@
-// Covers: task:3, task:4
+// Covers: task:3, task:4, task:5
 import { describe, it, expect } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -137,6 +137,26 @@ describe('custom parallel step validation', () => {
         },
       },
     })).toMatchObject({ ok: true });
+  });
+});
+
+describe('mermaid_renderer configuration', () => {
+  it.each([
+    ['a preset-only renderer', { preset: 'html' }],
+    ['an installer renderer', { preset: 'html', command: '', args: ['{file}'], mode: 'external' }],
+    ['the none preset', { preset: 'none' }],
+  ])('accepts %s', (_name, mermaid_renderer) => {
+    expect(validateConfig({ mermaid_renderer })).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ['an empty renderer', {}, /mermaid_renderer\.preset.*required/i],
+    ['a command-shaped renderer without a preset', { command: 'mmdc', args: ['{file}'], mode: 'external' }, /mermaid_renderer\.preset.*required/i],
+    ['a non-string preset', { preset: 3 }, /mermaid_renderer\.preset.*must be a string/i],
+  ])('rejects %s', (_name, mermaid_renderer, diagnostic) => {
+    const result = validateConfig({ mermaid_renderer });
+
+    expect(result.ok ? 'accepted invalid mermaid renderer' : result.error.message).toMatch(diagnostic);
   });
 });
 
