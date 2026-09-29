@@ -3,10 +3,8 @@ import { execa } from 'execa';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import {
-  scrubTmuxEnvironment,
-  TMUX_ENVIRONMENT_KEYS,
-} from '../../src/execution/child-environment.js';
+import { scrubTmuxEnvironment } from '../../src/execution/child-environment.js';
+import { TMUX_ENVIRONMENT_KEYS } from '../../src/execution/tmux-environment.js';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';

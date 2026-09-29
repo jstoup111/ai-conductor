@@ -17,4 +17,4 @@
  * `undefined` value masks it in both the overlay and the extended form.
  */
 
-export { scrubTmuxEnvironment, TMUX_ENVIRONMENT_KEYS } from './tmux-environment.js';
+export { scrubTmuxEnvironment } from './tmux-environment.js';

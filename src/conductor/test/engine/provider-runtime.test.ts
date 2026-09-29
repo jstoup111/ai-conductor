@@ -15,7 +15,8 @@ import {
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import type { AuthenticationReadiness } from '../../src/execution/llm-provider.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import { ProviderRuntimeSet as RuntimeSet, validateSpawnPermit } from '../../src/engine/provider-runtime.js';
+import { ProviderRuntimeSet as RuntimeSet } from '../../src/engine/provider-runtime.js';
+import { validateSpawnPermit } from '../../src/execution/spawn-permit.js';
 
 interface ClassifiedInvokeResult extends InvokeResult {
   timedOut?: boolean;

@@ -6,7 +6,6 @@ import type {
   SelfHostAuthContext,
   SelfHostAuthPreparation,
 } from '../execution/llm-provider.js';
-export { validateSpawnPermit } from '../execution/spawn-permit.js';
 import { ModelAvailability } from './model-availability.js';
 import {
   resolveProviderModelPolicy,
