@@ -40,6 +40,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Provider output that mentions an expired or in-use session no longer triggers unbudgeted step retries; the unused stale-session recovery path and session-reuse override were removed. ([implementation PR #2784](https://github.com/jstoup111/ai-conductor/pull/2784)).
 - As-built review no longer rejects findings that cite a plan task as `task-N`, which had halted features with no verdict. ([implementation PR #2819](https://github.com/jstoup111/ai-conductor/pull/2819)).
 - Daemon recovery now retains halt state when its committed halt record cannot be cleared. ([implementation PR #2820](https://github.com/jstoup111/ai-conductor/pull/2820)).
+- The as-built architecture review no longer rejects valid verdicts that carry Codex strict-mode filler prose, which had exhausted its retries and halted features. ([implementation PR #2826](https://github.com/jstoup111/ai-conductor/pull/2826)).
 
 ## [1.5.0] - 2026-09-27
 
