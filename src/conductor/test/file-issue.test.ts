@@ -1,3 +1,4 @@
+// Covers: task:3
 // Unit coverage for the intake creation transaction's terminal adapter.
 // GitHub is faked at the GhRunner boundary; fileIntakeIssue receives only the
 // creation-scoped authority and registered-operation runner.
@@ -10,7 +11,12 @@ import {
 } from '../src/engine/engineer/intake/file-issue.js';
 import type { GhRunner } from '../src/engine/tracker-client.js';
 
-function makeFakeGh(opts: { failIssueCreate?: boolean; failLabelApply?: boolean } = {}) {
+function makeFakeGh(opts: {
+  failIssueCreate?: boolean;
+  failLabelApply?: boolean;
+  failDependencyPostFor?: number;
+  failDependencyReadFor?: number;
+} = {}) {
   const calls: string[][] = [];
   const run: GhRunner = async (args) => {
     calls.push(args);
@@ -23,8 +29,20 @@ function makeFakeGh(opts: { failIssueCreate?: boolean; failLabelApply?: boolean 
       if (opts.failLabelApply) throw new Error('simulated label-apply outage');
       return { stdout: '{}' };
     }
+    if (args.some((arg) => arg.includes('/dependencies/blocked_by'))) {
+      const failedDependencyPost = opts.failDependencyPostFor;
+      if (failedDependencyPost !== undefined
+        && args.some((arg) => arg === `issue_id=${1_000_000 + failedDependencyPost}`)) {
+        throw new Error('HTTP 422 dependency rejected');
+      }
+      return { stdout: '{}' };
+    }
     if (args.some((arg) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(arg))) {
-      return { stdout: JSON.stringify({ id: 1_000_300 }) };
+      if (args.some((arg) => arg.endsWith(`/issues/${opts.failDependencyReadFor}`))) {
+        throw new Error('dependency id read failed');
+      }
+      const issueNumber = Number(args.find((arg) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(arg))!.split('/').at(-1));
+      return { stdout: JSON.stringify({ id: 1_000_000 + issueNumber }) };
     }
     return { stdout: '{}' };
   };
@@ -106,5 +124,46 @@ describe('fileIntakeIssue — creation-scoped terminal adapter', () => {
     })).resolves.toEqual({ kind: 'refused', reason: 'explicit-authorization-required' });
 
     expect(gh.calls).toHaveLength(before);
+  });
+
+  it('reports a rejected dependency POST as unlinked without failing the filing', async () => {
+    const gh = makeFakeGh({ failDependencyPostFor: 43 });
+
+    const result = await fileIntakeIssue({
+      title: 'Partial links', body: 'body', size: 'S', priority: 'low',
+      dependsOn: ['acme/app#42', 'acme/app#43'],
+    }, { creation: creation(gh.run) });
+
+    expect(result.ok).toBe(true);
+    expect(result.issueUrl).toBe('https://github.com/acme/app/issues/300');
+    expect(result.linked).toEqual(['acme/app#42']);
+    expect(result.unlinked).toEqual([
+      { ref: 'acme/app#43', reason: 'HTTP 422 dependency rejected' },
+    ]);
+  });
+
+  it('reports a failed dependency id read as unlinked while retaining successful links', async () => {
+    const gh = makeFakeGh({ failDependencyReadFor: 43 });
+
+    const result = await fileIntakeIssue({
+      title: 'Partial links', body: 'body', size: 'S', priority: 'low',
+      dependsOn: ['acme/app#42', 'acme/app#43'],
+    }, { creation: creation(gh.run) });
+
+    expect(result.ok).toBe(true);
+    expect(result.linked).toEqual(['acme/app#42']);
+    expect(result.unlinked).toEqual([
+      { ref: 'acme/app#43', reason: expect.stringContaining('dependency id read failed') },
+    ]);
+  });
+
+  it('returns no unlinked dependencies when every dependency link succeeds', async () => {
+    const gh = makeFakeGh();
+
+    const result = await fileIntakeIssue({
+      title: 'All links', body: 'body', size: 'S', priority: 'low', dependsOn: ['acme/app#42'],
+    }, { creation: creation(gh.run) });
+
+    expect(result.unlinked).toEqual([]);
   });
 });
