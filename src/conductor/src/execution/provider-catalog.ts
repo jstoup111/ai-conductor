@@ -42,8 +42,6 @@ export interface BuiltInProviderDescriptor {
   readonly id: string;
   /** Human-readable name for diagnostics and operator-facing status. */
   readonly displayName: string;
-  /** Source-root-relative module which owns this provider's adapter literals. */
-  readonly adapterModule: string;
   readonly createAdapter: (options?: ProviderFactoryOptions) => LLMProvider;
   readonly defaultExecutable: string;
   readonly executableOverrideEnv: string;
@@ -86,7 +84,6 @@ export const BUILT_IN_PROVIDERS = [
   {
     id: 'claude',
     displayName: 'Claude',
-    adapterModule: 'execution/claude-provider.ts',
     createAdapter: (): LLMProvider => new ClaudeProvider(
       undefined,
       undefined,
@@ -117,7 +114,6 @@ export const BUILT_IN_PROVIDERS = [
   {
     id: 'codex',
     displayName: 'Codex',
-    adapterModule: 'execution/codex-provider.ts',
     createAdapter: (options = {}): LLMProvider => new CodexProvider(
       undefined,
       resolveProviderExecutable('codex'),
@@ -149,7 +145,6 @@ export const BUILT_IN_PROVIDERS = [
   {
     id: 'pi',
     displayName: 'Pi',
-    adapterModule: 'execution/pi-provider.ts',
     createAdapter: (): LLMProvider => new PiProvider(resolveProviderExecutable('pi')),
     defaultExecutable: 'pi',
     executableOverrideEnv: 'PI_EXECUTABLE',

@@ -12,6 +12,11 @@ const testRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(testRoot, '../..');
 const sourceRoot = join(conductorRoot, 'src');
 const catalogModule = 'execution/provider-catalog.ts';
+const ADAPTER_MODULE_BY_PROVIDER_ID = {
+  claude: 'execution/claude-provider.ts',
+  codex: 'execution/codex-provider.ts',
+  pi: 'execution/pi-provider.ts',
+} as const satisfies Readonly<Record<(typeof BUILT_IN_PROVIDERS)[number]['id'], string>>;
 
 interface ProviderLiteralFinding {
   readonly file: string;
@@ -30,7 +35,7 @@ async function sourceFiles(directory: string): Promise<readonly string[]> {
 }
 
 function declaredAdapterModules(): ReadonlySet<string> {
-  return new Set(BUILT_IN_PROVIDERS.map(({ adapterModule }) => adapterModule));
+  return new Set(Object.values(ADAPTER_MODULE_BY_PROVIDER_ID));
 }
 
 function findProviderLiterals(
@@ -44,7 +49,7 @@ function findProviderLiterals(
     ({ id, displayName }) => [id, displayName],
   ));
   const adapter = adapterModules.has(module)
-    ? BUILT_IN_PROVIDERS.find(({ adapterModule }) => adapterModule === module)
+    ? BUILT_IN_PROVIDERS.find(({ id }) => ADAPTER_MODULE_BY_PROVIDER_ID[id] === module)
     : undefined;
   const foreignProviders = adapter === undefined
     ? BUILT_IN_PROVIDERS
@@ -114,6 +119,19 @@ async function productionProviderLiteralFindings(): Promise<readonly ProviderLit
 }
 
 describe('structural: built-in provider literals', () => {
+  it('declares exactly one existing adapter module for each built-in provider', async () => {
+    const catalogIds = BUILT_IN_PROVIDERS.map(({ id }) => id);
+    const adapterEntries = Object.entries(ADAPTER_MODULE_BY_PROVIDER_ID);
+    const adapterIds = adapterEntries.map(([id]) => id);
+    const modules = new Set((await sourceFiles(sourceRoot)).map((path) => relative(sourceRoot, path)));
+
+    expect(adapterIds).toHaveLength(catalogIds.length);
+    expect(new Set(adapterIds)).toEqual(new Set(catalogIds));
+    for (const [, adapterModule] of adapterEntries) {
+      expect(modules).toContain(adapterModule);
+    }
+  });
+
   it('reports a fixture provider id literal with its file and line', () => {
     const source = ts.createSourceFile('fixtures/provider-id-literal.ts', "const provider = 'codex';", ts.ScriptTarget.Latest, true);
 
