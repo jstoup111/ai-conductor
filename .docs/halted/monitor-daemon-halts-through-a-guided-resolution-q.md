@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-29T10:58:48.399Z
 Slug: monitor-daemon-halts-through-a-guided-resolution-q
 Class: needs-human
 Halting step: unknown
