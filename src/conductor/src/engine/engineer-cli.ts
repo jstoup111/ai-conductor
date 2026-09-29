@@ -87,7 +87,8 @@ import { CLAUDE_DISPLAY_NAME, CLAUDE_PROVIDER, resolveProviderExecutable } from 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
 type EngineerDispatchDescriptor =
-  | { kind: 'launch'; idea?: string }
+  | { kind: 'launch'; idea?: string; provider?: string }
+  | { kind: 'launch-usage'; flag: '--provider' }
   | { kind: 'guide' }
   | { kind: 'projects' }
   | { kind: 'worktree'; project: string; idea: string; sourceRef?: string; body?: string }
@@ -311,11 +312,18 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     return { kind: 'migrate-issue-deps', confirm };
   }
 
-  // `ai-conductor engineer --idea "<text>"` — launch driving a specific idea.
-  if (subCmd === '--idea') {
+  // `ai-conductor engineer [--provider <id>] [--idea "<text>"]` — launch driving
+  // an optional provider and/or specific idea. Flag order is deliberately free.
+  if (subCmd === '--idea' || subCmd === '--provider') {
     const idea = parseFlag(argv, '--idea');
-    if (!idea) return { kind: 'guide' };
-    return { kind: 'launch', idea };
+    const provider = parseFlag(argv, '--provider');
+    if (argv.includes('--provider') && !provider) return { kind: 'launch-usage', flag: '--provider' };
+    if (subCmd === '--idea' && !idea) return { kind: 'guide' };
+    return {
+      kind: 'launch',
+      ...(idea ? { idea } : {}),
+      ...(provider ? { provider } : {}),
+    };
   }
 
   // A bare non-flag positional is free-text idea input:
@@ -745,6 +753,7 @@ function printGuide(print: (s: string) => void): void {
       '\n' +
       '  ai-conductor compose                                     — launch the interactive /composer loop (pre-polls intake)\n' +
       '  ai-conductor compose --idea "<text>"                     — launch driving a specific idea (skips intake poll)\n' +
+      '  ai-conductor compose [--provider <id>] [--idea "<text>"] — launch with an optional provider and/or specific idea\n' +
       '  ai-conductor compose projects                            — list registered projects\n' +
       '  ai-conductor compose claim                               — dequeue the oldest pending intake idea (JSON)\n' +
       '  ai-conductor compose worktree --project <n> --idea "<i>" [--source-ref <ref>]  — create the per-idea authoring worktree\n' +
@@ -873,7 +882,7 @@ export async function dispatchEngineer(
 
   // This is a machine precondition, not an intake failure: refuse before any
   // command can create a worktree, branch, or claim record.
-  const canSkipCapabilityProbe = dispatch.kind === 'guide' || dispatch.kind === 'reject' || dispatch.kind === 'help';
+  const canSkipCapabilityProbe = dispatch.kind === 'guide' || dispatch.kind === 'reject' || dispatch.kind === 'help' || dispatch.kind === 'launch-usage';
   const ghVersion = canSkipCapabilityProbe
     ? ({ kind: 'ok' } as const)
     : await (opts.probeGhVersion ?? (opts.gh || opts.launchInteractive
@@ -909,6 +918,12 @@ export async function dispatchEngineer(
 
   try {
     switch (dispatch.kind) {
+    case 'launch-usage': {
+      printErr(`compose: ${dispatch.flag} requires a provider id`);
+      printGuide(print);
+      return 1;
+    }
+
     // ── launch ──────────────────────────────────────────────────────────────────
     // Bare `ai-conductor compose`: drop the operator into the interactive /composer loop.
     case 'launch': {

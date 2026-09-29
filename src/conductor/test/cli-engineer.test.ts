@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 // Specs for the `conduct engineer` subcommand wiring (Phase 9.3, ADR-008 conformance).
 //
 // Mirrors the structural detection pattern used by the registry-cli tests:
@@ -81,6 +81,17 @@ describe('detectEngineerCommand — argv detection', () => {
     expect(detectEngineerCommand(['node', 'conduct', verb])).toEqual({ kind: 'launch' });
   });
 
+  it.each(['engineer', 'compose'])('parses --provider on %s launch forms in either flag order', async (verb) => {
+    const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
+
+    expect(detectEngineerCommand(['node', 'conduct', verb, '--provider', 'codex']))
+      .toEqual({ kind: 'launch', provider: 'codex' });
+    expect(detectEngineerCommand(['node', 'conduct', verb, '--provider', 'claude', '--idea', 'add retries']))
+      .toEqual({ kind: 'launch', provider: 'claude', idea: 'add retries' });
+    expect(detectEngineerCommand(['node', 'conduct', verb, '--idea', 'add retries', '--provider', 'claude']))
+      .toEqual({ kind: 'launch', provider: 'claude', idea: 'add retries' });
+  });
+
   it.each(subcommandCases)('returns the same help descriptor for %s %s', async (subcommand, args) => {
     const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
     expect(detectEngineerCommand(['node', 'conduct', 'compose', subcommand, ...args, '--help']))
@@ -160,6 +171,23 @@ describe('dispatchEngineer — routes to engineer entry', () => {
     const code = await mod.dispatchEngineer({ kind: 'launch' }, { launchInteractive });
     expect(launchInteractive).toHaveBeenCalledOnce();
     expect(code).toBe(0);
+  });
+
+  it('reports a usage error for a valueless --provider before launching', async () => {
+    const mod = await import('../src/engine/engineer-cli.js');
+    const dispatch = mod.detectEngineerCommand(['node', 'conduct', 'compose', '--provider']);
+    const launchInteractive = vi.fn().mockResolvedValue(0);
+    const errors: string[] = [];
+
+    expect(dispatch).not.toBeNull();
+    const code = await mod.dispatchEngineer(dispatch!, {
+      launchInteractive,
+      printErr: (message) => errors.push(message),
+    });
+
+    expect(code).toBe(1);
+    expect(errors.join('\n')).toMatch(/--provider/);
+    expect(launchInteractive).not.toHaveBeenCalled();
   });
 
   it('dispatchEngineer({kind:"launch"}) loops one fresh session per idea until confirmAnother is false', async () => {
