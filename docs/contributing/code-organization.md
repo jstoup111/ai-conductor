@@ -25,7 +25,7 @@ notice and links the required branch, validation, documentation, and release-met
 | `src/conductor/test/` | Vitest suite. See [testing](testing.md). |
 | `src/conductor/scripts/` | `publish-engine.mjs` (the build), `publish-guard.mjs`, `intake-label-sync-apply.mts`. |
 | `src/conductor/bin/` | `intake-file` — a `tsx` shebang wrapper over `src/intake-file-cli.ts`. |
-| `bin/` | Repo-root bash wrappers: `ai-conductor`, `install`, `setup`, `update`, `migrate`, `generate-model-table`, `generate-docs-guard-hook`, `intake-file`, `intake-backfill`, `quarantine-engineer-signals`. |
+| `bin/` | Repo-root bash wrappers: `ai-conductor`, `install`, `setup`, `update`, `migrate`, `generate-model-table`, `generate-docs-guard-hook`, `intake-backfill`, `quarantine-engineer-signals`. |
 | `skills/` | Skill catalog. See [skills reference](../reference/skills.md). |
 | `agents/`, `templates/`, `tech-context/` | Prompt templates, scaffolding, stack knowledge. |
 | `hooks/claude/` | Hook scripts. See [settings and hooks](../reference/settings-and-hooks.md). |
