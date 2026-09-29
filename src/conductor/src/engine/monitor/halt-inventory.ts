@@ -3,9 +3,11 @@ import { join } from 'node:path';
 import { scanInheritedState } from '../daemon-dashboard.js';
 import { HALT_MARKER, readHaltClass, type HaltDisposition } from '../halt-marker.js';
 import { isOperatorParked } from '../park-marker.js';
+import { createRegistryReader, type RegistryReader } from '../registry.js';
 
 export interface ProjectHalt {
   project: string;
+  projectName?: string;
   slug: string;
   reason: string;
   haltClass: HaltDisposition;
@@ -13,6 +15,23 @@ export interface ProjectHalt {
 
 export interface HaltInventoryDeps {
   isOperatorParked: (projectRoot: string, slug: string) => Promise<boolean>;
+}
+
+export interface RegisteredHaltInventorySelection {
+  projectName?: string;
+}
+
+export interface RegisteredHaltInventoryResult {
+  code: number;
+  halts: ProjectHalt[];
+}
+
+export interface RegisteredHaltInventoryDeps {
+  registryPath?: string;
+  registryReader?: RegistryReader;
+  enumerateProjectHalts?: (projectRoot: string) => Promise<ProjectHalt[]>;
+  readProjectDirectory?: (projectRoot: string) => Promise<void>;
+  out?: (line: string) => void;
 }
 
 function firstHaltLine(contents: string): string {
@@ -124,4 +143,55 @@ export async function enumerateProjectHalts(
   }))).filter((halt): halt is ProjectHalt => halt !== null);
 
   return [...halted, ...unreadableEntries];
+}
+
+export async function enumerateRegisteredProjectHalts(
+  selection: RegisteredHaltInventorySelection = {},
+  deps: RegisteredHaltInventoryDeps = {},
+): Promise<RegisteredHaltInventoryResult> {
+  const out = deps.out ?? ((line: string) => console.log(line));
+  const registryReader = deps.registryReader ?? createRegistryReader(
+    deps.registryPath ? { registryPath: deps.registryPath } : {},
+  );
+  let projects;
+  try {
+    projects = await registryReader.listProjects();
+  } catch (error) {
+    out(`registry unreadable: ${error instanceof Error ? error.message : String(error)}`);
+    return { code: 1, halts: [] };
+  }
+
+  const selected = selection.projectName === undefined
+    ? projects
+    : projects.filter((project) => project.name === selection.projectName);
+  if (selection.projectName !== undefined && selected.length === 0) {
+    out(`unknown project: ${selection.projectName}`);
+    return { code: 1, halts: [] };
+  }
+  if (selected.length === 0) {
+    out('no registered projects');
+    return { code: 0, halts: [] };
+  }
+
+  const enumerate = deps.enumerateProjectHalts ?? enumerateProjectHalts;
+  const readProjectDirectory = deps.readProjectDirectory ?? (async (projectRoot: string) => {
+    await readdir(projectRoot);
+  });
+  const halts: ProjectHalt[] = [];
+  let code = 0;
+  for (const project of selected) {
+    try {
+      await readProjectDirectory(project.path);
+      const projectHalts = await enumerate(project.path);
+      halts.push(...projectHalts.map((halt) => ({
+        ...halt,
+        project: project.path,
+        projectName: project.name,
+      })));
+    } catch (error) {
+      code = 1;
+      out(`${project.name}: unreadable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { code, halts };
 }

@@ -1,13 +1,15 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  enumerateRegisteredProjectHalts,
   enumerateProjectHalts,
   type HaltInventoryDeps,
 } from '../../../src/engine/monitor/halt-inventory.js';
+import { writeRegistry, type ProjectRecord } from '../../../src/engine/registry.js';
 
 vi.mock('../../../src/engine/park-marker.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/engine/park-marker.js')>()),
@@ -191,6 +193,194 @@ describe('Task 1 — per-project halt inventory', () => {
   });
 });
 
+describe('Task 3 — registered-project halt inventory', () => {
+  let fleetRoot: string;
+
+  afterEach(async () => {
+    if (fleetRoot) await rm(fleetRoot, { recursive: true, force: true });
+  });
+
+  it('merges halts from every registered project and labels each with its registry name', async () => {
+    fleetRoot = await mkdtemp(join(tmpdir(), 'halt-inventory-fleet-'));
+    const alpha = join(fleetRoot, 'alpha');
+    const beta = join(fleetRoot, 'beta');
+    const gamma = join(fleetRoot, 'gamma');
+    await Promise.all([mkdir(alpha), mkdir(beta), mkdir(gamma)]);
+    await Promise.all([
+      writeHalt(alpha, 'alpha-halt', 'Alpha needs review.\n', 'needs-human\n'),
+      writeHalt(beta, 'beta-halt', 'Beta needs recovery.\n', 'mechanical\n'),
+    ]);
+    const registryPath = join(fleetRoot, 'registry.json');
+    await writeRegistry(registryPath, [
+      projectRecord('alpha', alpha),
+      projectRecord('beta', beta),
+      projectRecord('gamma', gamma),
+    ]);
+
+    expect(await enumerateRegisteredProjectHalts({}, { registryPath })).toEqual({
+      code: 0,
+      halts: [
+        {
+          project: alpha,
+          projectName: 'alpha',
+          slug: 'alpha-halt',
+          reason: 'Alpha needs review.',
+          haltClass: 'needs-human',
+        },
+        {
+          project: beta,
+          projectName: 'beta',
+          slug: 'beta-halt',
+          reason: 'Beta needs recovery.',
+          haltClass: 'mechanical',
+        },
+      ],
+    });
+  });
+
+  it('restricts enumeration to the named registered project', async () => {
+    fleetRoot = await mkdtemp(join(tmpdir(), 'halt-inventory-fleet-'));
+    const alpha = join(fleetRoot, 'alpha');
+    const beta = join(fleetRoot, 'beta');
+    await Promise.all([mkdir(alpha), mkdir(beta)]);
+    await Promise.all([
+      writeHalt(alpha, 'alpha-halt', 'Alpha needs review.\n', 'needs-human\n'),
+      writeHalt(beta, 'beta-halt', 'Beta needs recovery.\n', 'mechanical\n'),
+    ]);
+    const registryPath = join(fleetRoot, 'registry.json');
+    await writeRegistry(registryPath, [projectRecord('alpha', alpha), projectRecord('beta', beta)]);
+
+    expect(await enumerateRegisteredProjectHalts({ projectName: 'beta' }, { registryPath })).toEqual({
+      code: 0,
+      halts: [{
+        project: beta,
+        projectName: 'beta',
+        slug: 'beta-halt',
+        reason: 'Beta needs recovery.',
+        haltClass: 'mechanical',
+      }],
+    });
+  });
+
+  it('reports an absent registered project without dropping another project\'s halts', async () => {
+    fleetRoot = await mkdtemp(join(tmpdir(), 'halt-inventory-fleet-'));
+    const readable = join(fleetRoot, 'readable');
+    const unreadable = join(fleetRoot, 'unreadable');
+    await mkdir(readable);
+    await writeHalt(readable, 'readable-halt', 'Still queued.\n', 'needs-human\n');
+    const registryPath = join(fleetRoot, 'registry.json');
+    await writeRegistry(registryPath, [
+      projectRecord('readable', readable),
+      projectRecord('unreadable', unreadable),
+    ]);
+    const out: string[] = [];
+
+    const result = await enumerateRegisteredProjectHalts({}, { registryPath, out: (line) => out.push(line) });
+
+    expect({ result, out }).toEqual({
+      result: {
+        code: 1,
+        halts: [{
+          project: readable,
+          projectName: 'readable',
+          slug: 'readable-halt',
+          reason: 'Still queued.',
+          haltClass: 'needs-human',
+        }],
+      },
+      out: [expect.stringMatching(/^unreadable: unreadable: /)],
+    });
+  });
+
+  it('reports a controlled unreadable directory without dropping another project\'s halts', async () => {
+    fleetRoot = await mkdtemp(join(tmpdir(), 'halt-inventory-fleet-'));
+    const readable = join(fleetRoot, 'readable');
+    const unreadable = join(fleetRoot, 'unreadable');
+    await Promise.all([mkdir(readable), mkdir(unreadable)]);
+    await writeHalt(readable, 'readable-halt', 'Still queued.\n', 'needs-human\n');
+    const registryPath = join(fleetRoot, 'registry.json');
+    await writeRegistry(registryPath, [
+      projectRecord('readable', readable),
+      projectRecord('unreadable', unreadable),
+    ]);
+    const out: string[] = [];
+
+    const result = await enumerateRegisteredProjectHalts({}, {
+      registryPath,
+      readProjectDirectory: async (projectRoot) => {
+        if (projectRoot === unreadable) throw new Error('permission denied');
+      },
+      out: (line) => out.push(line),
+    });
+
+    expect({ result, out }).toEqual({
+      result: {
+        code: 1,
+        halts: [{
+          project: readable,
+          projectName: 'readable',
+          slug: 'readable-halt',
+          reason: 'Still queued.',
+          haltClass: 'needs-human',
+        }],
+      },
+      out: ['unreadable: unreadable: permission denied'],
+    });
+  });
+
+  it('reports an unknown project without enumerating any project', async () => {
+    fleetRoot = await mkdtemp(join(tmpdir(), 'halt-inventory-fleet-'));
+    const alpha = join(fleetRoot, 'alpha');
+    await mkdir(alpha);
+    const registryPath = join(fleetRoot, 'registry.json');
+    await writeRegistry(registryPath, [projectRecord('alpha', alpha)]);
+    const out: string[] = [];
+
+    const result = await enumerateRegisteredProjectHalts({ projectName: 'missing' }, {
+      registryPath,
+      enumerateProjectHalts: vi.fn(),
+      out: (line) => out.push(line),
+    });
+
+    expect({ result, out }).toEqual({
+      result: { code: 1, halts: [] },
+      out: ['unknown project: missing'],
+    });
+  });
+
+  it('reports an absent registry as an empty successful inventory', async () => {
+    fleetRoot = await mkdtemp(join(tmpdir(), 'halt-inventory-fleet-'));
+    const out: string[] = [];
+
+    const result = await enumerateRegisteredProjectHalts({}, {
+      registryPath: join(fleetRoot, 'absent-registry.json'),
+      out: (line) => out.push(line),
+    });
+
+    expect({ result, out }).toEqual({
+      result: { code: 0, halts: [] },
+      out: ['no registered projects'],
+    });
+  });
+
+  it('reports a malformed registry instead of treating it as empty', async () => {
+    fleetRoot = await mkdtemp(join(tmpdir(), 'halt-inventory-fleet-'));
+    const registryPath = join(fleetRoot, 'registry.json');
+    await writeFile(registryPath, '{ malformed', 'utf-8');
+    const out: string[] = [];
+
+    const result = await enumerateRegisteredProjectHalts({}, {
+      registryPath,
+      out: (line) => out.push(line),
+    });
+
+    expect({ result, out }).toEqual({
+      result: { code: 1, halts: [] },
+      out: [expect.stringMatching(/^registry unreadable: /)],
+    });
+  });
+});
+
 async function writeHalt(projectRoot: string, slug: string, reason: string, haltClass: string) {
   const pipeline = join(projectRoot, '.worktrees', slug, '.pipeline');
   await mkdir(pipeline, { recursive: true });
@@ -198,6 +388,16 @@ async function writeHalt(projectRoot: string, slug: string, reason: string, halt
     writeFile(join(pipeline, 'HALT'), reason, 'utf-8'),
     writeFile(join(pipeline, 'HALT.class'), haltClass, 'utf-8'),
   ]);
+}
+
+function projectRecord(name: string, path: string): ProjectRecord {
+  return {
+    schemaVersion: 1,
+    name,
+    path,
+    status: 'registered',
+    registeredAt: '2026-09-29T00:00:00.000Z',
+  };
 }
 
 async function projectTreeChecksum(root: string): Promise<string> {
