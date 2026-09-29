@@ -8,6 +8,7 @@ import { access, mkdir, readFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, formatRetryCounter, displayBuildPosition, formatCommitAge } from './engine/format-retry-line.js';
+import { formatHeartbeatAge } from './engine/step-heartbeat.js';
 import {
   formatDiagnosticDuration,
   formatFeatureUsageTotal,
@@ -3344,8 +3345,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const position = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId));
       const commitAge = formatCommitAge(event.lastCommitAt, Date.now());
       const commit = commitAge ? ` · last commit ${commitAge}` : '';
+      const activity = event.lastActivityAt === undefined
+        ? ''
+        : ` · provider activity ${formatHeartbeatAge(Math.max(0, Date.now() - event.lastActivityAt))} ago`;
       log(
-        `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} quiet ${event.quietMinutes}m (${position}/${event.total})${commit}`)}${slug}`,
+        `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} quiet ${event.quietMinutes}m (${position}/${event.total})${commit}${activity}`)}${slug}`,
       );
       break;
     }
