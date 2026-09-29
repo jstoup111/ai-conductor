@@ -431,6 +431,8 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
   - **No production caller exists** → this is a **BLOCKED** violation ("unreachable rung"), same
     severity as an ADR violation: shipped-tested-green code nothing invokes is not shipped
     behavior. Name the primitive and what was searched.
+    In the structured verdict, record it as a `reachability` entry with an empty `callerChain`
+    (`[]`); the engine admits an empty chain only under a `BLOCKED` verdict.
   - **Statically reachable but not yet observed running** (e.g. a new log line no production log
     shows yet) → record it under Drift Notes as `UNEXERCISED: <primitive> — signature: <the
     greppable line/event that will prove it live>`. Not blocking; the signature tells a later

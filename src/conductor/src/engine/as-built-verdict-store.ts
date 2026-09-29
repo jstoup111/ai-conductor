@@ -81,7 +81,7 @@ export function renderAsBuiltReport(value: PersistedAsBuiltVerdict): string {
     ...AS_BUILT_CHECKS.map((check) => `- ${check}: ${policy[check].enabled ? 'on' : 'off'} — ${policy[check].reason}`),
   ];
   if (verdict.reachability.length > 0) {
-    lines.push('', '## Production reachability', ...verdict.reachability.map((entry) => `- ${entry.primitive}: ${entry.callerChain.join(' -> ')}`));
+    lines.push('', '## Production reachability', ...verdict.reachability.map((entry) => `- ${entry.primitive}: ${entry.callerChain.length > 0 ? entry.callerChain.join(' -> ') : 'no production caller (unreachable)'}`));
   }
   if (verdict.driftNotes.length > 0) {
     lines.push('', '## Drift notes', ...verdict.driftNotes.map((note) =>
