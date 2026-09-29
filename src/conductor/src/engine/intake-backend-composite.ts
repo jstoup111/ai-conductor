@@ -64,7 +64,16 @@ export function createIntakeBackendComposite(deps: {
         selection: await deps.resolveTrackerSelection(project.path),
       })));
       for (const { project, selection } of selected) {
-        if (!selection.ok || selection.selection.backend === 'github') continue;
+        if (!selection.ok) {
+          await deps.events?.emit({
+            type: 'tracker_backend_unavailable',
+            project: project.name,
+            backend: 'github',
+            reason: 'invalid-config',
+          });
+          continue;
+        }
+        if (selection.selection.backend === 'github') continue;
         await deps.events?.emit({
           type: 'tracker_backend_unavailable',
           project: project.name,

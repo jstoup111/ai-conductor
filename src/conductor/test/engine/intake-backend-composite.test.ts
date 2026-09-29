@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:6, task:7
 
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -108,6 +108,72 @@ describe('intake backend composite tracker exclusion (Task 6)', () => {
           reason: 'no-adapter',
         }],
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('excludes projects with invalid tracker configuration and reports each one', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'intake-backend-composite-'));
+    try {
+      const projectA = project('owner/project-a');
+      const unreadableProject = project('owner/unparseable-config');
+      const invalidBackendProject = project('owner/gitlab-config');
+      projectA.path = join(root, 'project-a');
+      unreadableProject.path = join(root, 'unparseable-config');
+      invalidBackendProject.path = join(root, 'gitlab-config');
+      await Promise.all([
+        mkdir(projectA.path),
+        mkdir(unreadableProject.path),
+        mkdir(invalidBackendProject.path),
+      ]);
+      const calls: string[][] = [];
+      const events: unknown[] = [];
+      const composite = createComposite({
+        projects: [projectA, unreadableProject, invalidBackendProject],
+        selections: new Map([
+          [unreadableProject.path, {
+            ok: false,
+            reason: 'invalid-config',
+            detail: 'Failed to parse tracker configuration',
+          }],
+          [invalidBackendProject.path, {
+            ok: false,
+            reason: 'invalid-config',
+            detail: 'tracker.backend must be github or jira',
+          }],
+        ]),
+        calls,
+        events,
+        ledgerPath: join(root, 'ledger.json'),
+      });
+
+      const envelopes = await composite.poll();
+
+      expect({
+        sourceRefs: envelopes.map(({ sourceRef }) => sourceRef),
+        calls,
+        events,
+      }).toEqual({
+        sourceRefs: ['owner/project-a#17'],
+        calls: [expect.arrayContaining(['-R', 'owner/project-a'])],
+        events: [
+          {
+            type: 'tracker_backend_unavailable',
+            project: 'owner/unparseable-config',
+            backend: 'github',
+            reason: 'invalid-config',
+          },
+          {
+            type: 'tracker_backend_unavailable',
+            project: 'owner/gitlab-config',
+            backend: 'github',
+            reason: 'invalid-config',
+          },
+        ],
+      });
+      expect(calls.flat()).not.toContain('owner/unparseable-config');
+      expect(calls.flat()).not.toContain('owner/gitlab-config');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
