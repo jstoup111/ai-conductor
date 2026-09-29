@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execa } from 'execa';
 // Covers: task:5
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
 
@@ -692,7 +691,7 @@ Content
       await seedTaskStatus(dir, planPath);
 
       const statusPath = join(dir, '.pipeline/task-status.json');
-      const firstContent = await fsPromises.readFile(statusPath, 'utf-8');
+      await fsPromises.readFile(statusPath, 'utf-8');
 
       // Wipe the file
       await fsPromises.writeFile(statusPath, '');

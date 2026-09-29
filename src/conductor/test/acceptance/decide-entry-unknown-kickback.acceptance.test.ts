@@ -160,4 +160,3 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
   });
 });
 
-import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

@@ -338,7 +338,6 @@ describe('FR-16: clear-on-success', () => {
   });
 
   it('clear + enroll order: removeLabel before enroll before markProcessed, without teardown', async () => {
-    const { runGh } = makeGhFake({ labels: ['needs-remediation'] });
     const order: string[] = [];
     const run = makeRunFeature(
       baseDeps({

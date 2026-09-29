@@ -21,7 +21,7 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
   return opts.interactive ? 'interactive' : 'default';
 }
 
-import { dirname, join, resolve as resolvePath } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdir, readFile } from 'node:fs/promises';
 import { realpathSync, writeSync } from 'node:fs';
@@ -91,7 +91,7 @@ import {
 } from './cli.js';
 import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from './engine/build-review-cli.js';
-import type { ConductState, StepName } from './types/index.js';
+import type { StepName } from './types/index.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
 import { sendNotification } from './ui/notifications.js';
 import { scanResumableFeatures, selectFeature, formatResumeMenu } from './engine/resume.js';

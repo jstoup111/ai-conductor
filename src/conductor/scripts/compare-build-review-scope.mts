@@ -6,7 +6,7 @@
  * and projection builder with a scripted Git process and a fake dispatcher.
  */
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 
 import { assembleBuildReviewInputs } from '../src/engine/build-review-inputs.js';
 import { parseBuildReviewLapId } from '../src/engine/build-review-domain.js';
@@ -17,7 +17,7 @@ import {
 } from '../src/engine/build-review-projections.js';
 import { analyzeTestDeclarations } from '../src/engine/build-review-test-declarations.js';
 import type { FullSuiteInspectionResult } from '../src/engine/full-suite-verifier.js';
-import type { GitResult, GitRunner } from '../src/engine/rebase.js';
+import type { GitRunner } from '../src/engine/rebase.js';
 
 const fixtureUrl = new URL('../test/fixtures/build-review-scope/portable-2231.json', import.meta.url);
 const fixtureBase = 'portable-fixture-base';

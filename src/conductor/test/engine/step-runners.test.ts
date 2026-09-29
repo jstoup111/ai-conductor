@@ -1,11 +1,9 @@
 // Covers: task:1, task:3, task:7, task:8, task:10, task:11, task:12, task:17
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
-import { writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { execa } from 'execa';
 import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
@@ -1936,7 +1934,7 @@ describe('DefaultStepRunner', () => {
     );
     const provider = (
       invoke: LLMProvider['invoke'],
-      invokeInteractive: LLMProvider['invoke'] =
+      _invokeInteractive: LLMProvider['invoke'] =
         vi.fn().mockResolvedValue(undefined),
     ): LLMProvider => ({
       lifecycleCapability: { synchronousSpawnPermit: true },
@@ -2507,7 +2505,7 @@ describe('DefaultStepRunner', () => {
     }));
     const provider = (
       invoke: LLMProvider['invoke'],
-      invokeInteractive: LLMProvider['invoke'],
+      _invokeInteractive: LLMProvider['invoke'],
     ): LLMProvider => ({
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke,
@@ -6182,4 +6180,3 @@ describe('build_review rubric dispatch', () => {
 
 });
 
-import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

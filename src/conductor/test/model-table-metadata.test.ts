@@ -30,13 +30,6 @@ function proseSentences(text: string): string[] {
   return text.split(/[.!?](?:\s|$)/).filter((sentence) => sentence.trim().length > 0);
 }
 
-function proseClauses(text: string): string[] {
-  return text
-    .split(
-      /(?<=[.!?;])\s+|\n+|\s+(?:while|whereas)\s+|,\s+(?=(?:and\s+)?(?:Claude|Codex)\b)/i,
-    )
-    .filter((clause) => clause.trim().length > 0);
-}
 
 function containsToken(text: string, token: string): boolean {
   return new RegExp(`\\b${token.replaceAll('.', '\\.')}\\b`, 'i').test(text);
@@ -393,30 +386,3 @@ describe('real skills/*/SKILL.md pins are covered (TS-1)', () => {
 // Type-level negative fixture: a rationale record missing a required key must
 // fail to typecheck against Record<StepName, string>. Not executed — this
 // file is only meaningful to `tsc`/`vitest --typecheck`.
-function _typeFixture() {
-  const incomplete = {
-    bootstrap: 'x',
-    memory: 'x',
-    assess: 'x',
-    explore: 'x',
-    prd: 'x',
-    complexity: 'x',
-    stories: 'x',
-    conflict_check: 'x',
-    plan: 'x',
-    architecture_diagram: 'x',
-    architecture_review: 'x',
-    worktree: 'x',
-    acceptance_specs: 'x',
-    build: 'x',
-    manual_test: 'x',
-    prd_audit: 'x',
-    architecture_review_as_built: 'x',
-    rebase: 'x',
-    finish: 'x',
-    // 'remediate' intentionally omitted
-  };
-  // @ts-expect-error missing required key "remediate" must fail typecheck
-  const shouldFail = incomplete satisfies Record<StepName, string>;
-  return shouldFail;
-}

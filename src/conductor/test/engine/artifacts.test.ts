@@ -2277,7 +2277,7 @@ describe('engine/artifacts', () => {
         JSON.stringify({ pr_url: prUrl }),
       );
       // fakeGh that throws an error (network failure, auth error, etc.)
-      const fakeGh = async (args: string[]) => {
+      const fakeGh = async (_args: string[]) => {
         throw new Error('network error: connection refused');
       };
       const result = await checkStepCompletion(dir, 'finish', {
@@ -2317,7 +2317,7 @@ describe('engine/artifacts', () => {
       // No .pipeline/conduct-state.json with pr_url — should fail in Phase 1
       // and NEVER call the gh runner (short-circuit test)
       const ghCallCount = { count: 0 };
-      const fakeGh = async (args: string[]) => {
+      const fakeGh = async (_args: string[]) => {
         ghCallCount.count++;
         throw new Error('gh should not be called in this scenario');
       };
@@ -2489,7 +2489,7 @@ describe('engine/artifacts', () => {
             ? '<!-- conductor:pr-body-floor -->'
             : null;
         });
-        const fakeGh = async (args: string[]) => ({
+        const fakeGh = async (_args: string[]) => ({
           stdout: JSON.stringify({
             title: 'feat: something',
             isDraft: false,
@@ -6672,7 +6672,6 @@ Task 1 → Task 2
 
     describe('architecture_review_as_built', () => {
       const PATH = '.pipeline/architecture-review-as-built.md';
-      const APPROVED = '# As-Built Review\n\nVerdict: APPROVED\n';
 
       async function writeStaleReport(d: string, codeStamp: string): Promise<void> {
         await writeApprovedAsBuiltVerdict(d, { codeStamp });

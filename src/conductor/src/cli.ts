@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { CLAUDE_DISPLAY_NAME } from './execution/provider-catalog.js';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname } from 'node:path';
 import type { ViewMode } from './ui/types.js';
 import type {
   EffortLevel,

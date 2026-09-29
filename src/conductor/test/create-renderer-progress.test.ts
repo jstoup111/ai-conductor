@@ -8,7 +8,7 @@ import { ALL_STEPS } from '../src/engine/steps.js';
 
 class CaptureStream extends Writable {
   chunks: string[] = [];
-  _write(chunk: Buffer | string, _e: string, cb: (err?: Error | null) => void): void {
+  override _write(chunk: Buffer | string, _e: string, cb: (err?: Error | null) => void): void {
     this.chunks.push(chunk.toString());
     cb();
   }

@@ -58,11 +58,11 @@ import {
   renderPrdAuditScopeHalt,
   renderPrdWideningRecovery,
 } from './prd-widening-recovery.js';
-import { classifyPrdWidening, classifyPrdWideningProjection } from './prd-widening-classification.js';
+import { classifyPrdWideningProjection } from './prd-widening-classification.js';
 import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { createGithubTrackerClient } from './tracker-client.js';
-import { executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
+import { type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
@@ -104,7 +104,6 @@ import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
 import {
   BUILT_IN_PROVIDERS,
   CODEX_DISPLAY_NAME,
-  CLAUDE_PROVIDER,
   CODEX_PROVIDER,
   findBuiltInProviderDescriptor,
   providerDisplayName,
@@ -226,7 +225,6 @@ import {
   remediationDispositionAppendsToPlan,
   remediationDispositionStep,
   sweepStaleReviewArtifacts,
-  parseAdrDecisions,
   parseTrack,
   parseIntakeSourceRef,
   planStem,
@@ -234,7 +232,6 @@ import {
   BUILD_REVIEW_VERDICT,
   buildReviewFailureDetails,
   validateBuildReviewVerdict,
-  FINISH_CHOICE_MARKER,
   VERDICT_FRESHNESS_FS_TOLERANCE_MS,
   PRD_AUDIT_CODE_STAMP,
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
@@ -276,9 +273,6 @@ import {
 import {
   classifyOverScopeCriterion,
   overScopeRelations,
-  parseClearedOverScopeDecisions,
-  readOverScopeDecisions,
-  recordOverScopeDecisions,
   renderOverScopeDecisionBlock,
   type OverScopeDecision,
   type IntentRelation,
@@ -353,7 +347,7 @@ import {
   resolveBuildOutcomeCategory,
   writeBuildOutcome,
 } from './build-outcome.js';
-import type { BuildOutcomeRung, BuildOutcomeStore } from './build-outcome.js';
+import type { BuildOutcomeStore } from './build-outcome.js';
 
 async function writeBuildOutcomeBestEffort(projectRoot: string, outcome: BuildOutcomeStore): Promise<void> {
   await writeBuildOutcome(projectRoot, outcome).catch(() => {});
@@ -444,7 +438,6 @@ import {
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
 import { applyRebaseTransition, clampRebaseContinuation, isRebaseCoverageRefresh } from './rebase-transition.js';
-import { classifyGateInvalidation } from './gate-invalidation.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
   escalateBuildFailure as defaultEscalateBuildFailure,
@@ -454,7 +447,7 @@ import {
 import { writeIntakeMarker } from './engineer/intake-marker.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
-import { makeProductionGh, makeProductionGit, prMergeState, type GitRunner } from './pr-labels.js';
+import { makeProductionGh, makeProductionGit, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import {
   createTaskEvidence,
@@ -5973,7 +5966,7 @@ export class Conductor {
    * remain declaration-absent until the plan step has authored one.
    */
   private async resolvePlanContentScheduling(
-    state: ConductState,
+    _state: ConductState,
     tier: ComplexityTier,
   ): Promise<PlanContentScheduling> {
     const activePlanPath = await this.getActivePlanPath();
@@ -7196,10 +7189,6 @@ export class Conductor {
     // UI is told retry is exhausted so the step can't spin forever.
     const recoveryRetries = new Map<StepName, number>();
 
-    // Per-step guard: run auto-heal at most once per session. A second run
-    // against the same git log + same task-status.json can't produce new
-    // healings, so additional invocations are wasted git calls.
-    const autoHealAttempted = new Set<StepName>();
 
     // Task 6 (build-review-grades-plan-vs-diff-against-a-stale-o): the
     // merge-base a build_review dispatch actually graded against (set from
@@ -7333,15 +7322,6 @@ export class Conductor {
       return pending.length === 1 ? pending[0]! : null;
     };
 
-    const currentBuildRung = (): BuildOutcomeRung => {
-      const build = getStepDefinition('build');
-      const buildModelPolicy = this.modelPolicyForStep('build');
-      const resolvedBuild = resolveStepConfig(
-        'build', build.phase, buildModelPolicy, this.config,
-        { tier: state.complexity_tier },
-      );
-      return { model: resolvedBuild.model, effort: resolvedBuild.effort };
-    };
 
     const consumeKickbackBudget = async (gate: StepName, reason: string) => {
       const [treeHash, resolvedCount] = await Promise.all([
@@ -14339,7 +14319,7 @@ export class Conductor {
             // Errors during dispatch are caught and logged but never propagated.
             // Create an emitter adapter that forwards attribution_divergence events
             const emitterAdapter = {
-              emit: (type: 'attribution_divergence', event: { feature: string; taskId: string }): void => {
+              emit: (_type: 'attribution_divergence', event: { feature: string; taskId: string }): void => {
                 void this.events.emit({
                   type: 'attribution_divergence',
                   feature: event.feature,
@@ -14610,7 +14590,7 @@ export class Conductor {
             ? this.operatorParkBoundary
             : undefined,
           lifecycleObserver: {
-            onAdmitted: async (observation) => {
+            onAdmitted: async (_observation) => {
               await this.emitExecutionEvent({
                 type: 'step_started',
                 step: groupName,

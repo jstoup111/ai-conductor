@@ -410,13 +410,18 @@ describe('clearHaltForResume', () => {
 
   it('retains the marker when committed-record supersession reports a typed failure', async () => {
     const trace: string[] = [];
+    const logs: string[] = [];
     const result = await clearHaltForResume({
       worktreePath: '/wt', slug: 'feature',
       clearMarker: async () => { trace.push('marker'); },
-      resolveCommittedRecord: async () => ({ kind: 'failed' }),
+      resolveCommittedRecord: async () => ({ kind: 'failed', reason: 'EISDIR: illegal operation' }),
+      log: (message) => { logs.push(message); },
     });
     expect(result).toBe('partial');
     expect(trace).toEqual([]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('halt record not superseded');
+    expect(logs[0]).toContain('EISDIR: illegal operation');
   });
 });
 

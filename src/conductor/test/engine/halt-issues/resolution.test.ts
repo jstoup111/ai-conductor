@@ -1,6 +1,6 @@
 // Covers: task:2
 import { describe, it, expect } from 'vitest';
-import { resolveEntry, Resolution, FsAbstraction } from '../../../src/engine/halt-issues/resolution';
+import { resolveEntry, FsAbstraction } from '../../../src/engine/halt-issues/resolution';
 import { LedgerEntry } from '../../../src/engine/halt-issues/ledger';
 
 /**

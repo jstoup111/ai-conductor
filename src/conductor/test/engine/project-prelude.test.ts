@@ -278,7 +278,7 @@ describe('runProjectPrelude (happy paths)', () => {
     }));
     const provider = (
       invoke: LLMProvider['invoke'],
-      invokeInteractive: LLMProvider['invoke'],
+      _invokeInteractive: LLMProvider['invoke'],
     ): LLMProvider => ({
       invoke,
     });

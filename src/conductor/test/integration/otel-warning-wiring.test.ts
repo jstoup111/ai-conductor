@@ -40,7 +40,7 @@ import { TerminalSubscriber } from '../../src/ui/subscriber.js';
 class CaptureStream extends Writable {
   private readonly chunks: string[] = [];
 
-  _write(chunk: Buffer | string, _encoding: string, callback: (error?: Error | null) => void): void {
+  override _write(chunk: Buffer | string, _encoding: string, callback: (error?: Error | null) => void): void {
     this.chunks.push(chunk.toString());
     callback();
   }

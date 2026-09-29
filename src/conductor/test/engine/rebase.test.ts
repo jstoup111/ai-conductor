@@ -31,7 +31,6 @@ import {
 import { classifyGateInvalidation } from '../../src/engine/gate-invalidation.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 
 // A scripted GitRunner: matches argv prefixes to canned results.

@@ -474,7 +474,7 @@ describe('as-built verdict contract', () => {
     await expect(resolveAsBuiltReferences(verdict, root, '.docs/plans/feature.md')).resolves.toEqual({ ok: true, verdict });
   });
 
-  it('resolves a task- prefixed citation against the bare plan heading id', async () => {
+  it('resolves a task- prefixed reference and returns the canonical task id', async () => {
     const root = await governingReferenceFixture();
     const verdict: AsBuiltVerdict = {
       version: AS_BUILT_VERDICT_CONTRACT_VERSION,
@@ -485,7 +485,28 @@ describe('as-built verdict contract', () => {
       resolution: 'Wire the second task.',
     };
 
-    await expect(resolveAsBuiltReferences(verdict, root, '.docs/plans/feature.md')).resolves.toEqual({ ok: true, verdict });
+    await expect(resolveAsBuiltReferences(verdict, root)).resolves.toEqual({
+      ok: true,
+      verdict: { ...verdict, findings: [{ ...verdict.findings[0], reference: { kind: 'plan-task', taskId: '2' } }] },
+    });
+  });
+
+  it('rejects a task- prefixed reference absent from the active plan, naming the bare id', async () => {
+    const root = await governingReferenceFixture();
+    const verdict: AsBuiltVerdict = {
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [], driftNotes: [],
+      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: 'task-7' }, summary: 'Complete an absent task.' }],
+      violations: 'The implementation cites no active task.',
+      resolution: 'Use an active task.',
+    };
+
+    await expect(resolveAsBuiltReferences(verdict, root)).resolves.toEqual({
+      ok: false,
+      field: 'findings[0].reference.taskId',
+      requirement: 'plan task 7 is not declared by the active plan',
+    });
   });
 
   it('rejects a task absent from the active plan', async () => {

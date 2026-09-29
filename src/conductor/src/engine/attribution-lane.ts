@@ -36,13 +36,13 @@ import type {
   TokenUsage,
   AuthenticationReadiness,
 } from '../execution/llm-provider.js';
-import type { HarnessConfig, EffortLevel } from '../types/config.js';
+import type { HarnessConfig } from '../types/config.js';
 import { ModelAvailability } from './model-availability.js';
 import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
-import { resolveStepConfig, phaseForStep } from './resolved-config.js';
+import { resolveStepConfig } from './resolved-config.js';
 import { collectCandidateCommits } from './attribution-inputs.js';
 import { assembleAttributionInputs } from './attribution-inputs.js';
 import { buildAttributionPrompt } from './attribution-prompt.js';
@@ -193,7 +193,7 @@ export async function writeMemo(memoPath: string, key: string, result: string): 
  *
  * @param projectRoot - Project root directory (memo lives at
  *   `<projectRoot>/.pipeline/attribution-memo.json`)
- * @param map - Rewrite map from old SHAs (commits and HEAD) to new SHAs
+ * @param _map - Rewrite map from old SHAs (commits and HEAD) to new SHAs
  * @param oldHead - Pre-rebase HEAD SHA
  * @param newHead - Post-rebase HEAD SHA
  * @param residueIds - Pending task IDs used for the #520 memo-key convention
@@ -205,7 +205,7 @@ export async function writeMemo(memoPath: string, key: string, result: string): 
  */
 export async function rekeyMemoAfterRebase(
   projectRoot: string,
-  map: Record<string, string>,
+  _map: Record<string, string>,
   oldHead: string,
   newHead: string,
   residueIds: string[],

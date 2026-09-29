@@ -6,7 +6,7 @@ import { discoverPlugins, registerBuiltins } from '../../src/engine/plugin-loade
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
-import { PluginVersionError, PluginLoadError } from '../../src/types/plugin.js';
+import { PluginVersionError } from '../../src/types/plugin.js';
 
 /**
  * Integration tests for RecorderProvider reference plugin.

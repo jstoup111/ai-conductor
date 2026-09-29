@@ -1686,12 +1686,6 @@ const CATEGORY_STALE_REASONS: Record<
   tests: 'tests_changed',
 };
 
-function changedFingerprintInspection(
-  persisted: FullSuitePassEvidence,
-  current: FullSuiteFingerprint,
-): FullSuiteStaleInspection {
-  return changedFingerprintInspectionFromCategories(changedFingerprintCategories(persisted, current));
-}
 
 function changedFingerprintCategories(
   persisted: FullSuitePassEvidence,

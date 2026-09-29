@@ -88,13 +88,13 @@ describe('engine/build-review-policy catalog failures', () => {
   });
 
   it.each([
-    ['partial-success', async (controller: AbortController) => ({
+    ['partial-success', async (_controller: AbortController) => ({
       data: [{ cwd: '/prepared/project', skills: [], errors: [], complete: false }],
     }), undefined, 'partial'],
-    ['malformed', async (controller: AbortController) => ({ data: 'not-an-array' }), undefined, 'malformed'],
-    ['unsupported', async (controller: AbortController) => ({ version: 2, data: [] }), undefined, 'unsupported'],
-    ['unreadable', async (controller: AbortController) => { throw new Error('EACCES: permission denied'); }, undefined, 'unreadable'],
-    ['timeout', async (controller: AbortController) => { const error = new Error('deadline'); error.name = 'TimeoutError'; throw error; }, undefined, 'timeout'],
+    ['malformed', async (_controller: AbortController) => ({ data: 'not-an-array' }), undefined, 'malformed'],
+    ['unsupported', async (_controller: AbortController) => ({ version: 2, data: [] }), undefined, 'unsupported'],
+    ['unreadable', async (_controller: AbortController) => { throw new Error('EACCES: permission denied'); }, undefined, 'unreadable'],
+    ['timeout', async (_controller: AbortController) => { const error = new Error('deadline'); error.name = 'TimeoutError'; throw error; }, undefined, 'timeout'],
     ['cancelled', async (controller: AbortController) => { controller.abort(); return { data: [] }; }, undefined, 'cancelled'],
   ] as const)('closes the Codex session after %s catalog discovery failure', async (
     _name,

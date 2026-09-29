@@ -1508,7 +1508,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
   describe('test 1: Build gh api command from sourceRef', () => {
     it('parses owner/repo#N and builds correct gh api argv', async () => {
       const callLog: Array<{ args: string[] }> = [];
-      const runner: GhRunner = async (args: string[], opts: { cwd: string }) => {
+      const runner: GhRunner = async (args: string[], _opts: { cwd: string }) => {
         callLog.push({ args });
         return { stdout: JSON.stringify({ labels: [{ name: 'priority: high' }] }) };
       };
@@ -1525,7 +1525,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
   describe('test 2: Cross-repo refs', () => {
     it('handles multiple sourceRefs from different repos', async () => {
       const callLog: Array<{ args: string[] }> = [];
-      const runner: GhRunner = async (args: string[], opts: { cwd: string }) => {
+      const runner: GhRunner = async (args: string[], _opts: { cwd: string }) => {
         callLog.push({ args });
         // Return response based on which issue is being queried
         if (args.some((a) => a.endsWith('/456'))) {

@@ -295,8 +295,6 @@ describe('engine/worktree', () => {
   describe('checkPrMerged', () => {
     it('returns true when PR state is MERGED', async () => {
       // Mock execFile to simulate `gh pr view` returning MERGED
-      const { execFile: realExecFile } = await import('child_process');
-      const originalExecFile = realExecFile;
 
       // We test via the exported function which uses its own execFile
       // Use vi.mock for child_process within checkPrMerged

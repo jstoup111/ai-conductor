@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -8,7 +8,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { StepName } from '../../src/types/index.js';
 import { discoverPlugins, registerBuiltins } from '../../src/engine/plugin-loader.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
-import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
+import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { createProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 

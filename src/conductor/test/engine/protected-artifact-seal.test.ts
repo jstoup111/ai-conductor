@@ -16,7 +16,6 @@ import {
   classifyMutationTarget,
   evaluateProtectedArtifactSealRotation,
   evaluateProtectedArtifactSealRotationInRepository,
-  isActiveStepArtifactException,
   isProtectedArtifactPath,
   namesOwnFeature,
   readOperatorReseals,

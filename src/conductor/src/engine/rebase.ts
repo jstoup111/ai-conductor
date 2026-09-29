@@ -2449,7 +2449,7 @@ export async function emitRebaseEvent(
  * any conflict is out of scope or if rebase --continue fails.
  */
 export const docsKeepBothResolver: RebaseResolver = async (ctx) => {
-  const { conflicts, projectRoot, baseRef } = ctx;
+  const { conflicts, projectRoot } = ctx;
 
   // Only resolve .docs/ conflicts; anything else is not our domain.
   if (!conflicts.every((f) => f.startsWith('.docs/'))) {

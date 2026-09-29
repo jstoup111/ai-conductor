@@ -4,10 +4,11 @@ import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
-import { access, mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
+import { access, mkdir, readFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, formatRetryCounter, displayBuildPosition, formatCommitAge } from './engine/format-retry-line.js';
+import { formatHeartbeatAge } from './engine/step-heartbeat.js';
 import {
   formatDiagnosticDuration,
   formatFeatureUsageTotal,
@@ -15,7 +16,6 @@ import {
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { emitEngineerSignal, resolveEngineerDir } from './engine/engineer-store.js';
 import {
-  isEligibleForResolve,
   makeAutoresolveEligibility,
   resolveConflictingPr,
 } from './engine/autoresolve.js';
@@ -103,7 +103,7 @@ import {
   withDaemonLogFeatureOwnership,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
-import type { ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
+import type { ConductorEvent, StepName, StepStatus } from './types/index.js';
 import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
 import {
   createDaemonTeardown,
@@ -140,13 +140,10 @@ import { buildWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './engin
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
 import { cleanupHaltPresentation, parseIssueRef, resolveSpecPrUrl } from './engine/pr-labels.js';
-import { captureEngineIdentity, createStaleEngineChecker } from './engine/engine-identity.js';
+import { createStaleEngineChecker } from './engine/engine-identity.js';
 import { initStaleEngineState } from './engine/stale-engine-init.js';
 import {
-  readRestartMarkerWithStatus,
-  clearRestartMarker,
   isSuppressed,
-  recordSuppression,
   writeRestartMarker,
 } from './engine/restart-intent.js';
 import {
@@ -214,8 +211,7 @@ import {
 } from './engine/daemon-rekick.js';
 import { isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
-import { enrollWatch, sweepMergeableLabels, type WatchEntry } from './engine/mergeable-sweep.js';
-import type { PrMergeState } from './engine/pr-labels.js';
+import { enrollWatch, sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
@@ -223,7 +219,6 @@ import {
   readRestartPending,
   consumeOnBoot,
   recordRestartPendingDrain,
-  type RestartIntent,
 } from './engine/restart-marker.js';
 import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';
 import {
@@ -3350,8 +3345,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const position = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId));
       const commitAge = formatCommitAge(event.lastCommitAt, Date.now());
       const commit = commitAge ? ` · last commit ${commitAge}` : '';
+      const activity = event.lastActivityAt === undefined
+        ? ''
+        : ` · provider activity ${formatHeartbeatAge(Math.max(0, Date.now() - event.lastActivityAt))} ago`;
       log(
-        `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} quiet ${event.quietMinutes}m (${position}/${event.total})${commit}`)}${slug}`,
+        `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} quiet ${event.quietMinutes}m (${position}/${event.total})${commit}${activity}`)}${slug}`,
       );
       break;
     }

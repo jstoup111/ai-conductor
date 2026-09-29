@@ -136,9 +136,9 @@ export async function readTestSuiteRemediations(
 
 async function readLedger(projectRoot: string): Promise<RepairLedger> {
   try {
-    const parsed = JSON.parse(
+    JSON.parse(
       await readFile(join(projectRoot, BUILD_REVIEW_REPAIR_LEDGER), 'utf8'),
-    ) as Partial<RepairLedger>;
+    );
     return {
       repairs: await readTestSuiteRemediations(projectRoot),
     };

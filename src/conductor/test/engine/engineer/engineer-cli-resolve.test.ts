@@ -4,9 +4,9 @@
 // as delivered (prUrl present). This test suite covers CLI parsing, validation,
 // and error messaging — the negative paths that prevent invalid state transitions.
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { detectEngineerCommand, dispatchEngineer } from '../../../src/engine/engineer-cli.js';
-import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
@@ -169,7 +169,7 @@ describe('engineer resolve dispatch and validation (integration with dispatchEng
   });
 
   it('malformed resolve (missing --pr-url) triggers guide output with usage text', async () => {
-    const { out, err, opts } = captureOut();
+    const { out, opts } = captureOut();
     const result = detectEngineerCommand(argv('resolve', 'o/a#1'));
     expect(result).not.toBeNull();
     if (!result) throw new Error('unreachable: asserted above');

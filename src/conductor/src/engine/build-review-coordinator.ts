@@ -471,7 +471,7 @@ export function buildReviewCandidateScopeResolutionContext(projection: BuildRevi
  */
 export function validateBuildReviewDispatchedResult(
   candidate: unknown,
-  rubric: BuildReviewRubricId,
+  _rubric: BuildReviewRubricId,
   projection: BuildReviewRubricProjection,
 ): BuildReviewJudgedResult | undefined {
   const scopeContext = buildReviewCandidateScopeResolutionContext(projection);

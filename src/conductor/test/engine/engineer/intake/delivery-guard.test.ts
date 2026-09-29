@@ -283,7 +283,6 @@ describe('Task 3: createDeliveryGuardedQueue — auto-heal delivered entries', (
     const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
 
     // Pre-populate ledger with a claimed entry that has prUrl
-    const key1 = `${candidate1.source}:${candidate1.sourceRef}`;
     (ledger as any).get = async (source: string, sourceRef: string) => {
       if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
         return {
@@ -428,7 +427,7 @@ describe('Task 4: createDeliveryGuardedQueue — heal-path failure tolerance', (
     const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
     const candidate1 = makeEnvelope('idea-1');
     const candidate2 = makeEnvelope('idea-2');
-    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
     const { ledger, transitionCalls } = makeFakeLedger();
     const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
 
@@ -476,7 +475,7 @@ describe('Task 4: createDeliveryGuardedQueue — heal-path failure tolerance', (
     const candidate1 = makeEnvelope('idea-1');
     const candidate2 = makeEnvelope('idea-2');
     const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
-    const { ledger, transitionCalls } = makeFakeLedger();
+    const { ledger } = makeFakeLedger();
     const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
 
     // Simulate ledger.transition throwing a DB error
@@ -914,7 +913,7 @@ describe('Task 6: createDeliveryGuardedQueue — unknown PR state fails safe', (
     const { runner: gh } = makeFailingGh();
 
     const mockLogger = {
-      info: (msg: string) => {
+      info: (_msg: string) => {
         // Log captured but not asserted in this test
       },
     };
@@ -955,7 +954,7 @@ describe('Task 6: createDeliveryGuardedQueue — unknown PR state fails safe', (
     const { runner: gh } = makeFailingGh();
 
     const mockLogger = {
-      info: (msg: string) => {
+      info: (_msg: string) => {
         // Log captured
       },
     };
@@ -1001,7 +1000,7 @@ describe('Task 6: createDeliveryGuardedQueue — unknown PR state fails safe', (
     const { ledger } = makeFakeLedger();
 
     const mockLogger = {
-      info: (msg: string) => {
+      info: (_msg: string) => {
         // Log captured
       },
     };
@@ -1442,14 +1441,14 @@ describe('Task 7: createDeliveryGuardedQueue — in-flight duplicate envelope dr
 
     // Now simulate recovery: operator runs "engineer forget {sourceRef}" to clear the entry
     // Reset the ledger to return undefined for the same sourceRef
-    (ledger as any).get = async (source: string, sourceRef: string) => {
+    (ledger as any).get = async (_source: string, _sourceRef: string) => {
       // Entry is now cleared after forget
       return undefined;
     };
 
     // Create a fresh queue with the same candidate (simulating retry after forget)
     const candidate2 = makeEnvelope('idea-1'); // Same sourceRef
-    const { queue: queue2, releasedEnvelopes: releasedEnvelopes2 } = makeFakeQueueWithEnvelopes([candidate2]);
+    const { queue: queue2 } = makeFakeQueueWithEnvelopes([candidate2]);
 
     // Clear the log for the second phase
     logMessages.length = 0;

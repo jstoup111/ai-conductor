@@ -828,7 +828,6 @@ describe('engine/daemon-park-cli', () => {
     });
 
     it('reports an error gracefully instead of throwing (e.g. unreadable/missing repo root)', async () => {
-      const missingRoot = join(root, 'does-not-exist', 'nested', 'deeper');
       const out: string[] = [];
       // Even a nonexistent nested root should not throw — writeOperatorPark
       // creates the directory chain, so this should actually succeed; to

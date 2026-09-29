@@ -51,7 +51,7 @@ import { scanInheritedState, renderDashboard } from '../../src/engine/daemon-das
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import type { ConductState, StepName } from '../../src/types/index.js';
+import type { ConductState } from '../../src/types/index.js';
 
 const FEATURE_SPEC = 'test/acceptance/feature.acceptance.test.ts';
 const GREEN_REASON =

@@ -334,15 +334,18 @@ export async function resolveAsBuiltReferences(
   if (verdict.verdict !== 'BLOCKED') return { ok: true, verdict };
 
   const references = verdict.findings.flatMap((finding, index) =>
-    finding.reference === undefined ? [] : [{ reference: finding.reference, field: `findings[${index}].reference` }],
+    finding.reference === undefined ? [] : [{ reference: finding.reference, index, field: `findings[${index}].reference` }],
   );
   if (references.length === 0) return { ok: true, verdict };
 
   let decisionFiles: string[] | undefined;
   let activePlanTaskIds: ReadonlySet<string> | undefined;
   let activePlanRead = false;
+  // Canonical task ids by finding index, so downstream consumers never see a
+  // provider's `task-` presentation prefix.
+  const canonicalTaskIds = new Map<number, string>();
 
-  for (const { reference, field } of references) {
+  for (const { reference, index, field } of references) {
     if (reference.kind === 'adr-decision') {
       if (decisionFiles === undefined) {
         try {
@@ -393,8 +396,8 @@ export async function resolveAsBuiltReferences(
     if (activePlanTaskIds === undefined) {
       return rejected(`${field}.taskId`, `an active plan declaring task ${reference.taskId} is required`);
     }
-    // Agents cite `### Task 16` as `task-16`; the prefix is carrier presentation only.
-    const resolution = resolveCitedPlanTaskIds([reference.taskId], activePlanTaskIds);
+    // Providers cite tasks as `task-16` as often as `16`; the prefix is presentation only.
+    const resolution = resolveCitedPlanTaskIds(reference.taskId.split(','), activePlanTaskIds);
     if (resolution.kind === 'malformed') {
       return rejected(`${field}.taskId`, 'a task id matching the shared active-plan grammar is required');
     }
@@ -404,7 +407,19 @@ export async function resolveAsBuiltReferences(
         `plan task ${resolution.ids.join(', ')} is not declared by the active plan`,
       );
     }
+    const canonical = resolution.ids.join(',');
+    if (canonical !== reference.taskId) canonicalTaskIds.set(index, canonical);
   }
 
-  return { ok: true, verdict };
+  if (canonicalTaskIds.size === 0) return { ok: true, verdict };
+  return {
+    ok: true,
+    verdict: {
+      ...verdict,
+      findings: verdict.findings.map((finding, index) => {
+        const taskId = canonicalTaskIds.get(index);
+        return taskId === undefined ? finding : { ...finding, reference: { kind: 'plan-task', taskId } };
+      }),
+    },
+  };
 }

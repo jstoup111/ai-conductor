@@ -21,7 +21,6 @@ import type {
   GithubOperationRunnerResponse,
   GithubOperationEventEmitter,
   GithubIntakeWriteOperationRequest,
-  GithubSharedWriteOperationRequest,
 } from './github-operations.js';
 import {
   decodeGithubAmbientRead,
@@ -514,7 +513,7 @@ export interface IntakeTrackerClient extends TrackerClient {
  * advisory-label-strip flow) can detect "issue not found" specifically. */
 export class GhRunnerError extends Error {
   readonly argv: string[];
-  readonly cause: unknown;
+  override readonly cause: unknown;
   readonly stderr?: string;
   readonly exitCode?: number;
   readonly status?: number;
@@ -559,7 +558,7 @@ export class GithubTrackerOperationRefusalError extends Error {
 class GhParseError extends Error {
   readonly operation: string;
   readonly stdout: string;
-  readonly cause: unknown;
+  override readonly cause: unknown;
 
   constructor(operation: string, stdout: string, cause: unknown) {
     super(

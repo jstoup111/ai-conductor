@@ -12,11 +12,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { existsSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 
 import {
   writeRestartMarker,
@@ -30,7 +29,7 @@ import {
   SUPPRESSION_PATH,
   type RestartMarker,
 } from '../../src/engine/restart-intent.js';
-import { initStaleEngineState, type InitStaleEngineStateOpts } from '../../src/engine/stale-engine-init.js';
+import { initStaleEngineState } from '../../src/engine/stale-engine-init.js';
 import { captureEngineIdentity } from '../../src/engine/engine-identity.js';
 
 describe('daemon startup handshake (Task 9)', () => {
@@ -274,7 +273,6 @@ describe('daemon startup handshake (Task 9)', () => {
     expect(suppression?.suppressedTarget).toBe(freshIdentity);
 
     // Verify marker was cleared
-    const markerPath = join(projectRoot, 'RESTART_MARKER_PATH');
     const statusAfter = await readRestartMarkerWithStatus(projectRoot);
     expect(statusAfter.kind).toBe('absent');
   });
@@ -970,7 +968,6 @@ describe('daemon startup handshake (Task 9)', () => {
 
       // Create a directory at the suppression path to block file writes there
       // This simulates a write failure
-      const fs = await import('node:fs/promises');
       await mkdir(suppressionPath, { recursive: true });
 
       // Verify directory exists at suppression path

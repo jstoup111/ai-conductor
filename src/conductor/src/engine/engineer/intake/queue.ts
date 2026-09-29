@@ -57,10 +57,6 @@ function toClaimed(filename: string): string {
   return filename.replace(/\.json$/, '.claimed');
 }
 
-/** Convert a claimed filename to its pending counterpart. */
-function toPending(filename: string): string {
-  return filename.replace(/\.claimed$/, '.json');
-}
 
 // ─── createFileQueue ──────────────────────────────────────────────────────────
 

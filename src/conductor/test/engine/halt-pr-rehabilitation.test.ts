@@ -24,7 +24,7 @@ import {
 } from '../../src/engine/halt-pr-rehabilitation.js';
 import { shipDraftPrBody } from '../../src/engine/ship-draft-pr.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
-import { HALT_PR_BANNER_SENTINEL, NEEDS_REMEDIATION_MARKER } from '../../src/engine/pr-labels.js';
+import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import type {
   GithubOperationRequest,
   GithubOperationRunner,

@@ -49,7 +49,7 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, utimes, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -58,7 +58,6 @@ import {
   checkStepCompletion,
   sweepStaleReviewArtifacts,
   PRD_AUDIT_CODE_STAMP,
-  ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_FAIL_EVIDENCE,
 } from '../../src/engine/artifacts.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
@@ -250,7 +249,6 @@ async function writeManualTestVerdict(
 
 const PRD_HEADER = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n';
 const PRD_ALIGNED = PRD_HEADER + '| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n';
-const ARCH_APPROVED = '# As-Built Review\n\nVerdict: APPROVED\n';
 const MANUAL_TEST_PASS =
   '# Manual Test Results\n\n## Attempt 1 — 2026-07-22T10:00:00Z\n\n' +
   '| Story | Result |\n|---|---|\n| Foo | PASS |\n';

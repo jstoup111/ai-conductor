@@ -56,7 +56,6 @@ let workDir: string;
 let registryPath: string;
 let engineerDir: string;
 let repoPath: string;
-let defaultBranch: string;
 
 async function git(args: string[], cwd = repoPath): Promise<string> {
   const { stdout } = await execFile('git', args, { cwd });
@@ -172,7 +171,6 @@ beforeEach(async () => {
   await writeFile(join(repoPath, 'README.md'), '# repo\n');
   await git(['add', 'README.md']);
   await git(['commit', '-m', 'init']);
-  defaultBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
   await writeRegistry();
 });
 
@@ -214,7 +212,7 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     const worktree = await seedWorktree();
 
     // gh runner is available but should be ignored because user config is set
-    const gh: GhRunner = async (args, opts) => ({ stdout: 'ghlogin\n' });
+    const gh: GhRunner = async (_args, _opts) => ({ stdout: 'ghlogin\n' });
 
     // User config takes priority: bob is machine-scoped operator identity
     const fakeHome = await makeUserHome('spec_owner: bob\n');
@@ -259,7 +257,7 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     const worktree = await seedWorktree();
 
     // gh runner available: fallback after user config is absent
-    const gh: GhRunner = async (args, opts) => ({ stdout: 'ghlogin\n' });
+    const gh: GhRunner = async (_args, _opts) => ({ stdout: 'ghlogin\n' });
 
     // No user config file at all: chain falls through to gh
     const fakeHome = await makeUserHome();
@@ -321,7 +319,7 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     // Hermetic HOME: the operator's real ~/.ai-conductor/config.yml (spec_owner)
     // must not leak in and shadow the injected gh fake.
     const worktree = await seedWorktree();
-    const gh: GhRunner = async (args, opts) => ({ stdout: 'bob\n' });
+    const gh: GhRunner = async (_args, _opts) => ({ stdout: 'bob\n' });
     const { out, opts } = captureOpts({ gh });
     const fakeHome = await makeUserHome();
 

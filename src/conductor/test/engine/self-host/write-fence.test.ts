@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { generateFenceScript, mergeFenceIntoSettings } from '../../../src/engine/self-host/write-fence.js';
 import { execa } from 'execa';
 import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';

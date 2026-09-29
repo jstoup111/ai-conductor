@@ -98,7 +98,6 @@ import {
   TestSuiteProofError,
   type BuildReviewFrozenInputs,
   type BuildReviewInputOptions,
-  type BuildReviewRepairProvenance,
 } from './build-review-inputs.js';
 
 function isCoverageBindingAmendmentEntry(
@@ -190,7 +189,7 @@ import {
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
 import { buildReviewRubricPromptView, type BuildReviewRubricProjection } from './build-review-projections.js';
-import { boundedHeadTailExcerpt, classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-test-quality-preflight.js';
+import { classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-test-quality-preflight.js';
 import {
   defaultBuildReviewScopedLauncher,
   runBuildReviewScopedCommand,

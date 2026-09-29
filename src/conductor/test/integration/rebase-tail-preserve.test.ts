@@ -14,7 +14,6 @@ import type { StepRunner, StepRunOptions, StepRunResult } from '../../src/engine
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
-import { currentCommitSha } from '../../src/engine/project-prelude.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 

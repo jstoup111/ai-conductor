@@ -17,7 +17,7 @@ import type { ConductorEvent } from '../../../src/types/events.js';
 class CaptureStream extends Writable {
   chunks: string[] = [];
 
-  _write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+  override _write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
     this.chunks.push(chunk.toString());
     callback();
   }

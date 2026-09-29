@@ -35,7 +35,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { readState, writeState } from '../../src/engine/state.js';
+import { writeState } from '../../src/engine/state.js';
 import { ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP } from '../../src/engine/artifacts.js';
 import type { ConductState } from '../../src/types/index.js';
 

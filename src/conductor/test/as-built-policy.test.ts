@@ -1,11 +1,8 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { LLMProvider } from '../src/execution/llm-provider.js';
-import { resolveAsBuiltPolicy, type AsBuiltPolicyConfig } from '../src/engine/as-built-policy.js';
-import { DefaultStepRunner } from '../src/engine/step-runners.js';
-import type { HarnessConfig } from '../src/types/config.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { resolveAsBuiltPolicy } from '../src/engine/as-built-policy.js';
 
 const dirs: string[] = [];
 

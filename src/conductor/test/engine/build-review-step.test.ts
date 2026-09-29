@@ -678,7 +678,7 @@ describe('build_review structured rubric dispatch', () => {
     const incapableInvoke = vi.fn(async (): Promise<never> => {
       throw new Error('incapable candidate must not be launched');
     });
-    const capableInvoke = vi.fn(async (options: InvokeOptions) => ({
+    const capableInvoke = vi.fn(async (_options: InvokeOptions) => ({
       success: true, output: 'structured result', exitCode: 0, finalStructuredResult: { findings: [] },
     }));
     const incapable: LLMProvider = { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: incapableInvoke };

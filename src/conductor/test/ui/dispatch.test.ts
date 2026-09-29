@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { dispatchRenderers } from '../../src/ui/dispatch.js';
 import { RecordingRenderer } from './recording-renderer.js';
 import type { ConductorEvent } from '../../src/types/index.js';

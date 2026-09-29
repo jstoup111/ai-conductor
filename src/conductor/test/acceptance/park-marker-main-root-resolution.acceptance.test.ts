@@ -31,7 +31,6 @@ import { rekickSweep, type RekickSweepDeps } from '../../src/engine/daemon-rekic
 import { checkAndAutoPark } from '../../src/engine/daemon-auto-park.js';
 import {
   incrementNoEvidenceAttempts,
-  readNoEvidenceAttempts,
 } from '../../src/engine/task-evidence.js';
 import { dispatchDaemonPark } from '../../src/engine/daemon-park-cli.js';
 

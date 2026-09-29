@@ -1838,7 +1838,7 @@ describe('integration/rebase-loop', () => {
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
-        const { preserved, invalidated } = trackPreservedInvalidated();
+        const { preserved } = trackPreservedInvalidated();
         let completed = false;
         events.on('feature_complete', () => {
           completed = true;
@@ -2010,9 +2010,7 @@ describe('integration/rebase-loop', () => {
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
         const { preserved } = trackPreservedInvalidated();
-        let completed = false;
         events.on('feature_complete', () => {
-          completed = true;
         });
 
         await runThroughShip(runCountingRunner(counts));

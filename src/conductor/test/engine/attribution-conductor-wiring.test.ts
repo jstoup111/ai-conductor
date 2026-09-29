@@ -23,24 +23,21 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir, readFile, chmod, stat } from 'fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { execa } from 'execa';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { readState, writeState } from '../../src/engine/state.js';
-import { ALL_STEPS } from '../../src/engine/steps.js';
 import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
 } from '../../src/engine/provider-model-policy.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
-import type { ConductState, StepName } from '../../src/types/index.js';
+import type { StepName } from '../../src/types/index.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
@@ -48,7 +45,7 @@ import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review
 
 // Mock execa to return proper git responses
 vi.mock('execa', () => ({
-  execa: vi.fn(async (cmd: string, args: string[], opts?: any) => {
+  execa: vi.fn(async (cmd: string, args: string[], _opts?: any) => {
     if (cmd === 'git' && args[0] === 'rev-parse' && args[1] === 'HEAD') {
       return { stdout: 'abc1234567890123456789012345678901234567\n', stderr: '', exitCode: 0 };
     }
@@ -215,7 +212,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     );
     const provider = (
       invoke: LLMProvider['invoke'],
-      invokeInteractive: LLMProvider['invoke'],
+      _invokeInteractive: LLMProvider['invoke'],
     ): LLMProvider => ({
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: async (options) => {
@@ -460,7 +457,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     // Track invocation
     let providerWasInvoked = false;
     const trackedProvider: LLMProvider = {
-      invoke: async (opts: InvokeOptions): Promise<InvokeResult> => {
+      invoke: async (_opts: InvokeOptions): Promise<InvokeResult> => {
         providerWasInvoked = true;
         // Write a minimal result to satisfy the dispatcher
         const verdictPath = join(projectRoot, '.pipeline', 'attribution-verdict.json');
@@ -515,7 +512,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
   it('verifier dispatch resolves attribution verdict written by real provider', async () => {
     // Create a fixture provider that writes a more complex verdict
     const fixtureProvider: LLMProvider = {
-      invoke: async (opts: InvokeOptions): Promise<InvokeResult> => {
+      invoke: async (_opts: InvokeOptions): Promise<InvokeResult> => {
         const verdictPath = join(projectRoot, '.pipeline', 'attribution-verdict.json');
         const verdict = {
           schema: 1,
@@ -690,7 +687,7 @@ Add comprehensive tests.
     let providerInvoked = false;
 
     const testProvider: LLMProvider = {
-      invoke: async (opts: InvokeOptions): Promise<InvokeResult> => {
+      invoke: async (_opts: InvokeOptions): Promise<InvokeResult> => {
         providerInvoked = true;
 
         // Simulate real verifier: write the attribution verdict
@@ -735,7 +732,7 @@ Implementation that requires semantic verification.
 
     // Create task-evidence.json so that evidence tracking works
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
-    const evidence = await createTaskEvidence(projectRoot);
+    await createTaskEvidence(projectRoot);
 
     // Call dispatchVerifier as the conductor would at line 1919
     const result = await runner.dispatchVerifier({

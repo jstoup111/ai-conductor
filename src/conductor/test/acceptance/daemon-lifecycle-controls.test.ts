@@ -285,7 +285,7 @@ describe('Rebuilding the engine never crashes a running daemon (FR-13, real-bina
   it('a child process pinned to version A resolves a lazy import from A after B is published and made current', async () => {
     const store = await tempRepo('engine-store-');
     const storeRoot = join(store, 'dist-versions');
-    const { listVersions, currentTarget } = await load(ENGINE_STORE_MOD);
+    await load(ENGINE_STORE_MOD);
 
     // Version A: a package with an index and a submodule loaded LAZILY.
     // Ensure storeRoot exists first

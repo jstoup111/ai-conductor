@@ -11,7 +11,7 @@
  * 4. Idle cycles never clear the status map
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   runDaemon,
   type BacklogItem,
@@ -185,7 +185,7 @@ describe('Task 16: Transition-only status logging (RED tests)', () => {
         }
         return items(1);
       },
-      isHalted: async (slug) => {
+      isHalted: async (_slug) => {
         // Halted from first dispatch until haltCleared becomes true
         return dispatchCount >= 1 && !haltCleared;
       },
@@ -202,7 +202,7 @@ describe('Task 16: Transition-only status logging (RED tests)', () => {
       sleep: async () => {},
     };
 
-    const result = await runDaemon(deps, {
+    await runDaemon(deps, {
       concurrency: 1,
       once: false,
       maxIdlePolls: 2, // Two idle ticks: one while halted, one after completing
@@ -235,7 +235,6 @@ describe('Task 16: Transition-only status logging (RED tests)', () => {
   // ───────────────────────────────────────────────────────────────────────
   it('scenario 4: idle cycles preserve the status map (status still tracked)', async () => {
     let idleCount = 0;
-    const statusMapSnapshot: Map<string, string> = new Map();
     const deps: DaemonDeps = {
       discoverBacklog: async () => {
         if (idleCount === 0) return items(1); // First discovery: f0
@@ -291,7 +290,7 @@ describe('Task 16: Transition-only status logging (RED tests)', () => {
         }
         return items(1);
       },
-      isHalted: async (slug) => {
+      isHalted: async (_slug) => {
         // Halted from first dispatch until haltCleared becomes true
         return dispatchCount >= 1 && !haltCleared;
       },

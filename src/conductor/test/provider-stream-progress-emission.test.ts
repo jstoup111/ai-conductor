@@ -10,7 +10,7 @@ import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../src/engine/provider-
 import { ProviderRuntimeSet } from '../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../src/engine/provider-session.js';
 import type { ProviderExecutionResult } from '../src/engine/provider-execution.js';
-import type { InvokeOptions, LLMProvider, ProviderStreamObservation } from '../src/execution/llm-provider.js';
+import type { InvokeOptions, LLMProvider } from '../src/execution/llm-provider.js';
 import type { StepName } from '../src/types/index.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 

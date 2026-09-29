@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os';
 import {
   writeOperatorPark,
   isOperatorParked,
-  removeOperatorPark,
 } from '../../src/engine/park-marker.js';
 import { rekickSweep, type RekickSweepDeps } from '../../src/engine/daemon-rekick.js';
 import { dispatchDaemonPark } from '../../src/engine/daemon-park-cli.js';

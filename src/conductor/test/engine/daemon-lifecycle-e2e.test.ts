@@ -5,26 +5,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { spawnSync } from 'node:child_process';
 import {
-  makeTmuxSupervisor,
   tmuxInstalled,
-  sessionNameForRepo,
-  type TmuxRunner,
 } from '../../src/engine/daemon-tmux';
-import { readPidRecord } from '../../src/engine/daemon-lock';
 import { isPaused, writePauseMarker, removePauseMarker } from '../../src/engine/pause-marker';
 import { readRestartPending, writeRestartPending } from '../../src/engine/restart-marker';
-import { listVersions, currentTarget } from '../../src/engine/engine-store';
 
 // Mock TmuxRunner that tracks calls but doesn't actually run tmux
-const createMockRunner = (): TmuxRunner => {
-  return (args, opts) => {
-    // For this e2e test, we use a fake supervisor that doesn't require real tmux.
-    // Return success for all tmux commands to simulate a running daemon.
-    return { code: 0, stdout: '', stderr: '' };
-  };
-};
 
 describe('daemon-lifecycle — end-to-end lifecycle walkthrough (T37)', () => {
   let storeRoot: string;
@@ -51,9 +38,6 @@ describe('daemon-lifecycle — end-to-end lifecycle walkthrough (T37)', () => {
     // Skip if tmux unavailable
     if (!(await tmuxInstalled())) return;
 
-    const mockRunner = createMockRunner();
-    const supervisor = makeTmuxSupervisor(mockRunner);
-
     // 1. Both repos paused — zero dispatch expected
     await writePauseMarker(repo1);
     await writePauseMarker(repo2);
@@ -62,8 +46,6 @@ describe('daemon-lifecycle — end-to-end lifecycle walkthrough (T37)', () => {
     expect(await isPaused(repo2)).toBe(true);
 
     // 2. Publish a new engine version (simulated via env)
-    const engineVersion1 = 'v1-test';
-    const engineVersion2 = 'v2-test';
     // (In a real test, we'd call the publish script; here we just verify
     // the store lifecycle works with real markers).
 

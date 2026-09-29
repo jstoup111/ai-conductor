@@ -331,7 +331,7 @@ describe('engine/daemon — runDaemon', () => {
     const daemon = runDaemon(
       {
         discoverBacklog: staticBacklog(items(1)),
-        runFeature: async (item) => {
+        runFeature: async (_item) => {
           dispatched?.();
           return featureRun;
         },
@@ -1373,7 +1373,7 @@ describe('engine/daemon — runDaemon', () => {
         requestRestart,
       };
 
-      const res = await runDaemon(deps, {
+      await runDaemon(deps, {
         concurrency: 1,
         once: false,
         isSelfHost: true,
@@ -1451,7 +1451,7 @@ describe('engine/daemon — runDaemon', () => {
         requestRestart,
       };
 
-      const res = await runDaemon(deps, {
+      await runDaemon(deps, {
         concurrency: 1,
         once: false,
         isSelfHost: true,
@@ -1577,7 +1577,7 @@ describe('engine/daemon — runDaemon', () => {
         sleep: async () => {},
         log: (m) => logs.push(m),
       };
-      const res = await runDaemon(deps, {
+      await runDaemon(deps, {
         concurrency: 1,
         once: false,
         isSelfHost: true,
@@ -1600,7 +1600,7 @@ describe('engine/daemon — runDaemon', () => {
         staleEngineChecker: { check: () => 'stale' },
         sleep: async () => {},
       };
-      const res = await runDaemon(deps, {
+      await runDaemon(deps, {
         concurrency: 1,
         once: false,
         isSelfHost: false, // gate 2 fails → no rebuild, no restart
@@ -1628,7 +1628,7 @@ describe('engine/daemon — runDaemon', () => {
         isSuppressed: async () => true, // held: identity hasn't converged
         sleep: async () => {},
       };
-      const res = await runDaemon(deps, {
+      await runDaemon(deps, {
         concurrency: 1,
         once: false,
         isSelfHost: true,
@@ -1719,7 +1719,7 @@ describe('engine/daemon — runDaemon', () => {
     });
     const deps: DaemonDeps = {
       discoverBacklog: staticBacklog(items(1)),
-      runFeature: async (it: BacklogItem) => {
+      runFeature: async (_it: BacklogItem) => {
         dispatches++;
         // Return the pending promise — blocks until test code resolves it
         return workerPromise;
@@ -1897,7 +1897,7 @@ describe('engine/daemon — runDaemon', () => {
         maxIdlePolls: 1,
       });
 
-      const res = await Promise.race([
+      await Promise.race([
         daemonPromise,
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('daemon timeout')), 500)
@@ -1930,7 +1930,7 @@ describe('engine/daemon — runDaemon', () => {
           halted.add(it.slug);
           return { slug: it.slug, status: 'halted' };
         },
-        watchHaltCleared: (slug, onCleared) => {
+        watchHaltCleared: (slug, _onCleared) => {
           watchedSlugs.push(slug);
           return () => {};
         },
@@ -1939,7 +1939,7 @@ describe('engine/daemon — runDaemon', () => {
         },
       };
 
-      const daemonPromise = runDaemon(deps, {
+      void runDaemon(deps, {
         concurrency: 2,
         once: false,
         maxIdlePolls: 1,
@@ -1963,7 +1963,7 @@ describe('engine/daemon — runDaemon', () => {
           // Completes without halting
           return { slug: it.slug, status: 'done' };
         },
-        watchHaltCleared: (slug, onCleared) => {
+        watchHaltCleared: (slug, _onCleared) => {
           watchCalls.push(slug);
           return () => {};
         },
@@ -2208,7 +2208,7 @@ describe('engine/daemon — runDaemon', () => {
         },
       };
 
-      const res = await runDaemon(deps, {
+      await runDaemon(deps, {
         concurrency: 1,
         once: false,
         maxIdlePolls: 1,
@@ -2926,7 +2926,7 @@ describe('engine/daemon — runDaemon', () => {
           }, 5);
           return () => {};
         },
-        sleep: async (ms) => {
+        sleep: async (_ms) => {
           events.push('sleep:started');
           // Real (short) delay so the setTimeout above gets a chance to fire
           // mid-run, same as the fs-event race in the "fresh token" test above.

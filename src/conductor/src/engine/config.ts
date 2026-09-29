@@ -12,7 +12,6 @@ import {
 import { load as loadYaml } from 'js-yaml';
 import type {
   HarnessConfig,
-  StepConfig,
   EffortLevel,
   MarkdownViewerConfig,
   MermaidRendererConfig,

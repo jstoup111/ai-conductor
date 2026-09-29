@@ -39,7 +39,7 @@ import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepRunOptions, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunOptions } from '../../src/engine/conductor.js';
 import { CoverageBindingPayloadError, DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { StepName } from '../../src/types/index.js';

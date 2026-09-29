@@ -5,7 +5,6 @@ import { execa } from 'execa';
 import {
   parsePlanTasks,
   canonicalTaskId,
-  PlanTask,
   listCommitsWithTrailers,
   resolveOriginRef,
 } from './autoheal.js';

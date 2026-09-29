@@ -125,8 +125,8 @@ concern, in `.docs/decisions/`, approved before the code is written. The ADR mus
 3. what the new channel's consumers are, and why the existing consumers do not need the signal
 4. the migration or reconciliation story, if both channels will carry overlapping information
 
-Absent that ADR, a second channel is a finding — kick it back at `architecture-review`, not at
-review time after the code exists.
+Absent that ADR, catch a second channel at `architecture-review`. `build_review`'s `eventSpine`
+rubric is the backstop once a channel reaches the diff.
 
 ---
 
@@ -146,6 +146,65 @@ The accepted design (`adr-2026-08-08-pipeline-owned-closeout-timestamps`) emits 
 so the events go to a single-writer sibling ledger **in the same union**, merged by `ts` and
 re-emitted onto the live bus. One schema, one reader path, no parallel channel — and note that the
 sibling file, by §3, was never the violation.
+
+---
+
+## 7. Grading a finished diff
+
+Judge only the **frozen feature diff**. Do not infer a concern from unmodified code, a proposed
+follow-up, provider output, or an artifact outside the reviewed diff. This is a blocking backstop
+for channels that reached the diff, not a replacement for catching the design at
+`architecture-review`.
+
+When the frozen diff introduces a bypass, return one blocking custom finding with exactly one of
+these concern ids:
+
+- `bespoke-channel` — a sidecar, ledger, record, or other bespoke schema/reader path outside the
+  spine. A bespoke record in an existing file remains `bespoke-channel`: schema and reader path,
+  not file novelty, govern the decision.
+- `stamped-artifact-field` — a timestamp, counter, status, or similar field stamped into an
+  artifact so a later reader reconstructs an occurrence.
+- `watcher-or-poller` — a watcher or poller observes state to infer an occurrence.
+- `out-of-band-signal` — an IPC endpoint, status endpoint, or other signal coordinates components
+  outside the spine.
+- `exception-changes-schema` — a claimed §4 exception that creates a new format or schema is
+  `exception-changes-schema`. An exception moves the write but never changes schema.
+
+Every finding summary must name the channel being graded: say **ledger** or **sidecar** for a
+bespoke write, **stamped field** and its **artifact** for an artifact field, **watcher** for a
+watcher/poller, or **IPC endpoint** for an IPC signal. For an exception, the summary must say that
+an **exception moves the write but never changes schema**. `evidenceLocations` must cite the added
+changed hunk that introduces the channel, and `sourceRegions` must be that same added changed hunk.
+
+Do not raise these ids for a compliant same-schema sibling ledger or for durable state under
+exception C. The question is whether this frozen diff adds an alternate schema/reader path or a
+way to reconstruct or coordinate occurrences outside the event spine.
+
+### Explicit non-findings
+
+Return zero findings for these changes when the frozen diff establishes the stated boundary:
+
+- A new `ConductorEvent` variant emitted through `ConductorEventEmitter`. The union is meant to
+  grow; adding a variant is extending the spine, not bypassing it.
+- A same-schema, single-writer sibling ledger that the existing reader merges, under exceptions A
+  and B. A separate writer file is permitted for process access or atomicity, while the
+  `ConductorEvent` schema and reader path remain shared.
+- Gate evidence artifacts and committed design docs. They are durable state under exception C,
+  not occurrences reconstructed outside the bus.
+- Writes confined to test files or fixtures. Test-only data does not create a production channel.
+
+### New-channel approval
+
+A genuinely new channel passes only with an **APPROVED** architecture decision record in
+`.docs/decisions/`. The record must name the concern, the applicable §4 exception (or why none
+applies), the channel's consumers, and a reconciliation story for overlapping information. A
+DRAFT, proposed, missing, or incomplete record is not approval.
+
+Otherwise return one blocking `unapproved-channel-adr` finding. Its summary must name the channel
+and the missing approval or required element; for example, `The review IPC endpoint has a DRAFT
+ADR; missing approval, consumers, and reconciliation story.` `evidenceLocations` and
+`sourceRegions` must still cite the added changed hunk that introduces the channel, with the
+source region's valid content hash.
 
 ---
 

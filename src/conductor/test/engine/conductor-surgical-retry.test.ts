@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir, readFile } from 'fs/promises';
+import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -23,7 +23,6 @@ vi.mock('execa', () => ({
 }));
 
 import { buildRetryHint } from '../../src/engine/conductor.js';
-import type { CompletionResult } from '../../src/engine/artifacts.js';
 
 describe('conductor/surgical-retry', () => {
   let dir: string;
@@ -350,7 +349,7 @@ describe('conductor/surgical-retry', () => {
       const missing: 'recording' | undefined = 'recording';
       const pipelineDir = join(dir, '.pipeline');
 
-      const hint = buildRetryHint('finish', reason, missing, pipelineDir);
+      buildRetryHint('finish', reason, missing, pipelineDir);
 
       // Verify inputs are unchanged
       expect(reason).toBe('test reason');

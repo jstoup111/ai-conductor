@@ -22,14 +22,13 @@
 // Dependencies: T5 (launcher realpath pinning), T27 (restart verb) ✓
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile, symlink, readlink } from 'node:fs/promises';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, mkdir, writeFile, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { TmuxRunner } from '../../src/engine/daemon-tmux.js';
 import {
   makeTmuxSupervisor,
-  sessionNameForRepo,
 } from '../../src/engine/daemon-tmux.js';
 import { writeRestartPending, readRestartPending, consumeOnBoot } from '../../src/engine/restart-marker.js';
 
@@ -100,7 +99,7 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
     const tmuxCalls: Array<{ cmd: string; args: string[] }> = [];
     const scrollbackLog: string[] = [];
 
-    const mockRunner: TmuxRunner = (args, opts) => {
+    const mockRunner: TmuxRunner = (args, _opts) => {
       const cmd = args[0] ?? '';
       tmuxCalls.push({ cmd, args });
 
@@ -134,14 +133,13 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
     };
 
     const supervisor = makeTmuxSupervisor(mockRunner);
-    const sessionName = sessionNameForRepo(repoPath);
 
     // Set up session first (normally done by start)
     // Simulate: session exists with the foreground process
     tmuxCalls.length = 0;
 
     // Attempt restart: respawn-pane will be called
-    const outcome = await supervisor.restart(repoPath);
+    await supervisor.restart(repoPath);
 
     // Verify restart was attempted
     expect(tmuxCalls.some((c) => c.cmd === 'respawn-pane')).toBe(true);
@@ -168,7 +166,7 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
     // Mock runner: respawn sets pane to dead state after failure
     let paneAlive = true;
 
-    const mockRunner: TmuxRunner = (args, opts) => {
+    const mockRunner: TmuxRunner = (args, _opts) => {
       const cmd = args[0] ?? '';
 
       if (cmd === 'respawn-pane') {
@@ -221,7 +219,7 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
     // Simulate restart failure (pane dies, marker untouched)
     let paneAlive = false;
 
-    const mockRunner: TmuxRunner = (args, opts) => {
+    const mockRunner: TmuxRunner = (args, _opts) => {
       const cmd = args[0] ?? '';
       if (cmd === 'respawn-pane') {
         paneAlive = false; // Simulate launcher failure
@@ -264,7 +262,7 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
     // actual output by conduct-ts-smoke.test.ts (real-binary smoke).
     const scrollbackContent = 'previous output\nconduct-ts: dist symlink is broken\n[Process exited with code 1]';
 
-    const mockRunner: TmuxRunner = (args, opts) => {
+    const mockRunner: TmuxRunner = (args, _opts) => {
       const cmd = args[0] ?? '';
       tmuxCalls.push(cmd);
 
@@ -322,7 +320,7 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
     // Stage 1: Restart with broken current (pane dies)
     let paneAlive = false;
 
-    const mockRunner: TmuxRunner = (args, opts) => {
+    const mockRunner: TmuxRunner = (args, _opts) => {
       const cmd = args[0] ?? '';
 
       if (cmd === 'respawn-pane') {
@@ -370,7 +368,7 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
     // This time, the launcher will succeed
     let launcherSucceeded = false;
 
-    const recoveryRunner: TmuxRunner = (args, opts) => {
+    const recoveryRunner: TmuxRunner = (args, _opts) => {
       const cmd = args[0] ?? '';
 
       if (cmd === 'respawn-pane') {
@@ -418,7 +416,7 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
     // Stage 1: Restart with broken symlink (fails, marker stays)
     let paneAlive = false;
 
-    const failRunner: TmuxRunner = (args, opts) => {
+    const failRunner: TmuxRunner = (args, _opts) => {
       if (args[0] === 'respawn-pane') {
         paneAlive = false;
         return { code: 0, stdout: '', stderr: '' };
