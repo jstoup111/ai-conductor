@@ -4,12 +4,6 @@ spec_hash: a2d5eee72b571285afd8d3591300bbabcbc2be90088d4cc9a1adc208738055cd
 pr: https://github.com/jstoup111/ai-conductor/pull/2808
 shipped: 2026-09-29
 engine_version: 20260929T105729Z-f7dec31e6e68
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "src/conductor/test/engine/daemon-park-cli.test.ts:676-679,794 — unplanned test-only edit (commit 383896997) narrows a HALT-recovery forbidden-verb check and drops one negative assertion"
-    accepted: true
 ---
 
 ## Cost
@@ -28,8 +22,10 @@ providers:
   claude: input: 74, output: 20163, cache_read: 1680852, cache_creation: 284744, cost_usd: 2.9809, dispatches: 7, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","4c3420dd-e4b9-43e5-aebb-4a59f12519c4","lifecycle-step","finish"]
+state: measured
+active_ms: 7750562
+provider_active_ms: 4974622
+no_provider_active_ms: 2775940
 
 ## Build Review
 laps_to_pass: 1
