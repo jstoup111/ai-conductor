@@ -63,6 +63,15 @@ export function createIntakeBackendComposite(deps: {
         project,
         selection: await deps.resolveTrackerSelection(project.path),
       })));
+      for (const { project, selection } of selected) {
+        if (!selection.ok || selection.selection.backend === 'github') continue;
+        await deps.events?.emit({
+          type: 'tracker_backend_unavailable',
+          project: project.name,
+          backend: selection.selection.backend,
+          reason: 'no-adapter',
+        });
+      }
       return selected
         .filter(({ selection }) => selection.ok && selection.selection.backend === 'github')
         .map(({ project }) => ({

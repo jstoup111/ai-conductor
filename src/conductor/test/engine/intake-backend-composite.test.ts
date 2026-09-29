@@ -1,0 +1,149 @@
+// Covers: task:6
+
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+import {
+  createIntakeBackendComposite,
+  type IntakeEventEmitter,
+} from '../../src/engine/intake-backend-composite.js';
+import { createLedger } from '../../src/engine/engineer/intake/ledger.js';
+import { createGithubIssuesAdapter } from '../../src/engine/engineer/intake/github-issues.js';
+import type { ProjectRecord, RegistryReader } from '../../src/engine/registry.js';
+import type { GhRunner } from '../../src/engine/tracker-client.js';
+import type { TrackerSelectionResult } from '../../src/engine/tracker-selection.js';
+
+function project(name: string, path = `/projects/${name}`): ProjectRecord {
+  return {
+    schemaVersion: 1,
+    name,
+    path,
+    remote: `git@github.com:${name}.git`,
+    status: 'registered',
+    registeredAt: '2026-09-28T00:00:00.000Z',
+  };
+}
+
+function scriptedGh(calls: string[][]): GhRunner {
+  return async (argv) => {
+    calls.push(argv);
+    return {
+      stdout: JSON.stringify([{
+        number: 17,
+        title: 'An assigned issue',
+        body: 'Poll this GitHub project.',
+        labels: [],
+      }]),
+    };
+  };
+}
+
+function registry(projects: ProjectRecord[]): RegistryReader {
+  return {
+    listProjects: async () => projects,
+    getProject: async (path) => projects.find((candidate) => candidate.path === path),
+  };
+}
+
+function resolver(selections: Map<string, TrackerSelectionResult>) {
+  return async (projectPath: string) => selections.get(projectPath)
+    ?? { ok: true as const, selection: { backend: 'github' as const } };
+}
+
+function recordingEmitter(events: unknown[]): IntakeEventEmitter {
+  return { emit: async (event) => { events.push(event); } };
+}
+
+function createComposite(args: {
+  projects: ProjectRecord[];
+  selections: Map<string, TrackerSelectionResult>;
+  calls: string[][];
+  events: unknown[];
+  ledgerPath: string;
+}) {
+  return createIntakeBackendComposite({
+    backendFactories: { github: createGithubIssuesAdapter },
+    resolveTrackerSelection: resolver(args.selections),
+    registry: registry(args.projects),
+    ledger: createLedger(args.ledgerPath),
+    gh: scriptedGh(args.calls),
+    log: () => {},
+    events: recordingEmitter(args.events),
+  });
+}
+
+describe('intake backend composite tracker exclusion (Task 6)', () => {
+  it('polls only GitHub projects and reports a Jira project without an adapter', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'intake-backend-composite-'));
+    try {
+      const projectA = project('owner/project-a');
+      const projectB = project('owner/project-b');
+      projectA.path = join(root, 'project-a');
+      projectB.path = join(root, 'project-b');
+      await Promise.all([mkdir(projectA.path), mkdir(projectB.path)]);
+      const calls: string[][] = [];
+      const events: unknown[] = [];
+      const composite = createComposite({
+        projects: [projectA, projectB],
+        selections: new Map([[projectB.path, { ok: true, selection: { backend: 'jira' } }]]),
+        calls,
+        events,
+        ledgerPath: join(root, 'ledger.json'),
+      });
+
+      const envelopes = await composite.poll();
+
+      expect({
+        sourceRefs: envelopes.map(({ sourceRef }) => sourceRef),
+        calls,
+        events,
+      }).toEqual({
+        sourceRefs: ['owner/project-a#17'],
+        calls: [expect.arrayContaining(['-R', 'owner/project-a'])],
+        events: [{
+          type: 'tracker_backend_unavailable',
+          project: 'owner/project-b',
+          backend: 'jira',
+          reason: 'no-adapter',
+        }],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns no envelopes and reports every Jira project when no adapter exists', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'intake-backend-composite-'));
+    try {
+      const projectA = project('owner/project-a');
+      const projectB = project('owner/project-b');
+      projectA.path = join(root, 'project-a');
+      projectB.path = join(root, 'project-b');
+      await Promise.all([mkdir(projectA.path), mkdir(projectB.path)]);
+      const calls: string[][] = [];
+      const events: unknown[] = [];
+      const composite = createComposite({
+        projects: [projectA, projectB],
+        selections: new Map([
+          [projectA.path, { ok: true, selection: { backend: 'jira' } }],
+          [projectB.path, { ok: true, selection: { backend: 'jira' } }],
+        ]),
+        calls,
+        events,
+        ledgerPath: join(root, 'ledger.json'),
+      });
+
+      await expect(composite.poll()).resolves.toEqual([]);
+      expect({ calls, events }).toEqual({
+        calls: [],
+        events: [
+          { type: 'tracker_backend_unavailable', project: 'owner/project-a', backend: 'jira', reason: 'no-adapter' },
+          { type: 'tracker_backend_unavailable', project: 'owner/project-b', backend: 'jira', reason: 'no-adapter' },
+        ],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
