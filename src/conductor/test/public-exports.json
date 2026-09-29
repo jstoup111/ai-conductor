@@ -6,6 +6,7 @@
   "PluginRegistryError",
   "PluginVersionError",
   "VALID_PLUGIN_KINDS",
+  "bootComposeEngineerLaunch",
   "bootDispatchingCliProviders",
   "buildDaemonModeOptions",
   "buildInteractiveVisualizers",
