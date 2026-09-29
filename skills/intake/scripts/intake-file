@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REAL_PATH="$(readlink -f "$0")"
+SEARCH_DIR="$(dirname "$REAL_PATH")"
+
+while :; do
+  if [ -f "$SEARCH_DIR/src/conductor/src/intake-file-cli.ts" ] \
+    && [ -x "$SEARCH_DIR/src/conductor/node_modules/.bin/tsx" ]; then
+    exec "$SEARCH_DIR/src/conductor/node_modules/.bin/tsx" \
+      --tsconfig "$SEARCH_DIR/src/conductor/tsconfig.json" \
+      "$SEARCH_DIR/src/conductor/src/intake-file-cli.ts" "$@"
+  fi
+
+  if [ "$SEARCH_DIR" = / ]; then
+    echo "intake-file: could not find a harness root" >&2
+    exit 1
+  fi
+  SEARCH_DIR="$(dirname "$SEARCH_DIR")"
+done
