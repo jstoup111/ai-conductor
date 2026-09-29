@@ -162,6 +162,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 - While a session is open for an item, no second entry for that item is produced by any subsequent pass. While a queue of three halts is worked, exactly one item is open, and so exactly one guided session exists, at any moment.
 - No module persists queue membership: a static check asserts the queue type is constructed per pass and never read from disk. Two monitors over the same project each derive membership independently and each offer the halt, neither writing state the other reads, so the redundant offer is a duplicate prompt and never a data fault.
 - While a two-item queue is being worked, a third feature that halts is included in the ordering by the next membership recomputation, which then orders all three items.
+- After a halt is resolved, the displayed queue omits the resolved feature entirely: no entry for it is rendered, and no entry is ever shown with a resolved status.
 
 **Files likely touched:**
 - `src/conductor/src/engine/monitor/queue.ts`
@@ -344,6 +345,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 - A session that changed nothing leaves its halt in the recomputed queue.
 - When the head item's session ends normally, membership is recomputed and the next item in the recomputed order is offered; the session is not required to resolve its halt, and an unresolved head halt stays in the recomputed queue without being re-offered ahead of the remaining items.
 - With a queue of three halts, as each session ends in turn all three items are offered in queue order, and the monitor is never restarted.
+- A session that ends having changed nothing leaves its halt in the recomputed queue and that same halt is offered to the operator again on a later offer, never silently consumed.
 
 **Files likely touched:**
 - `src/conductor/src/engine/monitor/loop.ts`
