@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-29T13:17:45.547Z
 Slug: make-bin-install-uninstall-remove-installer-settin
 Class: needs-human
 Halting step: unknown
