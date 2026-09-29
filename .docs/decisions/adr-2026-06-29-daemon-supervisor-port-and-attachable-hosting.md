@@ -156,6 +156,19 @@ Key sub-decisions:
    > memory samples and heap-dump records are ordinary daemon-origin events on
    > `.daemon/events.jsonl`; no OpenTelemetry instrument is added (adr-014 unchanged).
 
+   > **Amended 2026-09-29 by operator decision (James Stoup, as-built halt recovery for
+   > `carry-daemon-cli-flags-across-stale-engine-restart`):** Decision 7's default is unchanged —
+   > the canonical session-hosted foreground command still omits `--max-idle-polls` and the
+   > daemon stays long-lived unless an operator asks otherwise.
+   >
+   > **D7.1** Operator-supplied idle limit survives a stale-engine respawn. When the operator
+   > explicitly started the running daemon with `--max-idle-polls <n>`, the stale-engine
+   > respawn replays that flag (with its raw value) into the session-hosted successor, alongside
+   > the other captured run flags. The idle self-limit is then the operator's own explicit
+   > choice carried across a restart, not a limit the supervisor or engineer imposes; the engine
+   > never adds the flag on its own, and `supervisor.start` / `ensureRunning` launches remain
+   > flag-free per Decision 7.
+
 ## Consequences
 
 ### Positive
