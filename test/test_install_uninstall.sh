@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Covers: task:1, task:2, task:4
+# Covers: task:1, task:2, task:4, task:5
 #
 # Public-entry-point RED coverage for uninstalling the settings entries written
 # by bin/install.  Every invocation uses a throwaway HOME and a copied harness
@@ -68,6 +68,10 @@ rate_card_file() { printf '%s/.ai-conductor/rate-card.json' "$1"; }
 expect_removal_report() {
   local home=$1 output=$2 hooks=$3 permissions=$4
   grep -Fq "Settings: removed ${hooks} harness hook commands and ${permissions} permissions from $(settings_file "$home")" "$output"
+}
+
+has_no_kept_line() {
+  ! grep -Fq 'Kept ' "$1"
 }
 
 assert_case_a() {
@@ -239,6 +243,33 @@ check 'R3 preserves a foreign global rate-card symlink' \
   test "$(readlink "$(rate_card_file "$CASE_R3")")" = /elsewhere/rate-card.json
 check 'R3 warns that a global rate-card symlink points elsewhere' \
   grep -Fq "Global rate card $(rate_card_file "$CASE_R3") points elsewhere" "$TMP_ROOT/case-r3.out"
+
+# K1: plain uninstall keeps operator configuration and runtime data after
+# removing its rate-card link, and says how to remove that retained state.
+CASE_K1="$TMP_ROOT/case-k1"
+make_case_home "$CASE_K1"
+mkdir -p "$CASE_K1/.ai-conductor/memory"
+printf '{"project":"registry"}\n' > "$CASE_K1/.ai-conductor/registry.json"
+printf 'operator memory\n' > "$CASE_K1/.ai-conductor/memory/note.md"
+cp "$CASE_K1/.ai-conductor/registry.json" "$TMP_ROOT/case-k1-registry-before.json"
+cp "$CASE_K1/.ai-conductor/memory/note.md" "$TMP_ROOT/case-k1-note-before.md"
+run_uninstall "$CASE_K1" "$TMP_ROOT/case-k1.out" || true
+check 'K1 keeps the operator project registry byte-identical' \
+  cmp -s "$CASE_K1/.ai-conductor/registry.json" "$TMP_ROOT/case-k1-registry-before.json"
+check 'K1 keeps operator memory byte-identical' \
+  cmp -s "$CASE_K1/.ai-conductor/memory/note.md" "$TMP_ROOT/case-k1-note-before.md"
+check 'K1 reports the exact kept-state guidance' \
+  grep -Fq "Kept $CASE_K1/.ai-conductor: operator configuration and runtime data (project registry, memory). Re-run with --uninstall --purge to remove it." "$TMP_ROOT/case-k1.out"
+
+# K2: uninstall does not create absent harness state or announce a kept path.
+CASE_K2="$TMP_ROOT/case-k2"
+mkdir -p "$CASE_K2"
+run_uninstall "$CASE_K2" "$TMP_ROOT/case-k2.out"
+CASE_K2_EXIT=$?
+check 'K2 uninstall exits successfully without harness state' test "$CASE_K2_EXIT" -eq 0
+check 'K2 does not create absent harness state' test ! -e "$CASE_K2/.ai-conductor"
+check 'K2 does not report kept state when none exists' \
+  has_no_kept_line "$TMP_ROOT/case-k2.out"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

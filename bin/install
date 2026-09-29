@@ -1643,6 +1643,11 @@ PYEOF
     warn "Global rate card ${rate_card} is not a harness link, skipping"
   fi
 
+  local harness_state_dir="${HOME}/.ai-conductor"
+  if [ "${PURGE:-false}" = false ] && [ -e "$harness_state_dir" ]; then
+    info "Kept ${harness_state_dir}: operator configuration and runtime data (project registry, memory). Re-run with --uninstall --purge to remove it."
+  fi
+
   echo -e "${BOLD}${CYAN}Uninstalling AI Conductor Harness${NC}"
   echo ""
 
