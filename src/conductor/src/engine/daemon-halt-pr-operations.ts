@@ -9,7 +9,7 @@ import {
 import type { OwnerResolution } from './owner-gate/identity.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
 
-const DAEMON_BRANCH_PREFIX = 'feat/daemon-';
+export const DAEMON_BRANCH_PREFIX = 'feat/daemon-';
 
 export interface DaemonHaltPrOperationsOptions {
   readonly projectRoot: string;

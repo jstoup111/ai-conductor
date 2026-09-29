@@ -129,6 +129,41 @@ describe('github-operation CLI', () => {
     expect(noConfirmationWrite.mock.calls[0]?.[0]).toContain('explicit-authorization-required');
   });
 
+  it('resolves a daemon feat/daemon-<slug> worktree to the feature slug for PR edits', async () => {
+    const shows: string[] = [];
+    const git = vi.fn(async (args: string[]) => {
+      if (args.join(' ') === 'branch --show-current') return { stdout: 'feat/daemon-widget\n' };
+      if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
+      if (args[0] === 'show') {
+        shows.push(args.join(' '));
+        if (args.some((arg) => arg.endsWith(':.docs/intake/widget.md'))) return { stdout: 'Owner: alice\n' };
+        throw new Error(`fatal: path not found: ${args.join(' ')}`);
+      }
+      throw new Error(`unexpected git read: ${args.join(' ')}`);
+    });
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
+      if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ number: 7 }) };
+      return { stdout: '' };
+    });
+    const pr = {
+      operation: 'pull-request.edit', repository: 'acme/widgets',
+      resource: { kind: 'pull-request', number: 7 }, context: { actor: 'alice', feature: 'widget' },
+      payload: { body: 'daemon prose' },
+    };
+    const output = vi.fn();
+
+    const exit = await dispatchGithubOperationCommand({ requestFile: '/daemon.json' }, {
+      cwd: '/fixture', readRequest: readRequest(pr), gh, git, resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }), write: output,
+    });
+
+    expect(exit, JSON.stringify(output.mock.calls)).toBe(0);
+    expect(shows.length).toBeGreaterThan(0);
+    expect(shows.every((call) => call.endsWith(':.docs/intake/widget.md'))).toBe(true);
+    expect(gh.mock.calls.some(([args]) => args[0] === 'pr' && args[1] === 'edit')).toBe(true);
+  });
+
   it('composes owned-worktree PR authority per request, refuses a foreign PR, and routes refs to guarded remote Git', async () => {
     const writes: string[][] = [];
     const git = vi.fn(async (args: string[]) => {
