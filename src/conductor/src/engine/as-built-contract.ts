@@ -9,6 +9,7 @@ export const AS_BUILT_VERDICT_CONTRACT_VERSION = 'v1' as const;
 
 export interface AsBuiltReachability {
   readonly primitive: string;
+  /** Production caller hops; empty only for an unreachable primitive, which a BLOCKED verdict must carry. */
   readonly callerChain: readonly string[];
 }
 
@@ -172,10 +173,12 @@ function parseReachability(value: unknown): Parsed<readonly AsBuiltReachability[
   for (const [index, entry] of value.entries()) {
     if (!record(entry) || !exactKeys(entry, ['primitive', 'callerChain'])) return rejected(`reachability[${index}]`, 'exactly primitive and callerChain are required');
     if (!nonEmptyText(entry.primitive)) return rejected(`reachability[${index}].primitive`, 'a non-empty primitive is required');
-    if (!Array.isArray(entry.callerChain) || entry.callerChain.length === 0 || !entry.callerChain.every(nonEmptyText)) {
-      return rejected(`reachability[${index}].callerChain`, 'a non-empty caller chain of non-empty strings is required');
+    if (!Array.isArray(entry.callerChain) || !entry.callerChain.every((hop) => typeof hop === 'string')) {
+      return rejected(`reachability[${index}].callerChain`, 'an array of caller strings is required; use an empty array only for a primitive with no production caller');
     }
-    entries.push({ primitive: entry.primitive, callerChain: entry.callerChain });
+    // Blank hops carry no caller; an entry left with no hops is the reviewer's explicit
+    // "no production caller" record, which validateAsBuiltVerdict admits only under BLOCKED.
+    entries.push({ primitive: entry.primitive, callerChain: entry.callerChain.filter(nonEmptyText) });
   }
   return { ok: true, value: entries };
 }
@@ -293,6 +296,10 @@ export function validateAsBuiltVerdict(input: unknown): ValidateAsBuiltVerdictRe
   if (!AS_BUILT_VERDICTS.includes(value.verdict as typeof AS_BUILT_VERDICTS[number])) return rejected('verdict', `one of ${AS_BUILT_VERDICTS.join(', ')} is required`);
   const reachability = parseReachability(value.reachability);
   if (!reachability.ok) return reachability;
+  const unreachable = reachability.value.findIndex((entry) => entry.callerChain.length === 0);
+  if (unreachable !== -1 && value.verdict !== 'BLOCKED') {
+    return rejected(`reachability[${unreachable}].callerChain`, 'an empty caller chain records an unreachable primitive, which requires a BLOCKED verdict');
+  }
   const driftNotes = parseDriftNotes(value.driftNotes);
   if (!driftNotes.ok) return driftNotes;
 
