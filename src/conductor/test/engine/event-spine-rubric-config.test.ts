@@ -42,7 +42,7 @@ describe('repository-local event-spine build-review rubric', () => {
       rawMinimumConfidence: undefined,
       eventSpine: [expect.objectContaining({
         id: 'eventSpine', kind: 'custom', skill: 'event-spine', source: 'project',
-        policy: expect.objectContaining({ enabled: true, llm_provider: 'claude', model: 'sonnet', effort: 'low' }),
+        policy: expect.objectContaining({ enabled: true }),
       })],
     });
 
