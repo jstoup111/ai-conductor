@@ -482,6 +482,28 @@ therefore completes without an empty review prompt; its marker is still checked 
 
 This repo's own custom step is documented in [self-hosting](../guides/self-hosting.md).
 
+### Pull-request template regions
+
+To reserve PR-body content for a custom SHIP step, put one named region for that step in
+`.github/pull_request_template.md`:
+
+```md
+<!-- ai-conductor:step compliance-attest -->
+Attested-By: security-bot
+<!-- /ai-conductor:step -->
+```
+
+The opening marker's name must be a declared custom step that runs in the SHIP phase before
+`finish`; built-in, undeclared, BUILD-phase, and post-`finish` owners fail config loading. An owner
+may have one region only. Regions cannot be nested or unclosed, and their template content cannot
+contain engine-owned PR-body headings or markers.
+
+The engine seeds the retained SHIP draft from the template. Before the owning step runs, it adds a
+missing region with the template bytes but never overwrites a region already on the draft. When the
+step succeeds, its non-empty region content is captured as opaque bytes. `finish` restores those
+captured bytes before making the PR ready, so PR-body authors must leave every region and its markers
+unchanged. A template without these markers keeps the existing PR-body behavior.
+
 ## complexity
 
 | Key | Type | Allowed | Default | Consumer |

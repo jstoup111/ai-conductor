@@ -102,17 +102,14 @@ work back to — are `prd`, `architecture_review`, `stories`, and `plan`.
 
 This repository adds two configured SHIP gates without changing the static `ALL_STEPS` index:
 `rebase → maintain-documentation → release-disposition → finish`. `release-disposition` is gating,
-writes the authoritative structured metadata to the retained SHIP draft PR, and records only its
-completion evidence in `.pipeline/release-disposition-pass`. The later `finish` step preserves that
-metadata while supplying the reader-facing PR body.
+writes the authoritative structured metadata inside its project-owned region on the retained SHIP
+draft PR, and records only its completion evidence in `.pipeline/release-disposition-pass`. The later
+`finish` step preserves every project-owned region while supplying the reader-facing PR body.
 
-`finish` captures the exact metadata block before it dispatches and restores it after the prose
-author has rewritten the body. Because `finish` advances one publication transition per dispatch,
-that capture is taken **once** per retained PR and persisted to
-`.pipeline/release-metadata-snapshot.json`: a later dispatch — including one in a fresh process after
-a daemon re-dispatch — reuses it instead of re-reading a body the prose author has already replaced.
-Dispatching `release-disposition` discards the capture, so a kickback that rewrites the disposition
-never has its superseded block restored over the new one.
+Each region is owned by one configured custom SHIP step and carries opaque body bytes. The engine
+prepares a missing region before its owner runs, captures the owner's non-empty result after success,
+and restores captured regions after PR-body authoring. See the
+[template-region contract](configuration.md#pull-request-template-regions).
 
 Before FINISH begins publication, it also checks every configured custom step that occurs earlier in
 the resolved flow and declares both `enforcement: gating` and a `completion_artifact`. Each such step
