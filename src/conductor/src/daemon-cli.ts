@@ -3334,7 +3334,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const commit = commitAge ? ` · last commit ${commitAge}` : '';
       const activity = event.lastActivityAt === undefined
         ? ''
-        : ` · provider activity ${formatHeartbeatAge(Date.now() - event.lastActivityAt)} ago`;
+        : ` · provider activity ${formatHeartbeatAge(Math.max(0, Date.now() - event.lastActivityAt))} ago`;
       log(
         `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} quiet ${event.quietMinutes}m (${position}/${event.total})${commit}${activity}`)}${slug}`,
       );

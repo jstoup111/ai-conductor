@@ -258,6 +258,51 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
     expect(line).not.toContain('last commit');
   });
 
+  it('leaves a quiet build warning without activity evidence unchanged', () => {
+    const [line] = lines({
+      type: 'build_no_progress',
+      step: 'build',
+      quietMinutes: 15,
+      resolved: 20,
+      total: 21,
+      currentTaskId: '21',
+      lastCommitAt: Date.now() - 7 * 60_000,
+      featureSlug: 'show-provider-activity-age',
+    });
+
+    expect(line).toBe('· ⚠ build quiet 15m (21/21) · last commit 7m ago · show-provider-activity-age');
+  });
+
+  it('renders a future provider activity timestamp as a zero-length age', () => {
+    const [line] = lines({
+      type: 'build_no_progress',
+      step: 'build',
+      quietMinutes: 15,
+      resolved: 20,
+      total: 21,
+      currentTaskId: '21',
+      lastActivityAt: Date.now() + 5 * 60_000,
+      featureSlug: 'show-provider-activity-age',
+    });
+
+    expect(line).toBe('· ⚠ build quiet 15m (21/21) · provider activity 0s ago · show-provider-activity-age');
+  });
+
+  it('clamps a future provider activity timestamp beyond an exact minute to zero', () => {
+    const [line] = lines({
+      type: 'build_no_progress',
+      step: 'build',
+      quietMinutes: 15,
+      resolved: 20,
+      total: 21,
+      currentTaskId: '21',
+      lastActivityAt: Date.now() + 5 * 60_000 + 1_000,
+      featureSlug: 'show-provider-activity-age',
+    });
+
+    expect(line).toBe('· ⚠ build quiet 15m (21/21) · provider activity 0s ago · show-provider-activity-age');
+  });
+
   it('marks build_no_progress with a distinct warning glyph under color', () => {
     chalk.level = 1;
     const [line] = lines({
