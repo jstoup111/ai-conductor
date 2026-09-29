@@ -7,9 +7,9 @@ import { EventPersister } from '../../src/engine/event-persister.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import {
   CLI_PROVIDER_DISPATCHING_COMMANDS,
-  bootComposeEngineerLaunch,
   bootDispatchingCliProviders,
   dispatchNonDispatchingCliCommand,
+  validateComposeEngineerClaudeInstallation,
 } from '../../src/index.js';
 import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
@@ -284,25 +284,18 @@ describe('runDaemonMode provider discovery at boot', () => {
     expect(CLI_PROVIDER_DISPATCHING_COMMANDS).not.toContain('render-diagrams');
   });
 
-  it('refuses a missing Claude before the compose launch callback can spawn', async () => {
-    const launch = vi.fn(async () => 0);
+  it('refuses a missing Claude during compose pre-launch validation', async () => {
     const events = new ConductorEventEmitter();
     const discoveries: unknown[] = [];
     events.on('provider_discovery', async (event) => { discoveries.push(event); });
 
-    await expect(bootComposeEngineerLaunch({
-      command: 'compose',
-      registry: new PluginRegistry(),
+    await expect(validateComposeEngineerClaudeInstallation({
       events,
-      config: { llm_provider: 'claude' },
-      rendererOpts: { stateFilePath: '/tmp/state.json', steps: [], readStateFn: async () => ({ ok: true, value: {} }), projectRoot: '/tmp' },
-      launch,
       providerDiscoveryRunner: async (executable) => {
         if (executable === 'claude') throw Object.assign(new Error('missing claude'), { code: 'ENOENT' });
         return { exitCode: 0 };
       },
     })).rejects.toThrow(/claude.*not installed.*not-found/i);
-    expect(launch).not.toHaveBeenCalled();
     expect({ discoveries }).toEqual({
       discoveries: [{
         type: 'provider_discovery',
@@ -312,36 +305,10 @@ describe('runDaemonMode provider discovery at boot', () => {
     });
   });
 
-  it('requires Claude for compose even when the configured provider is installed Pi', async () => {
-    const launch = vi.fn(async () => 0);
-
-    await expect(bootComposeEngineerLaunch({
-      command: 'compose',
-      registry: new PluginRegistry(),
+  it('allows compose pre-launch validation when Claude is installed', async () => {
+    await expect(validateComposeEngineerClaudeInstallation({
       events: new ConductorEventEmitter(),
-      config: { llm_provider: 'pi' },
-      rendererOpts: { stateFilePath: '/tmp/state.json', steps: [], readStateFn: async () => ({ ok: true, value: {} }), projectRoot: '/tmp' },
-      launch,
-      providerDiscoveryRunner: async (executable) => {
-        if (executable === 'claude') throw Object.assign(new Error('missing claude'), { code: 'ENOENT' });
-        return { exitCode: 0 };
-      },
-    })).rejects.toThrow(/claude.*not installed.*not-found/i);
-    expect(launch).not.toHaveBeenCalled();
-  });
-
-  it('allows compose to launch when Claude is installed and configuration names an external plugin', async () => {
-    const launch = vi.fn(async () => 0);
-
-    await expect(bootComposeEngineerLaunch({
-      command: 'compose',
-      registry: new PluginRegistry(),
-      events: new ConductorEventEmitter(),
-      config: { llm_provider: 'external-plugin' },
-      rendererOpts: { stateFilePath: '/tmp/state.json', steps: [], readStateFn: async () => ({ ok: true, value: {} }), projectRoot: '/tmp' },
-      launch,
       providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
-    })).resolves.toBe(0);
-    expect(launch).toHaveBeenCalledOnce();
+    })).resolves.toBeUndefined();
   });
 });

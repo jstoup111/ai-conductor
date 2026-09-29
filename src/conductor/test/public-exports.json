@@ -6,7 +6,6 @@
   "PluginRegistryError",
   "PluginVersionError",
   "VALID_PLUGIN_KINDS",
-  "bootComposeEngineerLaunch",
   "bootDispatchingCliProviders",
   "buildDaemonModeOptions",
   "buildInteractiveVisualizers",
@@ -29,5 +28,6 @@
   "runShipmentReconcileAction",
   "selectVisualizers",
   "stopVisualizers",
+  "validateComposeEngineerClaudeInstallation",
   "wireOtelVisualizer"
 ]

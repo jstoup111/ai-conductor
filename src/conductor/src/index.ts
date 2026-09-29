@@ -532,16 +532,11 @@ export async function bootDispatchingCliProviders(options: {
   return subscriber;
 }
 
-/** Boot the interactive compose/engineer provider before its launcher can spawn. */
-export async function bootComposeEngineerLaunch(options: {
-  readonly command: 'compose' | 'engineer';
-  readonly registry: PluginRegistry;
+/** Validate the Claude executable before compose or engineer launches it. */
+export async function validateComposeEngineerClaudeInstallation(options: {
   readonly events: ConductorEventEmitter;
-  readonly config: HarnessConfig | undefined;
-  readonly rendererOpts: TerminalRendererOptions;
-  readonly launch: () => Promise<number>;
   readonly providerDiscoveryRunner?: ProviderVersionProbeRunner;
-}): Promise<number> {
+}): Promise<void> {
   const discovery = await discoverInstalledProviders({
     events: options.events,
     ...(options.providerDiscoveryRunner ? { runner: options.providerDiscoveryRunner } : {}),
@@ -554,7 +549,6 @@ export async function bootComposeEngineerLaunch(options: {
     const reason = discovery.missing.find(({ id }) => id === CLAUDE_PROVIDER)?.reason ?? 'version-failed';
     throw new ProviderNotInstalledError(CLAUDE_PROVIDER, 'compose/engineer launch', reason);
   }
-  return options.launch();
 }
 
 // Harness VERSION lookup for the migration check. Probes the invocation cwd
@@ -960,30 +954,14 @@ async function main(): Promise<void> {
     const spine = startOperatorEventSpine(process.cwd());
     let code: number;
     try {
-      const projectRoot = process.cwd();
       let launchBoot: Promise<void> | undefined;
       code = await dispatchEngineer(engineerCmd, {
         events: spine.events,
         ...(engineerCmd.kind === 'launch' ? {
           beforeLaunch: async () => {
             launchBoot ??= (async () => {
-              const configResult = await loadConfig(projectRoot);
-              if (!configResult.ok && configResult.error.type !== 'missing') {
-                throw new Error(`Config error: ${configResult.error.message}`);
-              }
-              const registry = new PluginRegistry();
-              await bootComposeEngineerLaunch({
-                command: process.argv[2] === 'engineer' ? 'engineer' : 'compose',
-                registry,
+              await validateComposeEngineerClaudeInstallation({
                 events: spine.events,
-                config: configResult.ok ? configResult.config : undefined,
-                rendererOpts: {
-                  stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
-                  steps: [],
-                  readStateFn: async () => ({ ok: true, value: {} }),
-                  projectRoot,
-                },
-                launch: async () => 0,
               });
             })();
             await launchBoot;
