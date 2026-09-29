@@ -546,7 +546,9 @@ export function createFinishPresentationRepair(input: {
     const captures = await readRegionCaptures(cwd, prUrl);
     // A capture has no template bytes at this boundary; reconstruct the marker
     // wrapper from its key and preserve the captured interior exactly.
-    if (Object.keys(captures).length > 0) {
+    // Every capture-present failure is a RegionRestoreError (ADR D6) so FINISH
+    // fails closed instead of treating it as a lost response.
+    if (Object.keys(captures).length > 0) try {
       let body: string;
       try {
         const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
@@ -577,6 +579,10 @@ export function createFinishPresentationRepair(input: {
       for (const [key, bytes] of Object.entries(captures)) {
         if (extractRegionBytes(verified, key) !== bytes) throw new RegionRestoreError('mismatch', [key]);
       }
+    } catch (error) {
+      if (error instanceof RegionRestoreError) throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new RegionRestoreError('refused', Object.keys(captures), 'unavailable', `project-owned region restore failed: ${reason}`);
     }
     try {
       const outcome = await ensureShipReady(
@@ -3359,6 +3365,22 @@ export class Conductor {
   private async restoreCapturedRegions(state: ConductState, prUrl: string): Promise<void> {
     const captures = await readRegionCaptures(this.projectRoot, prUrl);
     if (Object.keys(captures).length === 0) return;
+    try {
+      await this.restoreCapturedRegionsFrom(state, prUrl, captures);
+    } catch (error) {
+      // Every capture-present failure fails closed (ADR D6): a generic error
+      // would read as response loss and let FINISH advance an unrestored body.
+      if (error instanceof RegionRestoreError) throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new RegionRestoreError('refused', Object.keys(captures), 'unavailable', `project-owned region restore failed: ${reason}`);
+    }
+  }
+
+  private async restoreCapturedRegionsFrom(
+    state: ConductState,
+    prUrl: string,
+    captures: Readonly<Record<string, string>>,
+  ): Promise<void> {
     const stdout = await runTrackerUrlRead(this.gh, this.projectRoot, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     const body = (JSON.parse(stdout) as { body?: unknown }).body;
     if (typeof body !== 'string') throw new Error('project-owned region restore failed: body read failed');
@@ -6338,7 +6360,6 @@ export class Conductor {
     executionContext?: ExecutionContext,
   ): Promise<StepRunResult> {
     if (!this.liveBoundaryCoordinator) {
-      await this.discardOwnedStepRegionCapture(state, name);
       return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext);
     }
     await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'queued' });
@@ -6349,7 +6370,6 @@ export class Conductor {
         return { success: false, operatorParkedBeforeDispatch: true };
       }
       await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'admitted' });
-      await this.discardOwnedStepRegionCapture(state, name);
       return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext);
     });
   }
@@ -6448,8 +6468,12 @@ export class Conductor {
     // ProviderExecutionContext. Real entrypoints always take the candidate
     // path below; this retains the existing isolated behavior for that narrow
     // test/extension surface.
+    // ADR D5: a capture is discarded only when its owner actually dispatches
+    // again, so every seam below discards at the provider-invocation boundary,
+    // after all self-host preflights have passed.
     if (!this.providerExecution) {
       if (preferredBuildProvider === CODEX_PROVIDER) {
+        await this.discardOwnedStepRegionCapture(state, name);
         return this.stepRunner.run(name, state, {
           retryReason: retryHint,
           ...identityOption,
@@ -6479,6 +6503,7 @@ export class Conductor {
       process.env.CLAUDE_CONFIG_DIR = sandbox.configDir;
       if (daemonToken) process.env.CLAUDE_CODE_OAUTH_TOKEN = daemonToken;
       try {
+        await this.discardOwnedStepRegionCapture(state, name);
         return await this.stepRunner.run(name, state, {
           retryReason: retryHint,
           ...identityOption,
@@ -6498,11 +6523,15 @@ export class Conductor {
     const priorSafety = this.providerExecution?.withCandidateSafety;
     if (this.providerExecution) {
       this.providerExecution.withCandidateSafety = async (candidate, invoke) => {
+        const invokeOwner = async () => {
+          await this.discardOwnedStepRegionCapture(state, name);
+          return invoke();
+        };
         const result = await this.withSelfHostCandidateSafety(
           candidate,
           state,
           sh.sandboxBuildEnv,
-          () => priorSafety ? priorSafety(candidate, invoke) : invoke(),
+          () => priorSafety ? priorSafety(candidate, invokeOwner) : invokeOwner(),
         );
         return result;
       };

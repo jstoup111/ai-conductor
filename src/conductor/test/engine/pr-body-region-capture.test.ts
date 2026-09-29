@@ -7,6 +7,7 @@ import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readRegionCaptures, writeRegionCapture } from '../../src/engine/pr-body-region-store.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import { RegionRestoreError } from '../../src/engine/region-restore-error.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 
@@ -123,5 +124,42 @@ describe('project-owned region capture', () => {
     await fixture.capture();
 
     await expect(readFile(join(fixture.root, CAPTURE_FILE), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('keeps a capture when a self-host preflight refuses before the owner is invoked', async () => {
+    const config = { ...ownerConfig, harness_self_host: { sandbox_build_env: false } } as HarnessConfig;
+    const fixture = await subject({ body: ownerBody('\nAttested-By: bot\n'), config });
+    await writeRegionCapture(fixture.root, PR_URL, OWNER, '\nAttested-By: first\n');
+
+    const result = await (fixture.conductor as unknown as {
+      runSelfBuildDispatch(name: StepName, state: ConductState, retryHint: string | undefined): Promise<{ success: boolean }>;
+    }).runSelfBuildDispatch(OWNER, { worktree_branch: BRANCH, feature_desc: 'capture fixture' } as ConductState, undefined);
+
+    expect(result.success).toBe(false);
+    expect(fixture.runner.run).not.toHaveBeenCalled();
+    await expect(readRegionCaptures(fixture.root, PR_URL)).resolves.toEqual({ [OWNER]: '\nAttested-By: first\n' });
+  });
+
+  it('fails closed with a RegionRestoreError when a capture is present but the body read fails', async () => {
+    const fixture = await subject({ body: ownerBody('\nAttested-By: bot\n'), failRead: true });
+    await writeRegionCapture(fixture.root, PR_URL, OWNER, '\nAttested-By: first\n');
+
+    const restore = (fixture.conductor as unknown as {
+      restoreCapturedRegions(state: ConductState, prUrl: string): Promise<void>;
+    }).restoreCapturedRegions({ worktree_branch: BRANCH, feature_desc: 'capture fixture' } as ConductState, PR_URL);
+
+    await expect(restore).rejects.toBeInstanceOf(RegionRestoreError);
+  });
+
+  it('fails closed with a RegionRestoreError when a capture is present but the body is malformed', async () => {
+    const fixture = await subject({ body: ownerBody('\nAttested-By: bot\n') });
+    fixture.views.mockImplementation(async () => ({ stdout: JSON.stringify({ body: 42 }) }));
+    await writeRegionCapture(fixture.root, PR_URL, OWNER, '\nAttested-By: first\n');
+
+    const restore = (fixture.conductor as unknown as {
+      restoreCapturedRegions(state: ConductState, prUrl: string): Promise<void>;
+    }).restoreCapturedRegions({ worktree_branch: BRANCH, feature_desc: 'capture fixture' } as ConductState, PR_URL);
+
+    await expect(restore).rejects.toBeInstanceOf(RegionRestoreError);
   });
 });

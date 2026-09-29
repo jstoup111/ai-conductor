@@ -36,6 +36,7 @@ import { classifyGitPushAuthRefusal, GithubBotAuthRefusalError } from './github-
 import {
   HALT_PR_BANNER_SENTINEL,
   NEEDS_REMEDIATION_BODY_MARKER,
+  maskProjectOwnedRegions,
 } from './pr-body-engine-markers.js';
 export {
   HALT_PR_BANNER_SENTINEL,
@@ -588,7 +589,7 @@ export async function prMergeState(
       state,
       mergeable,
       hasFailingOrPendingChecks,
-      hasHaltBodyMarker: typeof data.body === 'string' && data.body.includes(NEEDS_REMEDIATION_BODY_MARKER),
+      hasHaltBodyMarker: typeof data.body === 'string' && maskProjectOwnedRegions(data.body).includes(NEEDS_REMEDIATION_BODY_MARKER),
       labels,
       checksOutcome,
       statusCheckRollup: checks,
@@ -1086,7 +1087,7 @@ export async function ensureBodyMarker(
     }
 
     // ── Step 2: check if marker is present; if so, idempotent-exit ────────
-    if (body.includes(NEEDS_REMEDIATION_BODY_MARKER)) {
+    if (maskProjectOwnedRegions(body).includes(NEEDS_REMEDIATION_BODY_MARKER)) {
       // Marker already present — no edit needed
       return undefined;
     }
@@ -1194,7 +1195,7 @@ export async function ensureHaltPresentation(
     // ── Step 6: verify all three markers ──────────────────────────────────
     const hasDraft = afterWrite.isDraft;
     const hasLabel = afterWrite.labels.includes('needs-remediation');
-    const hasBodyMarker = afterWrite.body.includes(NEEDS_REMEDIATION_BODY_MARKER);
+    const hasBodyMarker = maskProjectOwnedRegions(afterWrite.body).includes(NEEDS_REMEDIATION_BODY_MARKER);
 
     if (hasDraft && hasLabel && hasBodyMarker) {
       return 'confirmed';
@@ -1348,7 +1349,7 @@ export async function cleanupHaltPresentation(
     // Under preserveDraft a still-draft PR is the intended end state, so it is
     // never a residual marker.
     const isDraft = preserveDraft ? false : afterCleanup.isDraft;
-    const hasBodyMarker = afterCleanup.body.includes(NEEDS_REMEDIATION_BODY_MARKER);
+    const hasBodyMarker = maskProjectOwnedRegions(afterCleanup.body).includes(NEEDS_REMEDIATION_BODY_MARKER);
 
     if (!hasResidualLabel && !isDraft && !hasBodyMarker) {
       return 'confirmed';

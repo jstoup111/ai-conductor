@@ -303,7 +303,7 @@ function prProse(
   // (#1703). `isEngineFlooredBody` reads the body content instead, so an
   // intact floor still classifies as a placeholder and authored prose does
   // not.
-  if (isEngineFlooredBody(prBody, templateBytes) || /Draft opened automatically/i.test(text)) {
+  if (isEngineFlooredBody(prBody, templateBytes) || /Draft opened automatically/i.test(maskProjectOwnedRegions(text))) {
     return 'placeholder';
   }
   // Existing prose is a judgment candidate until this coordinator either

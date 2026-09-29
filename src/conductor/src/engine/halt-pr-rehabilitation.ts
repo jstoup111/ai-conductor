@@ -444,7 +444,7 @@ export async function readStaleHaltBanner(
   try {
     const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
-    return body.includes(HALT_PR_BANNER_SENTINEL) ? HALT_PR_BANNER_SENTINEL : null;
+    return maskProjectOwnedRegions(body).includes(HALT_PR_BANNER_SENTINEL) ? HALT_PR_BANNER_SENTINEL : null;
   } catch (err) {
     log?.(`[halt-pr-rehab] gate read failed for ${prUrl} — fail-open: ${err}`);
     return null;
@@ -500,7 +500,15 @@ function authoredProseLength(body: string, templateBytes?: string): number {
   // A template is project-owned starting structure, not prose authored by the
   // FINISH authoring pass. Remove one exact seeded copy before measuring so a
   // long template does not make an otherwise untouched draft look authored.
-  const bodyWithoutTemplate = templateBytes === undefined ? body : body.replace(templateBytes, '');
+  // Region content is opaque (ADR D6): drop whole regions on both sides so
+  // neither their words nor their markers count as authored or floor prose,
+  // and a template whose region was since authored still strips exactly.
+  const stripRegions = (text: string): string =>
+    text.replace(/<!-- ai-conductor:step [^\r\n]+ -->[\s\S]*?<!-- \/ai-conductor:step -->/g, '');
+  const stripped = stripRegions(body);
+  const bodyWithoutTemplate = templateBytes === undefined
+    ? stripped
+    : stripped.replace(stripRegions(templateBytes), '');
   return bodyWithoutTemplate
     .replace(/```[\s\S]*?```/g, '')
     .replace(/<!--\s*[\w:-]+:start\s*-->[\s\S]*?<!--\s*[\w:-]+:end\s*-->/g, '')
@@ -536,7 +544,7 @@ function authoredProseLength(body: string, templateBytes?: string): number {
  * description slot a floor can fill.
  */
 export function isEngineFlooredBody(body: string, templateBytes?: string): boolean {
-  if (!body.includes(PR_BODY_FLOOR_MARKER)) return false;
+  if (!maskProjectOwnedRegions(body).includes(PR_BODY_FLOOR_MARKER)) return false;
   // The floor TEXTS are provenance too, exactly like the marker above, and
   // the same reasoning applies: an authoring pass that writes real prose
   // around the SHIP-entry draft note leaves that note in place. Returning
@@ -631,7 +639,7 @@ export async function postHaltHistoryComment(
   const hasHaltTitle = view.title.startsWith(NEEDS_REMEDIATION_TITLE_PREFIX);
   const hasHaltLabel = view.labels.includes(NEEDS_REMEDIATION_LABEL);
   const body = view.body ?? '';
-  const hasHaltBanner = body.includes(HALT_PR_BANNER_SENTINEL);
+  const hasHaltBanner = maskProjectOwnedRegions(body).includes(HALT_PR_BANNER_SENTINEL);
   if (!hasHaltTitle && !hasHaltLabel && !hasHaltBanner) return 'not-halt-pr';
 
   if (existingComments.some((c) => c.includes(HALT_HISTORY_COMMENT_MARKER))) {
@@ -873,7 +881,7 @@ export async function bodyFloor(
     return 'partial';
   }
 
-  if (!body.includes(HALT_PR_BANNER_SENTINEL)) {
+  if (!maskProjectOwnedRegions(body).includes(HALT_PR_BANNER_SENTINEL)) {
     return 'not-halt-body';
   }
 

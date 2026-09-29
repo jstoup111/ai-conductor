@@ -74,11 +74,7 @@ export function extractRegionBytes(body: string, key: string): string | undefine
   return endIndex === -1 ? undefined : body.slice(contentStart, endIndex);
 }
 
-/** Replace opaque regions with same-length whitespace for safe engine searches. */
-export function maskProjectOwnedRegions(body: string): string {
-  return body.replace(/<!-- ai-conductor:step [^\r\n]+ -->[\s\S]*?<!-- \/ai-conductor:step -->/g, (region) =>
-    region.replace(/[^\r\n]/g, ' '));
-}
+export { maskProjectOwnedRegions } from './pr-body-engine-markers.js';
 
 /** Parses project-owned, step-keyed regions without interpreting their contents. */
 export function parsePrTemplateRegions(template: string): ParsePrTemplateRegionsResult {
