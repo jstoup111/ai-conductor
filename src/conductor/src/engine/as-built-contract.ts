@@ -267,14 +267,17 @@ function isEmptyValue(value: unknown): boolean {
 /**
  * AS_BUILT_VERDICT_SCHEMA is one flat object, so a provider may legally fill a field that
  * belongs to another verdict (Codex strict mode requires every field). Outcome commentary
- * is dropped outside PLAN_GAP; BLOCKED-only fields are dropped only when empty. An APPROVED
- * verdict that lists findings or reports an undelivered outcome stays a rejected contradiction.
+ * is dropped outside PLAN_GAP, and BLOCKED's violation/resolution prose is dropped outside
+ * BLOCKED even when non-empty. Findings are dropped only when empty: an APPROVED verdict
+ * that lists findings or reports an undelivered outcome stays a rejected contradiction.
  */
 function withoutForeignVariantFields(value: Record<string, unknown>): Record<string, unknown> {
   const foreign = new Set<string>();
   if (value.verdict !== 'PLAN_GAP') for (const key of PLAN_GAP_ONLY_KEYS) foreign.add(key);
   if (value.verdict !== 'BLOCKED') {
-    for (const key of BLOCKED_ONLY_KEYS) if (isEmptyValue(value[key])) foreign.add(key);
+    for (const key of BLOCKED_ONLY_KEYS) {
+      if (key !== 'findings' || isEmptyValue(value[key])) foreign.add(key);
+    }
   }
   return Object.fromEntries(Object.entries(value).filter(([key]) => !foreign.has(key)));
 }
