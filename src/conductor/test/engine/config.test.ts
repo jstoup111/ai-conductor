@@ -278,6 +278,101 @@ steps:
   });
 
   describe('validateConfig', () => {
+    describe('tracker config field (Task 1)', () => {
+      it('accepts a GitHub tracker backend without warnings', () => {
+        const result = validateConfig({ tracker: { backend: 'github' } });
+
+        expect(result).toMatchObject({
+          ok: true,
+          config: { tracker: { backend: 'github' } },
+          warnings: [],
+        });
+      });
+
+      it('preserves every supported Jira tracker field', () => {
+        const result = validateConfig({
+          tracker: {
+            backend: 'jira',
+            transport: 'api',
+            credentials: 'jira-work',
+            site: 'https://example.atlassian.net',
+            project_key: 'ENG',
+          },
+        });
+
+        expect(result).toMatchObject({
+          ok: true,
+          config: {
+            tracker: {
+              backend: 'jira',
+              transport: 'api',
+              credentials: 'jira-work',
+              site: 'https://example.atlassian.net',
+              project_key: 'ENG',
+            },
+          },
+          warnings: [],
+        });
+      });
+
+      it('rejects a Jira-only site configured for the GitHub tracker backend', () => {
+        const result = validateConfig({
+          tracker: {
+            backend: 'github',
+            site: 'https://example.atlassian.net',
+          },
+        });
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            type: 'validation_error',
+          },
+        });
+        if (result.ok) return;
+        expect(result.error.message).toContain('tracker.site');
+      });
+
+      it.each([
+        [
+          'an unsupported backend',
+          { backend: 'gitlab' },
+          'tracker.backend',
+          'github',
+          'jira',
+        ],
+        [
+          'an unsupported Jira transport',
+          { backend: 'jira', transport: 'ftp' },
+          'tracker.transport',
+          'api',
+          'mcp',
+        ],
+        [
+          'an invalid Jira site URL',
+          { backend: 'jira', site: 'not a url' },
+          'tracker.site',
+          'https',
+          undefined,
+        ],
+        [
+          'an unknown tracker key',
+          { backend: 'jira', token: 'secret' },
+          'tracker.token',
+          undefined,
+          undefined,
+        ],
+      ])('rejects %s with a path-named error', (_name, tracker, path, acceptedOne, acceptedTwo) => {
+        const result = validateConfig({ tracker });
+
+        expect(result).toMatchObject({ ok: false, error: { type: 'validation_error' } });
+        if (result.ok) return;
+        expect(result.error.message).toContain(path);
+        if (acceptedOne !== undefined) expect(result.error.message).toContain(acceptedOne);
+        if (acceptedTwo !== undefined) expect(result.error.message).toContain(acceptedTwo);
+      });
+    });
+
     describe('codex_doctor_timeout_seconds', () => {
       it('resolves an omitted timeout to 10 seconds', () => {
         const result = validateConfig({});

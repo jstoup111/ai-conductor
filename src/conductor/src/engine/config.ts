@@ -106,7 +106,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   top: [
     'harness_version', 'defaults', 'phases', 'steps', 'complexity', 'conductor',
     'markdown_viewer', 'mermaid_renderer', 'assess', 'acceptance_spec_globs', 'test_suite',
-    'llm_provider', 'provider_substitution', 'ui_renderer', 'visualizers', 'memory_provider', 'otel', 'build_progress',
+    'llm_provider', 'provider_substitution', 'ui_renderer', 'visualizers', 'memory_provider', 'tracker', 'otel', 'build_progress',
     'provider_stream', 'spec_owner', 'github_bot', 'owner_gate_cutover', 'attribution_audit_sample_pct',
     'rebase_resolution_attempts', 'validation_concurrency', 'daemon_concurrency', 'daemon_heap_limit_mb',
     'daemon_heap_dump_threshold_mb', 'daemon_heap_dump_retention', 'harness_self_host',
@@ -141,6 +141,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'architecture_review_as_built.remediation': ['enabled'],
   'architecture_review_as_built.checks': ['tiers'],
   assess: ['stale_after_days', 'stale_after_commits'],
+  tracker: ['backend', 'transport', 'credentials', 'site', 'project_key'],
   test_suite: ['command', 'commands', 'scoped_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment', 'verification'],
   'test_suite.commands[]': TEST_SUITE_COMMAND_ENTRY_KEYS,
   'test_suite.verification': ['mode', 'drift_budget'],
@@ -563,6 +564,60 @@ export interface ValidateConfigOpts {
   materializeDefaults?: boolean;
 }
 
+/** Validate the per-project tracker backend block without applying defaults. */
+export function validateTrackerConfig(raw: unknown): ConfigError | null {
+  if (raw === undefined) return null;
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'tracker must be an object' };
+  }
+
+  const allowedKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS.tracker);
+  for (const key of Object.keys(raw)) {
+    if (!allowedKeys.has(key)) {
+      return { type: 'validation_error', message: `Unknown key: tracker.${key}` };
+    }
+  }
+
+  if (raw.backend !== 'github' && raw.backend !== 'jira') {
+    return { type: 'validation_error', message: 'tracker.backend must be github or jira' };
+  }
+
+  if (raw.backend === 'github') {
+    for (const key of ['transport', 'credentials', 'site', 'project_key'] as const) {
+      if (raw[key] !== undefined) {
+        return {
+          type: 'validation_error',
+          message: `tracker.${key} is valid only for the jira backend`,
+        };
+      }
+    }
+    return null;
+  }
+
+  if (raw.transport !== undefined && raw.transport !== 'api' && raw.transport !== 'mcp') {
+    return { type: 'validation_error', message: 'tracker.transport must be api or mcp' };
+  }
+
+  for (const key of ['credentials', 'site', 'project_key'] as const) {
+    if (raw[key] !== undefined && typeof raw[key] !== 'string') {
+      return { type: 'validation_error', message: `tracker.${key} must be a string` };
+    }
+  }
+
+  const site = raw.site;
+  if (site !== undefined) {
+    try {
+      if (typeof site !== 'string' || new URL(site).protocol !== 'https:') {
+        return { type: 'validation_error', message: 'tracker.site must be an https URL' };
+      }
+    } catch {
+      return { type: 'validation_error', message: 'tracker.site must be an https URL' };
+    }
+  }
+
+  return null;
+}
+
 export function validateConfig(
   raw: unknown,
   projectRoot?: string,
@@ -591,6 +646,9 @@ export function validateConfig(
       return errVal(`Unknown top-level key: "${key}"`);
     }
   }
+
+  const trackerConfigErr = validateTrackerConfig(obj.tracker);
+  if (trackerConfigErr) return { ok: false, error: trackerConfigErr };
 
   const providerSelectionErr = validateProviderSelection(obj.llm_provider, 'llm_provider');
   if (providerSelectionErr) return { ok: false, error: providerSelectionErr };
