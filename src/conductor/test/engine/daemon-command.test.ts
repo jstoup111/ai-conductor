@@ -1,4 +1,4 @@
-// Covers: task:10, task:8
+// Covers: task:1, task:10, task:8
 import { describe, it, expect } from 'vitest';
 import { DAEMON_SUBVERBS, detectDaemonCommand } from '../../src/engine/daemon-command.js';
 
@@ -57,6 +57,7 @@ describe('detectDaemonCommand', () => {
       idlePollSeconds: 60,
       maxIdlePolls: undefined,
       showCompleted: false,
+      operatorFlagArgs: [],
     });
   });
 
@@ -68,6 +69,66 @@ describe('detectDaemonCommand', () => {
       maxItems: 10,
       continuous: false,
     });
+  });
+
+  it('captures all eight recognized run flags in closed table order', () => {
+    const opts = detectDaemonCommand(argv(
+      'daemon',
+      '--max-runtime', '3600',
+      '--completed',
+      '--concurrency', '3',
+      '--no-watch',
+      '--max-items', '5',
+      '--max-idle-polls', '4',
+      '--idle-poll', '30',
+      '--max-cost', '50000',
+    ));
+
+    expect(opts).toMatchObject({
+      operatorFlagArgs: [
+        '--concurrency', '3',
+        '--max-items', '5',
+        '--max-cost', '50000',
+        '--max-runtime', '3600',
+        '--idle-poll', '30',
+        '--max-idle-polls', '4',
+        '--no-watch',
+        '--completed',
+      ],
+    });
+  });
+
+  it('replays captured concurrency onto continuous argv with flag provenance', async () => {
+    const { resolve } = await concurrencyContract();
+    const original = detectDaemonCommand(argv('daemon', '--concurrency', '3'))!;
+    const replayed = detectDaemonCommand(argv(
+      'daemon',
+      '--continuous',
+      ...original.operatorFlagArgs!,
+    ))!;
+
+    expect(resolve(replayed, 2)).toEqual({ concurrency: 3, source: 'flag' });
+  });
+
+  it('keeps continuous flag-free argv empty and config-sourced', async () => {
+    const { resolve } = await concurrencyContract();
+    const command = detectDaemonCommand(argv('daemon', '--continuous'))!;
+
+    expect(command.operatorFlagArgs).toEqual([]);
+    expect(resolve(command, 2)).toEqual({ concurrency: 2, source: 'config' });
+  });
+
+  it('excludes unrecognized flags and stray positionals from captured args', () => {
+    const command = detectDaemonCommand(argv(
+      'daemon',
+      '--concurrency', '3',
+      '--bogus', 'unrecognized-value',
+      'stray-positional',
+    ))!;
+
+    expect(command.operatorFlagArgs).toEqual(['--concurrency', '3']);
+    expect(command.operatorFlagArgs).not.toContain('--bogus');
+    expect(command.operatorFlagArgs).not.toContain('stray-positional');
   });
 
   it('resolves an explicit --concurrency over configured concurrency and names flag source in startup log', async () => {
