@@ -1117,6 +1117,8 @@ export type ConductorEvent =
       currentTaskId?: string;
       /** Epoch ms of the last observed commit, if tracked. */
       lastCommitAt?: number;
+      /** Epoch ms of the latest provider activity in this build dispatch, if observed. */
+      lastActivityAt?: number;
       featureSlug?: string;
     }
   | {

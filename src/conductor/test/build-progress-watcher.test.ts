@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -953,6 +954,14 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
     await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
   }
 
+  async function writeHeartbeat(timestamp: number): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/step-heartbeat'),
+      JSON.stringify({ step: 'build', ts: new Date(timestamp).toISOString() }),
+    );
+  }
+
   function noProgressEvents(): Extract<ConductorEvent, { type: 'build_no_progress' }>[] {
     return emitSpy.mock.calls
       .map((call) => call[0] as ConductorEvent)
@@ -1029,6 +1038,27 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
     ]);
   });
 
+  it('carries the running build dispatch activity timestamp on its first quiet warning exactly once', async () => {
+    await writeTasks(5, 21);
+    let clock = Date.UTC(2026, 8, 28, 12, 0, 0);
+    const watcher = makeWatcher(() => clock);
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    const pulseAt = clock + 14 * 60 * 1000 + 58 * 1000;
+    await writeHeartbeat(pulseAt);
+    clock += 15 * 60 * 1000 + 1_000;
+    await tick(watcher);
+
+    clock += 15 * 60 * 1000;
+    await tick(watcher);
+    watcher.stop();
+
+    expect(noProgressEvents()).toHaveLength(1);
+    expect(noProgressEvents()[0].lastActivityAt).toBe(pulseAt);
+  });
+
   it('re-arms after a change, firing again on a later quiet episode', async () => {
     await writeTasks(5, 21);
     let clock = 0;
@@ -1054,6 +1084,34 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
     watcher.stop();
 
     expect(noProgressEvents()).toHaveLength(1);
+  });
+
+  it('uses the newer running-build activity timestamp after progress re-arms a quiet episode', async () => {
+    await writeTasks(5, 21);
+    let clock = Date.UTC(2026, 8, 28, 12, 0, 0);
+    const watcher = makeWatcher(() => clock);
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    const firstPulseAt = clock + 14 * 60 * 1000 + 58 * 1000;
+    await writeHeartbeat(firstPulseAt);
+    clock += 15 * 60 * 1000 + 1_000;
+    await tick(watcher);
+
+    clock += 60 * 1000;
+    await writeTasks(6, 21);
+    await tick(watcher);
+
+    const secondPulseAt = clock + 14 * 60 * 1000 + 58 * 1000;
+    await writeHeartbeat(secondPulseAt);
+    clock += 15 * 60 * 1000 + 1_000;
+    await tick(watcher);
+    watcher.stop();
+
+    expect(noProgressEvents()).toHaveLength(2);
+    expect(noProgressEvents()[0].lastActivityAt).toBe(firstPulseAt);
+    expect(noProgressEvents()[1].lastActivityAt).toBe(secondPulseAt);
   });
 
   it('a change one tick before threshold resets the quiet clock', async () => {

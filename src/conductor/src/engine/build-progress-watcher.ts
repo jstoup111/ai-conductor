@@ -5,6 +5,7 @@ import { normalizeTasks, resolveTaskIds, type NormalizedTask } from './task-prog
 import { readNoEvidenceAttempts } from './task-evidence.js';
 import { makeGitRunner } from './rebase.js';
 import { resolveBuildProgressConfig } from './config.js';
+import { heartbeatBelongsToDispatch, readStepHeartbeat } from './step-heartbeat.js';
 import type { ResolvedBuildProgressConfig } from './config.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import type { StepName } from '../types/index.js';
@@ -225,6 +226,7 @@ export class BuildProgressWatcher {
   private lastCommitHead: string | undefined;
   private lastCommitAt: number | undefined;
   private lastEmitAt: number | null = null;
+  private dispatchStartedAtMs: number | null = null;
   private stopped = false;
   private pending: Promise<void> | null = null;
   /**
@@ -251,6 +253,7 @@ export class BuildProgressWatcher {
   start(): void {
     if (this.timer || !this.resolvedConfig.enabled) return;
     this.stopped = false;
+    this.dispatchStartedAtMs = this.now();
     const timer = setInterval(() => {
       this.pending = this.tick().finally(() => {
         this.pending = null;
@@ -384,6 +387,11 @@ export class BuildProgressWatcher {
         const quietElapsed = this.now() - this.lastChangeAt;
         if (quietElapsed >= quietMs) {
           this.quietFired = true;
+          const heartbeat = await readStepHeartbeat(this.projectRoot);
+          const lastActivityAt = this.dispatchStartedAtMs !== null
+            && heartbeatBelongsToDispatch(heartbeat, this.step, this.dispatchStartedAtMs)
+            ? Date.parse(heartbeat!.ts)
+            : undefined;
           await this.events.emit({
             type: 'build_no_progress',
             step: this.step,
@@ -392,6 +400,7 @@ export class BuildProgressWatcher {
             total,
             currentTaskId: snapshot.currentTaskId,
             lastCommitAt: this.lastCommitAt,
+            lastActivityAt,
             featureSlug: this.featureSlug,
           });
         }
