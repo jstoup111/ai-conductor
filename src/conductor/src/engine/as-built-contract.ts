@@ -2,7 +2,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { adrApprovalStatus, parseAdrDecisions, readActivePlanText } from './artifacts.js';
-import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
+import { parsePlanTaskBodies, resolveCitedPlanTaskIds } from './plan-task-parse.js';
 
 /** The versioned, engine-owned output contract for as-built review verdicts. */
 export const AS_BUILT_VERDICT_CONTRACT_VERSION = 'v1' as const;
@@ -267,14 +267,17 @@ function isEmptyValue(value: unknown): boolean {
 /**
  * AS_BUILT_VERDICT_SCHEMA is one flat object, so a provider may legally fill a field that
  * belongs to another verdict (Codex strict mode requires every field). Outcome commentary
- * is dropped outside PLAN_GAP; BLOCKED-only fields are dropped only when empty. An APPROVED
- * verdict that lists findings or reports an undelivered outcome stays a rejected contradiction.
+ * is dropped outside PLAN_GAP, and BLOCKED's violation/resolution prose is dropped outside
+ * BLOCKED even when non-empty. Findings are dropped only when empty: an APPROVED verdict
+ * that lists findings or reports an undelivered outcome stays a rejected contradiction.
  */
 function withoutForeignVariantFields(value: Record<string, unknown>): Record<string, unknown> {
   const foreign = new Set<string>();
   if (value.verdict !== 'PLAN_GAP') for (const key of PLAN_GAP_ONLY_KEYS) foreign.add(key);
   if (value.verdict !== 'BLOCKED') {
-    for (const key of BLOCKED_ONLY_KEYS) if (isEmptyValue(value[key])) foreign.add(key);
+    for (const key of BLOCKED_ONLY_KEYS) {
+      if (key !== 'findings' || isEmptyValue(value[key])) foreign.add(key);
+    }
   }
   return Object.fromEntries(Object.entries(value).filter(([key]) => !foreign.has(key)));
 }
@@ -390,7 +393,8 @@ export async function resolveAsBuiltReferences(
     if (activePlanTaskIds === undefined) {
       return rejected(`${field}.taskId`, `an active plan declaring task ${reference.taskId} is required`);
     }
-    const resolution = resolvePlanTaskReference(reference.taskId, activePlanTaskIds);
+    // Agents cite `### Task 16` as `task-16`; the prefix is carrier presentation only.
+    const resolution = resolveCitedPlanTaskIds([reference.taskId], activePlanTaskIds);
     if (resolution.kind === 'malformed') {
       return rejected(`${field}.taskId`, 'a task id matching the shared active-plan grammar is required');
     }
