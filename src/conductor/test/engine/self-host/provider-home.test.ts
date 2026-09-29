@@ -1,7 +1,7 @@
 // Covers: task:6
 import { describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -307,6 +307,10 @@ describe('provider-aware self-host homes', () => {
       // A skill that must survive, alongside every operator-only one.
       await mkdir(join(worktree, 'skills', 'keeper'), { recursive: true });
       await writeFile(join(worktree, 'skills', 'keeper', 'SKILL.md'), 'keep me\n', 'utf-8');
+      const helper = join(worktree, 'skills', 'intake', 'scripts', 'intake-file');
+      await mkdir(join(worktree, 'skills', 'intake', 'scripts'), { recursive: true });
+      await writeFile(helper, '#!/usr/bin/env bash\n', 'utf-8');
+      await chmod(helper, 0o755);
       for (const skill of OPERATOR_ONLY_SKILLS) {
         await mkdir(join(worktree, 'skills', skill), { recursive: true });
         await writeFile(join(worktree, 'skills', skill, 'SKILL.md'), 'operator only\n', 'utf-8');
@@ -335,6 +339,7 @@ describe('provider-aware self-host homes', () => {
         await expect(
           access(join(home.homeDir, 'skills', 'keeper', 'SKILL.md')),
         ).resolves.toBeUndefined();
+        expect((await stat(join(home.homeDir, 'skills', 'intake', 'scripts', 'intake-file'))).mode & 0o777).toBe(0o755);
       } finally {
         await home.teardown();
         await rm(root, { recursive: true, force: true });

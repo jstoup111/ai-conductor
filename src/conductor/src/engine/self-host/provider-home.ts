@@ -175,9 +175,10 @@ export async function provisionProviderHome(
       // Copy rather than symlink: a live link lets provider-owned warmup/init
       // writes (for example Codex's skill-discovery `.system/` bookkeeping)
       // land back inside the git-tracked worktree through the link, defeating
-      // the throwaway home's isolation. A one-time copy of the (small,
-      // markdown-only) skills asset keeps discovery in sync with whatever is
-      // currently checked out without exposing the worktree path itself.
+      // the throwaway home's isolation. A one-time copy of the small skills
+      // asset, including its bundled executable helpers, keeps discovery in
+      // sync with whatever is currently checked out without exposing the
+      // worktree path itself.
       await fs.cp(target, join(homeDir, asset));
 
       // Operator-only skills exist to debug a run from the outside; a
