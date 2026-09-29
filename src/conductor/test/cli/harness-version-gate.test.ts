@@ -18,7 +18,7 @@ afterEach(async () => {
 async function runWithConstraint(projectVersion?: string) {
   const root = await mkdtemp(join(tmpdir(), 'cli-harness-version-gate-'));
   roots.push(root);
-  await execa('git', ['init', '--quiet'], { cwd: root });
+  await execa('git', ['init', '--quiet', '-b', 'main'], { cwd: root });
   await mkdir(join(root, '.ai-conductor'), { recursive: true });
   await writeFile(join(root, '.ai-conductor', 'config.yml'), 'harness_version: "^99.0.0"\n');
   if (projectVersion) await writeFile(join(root, 'VERSION'), `${projectVersion}\n`);
