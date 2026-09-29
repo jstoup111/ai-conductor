@@ -951,12 +951,18 @@ export async function dispatchEngineer(
         printErr(`compose: ${loadedConfig.error.message}`);
         return 1;
       }
-      const host = loadedConfig
-        ? requireProviderCapability(
-          resolveComposeLaunchHost({ providerFlag: dispatch.provider, config: loadedConfig.config }),
-          'interactiveLaunch',
-        )
-        : undefined;
+      let host: ReturnType<typeof requireProviderCapability<'interactiveLaunch'>> | undefined;
+      try {
+        host = loadedConfig
+          ? requireProviderCapability(
+            resolveComposeLaunchHost({ providerFlag: dispatch.provider, config: loadedConfig.config }),
+            'interactiveLaunch',
+          )
+          : undefined;
+      } catch (error: unknown) {
+        printErr(error instanceof Error ? error.message : String(error));
+        return 1;
+      }
       const launchOne = opts.launchInteractive ?? ((idea?: string) => {
         const prompt = `${host!.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
         return (opts.spawnHost ?? spawnInteractiveHost)(

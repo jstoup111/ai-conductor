@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:5
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -26,6 +26,72 @@ afterEach(() => {
 });
 
 describe('dispatchEngineer interactive host launch', () => {
+  it('refuses a configured provider without interactive launch capability before spawning', async () => {
+    const spawnHost = vi.fn(async () => 0);
+    const printErr = vi.fn();
+
+    const code = await dispatchEngineer(
+      { kind: 'launch' },
+      { ...launchOptions({ ok: true, config: { llm_provider: 'pi' }, warnings: [] }, spawnHost), printErr },
+    );
+
+    expect([code, printErr.mock.calls.flat(), spawnHost.mock.calls.length]).toEqual([
+      1,
+      expect.arrayContaining([expect.stringContaining('pi'), expect.stringContaining('interactiveLaunch'), expect.stringContaining('#1007')]),
+      0,
+    ]);
+  });
+
+  it('refuses an unknown launch provider before spawning', async () => {
+    const spawnHost = vi.fn(async () => 0);
+    const printErr = vi.fn();
+
+    const code = await dispatchEngineer(
+      { kind: 'launch', provider: 'gemini' },
+      { ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost), printErr },
+    );
+
+    expect([code, printErr.mock.calls.flat(), spawnHost.mock.calls.length]).toEqual([
+      1,
+      expect.arrayContaining([expect.stringContaining('names unknown provider'), expect.stringContaining('gemini')]),
+      0,
+    ]);
+  });
+
+  it.each([
+    { type: 'parse_error' as const, message: 'configuration YAML is malformed' },
+    { type: 'validation_error' as const, message: 'configuration llm_provider is invalid' },
+  ])('reports a $type launch configuration error before spawning', async (error) => {
+    const spawnHost = vi.fn(async () => 0);
+    const printErr = vi.fn();
+
+    const code = await dispatchEngineer(
+      { kind: 'launch' },
+      { ...launchOptions({ ok: false, error }, spawnHost), printErr },
+    );
+
+    expect([code, printErr.mock.calls.flat(), spawnHost.mock.calls.length]).toEqual([
+      1,
+      expect.arrayContaining([expect.stringContaining(error.message)]),
+      0,
+    ]);
+  });
+
+  it('normalizes plan permission mode through the selected host descriptor', async () => {
+    const spawnHost = vi.fn(async () => 0);
+
+    await dispatchEngineer(
+      { kind: 'launch', provider: 'claude' },
+      launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost, { CONDUCT_ENGINEER_PERMISSION_MODE: 'plan' }),
+    );
+
+    expect(spawnHost).toHaveBeenCalledWith(
+      'claude',
+      expect.arrayContaining(['--permission-mode', 'default']),
+      process.cwd(),
+    );
+  });
+
   it('launches the host selected by the resolved configuration', async () => {
     const spawnHost = vi.fn(async () => 0);
 
