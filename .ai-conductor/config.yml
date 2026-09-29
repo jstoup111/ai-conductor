@@ -108,7 +108,7 @@ build_review:
       skill: event-spine
       source: project
       llm_provider: claude
-      model: sonnet
+      model: opus
       effort: low
       question: "Does the frozen feature diff add an observation or coordination channel outside ConductorEventEmitter → .pipeline/events.jsonl?"
 
