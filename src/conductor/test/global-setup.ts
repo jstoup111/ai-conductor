@@ -20,6 +20,7 @@ import {
   RUN_TMP_ROOT_LEGACY_STALE_AFTER_MS,
   RUN_TMP_ROOT_STALE_AFTER_MS,
   RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX,
+  vitestOwnTmpdirEntries,
   type StaleRunTmpRootsResult,
   type TmpdirDiff,
 } from './tmpdir-leak-guard.js';
@@ -286,7 +287,7 @@ function installInterruptReap(
   };
 }
 
-export default async function setup() {
+export default async function setup(project?: { tmpDir?: string }) {
   // Tmpdir leak guard (#1112), part 1 of 2 — the REDIRECT. It is installed one
   // stage earlier, in vitest.config.ts module scope (see `ensureRunTmpRootSync`
   // for why it cannot wait until here), so by now `TMPDIR` and `os.tmpdir()`
@@ -299,6 +300,7 @@ export default async function setup() {
   const runTmpRoot = installation.root;
   const ownsRunTmpRoot = isVitestTmpRootAllocatedByThisProcess(runTmpRoot);
   const originalTmpdir = installation.originalTmpdir ?? tmpdir();
+  const vitestTmpdirEntries = vitestOwnTmpdirEntries([project?.tmpDir], originalTmpdir);
   const selectedParent = installation.parent ?? dirname(runTmpRoot);
   const nestedParent = dirname(runTmpRoot);
   const sweepParents = [...new Set([originalTmpdir, selectedParent, nestedParent])];
@@ -476,7 +478,10 @@ export default async function setup() {
     // pre-empt an existing guard's verdict — a .pipeline, tmux, or signals
     // failure is the more specific diagnosis and still throws first.
     const tmpdirAfter = await snapshotTmpdirEntries(originalTmpdir);
-    applyTmpdirTeardownDecision(diffTmpdirEntries(tmpdirBefore, tmpdirAfter), originalTmpdir);
+    applyTmpdirTeardownDecision(
+      diffTmpdirEntries(tmpdirBefore, tmpdirAfter, undefined, vitestTmpdirEntries),
+      originalTmpdir
+    );
 
     // Parked-marker leak guard (#1251): runs last, after every established
     // teardown guard. It observes the actual repository ledger, not any
