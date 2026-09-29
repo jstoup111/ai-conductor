@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Covers: task:1
+# Covers: task:1, task:2
 #
 # Public-entry-point RED coverage for uninstalling the settings entries written
 # by bin/install.  Every invocation uses a throwaway HOME and a copied harness
@@ -148,6 +148,14 @@ make_case_home "$CASE_B"
 run_uninstall "$CASE_B" "$TMP_ROOT/case-b.out" || true
 check 'B prunes owned-only hooks and permissions containers' assert_case_b "$CASE_B"
 check 'B reports all removed owned hook commands and permissions' expect_removal_report "$CASE_B" "$TMP_ROOT/case-b.out" 10 18
+cp "$(settings_file "$CASE_B")" "$TMP_ROOT/case-b-after-first-uninstall.json"
+run_uninstall "$CASE_B" "$TMP_ROOT/case-b-second.out"
+CASE_B_SECOND_EXIT=$?
+check 'B second uninstall exits successfully after all owned entries are removed' test "$CASE_B_SECOND_EXIT" -eq 0
+check 'B second uninstall reports that no harness settings entries remain' \
+  grep -Fq "Settings: no harness settings entries found to remove in $(settings_file "$CASE_B")" "$TMP_ROOT/case-b-second.out"
+check 'B second uninstall leaves settings byte-identical' \
+  cmp -s "$(settings_file "$CASE_B")" "$TMP_ROOT/case-b-after-first-uninstall.json"
 
 # C: removal is command-level, retaining the matcher and its operator command.
 CASE_C="$TMP_ROOT/case-c"
@@ -184,7 +192,18 @@ mkdir -p "$CASE_E/.claude"
 printf '{\n  "hooks": {},\n  "permissions": {"allow": []}\n}\n' > "$(settings_file "$CASE_E")"
 run_uninstall "$CASE_E" "$TMP_ROOT/case-e.out" || true
 check 'E preserves pre-existing empty hooks and permissions containers' assert_case_e "$CASE_E"
-check 'E reports zero removed settings entries' expect_removal_report "$CASE_E" "$TMP_ROOT/case-e.out" 0 0
+check 'E reports that no harness settings entries remain' \
+  grep -Fq "Settings: no harness settings entries found to remove in $(settings_file "$CASE_E")" "$TMP_ROOT/case-e.out"
+
+# F: uninstalling without a settings file is successful and does not create one.
+CASE_F="$TMP_ROOT/case-f"
+mkdir -p "$CASE_F"
+run_uninstall "$CASE_F" "$TMP_ROOT/case-f.out"
+CASE_F_EXIT=$?
+check 'F uninstall exits successfully when settings are absent' test "$CASE_F_EXIT" -eq 0
+check 'F uninstall does not create an absent settings file' test ! -e "$(settings_file "$CASE_F")"
+check 'F reports that the settings file was not found' \
+  grep -Fq "Settings: no settings entries to remove ($(settings_file "$CASE_F") not found)" "$TMP_ROOT/case-f.out"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

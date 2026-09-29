@@ -1535,9 +1535,12 @@ uninstall() {
   local document reference_source reference_label settings_file perms_file settings_cleanup_output settings_cleanup_status
 
   settings_file="${HOME}/.claude/settings.json"
-  perms_file=$(mktemp)
-  printf '%s\n' "${HARNESS_PERMISSIONS[@]}" > "$perms_file"
-  if settings_cleanup_output=$(python3 - "$settings_file" "$perms_file" "${HARNESS_DIR}/hooks/claude/" <<'PYEOF'
+  if [ ! -e "$settings_file" ]; then
+    ok "Settings: no settings entries to remove (${settings_file} not found)"
+  else
+    perms_file=$(mktemp)
+    printf '%s\n' "${HARNESS_PERMISSIONS[@]}" > "$perms_file"
+    if settings_cleanup_output=$(python3 - "$settings_file" "$perms_file" "${HARNESS_DIR}/hooks/claude/" <<'PYEOF'
 import json
 import sys
 
@@ -1608,18 +1611,23 @@ if removed_hooks or removed_permissions:
 
 print(f"{removed_hooks} {removed_permissions}")
 PYEOF
-  ); then
-    settings_cleanup_status=0
-  else
-    settings_cleanup_status=$?
-  fi
-  rm -f "$perms_file"
+    ); then
+      settings_cleanup_status=0
+    else
+      settings_cleanup_status=$?
+    fi
+    rm -f "$perms_file"
 
-  if [ "$settings_cleanup_status" -eq 0 ]; then
-    read -r removed_hook_commands removed_permissions <<< "$settings_cleanup_output"
-    ok "Settings: removed ${removed_hook_commands} harness hook commands and ${removed_permissions} permissions from ${settings_file}"
-  else
-    warn "Could not remove harness settings entries from ${settings_file}"
+    if [ "$settings_cleanup_status" -eq 0 ]; then
+      read -r removed_hook_commands removed_permissions <<< "$settings_cleanup_output"
+      if [ "$removed_hook_commands" -eq 0 ] && [ "$removed_permissions" -eq 0 ]; then
+        ok "Settings: no harness settings entries found to remove in ${settings_file}"
+      else
+        ok "Settings: removed ${removed_hook_commands} harness hook commands and ${removed_permissions} permissions from ${settings_file}"
+      fi
+    else
+      warn "Could not remove harness settings entries from ${settings_file}"
+    fi
   fi
 
   echo -e "${BOLD}${CYAN}Uninstalling AI Conductor Harness${NC}"
