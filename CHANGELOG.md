@@ -17,6 +17,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Authorized GitHub writes and HTTPS pushes now support an optional machine-scoped bot credential with safe operator fallback. ([implementation PR #2734](https://github.com/jstoup111/ai-conductor/pull/2734)).
 - Use Pi as a build provider for supported one-shot AI-conductor steps. ([implementation PR #2765](https://github.com/jstoup111/ai-conductor/pull/2765)).
+- Build reviews now block unapproved event-spine bypasses before they ship. ([implementation PR #2821](https://github.com/jstoup111/ai-conductor/pull/2821)).
 
 ### Changed
 
