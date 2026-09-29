@@ -33,6 +33,7 @@ import { loadConfig } from './config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { openSpecPr, type HandoffDeps } from './engineer/handoff.js';
+import { isSpecSlug } from './engineer/spec-branch.js';
 import {
   createEngineerWorktree,
   removeEngineerWorktree,
@@ -588,9 +589,10 @@ function parseGhRepo(remote: string): string | null {
 }
 
 function featureMarkerForSpecBranch(branch: string): string {
-  const match = /^spec\/([a-z0-9]+(?:-[a-z0-9]+)*)$/.exec(branch);
-  if (!match) throw new Error(`engineer handoff: branch "${branch}" is not a canonical spec/<slug> branch.`);
-  return `.docs/intake/${match[1]}.md`;
+  const prefix = 'spec/';
+  const slug = branch.startsWith(prefix) ? branch.slice(prefix.length) : '';
+  if (!isSpecSlug(slug)) throw new Error(`engineer handoff: branch "${branch}" is not a canonical spec/<slug> branch.`);
+  return `.docs/intake/${slug}.md`;
 }
 
 /**
