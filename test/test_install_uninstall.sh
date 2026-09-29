@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Covers: task:1, task:2, task:3, task:4, task:5
+# Covers: task:1, task:2, task:3, task:4, task:5, task:6
 #
 # Public-entry-point RED coverage for uninstalling the settings entries written
 # by bin/install.  Every invocation uses a throwaway HOME and a copied harness
@@ -61,6 +61,21 @@ run_uninstall() {
   run_install "$home" "$output" --uninstall
 }
 
+run_uninstall_purge() {
+  local home=$1 output=$2
+  run_install "$home" "$output" --uninstall --purge
+}
+
+run_help() {
+  local home=$1 output=$2
+  mkdir -p "$home"
+  (
+    cd "$CHECKOUT" || exit 1
+    HOME="$home" PATH="$STUBS:/usr/bin:/bin" \
+      timeout 15s "$CHECKOUT/bin/install" --help </dev/null
+  ) >"$output" 2>&1
+}
+
 run_uninstall_without_python() {
   local home=$1 output=$2
   mkdir -p "$home"
@@ -108,6 +123,20 @@ assert_later_uninstall_steps() {
   done
   test ! -e "$(rate_card_file "$home")" &&
     grep -Fq "Kept $home/.ai-conductor: operator configuration and runtime data (project registry, memory). Re-run with --uninstall --purge to remove it." "$output"
+}
+
+assert_purged_uninstall_cleanup() {
+  local home=$1 output=$2 skill_dir entrypoint
+  assert_case_b "$home" || return 1
+  for skill_dir in "$CHECKOUT"/skills/*; do
+    test ! -e "$home/.claude/skills/$(basename "$skill_dir")" || return 1
+  done
+  for entrypoint in conduct conduct-ts ai-conductor; do
+    test ! -e "$home/.local/bin/$entrypoint" || return 1
+  done
+  test ! -e "$(rate_card_file "$home")" &&
+    test ! -L "$(rate_card_file "$home")" &&
+    grep -Fq "Purged $home/.ai-conductor" "$output"
 }
 
 assert_case_a() {
@@ -306,6 +335,53 @@ check 'K2 uninstall exits successfully without harness state' test "$CASE_K2_EXI
 check 'K2 does not create absent harness state' test ! -e "$CASE_K2/.ai-conductor"
 check 'K2 does not report kept state when none exists' \
   has_no_kept_line "$TMP_ROOT/case-k2.out"
+
+# U1: purge removes populated harness state as well as every ordinary uninstall target.
+CASE_U1="$TMP_ROOT/case-u1"
+make_case_home "$CASE_U1"
+mkdir -p "$CASE_U1/.ai-conductor/memory"
+printf '{"project":"registry"}\n' > "$CASE_U1/.ai-conductor/registry.json"
+printf 'operator memory\n' > "$CASE_U1/.ai-conductor/memory/note.md"
+seed_launcher_links "$CASE_U1"
+run_uninstall_purge "$CASE_U1" "$TMP_ROOT/case-u1.out"
+CASE_U1_EXIT=$?
+check 'U1 purge exits successfully for populated harness state' test "$CASE_U1_EXIT" -eq 0
+check 'U1 removes the populated harness state directory' \
+  sh -c 'test ! -e "$1" && test ! -L "$1"' sh "$CASE_U1/.ai-conductor"
+check 'U1 removes the ordinary uninstall targets and reports the purge' \
+  assert_purged_uninstall_cleanup "$CASE_U1" "$TMP_ROOT/case-u1.out"
+
+# U2: purge unlinks harness state when it is a symlink, preserving its target.
+CASE_U2="$TMP_ROOT/case-u2"
+STATE_U2="$TMP_ROOT/state-u2"
+mkdir -p "$CASE_U2" "$STATE_U2"
+printf 'keep this state\n' > "$STATE_U2/keep.txt"
+cp "$STATE_U2/keep.txt" "$TMP_ROOT/case-u2-keep-before.txt"
+ln -s "$STATE_U2" "$CASE_U2/.ai-conductor"
+run_uninstall_purge "$CASE_U2" "$TMP_ROOT/case-u2.out"
+CASE_U2_EXIT=$?
+check 'U2 purge exits successfully for a harness-state symlink' test "$CASE_U2_EXIT" -eq 0
+check 'U2 removes only the harness-state symlink' \
+  sh -c 'test ! -e "$1" && test ! -L "$1"' sh "$CASE_U2/.ai-conductor"
+check 'U2 preserves the symlink target byte-identically' \
+  cmp -s "$STATE_U2/keep.txt" "$TMP_ROOT/case-u2-keep-before.txt"
+check 'U2 reports the exact purged state directory' \
+  grep -Fq "Purged $CASE_U2/.ai-conductor" "$TMP_ROOT/case-u2.out"
+
+# U3: purge is a successful no-op when harness state is absent.
+CASE_U3="$TMP_ROOT/case-u3"
+mkdir -p "$CASE_U3"
+run_uninstall_purge "$CASE_U3" "$TMP_ROOT/case-u3.out"
+CASE_U3_EXIT=$?
+check 'U3 purge exits successfully without harness state' test "$CASE_U3_EXIT" -eq 0
+check 'U3 reports the exact absent state directory' \
+  grep -Fq "Nothing to purge $CASE_U3/.ai-conductor" "$TMP_ROOT/case-u3.out"
+
+run_help "$CASE_U3" "$TMP_ROOT/help.out"
+HELP_EXIT=$?
+check 'help exits successfully' test "$HELP_EXIT" -eq 0
+check 'help lists --purge alongside --uninstall' \
+  sh -c 'grep -Fq -- "--uninstall" "$1" && grep -Fq -- "--purge" "$1"' sh "$TMP_ROOT/help.out"
 
 # M: malformed settings cannot be cleaned, but every later uninstall step runs.
 CASE_M="$TMP_ROOT/case-m"

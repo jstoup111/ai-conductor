@@ -24,6 +24,11 @@ source "${HARNESS_DIR}/bin/lib/harness-common.sh"
 # harness update.
 UPDATE_MODE=false
 
+# PURGE=true removes the harness state directory during --uninstall.  It is
+# deliberately opt-in because that directory contains operator configuration
+# and runtime data in addition to installer-owned links.
+PURGE=false
+
 # ALLOW_WORKTREE_ROOT=true bypasses the worktree-root guard (issue #363). Set
 # via the --allow-worktree-root flag, which is stripped from "$@" before the
 # mode dispatch so it composes with any mode (e.g. --update).
@@ -66,6 +71,24 @@ ok()   { echo -e "  ${GREEN}✓${NC} $*"; }
 fail() { echo -e "  ${RED}✗${NC} $*"; }
 warn() { echo -e "  ${YELLOW}⚠${NC} $*"; }
 info() { echo -e "  ${CYAN}→${NC} $*"; }
+
+usage() {
+  echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--purge] [--providers claude[,codex]] [--channel stable|tagged|main] [--allow-worktree-root]"
+  echo ""
+  echo "  (no args)     Install/update harness skills and conduct script"
+  echo "  --check       Check installation status"
+  echo "  --update      Refresh symlinks + settings (skip deps + channel prompt)"
+  echo "  --uninstall   Remove all symlinks"
+  echo "  --purge       Remove ~/.ai-conductor during uninstall"
+  echo "  --providers   Comma-separated selection of Claude and/or Codex"
+  echo "  --channel     First-run update channel: stable, tagged, or main"
+  echo "                AI_CONDUCTOR_CHANNEL provides the same first-run choice"
+  echo "  --allow-worktree-root"
+  echo "                Bypass the refusal to install from a .worktrees/ checkout"
+  echo "                (installs from a worktree normally repoint global symlinks"
+  echo "                at a directory that is deleted at ship time)"
+  echo "  -h, --help    Show this help"
+}
 
 # Auto-discover every skill: any skills/<name>/ directory containing a SKILL.md.
 # Previously this was a hardcoded list that drifted out of sync — new skills
@@ -1652,11 +1675,6 @@ PYEOF
     warn "Global rate card ${rate_card} is not a harness link, skipping"
   fi
 
-  local harness_state_dir="${HOME}/.ai-conductor"
-  if [ "${PURGE:-false}" = false ] && [ -e "$harness_state_dir" ]; then
-    info "Kept ${harness_state_dir}: operator configuration and runtime data (project registry, memory). Re-run with --uninstall --purge to remove it."
-  fi
-
   echo -e "${BOLD}${CYAN}Uninstalling AI Conductor Harness${NC}"
   echo ""
 
@@ -1758,6 +1776,21 @@ PYEOF
     fi
   done
 
+  local harness_state_dir="${HOME}/.ai-conductor"
+  if [ "$PURGE" = true ]; then
+    if [ -L "$harness_state_dir" ]; then
+      rm -- "$harness_state_dir"
+      ok "Purged ${harness_state_dir}"
+    elif [ -d "$harness_state_dir" ]; then
+      rm -rf -- "$harness_state_dir"
+      ok "Purged ${harness_state_dir}"
+    else
+      info "Nothing to purge ${harness_state_dir}"
+    fi
+  elif [ -e "$harness_state_dir" ]; then
+    info "Kept ${harness_state_dir}: operator configuration and runtime data (project registry, memory). Re-run with --uninstall --purge to remove it."
+  fi
+
   echo ""
   if [ -n "$UNINSTALL_FAILURE" ]; then
     echo -e "${RED}${BOLD}Uninstall incomplete.${NC}"
@@ -1776,6 +1809,9 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --allow-worktree-root)
       ALLOW_WORKTREE_ROOT=true
+      ;;
+    --purge)
+      PURGE=true
       ;;
     --providers)
       shift
@@ -1861,20 +1897,7 @@ case "${1:-}" in
   --uninstall) uninstall ;;
   --update)    UPDATE_MODE=true; install ;;
   -h|--help)
-    echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--providers claude[,codex]] [--channel stable|tagged|main] [--allow-worktree-root]"
-    echo ""
-    echo "  (no args)     Install/update harness skills and conduct script"
-    echo "  --check       Check installation status"
-    echo "  --update      Refresh symlinks + settings (skip deps + channel prompt)"
-    echo "  --uninstall   Remove all symlinks"
-    echo "  --providers   Comma-separated selection of Claude and/or Codex"
-    echo "  --channel     First-run update channel: stable, tagged, or main"
-    echo "                AI_CONDUCTOR_CHANNEL provides the same first-run choice"
-    echo "  --allow-worktree-root"
-    echo "                Bypass the refusal to install from a .worktrees/ checkout"
-    echo "                (installs from a worktree normally repoint global symlinks"
-    echo "                at a directory that is deleted at ship time)"
-    echo "  -h, --help    Show this help"
+    usage
     ;;
   *)           install ;;
 esac
