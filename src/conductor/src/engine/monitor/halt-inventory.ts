@@ -27,23 +27,36 @@ function readFailureReason(error: unknown): string {
   return `HALT marker unreadable: ${error instanceof Error ? error.message : String(error)}`;
 }
 
+async function hasReadableCompletionMarker(worktreePath: string): Promise<boolean> {
+  try {
+    await readFile(join(worktreePath, '.pipeline/DONE'), 'utf-8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function unreadableHaltSlugs(worktreeBase: string, knownSlugs: Set<string>): Promise<string[]> {
   try {
     const entries = await readdir(worktreeBase, { withFileTypes: true });
     const unreadable: string[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory() || knownSlugs.has(entry.name)) continue;
-      const markerPath = join(worktreeBase, entry.name, HALT_MARKER);
+      const worktreePath = join(worktreeBase, entry.name);
+      const markerPath = join(worktreePath, HALT_MARKER);
       try {
         await stat(markerPath);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') unreadable.push(entry.name);
+        if (
+          (error as NodeJS.ErrnoException).code !== 'ENOENT'
+          && !await hasReadableCompletionMarker(worktreePath)
+        ) unreadable.push(entry.name);
         continue;
       }
       try {
         await readFile(markerPath, 'utf-8');
       } catch {
-        unreadable.push(entry.name);
+        if (!await hasReadableCompletionMarker(worktreePath)) unreadable.push(entry.name);
       }
     }
     return unreadable;

@@ -139,6 +139,15 @@ describe('Task 1 — per-project halt inventory', () => {
     expect(await enumerateProjectHalts(projectRoot)).toEqual([]);
   });
 
+  it('excludes an unreadable HALT fallback entry co-present with a completion marker', async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'halt-inventory-'));
+    const pipeline = join(projectRoot, '.worktrees', 'unreadable-completed-feature', '.pipeline');
+    await mkdir(join(pipeline, 'HALT'), { recursive: true });
+    await writeFile(join(pipeline, 'DONE'), 'complete\n', 'utf-8');
+
+    expect(await enumerateProjectHalts(projectRoot)).toEqual([]);
+  });
+
   it('excludes a halted worktree when the injected park predicate fails closed', async () => {
     projectRoot = await mkdtemp(join(tmpdir(), 'halt-inventory-'));
     await writeHalt(projectRoot, 'park-read-error', 'Awaiting operator decision.\n', 'needs-human\n');
