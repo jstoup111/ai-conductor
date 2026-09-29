@@ -1030,12 +1030,16 @@ export async function dispatchEngineer(
           lastCode = await launchOne(pendingIdea);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
-          const failedHost = host ?? requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch');
-          printErr(
-            `engineer: could not launch ${failedHost.id} executable ${failedHost.defaultExecutable} (${msg}). ` +
-              `Install it or set ${failedHost.executableOverrideEnv}; if already in a session, run ` +
-              `${failedHost.invocationPrefix}composer directly.`,
-          );
+          if ((err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT' && host) {
+            printErr(
+              `engineer: could not launch ${host.id} executable ${host.defaultExecutable} (${msg}). ` +
+                `Install it or set ${host.executableOverrideEnv}; if already in a session, run ` +
+                `${host.invocationPrefix}composer directly.`,
+            );
+          } else {
+            const displayName = host?.displayName ?? requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch').displayName;
+            printErr(`engineer: could not launch an interactive ${displayName} session (${msg}).`);
+          }
           printGuide(print);
           return 1;
         }

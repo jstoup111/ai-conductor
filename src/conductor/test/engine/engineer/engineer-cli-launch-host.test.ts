@@ -189,9 +189,8 @@ describe('dispatchEngineer interactive host launch', () => {
     }).toEqual({
       code: 1,
       diagnostics: expect.arrayContaining([
-        expect.stringContaining('codex'),
-        expect.stringContaining('CODEX_EXECUTABLE'),
-        expect.stringContaining('$composer'),
+        'engineer: could not launch codex executable codex (spawn codex ENOENT). ' +
+          'Install it or set CODEX_EXECUTABLE; if already in a session, run $composer directly.',
       ]),
       spawnCalls: [['codex', ['$composer'], process.cwd()]],
       discoveryCalls: [],
@@ -234,7 +233,10 @@ describe('dispatchEngineer interactive host launch', () => {
     expect({ code, diagnostics: printErr.mock.calls.flat(), spawnCalls: spawnHost.mock.calls, confirmCalls: confirmAnother.mock.calls })
       .toEqual({
         code: 1,
-        diagnostics: expect.arrayContaining([expect.stringContaining('CODEX_EXECUTABLE')]),
+        diagnostics: expect.arrayContaining([
+          'engineer: could not launch codex executable codex (spawn codex ENOENT). ' +
+            'Install it or set CODEX_EXECUTABLE; if already in a session, run $composer directly.',
+        ]),
         spawnCalls: [['codex', ['$composer'], process.cwd()], ['codex', ['$composer'], process.cwd()]],
         confirmCalls: [[]],
       });
