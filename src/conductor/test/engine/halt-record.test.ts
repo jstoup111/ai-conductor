@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -117,12 +117,24 @@ describe('halt record supersession', () => {
     expect(await commitCount(root)).toBe(before + 1);
   });
 
-  it('returns a failure result when the record cannot be read', async () => {
+  it('does nothing when no halt record exists', async () => {
     const root = await makeFeatureRepository();
+    const before = await commitCount(root);
 
-    await expect(supersedeHaltRecord(root, input.slug, 'operator resume')).resolves.toMatchObject({ kind: 'failed' });
+    await expect(supersedeHaltRecord(root, input.slug, 'operator resume')).resolves.toEqual({ kind: 'noop' });
+    await expect(readFile(join(root, haltRecordPath(input.slug)), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await commitCount(root)).toBe(before);
   });
 
+  it('returns a failure result when the record path cannot be read as a file', async () => {
+    const root = await makeFeatureRepository();
+    await mkdir(join(root, haltRecordPath(input.slug)), { recursive: true });
+
+    await expect(supersedeHaltRecord(root, input.slug, 'operator resume')).resolves.toMatchObject({
+      kind: 'failed',
+      reason: expect.stringMatching(/\S/),
+    });
+  });
 });
 
 const scratchRoots: string[] = [];

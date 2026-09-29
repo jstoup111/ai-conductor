@@ -152,7 +152,13 @@ export async function supersedeHaltRecord(
   try {
     const relPath = haltRecordPath(slug);
     const path = join(root, relPath);
-    const current = await readFile(path, 'utf8');
+    let current: string;
+    try {
+      current = await readFile(path, 'utf8');
+    } catch (error) {
+      if (isMissingHaltRecord(error)) return { kind: 'noop' };
+      throw error;
+    }
     const superseded = supersedeHaltRecordText(current, { cause, resolvedAt: new Date().toISOString() });
     if (superseded === current) return { kind: 'noop' };
 
@@ -257,4 +263,8 @@ function errorMessage(error: unknown): string {
     }
   }
   return String(error);
+}
+
+function isMissingHaltRecord(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
