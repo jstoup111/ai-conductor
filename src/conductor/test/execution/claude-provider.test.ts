@@ -1,4 +1,4 @@
-// Covers: task:2, task:4
+// Covers: task:2
 // Covers: task:5
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
