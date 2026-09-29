@@ -131,7 +131,7 @@ export interface UserConfigWriteDispatch {
   preset: string;
   command: string;
   args: string[];
-  mode: MarkdownViewerConfig['mode'] | MermaidRendererConfig['mode'];
+  mode: NonNullable<MarkdownViewerConfig['mode']> | MermaidRendererConfig['mode'];
 }
 
 export interface UserConfigSetDispatch {

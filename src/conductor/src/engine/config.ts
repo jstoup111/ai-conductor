@@ -10,6 +10,7 @@ import {
   sep,
 } from 'path';
 import { load as loadYaml } from 'js-yaml';
+import { satisfies, validRange } from 'semver';
 import type {
   HarnessConfig,
   EffortLevel,
@@ -168,6 +169,8 @@ const DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET = new Set<string>(
 );
 const DEPRECATED_BUILD_REVIEW_ADR =
   'adr-2026-08-22-build-review-opt-in-rubric-container';
+const DEPRECATED_WIRING_ADR =
+  'adr-2026-08-14-retire-build-review-wiring-rubric';
 
 /** Default hard floor for live provider-stream observation emission. */
 export const DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS = 5_000;
@@ -594,6 +597,24 @@ export function validateConfig(
   const providerSubstitutionErr = validateProviderSubstitution(obj.provider_substitution, 'provider_substitution');
   if (providerSubstitutionErr) return { ok: false, error: providerSubstitutionErr };
 
+  if (Object.hasOwn(obj, 'harness_version')) {
+    if (typeof obj.harness_version !== 'string') {
+      return errVal('harness_version must be a string');
+    }
+    if (obj.harness_version.trim() === '') {
+      return errVal('harness_version must not be empty');
+    }
+    if (validRange(obj.harness_version) === null) {
+      return errVal(`harness_version "${obj.harness_version}" is not a valid version range`);
+    }
+  }
+
+  if (Object.hasOwn(obj, 'wiring')) {
+    warnings.push(`wiring is retired and ignored (${DEPRECATED_WIRING_ADR}).`);
+    deprecatedKeys.push({ key: 'wiring', adr: DEPRECATED_WIRING_ADR });
+    delete obj.wiring;
+  }
+
   // defaults
   if (obj.defaults !== undefined) {
     const err = validateEffortAndModelBag(obj.defaults, 'defaults', false);
@@ -653,9 +674,13 @@ export function validateConfig(
       }
 
       if (key === 'disable') {
-        return `Cannot disable ${def.enforcement} step: "${name}". Only advisory steps may be disabled.`;
+        return def.enforcement === 'structural'
+          ? `Cannot disable structural step: "${name}". Structural steps can never be disabled.`
+          : `Cannot disable gating step: "${name}". Only advisory steps and gating steps that allow config disabling may be disabled.`;
       }
-      return `Cannot condition ${def.enforcement} step: "${name}" with when:. Only advisory steps may be conditional.`;
+      return def.enforcement === 'structural'
+        ? `Cannot condition structural step: "${name}" with when:. Structural steps can never be conditional.`
+        : `Cannot condition gating step: "${name}" with when:. Only advisory steps and gating steps that allow config disabling may be conditional.`;
     };
     // Collect all custom-step names up-front so a custom can legally point
     // `after` at a sibling custom (chain ordering). Validation still rejects
@@ -806,7 +831,10 @@ export function validateConfig(
             );
           }
           branchNames.add(b.name);
-          if (b.skill !== undefined && typeof b.skill !== 'string') {
+          if (b.skill === undefined) {
+            return errVal(`steps.${name}.parallel[${bi}].skill is required`);
+          }
+          if (typeof b.skill !== 'string') {
             return errVal(`steps.${name}.parallel[${bi}].skill must be a string`);
           }
           if (b.model !== undefined && typeof b.model !== 'string') {
@@ -847,7 +875,7 @@ export function validateConfig(
           if (normalize(artifact) !== artifact) return errVal(`${field} must be normalized`);
         }
 
-        // Custom steps need both `after` and `skill`.
+        // Custom steps need `after` and either a top-level skill or parallel branches.
         if (typeof cfg.after !== 'string') {
           return errVal(`Custom step "${name}" requires 'after: <existing-step>'`);
         }
@@ -859,7 +887,7 @@ export function validateConfig(
             `Custom step "${name}" references unknown after target: "${afterTarget}"`,
           );
         }
-        if (typeof cfg.skill !== 'string') {
+        if ((!Array.isArray(cfg.parallel) || cfg.parallel.length === 0) && typeof cfg.skill !== 'string') {
           return errVal(`Custom step "${name}" requires 'skill: <path-to-SKILL.md>'`);
         }
         if (cfg.enforcement !== undefined && !VALID_ENFORCEMENTS.has(cfg.enforcement as EnforcementLevel)) {
@@ -2626,11 +2654,22 @@ function validateMarkdownViewerBlock(raw: unknown): ConfigError | null {
       };
     }
   }
-  if (obj.mode !== undefined && !VALID_MARKDOWN_VIEWER_MODES.has(obj.mode as MarkdownViewerConfig['mode'])) {
+  if (obj.mode !== undefined && !VALID_MARKDOWN_VIEWER_MODES.has(obj.mode as NonNullable<MarkdownViewerConfig['mode']>)) {
     return {
       type: 'validation_error',
       message: 'markdown_viewer.mode must be inline|blocking|external',
     };
+  }
+  if (obj.preset === undefined || obj.preset === 'custom') {
+    if (obj.command === undefined) {
+      return { type: 'validation_error', message: 'markdown_viewer.command is required when no preset or custom preset is named' };
+    }
+    if (obj.args === undefined) {
+      return { type: 'validation_error', message: 'markdown_viewer.args is required when no preset or custom preset is named' };
+    }
+    if (obj.mode === undefined) {
+      return { type: 'validation_error', message: 'markdown_viewer.mode is required when no preset or custom preset is named' };
+    }
   }
   return null;
 }
@@ -2652,6 +2691,9 @@ function validateMermaidRendererBlock(raw: unknown): ConfigError | null {
   if (obj.preset !== undefined && typeof obj.preset !== 'string') {
     return { type: 'validation_error', message: 'mermaid_renderer.preset must be a string' };
   }
+  if (obj.preset === undefined) {
+    return { type: 'validation_error', message: 'mermaid_renderer.preset is required' };
+  }
   if (obj.command !== undefined && typeof obj.command !== 'string') {
     return { type: 'validation_error', message: 'mermaid_renderer.command must be a string' };
   }
@@ -2671,7 +2713,7 @@ function validateMermaidRendererBlock(raw: unknown): ConfigError | null {
   }
   if (
     obj.mode !== undefined &&
-    !VALID_MERMAID_RENDERER_MODES.has(obj.mode as MermaidRendererConfig['mode'])
+    !VALID_MERMAID_RENDERER_MODES.has(obj.mode as NonNullable<MermaidRendererConfig['mode']>)
   ) {
     return {
       type: 'validation_error',
@@ -2971,20 +3013,7 @@ function validateProviderSubstitution(value: unknown, path: string): ConfigError
 }
 
 export function satisfiesVersion(installed: string, constraint: string): boolean {
-  const match = constraint.match(/^>=(\d+\.\d+\.\d+)$/);
-  if (!match) return true;
-  const required = match[1];
-  return compareVersions(installed, required) >= 0;
-}
-
-function compareVersions(a: string, b: string): number {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    if (pa[i] > pb[i]) return 1;
-    if (pa[i] < pb[i]) return -1;
-  }
-  return 0;
+  return satisfies(installed, constraint);
 }
 
 // ────────────────────────────────────────────────────────────────────────────

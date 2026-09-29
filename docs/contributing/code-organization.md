@@ -156,9 +156,8 @@ Seven files sit at the top level of `src/conductor/src/`.
 Subcommand detection runs first; the `detectInline` check at `:670` is the last fallthrough, and a bare
 invocation with no subcommand is rejected with guidance rather than silently starting a run.
 
-`wiring.entry_points` in `.ai-conductor/config.yml` supplies the production roots that
-`build_review` gives its static wiring rubric. Keep it current when adding an independently invoked
-entry point so the reviewer can assess reachability from the complete production surface.
+Static wiring reachability review is retired. Cover every independently invoked entry point with an
+appropriate CLI or integration test instead of adding a `wiring.entry_points` configuration block.
 
 ## Dependency direction
 

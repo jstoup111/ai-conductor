@@ -1,5 +1,6 @@
 // Unit coverage for the `ai-conductor --version` report: argv grammar,
 // harness-VERSION resolution, rendering, and the dispatch that prints it.
+// Covers: task:8
 //
 // Level: unit. Every boundary the report touches (the VERSION file read and
 // the output sink) is injected, so nothing here reads the real filesystem or
@@ -10,6 +11,7 @@ import { join } from 'node:path';
 import {
   detectVersionCommand,
   harnessVersionCandidates,
+  installedHarnessVersionForConfig,
   renderVersionReport,
   resolveHarnessVersion,
   dispatchVersionCommand,
@@ -57,6 +59,18 @@ describe('resolveHarnessVersion', () => {
   it('falls back to 0.0.0 when no candidate holds a semver VERSION', async () => {
     expect(await resolveHarnessVersion('/h/x', async () => null)).toBe('0.0.0');
     expect(await resolveHarnessVersion('/h/x', async () => 'not a version')).toBe('0.0.0');
+  });
+});
+
+describe('installedHarnessVersionForConfig', () => {
+  it('returns the module-relative VERSION when it resolves', async () => {
+    await expect(installedHarnessVersionForConfig('/h/src/conductor/src', async (path) => (
+      path === join('/h', 'VERSION') ? '1.5.0\n' : null
+    ))).resolves.toBe('1.5.0');
+  });
+
+  it('returns undefined when the module-relative VERSION is unknown', async () => {
+    await expect(installedHarnessVersionForConfig('/h/src/conductor/src', async () => null)).resolves.toBeUndefined();
   });
 });
 

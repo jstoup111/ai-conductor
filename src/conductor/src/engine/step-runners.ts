@@ -1111,7 +1111,7 @@ export class DefaultStepRunner implements StepRunner {
     )
       ? STEP_SKILL_INVOCATIONS[step]
       : undefined;
-    const configuredSkillPath = this.config?.steps?.[step]?.skill;
+    const configuredSkillPath = opts?.branchSkill ?? this.config?.steps?.[step]?.skill;
     const customSkill = skillInvocation || configuredSkillPath === undefined
       ? undefined
       : resolveCustomStepSkill(step, configuredSkillPath, this.projectDir);

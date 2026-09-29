@@ -1,3 +1,4 @@
+// Covers: task:3, task:4, task:5, task:10
 import { describe, it, expect } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -46,6 +47,154 @@ describe('project config load errors', () => {
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe('harness_version validation', () => {
+  it.each([
+    ['a number', 1, /harness_version must be a string/],
+    ['an empty string', '', /harness_version must not be empty/],
+    ['a whitespace-only string', '  \t', /harness_version must not be empty/],
+    ['an invalid range', 'latest', /harness_version.*latest.*not a valid version range/i],
+  ])('rejects %s at the validation boundary', (_name, harnessVersion, diagnostic) => {
+    const result = validateConfig({ harness_version: harnessVersion });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatchObject({ type: 'validation_error' });
+    expect(result.error.message).toMatch(diagnostic);
+  });
+
+  it.each([
+    ['*'],
+    ['^1.2.0'],
+  ])('accepts the valid range %s without an installed version', (harnessVersion) => {
+    expect(validateConfig({ harness_version: harnessVersion })).toMatchObject({
+      ok: true,
+      config: { harness_version: harnessVersion },
+    });
+  });
+
+});
+
+describe('retired top-level wiring configuration', () => {
+  it.each([
+    { entry_points: ['src/cli.ts'] },
+    { entry_points: ['src/cli.ts'], bogus: 1 },
+    5,
+  ])('accepts and omits retired wiring value %#', (wiring) => {
+    const result = validateConfig({ wiring });
+
+    expect(result).toMatchObject({
+      ok: true,
+      config: {},
+      warnings: [expect.stringMatching(/wiring.*retired.*ignored.*adr-2026-08-14-retire-build-review-wiring-rubric/i)],
+      deprecatedKeys: [{ key: 'wiring', adr: 'adr-2026-08-14-retire-build-review-wiring-rubric' }],
+    });
+    if (!result.ok) return;
+    expect(result.config).not.toHaveProperty('wiring');
+  });
+
+  it('does not report wiring when it is absent', () => {
+    const result = validateConfig({});
+
+    expect(result).toMatchObject({ ok: true, warnings: [] });
+    if (!result.ok) return;
+    expect(result.deprecatedKeys).not.toContainEqual(expect.objectContaining({ key: 'wiring' }));
+  });
+});
+
+describe('markdown_viewer configuration', () => {
+  it.each([
+    ['a preset-only viewer', { preset: 'glow' }],
+    ['a complete custom viewer', { preset: 'custom', command: 'bat', args: ['{file}'], mode: 'inline' }],
+    ['a complete preset-less viewer', { command: 'bat', args: ['{file}'], mode: 'blocking' }],
+  ])('accepts %s', (_name, markdown_viewer) => {
+    expect(validateConfig({ markdown_viewer })).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ['an empty viewer', {}, /markdown_viewer\.command.*required/i],
+    ['a custom viewer without args', { preset: 'custom', command: 'bat', mode: 'inline' }, /markdown_viewer\.args.*required/i],
+    ['a preset-less viewer without mode', { command: 'bat', args: ['{file}'] }, /markdown_viewer\.mode.*required/i],
+    ['viewer args without the file placeholder', { preset: 'glow', args: ['-p'] }, /markdown_viewer\.args.*include.*\{file\}/i],
+  ])('rejects %s', (_name, markdown_viewer, diagnostic) => {
+    const result = validateConfig({ markdown_viewer });
+
+    expect(result.ok ? 'accepted invalid markdown viewer' : result.error.message).toMatch(diagnostic);
+  });
+});
+
+describe('custom parallel step validation', () => {
+  it('accepts when on a parallel group without a top-level skill per ADR 004-when-parallel-workflow-dsl', () => {
+    expect(validateConfig({
+      steps: {
+        parallel_review: {
+          after: 'build',
+          enforcement: 'advisory',
+          when: 'tier == L',
+          parallel: [{ name: 'review', skill: 'project-review' }],
+        },
+      },
+    })).toMatchObject({ ok: true });
+  });
+
+  it('rejects a parallel branch without a required skill', () => {
+    const result = validateConfig({
+      steps: {
+        parallel_review: {
+          after: 'build',
+          parallel: [{ name: 'review' }],
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        type: 'validation_error',
+        message: 'steps.parallel_review.parallel[0].skill is required',
+      },
+    });
+  });
+
+  it('rejects an empty parallel group without a top-level skill', () => {
+    const result = validateConfig({
+      steps: {
+        parallel_review: {
+          after: 'build',
+          parallel: [],
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        type: 'validation_error',
+        message: 'Custom step "parallel_review" requires \'skill: <path-to-SKILL.md>\'',
+      },
+    });
+  });
+});
+
+describe('mermaid_renderer configuration', () => {
+  it.each([
+    ['a preset-only renderer', { preset: 'html' }],
+    ['an installer renderer', { preset: 'html', command: '', args: ['{file}'], mode: 'external' }],
+    ['the none preset', { preset: 'none' }],
+  ])('accepts %s', (_name, mermaid_renderer) => {
+    expect(validateConfig({ mermaid_renderer })).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ['an empty renderer', {}, /mermaid_renderer\.preset.*required/i],
+    ['a command-shaped renderer without a preset', { command: 'mmdc', args: ['{file}'], mode: 'external' }, /mermaid_renderer\.preset.*required/i],
+    ['a non-string preset', { preset: 3 }, /mermaid_renderer\.preset.*must be a string/i],
+  ])('rejects %s', (_name, mermaid_renderer, diagnostic) => {
+    const result = validateConfig({ mermaid_renderer });
+
+    expect(result.ok ? 'accepted invalid mermaid renderer' : result.error.message).toMatch(diagnostic);
   });
 });
 

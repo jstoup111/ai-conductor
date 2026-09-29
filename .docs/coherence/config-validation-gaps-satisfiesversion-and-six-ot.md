@@ -21,9 +21,9 @@ Outcomes 2 and 3 are documentation-only. The approved design withdrew the `when`
 
 | Row class | Cited id(s) | Counterpart id(s) | Verdict | Quote / Notes |
 | --- | --- | --- | --- | --- |
-| story | story-1 | task-2 | covered | Every harness_version constraint form is actually evaluated |
+| story | story-1 | task-2, task-8 | covered | Every harness_version constraint form is actually evaluated |
 | story | story-2 | task-1 | covered | A harness_version the gate cannot evaluate is rejected at config load |
-| story | story-3 | task-3 | covered | The retired top-level wiring key is a reported no-op |
+| story | story-3 | task-3, task-9, task-10 | covered | The retired top-level wiring key is a reported no-op |
 | story | story-4 | task-4 | covered | A custom markdown viewer must say what to run |
 | story | story-5 | task-5 | covered | A mermaid renderer must name its preset |
 | story | story-6 | task-6 | covered | An unsupported OTLP protocol disables telemetry by name instead of silently falling back |
@@ -38,6 +38,9 @@ Outcomes 2 and 3 are documentation-only. The approved design withdrew the `when`
 | task | task-5 | story-5 | covered | negative-path: Require a mermaid renderer to name its preset |
 | task | task-6 | story-6 | covered | negative-path: Disable telemetry by name on an unsupported OTLP protocol |
 | task | task-7 | story-7 | covered | negative-path: State the real rule in step disable and when rejections |
+| task | task-8 | story-1 | covered | happy-path: Pass the installed harness version to CLI and daemon config loads |
+| task | task-9 | story-3 | covered | happy-path: Emit merged deprecated config keys from CLI and daemon startup |
+| task | task-10 | story-3 | covered | happy-path: Register custom parallel groups in ADR 004's step shape |
 
 ## Judgement notes
 
@@ -48,6 +51,7 @@ Outcomes 2 and 3 are documentation-only. The approved design withdrew the `when`
   - Tasks 4 and 5 leave every installer-written block valid, because each carries a preset.
 - **Outcome tie-out.** Outcome 4 (nested blocks validate their required fields) is delivered by Stories 4 and 5, the two blocks with required fields. Stories 3 (retired `wiring`) and 6 (OTLP protocol) close gaps from the issue's Observed list rather than a stated outcome, so citing them for outcome 4 would be decorative.
 - **Ordering.** Task 1 lands before Task 2, so only a non-empty, valid range reaches `satisfiesVersion`.
+- **Production reachability (as-built recovery, 2026-09-29).** Task 8 wires the installed harness version into CLI and daemon startup so Story 1's gate is reachable from a real entry point. Task 9 emits merged deprecated keys from both startups, and Task 10 registers custom parallel groups in ADR `004-when-parallel-workflow-dsl`'s step shape.
 - **Achievability.** Every criterion quote names its mechanism and asserts each Then outcome. This includes the absence outcomes: no `wiring` key in the returned config, no event for a config without `wiring`, and no exporter constructed for an unsupported protocol.
 
 ## Criterion coverage

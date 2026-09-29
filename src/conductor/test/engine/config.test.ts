@@ -105,6 +105,45 @@ steps:
       expect(result.ok).toBe(true);
     });
 
+    it.each([
+      '^1.2.0',
+      '~1.5.0',
+      '>=1.0.0 <2.0.0',
+      '1.5.0',
+      '>=0.99.0',
+    ])('loads a satisfied harness version constraint: %s', async (constraint) => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        `harness_version: "${constraint}"\n`,
+      );
+
+      await expect(loadConfig(tmpDir, '1.5.0')).resolves.toMatchObject({ ok: true });
+    });
+
+    it.each([
+      '^2.0.0',
+      '~1.4.0',
+      '>=2.0.0 <3.0.0',
+      '1.4.0',
+      '>=1.6.0',
+    ])('rejects an unsatisfied harness version constraint: %s', async (constraint) => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        `harness_version: "${constraint}"\n`,
+      );
+
+      const result = await loadConfig(tmpDir, '1.5.0');
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'version_mismatch',
+          message: expect.stringContaining('1.5.0'),
+        },
+      });
+      if (!result.ok) expect(result.error.message).toContain(constraint);
+    });
+
     it('loads OTel attributes without an unknown-key warning', async () => {
       await writeFile(
         join(tmpDir, '.ai-conductor', 'config.yml'),
@@ -128,6 +167,36 @@ steps:
       expect(result.error.type).toBe('version_mismatch');
       expect(result.error.message).toContain('1.0.0');
       expect(result.error.message).toContain('>=2.0.0');
+    });
+
+    it.each([
+      ['a number', 'harness_version: 1\n', /harness_version must be a string/],
+      ['an empty string', 'harness_version: ""\n', /harness_version must not be empty/],
+      ['an invalid range', 'harness_version: latest\n', /harness_version.*latest.*not a valid version range/i],
+    ])('returns a validation error through project config loading for %s', async (_name, contents, diagnostic) => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), contents);
+
+      const result = await loadConfig(tmpDir, '1.5.0');
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toMatchObject({ type: 'validation_error' });
+      expect(result.error.message).toMatch(diagnostic);
+    });
+
+    it('loads a wildcard range with an installed version', async () => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), 'harness_version: "*"\n');
+
+      await expect(loadConfig(tmpDir, '1.5.0')).resolves.toMatchObject({
+        ok: true,
+        config: { harness_version: '*' },
+      });
+    });
+
+    it.each(['1.5.0', '0.0.1'])('does not apply a version check when harness_version is absent (%s)', async (installedVersion) => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), '{}\n');
+
+      await expect(loadConfig(tmpDir, installedVersion)).resolves.toMatchObject({ ok: true });
     });
 
     it('parses valid .ai-conductor/config.yml (new flat schema)', async () => {
@@ -682,6 +751,13 @@ steps:
       expect(result.ok).toBe(true);
     });
 
+    it('accepts steps.memory.disable: true — advisory steps remain disableable', () => {
+      const result = validateConfig({
+        steps: { memory: { disable: true } },
+      });
+      expect(result.ok).toBe(true);
+    });
+
     it('rejects steps.test_suite.disable: true — the native BUILD gate is non-disableable', () => {
       const result = validateConfig({
         steps: { test_suite: { disable: true } },
@@ -699,6 +775,9 @@ steps:
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.message).toContain('build');
+      expect(result.error.message).toBe(
+        'Cannot disable structural step: "build". Structural steps can never be disabled.',
+      );
     });
 
     it('rejects invalid effort value', () => {
@@ -859,8 +938,8 @@ steps:
       });
 
       expect(outcomes).toEqual([
-        'Cannot condition gating step: "lint" with when:. Only advisory steps may be conditional.',
-        'Cannot condition structural step: "lint" with when:. Only advisory steps may be conditional.',
+        'Cannot condition gating step: "lint" with when:. Only advisory steps and gating steps that allow config disabling may be conditional.',
+        'Cannot condition structural step: "lint" with when:. Structural steps can never be conditional.',
         'accepted',
       ]);
     });
@@ -888,8 +967,8 @@ steps:
       });
 
       expect(outcomes).toEqual([
-        'Cannot disable gating step: "lint". Only advisory steps may be disabled.',
-        'Cannot disable structural step: "lint". Only advisory steps may be disabled.',
+        'Cannot disable gating step: "lint". Only advisory steps and gating steps that allow config disabling may be disabled.',
+        'Cannot disable structural step: "lint". Structural steps can never be disabled.',
         'accepted',
         'accepted',
       ]);
@@ -1140,7 +1219,7 @@ steps:
 
     it('rejects args without {file} placeholder', () => {
       const result = validateConfig({
-        mermaid_renderer: { command: 'mmdc', args: ['-i'], mode: 'external' },
+        mermaid_renderer: { preset: 'custom', command: 'mmdc', args: ['-i'], mode: 'external' },
       });
       expect(result.ok).toBe(false);
       if (result.ok) return;
@@ -1149,7 +1228,7 @@ steps:
 
     it('rejects invalid mode', () => {
       const result = validateConfig({
-        mermaid_renderer: { command: 'mmdc', args: ['{file}'], mode: 'weird' },
+        mermaid_renderer: { preset: 'custom', command: 'mmdc', args: ['{file}'], mode: 'weird' },
       });
       expect(result.ok).toBe(false);
       if (result.ok) return;
@@ -1158,7 +1237,7 @@ steps:
 
     it('rejects unknown keys under mermaid_renderer', () => {
       const result = validateConfig({
-        mermaid_renderer: { command: 'mmdc', args: ['{file}'], mode: 'external', bogus: 1 },
+        mermaid_renderer: { preset: 'custom', command: 'mmdc', args: ['{file}'], mode: 'external', bogus: 1 },
       });
       expect(result.ok).toBe(false);
       if (result.ok) return;
@@ -3129,22 +3208,22 @@ steps:
       const result = validateConfig({ steps: { build_review: { disable: true } } });
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.error.message).toMatch(/build_review/);
-      expect(result.error.message).toMatch(/gating/i);
+      expect(result.error.message).toBe(
+        'Cannot disable gating step: "build_review". Only advisory steps and gating steps that allow config disabling may be disabled.',
+      );
     });
 
     it.each([
-      ['build_review', "tier == 'S'", 'gating'],
-      ['rebase', "x == 'y'", 'structural'],
-      ['build_review', "'a' == 'a'", 'gating'],
-    ])('rejects when: on non-disableable %s steps without evaluating the expression', (name, when, enforcement) => {
+      ['finish', "tier == 'L'", 'Cannot condition gating step: "finish" with when:. Only advisory steps and gating steps that allow config disabling may be conditional.'],
+      ['rebase', "tier == 'L'", 'Cannot condition structural step: "rebase" with when:. Structural steps can never be conditional.'],
+    ])('rejects when: on non-disableable %s steps without evaluating the expression', (name, when, message) => {
       const result = validateConfig({ steps: { [name]: { when } } });
 
       expect(result).toMatchObject({
         ok: false,
         error: {
           type: 'validation_error',
-          message: expect.stringMatching(new RegExp(`Cannot condition ${enforcement} step: "${name}" with when:`, 'i')),
+          message,
         },
       });
     });

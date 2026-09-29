@@ -6,7 +6,7 @@
 
 ## Summary
 
-Seven tasks close the #1026 config-validation gaps that are still open. The `harness_version` gate is fixed in two steps: first rejecting values it cannot evaluate, then evaluating every semver range form. The dead top-level `wiring` key is reported as retired. Custom markdown viewers must say what to run, and mermaid renderers must name a preset. An unsupported OTLP protocol disables telemetry by name. Step disable and `when` rejections state the rule the validator applies.
+Ten tasks close the #1026 config-validation gaps that are still open. The `harness_version` gate is fixed in two steps: first rejecting values it cannot evaluate, then evaluating every semver range form. The dead top-level `wiring` key is reported as retired. Custom markdown viewers must say what to run, and mermaid renderers must name a preset. An unsupported OTLP protocol disables telemetry by name. Step disable and `when` rejections state the rule the validator applies. Three as-built recovery tasks (operator-approved, 2026-09-29) wire the installed harness version into CLI and daemon startup, emit merged deprecated keys from both production startups, and register custom parallel groups in ADR 004's shape.
 
 ## Technical Approach
 
@@ -23,7 +23,10 @@ Seven tasks close the #1026 config-validation gaps that are still open. The `har
 - **OTLP protocol is a telemetry-resolution check, not a config-load check.** An invalid `otel` value disables telemetry with a named error and never fails the run. The new check matches the shape of the sibling unknown-exporter check in `resolveOtelConfig`.
 - **Step-disable messages.** `stepSkipAuthorityError` keeps its predicate (structural always rejected; gating rejected unless the step allows config disabling). Only its wording changes.
 - **`when` with `parallel` is not rejected.** APPROVED `004-when-parallel-workflow-dsl` defines `when:` on a parallel group as supported, so there is no validator change for it.
-- **Sequencing.** Tasks 1→2→3→4→5→7 all edit `config.ts` and its tests, so they run as a chain to avoid same-file collisions. Task 1 precedes Task 2 so only valid ranges reach the evaluator. Task 6 touches only the otel module and runs independently.
+- **Production harness version (as-built AB-1 recovery).** `loadConfig` and `loadMergedConfig` only apply the `harness_version` gate when a caller passes the installed version, and no production caller did. The CLI run path in `src/conductor/src/index.ts` and daemon startup in `src/conductor/src/daemon-cli.ts` now pass the module-relative installed version. It comes from `resolveHarnessVersion(__dirname)` in `src/conductor/src/engine/version-report.ts`, not from `readHarnessVersion`, because that helper prefers the current directory's `VERSION` file, and in a consumer project that file is the consumer's own version. An unknown install (`UNKNOWN_HARNESS_VERSION`) passes no version, so an unidentifiable install never blocks startup.
+- **Merged deprecations reach the spine (as-built AB-3 recovery).** The foreground run emits deprecated keys from the merged result, which already de-duplicates project and user keys, instead of the project-only result. The daemon emits the same merged result once on its daemon event bus at startup.
+- **Custom parallel groups (as-built AB-2 recovery).** `buildStepRegistry` registers a custom step whose work lives in a `parallel` group even without a top-level `skill`, so the conductor and its parallel executor see it. The types follow ADR `004-when-parallel-workflow-dsl`: `skill` and `parallel` are mutually exclusive in `StepConfig`, and every parallel branch names its `skill`.
+- **Sequencing.** Tasks 1→2→3→4→5→7→10 all edit `config.ts` and its tests, so they run as a chain to avoid same-file collisions. Task 1 precedes Task 2 so only valid ranges reach the evaluator. Task 8 follows Task 2 and Task 9 follows Tasks 3 and 8, because both edit `index.ts` and `daemon-cli.ts`. Task 6 touches only the otel module and runs independently.
 
 ## Prerequisites
 
@@ -82,9 +85,9 @@ Seven tasks close the #1026 config-validation gaps that are still open. The `har
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests in `src/conductor/test/config-validation.test.ts` for `validateConfig` with top-level `wiring` values `{ entry_points: [src/cli.ts] }`, the same plus `bogus: 1`, the scalar `5`, and a config with no `wiring` key; and in `src/conductor/test/integration/config-deprecated-key-event.integration.test.ts` a `loadMergedConfig` test with a project config and a user config under a temporary `HOME` that both contain `wiring`, emitting the result through `emitDeprecatedConfigKeyEvents`, plus an emit test for a result with no `wiring` key.
-2. Verify the tests fail (RED): today `wiring` passes through untouched with no warning or deprecated-key entry.
-3. Implement in `src/conductor/src/engine/config.ts` inside `validateConfig`, following the retired-key precedent used for `build_review.perTaskFloor` (search `DEPRECATED_BUILD_REVIEW_ADR`): when `obj` has an own `wiring` key, push a warning naming `wiring` as retired and ignored that cites `adr-2026-08-14-retire-build-review-wiring-rubric`, push `{ key: 'wiring', adr: 'adr-2026-08-14-retire-build-review-wiring-rubric' }` onto `deprecatedKeys`, and delete `wiring` from the returned config. Keep `wiring` on the top-level accepted-key list. Remove the orphan field comment for the retired wiring entry points in `src/conductor/src/types/config.ts`. `loadMergedConfig` already de-duplicates deprecated keys with `uniqueDeprecatedConfigKeys`; do not add a second dedup.
+1. Write failing tests in `src/conductor/test/config-validation.test.ts` for `validateConfig` with top-level `wiring` values `{ entry_points: [src/cli.ts] }`, the same plus `bogus: 1`, the scalar `5`, and a config with no `wiring` key; and in `src/conductor/test/integration/config-deprecated-key-event.integration.test.ts` a `loadMergedConfig` test with a project config and a user config under a temporary `HOME` that both contain `wiring`, emitting the result through `emitDeprecatedConfigKeyEvents`, plus an emit test for a result with no `wiring` key. Also add a `src/conductor/test/config-validation.test.ts` regression test that `validateConfig` accepts a custom step carrying both `when:` and a `parallel` group with no `validation_error`, pinning ADR `004-when-parallel-workflow-dsl`; it fails today because a custom step must declare `skill` while `skill` and `parallel` are mutually exclusive.
+2. Verify the tests fail (RED): today `wiring` passes through untouched with no warning or deprecated-key entry, and the when-with-parallel custom step is rejected for lacking `skill`.
+3. Implement in `src/conductor/src/engine/config.ts` inside `validateConfig`, following the retired-key precedent used for `build_review.perTaskFloor` (search `DEPRECATED_BUILD_REVIEW_ADR`): when `obj` has an own `wiring` key, push a warning naming `wiring` as retired and ignored that cites `adr-2026-08-14-retire-build-review-wiring-rubric`, push `{ key: 'wiring', adr: 'adr-2026-08-14-retire-build-review-wiring-rubric' }` onto `deprecatedKeys`, and delete `wiring` from the returned config. Keep `wiring` on the top-level accepted-key list. Remove the orphan field comment for the retired wiring entry points in `src/conductor/src/types/config.ts`. In the same file, correct the `when` field comment that says it is mutually exclusive with `parallel`: state that `when:` on a `parallel` group is supported and a false `when` skips every branch, per ADR `004-when-parallel-workflow-dsl`. Add no rejection for `when` on a `parallel` group. Operator-approved validator change (plan-gap recovery, 2026-09-29): in the custom-step branch of `validateConfig`, require `skill: <path-to-SKILL.md>` only when the step has no `parallel` group, so a custom step whose work lives in `parallel` branches validates without a top-level `skill`; keep the `skill`/`parallel` mutual-exclusion check and the skill-file existence check unchanged. `loadMergedConfig` already de-duplicates deprecated keys with `uniqueDeprecatedConfigKeys`; do not add a second dedup.
 4. Verify the tests pass (GREEN).
 5. Commit: "fix(config): report the retired top-level wiring key"
 
@@ -93,11 +96,12 @@ Seven tasks close the #1026 config-validation gaps that are still open. The `har
 - `validateConfig` given a top-level `wiring` key returns `deprecatedKeys` containing key `wiring` with ADR `adr-2026-08-14-retire-build-review-wiring-rubric`, and given a config with no `wiring` key returns no warning and no `deprecatedKeys` entry mentioning `wiring`, as asserted by the deprecated-keys tests
 - `loadMergedConfig` with a project config and a user config under a temporary `HOME` that both contain `wiring` returns `deprecatedKeys` listing `wiring` exactly once, and `emitDeprecatedConfigKeyEvents` then emits exactly one `config_deprecated_key` event naming `wiring`, as asserted in `src/conductor/test/integration/config-deprecated-key-event.integration.test.ts`
 - `emitDeprecatedConfigKeyEvents` given the result of loading a config with no `wiring` key emits no `config_deprecated_key` event naming `wiring`, as asserted in the same integration test file
+- The `when` field comment in `src/conductor/src/types/config.ts` states that `when:` on a `parallel` group is supported and a false `when` skips every branch, per ADR `004-when-parallel-workflow-dsl`, with no mutual-exclusion claim, and `validateConfig` adds no rejection for `when` on a `parallel` group and accepts a custom step with `when:` and a `parallel` group and no top-level `skill`, as asserted by the when-with-parallel regression test in `src/conductor/test/config-validation.test.ts`
 
 **Files:**
-- `src/conductor/src/engine/config.ts` — wiring deprecation in validateConfig
-- `src/conductor/src/types/config.ts` — remove orphan wiring field comment
-- `src/conductor/test/config-validation.test.ts` — retired-wiring validation tests
+- `src/conductor/src/engine/config.ts` — wiring deprecation in validateConfig; custom step with `parallel` needs no top-level `skill`
+- `src/conductor/src/types/config.ts` — remove orphan wiring field comment; correct the when/parallel comment
+- `src/conductor/test/config-validation.test.ts` — retired-wiring validation tests and when-with-parallel regression test
 - `src/conductor/test/integration/config-deprecated-key-event.integration.test.ts` — merged-config dedup and event tests
 
 **Dependencies:** Task 2
@@ -198,17 +202,98 @@ Seven tasks close the #1026 config-validation gaps that are still open. The `har
 
 **Dependencies:** Task 5
 
+### Task 8: Pass the installed harness version to CLI and daemon config loads
+**Story:** 1
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests. In `src/conductor/test/cli/version-report.test.ts`, test a new exported `installedHarnessVersionForConfig(moduleDir, readText?)` in `src/conductor/src/engine/version-report.ts`: it returns the module-relative `VERSION` value when one resolves, and `undefined` when resolution yields `UNKNOWN_HARNESS_VERSION`. In a new `src/conductor/test/cli/harness-version-gate.test.ts`, run the CLI with `execa` (`node --import tsx src/index.ts`, as `test/cli/index.test.ts` does) from a temporary git project whose `.ai-conductor/config.yml` sets `harness_version: "^99.0.0"`, once as is and once with a `VERSION` file of `99.0.0` in the project root. In a new `src/conductor/test/daemon-harness-version-gate.test.ts`, drive `runDaemonMode` with mocked dependencies, following `test/daemon-otel-wiring.test.ts`, with the installed version mocked to `1.5.0` against project configs with `harness_version: "^2.0.0"` and `harness_version: "^1.2.0"`.
+2. Verify the tests fail (RED): today neither entry point passes a harness version, so both unsatisfiable constraints load clean.
+3. Implement `installedHarnessVersionForConfig` in `src/conductor/src/engine/version-report.ts` on top of `resolveHarnessVersion`. In `src/conductor/src/index.ts`, resolve it once with `__dirname` before the run path's `loadConfig(projectRoot)` and pass it to that call and to the run path's `loadMergedConfig(projectRoot)`. Do not use `readHarnessVersion`, which prefers the current directory's `VERSION`. In `runDaemonMode` in `src/conductor/src/daemon-cli.ts`, pass the same value to `loadMergedConfig(projectRoot)`. Keep the existing `Config error:` handling at both entry points, which already fails startup on a non-missing error.
+4. Verify the tests pass (GREEN).
+5. Commit: "fix(config): pass the installed harness version to CLI and daemon config loads"
+
+**Done when:**
+- `installedHarnessVersionForConfig` in `src/conductor/src/engine/version-report.ts` returns the module-relative `VERSION` value when one resolves and `undefined` when resolution yields `UNKNOWN_HARNESS_VERSION`, as asserted in `src/conductor/test/cli/version-report.test.ts`
+- The CLI run path started as `node --import tsx src/index.ts` from a temporary git project whose config sets `harness_version: "^99.0.0"` exits with code 1 and stderr containing `Config error: Harness version` and `does not satisfy constraint ^99.0.0`, as asserted in `src/conductor/test/cli/harness-version-gate.test.ts`
+- The same CLI run from a temporary git project that also holds a `VERSION` file of `99.0.0` still exits with code 1 and the `does not satisfy constraint ^99.0.0` error, showing the installed version is module-relative and not read from the project, as asserted in `src/conductor/test/cli/harness-version-gate.test.ts`
+- `runDaemonMode` in `src/conductor/src/daemon-cli.ts` with the installed version mocked to `1.5.0` rejects with an error containing `Config error:`, `1.5.0` and `^2.0.0` for a project config with `harness_version: "^2.0.0"`, and raises no config error for `harness_version: "^1.2.0"`, as asserted in `src/conductor/test/daemon-harness-version-gate.test.ts`
+
+**Files:**
+- `src/conductor/src/engine/version-report.ts` — installedHarnessVersionForConfig
+- `src/conductor/src/index.ts` — pass the installed version to the run path's config loads
+- `src/conductor/src/daemon-cli.ts` — pass the installed version to daemon startup's config load
+- `src/conductor/test/cli/version-report.test.ts` — installed-version helper tests
+- `src/conductor/test/cli/harness-version-gate.test.ts` — CLI entry-point gate tests
+- `src/conductor/test/daemon-harness-version-gate.test.ts` — daemon startup gate tests
+
+**Dependencies:** Task 2
+
+### Task 9: Emit merged deprecated config keys from CLI and daemon startup
+**Story:** 3
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in a new `src/conductor/test/daemon-deprecated-key-emission.test.ts` that drive `runDaemonMode` with mocked dependencies, following `test/daemon-otel-wiring.test.ts`, under a temporary `HOME`, and capture events on the daemon event bus: a project config and a user config that both contain `wiring`; a user config with `wiring` and a project config without it; and neither config containing `wiring`.
+2. Verify the tests fail (RED): today daemon startup never calls `emitDeprecatedConfigKeyEvents`.
+3. Implement. In `runDaemonMode` in `src/conductor/src/daemon-cli.ts`, call `emitDeprecatedConfigKeyEvents` once with the merged config result on the daemon event bus, after `startDaemonEventPersistence` starts. In the foreground run path of `src/conductor/src/index.ts`, pass the `loadMergedConfig` result to `emitDeprecatedConfigKeyEvents` in place of the project-only `loadConfig` result. `loadMergedConfig` already de-duplicates with `uniqueDeprecatedConfigKeys`; add no second dedup.
+4. Verify the tests pass (GREEN).
+5. Commit: "fix(config): emit merged deprecated config keys from CLI and daemon startup"
+
+**Done when:**
+- `runDaemonMode` in `src/conductor/src/daemon-cli.ts` with a project config and a user config under a temporary `HOME` that both contain `wiring` emits exactly one `config_deprecated_key` event naming `wiring` on the daemon event bus, as asserted in `src/conductor/test/daemon-deprecated-key-emission.test.ts`
+- `runDaemonMode` with `wiring` only in the user config under a temporary `HOME` emits exactly one `config_deprecated_key` event naming `wiring`, and with neither config containing `wiring` emits none, as asserted in `src/conductor/test/daemon-deprecated-key-emission.test.ts`
+- The foreground run path in `src/conductor/src/index.ts` passes the `loadMergedConfig` result to `emitDeprecatedConfigKeyEvents`, and `grep -n "emitDeprecatedConfigKeyEvents(configResult" src/conductor/src/index.ts` prints nothing
+
+**Files:**
+- `src/conductor/src/daemon-cli.ts` — emit merged deprecated keys at daemon startup
+- `src/conductor/src/index.ts` — emit merged deprecated keys on the foreground run path
+- `src/conductor/test/daemon-deprecated-key-emission.test.ts` — daemon emission tests
+
+**Dependencies:** Task 3, Task 8
+
+### Task 10: Register custom parallel groups in ADR 004's step shape
+**Story:** 3
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests. In a new `src/conductor/test/engine/custom-parallel-step-registry.test.ts`, call `buildStepRegistry` with a custom step `fanout` that has `after: build`, `when: tier == L` and a `parallel` group of two branches with `skill` and no top-level `skill`, and with a custom step that has `after: build` and neither `skill` nor `parallel`. In `src/conductor/test/config-validation.test.ts`, test `validateConfig` with a `parallel` branch that has no `skill`.
+2. Verify the tests fail (RED): today `buildStepRegistry` skips any custom step without a top-level `skill`, and a branch without `skill` validates clean.
+3. Implement. In `buildStepRegistry` in `src/conductor/src/engine/steps.ts`, admit a custom step with `after` and a non-empty `parallel` array even when it has no top-level `skill`; it registers with no skill name. Keep skipping a custom step that has neither. In `validateConfig` in `src/conductor/src/engine/config.ts`, require each branch's `skill`: a branch without one returns a `validation_error` naming `steps.<name>.parallel[<i>].skill` as required. In `src/conductor/src/types/config.ts`, make `ParallelBranch.skill` required, and express `StepConfig` as a union that keeps its shared fields and makes `skill` and `parallel` mutually exclusive, with `parallel?: never` on the skill arm and `skill?: never` on the parallel arm, per ADR `004-when-parallel-workflow-dsl`.
+4. Verify the tests pass (GREEN).
+5. Commit: "fix(steps): register custom parallel groups in ADR 004's step shape"
+
+**Done when:**
+- `buildStepRegistry` in `src/conductor/src/engine/steps.ts` given a custom step `fanout` with `after: build`, `when: tier == L` and a two-branch `parallel` group but no top-level `skill` returns a registry with `fanout` immediately after `build`, as asserted in `src/conductor/test/engine/custom-parallel-step-registry.test.ts`
+- `buildStepRegistry` given a custom step with `after: build` and neither `skill` nor `parallel` returns a registry without that step, as asserted in `src/conductor/test/engine/custom-parallel-step-registry.test.ts`
+- `validateConfig` in `src/conductor/src/engine/config.ts` returns a `validation_error` naming `steps.fanout.parallel[0].skill` as required for a `parallel` branch with no `skill`, as asserted in `src/conductor/test/config-validation.test.ts`
+- `ParallelBranch` in `src/conductor/src/types/config.ts` declares `skill` required, `StepConfig` is a union whose skill arm declares `parallel?: never` and whose parallel arm declares `skill?: never`, and the conductor TypeScript build compiles with that change
+
+**Files:**
+- `src/conductor/src/engine/steps.ts` — register custom parallel groups without a top-level skill
+- `src/conductor/src/engine/config.ts` — require each parallel branch's skill
+- `src/conductor/src/types/config.ts` — required branch skill; skill/parallel exclusive StepConfig union
+- `src/conductor/test/engine/custom-parallel-step-registry.test.ts` — registry tests
+- `src/conductor/test/config-validation.test.ts` — branch skill validation test
+
+**Dependencies:** Task 7
+
 ## Task Dependency Graph
 
 ```text
-Task 1 → Task 2 → Task 3 → Task 4 → Task 5 → Task 7
+Task 1 → Task 2 → Task 3 → Task 4 → Task 5 → Task 7 → Task 10
+Task 2 → Task 8
+Task 3 + Task 8 → Task 9
 Task 6 (independent)
 ```
 
 ## Integration Points
 
-- **After Task 2:** `loadProjectConfig` (called by `loadMergedConfig` from the CLI entry with `readHarnessVersion()`) rejects an unevaluable constraint and evaluates every range form. Task 2 owns the `harness_version` boundary proof.
-- **After Task 3:** the `wiring` deprecation travels `loadMergedConfig` → `emitDeprecatedConfigKeyEvents` → event spine. Task 3 owns that boundary proof.
+- **After Task 2:** `loadProjectConfig` rejects an unevaluable constraint and evaluates every range form when a caller supplies the installed version.
+- **After Task 8:** the CLI run path and daemon startup pass the module-relative installed version to `loadConfig` and `loadMergedConfig`, so a real entry point reaches `satisfiesVersion`. Task 8 owns the `harness_version` boundary proof.
+- **After Task 3:** the `wiring` deprecation travels `loadMergedConfig` → `emitDeprecatedConfigKeyEvents` → event spine.
+- **After Task 9:** CLI and daemon startup emit the merged result's deprecated keys, so a user-level `wiring` key reaches the event spine. Task 9 owns that boundary proof.
+- **After Task 10:** a custom `parallel` group without a top-level `skill` is in the step registry the conductor walks and hands to its parallel executor. Task 10 owns that boundary proof.
 - **After Task 6:** the otel visualizer factory registered in `plugin-loader.ts` declines to build an exporter for an unsupported protocol while config load succeeds. Task 6 owns that boundary proof.
 
 ## Coverage Check
@@ -274,3 +359,19 @@ Task 6 (independent)
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-ab4-1: Dispatch each custom parallel branch's configured skill (adr-2026-07-10-concurrent-group-core decision 2): add optional `branchSkill?: string` to StepRunOptions in src/conductor/src/engine/conductor.ts:1552; in runMemberAttempt in src/conductor/src/engine/group-core.ts:741-762 pass `branchSkill: member.skill` in both the providerSessions and fresh-session option objects when member.skill is non-empty; in DefaultStepRunner.runDispatch in src/conductor/src/engine/step-runners.ts:1063-1077 compute `configuredSkillPath = opts?.branchSkill ?? this.config?.steps?.[step]?.skill` so STEP_SKILL_INVOCATIONS still takes precedence for built-in step names and a non-built-in branch resolves its path through resolveCustomStepSkill(step, path, projectDir) (unresolvable path returns the existing `Cannot dispatch custom step` failure); add a failing-first test in src/conductor/test/engine/custom-parallel-step-registry.test.ts (or a sibling step-runners test) proving a custom `fanout` group branch named `lint` with `skill: .agents/skills/lint-x/SKILL.md` dispatches the rendered lint-x skill prompt, not `/lint`, and that a built-in-named branch still dispatches its STEP_SKILL_INVOCATIONS prompt
+**Gate:** as-built
+**Rationale:** Conforming drift against APPROVED adr-2026-07-10-concurrent-group-core decision 2 (per-branch skill dispatch), no new decision needed: conductor.ts:14539-14543 copies branch.skill into GroupMember.skill, but group-core.ts:668,741-762 dispatches stepRunner.run(member.name) and step-runners.ts:1063-1077 resolves only STEP_SKILL_INVOCATIONS[step] or config.steps[step]?.skill, so a custom parallel branch (now reachable via Task 10's buildStepRegistry change) falls back to `/<branchName>` and its configured skill is telemetry-only. No existing plan task's Done when admits the dispatch fix (Task 10 covers registry, branch-skill validation and types only), so this is a new remediation task rather than existing-task. The fix preserves built-in precedence: STEP_SKILL_INVOCATIONS still wins for built-in branch names, so existing validation-group dispatch (group-core members named prd_audit etc.) and Task 10's registry tests are unchanged. Sibling sites swept: conductor.ts:14541 and :14659 `branch.skill ?? ''` become dead fallbacks now that Task 10 made ParallelBranch.skill required — they are telemetry-only and left as found-and-excluded (not admitted, harmless).
+**Governing clause:** adr-2026-07-10-concurrent-group-core decision 2
+**Done when:**
+- adr-2026-07-10-concurrent-group-core decision 2 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab4-1 is complete.
+
+### Task rem-as-built-rem-ab5-1: Correct harness_version's consumer declaration: in src/conductor/test/engine/config-consumer-registry.ts add `const CONFIG_LOADER = 'src/conductor/src/engine/config.ts'` and change line 47 to `harness_version: consumer(CONFIG_LOADER)` with a comment naming loadProjectConfig's satisfiesVersion gate; in src/conductor/test/engine/config-consumer-registry.test.ts:23-29 keep the 'does not count validation as a key consumer' loop for every other key and exempt only harness_version, and add a positive test asserting configConsumerRegistry.harness_version.consumer is config.ts and that config.ts source contains `satisfiesVersion(harnessVersion, validation.config.harness_version)` inside loadProjectConfig, so the exemption cannot silently cover validation-only reads
+**Gate:** as-built
+**Rationale:** Conforming drift against APPROVED adr-2026-08-26-config-key-consumer-registry-and-dead-surface-removal decision 4: src/conductor/test/engine/config-consumer-registry.ts:47 declares harness_version's consumer as project-prelude.ts, but project-prelude.ts:79-263 only reads the bootstrap marker's own harness_version field; the real runtime consumer of HarnessConfig.harness_version is the version gate in loadProjectConfig at src/conductor/src/engine/config.ts:539-547 (satisfiesVersion), reached in production via Task 8's index.ts/daemon-cli.ts wiring. The matched counterpart is config-consumer-registry.test.ts:23-29 ('does not count validation as a key consumer'), which forbids config.ts for every key; the task narrows it with a single named harness_version exception because the loadProjectConfig gate is a post-validation runtime read, not validation, and replaces the dropped coverage with a positive assertion, so every other key keeps the original guarantee. No plan task's Done when admits the registry edit (Tasks 1, 2 and 8 cover validation, evaluation and entry-point wiring only), so this is a new remediation task. The sibling PROJECT_PRELUDE declarations for assess.* (registry lines 55, 270-271) were checked and are genuinely read in project-prelude.ts (DEFAULT_ASSESS_STALE_*), so they are excluded.
+**Governing clause:** adr-2026-08-26-config-key-consumer-registry-and-dead-surface-removal decision 4
+**Done when:**
+- adr-2026-08-26-config-key-consumer-registry-and-dead-surface-removal decision 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab5-1 is complete.
