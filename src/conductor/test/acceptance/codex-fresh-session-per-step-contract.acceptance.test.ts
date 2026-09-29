@@ -306,7 +306,7 @@ describe('S1 — Codex dispatch never requests session resume', () => {
     }).toEqual({
       resumeFlags: [false, false],
       uniqueSessionIds: 2,
-      transitionTypes: [],
+      transitionTypes: ['session_policy'],
     });
     for (const id of sessionIds) {
       expect(id).toMatch(
@@ -394,7 +394,7 @@ describe('S3 — a capability-suppressed resume is visible in the audit trail', 
     }).toEqual({ resume: false, transitionTypes: ['session_policy'] });
   });
 
-  it('starts a repeated Claude dispatch cold without a session_policy diagnostic', async () => {
+  it('starts a repeated Claude dispatch cold with a session_policy diagnostic', async () => {
     const execute = await loadExecuteProviderCandidates();
     const claude = scriptedProvider(() => ok('claude attempt'), true);
     const sessions = new ProviderSessionScope(() => 'claude-quiet-session');
@@ -416,7 +416,7 @@ describe('S3 — a capability-suppressed resume is visible in the audit trail', 
       sessionPolicyCount: transitions.filter(
         (transition) => transition.type === 'session_policy',
       ).length,
-    }).toEqual({ resumed: false, sessionPolicyCount: 0 });
+    }).toEqual({ resumed: false, sessionPolicyCount: 1 });
   });
 });
 

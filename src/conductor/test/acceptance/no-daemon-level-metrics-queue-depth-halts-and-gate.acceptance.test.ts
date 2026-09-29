@@ -18,12 +18,9 @@ import type { ConductorEvent } from '../../src/types/events.js';
 
 const buildExporters = vi.hoisted(() => vi.fn());
 vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters }));
-vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../src/engine/ci-fix.js')>()),
-  defaultCiFixProbe: vi.fn(async () => ({ exitCode: 0, stdout: 'claude 1.0.0', stderr: '' })),
-}));
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
+import { allInstalledProviderDiscoveryRunner } from '../engine/boot-test-helpers.js';
 
 interface DaemonOtelScope {
   flush(): Promise<void>;
@@ -378,6 +375,7 @@ describe('daemon-level metrics acceptance', () => {
         return [];
       } },
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
     });
 
     const daemonEvents = (await readFile(join(root, '.daemon', 'events.jsonl'), 'utf8'))

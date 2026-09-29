@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
 describe('Task 5 — runDaemonMode calls holdLock before ensureFresh', () => {
   let projectRoot: string;
@@ -55,6 +56,7 @@ describe('Task 5 — runDaemonMode calls holdLock before ensureFresh', () => {
         concurrency: 1,
         ensureFresh,
         probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
         exitProcess: () => {
           throw new Error('__stop__');
         },
@@ -97,6 +99,7 @@ describe('Task 5 — runDaemonMode calls holdLock before ensureFresh', () => {
         concurrency: 1,
         ensureFresh,
         probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
         exitProcess: () => {},
       } as any),
     ).rejects.toThrow('stale harness install');

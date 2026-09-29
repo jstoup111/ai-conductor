@@ -74,6 +74,7 @@ import type {
   AuthenticationReadiness,
   CodexProbeFailure,
   InvokeResult,
+  SelfHostAuthContext,
   SelfHostInvocation,
   TokenUsage,
 } from '../execution/llm-provider.js';
@@ -100,6 +101,16 @@ import type {
 } from './provider-execution.js';
 import { formatProviderCapabilityGapMessages } from './provider-execution.js';
 import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
+import {
+  BUILT_IN_PROVIDERS,
+  CODEX_DISPLAY_NAME,
+  CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
+  findBuiltInProviderDescriptor,
+  providerDisplayName,
+  requireProviderCapability,
+  supportsProviderCapability,
+} from '../execution/provider-catalog.js';
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import { redactSafetyText } from './safety-diagnostics.js';
 import { createEngineStateStore } from './engine-state-store.js';
@@ -3729,9 +3740,9 @@ export class Conductor {
       return {
         success: false,
         output:
-          'Codex cached-login recovery trial for the attribution verifier failed authentication ' +
+          `${CODEX_DISPLAY_NAME} cached-login recovery trial for the attribution verifier failed authentication ` +
           `after the readiness probe was unavailable (${formatProbeFailureClassification(park.probeFailure)}). ` +
-          'Refresh the Codex login, then re-queue this feature.',
+          `Refresh the ${CODEX_DISPLAY_NAME} login, then re-queue this feature.`,
       };
     }
     return trial;
@@ -3754,13 +3765,21 @@ export class Conductor {
     const shPark = resolveSelfHostConfig(this.config);
 
     const authentication = failed?.authentication;
-    if (authentication?.provider === 'codex') {
+    const readinessDescriptor = authentication === undefined
+      ? undefined
+      : findBuiltInProviderDescriptor(authentication.provider);
+    if (
+      authentication !== undefined &&
+      readinessDescriptor !== undefined &&
+      supportsProviderCapability(readinessDescriptor, 'readiness')
+    ) {
+      const providerName = readinessDescriptor.displayName;
       if (authentication.source === 'api-key') {
         const timeoutMs = shPark.authParkTimeoutMinutes * 60 * 1000;
         const startedAt = Date.now();
         await this.events.emit({
           type: 'credentials_park',
-          reason: 'Codex API key is startup-only — waiting for daemon restart',
+          reason: `${providerName} API key is startup-only — waiting for daemon restart`,
         });
         while (timeoutMs > 0 && Date.now() - startedAt < timeoutMs) {
           await this.sleep(1_000);
@@ -3768,7 +3787,7 @@ export class Conductor {
         return {
           disposition: 'halt',
           haltReason:
-            'Codex API-key authentication is inherited at daemon startup and cannot be refreshed in-process.\n' +
+            `${providerName} API-key authentication is inherited at daemon startup and cannot be refreshed in-process.\n` +
             'Replace CODEX_API_KEY, restart the daemon, then re-queue this feature.',
         };
       }
@@ -3783,12 +3802,12 @@ export class Conductor {
         const timedOutResult = {
           disposition: 'halt' as const,
           haltReason:
-            'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
-            'Refresh the Codex login, then re-queue this feature.',
+            `${providerName} cached-login authentication did not become ready before the auth park timed out.\n` +
+            `Refresh the ${providerName} login, then re-queue this feature.`,
         };
         await this.events.emit({
           type: 'credentials_park',
-          reason: 'Codex cached login unavailable — waiting for a fresh readiness check',
+          reason: `${providerName} cached login unavailable — waiting for a fresh readiness check`,
         });
 
         if (timeoutMs <= 0) {
@@ -3835,7 +3854,7 @@ export class Conductor {
             if (probeFailed) {
               await this.events.emit({
                 type: 'credentials_park_progress',
-                provider: 'codex',
+                provider: authentication.provider,
                 source: authentication.source,
                 readiness: current.state,
                 elapsedSeconds,
@@ -3850,7 +3869,7 @@ export class Conductor {
             } else if (current.state !== 'probe-failed') {
               await this.events.emit({
                 type: 'credentials_park_progress',
-                provider: 'codex',
+                provider: authentication.provider,
                 source: authentication.source,
                 readiness: current.state,
                 elapsedSeconds,
@@ -6225,7 +6244,7 @@ export class Conductor {
     // candidate-local invocation env instead and remain eligible for a pool.
     if (
       !this.providerExecution &&
-      preferredBuildProvider !== 'codex' &&
+      preferredBuildProvider !== CODEX_PROVIDER &&
       this.effectiveDaemonConcurrency > 1
     ) {
       return {
@@ -6248,7 +6267,7 @@ export class Conductor {
     // check if daemon-token mode is configured and the token file is readable.
     // If missing or unreadable, HALT with mint instructions. For api-key mode, skip.
     // Never consumes the retry budget.
-    if (preferredBuildProvider !== 'codex') {
+    if (preferredBuildProvider !== CODEX_PROVIDER) {
       const buildAuthPreflight = await checkBuildAuth(
         sh.buildAuthMode,
         sh.buildAuthTokenPath,
@@ -6292,7 +6311,7 @@ export class Conductor {
     // path below; this retains the existing isolated behavior for that narrow
     // test/extension surface.
     if (!this.providerExecution) {
-      if (preferredBuildProvider === 'codex') {
+      if (preferredBuildProvider === CODEX_PROVIDER) {
         return this.stepRunner.run(name, state, {
           retryReason: retryHint,
           ...identityOption,
@@ -6353,16 +6372,25 @@ export class Conductor {
         // This is a candidate-local setup capability. Check it before opening
         // a live-boundary window or allocating scratch state so fallback has
         // no resource ownership to unwind.
-        if (candidate.providerKey === 'codex') {
+        const descriptor = BUILT_IN_PROVIDERS.find(
+          (provider) => provider.id === candidate.providerKey,
+        );
+        // Plugins retain their own preparation seam. Built-ins must declare
+        // self-host support before they can enter the shared isolation path.
+        if (!descriptor) return priorPreparation?.(candidate, runtime, identity);
+        const provider = requireProviderCapability(descriptor.id, 'selfHost');
+        const providerId = descriptor.id;
+        const usesProviderHome = provider.homeVariable === 'CODEX_HOME';
+        if (usesProviderHome) {
           const missing = !runtime.provider.prepareSelfHostAuth
             || !runtime.provider.resolveSelfHostExecutable
             || !this.guardrails.provisionProviderHome;
           if (missing) {
             throw new ProviderSetupUnavailableError({
-              provider: 'codex',
+              provider: provider.id,
               capability: 'self-host-isolation',
-              reason: 'Codex self-host isolation is unavailable for the resolved provider candidate.',
-              recoveryAction: 'Update Codex and the self-host guardrails to provide isolated-home setup.',
+              reason: `${provider.id} self-host isolation is unavailable for the resolved provider candidate.`,
+              recoveryAction: `Update ${provider.id} and the self-host guardrails to provide isolated-home setup.`,
             });
           }
         }
@@ -6373,15 +6401,13 @@ export class Conductor {
         try {
           const installed = await this.guardrails.resolveInstalledHarnessRoot();
           const liveCheckout = installed.status === 'ok' ? installed.root : this.projectRoot;
-          const codex = candidate.providerKey === 'codex';
-          const providerHome = codex
-            ? process.env.CODEX_HOME ?? join(homedir(), '.codex')
-            : process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+          const providerHome = process.env[provider.homeVariable]
+            ?? join(homedir(), provider.defaultHome);
           const boundary = await fingerprintLiveBoundary({
             liveCheckout,
             unrelatedProviderState: providerHome,
-            provider: codex ? 'codex' : 'claude',
-            selectedAuthPaths: codex ? ['auth.json'] : ['.credentials.json'],
+            provider: providerId,
+            selectedAuthPaths: usesProviderHome ? ['auth.json'] : ['.credentials.json'],
           });
           await this.events.emit({
             type: 'self_host_boundary_fingerprint',
@@ -6450,7 +6476,7 @@ export class Conductor {
           if (!featureSlug || !identity?.runId || identity.attempt === undefined) {
             throw new Error('Candidate self-host provisioning requires repository, featureSlug, runId, and attempt.');
           }
-          if (codex) {
+          if (usesProviderHome) {
             const prepareAuth = runtime.provider.prepareSelfHostAuth;
             const resolveExecutable = runtime.provider.resolveSelfHostExecutable;
             const provisionHome = this.guardrails.provisionProviderHome;
@@ -6459,7 +6485,16 @@ export class Conductor {
             if (!prepareAuth || !resolveExecutable || !provisionHome) throw new Error('Self-host capability changed during preparation.');
             const executable = await resolveExecutable.call(runtime.provider);
             const home = await provisionHome({
-              provider: { id: 'codex', prepareSelfHostAuth: (context) => prepareAuth.call(runtime.provider, { provider: 'codex', homeDir: context.homeDir }) },
+              provider: {
+                id: providerId,
+                prepareSelfHostAuth: (context) => prepareAuth.call(
+                  runtime.provider,
+                  {
+                    provider: candidate.providerKey as SelfHostAuthContext['provider'],
+                    homeDir: context.homeDir,
+                  },
+                ),
+              },
               worktreeRoot: this.projectRoot,
               repository: this.projectRoot,
               featureSlug,
@@ -6469,26 +6504,22 @@ export class Conductor {
             ownershipTransferred = true;
             return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), originalCatalogHome: providerHome, teardown: async () => { try { await verify(); } finally { await home.teardown(); } } });
           }
-          if (candidate.providerKey === 'claude') {
-            const sandbox = await this.guardrails.provisionSandbox({
-              worktreeRoot: this.projectRoot,
-              harnessRoot: liveCheckout,
-              repository: this.projectRoot,
-              featureSlug,
-              runId: identity.runId,
-              attempt: identity.attempt,
-            });
-            ownershipTransferred = true;
-            return prepareInvocation({
-              executable: 'claude',
-              env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
-              args: [],
-              originalCatalogHome: providerHome,
-              teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
-            });
-          }
+          const sandbox = await this.guardrails.provisionSandbox({
+            worktreeRoot: this.projectRoot,
+            harnessRoot: liveCheckout,
+            repository: this.projectRoot,
+            featureSlug,
+            runId: identity.runId,
+            attempt: identity.attempt,
+          });
           ownershipTransferred = true;
-          return priorPreparation?.(candidate, runtime, identity);
+          return prepareInvocation({
+            executable: provider.defaultExecutable,
+            env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
+            args: [],
+            originalCatalogHome: providerHome,
+            teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
+          });
         } finally {
           if (!ownershipTransferred) boundaryWindow?.close();
         }
@@ -6560,7 +6591,7 @@ export class Conductor {
     // instead of the fabricated blocker parking finished work.
     const claimAudit = auditEnvironmentBlockerClaims(withNotices.output, {
       provider: candidate.providerKey,
-      writeFenceInstalled: candidate.providerKey === 'claude',
+      writeFenceInstalled: writeFenceInstalledForProvider(candidate.providerKey),
     });
     if (claimAudit.message === null) return withNotices;
     return {
@@ -8487,9 +8518,9 @@ export class Conductor {
                   // through parkOnAuthFailure; do not include provider output
                   // in this secret-safe diagnostic.
                   const haltReason =
-                    `Codex cached-login recovery trial for grouped member "${failedMember.name}" ` +
+                    `${CODEX_DISPLAY_NAME} cached-login recovery trial for grouped member "${failedMember.name}" ` +
                     `failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(park.probeFailure)}).\n` +
-                    'Refresh the Codex login, then re-queue this feature.';
+                    `Refresh the ${CODEX_DISPLAY_NAME} login, then re-queue this feature.`;
                   await closeSettledMembers(outcomes, haltReason);
                   await this.writeHaltMarker(haltReason + '\n', 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -8538,7 +8569,7 @@ export class Conductor {
               if (outcome.kind !== 'permission-denied') {
                 throw new Error('permission-denied outcome index lost its disposition');
               }
-              const provider = outcome.provider === 'codex' ? 'Codex' : outcome.provider;
+              const provider = providerDisplayName(outcome.provider);
               const source = outcome.authentication?.source;
               const haltReason =
                 `${provider} permission review denied a required action for grouped member "${member.name}"` +
@@ -10589,8 +10620,8 @@ export class Conductor {
               // unavailable probe. Do not recurse into another probe; keep the
               // halt secret-safe by excluding arbitrary provider output.
               const haltReason =
-                `Codex cached-login recovery trial failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(recoveryProbeFailure!)}).\n` +
-                'Refresh the Codex login, then re-queue this feature.';
+                `${CODEX_DISPLAY_NAME} cached-login recovery trial failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(recoveryProbeFailure!)}).\n` +
+                `Refresh the ${CODEX_DISPLAY_NAME} login, then re-queue this feature.`;
               await stampNoVerdict();
               await this.closeOpenExecutions();
               await this.writeHaltMarker(haltReason + '\n', 'needs-human');
@@ -10697,7 +10728,7 @@ export class Conductor {
             const source = result.authentication?.source;
             const detail = result.output?.trim();
             const haltReason =
-              `${provider === 'codex' ? 'Codex' : provider} permission review denied a required action` +
+              `${providerDisplayName(provider)} permission review denied a required action` +
               (source ? ` using the selected ${source} source` : '') +
               '.\n' +
               'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
@@ -15243,6 +15274,11 @@ export class Conductor {
     return findResumeIndex(state, steps);
   }
 
+}
+
+export function writeFenceInstalledForProvider(providerKey: string): boolean {
+  const descriptor = findBuiltInProviderDescriptor(providerKey);
+  return descriptor !== undefined && supportsProviderCapability(descriptor, 'writeFence');
 }
 
 /**

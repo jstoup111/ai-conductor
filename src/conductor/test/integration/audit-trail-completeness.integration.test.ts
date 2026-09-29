@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:6
+// Covers: task:1, task:4, task:6, task:11
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Every executed step leaves positive evidence —
 // including non-verdict steps" (Story 3,
@@ -119,6 +119,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // are deliberately outside the audit-trail friction vocabulary.
   github_operation_refused: 'not-audited-by-design',
   github_write_credential_fallback: 'not-audited-by-design',
+  provider_discovery: 'not-audited-by-design',
   provider_attempt: 'not-audited-by-design',
   // Daemon-only suppression durability is not an operator-friction record.
   provider_suppressed: 'not-audited-by-design',
@@ -392,6 +393,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     operation: 'issue.comment.create',
     target: { repository: 'acme/repo', kind: 'issue', number: 1 },
     reason: 'auth-refused',
+  },
+  provider_discovery: {
+    type: 'provider_discovery',
+    installed: ['claude', 'codex'],
+    missing: [{ id: 'pi', reason: 'not-found' }],
   },
   provider_attempt: {
     type: 'provider_attempt',

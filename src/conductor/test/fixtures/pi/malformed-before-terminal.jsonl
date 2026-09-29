@@ -1,0 +1,3 @@
+{"type":"message_update","usage":{"input":5,"output":2,"cacheRead":0,"cacheWrite":0,"totalTokens":7},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"The valid "}}
+this is an intentionally malformed JSONL diagnostic
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"The valid terminal message survives."}],"stopReason":"stop"}}

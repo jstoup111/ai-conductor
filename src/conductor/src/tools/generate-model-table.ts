@@ -15,6 +15,13 @@ import {
   type ProviderModelPolicy,
 } from '../engine/provider-model-policy.js';
 import {
+  CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
+  CLAUDE_DISPLAY_NAME,
+  CODEX_DISPLAY_NAME,
+  providerDisplayName,
+} from '../execution/provider-catalog.js';
+import {
   STEP_RATIONALE,
   MODEL_FREE_ENGINE_STEPS,
   AUXILIARY_MODEL_TABLE_ROWS,
@@ -328,10 +335,10 @@ export function buildEngineRows(
     return {
       name: stepDisplayName(step),
       executionPath: 'autonomous engine',
-      claudeModel: renderTieredField(claudePolicy, 'Claude', step, 'model'),
-      claudeEffort: renderTieredField(claudePolicy, 'Claude', step, 'effort'),
-      codexModel: renderTieredField(codexPolicy, 'Codex', step, 'model'),
-      codexEffort: renderTieredField(codexPolicy, 'Codex', step, 'effort'),
+      claudeModel: renderTieredField(claudePolicy, providerDisplayName(CLAUDE_PROVIDER), step, 'model'),
+      claudeEffort: renderTieredField(claudePolicy, providerDisplayName(CLAUDE_PROVIDER), step, 'effort'),
+      codexModel: renderTieredField(codexPolicy, providerDisplayName(CODEX_PROVIDER), step, 'model'),
+      codexEffort: renderTieredField(codexPolicy, providerDisplayName(CODEX_PROVIDER), step, 'effort'),
       why: STEP_RATIONALE[step],
     };
   });
@@ -386,7 +393,7 @@ export function buildExtraRows(
 }
 
 const TABLE_HEADER =
-  '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |';
+  `| Skill/Agent | Execution path | ${CLAUDE_DISPLAY_NAME} model | ${CLAUDE_DISPLAY_NAME} effort | ${CODEX_DISPLAY_NAME} model | ${CODEX_DISPLAY_NAME} effort | Why |`;
 const TABLE_SEPARATOR = '|---|---|---|---|---|---|---|';
 
 function renderRow(row: ModelTableRow): string {

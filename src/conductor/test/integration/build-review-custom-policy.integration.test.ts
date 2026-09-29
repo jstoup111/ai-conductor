@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY, resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
@@ -123,6 +123,53 @@ const passingEffectiveResolver = async () => ({
     skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
   },
 }) as never;
+
+it('records Pi as a skipped readOnlyReview candidate before invoking Claude from a custom fallback policy', async () => {
+  const root = await fixture();
+  const piInvoke = vi.fn();
+  const claudeInvoke = vi.fn(async () => {
+    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+  });
+  const attempts: unknown[] = [];
+  const pi: LLMProvider = {
+    invoke: piInvoke,
+    supportsSessionResume: true,
+    nativeSchemaCapability: { nativeOutputSchema: true },
+  };
+  const claude: LLMProvider = {
+    invoke: claudeInvoke,
+    supportsSessionResume: false,
+    lifecycleCapability: { synchronousSpawnPermit: true },
+    nativeSchemaCapability: { nativeOutputSchema: true },
+  };
+  const runner = new DefaultStepRunner(claude, 'custom-policy-pi-fallback', root, {
+    featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+    config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: ['pi', 'claude'] },
+    } } } as HarnessConfig,
+    providerRuntimes: new ProviderRuntimeSet([
+      { key: 'pi', provider: pi, policy: resolveProviderModelPolicy('pi'), builtIn: true, availability: new ModelAvailability(resolveProviderModelPolicy('pi').modelFallbackLadder) },
+      { key: 'claude', provider: claude, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
+    ]),
+    sessionStore: new ProviderSessionStore(),
+    providerAttempt: async (_step, attempt) => { attempts.push(attempt); },
+    probeReadOnlyReviewCapability: availableReadOnlyReviewCapability,
+    buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+    buildReviewEffectiveResolver: passingEffectiveResolver,
+    buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`, declaredDependencies: [], availability: 'available' as const }],
+    buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
+  });
+
+  const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
+  expect(result.success, result.output).toBe(true);
+  expect(piInvoke).not.toHaveBeenCalled();
+  expect(claudeInvoke).toHaveBeenCalledOnce();
+  expect(attempts).toEqual(expect.arrayContaining([
+    expect.objectContaining({ provider: 'pi', invoked: false, reason: expect.stringContaining('readOnlyReview') }),
+    expect.objectContaining({ provider: 'claude', invoked: true }),
+  ]));
+});
 
 const failingEffectiveResolver = async () => ({
   ok: true,

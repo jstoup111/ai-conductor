@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+// Covers: task:6
+import { describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -10,11 +11,29 @@ import {
   realProviderHomeFs,
   type ProviderHomeFs,
 } from '../../../src/engine/self-host/provider-home.js';
+import { ProviderCapabilityUnsupportedError } from '../../../src/execution/provider-catalog.js';
 import { OPERATOR_ONLY_SKILLS } from '../../../src/engine/worktree-prepare.js';
 
 const execFile = promisify(execFileCb);
 
 describe('provider-aware self-host homes', () => {
+  it('refuses Pi self-host preparation before the provider-owned spawn boundary', async () => {
+    const spawn = vi.fn();
+
+    await expect(provisionProviderHome({
+      provider: { id: 'pi', prepareSelfHostAuth: spawn },
+      worktreeRoot: '/unused-worktree',
+      baseDir: '/unused-homes',
+    })).rejects.toMatchObject({
+      name: ProviderCapabilityUnsupportedError.name,
+      provider: 'pi',
+      capability: 'selfHost',
+      owningIntake: '#1887',
+    });
+
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it('provisions a Codex home from the worktree scratch root unless baseDir is explicit', async () => {
     const root = await mkdtemp(join(tmpdir(), 'provider-home-scratch-'));
     const worktree = join(root, 'worktree');

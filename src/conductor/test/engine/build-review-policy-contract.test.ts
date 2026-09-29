@@ -1,4 +1,4 @@
-// Covers: task:2, task:3
+// Covers: task:2, task:3, task:5
 // Covers: task:10, task:11
 import { describe, expect, it, vi } from 'vitest';
 
@@ -10,6 +10,7 @@ import {
   renderBuildReviewPolicyUnsupportedDiagnostic,
   type BuildReviewPolicyCapabilityProfile,
 } from '../../src/engine/build-review-policy-contract.js';
+import { requireProviderCapability } from '../../src/execution/provider-catalog.js';
 import type { CapturedReviewPolicyBundle } from '../../src/engine/build-review-policy-bundle.js';
 import {
   classifyBuildReviewPolicyIncompatibility,
@@ -60,7 +61,7 @@ function bundle(skillText = ordinarySkillText): CapturedReviewPolicyBundle {
 }
 
 const readOnlyReviewProfile: BuildReviewPolicyCapabilityProfile = {
-  provider: 'codex',
+  provider: requireProviderCapability('codex', 'readOnlyReview'),
   admittedActions: ['read-frozen-input', 'read-policy-material'],
   admittedCapabilities: ['frozen-input', 'policy-material'],
   admittedTools: ['git'],
@@ -210,7 +211,7 @@ describe('engine/build-review-policy-contract', () => {
   it('maps a runtime policy refusal to unjudged failed coverage without text-selected routing or repair authority', () => {
     const runtime = parseBuildReviewPolicyRuntimeUnsupportedResponse(
       { kind: 'unsupported-policy', requirement: 'requires an undeclared deployment token' },
-      'claude',
+      requireProviderCapability('claude', 'readOnlyReview'),
     );
 
     expect(runtime).toEqual({
@@ -223,7 +224,10 @@ describe('engine/build-review-policy-contract', () => {
         recovery: 'adapt-policy-to-read-only-review',
       },
     });
-    expect(parseBuildReviewPolicyRuntimeUnsupportedResponse({ findings: [] }, 'claude')).toBeUndefined();
+    expect(parseBuildReviewPolicyRuntimeUnsupportedResponse(
+      { findings: [] },
+      requireProviderCapability('claude', 'readOnlyReview'),
+    )).toBeUndefined();
     expect(classifyBuildReviewPolicyIncompatibility(runtime!)).toEqual({
       kind: 'unsupported-policy',
       requirement: 'requires an undeclared deployment token',

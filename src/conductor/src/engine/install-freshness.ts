@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { access, constants } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { readRegistry, resolveRegistryPath } from './registry.js';
+import { CODEX_DISPLAY_NAME } from '../execution/provider-catalog.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -232,7 +233,7 @@ export interface EnsureFreshOptions {
 const DRIFT_MESSAGE =
   'Harness install is stale — one or more skills are missing or out of date in ' +
   '~/.claude/skills or ~/.agents/skills. Daemon-dispatched skills (e.g. `claude -p <skill>` ' +
-  'or Codex `$rebase`) will fail silently ' +
+  `or ${CODEX_DISPLAY_NAME} \`$rebase\`) will fail silently ` +
   'until `bin/install --update` is run.';
 
 /**

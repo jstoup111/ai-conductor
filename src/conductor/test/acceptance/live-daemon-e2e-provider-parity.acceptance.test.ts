@@ -33,6 +33,7 @@ const WORKFLOW_PATH = join(REPO_ROOT, '.github/workflows/live-daemon-e2e.yml');
 const LIVE_FILES = {
   claude: 'test/engine/daemon-e2e-live-claude.smoke.test.ts',
   codex: 'test/engine/daemon-e2e-live-codex.smoke.test.ts',
+  pi: 'test/engine/daemon-e2e-live-pi.smoke.test.ts',
 } as const;
 
 async function requiredSource(path: string): Promise<string> {
@@ -73,7 +74,7 @@ function discoveredLeg(provider: keyof typeof LIVE_FILES): { file: string; sourc
 }
 
 describe('live daemon E2E provider parity (#1264)', () => {
-  it('maps every registered provider to one descriptor-only live leg over the shared fixture body', async () => {
+  it('maps every provider to one descriptor-only live leg over the shared body', async () => {
     const registry = new PluginRegistry();
     registerBuiltins(registry, new ConductorEventEmitter(), () => {});
     const registeredProviders = registry.list('llm_provider').sort();
@@ -84,9 +85,9 @@ describe('live daemon E2E provider parity (#1264)', () => {
       requiredSource(join(CONDUCTOR_ROOT, 'test/fixtures/daemon-e2e/stories.md')),
     ]);
 
-    expect(registeredProviders).toEqual(['claude', 'codex']);
-    expect(manifestProviders.sort()).toEqual(registeredProviders);
-    for (const provider of registeredProviders) {
+    expect(registeredProviders).toEqual(['claude', 'codex', 'pi']);
+    expect(manifestProviders.sort()).toEqual(['claude', 'codex', 'pi']);
+    for (const provider of manifestProviders) {
       const leg = await requiredSource(
         join(CONDUCTOR_ROOT, `test/engine/daemon-e2e-live-${provider}.smoke.test.ts`),
       );
@@ -94,7 +95,6 @@ describe('live daemon E2E provider parity (#1264)', () => {
       expect(leg).toMatch(/from\s+['"][^'"]*live-e2e-run-body(?:\.js)?['"]/);
       expect(leg).not.toMatch(/runDaemon|dumpPipelineDiagnostics|assertTokenCap/);
     }
-
     expect(sharedBody).toMatch(/runDaemon\s*\(/);
     expect(sharedBody).toContain("new URL('./daemon-e2e/plan.md', import.meta.url)");
     expect(sharedBody).toContain("new URL('./daemon-e2e/stories.md', import.meta.url)");

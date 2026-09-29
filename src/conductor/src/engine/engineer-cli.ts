@@ -76,6 +76,7 @@ import {
   probeGhVersion,
   type GhVersionFloorVerdict,
 } from './gh-version-floor.js';
+import { CLAUDE_DISPLAY_NAME, CLAUDE_PROVIDER, resolveProviderExecutable } from '../execution/provider-catalog.js';
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
@@ -486,6 +487,8 @@ export interface DispatchEngineerOpts {
    * Receives the resolved one-shot idea (CLI-supplied) for the first session, if any.
    */
   launchInteractive?: (idea?: string) => number | Promise<number>;
+  /** CLI-owned provider boot that must succeed before an interactive launch spawns. */
+  beforeLaunch?: () => Promise<void>;
   /**
    * Injected pre-poll hook (for tests). When provided, the 'launch' kind calls this
    * before each fresh session (unless a CLI idea was supplied) to prime the intake
@@ -545,7 +548,7 @@ export function engineerLaunchArgs(env: NodeJS.ProcessEnv = process.env, idea?: 
  */
 function launchClaudeEngineer(cwd: string, idea?: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn('claude', engineerLaunchArgs(process.env, idea), { stdio: 'inherit', cwd });
+    const child = spawn(resolveProviderExecutable(CLAUDE_PROVIDER), engineerLaunchArgs(process.env, idea), { stdio: 'inherit', cwd });
     child.on('error', reject);
     child.on('exit', (code) => resolve(code ?? 0));
   });
@@ -907,12 +910,14 @@ export async function dispatchEngineer(
         const inside = opts.insideClaudeSession ?? Boolean(process.env.CLAUDECODE);
         if (inside) {
           print(
-            "You're already inside a Claude Code session — run /composer directly to start " +
+            `You're already inside a ${CLAUDE_DISPLAY_NAME} Code session — run /composer directly to start ` +
               'the idea→spec loop (no need to launch a nested session).',
           );
           return 0;
         }
       }
+
+      await opts.beforeLaunch?.();
 
       // Intake pre-poll: prime the durable inbox before launching so the spawned
       // /composer session can `claim` a github-issue idea. Defaults to a real sweep
@@ -969,7 +974,7 @@ export async function dispatchEngineer(
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
           printErr(
-            `engineer: could not launch an interactive Claude session (${msg}). ` +
+            `engineer: could not launch an interactive ${CLAUDE_DISPLAY_NAME} session (${msg}). ` +
               'Is the `claude` CLI installed and on your PATH?',
           );
           printGuide(print);

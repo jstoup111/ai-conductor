@@ -22,7 +22,7 @@ one is missing, so install them first.
 | `python3` | writing permissions and hooks into `~/.claude/settings.json` | `python3 --version` |
 | Node >= 26.0.0 (repo pins 26.7.0) | building and running the engine, and reading/writing the markdown-viewer and mermaid-renderer config | `node --version` |
 | `npm` | `npm ci` + `npm run build` for the engine | `npm --version` |
-| `claude` and/or `codex` | executing steps — at least one is required | `claude --version` / `codex --version` |
+| `claude`, `codex`, and/or `pi` | executing steps — at least one is required | `claude --version` / `codex --version` / `pi --version` |
 | `rg` (ripgrep) — **optional** | full shell test coverage; several tests skip themselves without it. `bin/install --check` warns, never fails | `rg --version` |
 
 Node is pinned to `26.7.0` in `.tool-versions` and `src/conductor/.tool-versions`. Install it
@@ -30,7 +30,7 @@ with `asdf install nodejs 26.7.0` or any equivalent version manager. `bin/ai-con
 `ASDF_NODEJS_VERSION` from that pin **only when `asdf` is on `PATH`** — without asdf, whatever
 `node` resolves first runs the engine.
 
-Pick your host now: `claude`, `codex`, or both. See
+Pick your provider now: `claude`, `codex`, `pi`, or a fallback ladder. See
 [multiprovider](guides/multiprovider.md) for what each one changes.
 
 ## One-line install

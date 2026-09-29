@@ -27,13 +27,6 @@ vi.mock('../../src/engine/self-host/daemon-build-token.js', async (importOrigina
   };
 });
 
-vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/engine/ci-fix.js')>();
-  return {
-    ...actual,
-    defaultCiFixProbe: vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '' })),
-  };
-});
 vi.mock('../../src/engine/daemon-deps.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/daemon-deps.js')>();
   return { ...actual, resolveDaemonBaseSha: vi.fn(async () => 'a'.repeat(40)) };
@@ -101,6 +94,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
 }));
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
+import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
 const directories: string[] = [];
 
@@ -129,6 +123,7 @@ describe('daemon skipped-to-stale refusal event wiring', () => {
       baseBranch: 'main',
       ensureFresh: async () => {},
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
       watch: false,
       workSource: { discover: async () => [{ slug: 'feature-a' }] },
     });

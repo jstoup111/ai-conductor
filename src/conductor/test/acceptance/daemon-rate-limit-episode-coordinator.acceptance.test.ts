@@ -214,7 +214,7 @@ describe('acceptance: the exact observed session-limit message routes to a coord
       });
     }) as never);
 
-    const provider = new ClaudeProvider();
+    const provider = new ClaudeProvider(undefined, mockedExeca as never);
     const runner: StepRunner = {
       run: async (): Promise<StepRunResult> => {
         const result = await provider.invoke({

@@ -1,0 +1,5 @@
+{"type":"session","version":3,"id":"fixture-session","timestamp":"2026-09-24T00:00:00.000Z","cwd":"/fixture"}
+{"type":"message_update","usage":{"input":89,"output":13,"cacheRead":34,"cacheWrite":5,"totalTokens":141},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Implemented "}}
+{"type":"message_update","usage":{"input":144,"output":21,"cacheRead":55,"cacheWrite":8,"totalTokens":228},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"the requested change."}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Implemented the requested change."}],"stopReason":"stop"}}
+{"type":"agent_settled"}

@@ -1,20 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 
-vi.mock('execa', () => ({
-  execa: vi.fn(),
+const { mockExeca } = vi.hoisted(() => ({
+  mockExeca: vi.fn<
+    (file: string, args: string[], options: ExecaOptions) => Promise<ExecaResult>
+  >(),
 }));
-
-import { execa } from 'execa';
-const mockExeca = vi.mocked(execa);
 
 describe('ClaudeProvider tokenUsage parsing', () => {
   let provider: ClaudeProvider;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    provider = new ClaudeProvider();
+    provider = new ClaudeProvider(undefined, mockExeca as never);
   });
 
   const baseOptions: InvokeOptions = {

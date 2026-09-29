@@ -17,6 +17,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runDaemonMode, type DaemonModeOptions } from '../../src/daemon-cli.js';
+import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 import { writePauseMarker, removePauseMarker } from '../../src/engine/pause-marker.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 
@@ -50,6 +51,7 @@ function baseOpts(projectRoot: string, dispatched: string[], discoverItems: Back
     baseBranch: 'main', // skip the real `git` default-branch lookup
     ensureFresh: async () => {}, // skip the stale-install backstop
     probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+    providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
     workSource: {
       discover: async () => {
         for (const it of discoverItems) dispatched.push(it.slug);

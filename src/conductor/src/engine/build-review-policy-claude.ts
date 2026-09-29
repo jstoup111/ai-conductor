@@ -8,6 +8,7 @@ import {
   ReviewPolicyCatalogError,
   type ReviewPolicyCatalogFailureCode,
 } from './build-review-policy-resolver.js';
+import { CLAUDE_DISPLAY_NAME, CLAUDE_PROVIDER, resolveProviderExecutable } from '../execution/provider-catalog.js';
 
 /** The prepared candidate context in which Claude discovery is allowed to run. */
 export interface ClaudeReviewPolicyCandidate {
@@ -63,7 +64,7 @@ export interface DiscoverClaudeReviewPoliciesOptions {
 
 export class ClaudeReviewPolicyCatalogError extends ReviewPolicyCatalogError {
   constructor(message: string, code: ReviewPolicyCatalogFailureCode = 'malformed') {
-    super('claude', code, message);
+    super(CLAUDE_PROVIDER, code, message);
   }
 }
 
@@ -84,7 +85,7 @@ const realCommand: ClaudeMetadataCommand = async (command, args, options) => {
 
 function abortIfNeeded(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new ClaudeReviewPolicyCatalogError(
-    'Claude policy catalog discovery was cancelled',
+    `${CLAUDE_DISPLAY_NAME} policy catalog discovery was cancelled`,
     'cancelled',
   );
 }
@@ -95,15 +96,15 @@ function asCatalogError(error: unknown, signal: AbortSignal | undefined): Claude
     return new ClaudeReviewPolicyCatalogError(error.message, error.code);
   }
   if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
-    return new ClaudeReviewPolicyCatalogError('Claude policy catalog discovery was cancelled', 'cancelled');
+    return new ClaudeReviewPolicyCatalogError(`${CLAUDE_DISPLAY_NAME} policy catalog discovery was cancelled`, 'cancelled');
   }
   if (error instanceof Error && /timeout/i.test(error.name)) {
-    return new ClaudeReviewPolicyCatalogError('Claude policy catalog discovery timed out', 'timeout');
+    return new ClaudeReviewPolicyCatalogError(`${CLAUDE_DISPLAY_NAME} policy catalog discovery timed out`, 'timeout');
   }
   if (typeof error === 'object' && error !== null && typeof (error as { exitCode?: unknown }).exitCode === 'number') {
-    return new ClaudeReviewPolicyCatalogError(`Claude plugin inventory command failed: ${String(error)}`, 'error');
+    return new ClaudeReviewPolicyCatalogError(`${CLAUDE_DISPLAY_NAME} plugin inventory command failed: ${String(error)}`, 'error');
   }
-  return new ClaudeReviewPolicyCatalogError(`Unable to load Claude policy catalog: ${String(error)}`, 'unreadable');
+  return new ClaudeReviewPolicyCatalogError(`Unable to load ${CLAUDE_DISPLAY_NAME} policy catalog: ${String(error)}`, 'unreadable');
 }
 
 interface ClaudePluginInventoryEntry {
@@ -138,7 +139,7 @@ async function optionalDirectoryEntries(
     return await filesystem.readdir(path);
   } catch (error) {
     if (isMissing(error)) return [];
-    throw new ClaudeReviewPolicyCatalogError(`Unable to read Claude skill root ${path}: ${String(error)}`, 'unreadable');
+    throw new ClaudeReviewPolicyCatalogError(`Unable to read ${CLAUDE_DISPLAY_NAME} skill root ${path}: ${String(error)}`, 'unreadable');
   }
 }
 
@@ -192,10 +193,10 @@ async function containedPluginDirectory(
     canonical = await filesystem.realpath(directory);
   } catch (error) {
     if (isMissing(error)) return undefined;
-    throw new ClaudeReviewPolicyCatalogError(`Unable to resolve Claude plugin skill directory ${directory}: ${String(error)}`, 'unreadable');
+    throw new ClaudeReviewPolicyCatalogError(`Unable to resolve ${CLAUDE_DISPLAY_NAME} plugin skill directory ${directory}: ${String(error)}`, 'unreadable');
   }
   if (!isInside(plugin.packageRoot, canonical)) {
-    throw new ClaudeReviewPolicyCatalogError(`Claude plugin ${plugin.id} skill directory ${directory} resolves outside its installed package`);
+    throw new ClaudeReviewPolicyCatalogError(`${CLAUDE_DISPLAY_NAME} plugin ${plugin.id} skill directory ${directory} resolves outside its installed package`);
   }
   return canonical;
 }
@@ -241,7 +242,7 @@ async function installedSkillAtDirectory(
     skillText = await filesystem.readFile(skillPath);
   } catch (error) {
     if (isMissing(error)) return undefined;
-    throw new ClaudeReviewPolicyCatalogError(`Unable to read Claude skill ${skillPath}: ${String(error)}`, 'unreadable');
+    throw new ClaudeReviewPolicyCatalogError(`Unable to read ${CLAUDE_DISPLAY_NAME} skill ${skillPath}: ${String(error)}`, 'unreadable');
   }
 
   const canonicalSkillDirectory = await filesystem.realpath(skillDirectory);
@@ -264,31 +265,31 @@ function parsePluginInventory(stdout: string): readonly ClaudePluginInventoryEnt
   try {
     value = JSON.parse(stdout);
   } catch (error) {
-    throw new ClaudeReviewPolicyCatalogError(`Invalid Claude plugin inventory JSON: ${String(error)}`);
+    throw new ClaudeReviewPolicyCatalogError(`Invalid ${CLAUDE_DISPLAY_NAME} plugin inventory JSON: ${String(error)}`);
   }
   const envelope = Array.isArray(value) ? undefined : object(value);
-  if (envelope?.complete === false) throw new ClaudeReviewPolicyCatalogError('Claude plugin inventory was partial', 'partial');
+  if (envelope?.complete === false) throw new ClaudeReviewPolicyCatalogError(`${CLAUDE_DISPLAY_NAME} plugin inventory was partial`, 'partial');
   if (envelope?.errors !== undefined) {
-    if (!Array.isArray(envelope.errors)) throw new ClaudeReviewPolicyCatalogError('Malformed Claude plugin inventory errors', 'malformed');
-    if (envelope.errors.length > 0) throw new ClaudeReviewPolicyCatalogError('Claude plugin inventory reported catalog errors', 'error');
+    if (!Array.isArray(envelope.errors)) throw new ClaudeReviewPolicyCatalogError(`Malformed ${CLAUDE_DISPLAY_NAME} plugin inventory errors`, 'malformed');
+    if (envelope.errors.length > 0) throw new ClaudeReviewPolicyCatalogError(`${CLAUDE_DISPLAY_NAME} plugin inventory reported catalog errors`, 'error');
   }
   if (envelope?.version !== undefined && envelope.version !== 1) {
-    throw new ClaudeReviewPolicyCatalogError(`Unsupported Claude plugin inventory version ${String(envelope.version)}`, 'unsupported');
+    throw new ClaudeReviewPolicyCatalogError(`Unsupported ${CLAUDE_DISPLAY_NAME} plugin inventory version ${String(envelope.version)}`, 'unsupported');
   }
   const entries = Array.isArray(value) ? value : envelope?.plugins;
-  if (!Array.isArray(entries)) throw new ClaudeReviewPolicyCatalogError('Unsupported Claude plugin inventory envelope', 'unsupported');
+  if (!Array.isArray(entries)) throw new ClaudeReviewPolicyCatalogError(`Unsupported ${CLAUDE_DISPLAY_NAME} plugin inventory envelope`, 'unsupported');
 
   return entries.map((entry, index) => {
     const item = object(entry);
     const id = item?.id ?? item?.name;
     if (!item || typeof id !== 'string' || typeof item.enabled !== 'boolean' || typeof item.scope !== 'string') {
-      throw new ClaudeReviewPolicyCatalogError(`Invalid Claude plugin inventory entry at index ${index}`);
+      throw new ClaudeReviewPolicyCatalogError(`Invalid ${CLAUDE_DISPLAY_NAME} plugin inventory entry at index ${index}`);
     }
     if (item.installPath !== undefined && typeof item.installPath !== 'string') {
-      throw new ClaudeReviewPolicyCatalogError(`Invalid Claude plugin installPath for ${id}`);
+      throw new ClaudeReviewPolicyCatalogError(`Invalid ${CLAUDE_DISPLAY_NAME} plugin installPath for ${id}`);
     }
     if (item.version !== undefined && typeof item.version !== 'string') {
-      throw new ClaudeReviewPolicyCatalogError(`Invalid Claude plugin version for ${id}`);
+      throw new ClaudeReviewPolicyCatalogError(`Invalid ${CLAUDE_DISPLAY_NAME} plugin version for ${id}`);
     }
     return {
       id,
@@ -305,9 +306,9 @@ function pluginSkillDirectories(manifestText: string, manifestPath: string): rea
   try {
     manifest = object(JSON.parse(manifestText));
   } catch (error) {
-    throw new ClaudeReviewPolicyCatalogError(`Invalid Claude plugin manifest ${manifestPath}: ${String(error)}`);
+    throw new ClaudeReviewPolicyCatalogError(`Invalid ${CLAUDE_DISPLAY_NAME} plugin manifest ${manifestPath}: ${String(error)}`);
   }
-  if (!manifest) throw new ClaudeReviewPolicyCatalogError(`Invalid Claude plugin manifest ${manifestPath}`);
+  if (!manifest) throw new ClaudeReviewPolicyCatalogError(`Invalid ${CLAUDE_DISPLAY_NAME} plugin manifest ${manifestPath}`);
   const skills = manifest.skills;
   const directories = skills === undefined ? ['./skills'] : typeof skills === 'string' ? [skills] : strings(skills);
   // Entries are joined onto the package root, so a './' prefix alone proves
@@ -316,7 +317,7 @@ function pluginSkillDirectories(manifestText: string, manifestPath: string): rea
   if (!directories || directories.some((path) => (
     !path.startsWith('./') || isAbsolute(path) || path.includes('\0') || !isInside(root, resolve(root, path))
   ))) {
-    throw new ClaudeReviewPolicyCatalogError(`Unsupported Claude plugin skill components in ${manifestPath}`);
+    throw new ClaudeReviewPolicyCatalogError(`Unsupported ${CLAUDE_DISPLAY_NAME} plugin skill components in ${manifestPath}`);
   }
   return directories;
 }
@@ -352,21 +353,21 @@ export async function discoverClaudeReviewPolicies(
     abortIfNeeded(candidate.signal);
     const filesystem = options.filesystem ?? realFilesystem;
     const command = options.command ?? realCommand;
-    const commandResult = await command('claude', ['plugin', 'list', '--json'], {
+    const commandResult = await command(resolveProviderExecutable(CLAUDE_PROVIDER), ['plugin', 'list', '--json'], {
       cwd: candidate.cwd,
       env: candidate.env,
       ...(candidate.signal === undefined ? {} : { signal: candidate.signal }),
     });
     abortIfNeeded(candidate.signal);
-    if (commandResult.complete === false) throw new ClaudeReviewPolicyCatalogError('Claude plugin inventory was partial', 'partial');
+    if (commandResult.complete === false) throw new ClaudeReviewPolicyCatalogError(`${CLAUDE_DISPLAY_NAME} plugin inventory was partial`, 'partial');
     if (commandResult.errors !== undefined && !Array.isArray(commandResult.errors)) {
-      throw new ClaudeReviewPolicyCatalogError('Malformed Claude plugin inventory errors', 'malformed');
+      throw new ClaudeReviewPolicyCatalogError(`Malformed ${CLAUDE_DISPLAY_NAME} plugin inventory errors`, 'malformed');
     }
     if (commandResult.errors && commandResult.errors.length > 0) {
-      throw new ClaudeReviewPolicyCatalogError('Claude plugin inventory reported catalog errors', 'error');
+      throw new ClaudeReviewPolicyCatalogError(`${CLAUDE_DISPLAY_NAME} plugin inventory reported catalog errors`, 'error');
     }
     if (commandResult.exitCode !== undefined && commandResult.exitCode !== 0) {
-      throw new ClaudeReviewPolicyCatalogError(`Claude plugin inventory exited with ${commandResult.exitCode}`, 'error');
+      throw new ClaudeReviewPolicyCatalogError(`${CLAUDE_DISPLAY_NAME} plugin inventory exited with ${commandResult.exitCode}`, 'error');
     }
     const pluginInventory = parsePluginInventory(commandResult.stdout);
 
@@ -395,7 +396,7 @@ export async function discoverClaudeReviewPolicies(
       try {
         manifestText = await filesystem.readFile(manifestPath);
       } catch (error) {
-        throw new ClaudeReviewPolicyCatalogError(`Unable to read Claude plugin manifest ${manifestPath}: ${String(error)}`, 'unreadable');
+        throw new ClaudeReviewPolicyCatalogError(`Unable to read ${CLAUDE_DISPLAY_NAME} plugin manifest ${manifestPath}: ${String(error)}`, 'unreadable');
       }
       const directories = pluginSkillDirectories(manifestText, manifestPath);
       for (const directory of directories) {

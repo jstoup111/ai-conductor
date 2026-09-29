@@ -1,13 +1,31 @@
 // Covers: task:2
 // Covers: task:5
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Mock } from 'vitest';
+
+const { mockExeca, mockValidateSpawnPermit, mockEnforceFreshSessionOptions } = vi.hoisted(() => ({
+  mockExeca: vi.fn(),
+  mockValidateSpawnPermit: vi.fn((permit, purpose) =>
+    permit?.(purpose) ?? { permitted: true as const }),
+  mockEnforceFreshSessionOptions: vi.fn(),
+}));
+vi.mock('execa', () => ({ execa: mockExeca }));
+vi.mock('../../src/execution/spawn-permit.js', () => ({
+  validateSpawnPermit: (...args: Parameters<typeof mockValidateSpawnPermit>) =>
+    mockValidateSpawnPermit(...args),
+}));
+vi.mock('../../src/execution/fresh-session.js', () => ({
+  enforceFreshSessionOptions: (...args: Parameters<typeof mockEnforceFreshSessionOptions>) =>
+    mockEnforceFreshSessionOptions(...args),
+}));
+
+vi.resetModules();
+
 import { PassThrough } from 'node:stream';
-import {
+const {
   ClaudeProvider,
   detectsSessionLimit,
   parseRateLimitWaitSeconds,
-} from '../../src/execution/claude-provider.js';
+} = await import('../../src/execution/claude-provider.js');
 import { classifyMetering } from '../../src/engine/metering.js';
 import { executeAuxiliaryProviderCandidates } from '../../src/engine/provider-execution.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
@@ -18,29 +36,9 @@ import { BUILD_REVIEW_RUBRIC_REGISTRY } from '../../src/engine/build-review-regi
 import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-config.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
+import type { ClaudeProvider as ClaudeProviderInstance } from '../../src/execution/claude-provider.js';
 
-// Mock execa before importing anything that uses it
-vi.mock('execa', () => ({
-  execa: vi.fn(),
-}));
-
-const { mockValidateSpawnPermit } = vi.hoisted(() => ({
-  mockValidateSpawnPermit: vi.fn((permit, purpose) =>
-    permit?.(purpose) ?? { permitted: true as const }),
-}));
-vi.mock('../../src/engine/provider-runtime.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src/engine/provider-runtime.js')>(),
-  validateSpawnPermit: mockValidateSpawnPermit,
-}));
-
-const { mockEnforceFreshSessionOptions } = vi.hoisted(() => ({
-  mockEnforceFreshSessionOptions: vi.fn(),
-}));
-vi.mock('../../src/execution/fresh-session.js', () => ({
-  enforceFreshSessionOptions: mockEnforceFreshSessionOptions,
-}));
-
-import { execa, type Options as ExecaOptions, type Result as ExecaResult } from 'execa';
+import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 
 /**
  * `execa`'s exported type is an intersection of several call-signature
@@ -53,13 +51,6 @@ import { execa, type Options as ExecaOptions, type Result as ExecaResult } from 
  * mock is re-typed to that actual call shape via `unknown` to bridge past
  * execa's overload-collapsing type limitation.
  */
-type ExecaInvocation = (
-  file: string,
-  args: string[],
-  options?: ExecaOptions,
-) => Promise<ExecaResult>;
-const mockExeca = vi.mocked(execa) as unknown as Mock<ExecaInvocation>;
-
 const claudeRubricPolicy: ResolvedBuildReviewRubricPolicy = {
   enabled: true,
   max_projection_bytes: 1_048_576,
@@ -72,7 +63,7 @@ const claudeRubricPolicy: ResolvedBuildReviewRubricPolicy = {
   min_confidence: 0,
 };
 
-function claudeRuntime(provider: ClaudeProvider): ProviderRuntimeSet {
+function claudeRuntime(provider: ClaudeProviderInstance): ProviderRuntimeSet {
   return new ProviderRuntimeSet([{
     key: 'claude',
     provider,
@@ -85,16 +76,16 @@ function claudeRuntime(provider: ClaudeProvider): ProviderRuntimeSet {
 }
 
 describe('ClaudeProvider', () => {
-  let provider: ClaudeProvider;
+  let provider: ClaudeProviderInstance;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockEnforceFreshSessionOptions.mockImplementation((options, provider) => ({
+    mockEnforceFreshSessionOptions.mockImplementation((options) => ({
       ...options,
       sessionId: '00000000-0000-4000-8000-000000000001',
       resume: false,
     }));
-    provider = new ClaudeProvider();
+    provider = new ClaudeProvider(undefined, mockExeca as never);
   });
 
   const baseOptions: InvokeOptions = {
@@ -701,7 +692,7 @@ describe('ClaudeProvider', () => {
       const clock: IntervalClock = {
         nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
       };
-      provider = new ClaudeProvider(clock);
+      provider = new ClaudeProvider(clock, mockExeca as never);
       const terminalResult = {
         type: 'result',
         result: 'Done!',
@@ -755,7 +746,7 @@ describe('ClaudeProvider', () => {
       const clock: IntervalClock = {
         nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
       };
-      provider = new ClaudeProvider(clock);
+      provider = new ClaudeProvider(clock, mockExeca as never);
       mockExeca.mockResolvedValue({
         stdout: 'interactive session failed',
         stderr: '',
@@ -807,7 +798,7 @@ describe('ClaudeProvider', () => {
       const clock: IntervalClock = {
         nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
       };
-      provider = new ClaudeProvider(clock);
+      provider = new ClaudeProvider(clock, mockExeca as never);
       mockExeca.mockResolvedValue({
         stdout: JSON.stringify({
           type: 'result',
@@ -1918,7 +1909,7 @@ describe('ClaudeProvider', () => {
         return { stdout: 'done', stderr: '', exitCode: 0, failed: false } as any;
       });
 
-      const provider = new ClaudeProvider();
+      const provider = new ClaudeProvider(undefined, mockExeca as never);
 
       // First call should detect rate limit
       const result1 = await provider.invoke({ ...baseOptions, interactive: true });

@@ -28,7 +28,6 @@ const { mockExeca } = vi.hoisted(() => ({
     ) => Promise<ExecaResult>
   >(),
 }));
-vi.mock('execa', () => ({ execa: mockExeca }));
 
 const baseOptions: InvokeOptions = {
   prompt: 'Make the no-op change',
@@ -62,7 +61,12 @@ describe('CodexProvider argv never expresses a session resume', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
-    provider = new CodexProvider(vi.fn(async () => readyDoctorResult()) as never);
+    provider = new CodexProvider(
+      vi.fn(async () => readyDoctorResult()) as never,
+      'codex',
+      undefined,
+      mockExeca as never,
+    );
   });
 
   it('starts a cold `exec` at both call sites even when handed resume: true', async () => {

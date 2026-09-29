@@ -17,6 +17,7 @@ import { ConductorEventEmitter } from '../src/ui/events.js';
 import type { FeatureRunnerDeps, FeatureRunScope } from '../src/engine/daemon-runner.js';
 import type { VisualizerFactoryContext } from '../src/types/plugin.js';
 import type { OtelVisualizerStartContext } from '../src/engine/otel/wire.js';
+import { allInstalledProviderDiscoveryRunner } from './engine/boot-test-helpers.js';
 
 type WireOtelVisualizer = typeof import('../src/engine/otel/wire.js').wireOtelVisualizer;
 type WireDaemonOtel = typeof import('../src/engine/otel/wire.js').wireDaemonOtel;
@@ -71,13 +72,6 @@ vi.mock('../src/engine/version-report.js', async (importOriginal) => {
 vi.mock('../src/engine/self-host/daemon-build-token.js', () => ({
   readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })),
 }));
-vi.mock('../src/engine/ci-fix.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/engine/ci-fix.js')>();
-  return {
-    ...actual,
-    defaultCiFixProbe: vi.fn(async () => ({ exitCode: 0, stdout: 'claude 1.0.0', stderr: '' })),
-  };
-});
 vi.mock('../src/engine/daemon-deps.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/engine/daemon-deps.js')>();
   return { ...actual, resolveDaemonBaseSha: vi.fn(async () => 'a'.repeat(40)) };
@@ -236,6 +230,7 @@ async function dispatchWithSessionId(
     watch: false,
     workSource: { discover: async () => [{ slug: 'feature-a' }] },
     probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+    providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
   });
   return { repo, pipelineDir };
 }

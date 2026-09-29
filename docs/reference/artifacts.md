@@ -700,10 +700,8 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` defines **111 variants** across **110** event types (`self_host_containment_verdict`
-declares two variants — `contained: true`/`contained: false` — under one type). `EventPersister`
-subscribes to the **98** event types marked `persist: true` in `event-sinks.ts` and writes only
-those:
+`ConductorEvent` is a discriminated union. `EventPersister` writes the event types marked
+`persist: true` in `event-sinks.ts`; common persisted types include:
 
 `land_gate_rejected`, `contained_live_checkout_drift`, `self_host_containment_verdict`, `self_host_boundary_fingerprint`, `containment_check_unresolved`,
 `operator_rewind`,
@@ -715,7 +713,7 @@ those:
 `remediation_adjudication_started`, `remediation_adjudication_completed`, `remediation_adjudication_failed`,
 `remediation_case_reconciled`, `remediation_case_refuted`, `remediation_effect_reserved`, `remediation_effect_applied`,
 `remediation_effect_failed`, `remediation_semantic_repeat_halt`,
-`step_started`, `deprecated_step`, `step_completed`, `step_failed`, `step_refused`, `provider_attempt`,
+`step_started`, `deprecated_step`, `step_completed`, `step_failed`, `step_refused`, `provider_discovery`, `provider_attempt`,
 `provider_stream_progress`,
 `scratch_cleanup_reclaimed`, `scratch_cleanup_retained`, `scratch_cleanup_failed`,
 `feature_usage_total`,
@@ -739,6 +737,10 @@ those:
 rationale, and declared superseded replay SHAs. `rebase_citation_residue` records the corresponding
 preservation-guard excusals. Both persist in the affected feature worktree's event ledger; neither
 is emitted by a finish-time or re-kick rebase, where supersession judgement is unavailable.
+
+`provider_discovery` records the installed built-in provider ids and every missing built-in id with one
+of four reasons: `not-found`, `not-executable`, `version-failed`, or `timeout`. It is emitted once when a
+provider-dispatching command boots; non-dispatching commands do not run discovery.
 
 `rate_limit` records the bounded wait and, for usage exhaustion, the provider and retry deadline.
 The daemon also writes `provider_suppressed` to its own event ledger. On restart it restores only a
@@ -802,7 +804,7 @@ separate HEAD-commit witness (`adr-2026-07-23-commit-movement-liveness-floor`), 
 disagree on the same turn (an empty commit moves HEAD without moving the tree).
 
 `session_policy` records when the fail-closed `supportsSessionResume` capability seam suppresses a
-would-be session resume. Both built-in providers declare the capability false, so this is diagnostic
+would-be session resume. All built-in providers declare the capability false, so this is diagnostic
 evidence of a prevented resume rather than a path to a later resumed invocation. It is emitted by the
 same session-capability contract described in
 [Per-step session capability contract](../explanation/architecture.md#per-step-session-capability-contract).

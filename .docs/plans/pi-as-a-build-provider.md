@@ -7,7 +7,7 @@
 
 ## Summary
 
-Replaces every hardcoded claude/codex site with one built-in provider catalog, adds boot-time installation discovery that registers only installed providers and fails fast on a configured-but-missing one, and adds Pi as a third built-in adapter. 21 tasks.
+Replaces every hardcoded claude/codex site with one built-in provider catalog, adds boot-time installation discovery that registers only installed providers and fails fast on a configured-but-missing one, and adds Pi as a third built-in adapter. 22 tasks.
 
 ## Technical Approach
 
@@ -105,7 +105,7 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 
 **Done when:**
 - a test asserts a claude invoke with `CLAUDE_EXECUTABLE` set to an absolute path spawns that path as the subprocess executable
-- `REVIEW_PROVIDER_PREFIXES` is computed from descriptor env-prefix namespaces and a test asserts it equals the pre-refactor claude and codex prefix lists
+- (Withdrawn 2026-09-28, as-built AB-4, operator decision: no pre-refactor review prefix map or production consumer ever existed, so `REVIEW_PROVIDER_PREFIXES` is dead code; Task 23 removes it.)
 - the existing claude and codex argv, environment-prefix, and provider-home tests pass with unchanged assertions
 
 **Files likely touched:**
@@ -126,15 +126,18 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 **Type:** refactor
 
 **Steps:**
-1. Write failing test: in `src/conductor/test/engine/build-review-policy-catalog.test.ts`, assert the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming `reviewPolicyCatalog` and never calls the claude or codex discovery stubs.
+1. Write failing test: in `src/conductor/test/engine/build-review-policy-catalog.test.ts`, assert the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming provider `pi` and `reviewPolicyCatalog` and never calls the claude or codex discovery stubs.
 2. Verify test fails (RED) — the factory throws a generic unsupported-provider error.
 3. Implement: replace the `claude | codex` unions and branches in `build-review-policy-contract.ts`, `build-review-policy-resolver.ts`, the build-review paths of `step-runners.ts`, and the custom-policy read-only review admission check in `provider-execution.ts` with `ProviderWith<readOnlyReview>` / `ProviderWith<reviewPolicyCatalog>` obtained through `requireProviderCapability`, dispatching to the descriptor-registered discovery function.
 4. Verify test passes (GREEN); existing build-review tests for claude and codex pass unchanged.
 5. Commit with message: "refactor(build-review): narrow provider paths by capability"
 
 **Done when:**
-- a test asserts the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming `reviewPolicyCatalog`, and that neither the claude nor the codex policy discovery stub was called
+- a test asserts the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming provider `pi` and `reviewPolicyCatalog`, and that neither the claude nor the codex policy discovery stub was called
 - build-review read-only review and policy modules accept `ProviderWith` capability types, and the existing claude and codex build-review tests pass with unchanged assertions
+- the claude and codex catalog descriptors declare `readOnlyReview` and the pi descriptor does not, and the claude and codex adapter tests assert the engine's read-only review option maps to that provider's native read-only mode (ADR D2/D6 amendment by #2735)
+- the custom-policy read-only review admission check refuses a candidate whose provider lacks `readOnlyReview` or whose read-only review mode is unavailable, without invoking it, as asserted by the provider-execution read-only admission tests
+- no build_review launch path composes bubblewrap review containment: `src/conductor/src/engine/build-review-containment.ts` does not exist and no `build-review*` module under `src/conductor/src/engine` references `bwrap` (retired by adr-2026-09-10-portable-build-review-policy D5.1)
 
 **Files likely touched:**
 - src/conductor/src/engine/provider-execution.ts — read-only review admission via capability
@@ -150,14 +153,14 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 **Type:** refactor
 
 **Steps:**
-1. Write failing test: in `src/conductor/test/engine/self-host/provider-home.test.ts`, assert preparing a self-host provider home for pi throws `ProviderCapabilityUnsupportedError` naming `selfHost` and `#1887` before any subprocess spawn stub is called.
+1. Write failing test: in `src/conductor/test/engine/self-host/provider-home.test.ts`, assert preparing a self-host provider home for pi throws `ProviderCapabilityUnsupportedError` naming provider `pi`, `selfHost`, and `#1887` before any subprocess spawn stub is called.
 2. Verify test fails (RED).
 3. Implement: `SelfHostProviderId` becomes `ProviderWith<selfHost>`; `provider-home.ts`, `live-boundary.ts` volatile-state tables, `sandbox-build-env.ts`, `smoke-capability.ts`, and the self-host build-candidate preparation in `conductor.ts` read descriptor fields and obtain the provider through `requireProviderCapability`.
 4. Verify test passes (GREEN); existing self-host tests pass unchanged.
 5. Commit with message: "refactor(self-host): narrow provider paths by capability"
 
 **Done when:**
-- a test asserts preparing a self-host provider home for pi throws `ProviderCapabilityUnsupportedError` naming `selfHost` and `#1887`, and that the subprocess spawn stub was never called
+- a test asserts preparing a self-host provider home for pi throws `ProviderCapabilityUnsupportedError` naming provider `pi`, `selfHost`, and `#1887`, and that the subprocess spawn stub was never called
 - the existing self-host provider-home, live-boundary, and sandbox tests for claude and codex pass with unchanged assertions
 
 **Files likely touched:**
@@ -485,7 +488,7 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 **Done when:**
 - the live-coverage structural test iterates `BUILT_IN_PROVIDERS` together with registered external plugin ids and a test asserts a registered fixture plugin is enumerated
 - a test asserts the live-coverage structural test requires the pi entry and smoke leg while discovery reports no provider installed
-- `live-e2e-providers.ts` is keyed by catalog ids, contains a pi entry, and `daemon-e2e-live-pi.smoke.test.ts` runs a trivial Pi step when credentials are present and live tests are opted in
+- `live-e2e-providers.ts` is keyed by catalog ids, contains a pi entry, and `daemon-e2e-live-pi.smoke.test.ts` runs a trivial Pi step through the real Pi CLI when credentials are present and live tests are opted in, and asserts that step completes
 - a test asserts the Pi smoke leg skips with a named reason when Pi credentials are absent and makes no real Pi call
 
 **Files likely touched:**
@@ -517,6 +520,50 @@ Replaces every hardcoded claude/codex site with one built-in provider catalog, a
 
 **Dependencies:** 13
 
+### Task 22: Pi smoke leg runs over the shared live run body without self-host
+**Story:** 7
+**Type:** happy-path
+
+**Steps:**
+1. Write failing test: in `src/conductor/test/engine/live-e2e-shared-body.test.ts`, assert `daemon-e2e-live-pi.smoke.test.ts` supplies only its descriptor to `defineLiveE2EProviderSmoke`, and assert a descriptor without `selfHostExecutable` drives the shared run body with no self-host wrapper while the claude and codex descriptors still receive it.
+2. Verify test fails (RED) — the Pi leg invokes `PiProvider` directly and the run body requires a self-host executable.
+3. Implement: make `selfHostExecutable` optional on the live descriptor and apply the self-host wrapper in `test/fixtures/live-e2e-run-body.ts` only when it is present; rewrite `daemon-e2e-live-pi.smoke.test.ts` as a thin file that calls `defineLiveE2EProviderSmoke` with the pi descriptor. Pi still refuses the `selfHost` capability (Task 6); self-host Pi stays with #1887.
+4. Verify test passes (GREEN).
+5. Commit with message: "test(live): run the Pi smoke leg over the shared run body"
+
+**Done when:**
+- `daemon-e2e-live-pi.smoke.test.ts` supplies only its descriptor to `defineLiveE2EProviderSmoke`, the same shared run body the claude and codex legs use, and imports no provider adapter directly
+- a test asserts a live descriptor without `selfHostExecutable` drives the shared seed, provision, preflight, meter, `runDaemon`, assert sequence with no self-host wrapper, while the claude and codex descriptors still receive the self-host wrapper
+- a test asserts preparing a self-host provider home for pi still throws `ProviderCapabilityUnsupportedError` naming `#1887` after this change
+
+**Files likely touched:**
+- src/conductor/test/fixtures/live-e2e-run-body.ts — self-host wrapper conditional on descriptor
+- src/conductor/test/fixtures/live-e2e-providers.ts — optional self-host executable
+- src/conductor/test/engine/daemon-e2e-live-pi.smoke.test.ts — thin shared-body leg
+- src/conductor/test/engine/live-e2e-shared-body.test.ts — structural assertion
+
+**Dependencies:** 20
+
+### Task 23: Remove the unconsumed REVIEW_PROVIDER_PREFIXES export
+**Story:** 1
+**Type:** refactor
+
+**Steps:**
+1. Confirm with a repository search that `REVIEW_PROVIDER_PREFIXES` has no reader under `src/conductor/src`.
+2. Remove the export from `src/conductor/src/execution/child-environment.ts` and its assertion and import from `src/conductor/test/execution/child-environment.test.ts`.
+3. Verify the child-environment tests pass and the TypeScript build succeeds.
+4. Commit with message: "refactor(providers): remove the unconsumed REVIEW_PROVIDER_PREFIXES export"
+
+**Done when:**
+- a repository search for `REVIEW_PROVIDER_PREFIXES` under `src/conductor` returns no match
+- the child-environment tests pass and `tsc --noEmit` succeeds
+
+**Files likely touched:**
+- src/conductor/src/execution/child-environment.ts — remove dead export
+- src/conductor/test/execution/child-environment.test.ts — remove its assertion
+
+**Dependencies:** 4
+
 ## Task Dependency Graph
 
 ```text
@@ -541,6 +588,7 @@ Task 18 <- 16
 Task 19 <- 18
 Task 20 <- 15
 Task 21 <- 13
+Task 22 <- 20
 ```
 
 ## Integration Points
@@ -561,8 +609,8 @@ Task 21 <- 13
 | Story 1 negative: Given `CLAUDE_EXECUTABLE` names a path that does not exist, when the engine boots with claude configured, then startup fails with the not-installed error for claude naming reason not-found. | 9 | "a test asserts that when `CLAUDE_EXECUTABLE` names a path that does not exist, claude is reported missing with reason `not-found` and `validateProviderInstallation` then raises `ProviderNotInstalledError` for claude" | diff-local |
 | Story 2 happy: Given claude and codex declare their current capabilities, when self-host, build-review read-only review, and review-policy catalog paths run for them, then behavior is unchanged. | 5, 6 | "build-review read-only review and policy modules accept `ProviderWith` capability types, and the existing claude and codex build-review tests pass with unchanged assertions" | diff-local |
 | Story 2 happy: Given pi is selected for an ordinary build step, when the step dispatches, then no capability refusal occurs. | 15 | "the pi descriptor declares no selfHost, readOnlyReview, reviewPolicyCatalog, writeFence, nativeSchema, costSelfReporting, or readiness capability, and a test asserts an ordinary build step with pi raises no capability refusal" | diff-local |
-| Story 2 negative: Given pi is selected for a path that requires the selfHost capability, when that path is reached, then it fails before spawning with an error naming provider pi, capability selfHost, and the owning intake. | 6 | "a test asserts preparing a self-host provider home for pi throws `ProviderCapabilityUnsupportedError` naming `selfHost` and `#1887`, and that the subprocess spawn stub was never called" | diff-local |
-| Story 2 negative: Given pi is selected for build-review with a custom review policy, when the review-policy catalog path is reached, then it fails naming capability reviewPolicyCatalog instead of falling into the codex or claude branch. | 5 | "a test asserts the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming `reviewPolicyCatalog`, and that neither the claude nor the codex policy discovery stub was called" | diff-local |
+| Story 2 negative: Given pi is selected for a path that requires the selfHost capability, when that path is reached, then it fails before spawning with an error naming provider pi, capability selfHost, and the owning intake. | 6 | "a test asserts preparing a self-host provider home for pi throws `ProviderCapabilityUnsupportedError` naming provider `pi`, `selfHost`, and `#1887`, and that the subprocess spawn stub was never called" | diff-local |
+| Story 2 negative: Given pi is selected for build-review with a custom review policy, when the review-policy catalog path is reached, then it fails naming capability reviewPolicyCatalog instead of falling into the codex or claude branch. | 5 | "a test asserts the review-policy catalog factory given provider pi throws `ProviderCapabilityUnsupportedError` naming provider `pi` and `reviewPolicyCatalog`, and that neither the claude nor the codex policy discovery stub was called" | diff-local |
 | Story 2 negative: Given a descriptor omits a capability flag, when any consumer queries it, then the capability is treated as unsupported. | 1 | "a test asserts, for each of readiness, selfHost, readOnlyReview, reviewPolicyCatalog, supportsSessionResume, costSelfReporting, writeFence, and nativeSchema, a descriptor omitting that flag is reported unsupported by the catalog capability query" | diff-local |
 | Story 3 happy: Given claude and codex executables resolve and their version probes exit 0 and pi is absent, when the daemon boots, then claude and codex are registered and pi is not. | 13, 9 | "a test asserts `runDaemonMode` with only claude and codex discovered registers claude and codex as `llm_provider` plugins and does not register pi" | diff-local |
 | Story 3 happy: Given a provider executable override env var is set, when discovery runs, then the override path is probed instead of the PATH lookup. | 9 | "a test asserts that when a descriptor override env var is set, the injected runner receives the override path instead of the PATH lookup result" | diff-local |
@@ -586,15 +634,15 @@ Task 21 <- 13
 | Story 5 happy: Given a step retries after a failure, when Pi is invoked again, then the retry also runs with no session and never resumes a prior one. | 15 | "a test asserts a second invoke for a retried step also carries `--no-session`, and `PiProvider.supportsSessionResume` is false" | diff-local |
 | Story 5 negative: Given Pi exits 0 but the stream contains no terminal assistant message, when the adapter parses it, then the invoke result is a step failure naming the missing terminal message. | 16 | "a test asserts a stream with no terminal assistant message and exit 0 yields a step failure whose reason names the missing terminal message" | diff-local |
 | Story 5 negative: Given a JSONL line is malformed, when the adapter parses the stream, then that line is ignored and the result is still derived from the valid terminal message if present. | 16 | "a test asserts a stream containing a malformed line still yields the terminal message as output, the malformed line being ignored" | diff-local |
-| Story 5 negative: Given the step is aborted by the lifecycle supervisor, when Pi is running, then the Pi subprocess is terminated and the result is an aborted step, not a success. | 17 | "a test asserts aborting the invoke signal while Pi runs kills the fake subprocess and the invoke result is an aborted step rather than a success" | diff-local |
+| Story 5 negative: Given Pi is running, when its invoke's abort signal fires, then the Pi subprocess is terminated and the result is an aborted step, not a success (codex parity; no production caller aborts a running ordinary step for any provider today, operator decision 2026-09-28 on as-built AB-9). | 17 | "a test asserts aborting the invoke signal while Pi runs kills the fake subprocess and the invoke result is an aborted step rather than a success" | diff-local |
 | Story 6 happy: Given a ladder of pi then claude, when Pi fails with a run-scope unavailable signal, then the run advances to claude exactly as it would from codex. | 19 | "a test parameterized over pi and codex as the first rung asserts a run-scope `providerUnavailable` result causes identical advance to the claude fake and the step completes on claude" | diff-local |
 | Story 6 happy: Given Pi reports its unknown-model error on stderr and exits 1, when the adapter classifies it, then the result carries the model-unavailable signal. | 18 | "a test asserts stderr `Error: Model "x" not found. Use --list-models to see available models.` with exit 1 yields `modelUnavailable`" | diff-local |
 | Story 6 negative: Given the Pi executable disappears after boot, when a step spawns Pi, then ENOENT or exit 127 maps to provider-unavailable with run scope. | 18 | "a test asserts ENOENT and exit 127 each yield `providerUnavailable` with `providerUnavailableScope` run" | diff-local |
 | Story 6 negative: Given Pi exits non-zero with stderr matching no confirmed signature, when the adapter classifies it, then the result is an ordinary step failure with no provider signal set. | 18 | "a test asserts a non-zero exit whose stderr matches no anchored signature yields a step failure with no provider signal set" | diff-local |
 | Story 6 negative: Given Pi exits non-zero with auth-failure or rate-limit output, when the adapter classifies it, then the result is an ordinary step failure with no auth-failure or rate-limited signal set, because no Pi auth or rate-limit signature is anchored in this feature. | 18 | "`pi-provider.ts` anchors no auth-failure or rate-limit regex, and a test asserts Pi auth-failure and rate-limit style stderr with a non-zero exit yields a step failure with neither `authFailure` nor `rateLimited` set" | diff-local |
-| Story 7 happy: Given the catalog includes pi, when the live-coverage structural test runs, then it finds a Pi descriptor entry and a Pi live smoke leg. | 20 | "`live-e2e-providers.ts` is keyed by catalog ids, contains a pi entry, and `daemon-e2e-live-pi.smoke.test.ts` runs a trivial Pi step when credentials are present and live tests are opted in" | diff-local |
+| Story 7 happy: Given the catalog includes pi, when the live-coverage structural test runs, then it finds a Pi descriptor entry and a Pi live smoke leg. | 20 | "`live-e2e-providers.ts` is keyed by catalog ids, contains a pi entry, and `daemon-e2e-live-pi.smoke.test.ts` runs a trivial Pi step through the real Pi CLI when credentials are present and live tests are opted in, and asserts that step completes" | diff-local |
 | Story 7 happy: Given an external `llm_provider` plugin is registered, when the live-coverage structural test runs, then that plugin is enumerated alongside the catalog ids. | 20 | "the live-coverage structural test iterates `BUILT_IN_PROVIDERS` together with registered external plugin ids and a test asserts a registered fixture plugin is enumerated" | diff-local |
-| Story 7 happy: Given Pi credentials are present and live tests are opted in, when the Pi smoke leg runs, then a trivial Pi step completes through the real CLI. | 20 | "`live-e2e-providers.ts` is keyed by catalog ids, contains a pi entry, and `daemon-e2e-live-pi.smoke.test.ts` runs a trivial Pi step when credentials are present and live tests are opted in" | diff-local |
+| Story 7 happy: Given Pi credentials are present and live tests are opted in, when the Pi smoke leg runs, then a trivial Pi step completes through the real CLI. | 20 | "`live-e2e-providers.ts` is keyed by catalog ids, contains a pi entry, and `daemon-e2e-live-pi.smoke.test.ts` runs a trivial Pi step through the real Pi CLI when credentials are present and live tests are opted in, and asserts that step completes" | diff-local |
 | Story 7 negative: Given a test machine without Pi installed, when the live-coverage structural test runs, then it still requires the Pi entry because it enumerates the catalog plus registered plugins, not discovered providers. | 20 | "a test asserts the live-coverage structural test requires the pi entry and smoke leg while discovery reports no provider installed" | diff-local |
 | Story 7 negative: Given Pi credentials are absent, when the live smoke suite runs, then the Pi leg is skipped with a named reason and the default suite makes no real Pi call. | 20 | "a test asserts the Pi smoke leg skips with a named reason when Pi credentials are absent and makes no real Pi call" | diff-local |
 
@@ -622,3 +670,129 @@ Task 21 <- 13
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-s1-2-1: test/execution/claude-provider.test.ts and test/execution/codex-provider.test.ts: point the vi.mock seams at ../../src/execution/spawn-permit.js (validateSpawnPermit) and ../../src/execution/fresh-session.js (enforceFreshSessionOptions), then restore the assertions exactly as they were at merge-base 581eec5e6: expect(mockEnforceFreshSessionOptions).toHaveBeenCalledTimes(1) and toHaveBeenCalledWith(..., 'claude'/'codex'), expect(mockValidateSpawnPermit).toHaveBeenCalledWith(spawnPermit), the exact --session-id value assertion (not arrayContaining(['--session-id'])), and the original '...exactly once for a %s dispatch' test title. Preserves Task 4 Done-when and Story 1 criterion S1.2 coverage. Do not change production code.
+**Gate:** prd-audit
+**Rationale:** The diff removes 5 expect() lines from each of test/execution/claude-provider.test.ts and codex-provider.test.ts (spawn-permit, exactly-once fresh-session, and exact --session-id value assertions), which breaches Story 1 Done-When and Task 4's 'pass with unchanged assertions' bullet. Production still calls both guards (claude-provider.ts:588,665; codex-provider.ts:299,447) via the moved modules src/execution/spawn-permit.ts and src/execution/fresh-session.ts, so only the test mocks need retargeting. Sweep: the other changed claude tests (claude-provider-json-result, -token-usage, -spawn) remove no expect() lines, so they are excluded.
+**Criterion:** S1.2
+**Parent task:** 4
+**Done when:**
+- S1.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s1-2-1 is complete.
+
+### Task rem-prd-audit-rem-s5-7-1: test/engine/provider-execution*.test.ts (the existing candidate-execution suite): add a test that drives the candidate executor with a registered fake Pi runtime whose subprocess never exits, aborts the executor's abortSignal mid-invoke, and asserts that the adapter's invoke options carried that same signal, that the fake subprocess received kill(), and that the result is the aborted, not successful, outcome with no provider failure signal, so the fallback ladder does not advance. Also update test/execution/pi-provider.test.ts:146 to pass abortSignal as a typed InvokeOptions field instead of a cast, keeping its kill and no-signal assertions (Task 17 Done-when coverage) unchanged.
+**Gate:** prd-audit
+**Rationale:** pi-provider.ts:111 reads abortSignal through a local PiInvokeOptions cast. InvokeOptions (llm-provider.ts:287) has no abort field, and the candidate-options merge in provider-execution.ts:817-833 never passes the executor's abortSignal (:735, :925-942) to the adapter. As a result the lifecycle abort that Story 5 criterion S5.7 and Task 17 require never reaches Pi in production. The contract and caller wiring is task rem-ab1-1 under AB-1. This task adds the production-boundary proof that AB-1's resolution asks Task 17 to supply. It also keeps the existing pi-provider.test.ts:135 kill test, rewritten without the cast.
+**Criterion:** S5.7
+**Parent task:** 17
+**Done when:**
+- S5.7 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s5-7-1 is complete.
+
+### Task rem-as-built-rem-ab5-1: src/conductor/src/execution/provider-catalog.ts + src/conductor/src/engine/provider-model-policy.ts:21 + src/conductor/src/engine/self-host/environment-claim-audit.ts:86-93: add descriptor fields optInModelIds (codex ['gpt-6-astra'], claude and pi []) and osSandbox (claude false, codex true, pi false); derive the opt-in model table and PROVIDER_OS_SANDBOX from BUILT_IN_PROVIDERS and delete both hand-keyed tables in the same change so the catalog is the single source. Existing model-policy and environment-claim-audit tests keep their assertions unchanged (Task 3 and Task 6 Done-when).
+**Gate:** as-built
+**Rationale:** Conforming drift under approved ADR decision 1 (catalog is the single provider authority); no architectural decision needed. provider-model-policy.ts:21 deepFreezePolicy({ codex: ['gpt-6-astra'] }) and self-host/environment-claim-audit.ts:86-93 PROVIDER_OS_SANDBOX { claude: false, codex: true } are hand-keyed provider tables. Admitted by Task 3 (model policy from descriptor fields) and Task 6 (self-host paths read descriptor fields). Sibling sweep: the id-literal guard gap that lets these pass is handled under S1.4 (Task 8), ordered after this task so the extended scan finds clean production source. Task 3 and Task 6 Done-when coverage (claude/codex model-policy and self-host tests with unchanged assertions) must survive.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 1
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 1 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab5-1 is complete.
+
+### Task rem-prd-audit-rem-s1-4-1: src/conductor/test/engine/provider-id-literals.test.ts:48: extend the scan beyond ts.isStringLiteral to identifier and computed property-name nodes (object literal keys, interface and type-literal members) whose text equals a BUILT_IN_PROVIDERS id; add a fixture test asserting const t = { codex: true } is reported with file:line; keep the existing string-literal and codex-fixture assertions unchanged (Task 8 Done-when) and assert zero findings on production source after rem-ab5-1.
+**Gate:** prd-audit
+**Rationale:** provider-id-literals.test.ts:48 visits only ts.isStringLiteral nodes, so provider-keyed tables written with bare identifier keys (provider-model-policy.ts:21, environment-claim-audit.ts:89,92) evade the Story 1 guard by syntax alone. Task 8 owns the scan; the table moves themselves are tasked under AB-5 (rem-ab5-1), which must land first. Task 8 Done-when string-literal and fixture assertions must survive unchanged.
+**Criterion:** S1.4
+**Parent task:** 8
+**Done when:**
+- S1.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s1-4-1 is complete.
+
+### Task rem-prd-audit-rem-s1-5-1: src/conductor/test/engine/provider-id-literals.test.ts:39-48: keep the adapter-module exemption for catalog id literals only; in declared adapter modules report any string literal or template span containing that adapter's own descriptor displayName as a whole word, with file:line; add a fixture test proving an adapter-module fixture with 'Pi invocation aborted.' is reported, keeping existing Task 8 fixture assertions unchanged. Then replace the literal display names at src/conductor/src/execution/pi-provider.ts:41,113,159 (and any claude-provider.ts / codex-provider.ts literals the extended scan reports) with the descriptor displayName, keeping message text byte-identical so existing adapter tests pass with unchanged assertions.
+**Gate:** prd-audit
+**Rationale:** provider-id-literals.test.ts:40 returns no findings for descriptor-declared adapter modules before the display check, and :48 matches only exact displayName strings, so pi-provider.ts:41 'Pi invocation aborted.', :113 and :159 hard-code the display name, against Task 8's Done-when that production display strings come from descriptor displayName. Admitted by Task 8. Found and excluded: word-bounded provider names inside longer prose strings in non-adapter modules (for example provider-model-policy.ts 'Claude-compatible model defaults'); Task 8 scopes enforcement to display-string literals, so sweeping them would widen the diff beyond plan admission. Task 8's existing fixture assertions must survive.
+**Criterion:** S1.5
+**Parent task:** 8
+**Done when:**
+- S1.5 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s1-5-1 is complete.
+
+### Task rem-prd-audit-rem-s7-3-1: src/conductor/src/execution/pi-provider.ts:60-95 (parsePiJsonl): count each assistant message_end event as one turn and set tokenUsage.numTurns to that count (creating tokenUsage with input/output 0 when a turn completes without a usage-bearing event), and also read usage carried on assistant message_end, not only message_update; in src/conductor/test/execution/pi-provider.test.ts add assertions that a stream with two assistant message_end events yields numTurns 2 and that usage on message_end is attached, keeping the existing Task 16 usage, cost-unmetered, malformed-line, and no-terminal-message assertions unchanged.
+**Gate:** prd-audit
+**Rationale:** The Pi smoke leg ends in assertSuccessfulCredentialedRun (test/fixtures/live-e2e-run-body.ts:509), which requires meter.totalTurns > 0 (:208), but parsePiJsonl (src/execution/pi-provider.ts:60-95) builds tokenUsage without numTurns, unlike codex-provider.ts:171-184; a credentialed Pi run therefore cannot pass. Admitted by Task 16 (Pi JSONL parsing attaches usage) and Task 22 (Pi leg over the shared run body). Task 16's existing usage and cost-unmetered assertions must survive.
+**Criterion:** S7.3
+**Parent task:** 22
+**Done when:**
+- S7.3 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s7-3-1 is complete.
+
+### Task rem-as-built-rem-ab6-1: src/conductor/test/structural/live-provider-coverage.test.ts (and the coverage helper behind providersRequiringLiveCoverage): make the coverage check fail naming the id for every enumerated provider, built-in or registered external plugin, that lacks a live-e2e-providers.ts descriptor or a smoke leg; add a test registering 'fixture-live-provider' with no descriptor or leg and asserting the check reports it; keep the existing enumeration test at :87 and the pi entry/leg requirement unchanged (Task 20 Done-when).
+**Gate:** as-built
+**Rationale:** Conforming drift under approved adr-2026-08-12-live-provider-coverage-from-plugin-registry decision 1: test/structural/live-provider-coverage.test.ts:87 only asserts a registered external plugin is enumerated, never that each enumerated id has a live descriptor and smoke leg, so an uncovered plugin passes. Admitted by Task 20 (structural test iterates catalog plus plugins and requires entry and smoke leg). Task 20's existing enumeration and pi-entry assertions must survive.
+**Governing clause:** adr-2026-08-12-live-provider-coverage-from-plugin-registry decision 1
+**Done when:**
+- adr-2026-08-12-live-provider-coverage-from-plugin-registry decision 1 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab6-1 is complete.
+
+### Task rem-as-built-rem-ab7-1: src/conductor/src/engine/ci-fix.ts: delete the dead defaultCiFixProbe, any preflight helper and result type only it uses, and imports left unused; remove the stale ci-fix startup preflight comment in src/conductor/src/daemon-cli.ts; drop the orphaned defaultCiFixProbe mock keys from src/conductor/test/daemon-otel-wiring.test.ts, test/engine/daemon-mode-feature-log.integration.test.ts, test/acceptance/no-daemon-level-metrics-queue-depth-halts-and-gate.acceptance.test.ts, test/acceptance/export-failure-visible-without-changing-run.acceptance.test.ts, test/acceptance/daemon-otel-parity.acceptance.test.ts, test/engine/daemon-cli-config-resolution.test.ts, and test/engine/daemon-state-refusal-event.test.ts, and delete any preflight-only test cases while keeping ci-fix resolver error-classification tests unchanged. Coverage preserved by the Task 12/13 boot not-installed tests.
+**Gate:** as-built
+**Rationale:** defaultCiFixProbe (src/engine/ci-fix.ts) has no production caller: daemon-cli.ts keeps only a stale CF-5/CF-6 comment, and the only other references are test mocks. It was already unwired at merge-base; the ci-fix startup-preflight ADR's #2153 amendment forbids the Claude-only startup veto and its #1884 amendment moves installation checks to catalog boot discovery (delivered by Tasks 12-13), so removal conforms and production-wiring would reinstate a forbidden veto. Admitted by Task 7, which lists ci-fix.ts. Coverage survives via the Task 12/13 boot not-installed tests and unchanged ci-fix resolver classification tests. Orphan sweep: every test file that mocks defaultCiFixProbe is named in the task.
+**Parent task:** 7
+**Governing clause:** Task 7
+**Done when:**
+- Task 7 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab7-1 is complete.
+
+### Task rem-as-built-rem-ab8-1: src/conductor/src/index.ts:490 (CLI_PROVIDER_DISPATCHING_COMMANDS) + src/conductor/src/engine/engineer-cli.ts (launchClaudeEngineer and its compose/engineer wiring): add the compose/engineer interactive launch to the provider-dispatching command set and run the same discoverInstalledProviders -> provider_discovery event -> validateProviderInstallation sequence before spawning, failing with the same not-installed error; in src/conductor/test/engine/daemon-provider-boot.test.ts add a test that with discovery reporting claude missing the compose/engineer entry exits non-zero naming claude and never calls the spawn stub, keeping the Task 14 set-membership and non-dispatching-skip assertions unchanged.
+**Gate:** as-built
+**Rationale:** Conforming drift under approved ADR decision 8: the bare compose/engineer launch (engineer-cli.ts launchClaudeEngineer) spawns the Claude executable directly with no discovery, installed-only registration, or not-installed validation, and CLI_PROVIDER_DISPATCHING_COMMANDS (index.ts:490) lists only inline and daemon. Admitted by Task 13 (dispatching CLI boot runs discovery and fails fast) and Task 14 (dispatching command set declared beside the command table). Task 14 Done-when coverage (rate-card, overlap-scan, render-diagrams excluded and skip discovery) must survive.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 8
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 8 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab8-1 is complete.
+
+### Task rem-as-built-rem-ab14-1: src/conductor/src/engine/step-runners.ts:850-870 (unavailableReviewCapabilityResult) and the custom-policy candidate paths that rethrow at src/conductor/src/engine/provider-execution.ts:1050-1051: when a custom-policy build_review candidate's provider key is not a catalog id (a registered external plugin, for which providerDescriptor throws Unknown built-in provider), return the same setup-unavailable skip result used for a catalog provider lacking readOnlyReview or reviewPolicyCatalog instead of rethrowing, so the executor records provider_attempt invoked:false with skipReason setup-unavailable and advances to the next candidate; in the existing custom-policy build_review candidate test suite add a test registering an external plugin candidate 'fixture-plugin-reviewer' ahead of a capable catalog candidate and asserting no throw, one provider_attempt with invoked:false and skipReason setup-unavailable for the plugin, and the catalog candidate invoked next, keeping existing catalog-capability refusal assertions unchanged (Task 5 Done-when).
+**Gate:** as-built
+**Rationale:** Operator decision 2026-09-29 (James) on AB-14 and NC.1: follow approved adr-2026-09-10-portable-build-review-policy D5.5 (skip an unavailable custom-policy candidate and try the next) and rescind the 2026-09-28 accepted widening NC.2 that treated the Unknown built-in provider throw as intended. Admitted by Task 5 (custom-policy read-only admission refuses a candidate without invoking it).
+**Governing clause:** adr-2026-09-10-portable-build-review-policy decision 5
+**Done when:**
+- A custom-policy build_review ladder whose first candidate is a registered external plugin records provider_attempt invoked:false with skipReason setup-unavailable for it, throws nothing, and invokes the next capable catalog candidate, as asserted by the new plugin-candidate test.
+- No path under src/conductor/src/engine rethrows the Unknown built-in provider error for a custom-policy review candidate, and the existing catalog capability-refusal tests pass with unchanged assertions.
+
+### Task rem-as-built-rem-pg1-1: src/conductor/test/engine/provider-id-literals.test.ts (findProviderLiterals): narrow the adapter-module exemption so a declared adapter module is exempt only for its OWN provider id and its own displayName where the catalog does not already supply them; inside an adapter module, report every string literal, template span, and declared property name that equals ANOTHER catalog provider's id (for example 'claude' or a claude key in the codex adapter) and every literal or template span containing ANOTHER provider's displayName as a whole word, with file:line; add fixture tests proving a codex adapter-module fixture containing 'claude', a { claude: true } key, and the text 'Claude' are each reported, keeping the existing catalog, non-adapter, own-displayName and Task 8 fixture assertions unchanged; then remove any foreign id or display-name literals the extended scan reports in src/conductor/src/execution/claude-provider.ts, codex-provider.ts and pi-provider.ts by reading them from the catalog, keeping message text byte-identical.
+**Gate:** as-built
+**Rationale:** Plan gaps PG-1 and PG-2 (operator-approved plan correction, 2026-09-29): Task 8 exempted adapter modules wholesale and rem-prd-audit-rem-s1-5-1 checked only an adapter's own display name, so a foreign provider id or display name inside another provider's adapter passes, contrary to sealed criteria S1.4 and S1.5. This task supersedes both exemptions; the sealed criteria govern.
+**Governing clause:** Story 1 criteria S1.4 and S1.5
+**Done when:**
+- The provider-id-literals structural test reports, with file:line, a foreign catalog provider id literal, a foreign id used as a declared property name, and a foreign provider display name inside a declared adapter module, as asserted by the new codex-adapter fixture tests, while an adapter's own id and displayName remain exempt.
+- The structural test reports zero findings on production source, and the existing catalog, non-adapter and Task 8 fixture assertions pass unchanged.
+
+### Task rem-as-built-rem-ab15-1: src/conductor/src/engine/provider-runtime.ts:9 and src/conductor/src/execution/child-environment.ts:20: delete the unconsumed re-export of validateSpawnPermit from provider-runtime.ts and of TMUX_ENVIRONMENT_KEYS from child-environment.ts (keep the scrubTmuxEnvironment re-export); repoint test/engine/provider-runtime.test.ts and test/execution/child-environment.test.ts to import those symbols from src/conductor/src/execution/spawn-permit.ts and src/conductor/src/execution/tmux-environment.ts, keeping their assertions unchanged.
+**Gate:** as-built
+**Rationale:** As-built findings AB-15 and AB-16: both re-exports have no production caller (Claude, Codex and Pi import spawn-permit directly; production uses only scrubTmuxEnvironment), making them unreachable rungs.
+**Governing clause:** plan task rem-prd-audit-rem-s1-2-1 and plan task 23
+**Done when:**
+- src/conductor/src/engine/provider-runtime.ts no longer exports validateSpawnPermit and src/conductor/src/execution/child-environment.ts no longer exports TMUX_ENVIRONMENT_KEYS, and a repository search finds no import of either symbol through those modules.
+- The provider-runtime and child-environment test suites pass with unchanged assertions after importing from spawn-permit.ts and tmux-environment.ts.
+
+### Task rem-as-built-rem-pg3-1: src/conductor/test/engine/provider-id-literals.test.ts (findProviderLiterals and its adapter fixtures): remove the own-displayName exemption that rem-as-built-rem-pg1-1 kept, so any string literal or template span containing ANY catalog provider displayName as a whole word is reported in every module except the catalog, including the provider's own adapter; keep only the adapter's own provider id exempt inside its adapter module; update the fixture that asserted an adapter's own displayName passes so it now asserts 'Codex' inside the codex adapter fixture is reported with file:line; then replace every own-displayName literal the scan reports in src/conductor/src/execution/claude-provider.ts, codex-provider.ts and pi-provider.ts with the catalog descriptor displayName, keeping message text byte-identical so adapter tests pass with unchanged assertions.
+**Gate:** as-built
+**Rationale:** Plan gap PG-3 (operator-approved plan correction, 2026-09-29): rem-as-built-rem-pg1-1 wrongly required an adapter's own displayName to stay exempt, contradicting sealed Story 1 which requires every user-facing provider display string to originate from the catalog. The sealed criterion governs; this task supersedes that exemption.
+**Governing clause:** Story 1 criterion S1.5
+**Done when:**
+- The provider-id-literals structural test reports, with file:line, the literal 'Codex' inside the codex adapter fixture and any catalog displayName literal in any non-catalog module, as asserted by the updated adapter fixture test.
+- The structural test reports zero findings on production source, and the claude, codex and pi adapter test suites pass with unchanged assertions.
+
+### Task rem-as-built-rem-ab17-1: src/conductor/src/execution/provider-catalog.ts:46,89,120,152 and src/conductor/test/engine/provider-id-literals.test.ts: remove the adapterModule field from BuiltInProviderDescriptor and the three catalog entries, and move the adapter-module ownership map into the structural test as a test-local constant keyed by provider id (claude to execution/claude-provider.ts, codex to execution/codex-provider.ts, pi to execution/pi-provider.ts) with an assertion that every catalog id has exactly one entry and that each listed file exists.
+**Gate:** as-built
+**Rationale:** As-built finding AB-17: adapterModule is populated in production but has no production reader; its only consumer is the structural test.
+**Governing clause:** plan task rem-as-built-rem-pg1-1
+**Done when:**
+- BuiltInProviderDescriptor declares no adapterModule field and a repository search finds no adapterModule reference under src/conductor/src.
+- The structural test's local adapter map covers every catalog id exactly once, each listed file exists, and the structural test passes.
+
+### Task rem-as-built-rem-ab18-1: src/conductor/src/index.ts:536-557 (bootComposeEngineerLaunch) and its caller at src/conductor/src/index.ts:965-990: collapse bootComposeEngineerLaunch into a validation-only helper that takes only the event emitter and an optional discovery runner, runs discoverInstalledProviders, and throws the existing ProviderNotInstalledError when claude is not installed, returning nothing; drop the unread command, registry, config, rendererOpts and launch parameters and the no-op launch callback at the caller, and rename it to reflect validation only; update src/conductor/test/engine/daemon-provider-boot.test.ts to the new signature keeping its claude-missing non-zero exit and never-spawns assertions unchanged.
+**Gate:** as-built
+**Rationale:** As-built finding AB-18: bootComposeEngineerLaunch accepts command, registry, config and rendererOpts it never reads, and production passes a no-op launch callback whose result is ignored while the real spawn happens later in launchClaudeEngineer.
+**Governing clause:** plan task rem-as-built-rem-ab8-1
+**Done when:**
+- The compose/engineer pre-launch helper accepts only the event emitter and optional discovery runner, and the production caller passes no launch callback, registry, config or renderer options.
+- With discovery reporting claude missing, the compose/engineer entry exits non-zero naming claude and never calls the spawn stub, as asserted by the existing daemon-provider-boot test.

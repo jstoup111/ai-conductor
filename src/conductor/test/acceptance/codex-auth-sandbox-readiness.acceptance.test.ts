@@ -75,6 +75,15 @@ function codexCompleted(output = 'completed') {
   ].join('\n');
 }
 
+function mockedCodexProvider(): CodexProvider {
+  return new CodexProvider(
+    mockExeca as never,
+    'codex',
+    undefined,
+    mockExeca as never,
+  );
+}
+
 describe('acceptance: Codex auth and bounded unattended execution (#905)', () => {
   let priorKey: string | undefined;
 
@@ -96,7 +105,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       .mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as any)
       .mockResolvedValueOnce({ stdout: doctorReady(), stderr: '', exitCode: 0 } as any)
       .mockResolvedValueOnce({ stdout: codexCompleted('resumed'), stderr: '', exitCode: 0 } as any);
-    const provider = new CodexProvider();
+    const provider = mockedCodexProvider();
 
     await provider.invoke(base);
     await provider.invoke({ ...base, resume: true });
@@ -115,7 +124,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     mockExeca
       .mockResolvedValueOnce({ stdout: doctorReady('api-key'), stderr: '', exitCode: 0 } as any)
       .mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as any);
-    const provider = new CodexProvider();
+    const provider = mockedCodexProvider();
 
     const result = await provider.invoke(base);
 
@@ -135,7 +144,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       stderr: `401 invalid key ${secret}`,
       exitCode: 1,
     } as any);
-    const provider = new CodexProvider();
+    const provider = mockedCodexProvider();
 
     const result = await provider.invoke(base);
 
@@ -156,7 +165,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       .mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as any)
       .mockResolvedValueOnce({ stdout: doctorReady(), stderr: '', exitCode: 0 } as any)
       .mockResolvedValueOnce({ stdout: codexCompleted('resumed'), stderr: '', exitCode: 0 } as any);
-    const provider = new CodexProvider();
+    const provider = mockedCodexProvider();
 
     await provider.invoke(base);
     await provider.invoke({ ...base, resume: true });
@@ -186,7 +195,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     mockExeca.mockResolvedValueOnce({ stdout, stderr: '', exitCode: state === 'unusable' ? 1 : 0 } as any);
     if (state === 'ready') mockExeca.mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as any);
 
-    const result = await new CodexProvider().invoke(base);
+    const result = await mockedCodexProvider().invoke(base);
 
     expect(result.authentication).toMatchObject({ provider: 'codex', source, state });
     expect(mockExeca).toHaveBeenCalledTimes(state === 'ready' ? 2 : 1);
@@ -202,7 +211,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
         .mockResolvedValueOnce({ stdout: '{not-json', stderr: '', exitCode: 0 } as any)
         .mockResolvedValueOnce({ stdout: codexCompleted('trial completed'), stderr: '', exitCode: 0 } as any);
 
-      const degraded = await new CodexProvider().invoke({ ...base, resume: true });
+      const degraded = await mockedCodexProvider().invoke({ ...base, resume: true });
 
       expect(degraded).toMatchObject({
         success: true,
@@ -215,7 +224,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
         stdout: doctorNonReady('cached-login', state), stderr: `diagnostic ${secret}`, exitCode: state === 'missing' ? 0 : 1,
       } as any);
 
-      const result = await new CodexProvider().invoke({ ...base, resume: true });
+      const result = await mockedCodexProvider().invoke({ ...base, resume: true });
 
       expect(mockExeca).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({ success: false, authFailure: true });
@@ -265,7 +274,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     else mockExeca.mockResolvedValueOnce(doctor as any);
     mockExeca.mockResolvedValueOnce({ stdout: codexCompleted('real invocation completed'), stderr: '', exitCode: 0 } as any);
 
-    const result = await new CodexProvider().invoke({ ...base, resume: true });
+    const result = await mockedCodexProvider().invoke({ ...base, resume: true });
 
     expect(result).toMatchObject({
       success: true,
@@ -291,7 +300,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       .mockResolvedValueOnce({ stdout: doctorAuthReadyWithUnrelatedHealthFailure(), stderr: 'unrelated health check failed', exitCode: 1 } as any)
       .mockResolvedValueOnce({ stdout: '', stderr, exitCode: 1 } as any);
 
-    const result = await new CodexProvider().invoke(base);
+    const result = await mockedCodexProvider().invoke(base);
 
     expect(result.authentication).toMatchObject({
       provider: 'codex',
@@ -311,7 +320,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       .mockResolvedValueOnce({ stdout: codexCompleted('BUILD completed'), stderr: '', exitCode: 0 } as any)
       .mockResolvedValueOnce({ stdout: doctorAuthReadyWithUnrelatedHealthFailure(), stderr: 'unrelated health check failed', exitCode: 1 } as any)
       .mockResolvedValueOnce({ stdout: codexCompleted('build_review completed'), stderr: '', exitCode: 0 } as any);
-    const provider = new CodexProvider();
+    const provider = mockedCodexProvider();
 
     const build = await provider.invoke({ ...base, prompt: 'BUILD' });
     const review = await provider.invoke({ ...base, prompt: 'build_review' });
@@ -334,7 +343,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       .mockResolvedValueOnce({ stdout: doctorReady(), stderr: '', exitCode: 0 } as any)
       .mockResolvedValueOnce({ stdout: '', stderr: 'approval denied by reviewer', exitCode: 1 } as any);
 
-    const result = await new CodexProvider().invoke({ ...base, resume: true });
+    const result = await mockedCodexProvider().invoke({ ...base, resume: true });
     const [, args] = mockExeca.mock.calls[1];
 
     expect(result.success).toBe(false);
@@ -356,7 +365,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       .mockResolvedValueOnce({ stdout: doctorReady(), stderr: '', exitCode: 0 } as any)
       .mockResolvedValueOnce({ stdout: codexCompleted('dependency installed; migration committed and branch published'), stderr: '', exitCode: 0 } as any);
 
-    const result = await new CodexProvider().invoke({ ...base, prompt: lifecycleRequest });
+    const result = await mockedCodexProvider().invoke({ ...base, prompt: lifecycleRequest });
     const [command, args, options] = mockExeca.mock.calls[1];
 
     expect(result).toMatchObject({ success: true });
@@ -377,7 +386,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     mockExeca
       .mockResolvedValueOnce({ stdout: doctorReady(), stderr: '', exitCode: 0 } as any)
       .mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as any);
-    const provider = new CodexProvider();
+    const provider = mockedCodexProvider();
 
     await provider.invoke(base);
 

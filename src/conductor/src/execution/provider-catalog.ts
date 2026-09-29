@@ -1,0 +1,251 @@
+import { ClaudeProvider } from './claude-provider.js';
+import { CodexProvider } from './codex-provider.js';
+import { PiProvider } from './pi-provider.js';
+import type { LLMProvider } from './llm-provider.js';
+import type { StepName } from '../types/steps.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+  type ProviderModelPolicy,
+} from '../engine/provider-model-policy-defaults.js';
+
+/** Provider-specific behavior that must be declared rather than inferred. */
+export type ProviderCapability =
+  | 'readiness'
+  | 'selfHost'
+  | 'readOnlyReview'
+  | 'reviewPolicyCatalog'
+  | 'supportsSessionResume'
+  | 'costSelfReporting'
+  | 'writeFence'
+  | 'nativeSchema';
+
+export type ProviderCapabilityFlags = Readonly<Partial<Record<ProviderCapability, boolean>>>;
+
+/** The provider-owned installed-policy discovery mechanism, when supported. */
+export type ReviewPolicyCatalogDiscovery = 'claude-metadata' | 'codex-app-server';
+export type ProviderDiagnosticEnvelope = 'claude-json' | 'codex-jsonl';
+
+/** Follow-up intakes that own capability-specific provider behavior. */
+export const PROVIDER_CAPABILITY_OWNERS = {
+  selfHost: '#1887',
+  readOnlyReview: '#1886',
+  reviewPolicyCatalog: '#1888',
+  costSelfReporting: '#1889',
+} as const satisfies Partial<Record<ProviderCapability, string>>;
+
+export interface ProviderFactoryOptions {
+  readonly codexDoctorTimeoutMs?: number;
+}
+
+export interface BuiltInProviderDescriptor {
+  readonly id: string;
+  /** Human-readable name for diagnostics and operator-facing status. */
+  readonly displayName: string;
+  readonly createAdapter: (options?: ProviderFactoryOptions) => LLMProvider;
+  readonly defaultExecutable: string;
+  readonly executableOverrideEnv: string;
+  readonly versionArgv: readonly string[];
+  readonly invocationPrefix: string;
+  readonly environmentPrefix: string;
+  readonly homeVariable: string;
+  readonly defaultHome: string;
+  readonly modelPolicy: ProviderModelPolicy;
+  /** Additional provider-owned model ids to include in rate-card refreshes. */
+  readonly optInModelIds: readonly string[];
+  /** Whether unattended provider commands run in an OS sandbox. */
+  readonly osSandbox: boolean;
+  readonly capabilities: ProviderCapabilityFlags;
+  /** Known machine-envelope formats, ordered by the adapter's native output. */
+  readonly diagnosticEnvelopes: readonly ProviderDiagnosticEnvelope[];
+  /** Registered discovery mechanism for installed build-review policies. */
+  readonly reviewPolicyCatalog?: ReviewPolicyCatalogDiscovery;
+}
+
+const PI_NO_MODEL = '';
+
+/** Pi owns its configured default model, so no harness model id is selected. */
+const PI_MODEL_POLICY: ProviderModelPolicy = {
+  stepModels: Object.fromEntries(
+    Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) => [step, PI_NO_MODEL]),
+  ) as Readonly<Record<StepName, string>>,
+  stepEfforts: CLAUDE_MODEL_POLICY.stepEfforts,
+  stepTierOverrides: {},
+  effortOrder: CLAUDE_MODEL_POLICY.effortOrder,
+  modelEscalationOrder: [PI_NO_MODEL],
+  modelFallbackLadder: [PI_NO_MODEL],
+};
+
+/**
+ * The built-in provider source of truth.  New built-ins belong here before a
+ * consumer can select or branch on them.
+ */
+export const BUILT_IN_PROVIDERS = [
+  {
+    id: 'claude',
+    displayName: 'Claude',
+    createAdapter: (): LLMProvider => new ClaudeProvider(
+      undefined,
+      undefined,
+      resolveProviderExecutable('claude'),
+    ),
+    defaultExecutable: 'claude',
+    executableOverrideEnv: 'CLAUDE_EXECUTABLE',
+    versionArgv: ['--version'],
+    invocationPrefix: '/',
+    environmentPrefix: 'CLAUDE_',
+    homeVariable: 'CLAUDE_CONFIG_DIR',
+    defaultHome: '.claude',
+    modelPolicy: CLAUDE_MODEL_POLICY,
+    optInModelIds: [],
+    osSandbox: false,
+    capabilities: {
+      selfHost: true,
+      readOnlyReview: true,
+      reviewPolicyCatalog: true,
+      supportsSessionResume: false,
+      costSelfReporting: true,
+      writeFence: true,
+      nativeSchema: true,
+    } as const satisfies ProviderCapabilityFlags,
+    diagnosticEnvelopes: ['claude-json', 'codex-jsonl'],
+    reviewPolicyCatalog: 'claude-metadata',
+  },
+  {
+    id: 'codex',
+    displayName: 'Codex',
+    createAdapter: (options = {}): LLMProvider => new CodexProvider(
+      undefined,
+      resolveProviderExecutable('codex'),
+      undefined,
+      undefined,
+      options.codexDoctorTimeoutMs,
+    ),
+    defaultExecutable: 'codex',
+    executableOverrideEnv: 'CODEX_EXECUTABLE',
+    versionArgv: ['--version'],
+    invocationPrefix: '$',
+    environmentPrefix: 'CODEX_',
+    homeVariable: 'CODEX_HOME',
+    defaultHome: '.codex',
+    modelPolicy: CODEX_MODEL_POLICY,
+    optInModelIds: ['gpt-6-astra'],
+    osSandbox: true,
+    capabilities: {
+      readiness: true,
+      selfHost: true,
+      readOnlyReview: true,
+      reviewPolicyCatalog: true,
+      supportsSessionResume: false,
+      nativeSchema: true,
+    } as const satisfies ProviderCapabilityFlags,
+    diagnosticEnvelopes: ['codex-jsonl', 'claude-json'],
+    reviewPolicyCatalog: 'codex-app-server',
+  },
+  {
+    id: 'pi',
+    displayName: 'Pi',
+    createAdapter: (): LLMProvider => new PiProvider(resolveProviderExecutable('pi')),
+    defaultExecutable: 'pi',
+    executableOverrideEnv: 'PI_EXECUTABLE',
+    versionArgv: ['--version'],
+    invocationPrefix: '',
+    environmentPrefix: 'PI_',
+    homeVariable: 'PI_HOME',
+    defaultHome: '.pi',
+    modelPolicy: PI_MODEL_POLICY,
+    optInModelIds: [],
+    osSandbox: false,
+    capabilities: {} as const satisfies ProviderCapabilityFlags,
+    diagnosticEnvelopes: [],
+  },
+] as const satisfies readonly BuiltInProviderDescriptor[];
+
+export type BuiltInProviderId = (typeof BUILT_IN_PROVIDERS)[number]['id'];
+
+/** The first catalog descriptor remains the default provider selection. */
+export const DEFAULT_PROVIDER: BuiltInProviderId = BUILT_IN_PROVIDERS[0].id;
+export const CLAUDE_PROVIDER = BUILT_IN_PROVIDERS[0].id;
+export const CODEX_PROVIDER = BUILT_IN_PROVIDERS[1].id;
+export const PI_PROVIDER = BUILT_IN_PROVIDERS[2].id;
+export const CLAUDE_DISPLAY_NAME = BUILT_IN_PROVIDERS[0].displayName;
+export const CODEX_DISPLAY_NAME = BUILT_IN_PROVIDERS[1].displayName;
+
+/** Catalog lookup that keeps plugin callers on their existing generic path. */
+export function findBuiltInProviderDescriptor(
+  id: string,
+): (typeof BUILT_IN_PROVIDERS)[number] | undefined {
+  return BUILT_IN_PROVIDERS.find((candidate) => candidate.id === id);
+}
+
+export function isBuiltInProviderId(id: string): id is BuiltInProviderId {
+  return findBuiltInProviderDescriptor(id) !== undefined;
+}
+
+/** Built-ins have catalog-owned operator labels; plugins retain their key. */
+export function providerDisplayName(id: string): string {
+  return findBuiltInProviderDescriptor(id)?.displayName ?? id;
+}
+
+type ProviderWithCapability<Provider, Capability extends ProviderCapability> = Provider extends {
+  readonly capabilities: Readonly<Record<Capability, true>>;
+}
+  ? Provider
+  : never;
+
+export type ProviderWith<Capability extends ProviderCapability> = ProviderWithCapability<
+  (typeof BUILT_IN_PROVIDERS)[number],
+  Capability
+>;
+
+export class ProviderCapabilityUnsupportedError extends Error {
+  constructor(
+    readonly provider: BuiltInProviderId,
+    readonly capability: ProviderCapability,
+    readonly owningIntake: string,
+  ) {
+    super(
+      `Built-in provider ${provider} does not support ${capability}; `
+      + `the capability is owned by intake ${owningIntake}.`,
+    );
+    this.name = 'ProviderCapabilityUnsupportedError';
+  }
+}
+
+/** Capability flags fail closed: an absent or false flag is unsupported. */
+export function supportsProviderCapability(
+  provider: Pick<BuiltInProviderDescriptor, 'capabilities'>,
+  capability: ProviderCapability,
+): boolean {
+  return provider.capabilities[capability] === true;
+}
+
+export function providerDescriptor(id: BuiltInProviderId): (typeof BUILT_IN_PROVIDERS)[number] {
+  const descriptor = findBuiltInProviderDescriptor(id);
+  if (!descriptor) {
+    throw new Error(`Unknown built-in provider: ${id}`);
+  }
+  return descriptor;
+}
+
+/** Return a capability-narrowed descriptor or fail before an unsupported path can branch. */
+export function requireProviderCapability<Capability extends ProviderCapability>(
+  id: BuiltInProviderId,
+  capability: Capability,
+): ProviderWith<Capability> {
+  const provider = providerDescriptor(id);
+  if (supportsProviderCapability(provider, capability)) {
+    return provider as ProviderWith<Capability>;
+  }
+
+  const owningIntake = PROVIDER_CAPABILITY_OWNERS[
+    capability as keyof typeof PROVIDER_CAPABILITY_OWNERS
+  ] ?? '#1884';
+  throw new ProviderCapabilityUnsupportedError(id, capability, owningIntake);
+}
+
+/** Resolve an override at use time so tests and child processes can provide it. */
+export function resolveProviderExecutable(id: BuiltInProviderId): string {
+  const descriptor = providerDescriptor(id);
+  return process.env[descriptor.executableOverrideEnv] ?? descriptor.defaultExecutable;
+}

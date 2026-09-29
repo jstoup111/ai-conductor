@@ -1,3 +1,4 @@
+// Covers: task:7
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InvokeOptions,
@@ -14,7 +15,8 @@ import {
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import type { AuthenticationReadiness } from '../../src/execution/llm-provider.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import { validateSpawnPermit } from '../../src/engine/provider-runtime.js';
+import { ProviderRuntimeSet as RuntimeSet } from '../../src/engine/provider-runtime.js';
+import { validateSpawnPermit } from '../../src/execution/spawn-permit.js';
 
 interface ClassifiedInvokeResult extends InvokeResult {
   timedOut?: boolean;
@@ -85,6 +87,25 @@ function provider(): LLMProvider {
 }
 
 describe('ProviderRuntimeSet', () => {
+  it('refuses native schema from a Pi adapter when its descriptor omits nativeSchema', () => {
+    const runtimes = new RuntimeSet([{
+      key: 'pi',
+      provider: { ...provider(), nativeSchemaCapability: { nativeOutputSchema: true } },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      policy: CLAUDE_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+    }]);
+
+    expect(runtimes.nativeSchemaCapabilityFor('pi')).toBeUndefined();
+  });
+
+  it('treats a Pi descriptor without writeFence as unfenced', async () => {
+    const { writeFenceInstalledForProvider } = await import('../../src/engine/conductor.js');
+
+    expect(writeFenceInstalledForProvider('pi')).toBe(false);
+  });
+
   it('exposes a provider-declared synchronous spawn-permit capability', async () => {
     const capable = {
       ...provider(),
@@ -224,6 +245,29 @@ describe('ProviderRuntimeSet', () => {
     expect(await codexReadiness?.()).toEqual(ready);
     expect(customReadiness).toBeUndefined();
     expect(custom.readiness).not.toHaveBeenCalled();
+  });
+
+  it('exposes readiness only when the built-in descriptor declares it', async () => {
+    const ready: AuthenticationReadiness = {
+      provider: 'codex',
+      source: 'cached-login',
+      state: 'ready',
+    };
+    const claudeAuthentication = { ...ready, provider: 'claude' } as unknown as AuthenticationReadiness;
+    const claudeReadiness = vi.fn(async () => ready);
+    const codexReadiness = vi.fn(async () => ready);
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'claude', { ...provider(), readiness: claudeReadiness });
+    registry.register('llm_provider', 'codex', { ...provider(), readiness: codexReadiness });
+    registry.markInitialized();
+
+    const runtimes = (await loadRuntimeSetFactory())?.(registry);
+
+    expect({
+      claude: runtimes?.readinessFor('claude', claudeAuthentication),
+      codex: await runtimes?.readinessFor('codex', ready)?.(),
+    }).toEqual({ claude: undefined, codex: ready });
+    expect(claudeReadiness).not.toHaveBeenCalled();
   });
 
   it('constructs every frozen-registry provider with isolated per-run state', async () => {

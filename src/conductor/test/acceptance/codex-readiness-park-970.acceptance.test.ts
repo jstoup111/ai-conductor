@@ -80,6 +80,15 @@ function codexCompleted(output = 'completed') {
   ].join('\n');
 }
 
+function mockedCodexProvider(): CodexProvider {
+  return new CodexProvider(
+    mockExeca as never,
+    'codex',
+    undefined,
+    mockExeca as never,
+  );
+}
+
 function cachedLoginConductor(
   readiness: () => Promise<{ provider: 'codex'; source: 'cached-login'; state: 'ready' | 'unusable' }>,
   events: ConductorEventEmitter,
@@ -179,7 +188,7 @@ describe('acceptance: Codex readiness park #970', () => {
       .mockResolvedValueOnce({ stdout: documentedDoctor('ok', 'fail'), stderr: '', exitCode: 1 } as never)
       .mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as never);
 
-    const result = await new CodexProvider().invoke(base);
+    const result = await mockedCodexProvider().invoke(base);
 
     expect(result).toMatchObject({ success: true, authentication: { source: 'cached-login', state: 'ready' } });
     expect(mockExeca).toHaveBeenCalledTimes(2);
@@ -193,7 +202,7 @@ describe('acceptance: Codex readiness park #970', () => {
     mockExeca
       .mockResolvedValueOnce({ stdout: '{not-json', stderr: '', exitCode: 0 } as never)
       .mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as never);
-    const degraded = await new CodexProvider().invoke(base);
+    const degraded = await mockedCodexProvider().invoke(base);
     expect(degraded).toMatchObject({
       success: true,
       authentication: { state: 'probe-failed', probeFailure: { kind: 'unparseable-output' } },
@@ -205,7 +214,7 @@ describe('acceptance: Codex readiness park #970', () => {
       mockExeca.mockResolvedValueOnce({ stdout: codexCompleted(), stderr: '', exitCode: 0 } as never);
     }
 
-    const result = await new CodexProvider().invoke(base);
+    const result = await mockedCodexProvider().invoke(base);
 
     expect(result).toMatchObject(
       state === 'unverifiable'

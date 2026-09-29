@@ -29,6 +29,7 @@
 // left entirely alone.
 
 import { generateFenceScript } from './write-fence.js';
+import { BUILT_IN_PROVIDERS } from '../../execution/provider-catalog.js';
 
 /**
  * Marker prefix on every engine-authored refutation. It exists so the audit
@@ -83,14 +84,9 @@ const UNBOUNDED_COMMAND_DENIAL_ASSERTIONS: readonly RegExp[] = [
 ];
 
 /** Providers whose dispatch runs under an OS sandbox that CAN restrict network. */
-const PROVIDER_OS_SANDBOX: Readonly<Record<string, boolean>> = {
-  // claude-provider.ts passes `--dangerously-skip-permissions` with no sandbox
-  // flags and inherits the full environment.
-  claude: false,
-  // codex-provider.ts passes `sandbox_mode="workspace-write"` in unattended
-  // runs, which really can restrict what a command reaches.
-  codex: true,
-};
+const PROVIDER_OS_SANDBOX: Readonly<Record<string, boolean>> = Object.freeze(
+  Object.fromEntries(BUILT_IN_PROVIDERS.map((provider) => [provider.id, provider.osSandbox])),
+);
 
 /** One claim the engine positively disproved. */
 export interface RefutedEnvironmentClaim {

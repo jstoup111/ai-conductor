@@ -6,6 +6,9 @@ import {
   ReviewPolicyCatalogError,
   type ReviewPolicyCatalogFailureCode,
 } from './build-review-policy-resolver.js';
+import { CODEX_PROVIDER, providerDescriptor, resolveProviderExecutable } from '../execution/provider-catalog.js';
+
+const CODEX_DISPLAY_NAME = providerDescriptor(CODEX_PROVIDER).displayName;
 
 export interface CodexPreparedCatalogEnvironment {
   readonly cwd: string;
@@ -68,7 +71,7 @@ export interface CodexAppServerTransport {
  * The catalog adapter remains the owner of validation; this transport only
  * provides request/response framing and closes the child with its candidate.
  */
-export function createCodexAppServerTransport(executable = 'codex', launch: typeof spawn = spawn): CodexAppServerTransport {
+export function createCodexAppServerTransport(executable = resolveProviderExecutable(CODEX_PROVIDER), launch: typeof spawn = spawn): CodexAppServerTransport {
   return {
     async open(environment) {
       const child = launch(environment.executable ?? executable, [...(environment.executableArgs ?? []), 'app-server'], {
@@ -76,7 +79,7 @@ export function createCodexAppServerTransport(executable = 'codex', launch: type
         env: environment.env,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-      if (!child.stdin || !child.stdout) throw new Error('Codex app server did not provide stdio');
+      if (!child.stdin || !child.stdout) throw new Error(`${CODEX_DISPLAY_NAME} app server did not provide stdio`);
       const pending = new Map<string, { resolve(value: unknown): void; reject(reason: unknown): void }>();
       let buffered = '';
       const rejectAll = (reason: unknown) => {
@@ -97,7 +100,7 @@ export function createCodexAppServerTransport(executable = 'codex', launch: type
             const request = pending.get(id);
             if (!request) continue;
             pending.delete(id);
-            if (message.error !== undefined) request.reject(new Error(`Codex app server request failed: ${JSON.stringify(message.error)}`));
+            if (message.error !== undefined) request.reject(new Error(`${CODEX_DISPLAY_NAME} app server request failed: ${JSON.stringify(message.error)}`));
             else request.resolve(message.result);
           } catch {
             // The next well-formed response remains independently usable.
@@ -105,7 +108,7 @@ export function createCodexAppServerTransport(executable = 'codex', launch: type
         }
       });
       child.once('error', rejectAll);
-      child.once('exit', (code) => rejectAll(new Error(`Codex app server exited${code === null ? '' : ` ${code}`}`)));
+      child.once('exit', (code) => rejectAll(new Error(`${CODEX_DISPLAY_NAME} app server exited${code === null ? '' : ` ${code}`}`)));
       const abort = () => child.kill();
       environment.signal?.addEventListener('abort', abort, { once: true });
       const session: CodexAppServerSession = {
@@ -122,7 +125,7 @@ export function createCodexAppServerTransport(executable = 'codex', launch: type
         },
         async close() {
           environment.signal?.removeEventListener('abort', abort);
-          rejectAll(new Error('Codex app server closed'));
+          rejectAll(new Error(`${CODEX_DISPLAY_NAME} app server closed`));
           child.kill();
         },
       };
@@ -144,11 +147,11 @@ function catalogError(
   code: ReviewPolicyCatalogFailureCode,
   message: string,
 ): ReviewPolicyCatalogError {
-  return new ReviewPolicyCatalogError('codex', code, message);
+  return new ReviewPolicyCatalogError(CODEX_PROVIDER, code, message);
 }
 
 function abortIfNeeded(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw catalogError('cancelled', 'Codex policy catalog discovery was cancelled');
+  if (signal?.aborted) throw catalogError('cancelled', `${CODEX_DISPLAY_NAME} policy catalog discovery was cancelled`);
 }
 
 function failureCode(error: unknown, signal: AbortSignal | undefined): ReviewPolicyCatalogFailureCode {
@@ -163,7 +166,7 @@ function failureCode(error: unknown, signal: AbortSignal | undefined): ReviewPol
 
 function asCatalogError(error: unknown, signal: AbortSignal | undefined): ReviewPolicyCatalogError {
   if (error instanceof ReviewPolicyCatalogError) return error;
-  return catalogError(failureCode(error, signal), `Unable to load Codex policy catalog: ${String(error)}`);
+  return catalogError(failureCode(error, signal), `Unable to load ${CODEX_DISPLAY_NAME} policy catalog: ${String(error)}`);
 }
 
 function requireCodexCatalogResponse(
@@ -171,18 +174,18 @@ function requireCodexCatalogResponse(
   cwd: string,
 ): CodexSkillsListResponse['data'][number] {
   if (!response || typeof response !== 'object' || !Array.isArray(response.data)) {
-    throw catalogError('malformed', 'Malformed Codex skills/list response');
+    throw catalogError('malformed', `Malformed ${CODEX_DISPLAY_NAME} skills/list response`);
   }
   if (response.version !== undefined && response.version !== 1) {
-    throw catalogError('unsupported', `Unsupported Codex skills/list response version ${String(response.version)}`);
+    throw catalogError('unsupported', `Unsupported ${CODEX_DISPLAY_NAME} skills/list response version ${String(response.version)}`);
   }
   const entry = response.data.find((candidate) => candidate?.cwd === cwd);
-  if (!entry) throw catalogError('partial', `Codex skills/list response omitted requested cwd ${cwd}`);
+  if (!entry) throw catalogError('partial', `${CODEX_DISPLAY_NAME} skills/list response omitted requested cwd ${cwd}`);
   if (!Array.isArray(entry.skills) || !Array.isArray(entry.errors)) {
-    throw catalogError('malformed', 'Malformed Codex skills/list catalog entry');
+    throw catalogError('malformed', `Malformed ${CODEX_DISPLAY_NAME} skills/list catalog entry`);
   }
-  if (entry.complete === false) throw catalogError('partial', 'Codex skills/list response was partial');
-  if (entry.errors.length > 0) throw catalogError('error', 'Codex skills/list response reported catalog errors');
+  if (entry.complete === false) throw catalogError('partial', `${CODEX_DISPLAY_NAME} skills/list response was partial`);
+  if (entry.errors.length > 0) throw catalogError('error', `${CODEX_DISPLAY_NAME} skills/list response reported catalog errors`);
   return entry;
 }
 
@@ -194,7 +197,7 @@ function requireCodexSkill(skill: CodexSkillMetadata): void {
     || (skill.dependencies !== undefined && (!skill.dependencies
       || !Array.isArray(skill.dependencies.tools)
       || skill.dependencies.tools.some((tool) => !tool || typeof tool.value !== 'string')))) {
-    throw catalogError('malformed', 'Malformed Codex skill metadata');
+    throw catalogError('malformed', `Malformed ${CODEX_DISPLAY_NAME} skill metadata`);
   }
 }
 
@@ -210,7 +213,7 @@ function requireCodexPlugin(
     || !summary.source || typeof summary.source !== 'object'
     || !['local', 'remote'].includes(summary.source.type)
     || (summary.source.type === 'local' && typeof summary.source.path !== 'string')) {
-    throw catalogError('malformed', `Malformed Codex plugin/read response for ${pluginId}`);
+    throw catalogError('malformed', `Malformed ${CODEX_DISPLAY_NAME} plugin/read response for ${pluginId}`);
   }
   return summary;
 }

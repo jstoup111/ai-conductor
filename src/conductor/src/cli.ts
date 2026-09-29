@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { CLAUDE_DISPLAY_NAME } from './execution/provider-catalog.js';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
@@ -76,11 +77,11 @@ function applyPipelineOptions(cmd: Command): Command {
     .option('--cleanup', 'Clean up worktrees')
     .option('--reset', 'Clear state')
     .option('--cooldown <seconds>', 'Cooldown between steps in seconds', '10')
-    .option('--model <name>', 'Override Claude model for every step (e.g. haiku, sonnet, opus, or full model ID)')
+    .option('--model <name>', `Override ${CLAUDE_DISPLAY_NAME} model for every step (e.g. haiku, sonnet, opus, or full model ID)`)
     .option('--effort <level>', 'Override effort for every step: low | medium | high | xhigh | max')
     .option('--view <mode>', 'Dashboard layout: full | focus | log', 'full')
     .option('--tail-lines <n>', 'Max lines to show in post-step tail pane (0 disables)', '20')
-    .option('--interactive', 'Run every step in interactive Claude REPL mode (no -p flag)')
+    .option('--interactive', `Run every step in interactive ${CLAUDE_DISPLAY_NAME} REPL mode (no -p flag)`)
     .option('--diagnose', 'Diagnose conductor state (non-mutating); reports SHIP-phase evidence gaps and exits non-zero if state is marked complete but evidence is missing')
     .option('--report', 'Print run summary from .pipeline/events.jsonl (step durations, retry hotspots, token spend) and exit');
 }

@@ -50,8 +50,9 @@ This skill is tier-varying, the same pattern as `conflict-check` and `plan`:
   fan-out of outcomes/FRs/stories/tasks and the highest cost of a missed transitive
   gap, so the semantic-judging pass needs the deepest reasoning tier.
 
-The autonomous/daemon path resolves this via `DEFAULT_STEP_TIER_OVERRIDES.coherence_check.L`
-in `resolved-config.ts` (wired in a later task); this SKILL.md documents the same rule
+The autonomous/daemon path resolves this via the Claude catalog descriptor's
+`modelPolicy.stepTierOverrides.coherence_check.L` in `resolved-config.ts` (wired in a later task);
+this SKILL.md documents the same rule
 for interactive/phone-driven runs, where the operator's active session may not be opus
 and must be told to escalate.
 

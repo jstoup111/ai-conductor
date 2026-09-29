@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
+import { PiProvider } from '../../src/execution/pi-provider.js';
 import {
   LIVE_E2E_PROVIDERS,
   type LiveE2EProviderDescriptor,
@@ -13,7 +14,7 @@ import {
 
 describe('LIVE_E2E_PROVIDERS', () => {
   it('declares the complete Claude live-leg descriptor', () => {
-    expect(LIVE_E2E_PROVIDERS).toHaveLength(2);
+    expect(LIVE_E2E_PROVIDERS).toHaveLength(3);
 
     const claude = LIVE_E2E_PROVIDERS.find(({ id }) => id === 'claude');
     expect(claude).toMatchObject({
@@ -82,16 +83,37 @@ describe('LIVE_E2E_PROVIDERS', () => {
       await rm(codexHome, { recursive: true, force: true });
     }
   });
+
+  it('declares Pi as a credential-gated shared-body leg without a self-host executable', () => {
+    const pi = LIVE_E2E_PROVIDERS.find(({ id }) => id === 'pi');
+
+    expect(pi).toMatchObject({
+      id: 'pi',
+      binaryName: 'pi',
+      credentialEnvVar: 'PI_API_KEY',
+      providerKey: 'pi',
+      expectedAuthenticationSource: 'missing',
+    });
+    expect(pi).not.toHaveProperty('selfHostExecutable');
+    expect(pi?.createProvider()).toBeInstanceOf(PiProvider);
+    expect(() => pi?.assertCredentialAvailable(undefined)).toThrow('Missing Pi credential: set PI_API_KEY.');
+  });
 });
 
-// @ts-expect-error Every live leg must declare its self-host executable.
-const descriptorMissingRequiredField: LiveE2EProviderDescriptor = {
+const descriptorWithoutSelfHost: LiveE2EProviderDescriptor = {
   id: 'claude',
   createProvider: () => new ClaudeProvider(),
   binaryName: 'claude',
   credentialEnvVar: 'CLAUDE_CODE_OAUTH_TOKEN',
   providerKey: 'claude',
   expectedAuthenticationSource: 'oauth-token',
+  resolveAuthenticationSource: async (provider) => {
+    if (!(provider instanceof ClaudeProvider)) {
+      throw new Error('Claude live descriptor requires ClaudeProvider');
+    }
+    return provider.authenticationSource();
+  },
+  assertCredentialAvailable: () => {},
 };
 
-void descriptorMissingRequiredField;
+void descriptorWithoutSelfHost;

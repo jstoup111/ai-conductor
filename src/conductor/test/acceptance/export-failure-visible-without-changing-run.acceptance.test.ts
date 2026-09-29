@@ -31,10 +31,6 @@ vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters }));
 vi.mock('../../src/engine/self-host/daemon-build-token.js', () => ({
   readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })),
 }));
-vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../src/engine/ci-fix.js')>()),
-  defaultCiFixProbe: vi.fn(async () => ({ exitCode: 0, stdout: 'claude 1.0.0', stderr: '' })),
-}));
 vi.mock('../../src/engine/daemon-runner.js', () => ({
   makeRunFeature: (deps: {
     beginFeatureRun: (
@@ -69,6 +65,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
 }));
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
+import { allInstalledProviderDiscoveryRunner } from '../engine/boot-test-helpers.js';
 
 const execFile = promisify(execFileCb);
 
@@ -142,6 +139,7 @@ async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
     baseBranch: 'main',
     ensureFresh: async () => {},
     probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+    providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
     watch: false,
     workSource: { discover: async () => [{ slug: 'feature-a' }] },
   });

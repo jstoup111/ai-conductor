@@ -44,14 +44,22 @@ import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
 import {
   normalizeProviderSelection,
+  ProviderNotInstalledError,
+  validateProviderInstallation,
   validateRegisteredProviderSelections,
 } from './engine/provider-selection.js';
+import { CLAUDE_PROVIDER } from './execution/provider-catalog.js';
+import {
+  discoverInstalledProviders,
+  type ProviderVersionProbeRunner,
+} from './engine/provider-discovery.js';
 import { resolveBuildReviewConfig } from './engine/resolved-config.js';
 import {
   probeReadOnlyReviewCapability,
   type ReadOnlyReviewCapability,
 } from './engine/build-review-read-only-capability.js';
 import { ConductorEventEmitter } from './ui/events.js';
+import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
 import {
   emitDeprecatedConfigKeyEvents,
   loadConfig,
@@ -476,6 +484,73 @@ export async function probeInteractiveReadOnlyReviewCapabilities(options: {
   }))));
 }
 
+/**
+ * Provider-dispatching command entries in the `main` command table. `inline`
+ * is the foreground `conduct run` path; `daemon` owns its equivalent boot in
+ * daemon-cli. Every other command must remain runnable without a provider CLI.
+ */
+export const CLI_PROVIDER_DISPATCHING_COMMANDS: ReadonlySet<string> = new Set([
+  'inline',
+  'daemon',
+  'compose',
+  'engineer',
+]);
+
+/**
+ * The provider-facing CLI boot boundary. Keep discovery here instead of in
+ * `main` so command handlers can opt in only when they can dispatch a provider,
+ * while tests replace the process probe without replacing registry wiring.
+ */
+export async function bootDispatchingCliProviders(options: {
+  readonly command: string;
+  readonly registry: PluginRegistry;
+  readonly events: ConductorEventEmitter;
+  readonly config: HarnessConfig | undefined;
+  readonly rendererOpts: TerminalRendererOptions;
+  readonly providerDiscoveryRunner?: ProviderVersionProbeRunner;
+  readonly discover?: typeof discoverInstalledProviders;
+}): Promise<ReturnType<typeof registerCliBuiltins> | undefined> {
+  if (!CLI_PROVIDER_DISPATCHING_COMMANDS.has(options.command)) return undefined;
+
+  const discovery = await (options.discover ?? discoverInstalledProviders)({
+    events: options.events,
+    ...(options.providerDiscoveryRunner ? { runner: options.providerDiscoveryRunner } : {}),
+  });
+  const subscriber = registerCliBuiltins(
+    options.registry,
+    options.events,
+    options.config,
+    options.rendererOpts,
+    new Set(discovery.installed),
+  );
+  options.registry.markInitialized();
+  validateProviderInstallation({ config: options.config ?? {}, discovery });
+  validateRegisteredProviderSelections({
+    config: options.config ?? {},
+    registeredProviders: options.registry.list('llm_provider'),
+  });
+  return subscriber;
+}
+
+/** Validate the Claude executable before compose or engineer launches it. */
+export async function validateComposeEngineerClaudeInstallation(options: {
+  readonly events: ConductorEventEmitter;
+  readonly providerDiscoveryRunner?: ProviderVersionProbeRunner;
+}): Promise<void> {
+  const discovery = await discoverInstalledProviders({
+    events: options.events,
+    ...(options.providerDiscoveryRunner ? { runner: options.providerDiscoveryRunner } : {}),
+  });
+  // Compose/engineer launches Claude directly, independently of the selected
+  // build provider. Check that executable only: validating the configured
+  // selection here would reject an otherwise-launchable external plugin or a
+  // missing provider this entry point never dispatches.
+  if (!discovery.installed.includes(CLAUDE_PROVIDER)) {
+    const reason = discovery.missing.find(({ id }) => id === CLAUDE_PROVIDER)?.reason ?? 'version-failed';
+    throw new ProviderNotInstalledError(CLAUDE_PROVIDER, 'compose/engineer launch', reason);
+  }
+}
+
 // Harness VERSION lookup for the migration check. Probes the invocation cwd
 // first, then falls back to the shared module-relative probe in
 // engine/version-report.ts — the installed layout is a symlink chain
@@ -673,6 +748,39 @@ export async function overlapScanCommand(
   return 0;
 }
 
+/**
+ * Dispatch command-table entries that never need a provider before the
+ * provider-aware foreground run bootstraps its registry.
+ */
+export async function dispatchNonDispatchingCliCommand(
+  argv: readonly string[],
+  projectRoot: string,
+  deps: {
+    readonly discoverProviders?: () => Promise<unknown>;
+    readonly dispatchRateCard?: typeof dispatchRateCard;
+    readonly dispatchOverlapScan?: typeof overlapScanCommand;
+    readonly dispatchRender?: typeof dispatchRender;
+  } = {},
+): Promise<number | undefined> {
+  if (CLI_PROVIDER_DISPATCHING_COMMANDS.has(argv[2])) {
+    await deps.discoverProviders?.();
+    return undefined;
+  }
+
+  const renderCmd = detectRenderCommand([...argv]);
+  if (renderCmd) return (deps.dispatchRender ?? dispatchRender)(renderCmd, projectRoot);
+
+  const rateCardCmd = detectRateCardCommand([...argv]);
+  if (rateCardCmd) return (deps.dispatchRateCard ?? dispatchRateCard)(rateCardCmd, projectRoot);
+
+  const overlapScanCmd = detectOverlapScanCommand([...argv]);
+  if (overlapScanCmd) {
+    return (deps.dispatchOverlapScan ?? overlapScanCommand)(overlapScanCmd, { cwd: projectRoot });
+  }
+
+  return undefined;
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -685,6 +793,15 @@ async function main(): Promise<void> {
   if (!daemonSessionVerdict.allowed) {
     console.error(`Error: ${daemonSessionVerdict.message}`);
     process.exitCode = 1;
+    return;
+  }
+
+  const nonDispatchingExitCode = await dispatchNonDispatchingCliCommand(
+    process.argv,
+    process.cwd(),
+  );
+  if (nonDispatchingExitCode !== undefined) {
+    process.exitCode = nonDispatchingExitCode;
     return;
   }
 
@@ -837,7 +954,20 @@ async function main(): Promise<void> {
     const spine = startOperatorEventSpine(process.cwd());
     let code: number;
     try {
-      code = await dispatchEngineer(engineerCmd, { events: spine.events });
+      let launchBoot: Promise<void> | undefined;
+      code = await dispatchEngineer(engineerCmd, {
+        events: spine.events,
+        ...(engineerCmd.kind === 'launch' ? {
+          beforeLaunch: async () => {
+            launchBoot ??= (async () => {
+              await validateComposeEngineerClaudeInstallation({
+                events: spine.events,
+              });
+            })();
+            await launchBoot;
+          },
+        } : {}),
+      });
     } finally {
       spine.stop();
     }
@@ -862,25 +992,6 @@ async function main(): Promise<void> {
   const brainCmd = detectBrainCommand(process.argv);
   if (brainCmd) {
     const code = await dispatchBrain(brainCmd);
-    process.exit(code);
-  }
-
-  // Render subcommand (`render-diagrams <file>...`) runs NON-INTERACTIVELY and
-  // exits — it renders the Mermaid blocks in the given Markdown via the
-  // configured mermaid_renderer preset. Best-effort; mirrors the dispatch pattern.
-  const renderCmd = detectRenderCommand(process.argv);
-  if (renderCmd) {
-    const code = await dispatchRender(renderCmd, process.cwd());
-    process.exit(code);
-  }
-
-  // Rate-card subcommand (`rate-card refresh|show`) runs NON-INTERACTIVELY and
-  // exits — maintains the committed per-model token price card the codex
-  // adapter prices its dispatches from. Network fetch lives here, never on the
-  // dispatch path.
-  const rateCardCmd = detectRateCardCommand(process.argv);
-  if (rateCardCmd) {
-    const code = await dispatchRateCard(rateCardCmd, process.cwd());
     process.exit(code);
   }
 
@@ -1057,16 +1168,6 @@ async function main(): Promise<void> {
     } finally {
       spine.stop();
     }
-    process.exit(code);
-  }
-
-  // Overlap-scan subcommand (`overlap-scan --files ... --source-ref ...
-  // --base ... --cwd ...`, #523 Task 7) runs NON-INTERACTIVELY and exits —
-  // advisory DECIDE-time scan for unmerged sibling-branch overlap plus open
-  // blockers. Mirrors the evidence/task-cli dispatch pattern; always exits 0.
-  const overlapScanCmd = detectOverlapScanCommand(process.argv);
-  if (overlapScanCmd) {
-    const code = await overlapScanCommand(overlapScanCmd, { cwd: process.cwd() });
     process.exit(code);
   }
 
@@ -1531,12 +1632,21 @@ async function main(): Promise<void> {
 
   // Discover and register external plugins, then built-ins
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-  const subscriber = registerCliBuiltins(registry, events, config, rendererOpts);
-  registry.markInitialized();
-  validateRegisteredProviderSelections({
-    config: config ?? {},
-    registeredProviders: registry.list('llm_provider'),
+  // Start persistence before boot discovery so the boot event is retained in
+  // the same ledger as the dispatch it authorizes.
+  const eventsLogPath = join(pipelineDir, 'events.jsonl');
+  const persister = new EventPersister(eventsLogPath, events);
+  persister.start();
+  const subscriber = await bootDispatchingCliProviders({
+    command: 'inline',
+    registry,
+    events,
+    config,
+    rendererOpts,
   });
+  if (!subscriber) {
+    throw new Error('Provider discovery was not enabled for the inline command');
+  }
 
   // Compose one provider-routing context from the complete frozen registry.
   // The ordered config survives intact; its first entry is only the
@@ -1567,10 +1677,6 @@ async function main(): Promise<void> {
   const renderer = registry.get<UIRenderer>('ui_renderer', config?.ui_renderer ?? 'terminal');
   subscriber.start([renderer]);
 
-  // Wire EventPersister: appends every ConductorEvent as a JSON line to .pipeline/events.jsonl
-  const eventsLogPath = join(pipelineDir, 'events.jsonl');
-  const persister = new EventPersister(eventsLogPath, events);
-  persister.start();
   await emitDeprecatedConfigKeyEvents(configResult, events);
   // Every foreground mode can reach build_review.  The daemon performs this
   // once at daemon start; foreground runs establish the same frozen evidence

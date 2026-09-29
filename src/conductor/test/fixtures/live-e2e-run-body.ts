@@ -35,6 +35,7 @@ export class TokenMeter implements LLMProvider {
   totalTokens = 0;
   totalTurns = 0;
   unmetered = 0;
+  dispatches = 0;
   readonly unmeteredSteps: (StepName | 'unattributed')[] = [];
 
   constructor(
@@ -49,6 +50,7 @@ export class TokenMeter implements LLMProvider {
   }
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
+    this.dispatches += 1;
     const result = await this.provider.invoke(options);
     this.record(result);
     return result;
@@ -190,7 +192,7 @@ const STEPS_ALLOWED_UNMETERED: readonly StepName[] = ['finish'];
 
 export function assertSuccessfulCredentialedRun(
   provisioned: Pick<ProvisionedHome, 'dispatches'> | undefined,
-  meter: Pick<TokenMeter, 'totalTurns' | 'totalTokens' | 'unmetered' | 'unmeteredSteps'>,
+  meter: Pick<TokenMeter, 'dispatches' | 'totalTurns' | 'totalTokens' | 'unmetered' | 'unmeteredSteps'>,
 ): void {
   if (meter.unmeteredSteps.includes('unattributed')) {
     throw new Error('Unattributable unmetered dispatch cannot be allow-listed.');
@@ -202,7 +204,7 @@ export function assertSuccessfulCredentialedRun(
     throw new Error(`Unmetered dispatch at ${disallowed[0]} before publication boundary.`);
   }
   expect(meter.unmeteredSteps.length).toBe(meter.unmetered);
-  expect(provisioned?.dispatches ?? 0).toBeGreaterThan(0);
+  expect(provisioned?.dispatches ?? meter.dispatches).toBeGreaterThan(0);
   expect(meter.totalTurns).toBeGreaterThan(0);
   expect(meter.totalTokens).toBeGreaterThan(0);
 }
@@ -441,23 +443,16 @@ export async function runLiveE2ERunBody(
     await assertDescriptorAuthenticationSource(descriptor, provider);
     await assertLiveProviderReadiness(provider);
     return await enforceLiveE2ETokenCap(async () => {
-        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-        expect(process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBeUndefined();
-        await withProvisionedLiveProviderHome(
-      fileURLToPath(new URL('../../../../', import.meta.url)),
-      descriptor,
-      provider,
-      dependencies.provisionProviderHome ?? provisionLiveProviderHome,
-      async (providerHome) => {
-        provisioned = new ProvisionedHome(provider, {
-          executable: descriptor.selfHostExecutable,
-          env: providerHome.childEnv(),
-          args: providerHome.childArgs(),
-          teardown: () => providerHome.teardown(),
-        });
+      delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      expect(process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBeUndefined();
+      const sourceRoot = fileURLToPath(new URL('../../../../', import.meta.url));
+      const dispatchLiveRun = async (
+        activeProvider: LLMProvider,
+        preflightHome: Pick<ProviderHome, 'homeDir'>,
+      ): Promise<void> => {
         const stepTracker: { current: StepName | undefined } = { current: undefined };
-        meter = new TokenMeter(provisioned, () => stepTracker.current);
-        await dispatchAfterLivePreflight(providerHome, async () => {
+        meter = new TokenMeter(activeProvider, () => stepTracker.current);
+        await dispatchAfterLivePreflight(preflightHome, async () => {
           const { stdout: seededFiles } = await execa('git', ['ls-tree', '--name-only', '-r', 'HEAD'], { cwd: liveWorktreeDir });
           expect(seededFiles.split('\n')).not.toContain('test/fixtures/daemon-e2e/touched.txt');
           await mkdir(pipelineDir, { recursive: true });
@@ -518,15 +513,37 @@ export async function runLiveE2ERunBody(
           touchedFixture: changedFiles.split('\n').includes('test/fixtures/daemon-e2e/touched.txt'),
           taskTrailer: /(?:^|\n)Task:\s*1\s*$/m.test(commitBody),
         }).toEqual({ terminal: true, madeCommit: true, touchedFixture: true, taskTrailer: true });
-      },
+      };
+
+      if (descriptor.selfHostExecutable) {
+        await withProvisionedLiveProviderHome(
+          sourceRoot,
+          descriptor,
+          provider,
+          dependencies.provisionProviderHome ?? provisionLiveProviderHome,
+          async (providerHome) => {
+            provisioned = new ProvisionedHome(provider, {
+              executable: descriptor.selfHostExecutable!,
+              env: providerHome.childEnv(),
+              args: providerHome.childArgs(),
+              teardown: () => providerHome.teardown(),
+            });
+            await dispatchLiveRun(provisioned, providerHome);
+          },
         );
+      } else {
+        // Pi deliberately has no self-host capability. It still follows the
+        // full live fixture, resolving shared skills from the source checkout
+        // without injecting a self-host wrapper into its invocation options.
+        await dispatchLiveRun(provider, { homeDir: sourceRoot });
+      }
     }, () => meter!, tokenCap);
     });
   } finally {
     if (meter) {
       reportLiveE2ESpend({
         totalTokens: meter.totalTokens,
-        dispatches: provisioned?.dispatches ?? 0,
+        dispatches: meter.dispatches,
       }, tokenCap);
     }
     if (fixtureRoot) await rm(fixtureRoot, { recursive: true, force: true });

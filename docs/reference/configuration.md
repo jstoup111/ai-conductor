@@ -650,9 +650,9 @@ with a list of available providers (`provider-selection.ts:52-66`).
 
 An array is a fallback ladder, not a set. The **first** entry is inherited by every step that does not
 set its own `steps.<n>.llm_provider` (`provider-selection.ts:10-20`; `src/conductor/src/index.ts:1001`;
-`src/conductor/src/daemon-cli.ts:808`). Built-in model policies exist for `claude` and `codex`; any other
-registered provider warns and falls back to the Claude policy
-(`src/conductor/src/engine/provider-model-policy.ts:178-190`).
+`src/conductor/src/daemon-cli.ts:808`). `claude` and `codex` use harness model policies. `pi` sends no
+harness-selected model id, leaving model selection to Pi's configured default. Other registered
+providers warn and fall back to the Claude policy.
 
 Procedure and trade-offs are in [multiprovider](../guides/multiprovider.md); the per-provider model
 tables are in [models](models.md).

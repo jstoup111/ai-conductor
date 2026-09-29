@@ -1,4 +1,5 @@
 import type { StepName } from '../types/steps.js';
+import { CLAUDE_DISPLAY_NAME, CODEX_DISPLAY_NAME } from '../execution/provider-catalog.js';
 
 // These steps retain exhaustive provider-policy placeholders for StepName
 // type safety, but execute entirely in-process and never dispatch a model.
@@ -21,7 +22,7 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   bootstrap: 'Detection and scaffolding — largely mechanical. Authors the project CLAUDE.md every later step depends on.',
   memory: 'Read/write files, update index — mechanical.',
   assess:
-    'The assess skill dispatches 9 specialists and drives structure verification with Claude Sonnet; the final cross-referencing of all 9 reports is the cto-orchestrator agent on Claude Opus. The orchestrator also sets the env var that cascades effort to subagents.',
+    `The assess skill dispatches 9 specialists and drives structure verification with ${CLAUDE_DISPLAY_NAME} Sonnet; the final cross-referencing of all 9 reports is the cto-orchestrator agent on ${CLAUDE_DISPLAY_NAME} Opus. The orchestrator also sets the env var that cascades effort to subagents.`,
   explore:
     'Divergent discovery: approach trade-offs + product/technical track classification. At M/L or without a recorded tier, each built-in provider policy selects a high-capability reasoning model and HIGH effort for this high-branching, front-of-funnel step; attempt 2 therefore raises reasoning to XHIGH. S tier alone uses LOW effort for a fast scoping pass on small, well-understood work.',
   prd:
@@ -32,7 +33,7 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   conflict_check:
     'Pairwise story comparison benefits from a stronger reasoning model at every tier; Large tier uses each provider policy\'s high-capability model for subtle contradiction detection at scale.',
   plan:
-    'Task breakdown and dependency sequencing use a stronger Claude reasoning model at S/M; Large tier uses each provider policy\'s high-capability model and XHIGH effort for planning at scale.',
+    `Task breakdown and dependency sequencing use a stronger ${CLAUDE_DISPLAY_NAME} reasoning model at S/M; Large tier uses each provider policy's high-capability model and XHIGH effort for planning at scale.`,
   coherence_check:
     'Cross-references outcomes/FRs/stories/tasks into a per-row traceability verdict — structured comparison across committed artifacts, comparable in depth to conflict_check. M/L tier only (S is skippable).',
   architecture_diagram: 'Structured output generation from codebase scan — pattern-following.',
@@ -190,9 +191,9 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
 
 const INTERACTIVE_EXECUTION_PATH = 'supported-host interactive' as const;
 const CODEX_MODEL_INHERITANCE =
-  'inherits model from the Codex session or spawned-agent configuration';
+  `inherits model from the ${CODEX_DISPLAY_NAME} session or spawned-agent configuration`;
 const CODEX_EFFORT_INHERITANCE =
-  'inherits effort from the Codex session or spawned-agent configuration';
+  `inherits effort from the ${CODEX_DISPLAY_NAME} session or spawned-agent configuration`;
 
 const EXTRA_MODEL_TABLE_ROW_DEFAULTS = {
   executionPath: INTERACTIVE_EXECUTION_PATH,
@@ -254,7 +255,7 @@ const EXTRA_MODEL_TABLE_ROW_INPUTS: Array<
     claudeModel: 'opus',
     claudeEffort: '',
     why:
-      'Canonical interactive idea→spec authoring loop: routes a raw idea through the full DECIDE phase and delivers a spec PR, so its high-stakes authoring judgement uses Claude Opus.',
+      `Canonical interactive idea→spec authoring loop: routes a raw idea through the full DECIDE phase and delivers a spec PR, so its high-stakes authoring judgement uses ${CLAUDE_DISPLAY_NAME} Opus.`,
   },
   {
     name: 'engineer',

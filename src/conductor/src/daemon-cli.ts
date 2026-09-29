@@ -53,11 +53,17 @@ import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
+import { CODEX_PROVIDER, providerDescriptor } from './execution/provider-catalog.js';
 import { createProviderAvailability, restoreProviderAvailabilityFromDaemonLedger } from './engine/provider-availability.js';
 import {
   normalizeProviderSelection,
+  validateProviderInstallation,
   validateRegisteredProviderSelections,
 } from './engine/provider-selection.js';
+import {
+  discoverInstalledProviders,
+  type ProviderVersionProbeRunner,
+} from './engine/provider-discovery.js';
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import {
   Conductor,
@@ -483,6 +489,8 @@ export interface DaemonModeOptions {
   probeGhVersion?: typeof probeGhVersion;
   /** Provider read-only review capability probe; injectable at daemon startup. */
   probeReadOnlyReviewCapability?: typeof probeReadOnlyReviewCapability;
+  /** Injectable process boundary for the provider installation probes at boot. */
+  providerDiscoveryRunner?: ProviderVersionProbeRunner;
   /**
    * Startup migration boundary (tests inject an ordering probe). Production
    * uses runOwnedHaltClassMigration.
@@ -877,8 +885,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // `log` goes to the console only.
   let logSink: DaemonLogSink | null = null;
 
-  // ci-fix startup preflight (CF-5/CF-6) result is disabled below, right
-  // after `log` is defined.
   let ciFixEnabled = true;
 
   // Task 4 (#521): own the halt-PR reconciliation outcome cache for the lifetime
@@ -1159,6 +1165,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const globalPluginsDir = join(process.env.HOME || '', '.ai-conductor', 'plugins');
   const projectPluginsDir = join(projectRoot, '.ai-conductor', 'plugins');
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
+  // Discover before registration: unavailable built-ins must never enter the
+  // registry, and configured unavailable ids need their installation diagnosis
+  // before the generic unknown-provider validation below.
+  const providerDiscovery = await discoverInstalledProviders({
+    events,
+    ...(opts.providerDiscoveryRunner ? { runner: opts.providerDiscoveryRunner } : {}),
+  });
   // Feature-scoped renderers are installed in beginFeatureRun (and via
   // createSlugScopedProviderExecution below) with the feature-owned logger.
   // This global subscriber renders anything emitted directly on the
@@ -1176,8 +1189,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     events,
     rendererOpts,
     config?.codex_doctor_timeout_seconds,
+    undefined,
+    new Set(providerDiscovery.installed),
   );
   registry.markInitialized();
+  validateProviderInstallation({
+    config: config ?? {},
+    discovery: providerDiscovery,
+  });
   validateRegisteredProviderSelections({
     config: config ?? {},
     registeredProviders: registry.list('llm_provider'),
@@ -3116,8 +3135,8 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(
         chalk.yellow(
           event.degradation === 'probe-failure'
-            ? `Codex ${event.source} credentials: ${event.readiness} (${event.degradation}: ${event.probeFailureKind}${event.parserRejection === undefined ? '' : `, parser-rejection: ${event.parserRejection}`}); waiting ${event.elapsedSeconds}s, next disposition: ${event.nextDisposition}`
-            : `Codex ${event.source} credentials: ${event.readiness} (${event.degradation}); waiting ${event.elapsedSeconds}s, next check in ${event.nextProbeDelaySeconds}s`,
+            ? `${providerDescriptor(CODEX_PROVIDER).displayName} ${event.source} credentials: ${event.readiness} (${event.degradation}: ${event.probeFailureKind}${event.parserRejection === undefined ? '' : `, parser-rejection: ${event.parserRejection}`}); waiting ${event.elapsedSeconds}s, next disposition: ${event.nextDisposition}`
+            : `${providerDescriptor(CODEX_PROVIDER).displayName} ${event.source} credentials: ${event.readiness} (${event.degradation}); waiting ${event.elapsedSeconds}s, next check in ${event.nextProbeDelaySeconds}s`,
         ),
       );
       break;

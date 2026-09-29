@@ -8,16 +8,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { promisify } from 'node:util';
-import {
-  CodexProvider,
-  parseCodexJsonl,
-} from '../../src/execution/codex-provider.js';
 import type { CodexDoctorRunner } from '../../src/execution/codex-provider.js';
 import type {
   AuthenticationReadiness,
   InvokeOptions,
 } from '../../src/execution/llm-provider.js';
-import type { RateCard } from '../../src/execution/rate-card.js';
+import type { RateCard, RateCardLoader } from '../../src/execution/rate-card.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import type { Options as ExecaOptions, Result as ExecaResult, ResultPromise } from 'execa';
 import {
@@ -51,22 +47,29 @@ const { mockExeca } = vi.hoisted(() => {
   };
 });
 vi.mock('execa', () => ({ execa: mockExeca }));
-
 const { mockValidateSpawnPermit } = vi.hoisted(() => ({
   mockValidateSpawnPermit: vi.fn((permit, purpose) =>
     permit?.(purpose) ?? { permitted: true as const }),
 }));
-vi.mock('../../src/engine/provider-runtime.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src/engine/provider-runtime.js')>(),
-  validateSpawnPermit: mockValidateSpawnPermit,
+vi.mock('../../src/execution/spawn-permit.js', () => ({
+  validateSpawnPermit: (...args: Parameters<typeof mockValidateSpawnPermit>) =>
+    mockValidateSpawnPermit(...args),
 }));
 
 const { mockEnforceFreshSessionOptions } = vi.hoisted(() => ({
   mockEnforceFreshSessionOptions: vi.fn(),
 }));
 vi.mock('../../src/execution/fresh-session.js', () => ({
-  enforceFreshSessionOptions: mockEnforceFreshSessionOptions,
+  enforceFreshSessionOptions: (...args: Parameters<typeof mockEnforceFreshSessionOptions>) =>
+    mockEnforceFreshSessionOptions(...args),
 }));
+
+vi.resetModules();
+
+const {
+  CodexProvider: ProductionCodexProvider,
+  parseCodexJsonl,
+} = await import('../../src/execution/codex-provider.js');
 
 const baseOptions: InvokeOptions = {
   prompt: 'Make the no-op change',
@@ -96,6 +99,27 @@ function readyDoctorResult(source: 'api-key' | 'cached-login' = 'cached-login') 
     }),
     exitCode: 0,
   };
+}
+
+const mockDoctorRunner: CodexDoctorRunner = (command, args, options) =>
+  mockExeca(command, args, options) as never;
+
+/**
+ * Every ordinary provider test substitutes both process boundaries.  Tests
+ * that need a particular doctor response inject it explicitly; the default
+ * still exercises the same captured doctor command via `mockExeca`.
+ */
+class CodexProvider extends ProductionCodexProvider {
+  constructor(
+    runDoctor: CodexDoctorRunner = mockDoctorRunner,
+    executable = 'codex',
+    intervalClock: IntervalClock | undefined = undefined,
+    subprocessFactory: (file: string, args: readonly string[], options: ExecaOptions) => ResultPromise = mockExeca as never,
+    doctorTimeoutMs: number | undefined = undefined,
+    loadRates: RateCardLoader | undefined = undefined,
+  ) {
+    super(runDoctor, executable, intervalClock, subprocessFactory, doctorTimeoutMs, loadRates);
+  }
 }
 
 const codexRubricPolicy: ResolvedBuildReviewRubricPolicy = {
@@ -129,7 +153,7 @@ describe('CodexProvider', () => {
     vi.resetAllMocks();
     mockValidateSpawnPermit.mockImplementation((permit, purpose) =>
       permit?.(purpose) ?? { permitted: true });
-    mockEnforceFreshSessionOptions.mockImplementation((options, provider) => ({
+    mockEnforceFreshSessionOptions.mockImplementation((options) => ({
       ...options,
       sessionId: '00000000-0000-4000-8000-000000000002',
       resume: false,
@@ -138,6 +162,9 @@ describe('CodexProvider', () => {
       vi.fn(async (_command, _args, options) =>
         readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
       ),
+      'codex',
+      undefined,
+      mockExeca as never,
     );
   });
 

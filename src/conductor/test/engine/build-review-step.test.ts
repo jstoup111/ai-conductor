@@ -1,6 +1,7 @@
 // Covers: task:2, task:4
 // Covers: task:9, task:10
 // Covers: task:5
+// Covers: task:rem-as-built-rem-ab14-1
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -23,6 +24,7 @@ import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-revie
 import { diagnoseBuildReviewCustomReviewerPayloadRejection } from '../../src/engine/build-review-domain.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import type { ProviderAttemptMetadata } from '../../src/engine/provider-execution.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import type { ResolvedBuildReviewCustomCatalogEntry } from '../../src/engine/resolved-config.js';
@@ -685,7 +687,8 @@ describe('build_review structured rubric dispatch', () => {
       nativeSchemaCapability: { nativeOutputSchema: true },
       invoke: capableInvoke,
     };
-    const runner = new DefaultStepRunner(incapable, 'runtime-review', '/fixture', {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-schema-capable-'));
+    const runner = new DefaultStepRunner(incapable, 'runtime-review', projectDir, {
       config: { llm_provider: ['codex', 'claude'] } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([
         { key: 'codex', provider: incapable, lifecycleCapability: incapable.lifecycleCapability, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) },
@@ -696,14 +699,18 @@ describe('build_review structured rubric dispatch', () => {
     });
     const mixedBranch = { ...branch, policy: { ...branch.policy, llm_provider: ['codex', 'claude'] } };
 
-    const result = await (runner as unknown as {
-      dispatchBuildReviewRubric: (value: typeof mixedBranch, reviewProjection: typeof projection) => Promise<unknown>;
-    }).dispatchBuildReviewRubric(mixedBranch, projection);
+    try {
+      const result = await (runner as unknown as {
+        dispatchBuildReviewRubric: (value: typeof mixedBranch, reviewProjection: typeof projection) => Promise<unknown>;
+      }).dispatchBuildReviewRubric(mixedBranch, projection);
 
-    expect(incapableInvoke).not.toHaveBeenCalled();
-    expect(capableInvoke).toHaveBeenCalledOnce();
-    expect(capableInvoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output.jsonSchema);
-    expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
+      expect(incapableInvoke).not.toHaveBeenCalled();
+      expect(capableInvoke).toHaveBeenCalledOnce();
+      expect(capableInvoke.mock.calls[0]?.[0]?.nativeSchema).toBe(BUILD_REVIEW_RUBRIC_REGISTRY.testQuality.contract.output.jsonSchema);
+      expect(result).toMatchObject({ kind: 'judged', verdict: 'PASS', findings: [] });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('keeps an adapter-reported native schema refusal on the native-schema-unsupported lane', async () => {
@@ -718,7 +725,8 @@ describe('build_review structured rubric dispatch', () => {
       nativeSchemaCapability: { nativeOutputSchema: true },
       invoke,
     };
-    const runner = new DefaultStepRunner(provider, 'runtime-review', '/fixture', {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-schema-refusal-'));
+    const runner = new DefaultStepRunner(provider, 'runtime-review', projectDir, {
       config: { llm_provider: ['claude'] } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{
         key: 'claude', provider, lifecycleCapability: provider.lifecycleCapability, nativeSchemaCapability: provider.nativeSchemaCapability,
@@ -728,12 +736,16 @@ describe('build_review structured rubric dispatch', () => {
       configuredProviders: ['claude'],
     });
 
-    const result = await (runner as unknown as {
-      dispatchBuildReviewRubric: (value: typeof branch, reviewProjection: typeof projection) => Promise<unknown>;
-    }).dispatchBuildReviewRubric(branch, projection);
+    try {
+      const result = await (runner as unknown as {
+        dispatchBuildReviewRubric: (value: typeof branch, reviewProjection: typeof projection) => Promise<unknown>;
+      }).dispatchBuildReviewRubric(branch, projection);
 
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({ kind: 'dispatch-failure', cause: 'native-schema-unsupported', detail: 'adapter could not apply the output schema' });
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({ kind: 'dispatch-failure', cause: 'native-schema-unsupported', detail: 'adapter could not apply the output schema' });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('gives a Codex rubric invocation an engine-owned schema scratch home and settles it', async () => {
@@ -990,6 +1002,79 @@ describe('build_review structured rubric dispatch', () => {
         contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', changes: [],
       });
       expect(outcome).toMatchObject({ success: true, id: 'custom-policy' });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips a registered external candidate without a built-in descriptor and invokes the next custom-policy candidate', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-external-custom-candidate-'));
+    const externalInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async () => ({
+      success: true,
+      output: '{"kind":"custom-findings","version":"v1","findings":[]}',
+      exitCode: 0,
+      finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] },
+    }));
+    const externalProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke: externalInvoke,
+    };
+    const claudeProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke: claudeInvoke,
+    };
+    const attempts: ProviderAttemptMetadata[] = [];
+    const entry: ResolvedBuildReviewCustomCatalogEntry = {
+      id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
+      policy: { ...branch.policy, llm_provider: ['fixture-plugin-reviewer', 'claude'] }, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+    };
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'external-custom-candidate', projectDir, {
+      gitRunner: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
+      config: { llm_provider: ['fixture-plugin-reviewer', 'claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([
+        { key: 'fixture-plugin-reviewer', provider: externalProvider, lifecycleCapability: externalProvider.lifecycleCapability, nativeSchemaCapability: externalProvider.nativeSchemaCapability, policy: CLAUDE_MODEL_POLICY, builtIn: false, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
+        { key: 'claude', provider: claudeProvider, lifecycleCapability: claudeProvider.lifecycleCapability, nativeSchemaCapability: claudeProvider.nativeSchemaCapability, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
+      ]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['fixture-plugin-reviewer', 'claude'],
+      providerAttempt: (_step, attempt) => { attempts.push(attempt); },
+      buildReviewPolicyCatalog: async ({ provider }) => [{
+        semanticName: 'custom-policy', source: 'project', installationOrigin: `/fixture/${provider}`,
+        canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+    });
+
+    try {
+      await expect((runner as unknown as {
+        dispatchInstalledBuildReviewPolicy: (
+          entry: ResolvedBuildReviewCustomCatalogEntry,
+          inputs: unknown,
+          lapId: string,
+          tier?: unknown,
+          lapGate?: unknown,
+          readOnlyReviewCapabilityFor?: (provider: string) => Promise<unknown>,
+        ) => Promise<unknown>;
+      }).dispatchInstalledBuildReviewPolicy(entry, {
+        sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot', sourceChanges: [] },
+      }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b', undefined, undefined, async (provider) => ({
+        provider, platform: process.platform, status: 'available' as const,
+      }))).resolves.toMatchObject({ success: true, id: 'custom-policy' });
+
+      expect(externalInvoke).not.toHaveBeenCalled();
+      expect(claudeInvoke).toHaveBeenCalledOnce();
+      expect(attempts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ provider: 'fixture-plugin-reviewer', invoked: false, skipReason: 'setup-unavailable' }),
+        expect.objectContaining({ provider: 'claude', invoked: true }),
+      ]));
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }

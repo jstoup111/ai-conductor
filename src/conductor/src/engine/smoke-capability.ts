@@ -1,4 +1,5 @@
 import { LIVE_E2E_PROVIDERS } from './live-e2e-providers.js';
+import { CODEX_PROVIDER, type BuiltInProviderId } from '../execution/provider-catalog.js';
 
 /** The complete set of capabilities a smoke test may require. */
 export const SMOKE_CAPABILITIES = [
@@ -6,6 +7,7 @@ export const SMOKE_CAPABILITIES = [
   'toolchain',
   'credentialed:claude',
   'credentialed:codex',
+  'credentialed:pi',
 ] as const;
 
 export type SmokeCapability = (typeof SMOKE_CAPABILITIES)[number];
@@ -40,7 +42,7 @@ export type AdvisorySmokeCapabilityResolution =
 
 export type GateSmokeCapabilityResolution =
   | { outcome: 'ran' }
-  | { outcome: 'skipped'; provider: 'claude' | 'codex'; unmet: string }
+  | { outcome: 'skipped'; provider: BuiltInProviderId; unmet: string }
   | { outcome: 'failed'; unmet: string };
 
 type CredentialedSmokeCapability = Extract<SmokeCapability, `credentialed:${string}`>;
@@ -69,7 +71,7 @@ const SMOKE_TOOLCHAIN_COMMANDS: Readonly<Record<string, string>> = {
   'test/backlog-priority.smoke.test.ts': 'gh',
   'test/gh-version-floor.smoke.test.ts': 'gh',
   'test/engine/daemon-tmux.smoke.test.ts': 'tmux',
-  'test/execution/codex-provider.smoke.test.ts': 'codex',
+  'test/execution/codex-provider.smoke.test.ts': CODEX_PROVIDER,
   'test/smoke/publish-interrupted.smoke.test.ts': 'bin/setup',
 };
 

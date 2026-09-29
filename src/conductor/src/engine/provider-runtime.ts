@@ -5,17 +5,17 @@ import type {
   ProviderNativeSchemaCapability,
   SelfHostAuthContext,
   SelfHostAuthPreparation,
-  SpawnPermit,
-  SpawnPermitDecision,
-  SpawnPermitPurpose,
 } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import {
-  hasBuiltInProviderModelPolicy,
   resolveProviderModelPolicy,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
 import type { PluginRegistry } from './plugin-registry.js';
+import {
+  findBuiltInProviderDescriptor,
+  supportsProviderCapability,
+} from '../execution/provider-catalog.js';
 
 export interface ProviderRuntime {
   key: string;
@@ -58,6 +58,8 @@ export class ProviderRuntimeSet {
   /** Resolves the selected adapter's declared native output-schema capability. */
   nativeSchemaCapabilityFor(key: string): ProviderNativeSchemaCapability | undefined {
     const runtime = this.runtimes.get(key);
+    const descriptor = findBuiltInProviderDescriptor(key);
+    if (descriptor && !supportsProviderCapability(descriptor, 'nativeSchema')) return undefined;
     return runtime?.nativeSchemaCapability ?? runtime?.provider.nativeSchemaCapability;
   }
 
@@ -70,10 +72,14 @@ export class ProviderRuntimeSet {
     authentication: AuthenticationReadiness,
   ): (() => Promise<AuthenticationReadiness>) | undefined {
     const runtime = this.runtimes.get(key);
+    const descriptor = runtime?.builtIn
+      ? findBuiltInProviderDescriptor(runtime.key)
+      : undefined;
     if (
       !runtime ||
-      !runtime.builtIn ||
+      !descriptor ||
       runtime.key !== authentication.provider ||
+      !supportsProviderCapability(descriptor, 'readiness') ||
       !runtime.provider.readiness
     ) {
       return undefined;
@@ -91,17 +97,6 @@ export class ProviderRuntimeSet {
   }
 }
 
-/**
- * Evaluates a lifecycle-owned permit without awaiting, so adapters can invoke
- * it immediately before their subprocess factory and fail closed on denial.
- */
-export function validateSpawnPermit(
-  permit: SpawnPermit | undefined,
-  purpose?: SpawnPermitPurpose,
-): SpawnPermitDecision {
-  return permit?.(purpose) ?? { permitted: true };
-}
-
 export function createProviderRuntimeSet(
   registry: PluginRegistry,
   warn?: (message: string) => void,
@@ -116,7 +111,7 @@ export function createProviderRuntimeSet(
         lifecycleCapability: provider.lifecycleCapability,
         nativeSchemaCapability: provider.nativeSchemaCapability,
         policy,
-        builtIn: hasBuiltInProviderModelPolicy(key),
+        builtIn: findBuiltInProviderDescriptor(key) !== undefined,
         availability: new ModelAvailability(policy.modelFallbackLadder, warn),
       };
     }),
