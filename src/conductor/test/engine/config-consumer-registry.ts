@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -61,6 +61,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   ui_renderer: consumer('src/conductor/src/engine/plugin-loader.ts'),
   visualizers: consumer('src/conductor/src/index.ts'),
   memory_provider: consumer('src/conductor/src/engine/local-memory-provider.ts'),
+  tracker: consumer('src/conductor/src/engine/tracker-selection.ts'),
   otel: consumer(OTEL_CONFIG),
   build_progress: consumer(BUILD_PROGRESS_WATCHER),
   provider_stream: consumer(STEP_RUNNERS),
@@ -153,6 +154,13 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     'typed and validated but unread: GroupMember carries name/skill/outcome only, so a branch effort override cannot reach dispatch (#1025)',
   ),
   'steps.parallel.advisory': consumer(CONDUCTOR),
+
+  // ── tracker ───────────────────────────────────────────────────────────────
+  'tracker.backend': consumer('src/conductor/src/engine/tracker-selection.ts'),
+  'tracker.transport': consumer('src/conductor/src/engine/tracker-selection.ts'),
+  'tracker.credentials': consumer('src/conductor/src/engine/tracker-selection.ts'),
+  'tracker.site': consumer('src/conductor/src/engine/tracker-selection.ts'),
+  'tracker.project_key': consumer('src/conductor/src/engine/tracker-selection.ts'),
 
   // ── conductor (per-user update state) ─────────────────────────────────────
   // `conductor_cfg_key` maps each legacy field name onto the schema key and

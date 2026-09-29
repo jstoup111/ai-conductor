@@ -164,7 +164,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
-45 top-level keys are allow-listed (plus the retired compatibility key `wiring`, which emits a
+55 top-level keys are allow-listed (plus the retired compatibility key `wiring`, which emits a
 deprecation warning and event; see [build_review](#build_review)). Everything else fails the load.
 
 | Key | Type | Default | Section |
@@ -181,9 +181,11 @@ deprecation warning and event; see [build_review](#build_review)). Everything el
 | `acceptance_spec_globs` | string[] | `[]` | [acceptance_spec_globs](#acceptance_spec_globs) |
 | `test_suite` | object | none | [test_suite](#test_suite) |
 | `llm_provider` | string \| string[] | `['claude']` | [llm_provider](#llm_provider) |
+| `provider_substitution` | string | `allow` | [provider_substitution](#provider_substitution) |
 | `ui_renderer` | string | `terminal` | [ui_renderer](#ui_renderer) |
 | `visualizers` | string[] | unset | [visualizers](#visualizers) |
 | `memory_provider` | string | `local` | [memory_provider](#memory_provider) |
+| `tracker` | object | GitHub selection | [tracker](#tracker) |
 | `otel` | object | disabled | [otel](#otel) |
 | `build_progress` | object | see section | [build_progress](#build_progress) |
 | `provider_stream` | object | `{ min_interval_ms: 5000 }` | [provider_stream](#provider_stream) |
@@ -718,6 +720,47 @@ Plugin name for the memory store. Optional string, default `local`. Resolved by 
 | A valid name that is not installed | `local` plus one warning per bad name per run (`config.ts:1841-1849`) |
 
 Not schema-validated.
+
+## tracker
+
+Per-project work-tracker selection for engineer intake and its write-backs. Put this block in the
+project's `.ai-conductor/config.yml`; intake reads that project file directly and ignores an absent
+block, selecting GitHub in either case. This deliberately validates only `tracker`, so an unrelated
+configuration error does not change the selected backend.
+
+| Key | Type | Required | Allowed | Default |
+| --- | --- | --- | --- | --- |
+| `tracker` | object | No | `github` or `jira` backend block | absent selects GitHub |
+| `tracker.backend` | string | Yes when `tracker` exists | `github`, `jira` | — |
+| `tracker.transport` | string | No; Jira only | `api`, `mcp` | absent |
+| `tracker.credentials` | string | No; Jira only | any string | absent |
+| `tracker.site` | string | No; Jira only | HTTPS URL | absent |
+| `tracker.project_key` | string | No; Jira only | any string | absent |
+
+```yaml
+tracker:
+  backend: github
+```
+
+The Jira shape reserves its connection fields for a future adapter:
+
+```yaml
+tracker:
+  backend: jira
+  transport: api
+  credentials: jira-work
+  site: https://example.atlassian.net
+  project_key: ENG
+```
+
+No Jira adapter is currently installed. Selecting `jira`, or supplying an unreadable or invalid
+`tracker` block, excludes that project from intake instead of falling back to GitHub. The engine emits
+the persisted and rendered `tracker_backend_unavailable` event for that exclusion. GitHub remains the
+selection for projects with no config file, no `tracker` block, or an invalid unrelated configuration
+key.
+
+`tracker` rejects unknown nested keys. The GitHub block accepts only `backend`; Jira-only fields on a
+GitHub block are errors. `tracker.site` must use `https:`.
 
 ## otel
 

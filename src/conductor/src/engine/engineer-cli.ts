@@ -52,6 +52,12 @@ import {
   GITHUB_ISSUES_SOURCE,
   HANDLED_LABEL,
 } from './engineer/intake/github-issues.js';
+import {
+  createIntakeBackendComposite,
+  type IntakeBackend,
+  type IntakeEventEmitter,
+} from './intake-backend-composite.js';
+import { resolveTrackerSelection } from './tracker-selection.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
 import { makeProductionGit, type GitRunner } from './pr-labels.js';
 import {
@@ -67,7 +73,7 @@ import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { runMigration } from './engineer/issue-dep-migration.js';
-import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead } from './tracker-client.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead, type GhRunner } from './tracker-client.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
 import { bindMutationToPullRequest } from './ship-draft-pr.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
@@ -466,11 +472,11 @@ export interface DispatchEngineerOpts {
   /** Print to stderr (default: process.stderr.write). */
   printErr?: (s: string) => void;
   /** Injected gh runner (for tests). */
-  gh?: (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
+  gh?: GhRunner;
   /** Test seam for fresh machine identity used by independently authorized intake writes. */
   intakeResolveActor?: () => Promise<OwnerResolution>;
   /** Existing event spine for intake mutation fallback telemetry. */
-  events?: GithubOperationEventEmitter;
+  events?: IntakeEventEmitter;
   /** Machine-level gh capability probe; injectable so entry refusal is testable. */
   probeGhVersion?: () => Promise<GhVersionFloorVerdict>;
   /** Injected git runner (for tests). */
@@ -767,6 +773,12 @@ export { makeProductionGh };
 export const missingRegistrationEpisodes = new Set<string>();
 
 /**
+ * Unavailable tracker-selection episodes shared by composites rebuilt during a
+ * long-running engineer process.
+ */
+export const trackerExclusionEpisodes = new Set<string>();
+
+/**
  * Composition root for the github-issues intake: wires the registry reader, the
  * durable ledger + file queue, and the adapter (IntakeSource + IntakePort) over an
  * injected gh runner. The engineer loop must NOT import a concrete adapter (FR-13);
@@ -779,33 +791,32 @@ export const missingRegistrationEpisodes = new Set<string>();
 export function buildIntake(deps: {
   engineerDir: string;
   registryPath?: string;
-  gh: NonNullable<DispatchEngineerOpts['gh']>;
+  gh: GhRunner;
   printErr: (s: string) => void;
   missingRegistrationEpisodes?: Set<string>;
+  trackerExclusionEpisodes?: Set<string>;
   resolveActor?: () => Promise<OwnerResolution>;
-  events?: GithubOperationEventEmitter;
+  /** Injectable only to observe lazy per-project backend resolution in tests. */
+  resolveTrackerSelection?: typeof resolveTrackerSelection;
+  events?: IntakeEventEmitter;
 }): {
   reader: ReturnType<typeof createRegistryReader>;
   ledger: ReturnType<typeof createLedger>;
   queue: ReturnType<typeof createFileQueue>;
-  adapter: ReturnType<typeof createGithubIssuesAdapter>;
+  adapter: IntakeBackend;
 } {
   const reader = createRegistryReader(deps.registryPath ? { registryPath: deps.registryPath } : {});
   const ledger = createLedger(join(deps.engineerDir, 'ledger.json'));
   const queue = createFileQueue(join(deps.engineerDir, 'inbox'));
-  const adapter = createGithubIssuesAdapter({
-    gh: deps.gh,
-    registry: {
-      list: async () =>
-        (await reader.listProjects()).map((p) => ({
-          name: p.remote ? parseGhRepo(p.remote) ?? p.name : p.name,
-          ghRepo: p.remote ? parseGhRepo(p.remote) ?? undefined : undefined,
-          path: p.path,
-        })),
-    },
+  const adapter = createIntakeBackendComposite({
+    backendFactories: { github: createGithubIssuesAdapter },
+    resolveTrackerSelection: deps.resolveTrackerSelection ?? resolveTrackerSelection,
+    registry: reader,
     ledger,
+    gh: deps.gh,
     log: (m: string) => deps.printErr(m),
     missingRegistrationEpisodes: deps.missingRegistrationEpisodes,
+    trackerExclusionEpisodes: deps.trackerExclusionEpisodes,
     resolveActor: deps.resolveActor,
     events: deps.events,
   });
@@ -822,13 +833,14 @@ export function buildIntake(deps: {
 export async function prePollIntake(deps: {
   engineerDir: string;
   registryPath?: string;
-  gh: NonNullable<DispatchEngineerOpts['gh']>;
+  gh: GhRunner;
   printErr: (s: string) => void;
-  events?: GithubOperationEventEmitter;
+  events?: IntakeEventEmitter;
 }): Promise<number> {
   const { queue, adapter } = buildIntake({
     ...deps,
     missingRegistrationEpisodes,
+    trackerExclusionEpisodes,
     events: deps.events,
   });
   const envelopes = await adapter.poll();

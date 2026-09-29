@@ -471,6 +471,17 @@ export type AggregateTestSuiteConfig = TestSuiteConfig & (
   | { commands: TestSuiteCommandConfig[] }
 );
 
+/** Per-project work-tracker backend selection. */
+export type TrackerConfig =
+  | { backend: 'github' }
+  | {
+      backend: 'jira';
+      transport?: 'api' | 'mcp';
+      credentials?: string;
+      site?: string;
+      project_key?: string;
+    };
+
 export interface HarnessConfig {
   harness_version?: string;
   defaults?: DefaultsConfig;
@@ -519,6 +530,8 @@ export interface HarnessConfig {
    * memory-using step sees the same active provider (adr-2026-06-29-per-project-memory-provider-selection).
    */
   memory_provider?: string;
+  /** Per-project work-tracker backend selection. Absent defaults at the intake composition root. */
+  tracker?: TrackerConfig;
   /** OpenTelemetry exporter config. Absent = disabled (default off, FR-1). */
   otel?: OtelConfig;
   /**
