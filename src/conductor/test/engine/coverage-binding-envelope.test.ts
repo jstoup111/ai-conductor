@@ -232,6 +232,18 @@ describe('coverage binding envelope', () => {
     });
   });
 
+  it('accepts agreeing verdicts for two claim ids sharing one digest and fails conflicting ones closed', () => {
+    const issued = issueJudgeClaimIds(['sha256:shared', 'sha256:shared'], 'criterion');
+
+    expect(parseJudgeBatchPayload(JSON.stringify({ verdicts: [{ id: 'c1', verdict: 'asserts' }, { id: 'c2', verdict: 'asserts' }] }), issued))
+      .toEqual({ ok: true, verdicts: new Map([['sha256:shared', { verdict: 'asserts' }]]) });
+    expect(parseJudgeBatchPayload(JSON.stringify({ verdicts: [
+      { id: 'c1', verdict: 'asserts' },
+      { id: 'c2', verdict: 'does-not-assert', missingAssertion: 'No check requires it.' },
+    ] }), issued)).toEqual({ ok: false, reason: expect.stringContaining('claim id c2 conflicts') });
+  });
+
+
   it.each([
     ['unknown verdict', { verdicts: [{ id: 'c1', verdict: 'maybe' }] }, 'verdict'],
     ['missingAssertion on asserts', { verdicts: [{ id: 'c1', verdict: 'asserts', missingAssertion: 'not allowed' }] }, 'asserts'],

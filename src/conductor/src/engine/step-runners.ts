@@ -72,6 +72,7 @@ import {
   amendmentClaimDigest,
   claimDigest,
   parseJudgeBatchPayload,
+  issueJudgeClaimIds,
   readCoverageBindingEnvelope,
   writeCoverageBindingCodeStamp,
   writeCoverageBindingEnvelope,
@@ -4614,19 +4615,22 @@ export class DefaultStepRunner implements StepRunner {
       const batchDigests = batch.map(({ claimDigest: digest }) => digest);
       const memberId = batchDigests[0]!;
       const amendmentBatch = batch[0]?.claim.kind === 'amendment';
+      // The judge sees short opaque ids, never digests: it cannot reliably copy a 64-hex string.
+      const issuedIds = issueJudgeClaimIds(batchDigests, amendmentBatch ? 'amendment' : 'criterion');
+      const judgeClaimIds = [...issuedIds.keys()];
       const prompt = amendmentBatch
         ? [
           'Judge each supplied DECIDE amendment independently against only the plan tasks and their Done when checks. Do not read files, inspect a diff, or use any transcript.',
-          'Return exactly one JSON object with a verdicts array containing one verdict for every supplied digest. A verdict is carried with non-empty issued taskIds, not-carried with non-empty missingObligation, or no-plan-obligation; contradictsCompleted is optional and may name only issued completed task ids.',
+          'Return exactly one JSON object with a verdicts array containing one verdict for every supplied claim id. A verdict is carried with non-empty issued taskIds, not-carried with non-empty missingObligation, or no-plan-obligation; contradictsCompleted is optional and may name only issued completed task ids.',
           JSON.stringify({
-            claims: batch.map(({ claim, claimDigest: digest }) => ({ digest, artifactPath: claim.artifactPath, amendment: claim.amendment, taskIds: claim.taskIds, doneWhen: claim.doneWhen })),
+            claims: batch.map(({ claim }, index) => ({ id: judgeClaimIds[index], artifactPath: claim.artifactPath, amendment: claim.amendment, taskIds: claim.taskIds, doneWhen: claim.doneWhen })),
             completedTaskIds: [...completedTaskIds],
           }),
         ].join('\n\n')
         : [
           'Judge each supplied claim independently against only its cited Done when checks. Do not read files, inspect a diff, or use any transcript.',
-          'Return exactly one JSON object with a verdicts array containing one verdict for every supplied digest.',
-          JSON.stringify({ claims: batch.map(({ claim, claimDigest: digest }) => ({ digest, criterion: claim.criterion, taskIds: claim.taskIds, doneWhen: claim.doneWhen })) }),
+          'Return exactly one JSON object with a verdicts array containing one verdict for every supplied claim id.',
+          JSON.stringify({ claims: batch.map(({ claim }, index) => ({ id: judgeClaimIds[index], criterion: claim.criterion, taskIds: claim.taskIds, doneWhen: claim.doneWhen })) }),
         ].join('\n\n');
       let result: { success: boolean; output?: string; providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'] };
       if (this.providerRuntimes && this.sessionStore) {
@@ -4673,7 +4677,7 @@ export class DefaultStepRunner implements StepRunner {
       if (amendmentBatch) {
         const parsed = parseAmendmentBatchPayload(
           result.output,
-          batchDigests,
+          issuedIds,
           batch.flatMap(({ claim }) => [...claim.taskIds]),
           [...completedTaskIds],
         );
@@ -4711,7 +4715,7 @@ export class DefaultStepRunner implements StepRunner {
           if ((entry as { verdict: string }).verdict === 'not-carried') refused.push(entry);
         }
       } else {
-        const parsed = parseJudgeBatchPayload(result.output, batchDigests);
+        const parsed = parseJudgeBatchPayload(result.output, issuedIds);
         if (!parsed.ok) {
           await writeEnvelope('failed', entries);
           const infrastructureFailure = new CoverageBindingPayloadError(parsed.reason);
