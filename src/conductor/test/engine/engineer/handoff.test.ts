@@ -25,6 +25,7 @@ import { openSpecPr as openSpecPrProduction } from '../../../src/engine/engineer
 import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
 import { initialSpecPublication } from '../../../src/engine/engineer-cli.js';
 import { readAuthoredKeys } from '../../../src/engine/engineer/authored-ledger.js';
+import { slugify } from '../../../src/engine/engineer/spec-branch.js';
 import type { TargetRepo } from '../../../src/engine/engineer/target.js';
 import { GithubBotAuthRefusalError } from '../../../src/engine/github-bot-auth-refusal.js';
 
@@ -139,6 +140,97 @@ describe('openSpecPr', () => {
 
   afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function publishGeneratedSpecBranch(branch: string) {
+    const repository = 'acme/my-project';
+    const marker = `.docs/intake/${branch.slice('spec/'.length)}.md`;
+    const gitCalls: string[][] = [];
+    const githubCalls: string[][] = [];
+    const runnerCalls: string[][] = [];
+    const git: NonNullable<HandoffDeps['gitRunner']> = async (args) => {
+      gitCalls.push([...args]);
+      if (args[0] === 'remote') return { stdout: `https://github.com/${repository}.git\n`, stderr: '' };
+      if (args[0] === 'show' && args[1] === `${branch}:${marker}`) {
+        return { stdout: 'Owner: alice\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    };
+    const gh = async (args: string[], options: { credential?: 'operator' | 'write' }) => {
+      githubCalls.push([...args]);
+      if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
+      if (options.credential === 'write') throw new GithubBotAuthRefusalError('auth-refused');
+      return { stdout: '' };
+    };
+    const runner: HandoffDeps['runner'] = async (args) => {
+      runnerCalls.push([...args]);
+      return {
+        stdout: args[0] === 'pr' && args[1] === 'view'
+          ? args[2] === branch
+            ? JSON.stringify({ url: `https://github.com/${repository}/pull/42` })
+            : JSON.stringify({ body: '' })
+          : '',
+        stderr: '',
+      };
+    };
+    const machineIdentity = await import('../../../src/engine/owner-gate/machine-identity.js');
+    const owner = vi.spyOn(machineIdentity, 'readMachineOwnerConfig').mockResolvedValue({ spec_owner: 'alice' });
+    try {
+      const publication = initialSpecPublication(
+        { remote: `https://github.com/${repository}.git` }, branch, tempDir, gh, git, { emit: async () => {} },
+      );
+      const result = await openSpecPrProduction(makeTarget(tempDir), branch, {
+        runner,
+        gitRunner: git,
+        ledgerOpts: { engineerDir: tempDir },
+        publication,
+      });
+      return { result, marker, gitCalls, githubCalls, runnerCalls };
+    } finally {
+      owner.mockRestore();
+    }
+  }
+
+  it('publishes the generated trailing-hyphen branch without changing its marker or remote names', async () => {
+    const branch = `spec/${slugify('engine-owned destructive-git prevention is absent in self-host')}`;
+
+    const result = await publishGeneratedSpecBranch(branch);
+
+    expect(branch.endsWith('-')).toBe(true);
+    expect(result.result).toEqual({ kind: 'pr-opened', url: 'https://github.com/acme/my-project/pull/42' });
+    expect(result.gitCalls).toContainEqual(['show', `${branch}:${result.marker}`]);
+    expect(result.gitCalls).toContainEqual(['push', '-u', 'origin', `HEAD:refs/heads/${branch}`]);
+    expect(result.githubCalls).toContainEqual(expect.arrayContaining(['pr', 'create', '--head', branch]));
+    expect(result.githubCalls).toContainEqual(expect.arrayContaining(['pr', 'edit']));
+  });
+
+  it('publishes a generated branch without a trailing hyphen through the same composition', async () => {
+    const branch = `spec/${slugify('Compose handoff')}`;
+
+    const result = await publishGeneratedSpecBranch(branch);
+
+    expect(result.result).toEqual({ kind: 'pr-opened', url: 'https://github.com/acme/my-project/pull/42' });
+    expect(result.gitCalls).toContainEqual(['show', `${branch}:${result.marker}`]);
+  });
+
+  it.each([
+    'other/foo',
+    'spec/',
+    'spec/Foo',
+    'spec/-foo',
+    'spec/foo--bar',
+    'spec/foo--',
+    'spec/foo/bar',
+    `spec/${'a'.repeat(51)}`,
+  ])('refuses non-canonical branch %s before calling git or GitHub', async (branch) => {
+    const git = vi.fn<NonNullable<HandoffDeps['gitRunner']>>();
+    const gh = vi.fn<NonNullable<Parameters<typeof initialSpecPublication>[3]>>();
+
+    expect(() => initialSpecPublication(
+      { remote: 'https://github.com/acme/my-project.git' }, branch, tempDir, gh, git,
+    )).toThrow(`engineer handoff: branch "${branch}" is not a canonical spec/<slug> branch.`);
+    expect(git).not.toHaveBeenCalled();
+    expect(gh).not.toHaveBeenCalled();
   });
 
   it('uses one event spine for bot fallback at push, PR creation, and presentation repair', async () => {
