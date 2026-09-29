@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import type { SetupFailureAttempt } from './rebase.js';
 import type { SetupRepairRejectionReason } from '../types/events.js';
+import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 
 /** Minimal git runner — injected so the helpers are unit-testable without a repo. */
 export interface GitRunner {
@@ -343,7 +344,7 @@ export async function quarantine(
   }
 
   // Commit the staged changes
-  const commitResult = await git(['commit', '-m', 'Quarantine before reset']);
+  const commitResult = await git(['commit', '-m', withDaemonCoAuthorTrailer('Quarantine before reset')]);
   if (commitResult.exitCode !== 0) {
     // Commit failed — roll back the index
     await git(['reset', '--mixed', 'HEAD']);
@@ -627,7 +628,7 @@ async function preserveRepairAttempt(git: GitRunner, slug: string, originalHead:
   if (residue.length > 0) {
     const add = await git(['add', '-A']);
     if (add.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(add, 'could not stage rejected repair') };
-    const commit = await git(['commit', '-m', 'wip(setup): preserve rejected repair']);
+    const commit = await git(['commit', '-m', withDaemonCoAuthorTrailer('wip(setup): preserve rejected repair')]);
     if (commit.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(commit, 'could not preserve rejected repair') };
   }
   const attempted = await git(['rev-parse', 'HEAD']);
@@ -725,7 +726,7 @@ export async function fixSession(
   if (afterPrepare.value.head !== candidate.value.head || afterPrepare.value.tree !== candidate.value.tree) return reject('setup-drift', 'forced setup changed the repair candidate', true);
   if (!candidate.value.dirty) return candidate.value.head === original.head ? success('verified-no-tree-change') : success('accepted-existing-commit');
   const add = await git(['add', '-A']);
-  const commit = add.exitCode === 0 ? await git(['commit', '-m', 'fix(setup): retain verified repair']) : add;
+  const commit = add.exitCode === 0 ? await git(['commit', '-m', withDaemonCoAuthorTrailer('fix(setup): retain verified repair')]) : add;
   if (commit.exitCode !== 0) return reject('repair-commit-failed', gitFailure(commit, 'could not commit verified repair'), true);
   const verified = await repairSnapshot(git);
   if (!verified.ok) return reject('repair-postcondition-failed', verified.outputTail, true);

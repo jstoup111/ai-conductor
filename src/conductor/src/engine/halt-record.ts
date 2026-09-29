@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import type { HaltClass } from './halt-marker.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
+import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import { makeProductionGh, makeProductionGit, type GhRunner, type GitRunner } from './pr-labels.js';
@@ -225,7 +226,7 @@ async function commitHaltRecordChange(
   if (staged.exitCode === 0) return { kind: 'noop' };
   if (staged.exitCode !== 1) return { kind: 'failed', reason: commandFailure(staged) };
 
-  await execa('git', ['commit', '--no-verify', '-m', message], {
+  await execa('git', ['commit', '--no-verify', '-m', withDaemonCoAuthorTrailer(message)], {
     cwd: root,
     env: withEngineCommitEnv(),
   });

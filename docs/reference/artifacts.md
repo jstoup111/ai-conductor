@@ -591,6 +591,11 @@ legacy interactive cleanup path also deletes the branch.
 
 ### Commit trailers
 
+Daemon worktrees may contain `.pipeline/co-author`, a hook input written during preparation. It is
+not telemetry: it supplies the configured bot's `Co-authored-by:` trailer to build commits and is
+removed when no bot identity is available. The root checkout and operator-created worktrees never
+receive this hook input.
+
 The engine's trailer parser recognizes exactly two keys: `Task:` and `Evidence:`. There is no `Owner:`
 commit trailer (`Owner:` is a line inside `.docs/intake/<slug>.md`), no `Shipped-Record:` trailer, and
 no `Co-Authored-By` handling anywhere in the engine.

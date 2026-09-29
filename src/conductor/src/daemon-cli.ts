@@ -82,6 +82,7 @@ import { heapDumpOptionsFromConfig, startDaemonMemorySampler } from './engine/da
 import { renderedEventTypes } from './engine/event-sinks.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
 import { formatGithubCredentialFallback, formatGithubOperationRefusal } from './engine/github-operations.js';
+import { createBotCoAuthorResolver, formatBotCoAuthorSkipped, installDaemonBotCoAuthor } from './engine/bot-co-author.js';
 import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
@@ -857,6 +858,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     throw new Error(`Config error: ${configResult.error.message}`);
   }
   const config = configResult.ok ? configResult.config : undefined;
+  installDaemonBotCoAuthor(createBotCoAuthorResolver({ runner: makeProductionGh(), cwd: projectRoot }));
   const daemonConcurrency = resolveDaemonCommandConcurrency(opts, config?.daemon_concurrency);
 
   // Backstop for every daemon launch path: refuse to run on a stale harness
@@ -2946,6 +2948,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'github_write_credential_fallback':
       log(`${dot} ${chalk.yellow('↻')} ${chalk.yellow(formatGithubCredentialFallback(event))}`);
+      break;
+    case 'bot_co_author_skipped':
+      log(`${dot} ${chalk.yellow('↻')} ${chalk.yellow(formatBotCoAuthorSkipped(event))}`);
       break;
     case 'step_retry': {
       const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
