@@ -8,7 +8,7 @@
 
 ## Summary
 
-Seventeen tasks deliver an engine-generated `git` argv guard, provisioned fail-closed into every daemon-prepared worktree and prepended to the child `PATH` of every Claude and Codex dispatch in both run modes. It is re-verified before each dispatch. The same tasks fix the operator hook's heredoc false positive, align the `tdd` skill and the environment-claim audit, and prove coverage with unit, adapter, dispatch-shape, containment and live smoke tests.
+Twenty-three tasks deliver an engine-generated `git` argv guard, provisioned fail-closed into every daemon-prepared worktree and prepended to the child `PATH` of every Claude and Codex dispatch in both run modes. It is re-verified before each dispatch. The same tasks fix the operator hook's heredoc false positive, align the `tdd` skill and the environment-claim audit, and prove coverage with unit, adapter, dispatch-shape, containment and live smoke tests.
 
 ## Technical Approach
 
@@ -390,15 +390,154 @@ Seventeen tasks deliver an engine-generated `git` argv guard, provisioned fail-c
 
 **Dependencies:** 14
 
+### Task 18: Real-git resolution rejects every spelling of the guard directory
+**Story:** 7
+**Type:** negative-path
+
+> Added 2026-09-29 by #1354 (operator decision, as-built finding adr-d1-trailing-slash-real-git-self-resolution).
+
+**Steps:**
+1. Add failing tests to `src/conductor/test/engine/git-guard.test.ts`: `resolveRealGit` with a first `PATH` entry naming a `.pipeline/bin` directory that holds the guard, spelled with a trailing slash, with a `.` segment, and through a symlinked directory; and `ensureGitGuardForDispatch` on a prepared worktree whose `.pipeline/git-guard/real-git` sidecar names that worktree's own `.pipeline/bin/git`.
+2. Verify RED.
+3. In `src/conductor/src/engine/git-guard.ts`, normalize each `PATH` entry (resolve, then realpath) before the `.pipeline/bin` exclusion, and skip any candidate whose content equals `GIT_GUARD_SCRIPT`. In `ensureGitGuardForDispatch`, treat a `real-git` sidecar whose realpath lies under a `.pipeline/bin` directory, or whose content equals `GIT_GUARD_SCRIPT`, as invalid and rewrite it through `writeGitGuard`.
+4. Verify GREEN. Commit: "git guard: reject every spelling of the guard directory as real git"
+
+**Done when:**
+- `resolveRealGit` given a `PATH` whose first entry is a `.pipeline/bin` directory holding the guard, spelled with a trailing slash, with a `.` segment, or through a symlinked directory, returns the next real `git` on that `PATH`, as asserted by the guard-directory spelling tests.
+- `ensureGitGuardForDispatch` on a prepared worktree whose `.pipeline/git-guard/real-git` sidecar names that worktree's own `.pipeline/bin/git` rewrites the sidecar to a real git outside every `.pipeline/bin` directory before returning, as asserted by the self-resolved sidecar repair test.
+
+**Files likely touched:**
+- `src/conductor/src/engine/git-guard.ts`
+- `src/conductor/test/engine/git-guard.test.ts`
+
+**Dependencies:** 7
+
+### Task 19: A configured worktree whose hooks directory is missing is still guarded
+**Story:** 7
+**Type:** negative-path
+
+> Added 2026-09-29 by #1354 (operator decision, as-built finding adr-d3-missing-hooks-directory-fails-open).
+
+**Steps:**
+1. Add failing tests to `src/conductor/test/engine/git-guard.test.ts` and the two adapter test files: a prepared worktree whose `.pipeline/git-hooks` directory is deleted while its worktree-scoped `core.hooksPath` still names it, then `ensureGitGuardForDispatch` and a Claude and a Codex dispatch into it with a recording spawn.
+2. Verify RED.
+3. In `ensureGitGuardForDispatch`, decide preparedness from the worktree-scoped `core.hooksPath` value alone, never from whether `.pipeline/git-hooks` exists. The only early return that skips the git config read is a `cwd` with no `.git` entry.
+4. Verify GREEN. Commit: "git guard: fail closed when the hooks directory is missing"
+
+**Done when:**
+- `ensureGitGuardForDispatch` on a worktree whose worktree-scoped `core.hooksPath` names its own `.pipeline/git-hooks` while that directory is missing returns the worktree's `.pipeline/bin` path with the guard rewritten to mode 0755, as asserted by the missing-hooks-directory test.
+- A Claude dispatch and a Codex dispatch into that worktree each reach the recorded spawn with a child `PATH` beginning with the worktree's `.pipeline/bin`, as asserted by the adapter missing-hooks-directory tests.
+
+**Files likely touched:**
+- `src/conductor/src/engine/git-guard.ts`
+- `src/conductor/test/engine/git-guard.test.ts`
+- `src/conductor/test/execution/claude-provider.test.ts`
+- `src/conductor/test/execution/codex-provider.test.ts`
+
+**Dependencies:** 18
+
+### Task 20: Every build_review dispatch launches without the guard, including built-in-only laps
+**Story:** 6
+**Type:** negative-path
+
+> Added 2026-09-29 by #1354 (operator decision, as-built finding adr-d2-build-review-exemption-not-applied).
+
+**Steps:**
+1. Add a failing test to `src/conductor/test/engine/git-guard-review-exemption.test.ts` that drives the build_review step runner through a built-in-only lap (no custom member, so no materialized checkout) whose dispatch `cwd` is the prepared feature worktree, with real Claude and Codex adapters whose spawn function is a recorder.
+2. Verify RED.
+3. Carry an explicit review-dispatch marker in the provider invocation options from both build_review dispatch paths in `src/conductor/src/engine/step-runners.ts` (materialized and built-in-only). In `ClaudeProvider.invoke` and `CodexProvider.invoke`, skip `ensureGitGuardForDispatch`, `withGitGuardPath` and the Codex `shell_environment_policy.set.PATH` override when the marker is set.
+4. Verify GREEN. Commit: "git guard: exempt every build_review dispatch"
+
+**Done when:**
+- A built-in-only build_review lap whose dispatch `cwd` is the prepared feature worktree launches its Claude and Codex members with no `.pipeline/bin` entry on the child `PATH` and no `shell_environment_policy.set.PATH` in the Codex argv, as asserted by the built-in-lap review-exemption test.
+- A non-review dispatch into the same prepared feature worktree still reaches the recorded spawn with a child `PATH` beginning with its `.pipeline/bin`, as asserted by the same test file.
+
+**Files likely touched:**
+- `src/conductor/src/engine/step-runners.ts`
+- `src/conductor/src/execution/claude-provider.ts`
+- `src/conductor/src/execution/codex-provider.ts`
+- `src/conductor/test/engine/git-guard-review-exemption.test.ts`
+
+**Dependencies:** 11, 19
+
+### Task 21: Commands that cannot be destructive exec the real git with no extra git call
+**Story:** 4
+**Type:** happy-path
+
+> Added 2026-09-29 by #1354 (operator decision, as-built finding adr-d4-safe-command-extra-git-query).
+
+**Steps:**
+1. Add failing tests to `src/conductor/test/engine/git-guard-script.test.ts` with the recording stub real git: `show`, `fetch`, `add`, `ls-files` and `worktree list` through the guard each record exactly one invocation equal to the original argv.
+2. Verify RED.
+3. In `GIT_GUARD_SCRIPT`, replace the short no-alias allowlist with a static literal list of git built-in subcommand names (git never expands an alias that shadows a built-in). Look up `alias.«name»` only for a subcommand that is not a built-in, and `exec` the real git immediately for a built-in other than `push`, `reset`, `clean`, `checkout`, `restore` and `branch`.
+4. Verify GREEN. Commit: "git guard: exec non-destructive built-ins with no extra git call"
+
+**Done when:**
+- `show`, `fetch`, `add`, `ls-files` and `worktree list` through the guard each produce exactly one recorded stub real git invocation whose argv is byte-identical to the original, with no `config --get alias.*` call, as asserted by the no-extra-call fast-path test.
+- A non-shell alias expanding to `reset --hard` is still refused in the feature worktree after the change, as asserted by the existing alias test.
+
+**Files likely touched:**
+- `src/conductor/src/engine/git-hook-assets.ts`
+- `src/conductor/test/engine/git-guard-script.test.ts`
+
+**Dependencies:** 5
+
+### Task 22: The environment-claim audit exempts a bare-force claim only when the guard was installed
+**Story:** 12
+**Type:** negative-path
+
+> Added 2026-09-29 by #1354 (operator decision, as-built finding adr-d6-audit-exempts-unguarded-review).
+
+**Steps:**
+1. Add failing tests to `src/conductor/test/engine/environment-claim-audit.test.ts` for the new fact, and a wiring test that captures the facts `conductor.ts` passes for a guarded feature-worktree dispatch, a build_review dispatch, and a dispatch whose `cwd` is not an engine-prepared worktree.
+2. Verify RED.
+3. Add `gitGuardInstalled: boolean` to `DispatchEnvironmentFacts` in `self-host/environment-claim-audit.ts` and apply the bare-force exemption only when it is true. Report per dispatch whether the adapter actually prepended the guard, and pass that value where `conductor.ts` builds the facts.
+4. Verify GREEN. Commit: "environment-claim audit: exempt bare-force claims only under an installed guard"
+
+**Done when:**
+- `auditEnvironmentBlockerClaims` given Claude self-host blocker text claiming the environment refused `git push --force` returns no refutation when `gitGuardInstalled` is true and refutes it when `gitGuardInstalled` is false, as asserted by the guard-installed claim tests.
+- A build_review dispatch and a dispatch whose `cwd` is not an engine-prepared worktree reach the audit with `gitGuardInstalled` false, and a guarded feature-worktree dispatch reaches it with `gitGuardInstalled` true, as asserted by the dispatch-facts wiring test.
+
+**Files likely touched:**
+- `src/conductor/src/engine/self-host/environment-claim-audit.ts`
+- `src/conductor/src/engine/conductor.ts`
+- `src/conductor/test/engine/environment-claim-audit.test.ts`
+
+**Dependencies:** 13, 20
+
+### Task 23: Adapter tests cover all four provider and run-mode cells with no operator home
+**Story:** 6
+**Type:** happy-path
+
+> Added 2026-09-29 by #1354 (operator decision, as-built finding adr-d10-coverage-and-inventory-incomplete).
+
+**Steps:**
+1. Write `src/conductor/test/execution/git-guard-adapter-cells.test.ts` with one named test per cell: Claude non-self-host, Claude self-host, Codex non-self-host, Codex self-host. Each prepares a scratch worktree with `prepareWorktree`, sets `HOME` to an empty temp directory (no `~/.claude/settings.json`, no Codex config), and invokes the real adapter with a recording spawn function.
+2. Confirm each cell fails when its adapter's `withGitGuardPath` call is removed, by reading the recorded spawn env rather than a mocked helper.
+3. Commit: "test(git-guard): cover all four adapter cells with no operator home"
+
+**Done when:**
+- Four named adapter-cell tests (Claude non-self-host, Claude self-host, Codex non-self-host, Codex self-host) each dispatch into a prepared scratch worktree with `HOME` set to an empty temp directory and assert the recorded child `PATH` begins with that worktree's `.pipeline/bin`, as asserted by the adapter-cell test file.
+- Each cell test reads the child env from the recorded spawn call, never from a mocked `withGitGuardPath`, so removing the guard prepend from that adapter fails the cell.
+
+**Files likely touched:**
+- `src/conductor/test/execution/git-guard-adapter-cells.test.ts`
+
+**Verify-only:** yes
+
+**Dependencies:** 9
+
 ## Task Dependency Graph
 
 ```text
-1 → 2 → 3 → 4 → 5
+1 → 2 → 3 → 4 → 5 → 21
 1 → 6 → 7 → 8 → 9 → 10
-              8 → 11
+          7 → 18 → 19 → 20 → 22
+              9 → 23
+              8 → 11 → 20
               9 → 12
               9 → 16
-13 (independent)
+13 → 22
 14 → 17
 15 (independent)
 ```
@@ -429,24 +568,24 @@ Seventeen tasks deliver an engine-generated `git` argv guard, provisioned fail-c
 | Story 3 negative: **Given** a guarded agent shell, **When** the agent runs `git restore --staged «file»` or `git checkout «branch»` with no pathspec, **Then** the command reaches the real git unchanged. | 3 | "`restore --staged «file»`, `checkout «branch»` with no pathspec" | diff-local |
 | Story 3 negative: **Given** a guarded agent shell, **When** the agent runs `git clean -n` or `git clean --dry-run`, **Then** the command reaches the real git and lists what would be removed without removing anything. | 3 | "`clean -n` and `clean --dry-run` through the guard each print the untracked path, and the untracked file still exists afterwards" | diff-local |
 | Story 4 happy: **Given** a guarded agent shell and a temporary repository outside the feature repository (for example a test fixture), **When** the agent or a test it runs executes `git reset --hard`, `git clean -fd`, or `git branch -D «branch»` in that repository, **Then** the command reaches the real git and takes effect. | 4 | "through the guard reach the real git and take effect" | diff-local |
-| Story 4 happy: **Given** a guarded agent shell in the feature worktree, **When** the agent runs a non-destructive command such as `git status`, `git log -1`, `git diff`, `git commit`, or `git rebase --continue`, **Then** the output, exit status, and side effects are identical to running the real git directly. | 4 | "produce stdout, stderr, exit status and resulting `HEAD` byte-identical to the real git run directly from the same repository state" | diff-local |
+| Story 4 happy: **Given** a guarded agent shell in the feature worktree, **When** the agent runs a non-destructive command such as `git status`, `git log -1`, `git diff`, `git commit`, or `git rebase --continue`, **Then** the output, exit status, and side effects are identical to running the real git directly. | 4, 21 | "produce stdout, stderr, exit status and resulting `HEAD` byte-identical to the real git run directly from the same repository state" | diff-local |
 | Story 4 negative: **Given** a guarded agent shell whose current directory is a temporary repository, **When** the agent runs `git -C «feature-worktree» reset --hard` or sets `GIT_DIR` to the feature repository's git directory, **Then** the command is refused because the target, not the current directory, decides the scope. | 4 | "`-C «feature-worktree» reset --hard` and `reset --hard` with `GIT_DIR` set to the feature repository's git dir exit non-zero" | diff-local |
 | Story 4 negative: **Given** a guarded agent shell in a sibling worktree or the root checkout of the feature repository, **When** the agent runs `git clean -f`, **Then** the command is refused. | 4 | "`clean -f` through the guard in a sibling worktree of the feature repository and in the feature repository's root checkout each exit non-zero" | diff-local |
 | Story 4 negative: **Given** a feature repository whose git config defines a non-shell alias that expands to `reset --hard`, **When** the agent runs that alias in a guarded agent shell, **Then** the command is refused. | 4 | "a non-shell alias expanding to `reset --hard` in the feature worktree, both exit non-zero" | diff-local |
 | Story 5 happy: **Given** a guarded agent shell, **When** any refused command runs, **Then** it exits with a non-zero status, prints nothing to stdout, and writes to stderr one message naming the refused operation, why it is refused, and the safe alternative for that class (`--force-with-lease`, `reset --keep`, `branch -d`, `clean -n`, or commit a WIP / use a temporary worktree). | 5 | "exits with status 1, writes nothing to stdout, and writes one stderr message containing the refused operation, a reason, and its class's safe alternative" | diff-local |
 | Story 5 negative: **Given** a guarded agent shell, **When** a refused command runs, **Then** the real git never runs the refused command or any command that can change repository state; only the read-only queries the guard uses to classify it (`rev-parse`, `config`, `for-each-ref`, `merge-base`) reach the real git, as a stub real git that records every call shows. | 5 | "For every refused form the recording stub real git records no invocation of the refused subcommand and no state-changing subcommand" | diff-local |
 | Story 5 negative: **Given** a guarded agent shell, **When** an allowed command fails inside git (for example a push rejected as non-fast-forward), **Then** the message and exit status the agent sees are git's own, with no refusal text added. | 5 | "surfaces the stub's exact stderr and exit status with no guard text added" | diff-local |
-| Story 6 happy: **Given** an engine-prepared feature worktree and an empty operator home (no `~/.claude/settings.json`, no Codex config), **When** the daemon dispatches Claude non-self-host, Claude self-host, Codex non-self-host, and Codex self-host into that worktree, **Then** each child environment's `PATH` begins with that worktree's guard directory. | 8, 9 | "passes a child env whose `PATH` begins with that worktree's `.pipeline/bin`, as asserted by the two Claude env-cell tests" | diff-local |
+| Story 6 happy: **Given** an engine-prepared feature worktree and an empty operator home (no `~/.claude/settings.json`, no Codex config), **When** the daemon dispatches Claude non-self-host, Claude self-host, Codex non-self-host, and Codex self-host into that worktree, **Then** each child environment's `PATH` begins with that worktree's guard directory. | 8, 9, 23 | "passes a child env whose `PATH` begins with that worktree's `.pipeline/bin`, as asserted by the two Claude env-cell tests" | diff-local |
 | Story 6 happy: **Given** a Codex dispatch into an engine-prepared worktree, **When** the engine builds the Codex invocation, **Then** the shell-environment policy passed to Codex carries the same guarded `PATH`. | 9 | "contains `--config` with `shell_environment_policy.set.PATH` equal to the guarded child `PATH`" | diff-local |
-| Story 6 happy: **Given** a build_review dispatch, **When** the engine builds the review's child environment, **Then** no guard directory is prepended to its `PATH`, because review dispatches are outside the guard's scope (ADR D2 amendment, 2026-09-28). | 11 | "launches with no `.pipeline/bin` entry on its child `PATH`" | diff-local |
+| Story 6 happy: **Given** a build_review dispatch, **When** the engine builds the review's child environment, **Then** no guard directory is prepended to its `PATH`, because review dispatches are outside the guard's scope (ADR D2 amendment, 2026-09-28). | 11, 20 | "launches with no `.pipeline/bin` entry on its child `PATH`" | diff-local |
 | Story 6 negative: **Given** a dispatch whose working directory is not an engine-prepared worktree (an interactive run or the root checkout), **When** the engine builds the child environment, **Then** `PATH` is unchanged and no guard directory is added. | 8, 9 | "passes a child `PATH` equal to the inherited one" | diff-local |
 | Story 6 negative: **Given** any guarded dispatch, **When** the engine builds the child environment, **Then** the daemon's own `process.env.PATH` is identical before and after, and the credential stripping and review allowlisting are unchanged. | 8, 9 | "still omits `CLAUDE_CODE_OAUTH_TOKEN` wherever it is stripped today, and the contained-review env still equals the allowlisted set with only `PATH` changed" | diff-local |
 | Story 6 negative: **Given** a model-fallback retry, an auxiliary dispatch, or a replacement-provider dispatch into an engine-prepared worktree, **When** the engine builds that child environment, **Then** its `PATH` begins with the guard directory, just like the initial dispatch. | 10 | "an initial dispatch, a model-fallback rung retry, and a replacement-provider candidate into a prepared worktree each reach the recorded spawn with a child `PATH` beginning with the guard directory" | diff-local |
-| Story 7 happy: **Given** an engine-prepared worktree whose guard file was deleted, edited, or had its execute bit removed, **When** the next dispatch into that worktree is prepared, **Then** the guard is rewritten from the embedded asset with mode 0755 before the provider launches, and the dispatch proceeds guarded. | 7, 8 | "rewrites it to `GIT_GUARD_SCRIPT` with mode 0755 and returns the worktree's `.pipeline/bin` path" | diff-local |
-| Story 7 happy: **Given** a fresh worktree being prepared, **When** worktree preparation completes, **Then** the guard exists as a regular file (not a symlink) with mode 0755, and embeds the absolute path of a real git that is not itself the guard. | 6 | "is a regular file (lstat not a symlink) with mode 0755 whose content equals `GIT_GUARD_SCRIPT`" | diff-local |
+| Story 7 happy: **Given** an engine-prepared worktree whose guard file was deleted, edited, or had its execute bit removed, **When** the next dispatch into that worktree is prepared, **Then** the guard is rewritten from the embedded asset with mode 0755 before the provider launches, and the dispatch proceeds guarded. | 7, 8, 19 | "rewrites it to `GIT_GUARD_SCRIPT` with mode 0755 and returns the worktree's `.pipeline/bin` path" | diff-local |
+| Story 7 happy: **Given** a fresh worktree being prepared, **When** worktree preparation completes, **Then** the guard exists as a regular file (not a symlink) with mode 0755 whose content is the static embedded asset, and a sidecar data file beside it records the absolute path of a real git that is not itself the guard, which the guard reads at run time. | 6 | "`.pipeline/git-guard/real-git` names an absolute executable git that is not under any `.pipeline/bin` directory" | diff-local |
 | Story 7 negative: **Given** an engine-prepared worktree whose guard cannot be rewritten (for example its directory is read-only), **When** a dispatch into it is prepared, **Then** the provider is not launched and the dispatch fails with a message naming the guard path. | 8, 9 | "resolves a failed result whose output names the guard path and the recorded spawn function is never called" | diff-local |
 | Story 7 negative: **Given** worktree preparation whose guard write fails, **When** preparation runs, **Then** preparation fails with a message naming the guard, instead of logging a skip and continuing. | 6 | "`prepareWorktree` rejects with an error naming `.pipeline/bin/git` and logs no `git hooks: skipped` line" | diff-local |
-| Story 7 negative: **Given** a daemon whose own `PATH` contains a `.pipeline/bin` directory, **When** the guard is written, **Then** the embedded real-git path does not point into any `.pipeline/bin` directory. | 6 | "returns the next `git` on that `PATH`" | diff-local |
+| Story 7 negative: **Given** a daemon whose own `PATH` contains a `.pipeline/bin` directory, spelled with or without a trailing slash, **When** the guard is written, **Then** the real-git path recorded in the sidecar data file does not point into any `.pipeline/bin` directory. | 6, 18 | "spelled with a trailing slash, with a `.` segment, or through a symlinked directory, returns the next real `git` on that `PATH`" | diff-local |
 | Story 8 happy: **Given** an engine-prepared worktree with the guard present, **When** the daemon runs its own git operations for rebase, quarantine, setup-triage reset or clean, and shipped-record refresh, **Then** they run against the real git and their outcomes are unchanged. | 12 | "resolves `git` to the same executable as before the dispatch" | diff-local |
 | Story 8 happy: **Given** a guarded agent shell, **When** the agent launches an engine CLI whose git use includes a `--force-with-lease` push (the draft-PR ship path), **Then** that push reaches the real git. | 12 | "including `push --force-with-lease` from the draft-PR ship path" | diff-local |
 | Story 8 negative: **Given** a guarded agent shell, **When** the agent launches an engine CLI in the feature repository, **Then** every git argv that CLI issues today is classified as allowed by the guard, and a test fails if any is refused. | 12 | "the test fails if any inventoried argv is refused" | diff-local |
@@ -461,7 +600,7 @@ Seventeen tasks deliver an engine-generated `git` argv guard, provisioned fail-c
 | Story 11 negative: **Given** an advisory-mode smoke run without a provider's credentials or binary, **When** that provider's guard smoke file runs, **Then** its case is reported as skipped with the missing prerequisite named, never as passed. | 16 | "reports skipped naming the missing prerequisite" | diff-local |
 | Story 11 negative: **Given** a gate-mode smoke run that selects a provider's credentialed leg without that provider's credentials, **When** the guard smoke file runs, **Then** the run fails naming the missing credential and does not skip. | 16 | "in gate mode the smoke runner fails naming the missing credential" | diff-local |
 | Story 11 negative: **Given** the default (non-smoke) test suite, **When** it runs, **Then** no live provider session is started. | 16 | "confirms the default `vitest` configuration excludes them" | diff-local |
-| Story 12 happy: **Given** a Claude self-host dispatch whose blocker text claims the environment refused `git push --force` (or `git push -f`), **When** the environment-claim audit evaluates that text, **Then** it does not refute the claim. | 13 | "returns no refutation, as asserted by the guard-refused-claim test" | diff-local |
+| Story 12 happy: **Given** a Claude self-host dispatch whose blocker text claims the environment refused `git push --force` (or `git push -f`), **When** the environment-claim audit evaluates that text, **Then** it does not refute the claim. | 13, 22 | "returns no refutation, as asserted by the guard-refused-claim test" | diff-local |
 | Story 12 negative: **Given** a Claude self-host dispatch whose blocker text claims the environment blocks plain `git push` or `git push --force-with-lease`, **When** the environment-claim audit evaluates that text, **Then** it still refutes the claim as it does today. | 13 | "still refutes blocker text claiming plain `git push` or `git push --force-with-lease` is blocked" | diff-local |
 | Story 12 negative: **Given** a Claude self-host dispatch whose blocker text claims the environment blocks `gh pr`, **When** the environment-claim audit evaluates that text, **Then** its verdict is unchanged from today. | 13 | "its verdicts for `gh pr` claims are unchanged" | diff-local |
 
@@ -469,16 +608,16 @@ Seventeen tasks deliver an engine-generated `git` argv guard, provisioned fail-c
 
 | Decision | Disposition | Task(s) | Evidence |
 | --- | --- | --- | --- |
-| adr-2026-09-23-engine-git-guard-on-agent-path#D1 | task | task-6 | is a regular file (lstat not a symlink) with mode 0755 whose content equals `GIT_GUARD_SCRIPT` |
-| adr-2026-09-23-engine-git-guard-on-agent-path#D2 | task | task-8, task-9, task-10 | passes a child env whose `PATH` begins with that worktree's `.pipeline/bin` |
-| adr-2026-09-23-engine-git-guard-on-agent-path#D3 | task | task-7, task-8, task-9 | rewrites it to `GIT_GUARD_SCRIPT` with mode 0755 |
-| adr-2026-09-23-engine-git-guard-on-agent-path#D4 | task | task-4 | resolves the target's common dir via the real git's `rev-parse --git-common-dir` |
+| adr-2026-09-23-engine-git-guard-on-agent-path#D1 | task | task-6, task-18 | is a regular file (lstat not a symlink) with mode 0755 whose content equals `GIT_GUARD_SCRIPT` |
+| adr-2026-09-23-engine-git-guard-on-agent-path#D2 | task | task-8, task-9, task-10, task-20 | passes a child env whose `PATH` begins with that worktree's `.pipeline/bin` |
+| adr-2026-09-23-engine-git-guard-on-agent-path#D3 | task | task-7, task-8, task-9, task-19 | rewrites it to `GIT_GUARD_SCRIPT` with mode 0755 |
+| adr-2026-09-23-engine-git-guard-on-agent-path#D4 | task | task-4, task-21 | resolves the target's common dir via the real git's `rev-parse --git-common-dir` |
 | adr-2026-09-23-engine-git-guard-on-agent-path#D5 | task | task-2, task-1, task-3, task-4 | whose tip is reachable from no other local branch or remote-tracking ref exit non-zero |
-| adr-2026-09-23-engine-git-guard-on-agent-path#D6 | task | task-5, task-13 | writes one stderr message containing the refused operation, a reason, and its class's safe alternative |
+| adr-2026-09-23-engine-git-guard-on-agent-path#D6 | task | task-5, task-13, task-22 | writes one stderr message containing the refused operation, a reason, and its class's safe alternative |
 | adr-2026-09-23-engine-git-guard-on-agent-path#D7 | task | task-12 | the daemon process's `PATH` contains no `.pipeline/bin` entry |
 | adr-2026-09-23-engine-git-guard-on-agent-path#D8 | task | task-14 | exits 0 for a command whose heredoc body |
 | adr-2026-09-23-engine-git-guard-on-agent-path#D9 | task | task-15 | names a temporary detached worktree at the base commit |
-| adr-2026-09-23-engine-git-guard-on-agent-path#D10 | task | task-16, task-8, task-9 | asserts a real Claude session's `command -v git` output equals the prepared worktree's `.pipeline/bin/git` |
+| adr-2026-09-23-engine-git-guard-on-agent-path#D10 | task | task-16, task-8, task-9, task-23 | asserts a real Claude session's `command -v git` output equals the prepared worktree's `.pipeline/bin/git` |
 
 ## Verification
 

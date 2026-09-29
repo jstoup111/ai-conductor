@@ -154,13 +154,13 @@ As the harness operator, I want the guard verified at every dispatch, so that a 
 ### Happy Path
 
 - **Given** an engine-prepared worktree whose guard file was deleted, edited, or had its execute bit removed, **When** the next dispatch into that worktree is prepared, **Then** the guard is rewritten from the embedded asset with mode 0755 before the provider launches, and the dispatch proceeds guarded.
-- **Given** a fresh worktree being prepared, **When** worktree preparation completes, **Then** the guard exists as a regular file (not a symlink) with mode 0755, and embeds the absolute path of a real git that is not itself the guard.
+- **Given** a fresh worktree being prepared, **When** worktree preparation completes, **Then** the guard exists as a regular file (not a symlink) with mode 0755 whose content is the static embedded asset, and a sidecar data file beside it records the absolute path of a real git that is not itself the guard, which the guard reads at run time.
 
 ### Negative Paths
 
 - **Given** an engine-prepared worktree whose guard cannot be rewritten (for example its directory is read-only), **When** a dispatch into it is prepared, **Then** the provider is not launched and the dispatch fails with a message naming the guard path.
 - **Given** worktree preparation whose guard write fails, **When** preparation runs, **Then** preparation fails with a message naming the guard, instead of logging a skip and continuing.
-- **Given** a daemon whose own `PATH` contains a `.pipeline/bin` directory, **When** the guard is written, **Then** the embedded real-git path does not point into any `.pipeline/bin` directory.
+- **Given** a daemon whose own `PATH` contains a `.pipeline/bin` directory, spelled with or without a trailing slash, **When** the guard is written, **Then** the real-git path recorded in the sidecar data file does not point into any `.pipeline/bin` directory.
 
 ### Done When
 
