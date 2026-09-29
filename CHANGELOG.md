@@ -42,6 +42,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon recovery now retains halt state when its committed halt record cannot be cleared. ([implementation PR #2820](https://github.com/jstoup111/ai-conductor/pull/2820)).
 - The as-built architecture review no longer rejects valid verdicts that carry Codex strict-mode filler prose, which had exhausted its retries and halted features. ([implementation PR #2826](https://github.com/jstoup111/ai-conductor/pull/2826)).
 - The coverage_binding judge now answers with short claim ids instead of copying 64-character digests, so a judge that mistypes a digest no longer halts the feature. ([implementation PR #2830](https://github.com/jstoup111/ai-conductor/pull/2830)).
+- Compose handoff accepts generated spec branch slugs that end in one trailing hyphen. ([implementation PR #2828](https://github.com/jstoup111/ai-conductor/pull/2828)).
 
 ## [1.5.0] - 2026-09-27
 
