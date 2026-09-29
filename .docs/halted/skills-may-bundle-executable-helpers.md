@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-29T18:15:18.729Z
+Status: halted
 Slug: skills-may-bundle-executable-helpers
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-skills-may-bundle-executable-helpers
-Head SHA: 357c99e8b1208c14dc95968f3bf7fc2d21d78ad6
-Halted at: 2026-09-29T17:05:42.139Z
+Head SHA: 52fe6733c11f1505f5a533886b5f4c8fcf79945b
+Halted at: 2026-09-29T18:19:01.394Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
