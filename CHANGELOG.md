@@ -19,6 +19,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Use Pi as a build provider for supported one-shot AI-conductor steps. ([implementation PR #2765](https://github.com/jstoup111/ai-conductor/pull/2765)).
 - Build reviews now block unapproved event-spine bypasses before they ship. ([implementation PR #2821](https://github.com/jstoup111/ai-conductor/pull/2821)).
 - Daemon operators see the age of the most recent provider activity in quiet-build warnings. ([implementation PR #2824](https://github.com/jstoup111/ai-conductor/pull/2824)).
+- Harness uninstall now removes its settings and offers an opt-in `--purge` cleanup for its state directory. ([implementation PR #2808](https://github.com/jstoup111/ai-conductor/pull/2808)).
 
 ### Changed
 
@@ -44,6 +45,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The coverage_binding judge now answers with short claim ids instead of copying 64-character digests, so a judge that mistypes a digest no longer halts the feature. ([implementation PR #2830](https://github.com/jstoup111/ai-conductor/pull/2830)).
 - Compose handoff accepts generated spec branch slugs that end in one trailing hyphen. ([implementation PR #2828](https://github.com/jstoup111/ai-conductor/pull/2828)).
 - OTel step spans now carry provider attribution for rebase-resolver and custom build_review rubric dispatches, and out-of-band remediate dispatches are recorded on the run span instead of logging orphan-span warnings. ([implementation PR #2835](https://github.com/jstoup111/ai-conductor/pull/2835)).
+- The as-built architecture review now accepts a BLOCKED verdict that records an unreachable primitive with an empty caller chain, instead of rejecting it until the feature halts. ([implementation PR #2840](https://github.com/jstoup111/ai-conductor/pull/2840)).
 
 ## [1.5.0] - 2026-09-27
 
