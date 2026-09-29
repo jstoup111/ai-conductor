@@ -138,6 +138,25 @@ describe('custom parallel step validation', () => {
       },
     })).toMatchObject({ ok: true });
   });
+
+  it('rejects a parallel branch without a required skill', () => {
+    const result = validateConfig({
+      steps: {
+        parallel_review: {
+          after: 'build',
+          parallel: [{ name: 'review' }],
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        type: 'validation_error',
+        message: 'steps.parallel_review.parallel[0].skill is required',
+      },
+    });
+  });
 });
 
 describe('mermaid_renderer configuration', () => {

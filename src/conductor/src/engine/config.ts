@@ -831,7 +831,10 @@ export function validateConfig(
             );
           }
           branchNames.add(b.name);
-          if (b.skill !== undefined && typeof b.skill !== 'string') {
+          if (b.skill === undefined) {
+            return errVal(`steps.${name}.parallel[${bi}].skill is required`);
+          }
+          if (typeof b.skill !== 'string') {
             return errVal(`steps.${name}.parallel[${bi}].skill must be a string`);
           }
           if (b.model !== undefined && typeof b.model !== 'string') {

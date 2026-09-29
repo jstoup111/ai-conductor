@@ -46,7 +46,7 @@ export interface ParallelBranch {
   /** Unique name within the group. Used to form synthetic state key: <group>__<branch>. */
   name: string;
   /** Skill to run for this branch. */
-  skill?: string;
+  skill: string;
   /** Model override for this branch. */
   model?: string;
   /** Effort override for this branch. */
@@ -67,7 +67,7 @@ export interface ParallelBranch {
  * Custom steps (not in ALL_STEPS) MUST set `after` plus either `skill` or a
  * `parallel` group so the registry knows where and how to insert them.
  */
-export interface StepConfig {
+interface SharedStepConfig {
   /** Provider selection for this step. Unset steps inherit the first run-level entry. */
   llm_provider?: ProviderSelection;
   /** Overrides the run-level provider substitution policy for this step. */
@@ -91,9 +91,6 @@ export interface StepConfig {
    * model/effort across every retry (identical-retry, pre-#188 behavior).
    */
   escalate?: boolean;
-
-  /** Replace the default SKILL.md file with this path. */
-  skill?: string;
 
   /** Shell hooks run before/after the step. Paths are project-relative. */
   hooks?: {
@@ -153,8 +150,24 @@ export interface StepConfig {
    * Synthetic state keys written to conduct-state.json:
    *   <step_name>__<branch_name>  → "done" | "skipped" | "failed"
    */
-  parallel?: ParallelBranch[];
 }
+
+/**
+ * Configuration for a single step. A step can dispatch one skill or a
+ * parallel branch group, but never both.
+ */
+export type StepConfig = SharedStepConfig & (
+  | {
+      /** Replace the default SKILL.md file with this path. */
+      skill?: string;
+      parallel?: never;
+    }
+  | {
+      skill?: never;
+      /** Concurrent branch group. */
+      parallel?: ParallelBranch[];
+    }
+);
 
 /**
  * Phase-wide defaults. Apply to every step in the phase unless overridden.
