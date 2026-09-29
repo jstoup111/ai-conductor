@@ -40,6 +40,40 @@ function collectTsFiles(dir: string): string[] {
 }
 
 describe('Task 4 — recorded deferrals', () => {
+  it('atomically persists the first deferral when no record exists yet', async () => {
+    const files = new Map<string, string>();
+    const deps: DeferralDeps = {
+      resolveMainRoot: vi.fn(async () => '/projects/payments'),
+      mkdir: vi.fn(async () => undefined),
+      writeFile: vi.fn(async (path, contents) => {
+        files.set(path, contents);
+      }),
+      rename: vi.fn(async (from, to) => {
+        files.set(to, files.get(from) ?? '');
+      }),
+      readFile: vi.fn(async path => {
+        const contents = files.get(path);
+        if (contents === undefined) {
+          throw Object.assign(new Error(`missing ${path}`), { code: 'ENOENT' });
+        }
+        return contents;
+      }),
+      rm: vi.fn(async () => undefined),
+    };
+    const { recordDeferral } = await import('../../../src/engine/monitor/deferrals.js') as {
+      recordDeferral(startCwd: string, key: DeferralKey, deps: DeferralDeps): Promise<void>;
+    };
+    const firstHalt: DeferralKey = {
+      project: '/projects/payments',
+      feature: 'release-gate',
+      haltIdentity: { present: true, mtimeMs: 1_726_754_400_000, size: 86 },
+    };
+
+    await recordDeferral('/projects/payments/.worktrees/release-gate', firstHalt, deps);
+
+    expect(files.get('/projects/payments/.daemon/deferrals.json')).toBe(JSON.stringify([firstHalt]));
+  });
+
   it('round-trips project, feature, and halt identity as separate fields', async () => {
     const files = new Map<string, string>();
     const writeFile = vi.fn(async (path: string, contents: string) => {

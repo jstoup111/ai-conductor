@@ -80,7 +80,12 @@ export async function recordDeferral(
 ): Promise<void> {
   const resolvedDeps = resolveDeps(deps);
   const paths = await deferralsPath(startCwd, resolvedDeps);
-  const deferrals = await readDeferralsAt(paths.file, resolvedDeps);
+  const deferrals = await readDeferralsAt(paths.file, resolvedDeps).catch(
+    (error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [] as DeferralKey[];
+      throw error;
+    },
+  );
 
   deferrals.push(key);
   await resolvedDeps.mkdir(paths.directory, { recursive: true });
