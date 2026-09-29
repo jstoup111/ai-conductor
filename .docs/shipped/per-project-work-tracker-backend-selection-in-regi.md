@@ -4,6 +4,17 @@ spec_hash: 321e62fe074fa60c5bb806f5e1700815599fd9675539444d01bd1051d52d144a
 pr: https://github.com/jstoup111/ai-conductor/pull/2825
 shipped: 2026-09-29
 engine_version: 20260929T143128Z-78113f1e7e2f
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/engine/build-review-policy-bundle.ts:301-306,332 — private validateBundleLimits renamed and exported as validateReviewPolicyBundleLimits, and its test rewritten (commit 49761fc81); unrelated to tracker selection, no behavior change"
+    accepted: true
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.2
+    summary: "src/conductor/src/engine/intake-backend-composite.ts:144-155 — a GitHub write-back whose owning project has an unreadable or malformed tracker block is skipped with an invalid-config event and {ok:true}; no task or criterion specifies this case, and no test covers it"
+    accepted: true
 ---
 
 ## Cost
