@@ -1,4 +1,4 @@
-// Covers: task:4, task:5, task:6, task:7
+// Covers: task:4, task:5, task:6, task:7, task:8
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -31,6 +31,53 @@ afterEach(() => {
 });
 
 describe('dispatchEngineer interactive host launch', () => {
+  it('reuses the initially selected host executable for a follow-on idea', async () => {
+    vi.stubEnv('CODEX_EXECUTABLE', '/hosts/initial-codex');
+    const spawnHost = vi.fn(async () => {
+      process.env.CODEX_EXECUTABLE = '/hosts/replaced-codex';
+      return 0;
+    });
+    const confirmAnother = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    const code = await dispatchEngineer(
+      { kind: 'launch', provider: 'codex', idea: 'add retries' },
+      {
+        ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost),
+        confirmAnother,
+      },
+    );
+
+    expect({ code, spawnCalls: spawnHost.mock.calls, confirmCalls: confirmAnother.mock.calls }).toEqual({
+      code: 0,
+      spawnCalls: [
+        ['/hosts/initial-codex', ['$composer add retries'], process.cwd()],
+        ['/hosts/initial-codex', ['$composer'], process.cwd()],
+      ],
+      confirmCalls: [[], []],
+    });
+  });
+
+  it('returns the first selected-host exit code when follow-on work is declined', async () => {
+    const spawnHost = vi.fn(async () => 23);
+    const confirmAnother = vi.fn(async () => false);
+
+    const code = await dispatchEngineer(
+      { kind: 'launch', provider: 'codex' },
+      {
+        ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost),
+        confirmAnother,
+      },
+    );
+
+    expect({ code, spawnCalls: spawnHost.mock.calls, confirmCalls: confirmAnother.mock.calls }).toEqual({
+      code: 23,
+      spawnCalls: [['codex', ['$composer'], process.cwd()]],
+      confirmCalls: [[]],
+    });
+  });
+
   it('refuses a nested codex session before loading config, polling, or spawning', async () => {
     const spawnHost = vi.fn(async () => 0);
     const prePoll = vi.fn(async () => 0);

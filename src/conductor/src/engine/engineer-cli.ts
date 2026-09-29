@@ -968,10 +968,11 @@ export async function dispatchEngineer(
         printErr(error instanceof Error ? error.message : String(error));
         return 1;
       }
+      const executable = host ? resolveProviderExecutable(host.id) : undefined;
       const launchOne = opts.launchInteractive ?? ((idea?: string) => {
         const prompt = `${host!.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
         return (opts.spawnHost ?? spawnInteractiveHost)(
-          resolveProviderExecutable(host!.id),
+          executable!,
           host!.interactiveLaunch.argv(prompt, launchEnv),
           launchingDirectory,
         );
