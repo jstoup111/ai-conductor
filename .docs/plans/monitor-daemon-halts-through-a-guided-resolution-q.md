@@ -513,6 +513,28 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 
 **Dependencies:** 20
 
+### Task 22: Launch the Codex guided session as an attached interactive TUI
+**Story:** 14
+**Type:** feature
+
+**Steps:**
+1. Write failing tests against the mocked process boundary: the Codex guided launch argv contains no `exec` subcommand, the opening prompt is passed as the final positional argument, and stdio is inherited on all three streams; the Claude guided launch argv and stdio are unchanged.
+2. Verify RED.
+3. Change the Codex branch of the guided-session launch seam to spawn `codex [OPTIONS] "<prompt>"` with inherited stdio and no stdin write, per adr-2026-08-25-committed-rate-card-prices-codex-and-its-repl-is-one-shot D5. Leave every other codex dispatch on the one-shot shape.
+4. Verify GREEN. Commit: "monitor: launch codex guided sessions as the attached TUI"
+
+**Done when:**
+- A test asserts the Codex guided launch argv handed to the mocked boundary contains no `exec` subcommand.
+- A test asserts the Codex guided launch passes the opening prompt as the final positional argument and writes nothing to the child's stdin.
+- A test asserts the Codex guided launch spawns with stdio inherited on stdin, stdout, and stderr.
+- A test asserts the Claude guided launch argv and stdio are unchanged.
+
+**Files likely touched:**
+- `src/conductor/src/engine/monitor/interactive-launch.ts`
+- `src/conductor/test/engine/monitor/interactive-launch.test.ts`
+
+**Dependencies:** 9, 13
+
 ## Architecture Obligation Coverage
 
 | Decision | Disposition | Tasks | Evidence |
@@ -531,3 +553,8 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 | adr-2026-09-20-operator-launched-sessions-retain-conductor-authority#D5 | task | task-13 | resolved working directory is the halted feature's worktree |
 | adr-2026-09-20-operator-launched-sessions-retain-conductor-authority#D6 | task | task-16 | No code path marks a halt resolved on session exit |
 | adr-2026-09-20-operator-launched-sessions-retain-conductor-authority#D7 | existing | none | The per-action approval contract is already owned and shipped by the existing operator triage procedure, which task-11 invokes as-is rather than reimplementing. This feature adds no standing consent and no approval path of its own, so D7 is satisfied by existing behavior. |
+| adr-2026-08-25-committed-rate-card-prices-codex-and-its-repl-is-one-shot#D1 | no-change | none | Decision 1 of this ADR is unchanged by the amendment and this feature changes no rate-card pricing, metering state, or non-monitor codex dispatch shape. |
+| adr-2026-08-25-committed-rate-card-prices-codex-and-its-repl-is-one-shot#D2 | no-change | none | Decision 2 of this ADR is unchanged by the amendment and this feature changes no rate-card pricing, metering state, or non-monitor codex dispatch shape. |
+| adr-2026-08-25-committed-rate-card-prices-codex-and-its-repl-is-one-shot#D3 | no-change | none | Decision 3 of this ADR is unchanged by the amendment and this feature changes no rate-card pricing, metering state, or non-monitor codex dispatch shape. |
+| adr-2026-08-25-committed-rate-card-prices-codex-and-its-repl-is-one-shot#D4 | no-change | none | Decision 4 of this ADR is unchanged by the amendment and this feature changes no rate-card pricing, metering state, or non-monitor codex dispatch shape. |
+| adr-2026-08-25-committed-rate-card-prices-codex-and-its-repl-is-one-shot#D5 | task | task-22 | A test asserts the Codex guided launch argv handed to the mocked boundary contains no `exec` subcommand. |

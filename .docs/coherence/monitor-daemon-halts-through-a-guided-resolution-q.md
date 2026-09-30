@@ -67,7 +67,7 @@ PRD↔stories tie-out (§4e): every FR-1..FR-27 is cited by a story whose scenar
 | story | story-11 | task-8 | covered | Delivered by task-8. |
 | story | story-12 | task-9, task-11 | covered | Delivered by task-9, task-11. |
 | story | story-13 | task-12 | covered | Delivered by task-12. |
-| story | story-14 | task-10, task-13 | covered | Delivered by task-10, task-13. |
+| story | story-14 | task-10, task-13, task-22 | covered | Delivered by task-10, task-13, task-22. |
 | story | story-15 | task-14, task-18 | covered | Delivered by task-14, task-18. |
 | story | story-16 | task-7, task-15, task-18 | covered | Delivered by task-7, task-15, task-18. |
 | story | story-17 | task-16 | covered | Delivered by task-16. |
@@ -94,6 +94,7 @@ PRD↔stories tie-out (§4e): every FR-1..FR-27 is cited by a story whose scenar
 | task | task-19 | story-19 | covered | A monitoring cycle invokes the existing reconciliation with its behavior unchanged, as asserted against an injected reconciliation stub. |
 | task | task-20 | story-1, story-2 | covered | The detector recognizes the verb with all-projects and single-project selectors, and returns help rather than null for a malformed-but-recognized invocation. |
 | task | task-21 | story-1 | covered | The generated full help reference contains the monitor verb and its project selectors, as asserted by a help-rendering test. |
+| task | task-22 | story-14 | covered | A test asserts the Codex guided launch argv handed to the mocked boundary contains no `exec` subcommand. |
 | criterion | Story 1 happy: Given at least one feature is halted in a selected project, when the operator starts the monitor, then it reports that halt as work to resolve rather than exiting. | task-17 | covered | "Starting with no halted features reports an empty queue, stays alive, and creates zero sessions across several passes." | diff-local |
 | criterion | Story 1 happy: Given the monitor is running and no halts exist anywhere in the selected projects, when a resolution pass completes, then the monitor reports an empty queue, remains active, and opens no session. | task-17 | covered | "Starting with no halted features reports an empty queue, stays alive, and creates zero sessions across several passes." | diff-local |
 | criterion | Story 1 happy: Given the monitor is running with an empty queue, when a feature halts in a selected project, then the next pass reports it without the operator restarting the monitor. | task-17 | covered | "Starting with no halted features reports an empty queue, stays alive, and creates zero sessions across several passes." | diff-local |
@@ -217,3 +218,4 @@ PRD↔stories tie-out (§4e): every FR-1..FR-27 is cited by a story whose scenar
 | criterion | Story 19 negative: Given the reconciliation is slow, when it is running, then the operator's queue work is not blocked waiting for it. | task-19 | covered | "A monitoring cycle invokes the existing reconciliation with its behavior unchanged, as asserted against an injected reconciliation stub." | diff-local |
 | adr | adr-2026-09-20-halt-resolution-queue-derived-from-markers | story-5, story-6, story-9, story-16, story-18 | covered | D1 derived membership is delivered by task-6; D2 marker-as-source by task-1; D3 and D4 the deferral record and its identity key by task-4 and task-5; D5 ordering by task-7 and task-8; D6 spine transitions by task-18; D7 records no artifact, so nothing is built for it. Dispositions judged individually below. |
 | adr | adr-2026-09-20-operator-launched-sessions-retain-conductor-authority | story-12, story-13, story-14, story-17 | covered | D1 and D2 are delivered by task-13 (no marker stamped, sanctioned set unchanged); D3 the provider-agnostic seam by task-9; D4 the foreground-only confinement by task-10; D5 the worktree working directory by task-13; D6 cold start and exit-is-not-resolution by task-11 and task-16; D7 the approval contract is inherited unchanged by task-13. Dispositions judged individually below. |
+| adr | adr-2026-08-25-committed-rate-card-prices-codex-and-its-repl-is-one-shot | story-14 | covered | The additive amendment D5 scopes a guided-monitor exception to the codex one-shot REPL rule, delivered by task-22 (attached TUI, positional prompt, inherited stdio); D1-D4 are unchanged and need no work. |
