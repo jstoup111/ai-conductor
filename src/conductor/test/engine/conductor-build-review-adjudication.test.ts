@@ -653,6 +653,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       lapId: LAP_ID,
     });
     expect(await uncovered.haltMarker()).toContain('build_review adjudication halted');
+    expect(await uncovered.haltMarker()).not.toContain('scope-incomplete testQuality');
   });
 
   it.each([
@@ -959,5 +960,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     };
     expect(ledger.gates.build_review).toMatchObject({ count: 0, mechanicalFaults: 3, lastMechanicalFault: { reason: 'scope-incomplete' } });
     expect(await run.haltMarker()).toContain('uncovered build-review coverage failure');
+    expect(await run.haltMarker()).toContain('scope-incomplete testQuality test/example.test.ts:2');
+    expect(await run.haltMarker()).toContain('the pinned binding is incomplete');
   });
 });
