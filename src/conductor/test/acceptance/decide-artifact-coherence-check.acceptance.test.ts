@@ -211,6 +211,7 @@ interface SeedOverrides {
   tier?: string; // 'M' | 'L' | 'S'
   track?: string; // 'product' | 'technical'
   stageOutcomes?: boolean; // write .pipeline/intake-outcomes.md
+  intakeBody?: string; // stage through the real worktree-creation writer
   waiver?: string | null; // .docs/coherence-waivers/<stem>.md content
   stampCoherenceSignal?: boolean; // default true; false simulates a pre-FR-14 legacy worktree
 }
@@ -232,11 +233,17 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
     tier = 'M',
     track = 'product',
     stageOutcomes = true,
+    intakeBody,
     waiver = null,
     stampCoherenceSignal = true,
   } = overrides;
 
-  const wt = await createEngineerWorktree(repoPath, idea);
+  const wt = await createEngineerWorktree(
+    repoPath,
+    idea,
+    undefined,
+    intakeBody === undefined ? undefined : { sourceRef: SOURCE_REF, body: intakeBody },
+  );
   const dir = wt.worktreePath;
 
   if (!stampCoherenceSignal) {
@@ -291,7 +298,7 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
     await w(`coherence-waivers/${stem}.md`, waiver);
   }
 
-  if (stageOutcomes) {
+  if (stageOutcomes && intakeBody === undefined) {
     // Simulate the claim-time staging writer (FR-13 capture; the writer itself
     // is unit-covered by plan Tasks 1/2). `.pipeline/` is gitignored run state.
     await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -350,6 +357,43 @@ describe('Story 1 / FR-13 — outcomes committed into the intake marker at land'
     for (const bullet of OUTCOME_BULLETS) {
       expect(marker).toContain(bullet);
     }
+  });
+
+  it('happy (real staging writer): a wrapped outcome reaches the committed marker as its complete joined line', async () => {
+    const intakeBody = [
+      '## Desired outcome',
+      '',
+      '- The duplicate-spec class',
+      '  dies at land.',
+      '- An unmapped outcome blocks the spec.',
+      '',
+    ].join('\n');
+    const wt = await seedWorktree('coherence demo', { intakeBody });
+
+    const result = await landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts());
+    const marker = await git(['show', `${result.branch}:.docs/intake/coherence-demo.md`], wt);
+
+    expect(marker).toContain('- The duplicate-spec class dies at land.');
+  });
+
+  it('negative (real staging writer): a quote containing only a wrapped outcome fragment is refused naming outcome-1', async () => {
+    const intakeBody = [
+      '## Desired outcome',
+      '',
+      '- The duplicate-spec class',
+      '  dies at land.',
+      '- An unmapped outcome blocks the spec.',
+      '',
+    ].join('\n');
+    const fragmentQuote = COHERENCE.replace(
+      '"The duplicate-spec class dies at land."',
+      '"The duplicate-spec class"',
+    );
+    const wt = await seedWorktree('coherence demo', { intakeBody, coherence: fragmentQuote });
+
+    await expect(
+      landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
+    ).rejects.toThrow(/outcome-1/i);
   });
 
   it('negative: a chat-origin idea (no staged outcomes, no sourceRef) stages nothing and lands without error', async () => {

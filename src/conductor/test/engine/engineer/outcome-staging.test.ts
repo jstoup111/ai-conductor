@@ -13,6 +13,7 @@ import {
   readCommittedIntakeOutcomes,
   INTAKE_OUTCOMES_RELATIVE_PATH,
 } from '../../../src/engine/engineer/outcome-staging.js';
+import { checkOutcomeCoverage } from '../../../src/engine/engineer/coherence-validator.js';
 
 describe('stageIntakeOutcomes', () => {
   let worktreePath: string;
@@ -79,6 +80,55 @@ describe('stageIntakeOutcomes', () => {
         sourceRef,
       },
     });
+  });
+
+  it('folds wrapped bullets, while leaving prose, nested bullets, and inbound armor outside the parent bullet', async () => {
+    const opening = '<<< INBOUND sourceRef=owner/repo#48 digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >>>';
+    const closing = '<<< END INBOUND >>>';
+    const intakeBody = [
+      opening,
+      '## Desired outcome',
+      '',
+      'Lead-in prose is not an outcome.',
+      '- First outcome starts here',
+      '  continues on an indented line',
+      'and finishes without indentation.',
+      '  - Nested outcome starts here',
+      '    and continues here.',
+      '',
+      'This paragraph is not an outcome.',
+      '- Final outcome',
+      closing,
+    ].join('\n');
+
+    const stagedPath = await stageIntakeOutcomes(worktreePath, 'owner/repo#48', intakeBody);
+    const contents = await readFile(stagedPath!, 'utf8');
+
+    expect(contents).toContain('- First outcome starts here continues on an indented line and finishes without indentation.\n- Nested outcome starts here and continues here.\n- Final outcome\n<<< END INBOUND >>>');
+    await expect(readStagedIntakeOutcomes(worktreePath)).resolves.toEqual({
+      required: true,
+      bullets: [
+        '- First outcome starts here continues on an indented line and finishes without indentation.',
+        '- Nested outcome starts here and continues here.',
+        '- Final outcome',
+      ],
+      sourceRef: 'owner/repo#48',
+    });
+    expect(contents).not.toContain('Lead-in prose');
+    expect(contents).not.toContain('This paragraph');
+  });
+
+  it('keeps single-line Desired-outcome staging byte-identical', async () => {
+    const sourceRef = 'owner/repo#49';
+    const stagedPath = await stageIntakeOutcomes(
+      worktreePath,
+      sourceRef,
+      '## Desired outcome\n\n- First outcome\n- Second outcome\n',
+    );
+
+    await expect(readFile(stagedPath!, 'utf8')).resolves.toBe(
+      `Source-Ref: ${sourceRef}\n\n## Desired outcome\n\n- First outcome\n- Second outcome\n`,
+    );
   });
 
   it.each([
@@ -226,6 +276,29 @@ describe('readCommittedIntakeOutcomes', () => {
       bullets: ['- Bullet one', '- Bullet two'],
       sourceRef: 'owner/repo#42',
     });
+  });
+
+  it('keeps legacy truncated marker bullets unchanged for matching outcome rows', async () => {
+    await writeMarker(
+      'legacy-plan',
+      '# Intake origin: legacy-plan\n\n' +
+        'Source-Ref: owner/repo#50\n\n' +
+        '## Desired outcome\n\n' +
+        '- A formerly truncated outcome\n' +
+        '- Another truncated outcome\n' +
+        '<<< END INBOUND >>>\n',
+    );
+
+    const staged = await readCommittedIntakeOutcomes(worktreePath, 'legacy-plan');
+    expect(staged).toEqual({
+      required: true,
+      bullets: ['- A formerly truncated outcome', '- Another truncated outcome'],
+      sourceRef: 'owner/repo#50',
+    });
+    expect(checkOutcomeCoverage([
+      { rowClass: 'outcome', id: 'outcome-1', citedIds: ['story-1'], verdict: 'covered', quote: '"A formerly truncated outcome"', evidence: '' },
+      { rowClass: 'outcome', id: 'outcome-2', citedIds: ['story-1'], verdict: 'covered', quote: '"Another truncated outcome"', evidence: '' },
+    ], staged.bullets, new Set(['story-1']))).toEqual({ ok: true });
   });
 
   it('reports outcome layer not required when the marker exists but has no Desired-outcome bullets', async () => {

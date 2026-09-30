@@ -31,10 +31,34 @@ export function extractDesiredOutcomeSection(intakeBody: string): string | null 
     : afterHeading;
 
   const heading = '## Desired outcome';
-  const bulletLines = sectionBody
-    .split('\n')
-    .filter((line) => /^\s*-\s/.test(line))
-    .map((line) => line.trim());
+  const bulletLines: string[] = [];
+  let currentBullet: string | null = null;
+
+  const flushBullet = (): void => {
+    if (currentBullet !== null) bulletLines.push(currentBullet);
+    currentBullet = null;
+  };
+
+  for (const line of sectionBody.split('\n')) {
+    if (/^\s*-\s/.test(line)) {
+      flushBullet();
+      currentBullet = line.trim();
+      continue;
+    }
+
+    if (
+      line.trim() === '' ||
+      /^\s*#/.test(line) ||
+      /^\s*(?:[*+]|\d+[.)])\s/.test(line) ||
+      INBOUND_ARMOR_LINE.test(line)
+    ) {
+      flushBullet();
+      continue;
+    }
+
+    if (currentBullet !== null) currentBullet += ` ${line.trim()}`;
+  }
+  flushBullet();
 
   if (bulletLines.length === 0) return `${heading}\n`;
   return `${heading}\n\n${bulletLines.join('\n')}`;
