@@ -727,7 +727,7 @@ type RebaseOutcomeKind =
     };
 
 /** A quarantine applies to every outcome after an untracked-collision heal. */
-export type RebaseOutcome = RebaseOutcomeKind & { quarantine?: RebaseQuarantine };
+export type RebaseOutcome = RebaseOutcomeKind & { quarantine?: RebaseQuarantine; flatten?: FlattenedReplayPlan };
 
 export type FlattenedReplayEntry =
   | { kind: 'ordinary'; sha: string }
@@ -956,9 +956,12 @@ export async function startFeatureReplay(
  */
 export async function writeRebaseOutcomeHalt(
   projectRoot: string,
-  outcome: Extract<RebaseOutcome, { kind: 'conflict_halt' }>,
+  outcome: Extract<RebaseOutcome, { kind: 'conflict_halt' | 'flatten_refused' }>,
   events?: ConductorEventEmitter,
 ): Promise<HaltMarkerWriteResult> {
+  if (outcome.kind === 'flatten_refused') {
+    return writeHaltMarker(projectRoot, `flattened rebase refused\n${outcome.reason}\n\nRecovery procedure:\n  1. Park the feature.\n  2. ${outcome.recipe}\n  3. Clear .pipeline/HALT and .pipeline/HALT.class, then re-queue the feature.\n`, 'needs-human', events);
+  }
   if (!outcome.startFailure) {
     return writeHalt(projectRoot, outcome.conflicts, outcome.reason, events, outcome.resumeShape);
   }
@@ -1286,7 +1289,7 @@ export async function performRebase(
     // any evidence citation pinned to the pre-rebase shas. Translate
     // unconditionally on any real rebase, not gated on that heuristic.
     await translateCompletedRebase();
-    return attachReplayIdentity(outcome);
+    return attachReplayIdentity(replayStart.flatten ? { ...outcome, flatten: replayStart.flatten } : outcome);
   }
 
   // Non-zero → conflicts (or another error). Inspect unmerged paths.
@@ -1307,7 +1310,7 @@ export async function performRebase(
           if (retry.exitCode === 0) {
             const outcome = await classifyClean(git, preTree, mergeBase, projectRoot);
             await translateCompletedRebase();
-            return attachReplayIdentity({ ...outcome, quarantine });
+            return attachReplayIdentity({ ...outcome, quarantine, ...(replayStart.flatten ? { flatten: replayStart.flatten } : {}) });
           }
           const retryConflicts = await conflictedFiles(git);
           if (retryConflicts.length > 0) {
@@ -2661,6 +2664,10 @@ export async function emitRebaseEvent(
             ? {}
             : { allChangedPaths: outcome.allChangedPaths }),
         });
+        if ((outcome as RebaseOutcome & { flatten?: FlattenedReplayPlan }).flatten) {
+          const audit = (outcome as RebaseOutcome & { flatten: FlattenedReplayPlan }).flatten.audit;
+          await events.emit({ type: 'rebase_merge_audit', ...audit });
+        }
         break;
       case 'conflict_halt':
         await events.emit({
@@ -2671,12 +2678,12 @@ export async function emitRebaseEvent(
         });
         break;
       case 'flatten_refused':
-        // Task 6 replaces this conflict-halt stub with the flatten audit.
         await events.emit({
           type: 'rebase_conflict_halt',
           step: 'rebase',
           reason: outcome.reason,
           conflicts: outcome.conflicts,
+          mergeAudit: { flattenedMerges: outcome.mergeSha ? [outcome.mergeSha] : [], ancestryOnlyMerges: [], sideLineageCount: 0 },
         });
         break;
       case 'setup_stop':
