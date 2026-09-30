@@ -1,4 +1,4 @@
-// Covers: task:10, task:11
+// Covers: task:10, task:11, task:12
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SpoolDrainer } from '../../../src/engine/otel/spool-drainer.js';
 import { SpoolStore } from '../../../src/engine/otel/spool-store.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const directories: string[] = [];
 const servers: Server[] = [];
@@ -132,6 +133,91 @@ describe('SpoolDrainer', () => {
     expect({ received, remaining: await store.list('traces'), batch: batch.name }).toEqual({
       received: [Buffer.from('days-old-protobuf-body')], remaining: [], batch: expect.any(String),
     });
+  });
+
+  it.each([400, 413])('drops a days-old rejected batch and emits its status for HTTP %i', async (status) => {
+    const events = new ConductorEventEmitter();
+    const drops: unknown[] = [];
+    events.on('otel_spool_drop', (event) => drops.push(event));
+    const server = createServer((request, response) => {
+      request.resume();
+      response.writeHead(status).end();
+    });
+    const endpoint = await listen(server);
+    const store = new SpoolStore(await temporaryDirectory(), {
+      now: () => 1_727_000_000_000 - (7 * 24 * 60 * 60 * 1_000),
+    });
+    await store.write('traces', Buffer.from('rejected-days-old-batch'), 2);
+
+    await new SpoolDrainer(store, { endpoint, headers: () => ({}), events }).drain();
+
+    expect(await store.list('traces')).toEqual([]);
+    expect(drops).toEqual([
+      { type: 'otel_spool_drop', signal: 'traces', reason: 'rejected', batches: 1, items: 2, status },
+    ]);
+  });
+
+  it('drops a partial-success response once and reports its rejected item count', async () => {
+    const events = new ConductorEventEmitter();
+    const drops: unknown[] = [];
+    const received: string[] = [];
+    events.on('otel_spool_drop', (event) => drops.push(event));
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      received.push(Buffer.concat(chunks).toString());
+      // ExportTraceServiceResponse { partial_success: { rejected_spans: 3 } }
+      response.writeHead(200, { 'content-type': 'application/x-protobuf' }).end(Buffer.from([0x0a, 0x02, 0x08, 0x03]));
+    });
+    const endpoint = await listen(server);
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('traces', Buffer.from('partially-rejected-batch'), 5);
+
+    await new SpoolDrainer(store, { endpoint, headers: () => ({}), events }).drain();
+
+    expect(received).toEqual(['partially-rejected-batch']);
+    expect(await store.list('traces')).toEqual([]);
+    expect(drops).toEqual([
+      { type: 'otel_spool_drop', signal: 'traces', reason: 'rejected', batches: 1, items: 3, status: 200 },
+    ]);
+  });
+
+  it.each([
+    [401, 'auth'],
+    [403, 'auth'],
+    [404, 'endpoint'],
+  ] as const)('keeps HTTP %i batches without emitting a drop event and preserves %s for backlog reporting', async (status, failureClass) => {
+    const events = new ConductorEventEmitter();
+    const drops: unknown[] = [];
+    events.on('otel_spool_drop', (event) => drops.push(event));
+    const server = createServer((request, response) => {
+      request.resume();
+      response.writeHead(status).end();
+    });
+    const endpoint = await listen(server);
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('traces', Buffer.from(`keep-${status}`));
+    let releaseSleep: (() => void) | undefined;
+    const drainer = new SpoolDrainer(store, {
+      endpoint,
+      headers: () => ({}),
+      events,
+      sleep: async () => new Promise<void>((resolve) => { releaseSleep = resolve; }),
+    });
+    const draining = drainer.drain();
+
+    try {
+      for (let turns = 0; turns < 50 && !releaseSleep; turns += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(await store.list('traces')).toHaveLength(1);
+      expect(drops).toEqual([]);
+      expect(drainer.lastFailureClass('traces')).toBe(failureClass);
+    } finally {
+      releaseSleep?.();
+      await drainer.stop();
+      await draining.catch(() => undefined);
+    }
   });
 
   it('redelivers exactly once after an accepted batch is left behind by a crash, then continues', async () => {

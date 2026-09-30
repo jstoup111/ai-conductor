@@ -1,4 +1,5 @@
-import { classifyNetworkError, classifyResponse } from './delivery-classifier.js';
+import { classifyNetworkError, classifyResponse, type DeliveryClassification } from './delivery-classifier.js';
+import type { ConductorEventEmitter } from '../../ui/events.js';
 import { type SpoolSignal, SpoolStore } from './spool-store.js';
 
 export interface SpoolDrainerOptions {
@@ -14,11 +15,14 @@ export interface SpoolDrainerOptions {
   random?: () => number;
   /** Maximum time a single OTLP/HTTP request may remain in flight. */
   exportTimeoutMs?: number;
+  /** Optional event-spine owner for durable spool delivery telemetry. */
+  events?: ConductorEventEmitter;
 }
 
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 60_000;
 const DEFAULT_EXPORT_TIMEOUT_MS = 5_000;
+type DeliveryFailureClass = Extract<DeliveryClassification, { action: 'keep' }>['failureClass'];
 
 /**
  * Delivers immutable OTLP batches one at a time. Delivery is at-least-once:
@@ -34,17 +38,24 @@ export class SpoolDrainer {
   private readonly inFlight = new Set<AbortController>();
   private readonly pendingDelays = new Set<() => void>();
   private readonly loops = new Set<Promise<void>>();
+  private readonly lastFailures = new Map<SpoolSignal, DeliveryFailureClass>();
   private stopped = false;
 
   constructor(
     private readonly store: SpoolStore,
     private readonly options: SpoolDrainerOptions,
+    private readonly events: ConductorEventEmitter | undefined = options.events,
   ) {
     this.send = options.fetch ?? globalThis.fetch;
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.random = options.random ?? Math.random;
     this.exportTimeoutMs = options.exportTimeoutMs ?? DEFAULT_EXPORT_TIMEOUT_MS;
+  }
+
+  /** Last retained delivery failure for this signal, for backlog telemetry. */
+  lastFailureClass(signal: SpoolSignal): DeliveryFailureClass | undefined {
+    return this.lastFailures.get(signal);
   }
 
   async drain(): Promise<void> {
@@ -86,8 +97,20 @@ export class SpoolDrainer {
         if (this.stopped) return;
         if (classification.action !== 'keep') {
           await this.store.delete(batch);
+          if (classification.action === 'drop') {
+            await this.events?.emit({
+              type: 'otel_spool_drop',
+              signal,
+              reason: classification.reason,
+              batches: 1,
+              items: classification.rejectedItems || batch.items,
+              status: classification.status,
+            });
+          }
           break;
         }
+
+        this.lastFailures.set(signal, classification.failureClass);
 
         // A server-directed delay takes precedence over the ordinary backoff.
         if (classification.retryAfterMs !== undefined) {

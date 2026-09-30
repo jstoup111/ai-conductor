@@ -1,4 +1,4 @@
-// Covers: task:5, task:6
+// Covers: task:5, task:6, task:12
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -165,5 +165,47 @@ describe('spooling exporters', () => {
       { code: ExportResultCode.SUCCESS },
     ]);
     expect(warnings).toEqual([`[otel] spool write failed; sending directly: spool write failed: ${code}`]);
+  });
+
+  it.each([
+    [{ evictedBatches: 2, evictedItems: 4 }, { batches: 2, items: 4 }],
+    [{ rejectedOversize: true, rejectedItems: 7 }, { batches: 1, items: 7 }],
+  ] as const)('emits an evicted spool-drop event for a write result of %o', async (writeResult, counts) => {
+    const events = new ConductorEventEmitter();
+    const drops: unknown[] = [];
+    events.on('otel_spool_drop', (event) => drops.push(event));
+    const store = {
+      write: async () => writeResult,
+    } as unknown as SpoolStore;
+    const provider = new BasicTracerProvider();
+    const span = provider.getTracer('spooling-exporter-test').startSpan('eviction-is-visible');
+    span.end();
+    const exporter = new SpoolingSpanExporter(store, directSpanExporter(), events);
+
+    await new Promise<void>((resolve) => exporter.export([span as unknown as ReadableSpan], () => resolve()));
+
+    expect(drops).toEqual([
+      { type: 'otel_spool_drop', signal: 'traces', reason: 'evicted', ...counts },
+    ]);
+  });
+
+  it('emits an evicted spool-drop event when a metrics write rejects an oversize batch', async () => {
+    const events = new ConductorEventEmitter();
+    const drops: unknown[] = [];
+    events.on('otel_spool_drop', (event) => drops.push(event));
+    const store = {
+      write: async () => ({ rejectedOversize: true, rejectedItems: 7, evictedBatches: 0, evictedItems: 0 }),
+    } as unknown as SpoolStore;
+    const metrics = {
+      resource: { attributes: {} } as ResourceMetrics['resource'],
+      scopeMetrics: [],
+    } satisfies ResourceMetrics;
+    const exporter = new SpoolingMetricExporter(store, directMetricExporter(), events);
+
+    await new Promise<void>((resolve) => exporter.export(metrics, () => resolve()));
+
+    expect(drops).toEqual([
+      { type: 'otel_spool_drop', signal: 'metrics', reason: 'evicted', batches: 1, items: 7 },
+    ]);
   });
 });

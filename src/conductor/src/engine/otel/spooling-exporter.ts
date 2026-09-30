@@ -3,7 +3,18 @@ import { ProtobufMetricsSerializer, ProtobufTraceSerializer } from '@opentelemet
 import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import type { ConductorEventEmitter } from '../../ui/events.js';
-import { SpoolStore } from './spool-store.js';
+import { type SpoolWriteResult, SpoolStore } from './spool-store.js';
+
+function emitEviction(
+  events: ConductorEventEmitter | undefined,
+  signal: 'traces' | 'metrics',
+  result: SpoolWriteResult,
+): void {
+  const batches = result.rejectedOversize ? 1 : result.evictedBatches;
+  const items = result.rejectedOversize ? result.rejectedItems : result.evictedItems;
+  if (batches === 0) return;
+  void events?.emit({ type: 'otel_spool_drop', signal, reason: 'evicted', batches, items });
+}
 
 /**
  * Acknowledges spans to the SDK only after their exact OTLP/HTTP protobuf
@@ -32,7 +43,8 @@ export class SpoolingSpanExporter implements SpanExporter {
 
   private async write(spans: ReadableSpan[], resultCallback: (result: ExportResult) => void): Promise<void> {
     try {
-      await this.store.write('traces', ProtobufTraceSerializer.serializeRequest(spans) ?? new Uint8Array(), spans.length);
+      const result = await this.store.write('traces', ProtobufTraceSerializer.serializeRequest(spans) ?? new Uint8Array(), spans.length);
+      emitEviction(this.events, 'traces', result);
       resultCallback({ code: ExportResultCode.SUCCESS });
     } catch (error) {
       this.warn(error);
@@ -85,7 +97,8 @@ export class SpoolingMetricExporter implements PushMetricExporter {
 
   private async write(metrics: ResourceMetrics, resultCallback: (result: ExportResult) => void): Promise<void> {
     try {
-      await this.store.write('metrics', ProtobufMetricsSerializer.serializeRequest(metrics) ?? new Uint8Array());
+      const result = await this.store.write('metrics', ProtobufMetricsSerializer.serializeRequest(metrics) ?? new Uint8Array(), 1);
+      emitEviction(this.events, 'metrics', result);
       resultCallback({ code: ExportResultCode.SUCCESS });
     } catch (error) {
       this.warn(error);
