@@ -186,6 +186,48 @@ describe('consumeResumeAuthorizations', () => {
     }
   });
 
+  it('consumes the authorization bound to the live halt and leaves stale sibling authorizations untouched', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kickback-resume-matching-generation-'));
+    const worktree = join(root, 'feature');
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeKickbackLedger(worktree, {
+        version: 1,
+        gates: {
+          prd_audit: {
+            ...gateEntry,
+            capEvidence: { gate: 'prd_audit', consumed: 1, limit: 1, latestReason: 'cap', haltGeneration: 'g0' },
+            resumeAuthorization: { adjustmentId: 'a0', haltGeneration: 'g0', consumed: false },
+          },
+          architecture_review_as_built: {
+            ...gateEntry,
+            capEvidence: { gate: 'architecture_review_as_built', consumed: 1, limit: 1, latestReason: 'cap', haltGeneration: 'g1' },
+            resumeAuthorization: { adjustmentId: 'a1', haltGeneration: 'g1', consumed: false },
+          },
+        },
+      } as never);
+      const logs: string[] = [];
+      const clearHalt = vi.fn(async () => 'confirmed' as const);
+
+      await expect(consumeResumeAuthorizations(base(worktree, {
+        readLiveHaltClass: async () => 'kickback-cap',
+        readLiveHaltGeneration: async () => 'g1',
+        clearHalt,
+        log: (message: string) => { logs.push(message); },
+      }) as never)).resolves.toEqual(['feature']);
+
+      expect(clearHalt).toHaveBeenCalledTimes(1);
+      const ledger = await readKickbackLedger(worktree);
+      expect(ledger.gates.prd_audit.resumeAuthorization?.consumed).toBe(false);
+      expect(ledger.gates.architecture_review_as_built.resumeAuthorization?.consumed).toBe(true);
+      expect(logs).toContainEqual(expect.stringContaining('kickback-budget feature: prd_audit authorization is stale'));
+      expect(logs).toContainEqual(expect.stringContaining('bound to generation g0 rather than live generation g1'));
+      expect(logs).toContainEqual(expect.stringContaining('was not consumed'));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('does not let an authorization from one remediation gate clear another gate\'s cap halt', async () => {
     const { root, worktree } = await seed({
       ...gateEntry,
