@@ -81,6 +81,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   engine_refresh_min_interval_seconds: consumer(DAEMON_CLI),
   codex_doctor_timeout_seconds: consumer('src/conductor/src/engine/plugin-loader.ts'),
   mergeable_autoresolve: consumer(AUTORESOLVE),
+  stacked_prs: none('reserved for #2724 build-loop slice checkpoints; replaced by a real consumer when #2724 lands'),
   build_review: consumer(RESOLVED_CONFIG),
   coverage_binding: consumer(RESOLVED_CONFIG),
   conflict_check: consumer('skills/conflict-check/SKILL.md'),
@@ -191,6 +192,9 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'mergeable_autoresolve.enabled': consumer(AUTORESOLVE),
   'mergeable_autoresolve.cooldownMinutes': consumer(AUTORESOLVE),
   'mergeable_autoresolve.suiteCommand': consumer(DAEMON_CLI),
+
+  // ── stacked_prs ──────────────────────────────────────────────────────────
+  'stacked_prs.enabled': none('reserved for #2724 build-loop slice checkpoints; replaced by a real consumer when #2724 lands'),
 
   // ── build_review ──────────────────────────────────────────────────────────
   // `resolveBuildReviewConfig` is the only reader of the raw block and of every

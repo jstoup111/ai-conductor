@@ -204,6 +204,11 @@
 # Default: unset; enabled false, cooldownMinutes 60, suiteCommand unset.
 # Changing it: enabled true lets the daemon rebase and resolve CONFLICTING non-draft PRs on its own; draft PRs are always left alone.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
+# Controls: stacked_prs — reserved configuration for build-loop slice checkpoints.
+# Allowed: an object with enabled (true or false).
+# Default: unset; enabled false.
+# Changing it: has no effect until #2724 adds its runtime consumer.
+# Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
 # Controls: build_review — the judgement gate that reviews the build before the SHIP-tail steps.
 # Allowed: an object with enabled, scopeContainmentEnforced, maxParallel, adjudication, and rubrics; perTaskFloor is retired and ignored.
 # Default: enabled true, adjudication.enabled true, scopeContainmentEnforced false, maxParallel 4, and the testQuality rubric off.
@@ -355,6 +360,10 @@ build_review:
   rubrics:
     testQuality:
       enabled: false
+
+# Reserved for #2724 build-loop slice checkpoints; currently inert.
+# stacked_prs:
+#   enabled: false
 
 # Controls: test_suite.working_directory — the working directory used before test commands run.
 # Allowed: a project-relative directory inside the project root; absolute paths and .. escapes fail the load.

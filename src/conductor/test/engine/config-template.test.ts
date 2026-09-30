@@ -1,4 +1,4 @@
-// Covers: task:18
+// Covers: task:2
 /**
  * Regression coverage for issue #1010: copying
  * templates/ai-conductor-config.yml.template produced an invalid
@@ -374,5 +374,24 @@ describe('templates/project-config.yml.template', () => {
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('documents stacked pull requests as an opt-in commented block', async () => {
+    const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
+    const authoredConfig = loadYaml(raw) as Record<string, unknown>;
+    const commentedBlock = '# stacked_prs:\n#   enabled: false';
+
+    expect(raw).toContain(commentedBlock);
+    expect(authoredConfig).not.toHaveProperty('stacked_prs');
+
+    const activatedConfig = loadYaml(
+      raw.replace(commentedBlock, 'stacked_prs:\n  enabled: false'),
+    ) as Record<string, unknown>;
+    const activatedKeysWithoutStackedPrs = Object.keys(activatedConfig)
+      .filter((key) => key !== 'stacked_prs')
+      .sort();
+
+    expect(activatedKeysWithoutStackedPrs).toEqual(Object.keys(authoredConfig).sort());
+    expect(activatedConfig.stacked_prs).toEqual({ enabled: false });
   });
 });
