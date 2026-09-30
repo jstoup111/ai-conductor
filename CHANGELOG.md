@@ -24,6 +24,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon commits now credit the configured GitHub bot as a co-author when its identity is available. ([implementation PR #2839](https://github.com/jstoup111/ai-conductor/pull/2839)).
 - Project configuration now selects a work-tracker backend, preserving GitHub behavior and safely excluding unsupported Jira projects. ([implementation PR #2825](https://github.com/jstoup111/ai-conductor/pull/2825)).
 - Operators see acceptance-guard and suite-gate progress for auto-resolved rebases. ([implementation PR #2862](https://github.com/jstoup111/ai-conductor/pull/2862)).
+- Interactive composer launches honor the configured Codex provider. ([implementation PR #2844](https://github.com/jstoup111/ai-conductor/pull/2844)).
+- Plan authors can declare bounded work slices, and the conductor rejects ordered slice dependencies. ([implementation PR #2864](https://github.com/jstoup111/ai-conductor/pull/2864)).
 
 ### Changed
 
