@@ -735,10 +735,14 @@ back atomically, then writes the id into `.pipeline/current-task`. It exits 1 wh
 unreadable, corrupt, not an object, or has no `tasks` array; when the id is not found (the error lists
 the valid ids); or when either write fails.
 
-`done` reads `.pipeline/current-task`. An absent stamp exits 0 — the command is idempotent. A stamp
-holding a different id prints `cannot clear task <id>; current stamp is <other>` and exits 1 with the
-stamp untouched. A match removes the stamp. `done` never modifies `task-status.json`; completion is the
-gate authority's decision. See [gates](../explanation/gates.md).
+`done` reads `.pipeline/current-task`, but the stamp is attribution telemetry rather than close
+authority. With or without a stamp, a task whose active plan declares `Done when:` checks records
+the supplied evidence for every check and marks its row `completed`; missing evidence refuses the
+close and names the check. Re-closing an already `completed` or `skipped` row with no evidence exits
+0 without rewriting `task-status.json`. A legacy task with no `Done when:` checks keeps its prior
+exit-0, no-write behavior. A stamp holding a different id prints `cannot clear task <id>; current
+stamp is <other>` and exits 1 with both the stamp and `task-status.json` untouched. A matching stamp
+is removed after a successful close. See [gates](../explanation/gates.md).
 
 ## `ai-conductor test-suite`
 

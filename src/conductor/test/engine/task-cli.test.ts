@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   detectTaskCommand,
@@ -851,6 +851,69 @@ describe('runTaskDone', () => {
       expect(await resolveTaskIds(dir, ['7'])).toEqual(new Set());
       await expect(runTaskDone(dir, '7', [{ index: 1, evidence: 'fresh proof' }])).resolves.toBe(0);
       expect(await resolveTaskIds(dir, ['7'])).toEqual(new Set(['7']));
+    });
+  });
+
+  describe('CLI entry — stampless done', () => {
+    it('parses and dispatches Done when evidence to complete a stampless task', async () => {
+      await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+        '### Task 7: Record completion through the CLI',
+        '**Done when:**',
+        '- CLI evidence is recorded.',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '7', status: 'in_progress' }],
+      }));
+
+      const command = detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '7', '--done-when', '1=CLI proof',
+      ]);
+
+      expect(command).toEqual({
+        kind: 'done',
+        id: '7',
+        doneWhen: [{ index: 1, evidence: 'CLI proof' }],
+      });
+      expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+
+      const status = JSON.parse(
+        await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
+      ) as { tasks: Array<Record<string, unknown>> };
+      expect(status.tasks[0]).toMatchObject({
+        status: 'completed',
+        doneWhen: [{ check: 'CLI evidence is recorded.', evidence: 'CLI proof' }],
+      });
+    });
+
+    it('parses and dispatches a stampless re-close without rewriting a completed row', async () => {
+      await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+        '### Task 7: Record completion through the CLI',
+        '**Done when:**',
+        '- CLI evidence is recorded.',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      const originalStatus = JSON.stringify({
+        tasks: [{ id: '7', status: 'completed', doneWhen: [{ check: 'CLI evidence is recorded.', evidence: 'CLI proof' }] }],
+      }, null, 2);
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), originalStatus);
+
+      const command = detectTaskCommand(['node', 'conduct', 'task', 'done', '7']);
+
+      expect(command).toEqual({ kind: 'done', id: '7' });
+      expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'))
+        .resolves.toBe(originalStatus);
     });
   });
 
