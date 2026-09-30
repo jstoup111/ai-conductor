@@ -86,6 +86,12 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    class is introduced (adr-2026-07-28 D1 unchanged); laps ride
    `gates.architecture_review_as_built`, never build_review's cumulative counter.
 
+   > **Amended 2026-09-29 by #2753:** The as-built lap and its shared-growth draw are charged at
+   > BUILD dispatch through the pending-repair settlement, not at append
+   > (adr-2026-08-22-prd-audit-stories-authority-and-bounded-kickback decisions 5 and 6, as
+   > amended). A second lap or an exceeded allowance halts `kickback-cap` at that dispatch, after
+   > the repair tasks are appended and pending.
+
 5. **One appender, restated (amends adr-2026-08-22-one-owner-per-review-question).** The
    binding principle becomes: *a gate may fail a lap or halt, and only the
    `planRemediation` → remediation-append seam may append plan tasks — with `prd_audit` and
@@ -93,6 +99,13 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    may direct BUILD to a mechanism the approved plan (or the governing approved clause a
    remediation task cites) does not authorize.* Appended tasks carry the governing clause the
    way prd_audit tasks carry `Criterion:`.
+
+   > **Amended 2026-09-29 by #2753:** "Each under its own cap" is enforced on the BUILD dispatch that
+   > would build the appended tasks, not on the append itself. The seam may append and commit an
+   > admitted repair before its allowance is settled. Appended but unsettled tasks never build
+   > without an in-cap settlement or a consumed operator raise, and the seam remains the only
+   > appender. This also qualifies adr-2026-08-22-one-owner-per-review-question's "only under its
+   > cap" as restated here.
 
 6. **Observability and lifecycle.** Per-finding classification and each remediation outcome
    are projected into the verdict artifact and the shipped record through the existing
@@ -119,6 +132,12 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    projects its findings into the verdict artifact, so a pending entry never outlives its
    projection. This is the only durable surface the feature adds, and no component outside the
    remediation seam reads it.
+
+   > **Amended 2026-09-29 by #2753:** "Written only when the append that authorizes the lap
+   > succeeds" now means written when the append (or `existing-task` binding) succeeds. The lap
+   > itself is authorized at BUILD dispatch. A pending finding whose repair halts at the cap
+   > stays pending until projection or a fresh session. It cannot project early, because as-built
+   > cannot pass before that repair's BUILD runs.
 
 8. **The bounded route is a fallback, never a preemption (added 2026-08-26 by operator
    amendment).** `adr-2026-07-10-validation-group-join` decision 3 is unchanged and keeps
@@ -214,6 +233,10 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
 > ledger reads as no pending findings, and an unreadable ledger is a named fault, never an empty
 > list. Decision 7's write, validation, and clear rules are unchanged, and the remediation seam
 > remains the only writer.
+
+   > **Amended 2026-09-29 by #2753:** An `existing-task` round registers a lap-only pending
+   > repair. Its lap is charged at BUILD dispatch settlement, not at restage, and still charges no
+   > growth. The restage-before-rewind obligation is unchanged.
 
 ## Consequences
 
