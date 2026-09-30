@@ -1,4 +1,6 @@
-// Covers: task:14
+// Covers: task:14, task:16
+import { readFile } from 'node:fs/promises';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import type { DeferralKey } from '../../../src/engine/monitor/deferrals.js';
@@ -203,6 +205,56 @@ describe('Task 15 — deferring a skipped guided session', () => {
       }],
       markerAfterRestart: markerBeforeSkip,
       markerWrites: [],
+    });
+  });
+});
+
+describe('Task 16 — deriving resolution only from halt membership', () => {
+  it('re-offers a marker that persists after a zero-exit session claiming resolution with its original context', async () => {
+    const persistent = halt('persistent-marker');
+    const currentContext = {
+      project: persistent.project,
+      feature: persistent.slug,
+      reason: persistent.reason,
+      classification: persistent.haltClass,
+    };
+    let markerStillPresent = true;
+    const offer = vi.fn();
+    const launch = vi.fn(async () => {
+      if (launch.mock.calls.length === 1) {
+        return { kind: 'exited', exitCode: 0, output: 'halt resolved' };
+      }
+      markerStillPresent = false;
+      return { kind: 'exited', exitCode: 0 };
+    });
+
+    await runGuidedMonitorQueue({
+      deriveMembership: async () => markerStillPresent ? [{ ...persistent }] : [],
+      launch,
+      offer,
+    });
+
+    expect({
+      offeredContexts: offer.mock.calls.map(([item]) => ({
+        project: item.project,
+        feature: item.slug,
+        reason: item.reason,
+        classification: item.haltClass,
+      })),
+    }).toEqual({
+      offeredContexts: [currentContext, currentContext],
+    });
+  });
+
+  it('does not parse session output or reports, or write a resolution verdict', async () => {
+    const source = await readFile(new URL('../../../src/engine/monitor/loop.ts', import.meta.url), 'utf8');
+
+    expect({
+      parsesSessionOutputOrReports: /\b(?:outcome|session)\s*(?:\.|\[)\s*['\"]?(?:output|reports?)\b/i.test(source),
+      writesHaltMarkerOrResolutionVerdict: /\b(?:writeHaltMarker|writeFile|rm|unlink)\s*\(|\b(?:record|mark|set)\w*(?:resolution|resolved)\w*\s*\(/i.test(source),
+    }).toEqual({
+      parsesSessionOutputOrReports: false,
+      writesHaltMarkerOrResolutionVerdict: false,
     });
   });
 });
