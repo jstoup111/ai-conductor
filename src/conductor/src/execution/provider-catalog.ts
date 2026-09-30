@@ -1,6 +1,6 @@
 import { ClaudeProvider } from './claude-provider.js';
 import { CodexProvider } from './codex-provider.js';
-import { PiProvider } from './pi-provider.js';
+import { parsePiModelId, PiProvider, type PiModelIdParseResult } from './pi-provider.js';
 import type { LLMProvider } from './llm-provider.js';
 import type { StepName } from '../types/steps.js';
 import {
@@ -58,6 +58,8 @@ export interface BuiltInProviderDescriptor {
   readonly homeVariable: string;
   readonly defaultHome: string;
   readonly modelPolicy: ProviderModelPolicy;
+  /** Parses provider-native model ids when the provider defines model-id grammar. */
+  readonly parseModelId?: (modelId: string) => PiModelIdParseResult;
   /** Additional provider-owned model ids to include in rate-card refreshes. */
   readonly optInModelIds: readonly string[];
   /** Whether unattended provider commands run in an OS sandbox. */
@@ -105,6 +107,7 @@ export const BUILT_IN_PROVIDERS = [
     homeVariable: 'CLAUDE_CONFIG_DIR',
     defaultHome: '.claude',
     modelPolicy: CLAUDE_MODEL_POLICY,
+    parseModelId: undefined,
     optInModelIds: [],
     osSandbox: false,
     capabilities: {
@@ -146,6 +149,7 @@ export const BUILT_IN_PROVIDERS = [
     homeVariable: 'CODEX_HOME',
     defaultHome: '.codex',
     modelPolicy: CODEX_MODEL_POLICY,
+    parseModelId: undefined,
     optInModelIds: ['gpt-6-astra'],
     osSandbox: true,
     capabilities: {
@@ -176,6 +180,7 @@ export const BUILT_IN_PROVIDERS = [
     homeVariable: 'PI_HOME',
     defaultHome: '.pi',
     modelPolicy: PI_MODEL_POLICY,
+    parseModelId: parsePiModelId,
     optInModelIds: [],
     osSandbox: false,
     capabilities: {} as const satisfies ProviderCapabilityFlags,

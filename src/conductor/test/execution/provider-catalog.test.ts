@@ -12,6 +12,7 @@ import {
   type ProviderCapabilityFlags,
   type ProviderWith,
 } from '../../src/execution/provider-catalog.js';
+import { parsePiModelId } from '../../src/execution/pi-provider.js';
 import { rateCardModelIds } from '../../src/engine/provider-model-policy.js';
 
 const executableOverrides = ['CLAUDE_EXECUTABLE', 'CODEX_EXECUTABLE', 'PI_EXECUTABLE'] as const;
@@ -52,6 +53,18 @@ describe('built-in provider catalog', () => {
 
   it('never sends an empty model id to rate-card refreshes', () => {
     expect(rateCardModelIds()).not.toContain('');
+  });
+
+  it('declares Pi model parsing only on the Pi descriptor', () => {
+    const parserByProvider = Object.fromEntries(
+      BUILT_IN_PROVIDERS.map((provider) => [provider.id, provider.parseModelId]),
+    );
+
+    expect(parserByProvider).toEqual({
+      claude: undefined,
+      codex: undefined,
+      pi: parsePiModelId,
+    });
   });
 
   it('declares interactive launch mechanics without changing read-only review admission', () => {

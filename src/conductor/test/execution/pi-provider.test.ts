@@ -1,9 +1,9 @@
-// Covers: task:3, task:4, task:15, task:16, task:17, task:18
+// Covers: task:2, task:3, task:4, task:15, task:16, task:17, task:18
 import { readFile } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 import { classifyMetering } from '../../src/engine/metering.js';
-import { PiProvider } from '../../src/execution/pi-provider.js';
+import { parsePiModelId, PiProvider } from '../../src/execution/pi-provider.js';
 import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
@@ -299,5 +299,23 @@ describe('PiProvider', () => {
     }
     if (!('modelUnavailable' in expected)) expect(result).not.toHaveProperty('modelUnavailable');
     if (Object.keys(expected).length > 0) expect(result).not.toHaveProperty('exitFacts');
+  });
+});
+
+describe('parsePiModelId', () => {
+  it.each([
+    ['anthropic/claude-opus-4-5', { provider: 'anthropic', model: 'claude-opus-4-5' }],
+    ['cline/google/gemma-4-31b-it:free', { provider: 'cline', model: 'google/gemma-4-31b-it:free' }],
+  ])('splits canonical id %s at its first separator only', (modelId, expected) => {
+    expect(parsePiModelId(modelId)).toEqual(expected);
+  });
+
+  it.each([
+    ['claude-opus-4-5', 'missing-separator'],
+    ['anthropic/', 'empty-model'],
+    ['/claude-opus-4-5', 'empty-provider'],
+    ['anthropic/claude opus-4-5', 'whitespace'],
+  ] as const)('rejects invalid Pi id %j with reason %s', (modelId, reason) => {
+    expect(parsePiModelId(modelId)).toEqual({ reason });
   });
 });

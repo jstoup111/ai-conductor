@@ -24,6 +24,32 @@ export type PiSubprocessFactory = (
 export const PI_MODEL_UNAVAILABLE_RE =
   /^Error: Model "[^"\r\n]+" not found\. Use --list-models to see available models\.$/;
 
+export type PiModelIdParseFailureReason =
+  | 'missing-separator'
+  | 'empty-provider'
+  | 'empty-model'
+  | 'whitespace';
+
+export type PiModelIdParseResult =
+  | { readonly provider: string; readonly model: string }
+  | { readonly reason: PiModelIdParseFailureReason };
+
+/** Parse Pi's canonical provider/model identifier without rewriting its model suffix. */
+export function parsePiModelId(modelId: string): PiModelIdParseResult {
+  if (/\s/.test(modelId)) return { reason: 'whitespace' };
+
+  const separator = modelId.indexOf('/');
+  if (separator === -1) return { reason: 'missing-separator' };
+
+  const provider = modelId.slice(0, separator);
+  if (!provider) return { reason: 'empty-provider' };
+
+  const model = modelId.slice(separator + 1);
+  if (!model) return { reason: 'empty-model' };
+
+  return { provider, model };
+}
+
 type PiJsonEvent = {
   type?: unknown;
   message?: {
