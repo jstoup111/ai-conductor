@@ -65,6 +65,8 @@ describe('halt rehabilitation ownership outcomes', () => {
     )).resolves.toBe('cleared');
     expect(fixture.state.isDraft).toBe(true);
 
+    // Re-halt the PR (resume clear now repairs title + banner as well).
+    fixture.state.title = 'needs-remediation: widget import';
     fixture.state.labels = ['needs-remediation'];
     fixture.state.body = `${HALT_PR_BANNER_SENTINEL}\n${NEEDS_REMEDIATION_BODY_MARKER}`;
     await expect(rehabilitateHaltPr({

@@ -241,6 +241,27 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
     ]));
   });
 
+  it('clears a halt title prefix and banner when no label or body marker remains', async () => {
+    const halted = {
+      title: 'needs-remediation: feat/daemon-widget — manual remediation required',
+      isDraft: true,
+      labels: [],
+      body: `${HALT_PR_BANNER_SENTINEL}\n\n## Summary\n\nWidget import flow.`,
+    };
+    const { gh } = fakeGh([{ stdout: JSON.stringify(halted) }]);
+    const { operations, writes } = fakeOperations();
+
+    await expect(clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations, {
+      featureDesc: 'widget import flow',
+    })).resolves.toBe('cleared');
+
+    expect(writes.map((w) => [w.operation, w.payload])).toEqual([
+      ['pull-request.edit', { title: 'feat: widget import flow' }],
+      ['pull-request.edit', { body: '## Summary\n\nWidget import flow.' }],
+      ['pull-request.comment.create', expect.objectContaining({ body: expect.stringContaining('Halt resolved') })],
+    ]);
+  });
+
   it('returns gh-unavailable without throwing when the initial read rejects', async () => {
     const { gh } = fakeGh([new Error('gh: network error')]);
 
