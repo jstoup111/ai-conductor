@@ -141,6 +141,42 @@ else
   exit 1
 fi
 
+# Provider readiness is deliberately separate from catalog reconciliation.
+# Establish the existing two-provider catalog, then prove that selecting Pi
+# cannot create, remove, or repoint either discovery catalog on either run.
+CATALOG_LINKS_HOME="$TMP_ROOT/catalog-links-home"
+mkdir -p "$CATALOG_LINKS_HOME"
+set +e
+CATALOG_BASELINE_OUT=$(cd "$CHECKOUT" && HOME="$CATALOG_LINKS_HOME" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" --providers claude,codex --allow-worktree-root </dev/null 2>&1)
+CATALOG_BASELINE_CODE=$?
+set -e
+CATALOG_LINKS_BEFORE=$(find "$CATALOG_LINKS_HOME/.claude/skills" "$CATALOG_LINKS_HOME/.agents/skills" -maxdepth 1 -printf '%p -> %l\n' | sort)
+
+set +e
+CATALOG_PI_FIRST_OUT=$(cd "$CHECKOUT" && HOME="$CATALOG_LINKS_HOME" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" --providers pi --allow-worktree-root </dev/null 2>&1)
+CATALOG_PI_FIRST_CODE=$?
+set -e
+CATALOG_LINKS_AFTER_FIRST_PI=$(find "$CATALOG_LINKS_HOME/.claude/skills" "$CATALOG_LINKS_HOME/.agents/skills" -maxdepth 1 -printf '%p -> %l\n' | sort)
+
+set +e
+CATALOG_PI_SECOND_OUT=$(cd "$CHECKOUT" && HOME="$CATALOG_LINKS_HOME" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" --providers pi --allow-worktree-root </dev/null 2>&1)
+CATALOG_PI_SECOND_CODE=$?
+set -e
+CATALOG_LINKS_AFTER_SECOND_PI=$(find "$CATALOG_LINKS_HOME/.claude/skills" "$CATALOG_LINKS_HOME/.agents/skills" -maxdepth 1 -printf '%p -> %l\n' | sort)
+
+if [ "$CATALOG_BASELINE_CODE" -eq 0 ] \
+  && [ "$CATALOG_PI_FIRST_CODE" -eq 0 ] \
+  && [ "$CATALOG_PI_SECOND_CODE" -eq 0 ] \
+  && [ "$CATALOG_LINKS_BEFORE" = "$CATALOG_LINKS_AFTER_FIRST_PI" ] \
+  && [ "$CATALOG_LINKS_BEFORE" = "$CATALOG_LINKS_AFTER_SECOND_PI" ]; then
+  echo 'PASS Pi installs preserve existing Claude and Codex catalog links on both runs'
+else
+  echo 'FAIL Pi installs preserve existing Claude and Codex catalog links on both runs'
+  printf 'baseline exit code: %s; first Pi exit code: %s; second Pi exit code: %s\n' "$CATALOG_BASELINE_CODE" "$CATALOG_PI_FIRST_CODE" "$CATALOG_PI_SECOND_CODE"
+  printf 'before:\n%s\nafter first Pi:\n%s\nafter second Pi:\n%s\n' "$CATALOG_LINKS_BEFORE" "$CATALOG_LINKS_AFTER_FIRST_PI" "$CATALOG_LINKS_AFTER_SECOND_PI"
+  exit 1
+fi
+
 # A missing Pi remains advisory during installation, but strict readiness
 # reports it as a selected unavailable provider.
 MISSING_PI_STUBS="$TMP_ROOT/stubs-without-pi"
@@ -256,6 +292,25 @@ else
   echo 'FAIL strict readiness succeeds for Claude, Codex, and both required-provider selections when ready'
   printf 'providers: %s; exit code: %s\n' "$REQUIRED_PROVIDERS" "$STRICT_READY_MATRIX_CODE"
   printf '%s\n' "$STRICT_READY_MATRIX_OUT"
+  exit 1
+fi
+
+# Omitting --providers keeps the original strict-check default: Claude alone
+# is required. Codex and Pi remain unselected even when their CLIs are present.
+set +e
+DEFAULT_STRICT_CHECK_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$STUBS:$FAKE_HOME/.local/bin:/usr/bin:/bin" timeout 8s "$CHECKOUT/bin/install" --check --allow-worktree-root 2>&1)
+DEFAULT_STRICT_CHECK_CODE=$?
+set -e
+
+if [ "$DEFAULT_STRICT_CHECK_CODE" -eq 0 ] \
+  && printf '%s' "$DEFAULT_STRICT_CHECK_OUT" | grep -Fqi 'Claude Code installed' \
+  && ! printf '%s' "$DEFAULT_STRICT_CHECK_OUT" | grep -Fqi 'Codex CLI installed' \
+  && ! printf '%s' "$DEFAULT_STRICT_CHECK_OUT" | grep -Fqi 'Pi CLI installed'; then
+  echo 'PASS no-provider strict check retains the Claude-only default selection'
+else
+  echo 'FAIL no-provider strict check retains the Claude-only default selection'
+  printf 'exit code: %s\n' "$DEFAULT_STRICT_CHECK_CODE"
+  printf '%s\n' "$DEFAULT_STRICT_CHECK_OUT"
   exit 1
 fi
 
