@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:4
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, open, readdir, readFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -106,6 +106,45 @@ describe('SpoolStore', () => {
       beforeDelete: [oldest.name, newest.name],
       listed: [newest.name],
       totalBytes: Buffer.byteLength('newer'),
+    });
+  });
+
+  it('evicts the oldest batches and reports their item counts when a write exceeds the byte cap', async () => {
+    const directory = await temporaryDirectory();
+    let now = 1_727_000_000_000;
+    const store = new SpoolStore(directory, { maxBytes: 1_048_576, now: () => now });
+    await store.write('traces', Buffer.alloc(524_288), 2);
+    now += 1;
+    const retained = await store.write('traces', Buffer.alloc(524_288));
+    now += 1;
+    const result = await store.write('traces', Buffer.alloc(102_400), 7);
+    if (result.rejectedOversize) throw new Error('expected the batch to be stored');
+
+    expect({
+      result: { evictedBatches: result.evictedBatches, evictedItems: result.evictedItems },
+      names: (await store.list('traces')).map((batch) => batch.name),
+      totalBytes: await store.totalBytes('traces'),
+    }).toEqual({
+      result: { evictedBatches: 1, evictedItems: 2 },
+      names: [retained.name, result.name],
+      totalBytes: 626_688,
+    });
+  });
+
+  it('rejects an oversize batch with its item count without changing retained files', async () => {
+    const directory = await temporaryDirectory();
+    const store = new SpoolStore(directory, { maxBytes: 1_048_576 });
+    const retained = await store.write('metrics', Buffer.from('retained'));
+    const result = await store.write('metrics', Buffer.alloc(2_097_152), 11);
+
+    expect({
+      result: { rejectedOversize: result.rejectedOversize, rejectedItems: result.rejectedItems },
+      batches: (await store.list('metrics')).map((batch) => batch.name),
+      body: await store.read(retained),
+    }).toEqual({
+      result: { rejectedOversize: true, rejectedItems: 11 },
+      batches: [retained.name],
+      body: Buffer.from('retained'),
     });
   });
 });

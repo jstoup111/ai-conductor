@@ -8,7 +8,22 @@ export interface SpoolBatch {
   name: string;
   path: string;
   size: number;
+  items: number;
 }
+
+export type SpoolWriteResult =
+  | (SpoolBatch & {
+    rejectedOversize: false;
+    rejectedItems: 0;
+    evictedBatches: number;
+    evictedItems: number;
+  })
+  | {
+    rejectedOversize: true;
+    rejectedItems: number;
+    evictedBatches: 0;
+    evictedItems: 0;
+  };
 
 interface SpoolFileHandle {
   writeFile(data: Uint8Array): Promise<void>;
@@ -29,6 +44,7 @@ export interface SpoolFilesystem {
 
 export interface SpoolStoreOptions {
   filesystem?: SpoolFilesystem;
+  maxBytes?: number;
   now?: () => number;
   pid?: number;
   randomBytes?: (size: number) => Buffer;
@@ -49,18 +65,26 @@ export class SpoolStore {
   private readonly now: () => number;
   private readonly pid: number;
   private readonly randomBytes: (size: number) => Buffer;
+  private readonly maxBytes: number | undefined;
 
   constructor(private readonly root: string, options: SpoolStoreOptions = {}) {
     this.filesystem = options.filesystem ?? filesystem;
     this.now = options.now ?? Date.now;
     this.pid = options.pid ?? process.pid;
     this.randomBytes = options.randomBytes ?? randomBytes;
+    this.maxBytes = options.maxBytes;
   }
 
-  async write(signal: SpoolSignal, body: Uint8Array): Promise<SpoolBatch> {
+  write(signal: SpoolSignal, body: Uint8Array): Promise<SpoolBatch>;
+  write(signal: SpoolSignal, body: Uint8Array, items: number): Promise<SpoolWriteResult>;
+  async write(signal: SpoolSignal, body: Uint8Array, items = 1): Promise<SpoolBatch | SpoolWriteResult> {
+    if (this.maxBytes !== undefined && body.byteLength > this.maxBytes) {
+      return { rejectedOversize: true, rejectedItems: items, evictedBatches: 0, evictedItems: 0 };
+    }
+
     const directory = this.directory(signal);
     await this.filesystem.mkdir(directory, { recursive: true, mode: 0o700 });
-    const name = `${String(this.now()).padStart(15, '0')}-${this.pid}-${this.randomBytes(4).toString('hex')}.pb`;
+    const name = `${String(this.now()).padStart(15, '0')}-${this.pid}-${this.randomBytes(4).toString('hex')}-${items}.pb`;
     const path = join(directory, name);
     const temporaryPath = `${path}.${this.randomBytes(4).toString('hex')}.tmp`;
     const handle = await this.filesystem.open(temporaryPath, 'wx');
@@ -76,7 +100,22 @@ export class SpoolStore {
       if (!closed) await handle.close().catch(() => undefined);
     }
 
-    return { name, path, size: body.byteLength };
+    const batch = { name, path, size: body.byteLength, items };
+    if (this.maxBytes === undefined) return batch;
+
+    let totalBytes = await this.totalBytes();
+    let evictedBatches = 0;
+    let evictedItems = 0;
+    for (const oldest of await this.allBatches()) {
+      if (totalBytes <= this.maxBytes) break;
+      if (oldest.path === path) continue;
+      await this.delete(oldest);
+      totalBytes -= oldest.size;
+      evictedBatches += 1;
+      evictedItems += oldest.items;
+    }
+
+    return { ...batch, rejectedOversize: false, rejectedItems: 0, evictedBatches, evictedItems };
   }
 
   async list(signal: SpoolSignal): Promise<SpoolBatch[]> {
@@ -94,7 +133,12 @@ export class SpoolStore {
       .sort()
       .map(async (name) => {
         const path = join(directory, name);
-        return { name, path, size: (await this.filesystem.stat(path)).size };
+        return {
+          name,
+          path,
+          size: (await this.filesystem.stat(path)).size,
+          items: this.itemsFromName(name),
+        };
       }));
     return batches;
   }
@@ -107,11 +151,24 @@ export class SpoolStore {
     return this.filesystem.rm(batch.path, { force: true });
   }
 
-  async totalBytes(signal: SpoolSignal): Promise<number> {
-    return (await this.list(signal)).reduce((total, batch) => total + batch.size, 0);
+  async totalBytes(signal?: SpoolSignal): Promise<number> {
+    const signals: readonly SpoolSignal[] = signal === undefined ? ['traces', 'metrics'] : [signal];
+    const batches = await Promise.all(signals.map((currentSignal) => this.list(currentSignal)));
+    return batches.flat().reduce((total, batch) => total + batch.size, 0);
   }
 
   private directory(signal: SpoolSignal): string {
     return join(this.root, signal);
+  }
+
+  private async allBatches(): Promise<SpoolBatch[]> {
+    const signals: readonly SpoolSignal[] = ['traces', 'metrics'];
+    const batches = await Promise.all(signals.map((signal) => this.list(signal)));
+    return batches.flat().sort((first, second) => first.name.localeCompare(second.name));
+  }
+
+  private itemsFromName(name: string): number {
+    const match = /-(\d+)\.pb$/.exec(name);
+    return match === null ? 1 : Number(match[1]);
   }
 }
