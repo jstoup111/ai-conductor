@@ -35,6 +35,7 @@ import {
   startFeatureReplay,
   runTier1,
   makeGitRunner,
+  assertNeverRebaseOutcome,
 } from './rebase.js';
 import { execa } from 'execa';
 import type { WorktreeLifecycleQueue } from './worktree.js';
@@ -1220,40 +1221,34 @@ export async function resolveConflictingPr(
           return { kind: 'escalated' };
         }
 
-        // If tier2 failed (unresolved conflicts), escalate immediately
-        if (tier2Outcome.kind === 'conflict_halt') {
-          const reason = tier2Outcome.reason || 'could not resolve remaining conflicts';
-          // Only the judgement (test-only) path names the acceptance-guards
-          // stage, for a completed rebase the post-completion guards rejected
-          // (S3.3: an undeclared drop). A strict-path completed-rebase halt
-          // keeps tier2-resolve — relabelling it was refused as out of scope
-          // (NC.1).
-          const stage = conflictScope === 'test-only' && tier2Outcome.resumeShape === 'completed-rebase'
-            ? 'acceptance-guards'
-            : 'tier2-resolve';
-          await escalate(prUrl, stage, reason, {
-            runGh: deps.runGh,
-            operations,
-            cwd: repoCwd,
-            log,
-          });
-          logOutcome(log, prUrl, stage, 'escalated');
-          return { kind: 'escalated' };
-        }
-        if (tier2Outcome.kind === 'flatten_refused') {
-          // Task 11 reaches this branch from the shared replay primitive.
-          await escalate(prUrl, 'merge-flatten-refused', tier2Outcome.recipe, {
-            runGh: deps.runGh,
-            operations,
-            cwd: repoCwd,
-            log,
-          });
-          logOutcome(log, prUrl, 'merge-flatten-refused', 'escalated');
-          return { kind: 'escalated' };
-        }
-        if (tier2Outcome.kind === 'setup_stop') {
-          logOutcome(log, prUrl, 'tier2-setup', 'setup-stop');
-          return { kind: 'setup-stop' };
+        // If tier2 failed (unresolved conflicts), escalate immediately.
+        switch (tier2Outcome.kind) {
+          case 'conflict_halt': {
+            const reason = tier2Outcome.reason || 'could not resolve remaining conflicts';
+            // Only the judgement (test-only) path names the acceptance-guards
+            // stage, for a completed rebase the post-completion guards rejected.
+            const stage = conflictScope === 'test-only' && tier2Outcome.resumeShape === 'completed-rebase'
+              ? 'acceptance-guards'
+              : 'tier2-resolve';
+            await escalate(prUrl, stage, reason, { runGh: deps.runGh, operations, cwd: repoCwd, log });
+            logOutcome(log, prUrl, stage, 'escalated');
+            return { kind: 'escalated' };
+          }
+          case 'flatten_refused':
+            await escalate(prUrl, 'merge-flatten-refused', tier2Outcome.recipe, {
+              runGh: deps.runGh, operations, cwd: repoCwd, log,
+            });
+            logOutcome(log, prUrl, 'merge-flatten-refused', 'escalated');
+            return { kind: 'escalated' };
+          case 'setup_stop':
+            logOutcome(log, prUrl, 'tier2-setup', 'setup-stop');
+            return { kind: 'setup-stop' };
+          case 'changed':
+          case 'noop':
+          case 'mergeable_skip':
+            break;
+          default:
+            assertNeverRebaseOutcome(tier2Outcome);
         }
       }
 

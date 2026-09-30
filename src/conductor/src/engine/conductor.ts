@@ -422,6 +422,7 @@ import {
   writeHalt,
   writeRebaseOutcomeHalt,
   writeSealHalt,
+  assertNeverRebaseOutcome,
   ProtectedArtifactSealRejection,
   originDefaultBranch,
   type RebaseOutcome,
@@ -15188,19 +15189,27 @@ export class Conductor {
       await emitRebaseEvent(this.events, outcome);
     }
 
-    if (outcome.kind === 'conflict_halt' && !sealRejectionReason) {
-      await writeRebaseOutcomeHalt(this.projectRoot, outcome, this.events);
-    } else if (outcome.kind === 'flatten_refused' && !sealRejectionReason) {
-      await writeRebaseOutcomeHalt(this.projectRoot, outcome, this.events);
-    } else if (outcome.kind === 'setup_stop') {
-      // Setup-only resolver exhaustion leaves the rebase paused: park it for the
-      // provider recovery action instead of stamping the gate satisfied.
-      await writeHalt(
-        this.projectRoot,
-        outcome.conflicts,
-        `provider setup unavailable: ${outcome.reason}`,
-        this.events,
-      );
+    switch (outcome.kind) {
+      case 'conflict_halt':
+      case 'flatten_refused':
+        if (!sealRejectionReason) await writeRebaseOutcomeHalt(this.projectRoot, outcome, this.events);
+        break;
+      case 'setup_stop':
+        // Setup-only resolver exhaustion leaves the rebase paused: park it for the
+        // provider recovery action instead of stamping the gate satisfied.
+        await writeHalt(
+          this.projectRoot,
+          outcome.conflicts,
+          `provider setup unavailable: ${outcome.reason}`,
+          this.events,
+        );
+        break;
+      case 'changed':
+      case 'noop':
+      case 'mergeable_skip':
+        break;
+      default:
+        assertNeverRebaseOutcome(outcome);
     }
 
     await recordRebaseStepCompletion(this.stateFilePath, outcome);

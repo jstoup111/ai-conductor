@@ -735,6 +735,16 @@ export type RebaseOutcome = RebaseOutcomeKind & {
   expectedSubjects?: string[];
 };
 
+/**
+ * Make outcome consumers fail to typecheck when the discriminated union gains
+ * a member they have not consciously routed.  Rebase outcomes cross daemon,
+ * foreground, and autoresolve boundaries, so a silent fall-through here is a
+ * safety bug rather than merely unreachable code.
+ */
+export function assertNeverRebaseOutcome(outcome: never): never {
+  throw new Error(`unhandled rebase outcome: ${JSON.stringify(outcome)}`);
+}
+
 export type FlattenedReplayEntry =
   | { kind: 'ordinary'; sha: string }
   | {

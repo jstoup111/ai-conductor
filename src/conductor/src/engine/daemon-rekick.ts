@@ -23,6 +23,7 @@ import {
   writeHalt,
   writeRebaseOutcomeHalt,
   writeSealHalt,
+  assertNeverRebaseOutcome,
   ProtectedArtifactSealRejection,
   type RebaseOutcome,
   type RebaseResolver,
@@ -969,34 +970,39 @@ export async function resumeRebaseFirst(opts: {
   await recordRebaseStepCompletion(stateFilePath, outcome);
   await emitRebaseEvent(opts.events, outcome);
 
-  if (outcome.kind === 'conflict_halt') {
-    // Re-conflict on the new base → re-park via 9.0's existing HALT path.
-    await writeRebaseOutcomeHalt(opts.worktreePath, outcome, opts.events);
-    opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase re-conflicted on advanced base — re-parked`);
-    return 'halted';
-  }
-  if (outcome.kind === 'flatten_refused') {
-    await writeRebaseOutcomeHalt(opts.worktreePath, outcome, opts.events);
-    opts.log?.(`re-kick ${basename(opts.worktreePath)}: flattened rebase refused — re-parked`);
-    return 'halted';
-  }
-  if (outcome.kind === 'setup_stop') {
-    // Setup-only resolver exhaustion: the rebase is still paused, so park it
-    // for the provider recovery action rather than reporting it rebased.
-    await writeHalt(
-      opts.worktreePath,
-      outcome.conflicts,
-      `provider setup unavailable: ${outcome.reason}`,
-      opts.events,
-    );
-    await opts.events.emit({
-      type: 'step_refused',
-      step: 'rebase',
-      kind: 'needs-human',
-      reason: `rebase resolution paused — provider setup unavailable: ${outcome.reason}`,
-    });
-    opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase resolution paused — provider setup unavailable — re-parked`);
-    return 'halted';
+  switch (outcome.kind) {
+    case 'conflict_halt':
+      // Re-conflict on the new base → re-park via 9.0's existing HALT path.
+      await writeRebaseOutcomeHalt(opts.worktreePath, outcome, opts.events);
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase re-conflicted on advanced base — re-parked`);
+      return 'halted';
+    case 'flatten_refused':
+      await writeRebaseOutcomeHalt(opts.worktreePath, outcome, opts.events);
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: flattened rebase refused — re-parked`);
+      return 'halted';
+    case 'setup_stop':
+      // Setup-only resolver exhaustion: the rebase is still paused, so park it
+      // for the provider recovery action rather than reporting it rebased.
+      await writeHalt(
+        opts.worktreePath,
+        outcome.conflicts,
+        `provider setup unavailable: ${outcome.reason}`,
+        opts.events,
+      );
+      await opts.events.emit({
+        type: 'step_refused',
+        step: 'rebase',
+        kind: 'needs-human',
+        reason: `rebase resolution paused — provider setup unavailable: ${outcome.reason}`,
+      });
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase resolution paused — provider setup unavailable — re-parked`);
+      return 'halted';
+    case 'changed':
+    case 'noop':
+    case 'mergeable_skip':
+      break;
+    default:
+      assertNeverRebaseOutcome(outcome);
   }
 
   opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebased onto latest before resuming gate`);
