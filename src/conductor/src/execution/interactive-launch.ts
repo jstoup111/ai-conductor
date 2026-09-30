@@ -43,20 +43,33 @@ export interface LaunchInteractiveSessionOptions {
   readonly spawn?: InteractiveLaunchProcess;
   readonly report?: (message: string) => void;
   readonly isInteractiveTerminal?: () => boolean;
+  /** The guided monitor alone needs an attached Codex TUI for operator approvals. */
+  readonly mode?: 'guided-monitor';
 }
 
-const interactiveInvocations: Record<string, (prompt: string) => InteractiveInvocation> = {
+const interactiveInvocations: Record<
+  string,
+  (prompt: string, mode?: LaunchInteractiveSessionOptions['mode']) => InteractiveInvocation
+> = {
   [CLAUDE_PROVIDER]: (prompt: string) => ({
     executable: resolveProviderExecutable(CLAUDE_PROVIDER),
     args: ['--permission-mode', 'default', prompt],
     stdio: 'inherit',
   }),
-  [CODEX_PROVIDER]: (prompt: string) => ({
-    executable: resolveProviderExecutable(CODEX_PROVIDER),
-    args: ['exec'],
-    stdio: ['pipe', 'inherit', 'inherit'],
-    stdin: prompt,
-  }),
+  [CODEX_PROVIDER]: (prompt: string, mode?: LaunchInteractiveSessionOptions['mode']) => (
+    mode === 'guided-monitor'
+      ? {
+          executable: resolveProviderExecutable(CODEX_PROVIDER),
+          args: [prompt],
+          stdio: 'inherit',
+        }
+      : {
+          executable: resolveProviderExecutable(CODEX_PROVIDER),
+          args: ['exec'],
+          stdio: ['pipe', 'inherit', 'inherit'],
+          stdin: prompt,
+        }
+  ),
 } as const;
 
 const defaultSpawn = (
@@ -101,7 +114,7 @@ export async function launchInteractiveSession(
   }
 
   try {
-    const launch = invocation(request.openingPrompt);
+    const launch = invocation(request.openingPrompt, options.mode);
     const spawnProcess = options.spawn ?? ((executable, args, spawnOptions) => defaultSpawn(
       executable,
       args,

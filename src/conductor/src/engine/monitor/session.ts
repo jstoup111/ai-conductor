@@ -91,7 +91,10 @@ export async function openGuidedSession(
   request: GuidedSessionRequest,
   options: GuidedSessionOptions = {},
 ): Promise<InteractiveLaunchOutcome> {
-  const launch = options.launch ?? launchInteractiveSession;
+  const launch = options.launch ?? ((interactiveRequest) => launchInteractiveSession(
+    interactiveRequest,
+    { mode: 'guided-monitor' },
+  ));
   return launch({
     provider: request.provider,
     cwd: haltedWorktree(request.halt),
