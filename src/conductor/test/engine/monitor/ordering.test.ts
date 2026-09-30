@@ -84,6 +84,34 @@ describe('Task 7 — monitor queue ordering', () => {
     });
   });
 
+  it('keeps the remaining unseen equal-band halts in their prior order after one is deferred', async () => {
+    const resolver = createPriorityResolver(readerFor({
+      'owner/repo#equal-a': ['priority: medium'],
+      'owner/repo#equal-b': ['priority: medium'],
+      'owner/repo#equal-c': ['priority: medium'],
+    }), () => {});
+    const equal = [
+      halt('equal-a', 'owner/repo#equal-a'),
+      halt('equal-b', 'owner/repo#equal-b'),
+      halt('equal-c', 'owner/repo#equal-c'),
+    ];
+
+    const first = await orderMonitorQueue(equal, resolver);
+    const recomputed = await orderMonitorQueue([
+      equal[0],
+      halt('equal-b', 'owner/repo#equal-b', true),
+      equal[2],
+    ], resolver);
+
+    expect({
+      first: first.map(({ slug }) => slug),
+      afterDeferral: recomputed.map(({ slug }) => slug),
+    }).toEqual({
+      first: ['equal-a', 'equal-b', 'equal-c'],
+      afterDeferral: ['equal-a', 'equal-c', 'equal-b'],
+    });
+  });
+
   it('retains an unresolved linked issue and remains byte-stable when no item has a priority label', async () => {
     const resolver = createPriorityResolver(readerFor({
       'owner/repo#missing': 'not-found',
