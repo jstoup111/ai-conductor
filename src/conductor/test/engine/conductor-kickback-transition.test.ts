@@ -180,7 +180,87 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     expect(build).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/kickback|allowance/i);
   });
+
+  it.each(['build_review', 'test_suite', 'manual_test'] as const)(
+    'does not settle a remediation charge for a %s kickback into BUILD',
+    async (sourceGate) => {
+      const { build } = await runBuild(undefined, {
+        version: 1,
+        gates: {
+          prd_audit: entry(2),
+          architecture_review_as_built: entry(3),
+          [sourceGate]: entry(4),
+        },
+        growth: { authored: 8, added: 3, byGate: { prd_audit: 2, architecture_review_as_built: 1 } },
+      });
+
+      expect(build).toHaveBeenCalledOnce();
+      await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+        gates: {
+          prd_audit: { laps: 2 },
+          architecture_review_as_built: { laps: 3 },
+          [sourceGate]: { laps: 4 },
+        },
+        growth: { added: 3, byGate: { prd_audit: 2, architecture_review_as_built: 1 } },
+      });
+    },
+  );
 });
+
+describe('remediation halts without a planned repair (Task 11)', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-kickback-no-repair-'));
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('keeps the no-recognized-disposition needs-human halt uncharged', async () => {
+    const dispatched: string[] = [];
+    const conductor = new Conductor({
+      stateFilePath: join(dir, '.pipeline', 'conduct-state.json'),
+      projectRoot: dir,
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, verifyArtifacts: false,
+      stepRunner: {
+        run: async (step) => {
+          dispatched.push(step);
+          await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({
+            dispositions: [{ id: 'S1.1', disposition: 'unrecognized', rationale: 'Needs a human.' }],
+          }));
+          return { success: true };
+        },
+      },
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (
+        state: { session_started_at: number; feature_desc: string },
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: { source: string; evidence: [] },
+      ) => Promise<{ kind: string; haltClass?: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'no-repair' },
+      ALL_STEPS,
+      'no recognized remediation disposition',
+      { source: 'build_review', evidence: [] },
+    );
+
+    expect(dispatched).toEqual(['remediate']);
+    expect(outcome).toEqual(expect.objectContaining({
+      kind: 'halt',
+      haltClass: 'needs-human',
+      detail: expect.stringContaining('remediation planner returned no recognized disposition'),
+    }));
+    expect((await readKickbackLedger(dir)).pendingRepair).toBeUndefined();
+  });
+});
+
 
 describe('kickback-cap resume into BUILD (Task 9)', () => {
   let dir: string;
