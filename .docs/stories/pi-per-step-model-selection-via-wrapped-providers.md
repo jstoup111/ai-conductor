@@ -173,7 +173,7 @@ As the harness maintainer, I want the generated model table to show Pi next to c
 - Given the regenerated table is committed, when `bin/generate-model-table --check` runs, then it exits 0.
 
 #### Negative Paths
-- Given the regenerated table, when the claude and codex model and effort cells are compared with the pre-change table, then every value is identical.
+- Given the regenerated table, when the claude and codex model and effort cells are compared with the pre-change table, then every value is identical except that a pre-change blank Claude effort cell on an interactive row now reads `n/a`.
 - Given the committed table lacks the Pi columns, when `bin/generate-model-table --check` runs, then it exits non-zero with a diff showing the missing columns.
 - Given a catalog provider whose policy is added to the catalog, when the table renders, then its columns appear without any edit to the generator.
 - Given a generated row with a blank cell for any catalog provider, when the completeness checks run, then they fail naming the row, while `config-required` and `n/a` pass as explicit sentinels.
