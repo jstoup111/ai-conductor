@@ -63,6 +63,10 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   feature_dispatch_started: 'not-audited-by-design',
   feature_dispatch_ended: 'not-audited-by-design',
   feature_shipped: 'not-audited-by-design',
+  monitor_item_offered: 'not-audited-by-design',
+  monitor_session_opened: 'not-audited-by-design',
+  monitor_item_deferred: 'not-audited-by-design',
+  monitor_session_ended: 'not-audited-by-design',
   intake_inbound_sanitized: 'not-audited-by-design',
   intake_overlap_checked: 'not-audited-by-design',
   // Command rejection telemetry is persisted but has no audit-trail projection.
@@ -265,6 +269,10 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   feature_dispatch_started: { type: 'feature_dispatch_started', slug: 'feature', kind: 'initial' },
   feature_dispatch_ended: { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete' },
   feature_shipped: { type: 'feature_shipped', slug: 'feature', active: { state: 'unavailable' } },
+  monitor_item_offered: { type: 'monitor_item_offered', project: '/projects/alpha', feature: 'feature' },
+  monitor_session_opened: { type: 'monitor_session_opened', project: '/projects/alpha', feature: 'feature' },
+  monitor_item_deferred: { type: 'monitor_item_deferred', project: '/projects/alpha', feature: 'feature' },
+  monitor_session_ended: { type: 'monitor_session_ended', project: '/projects/alpha', feature: 'feature' },
   ci_repair_diagnostic: {
     type: 'ci_repair_diagnostic', prUrl: 'https://github.com/acme/widget/pull/1', slug: 'widget',
     stage: 'execution', reason: 'unknown', disposition: 'failed', provider: 'codex',

@@ -2,6 +2,18 @@ import { join } from 'node:path';
 import { recordDeferralSafely, type DeferralKey } from './deferrals.js';
 import type { ProjectHalt } from './halt-inventory.js';
 import { snapshotHaltMarker } from '../halt-marker.js';
+import type { ConductorEvent } from '../../types/events.js';
+import type { ConductorEventEmitter } from '../../ui/events.js';
+
+type MonitorTransitionType = Extract<ConductorEvent, {
+  type:
+    | 'monitor_item_offered'
+    | 'monitor_session_opened'
+    | 'monitor_item_deferred'
+    | 'monitor_session_ended';
+}>['type'];
+
+type MonitorEventEmitter = Pick<ConductorEventEmitter, 'emit'>;
 
 /** Seams owned by the foreground monitor's queue-driving loop. */
 export interface GuidedMonitorLoopDeps {
@@ -17,6 +29,8 @@ export interface GuidedMonitorLoopDeps {
   readonly writeHaltMarker?: (halt: ProjectHalt, contents: Uint8Array) => Promise<void>;
   readonly recordDeferral?: (key: DeferralKey) => Promise<void>;
   readonly report?: (message: string) => void;
+  /** Existing event spine for durable queue-transition telemetry. */
+  readonly events?: MonitorEventEmitter;
 }
 
 /** The monitor is still available when it has no item to offer. */
@@ -48,9 +62,9 @@ async function recordSkipIfNeeded(
   deps: GuidedMonitorLoopDeps,
   halt: ProjectHalt,
   outcome: unknown,
-): Promise<void> {
+): Promise<boolean> {
   const skipped = await (deps.operatorSkipped?.(outcome, halt) ?? wasSkipped(outcome));
-  if (!skipped) return;
+  if (!skipped) return false;
 
   const key: DeferralKey = {
     project: halt.project,
@@ -59,9 +73,22 @@ async function recordSkipIfNeeded(
   };
   if (deps.recordDeferral !== undefined) {
     await deps.recordDeferral(key);
-    return;
+    return true;
   }
-  await recordDeferralSafely(worktreePath(halt), key);
+  return recordDeferralSafely(worktreePath(halt), key);
+}
+
+async function emitMonitorTransition(
+  deps: GuidedMonitorLoopDeps,
+  type: MonitorTransitionType,
+  halt: ProjectHalt,
+): Promise<void> {
+  await deps.events?.emit({ type, project: halt.project, feature: halt.slug });
+}
+
+async function offerHalt(deps: GuidedMonitorLoopDeps, halt: ProjectHalt): Promise<void> {
+  deps.offer(halt);
+  await emitMonitorTransition(deps, 'monitor_item_offered', halt);
 }
 
 /**
@@ -74,12 +101,16 @@ export async function advanceAfterGuidedSession(deps: GuidedMonitorLoopDeps): Pr
   const head = current[0];
   if (head === undefined) return;
 
-  deps.offer(head);
+  await offerHalt(deps, head);
+  await emitMonitorTransition(deps, 'monitor_session_opened', head);
   const outcome = await deps.launch(head);
-  await recordSkipIfNeeded(deps, head, outcome);
+  if (await recordSkipIfNeeded(deps, head, outcome)) {
+    await emitMonitorTransition(deps, 'monitor_item_deferred', head);
+  }
+  await emitMonitorTransition(deps, 'monitor_session_ended', head);
 
   const next = (await deps.deriveMembership()).find((halt) => !sameHalt(halt, head));
-  if (next !== undefined) deps.offer(next);
+  if (next !== undefined) await offerHalt(deps, next);
 }
 
 /**
@@ -129,17 +160,24 @@ export async function runGuidedMonitorQueue(
     }
 
     offered.add(`${next.project}\u0000${next.slug}`);
-    deps.offer(next);
+    await offerHalt(deps, next);
+    await emitMonitorTransition(deps, 'monitor_session_opened', next);
     if (untilStop !== undefined) {
       const outcome = await Promise.race([
         deps.launch(next).then((value) => ({ stopped: false as const, value })),
         untilStop.then(() => ({ stopped: true as const })),
       ]);
       if (outcome.stopped) return stop();
-      await recordSkipIfNeeded(deps, next, outcome.value);
+      if (await recordSkipIfNeeded(deps, next, outcome.value)) {
+        await emitMonitorTransition(deps, 'monitor_item_deferred', next);
+      }
+      await emitMonitorTransition(deps, 'monitor_session_ended', next);
       continue;
     }
     const outcome = await deps.launch(next);
-    await recordSkipIfNeeded(deps, next, outcome);
+    if (await recordSkipIfNeeded(deps, next, outcome)) {
+      await emitMonitorTransition(deps, 'monitor_item_deferred', next);
+    }
+    await emitMonitorTransition(deps, 'monitor_session_ended', next);
   }
 }
