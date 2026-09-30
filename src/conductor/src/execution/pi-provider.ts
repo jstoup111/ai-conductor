@@ -1,3 +1,6 @@
+import { stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { execa, type Options as ExecaOptions } from 'execa';
 import type { InvokeOptions, InvokeResult, LLMProvider, TokenUsage } from './llm-provider.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
@@ -17,6 +20,65 @@ export type PiSubprocessFactory = (
   exitCode?: number | null;
   signal?: unknown;
 }>;
+
+/** Filesystem and process environment Pi uses to locate installed skills. */
+export interface PiEnvironment {
+  readonly stat: (path: string) => Promise<{ isFile: () => boolean }>;
+  readonly env: NodeJS.ProcessEnv;
+  readonly homeDir: () => string;
+  readonly cwd: () => string;
+}
+
+export type PiSkillResolution = {
+  readonly found: true;
+  readonly skillPath: string;
+  readonly searchedRoots: readonly string[];
+} | {
+  readonly found: false;
+  readonly searchedRoots: readonly string[];
+};
+
+const defaultPiEnvironment: PiEnvironment = {
+  stat,
+  env: process.env,
+  homeDir: homedir,
+  cwd: process.cwd,
+};
+
+async function isFile(path: string, environment: PiEnvironment): Promise<boolean> {
+  try {
+    return (await environment.stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve a Pi skill only in the roots loaded by non-interactive Pi sessions.
+ * The resolver deliberately stats the conventionally named instruction file;
+ * eligibility is Pi's responsibility, so no frontmatter is parsed here.
+ */
+export async function resolvePiSkill(
+  name: string,
+  environment: PiEnvironment = defaultPiEnvironment,
+): Promise<PiSkillResolution> {
+  const descriptor = providerDescriptor('pi');
+  const piAgentDirectory = environment.env[descriptor.homeVariable]
+    ?? join(environment.homeDir(), descriptor.defaultHome);
+  const searchedRoots = [
+    join(environment.homeDir(), '.agents', 'skills'),
+    join(piAgentDirectory, 'skills'),
+    join(environment.cwd(), '.agents', 'skills'),
+  ];
+
+  for (const root of searchedRoots) {
+    const skillPath = join(root, name, 'SKILL.md');
+    if (await isFile(skillPath, environment)) {
+      return { found: true, skillPath, searchedRoots };
+    }
+  }
+  return { found: false, searchedRoots };
+}
 
 /**
  * This is the one Pi diagnostic verified against the CLI. Keep it anchored:

@@ -3,7 +3,13 @@ import { readFile } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 import { classifyMetering } from '../../src/engine/metering.js';
-import { parsePiModelId, parsePiModelListing, PiProvider } from '../../src/execution/pi-provider.js';
+import {
+  parsePiModelId,
+  parsePiModelListing,
+  PiProvider,
+  resolvePiSkill,
+  type PiEnvironment,
+} from '../../src/execution/pi-provider.js';
 import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
@@ -56,6 +62,95 @@ describe('parsePiModelListing', () => {
       kind: 'unparseable',
       firstLine: 'Pi failed to load models',
     });
+  });
+});
+
+function fakePiEnvironment(options: {
+  files?: readonly string[];
+  directories?: readonly string[];
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+  cwd?: string;
+} = {}): { environment: PiEnvironment; stat: ReturnType<typeof vi.fn> } {
+  const files = new Set(options.files ?? []);
+  const directories = new Set(options.directories ?? []);
+  const stat = vi.fn(async (path: string) => {
+    if (files.has(path)) return { isFile: () => true };
+    if (directories.has(path)) return { isFile: () => false };
+    const error = new Error(`ENOENT: ${path}`) as NodeJS.ErrnoException;
+    error.code = 'ENOENT';
+    throw error;
+  });
+  return {
+    environment: {
+      stat,
+      env: options.env ?? {},
+      homeDir: () => options.homeDir ?? '/home/agent',
+      cwd: () => options.cwd ?? '/workspace/project',
+    },
+    stat,
+  };
+}
+
+describe('resolvePiSkill', () => {
+  const skillName = 'pipeline';
+  const homeSkillsRoot = '/home/agent/.agents/skills';
+  const configuredPiRoot = '/configured/pi-agent/skills';
+  const defaultPiRoot = '/home/agent/.pi/agent/skills';
+  const projectSkillsRoot = '/workspace/project/.agents/skills';
+
+  it.each([
+    ['the agent catalog', `${homeSkillsRoot}/${skillName}/SKILL.md`, {}, [homeSkillsRoot, defaultPiRoot, projectSkillsRoot]],
+    ['the configured Pi agent catalog', `${configuredPiRoot}/${skillName}/SKILL.md`, { PI_CODING_AGENT_DIR: '/configured/pi-agent' }, [homeSkillsRoot, configuredPiRoot, projectSkillsRoot]],
+    ['the default Pi agent catalog', `${defaultPiRoot}/${skillName}/SKILL.md`, {}, [homeSkillsRoot, defaultPiRoot, projectSkillsRoot]],
+    ['the project catalog', `${projectSkillsRoot}/${skillName}/SKILL.md`, {}, [homeSkillsRoot, defaultPiRoot, projectSkillsRoot]],
+  ])('finds SKILL.md in %s', async (_source, skillPath, env, searchedRoots) => {
+    const { environment, stat } = fakePiEnvironment({ files: [skillPath], env });
+
+    await expect(resolvePiSkill(skillName, environment)).resolves.toEqual({
+      found: true,
+      skillPath,
+      searchedRoots,
+    });
+    expect(stat.mock.calls.flat().every((path) => path.endsWith('/SKILL.md'))).toBe(true);
+    expect(stat.mock.calls.flat().at(-1)).toBe(skillPath);
+  });
+
+  it.each([
+    ['the retired PI_HOME catalog', '/legacy/pi-home/skills/pipeline/SKILL.md', { PI_HOME: '/legacy/pi-home' }],
+    ['the retired project .pi catalog', '/workspace/project/.pi/skills/pipeline/SKILL.md', {}],
+    ['a skill directory without SKILL.md', '/home/agent/.agents/skills/pipeline', {}],
+  ])('rejects a skill found only in %s', async (_source, legacyPath, env) => {
+    const { environment, stat } = fakePiEnvironment({
+      env,
+      files: legacyPath.endsWith('/SKILL.md') ? [legacyPath] : [],
+      directories: legacyPath.endsWith('/SKILL.md') ? [] : [legacyPath],
+    });
+
+    await expect(resolvePiSkill(skillName, environment)).resolves.toEqual({
+      found: false,
+      searchedRoots: [homeSkillsRoot, defaultPiRoot, projectSkillsRoot],
+    });
+    expect(stat.mock.calls.flat()).toEqual([
+      `${homeSkillsRoot}/${skillName}/SKILL.md`,
+      `${defaultPiRoot}/${skillName}/SKILL.md`,
+      `${projectSkillsRoot}/${skillName}/SKILL.md`,
+    ]);
+  });
+
+  it('reads the configured variable and default home from the Pi catalog and only stats SKILL.md', async () => {
+    const { environment, stat } = fakePiEnvironment({
+      env: { PI_CODING_AGENT_DIR: '/configured/pi-agent' },
+    });
+
+    await resolvePiSkill(skillName, environment);
+
+    expect(stat.mock.calls.flat()).toEqual([
+      `${homeSkillsRoot}/${skillName}/SKILL.md`,
+      `${configuredPiRoot}/${skillName}/SKILL.md`,
+      `${projectSkillsRoot}/${skillName}/SKILL.md`,
+    ]);
+    expect(stat.mock.calls.flat().every((path) => path.endsWith('/SKILL.md'))).toBe(true);
   });
 });
 
