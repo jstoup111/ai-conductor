@@ -76,14 +76,25 @@ export async function runOverlapPreflight(
   deps: OverlapPreflightDeps,
 ): Promise<OverlapDecision> {
   const suggestions = await deps.suggestions(input);
-  const decision: OverlapDecision = {
-    kind: 'proceed',
-    accepted: [],
-    declined: [],
-    advisory: [...suggestions.advisory],
-    skipNotes: [],
-    omittedCount: suggestions.omittedCount ?? 0,
-  };
+  const decision: OverlapDecision = suggestions.shown.length > 0 && !input.interactive
+    ? {
+      kind: 'refused',
+      undecided: [...suggestions.shown],
+      advisory: [...suggestions.advisory],
+      skipNotes: [],
+      omittedCount: suggestions.omittedCount ?? 0,
+    }
+    : {
+      kind: 'proceed',
+      // A pre-accepted suggestion came from an existing --depends-on ref,
+      // which fileIntakeIssue already links. Re-adding it here would submit
+      // that dependency operation twice.
+      accepted: [],
+      declined: [],
+      advisory: [...suggestions.advisory],
+      skipNotes: [],
+      omittedCount: suggestions.omittedCount ?? 0,
+    };
   if (deps.events && deps.repository) {
     await deps.events.emit(intakeOverlapCheckedEvent(deps.repository, suggestions, decision));
   }
