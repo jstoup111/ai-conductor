@@ -260,7 +260,7 @@ export function validatePlanSlices(planText: string): PlanSlicesValidation {
       violations.push({
         code: 'malformed-dependencies',
         taskId,
-        message: `Task ${taskId} has malformed Dependencies "${rawDependencies}"`,
+        message: `Task ${taskId} has malformed Dependencies "${rawDependencies}"; expected "none" or comma-separated task references (for example "Task 1, Tasks 2")`,
       });
       continue;
     }

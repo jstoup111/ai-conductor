@@ -55,12 +55,20 @@ describe('validatePlanSlices Dependencies', () => {
   });
 
   it.each([
-    ['a range', 'Tasks 1–5', /malformed Dependencies/i],
-    ['prose', 'all prior.', /malformed Dependencies/i],
-    ['an unknown task', 'Task 20', /Task 20.*unknown/i],
-  ])('refuses $0 Dependencies', (_name, dependencies, message) => {
+    ['a range', 'Tasks 1–5'],
+    ['prose', 'all prior.'],
+  ])('refuses $0 Dependencies with the accepted forms', (_name, dependencies) => {
     expect(violations(plan({ 4: dependencies }))).toEqual(expect.arrayContaining([
-      expect.objectContaining({ taskId: '4', message: expect.stringMatching(message) }),
+      expect.objectContaining({
+        taskId: '4',
+        message: expect.stringMatching(/Task 4.*none.*Task 1.*Tasks 2/i),
+      }),
+    ]));
+  });
+
+  it('refuses an unknown task Dependencies reference', () => {
+    expect(violations(plan({ 4: 'Task 20' }))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: '4', message: expect.stringMatching(/Task 20.*unknown/i) }),
     ]));
   });
 
