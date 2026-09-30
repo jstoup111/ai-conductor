@@ -84,8 +84,8 @@ feature's specification, plan, and story artifacts, then rewrite the retained
 PR's title and body in place following the `/pr` authoring contract (Claude Code
 invokes that skill as `/pr`; Codex invokes it as `$pr`). Keep the template
 section shape, replace every "not yet authored" marker and the body-floor marker
-with specific reader-facing content, and preserve release metadata already
-present.
+with specific reader-facing content, and preserve every `ai-conductor:step`
+region and its markers unchanged.
 
 Never return a verdict instead of prose here, and never report that the body
 cannot be authored because the diff was not supplied — obtaining the diff is

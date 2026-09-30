@@ -31,6 +31,8 @@ import type { PluginRegistry } from './plugin-registry.js';
 import { FALLBACK_RETRIES } from './resolved-config.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
+import { parsePrTemplateRegions } from './pr-body-regions.js';
+import { buildStepRegistry } from './steps.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -535,6 +537,95 @@ async function loadProjectConfig(
     materializeDefaults,
   });
   if (!validation.ok) return validation;
+
+  const templatePath = join(projectRoot, '.github', 'pull_request_template.md');
+  let templateBytes: string | undefined;
+  try {
+    templateBytes = await readFile(templatePath, 'utf-8');
+  } catch (error: unknown) {
+    if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') {
+      return {
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: `Unable to read pull request template: ${templatePath}`,
+        },
+      };
+    }
+  }
+
+  const regionOwners: Record<string, string> = {};
+  if (templateBytes !== undefined) {
+    const parsedRegions = parsePrTemplateRegions(templateBytes);
+    if (!parsedRegions.ok) {
+      const error = parsedRegions.error;
+      const message = (() => {
+        switch (error.kind) {
+          case 'unclosed-region':
+            return `Pull request template region owner "${error.key}" is unclosed`;
+          case 'nested-region':
+            return `Pull request template region "${error.innerKey}" is nested inside "${error.outerKey}"`;
+          case 'duplicate-region-key':
+            return `Pull request template region owner "${error.key}" owns more than one region`;
+          case 'unexpected-closing-marker':
+            return 'Pull request template has an unexpected closing region marker';
+          case 'engine-owned-text':
+            return `Pull request template region owner "${error.key}" contains engine-owned text: ${error.text}`;
+        }
+      })();
+      return { ok: false, error: { type: 'validation_error', message } };
+    }
+
+    const builtInSteps = new Set(ALL_STEPS.map((step) => step.name as string));
+    // Region ownership is a dispatch-order contract, not a FINISH artifact
+    // prerequisite: advisory and artifact-free custom steps may own regions.
+    const stepRegistry = buildStepRegistry(validation.config);
+    const finishIndex = stepRegistry.findIndex((step) => step.name === 'finish');
+    const stepsBeforeFinish = new Set<string>(stepRegistry.slice(0, finishIndex).map((step) => step.name));
+    for (const region of parsedRegions.regions) {
+      if (builtInSteps.has(region.key)) {
+        return {
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: `Pull request template region owner "${region.key}": built-in steps cannot own a region`,
+          },
+        };
+      }
+      if (validation.config.steps?.[region.key] === undefined) {
+        return {
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: `Pull request template region owner "${region.key}" is an undeclared step`,
+          },
+        };
+      }
+      if (!stepsBeforeFinish.has(region.key)) {
+        return {
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: `Pull request template region owner "${region.key}" must run before finish`,
+          },
+        };
+      }
+      const owner = stepRegistry.find((step) => step.name === region.key);
+      if (owner?.phase !== 'SHIP') {
+        return {
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: `Pull request template region owner "${region.key}" must run in the SHIP phase`,
+          },
+        };
+      }
+      regionOwners[region.key] = region.bytes;
+    }
+  }
+
+  validation.config.pr_template_region_owners = regionOwners;
+  if (templateBytes !== undefined) validation.config.pr_template_bytes = templateBytes;
 
   if (harnessVersion && validation.config.harness_version) {
     if (!satisfiesVersion(harnessVersion, validation.config.harness_version)) {
@@ -2990,12 +3081,20 @@ export async function loadMergedConfig(
     };
   }
 
-  const merged = mergeConfigs(userResult.config, projectResult.config);
+  const {
+    pr_template_bytes: templateBytes,
+    pr_template_region_owners: templateRegionOwners,
+    ...projectConfig
+  } = projectResult.config;
+  const merged = mergeConfigs(userResult.config, projectConfig);
   // 'merged' source: the anti-leak guard already fired on the raw project file
   // inside loadProjectConfig above. Here a spec_owner can only have come from the USER
   // config, which is its legitimate home — so the guard must NOT reject it.
   const validated = validateConfig(merged, projectRoot, { source: 'merged' });
   if (!validated.ok) return validated;
+
+  validated.config.pr_template_region_owners = templateRegionOwners;
+  if (templateBytes !== undefined) validated.config.pr_template_bytes = templateBytes;
 
   return {
     ok: true,

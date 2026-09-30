@@ -17,6 +17,7 @@ import { parseWorkRef } from './source-ref.js';
 import { parseIssueRef } from '../pr-labels.js';
 import { executeGithubOperation, type GithubOperationRunner } from '../github-operations.js';
 import { runTrackerUrlRead } from '../tracker-client.js';
+import { maskProjectOwnedRegions } from '../pr-body-regions.js';
 
 /** Shell runner for the `gh` CLI. Mirrors the intake adapter's GhRunner shape. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
@@ -122,7 +123,7 @@ export async function injectIssueRef(opts: InjectIssueRefOpts): Promise<boolean>
       body = '';
     }
 
-    if (bodyReferencesIssue(body, keyword, parsed)) {
+    if (bodyReferencesIssue(maskProjectOwnedRegions(body), keyword, parsed)) {
       return false; // already linked — nothing to do.
     }
 

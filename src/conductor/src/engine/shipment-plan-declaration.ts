@@ -55,8 +55,17 @@ export function upsertShipmentPlanDeclaration(body: string, stem: string): strin
 function declarationSpans(body: string): DeclarationSpan[] {
   const declarations: DeclarationSpan[] = [];
   let inComment = false;
+  let inProjectOwnedRegion = false;
   let fence: { character: '`' | '~'; length: number } | undefined;
   for (const line of lines(body)) {
+    if (/^<!-- ai-conductor:step [^\r\n]+ -->$/.test(line.text)) {
+      inProjectOwnedRegion = true;
+      continue;
+    }
+    if (inProjectOwnedRegion) {
+      if (line.text === '<!-- /ai-conductor:step -->') inProjectOwnedRegion = false;
+      continue;
+    }
     if (inComment) {
       if (line.text.includes('-->')) inComment = false;
       continue;

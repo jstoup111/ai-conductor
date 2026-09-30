@@ -21,6 +21,8 @@ import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.j
 import * as asBuiltVerdictStore from '../../src/engine/as-built-verdict-store.js';
 import * as gateVerdicts from '../../src/engine/gate-verdicts.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+import { writeRegionCapture } from '../../src/engine/pr-body-region-store.js';
+import type { GithubOperationRequest, GithubOperationRunner } from '../../src/engine/github-operations.js';
 
 vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/engine/project-prelude.js')>()),
@@ -149,6 +151,203 @@ describe('Conductor FINISH publication routing', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it('restores an authoring-omitted captured region before the prose judge observes the revision', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/42';
+    const owner = 'compliance-attest';
+    const capture = '\nCompliance-Attestation: signed 2026-09-24\n';
+    await writeRegionCapture(dir, prUrl, owner, capture);
+    let body = '## Summary\n\nReader-facing prose';
+    const edits: GithubOperationRequest[] = [];
+    let bodySeenByJudge = '';
+    const operations: GithubOperationRunner = { run: async (request) => {
+      edits.push(request);
+      body = (request.payload as { body: string }).body;
+      return {} as never;
+    } };
+    const runner: StepRunner = { run: vi.fn(async (_step, _state, options) => {
+      if (options?.finishProsePass === 'judge') bodySeenByJudge = body;
+      return { success: true };
+    }) };
+    const finishPublication = { advance: vi.fn(async ({ dispatchAuthoring, dispatchJudgment }) => {
+      await dispatchAuthoring({ kind: 'author_pr_prose', pullRequestUrl: prUrl, revisionGuidance: undefined });
+      await dispatchJudgment({ kind: 'finish_pr_prose_quality', pullRequestUrl: prUrl, qualityScope: ['title', 'body'], maximumPasses: 1 });
+      return { kind: 'complete' } as const;
+    }) };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, finishPublication, events: new ConductorEventEmitter(), projectRoot: dir,
+      gh: async () => ({ stdout: JSON.stringify({ body }) }), git: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+      resolveShipDraftPublicationDependencies: async () => ({ operations }) as never,
+    });
+
+    await (conductor as unknown as { runFinishPublication(state: ConductState, options: never): Promise<unknown> }).runFinishPublication({
+      feature_desc: 'finish-publication', worktree_branch: 'feat/region', complexity_tier: 'S',
+    } as ConductState, {} as never);
+
+    const restored = `<!-- ai-conductor:step ${owner} -->${capture}<!-- /ai-conductor:step -->`;
+    expect(edits).toHaveLength(1);
+    expect(bodySeenByJudge).toContain(restored);
+    expect(body).toContain(restored);
+  });
+
+  it('restores a region omitted by a judge-repair dispatch before the repaired body is observed', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/42';
+    const owner = 'compliance-attest';
+    const capture = '\nCompliance-Attestation: signed 2026-09-24\n';
+    const restored = `<!-- ai-conductor:step ${owner} -->${capture}<!-- /ai-conductor:step -->`;
+    await writeRegionCapture(dir, prUrl, owner, capture);
+    let body = `## Summary\n\n${restored}`;
+    const operations: GithubOperationRunner = { run: async (request) => {
+      body = (request.payload as { body: string }).body;
+      return {} as never;
+    } };
+    const runner: StepRunner = { run: vi.fn(async (_step, _state, options) => {
+      if (options?.finishProsePass === 'judge') body = '## Summary\n\nJudge-repaired prose';
+      return { success: true };
+    }) };
+    const finishPublication = { advance: vi.fn(async ({ dispatchJudgment }) => {
+      await dispatchJudgment({ kind: 'finish_pr_prose_quality', pullRequestUrl: prUrl, qualityScope: ['title', 'body'], maximumPasses: 1 });
+      expect(body).toContain(restored);
+      return { kind: 'complete' } as const;
+    }) };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, finishPublication, events: new ConductorEventEmitter(), projectRoot: dir,
+      gh: async () => ({ stdout: JSON.stringify({ body }) }), git: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+      resolveShipDraftPublicationDependencies: async () => ({ operations }) as never,
+    });
+
+    await (conductor as unknown as { runFinishPublication(state: ConductState, options: never): Promise<unknown> }).runFinishPublication({
+      feature_desc: 'finish-publication', worktree_branch: 'feat/region', complexity_tier: 'S',
+    } as ConductState, {} as never);
+  });
+
+  it.each([
+    ['authoring', 'author', 'returns false' as const],
+    ['judgment', 'judge', 'returns false' as const],
+    ['authoring', 'author', 'throws' as const],
+    ['judgment', 'judge', 'throws' as const],
+  ])('restores an omitted region after %s dispatch %s', async (_name, pass, outcome) => {
+    const prUrl = 'https://github.com/acme/widget/pull/42';
+    const owner = 'compliance-attest';
+    const capture = '\nCompliance-Attestation: signed 2026-09-24\n';
+    const restored = `<!-- ai-conductor:step ${owner} -->${capture}<!-- /ai-conductor:step -->`;
+    const dispatchError = new Error(`${pass} response lost`);
+    await writeRegionCapture(dir, prUrl, owner, capture);
+    let body = `## Summary\n\n${restored}`;
+    const operations: GithubOperationRunner = { run: async (request) => {
+      body = (request.payload as { body: string }).body;
+      return {} as never;
+    } };
+    const runner: StepRunner = { run: vi.fn(async () => {
+      body = `## Summary\n\n${pass} rewrote prose without the capture`;
+      if (outcome === 'throws') throw dispatchError;
+      return { success: false };
+    }) };
+    const finishPublication = { advance: vi.fn(async ({ dispatchAuthoring, dispatchJudgment }) => {
+      const dispatch = pass === 'author' ? dispatchAuthoring : dispatchJudgment;
+      const request = pass === 'author'
+        ? { kind: 'author_pr_prose' as const, pullRequestUrl: prUrl, revisionGuidance: undefined }
+        : { kind: 'finish_pr_prose_quality' as const, pullRequestUrl: prUrl, qualityScope: ['title', 'body'] as const, maximumPasses: 1 };
+      if (outcome === 'throws') await expect(dispatch(request)).rejects.toBe(dispatchError);
+      else await expect(dispatch(request)).resolves.toEqual({ success: false });
+      expect(body).toContain(restored);
+      return { kind: 'complete' } as const;
+    }) };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, finishPublication, events: new ConductorEventEmitter(), projectRoot: dir,
+      gh: async () => ({ stdout: JSON.stringify({ body }) }), git: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+      resolveShipDraftPublicationDependencies: async () => ({ operations }) as never,
+    });
+
+    await (conductor as unknown as { runFinishPublication(state: ConductState, options: never): Promise<unknown> }).runFinishPublication({
+      feature_desc: 'finish-publication', worktree_branch: 'feat/region', complexity_tier: 'S',
+    } as ConductState, {} as never);
+  });
+
+  it('restores every omitted captured region once with its own bytes after authoring', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/42';
+    const captures = [
+      ['compliance-attest', '\nCompliance-Attestation: signed 2026-09-24\n'],
+      ['release-disposition', '\nRelease-Disposition: no-note\n'],
+    ] as const;
+    for (const [owner, bytes] of captures) await writeRegionCapture(dir, prUrl, owner, bytes);
+    let body = '## Summary\n\nAuthoring omitted both project-owned regions.';
+    const operations: GithubOperationRunner = { run: async (request) => {
+      body = (request.payload as { body: string }).body;
+      return {} as never;
+    } };
+    const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+    const finishPublication = { advance: vi.fn(async ({ dispatchAuthoring }) => {
+      await dispatchAuthoring({ kind: 'author_pr_prose', pullRequestUrl: prUrl, revisionGuidance: undefined });
+      return { kind: 'complete' } as const;
+    }) };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, finishPublication, events: new ConductorEventEmitter(), projectRoot: dir,
+      gh: async () => ({ stdout: JSON.stringify({ body }) }), git: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+      resolveShipDraftPublicationDependencies: async () => ({ operations }) as never,
+    });
+
+    await (conductor as unknown as { runFinishPublication(state: ConductState, options: never): Promise<unknown> }).runFinishPublication({
+      feature_desc: 'finish-publication', worktree_branch: 'feat/region', complexity_tier: 'S',
+    } as ConductState, {} as never);
+
+    for (const [owner, bytes] of captures) {
+      expect(body).toContain(`<!-- ai-conductor:step ${owner} -->${bytes}<!-- /ai-conductor:step -->`);
+      expect(body.match(new RegExp(`<!-- ai-conductor:step ${owner} -->`, 'g'))).toHaveLength(1);
+    }
+  });
+
+  it('does not edit an intact captured region and dispatches exactly one judge', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/42';
+    const owner = 'compliance-attest';
+    const capture = '\nCompliance-Attestation: signed 2026-09-24\n';
+    await writeRegionCapture(dir, prUrl, owner, capture);
+    let body = `## Summary\n\n<!-- ai-conductor:step ${owner} -->${capture}<!-- /ai-conductor:step -->`;
+    const operations = { run: vi.fn(async () => ({})) } as unknown as GithubOperationRunner;
+    const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+    const finishPublication = { advance: vi.fn(async ({ dispatchJudgment }) => {
+      await dispatchJudgment({ kind: 'finish_pr_prose_quality', pullRequestUrl: prUrl, qualityScope: ['title', 'body'], maximumPasses: 1 });
+      return { kind: 'complete' } as const;
+    }) };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, finishPublication, events: new ConductorEventEmitter(), projectRoot: dir,
+      gh: async () => ({ stdout: JSON.stringify({ body }) }), git: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+      resolveShipDraftPublicationDependencies: async () => ({ operations }) as never,
+    });
+
+    await (conductor as unknown as { runFinishPublication(state: ConductState, options: never): Promise<unknown> }).runFinishPublication({
+      feature_desc: 'finish-publication', worktree_branch: 'feat/region', complexity_tier: 'S',
+    } as ConductState, {} as never);
+
+    expect(operations.run).not.toHaveBeenCalled();
+    expect(runner.run).toHaveBeenCalledTimes(1);
+    expect((runner.run as ReturnType<typeof vi.fn>).mock.calls[0][2]).toMatchObject({ finishProsePass: 'judge' });
+  });
+
+  it('halts with the owner name and does not ready the PR when region re-insertion is refused', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/42';
+    const owner = 'compliance-attest';
+    await writeRegionCapture(dir, prUrl, owner, '\nCompliance-Attestation: signed 2026-09-24\n');
+    let body = '## Summary\n\nAuthor omitted the project-owned content';
+    const ready = vi.fn();
+    const operations: GithubOperationRunner = { run: async () => ({ kind: 'refused', reason: 'other-owner' }) };
+    const finishPublication = { advance: vi.fn(async ({ dispatchAuthoring }) => {
+      await dispatchAuthoring({ kind: 'author_pr_prose', pullRequestUrl: prUrl, revisionGuidance: undefined });
+      ready();
+      return { kind: 'complete' } as const;
+    }) };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: { run: vi.fn(async () => ({ success: true })) }, finishPublication,
+      events: new ConductorEventEmitter(), projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, maxRetries: 1,
+      gh: async () => ({ stdout: JSON.stringify({ body }) }), git: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+      resolveShipDraftPublicationDependencies: async () => ({ operations }) as never, log: () => {},
+    });
+
+    await conductor.run();
+
+    expect(ready).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(`project-owned region restore failed for ${owner}: guarded edit refused`);
   });
 
   it.each([

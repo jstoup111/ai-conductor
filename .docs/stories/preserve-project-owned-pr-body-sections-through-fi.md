@@ -30,6 +30,7 @@ As a maintainer of any repository, I want to declare the pull request body regio
 - Given a template region whose marker names built-in step `finish`, when the project config loads, then loading fails with an error naming the marker key `finish` and stating that built-in steps cannot own a region.
 - Given a template region whose marker names `release-disposiiton` and no step of that name is declared, when the project config loads, then loading fails with an error naming `release-disposiiton` as an undeclared step.
 - Given a template region naming a declared custom step whose `after:` places it after `finish`, when the project config loads, then loading fails with an error naming that step and stating that a region owner must run before `finish`.
+- Given a template region naming a declared custom step whose `after:` target is a BUILD-phase step, when the project config loads, then loading fails with an error naming that step and stating that a region owner must run in the SHIP phase.
 - Given a template with two regions that both name `compliance-attest`, when the project config loads, then loading fails with an error naming `compliance-attest` as owning more than one region.
 - Given a template with an opening region marker and no closing marker, when the project config loads, then loading fails with an error naming the unclosed region's step key.
 - Given a template with a region opened inside another region, when the project config loads, then loading fails with an error naming both step keys as nested.

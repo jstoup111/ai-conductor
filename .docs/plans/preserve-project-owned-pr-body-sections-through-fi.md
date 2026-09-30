@@ -63,7 +63,7 @@ Fifteen tasks let a project declare step-owned pull request body regions in its 
 - `loadConfig` in `src/conductor/src/engine/config.ts`, given `.github/pull_request_template.md` with a region naming a declared custom step ordered before `finish`, succeeds and reports that step as the region's owner in the loaded config, and given two regions naming two such steps succeeds with each step owning exactly its own region, as asserted by the region-owner config tests in `src/conductor/test/engine/config.test.ts`
 - `loadConfig` succeeds with zero region owners for a template with no markers and for a repository whose only marked template is at the repository root rather than `.github/pull_request_template.md`, as asserted by the unmarked-template and root-template config tests
 - `loadConfig` fails with an error naming the marker key and the broken rule for a region naming built-in step `finish` (built-in steps cannot own a region), an undeclared key `release-disposiiton` (undeclared step), and a declared step whose `after:` orders it after `finish` (a region owner must run before `finish`), as asserted by the three owner-rule config tests
-- `loadConfig` fails with an error naming the offending step key for the duplicate-key, unclosed, and nested (naming both keys) templates, and naming the step key and the engine-owned text it contains for the engine-owned-text template, as asserted by the four template-shape config tests
+- `loadConfig` fails with an error naming the offending step key for the duplicate-key, unclosed, and nested (naming both keys) templates, and naming the step key and the engine-owned text it contains for the engine-owned-text template, as asserted by the four template-shape config tests; the duplicate-key error also states that the named key owns more than one region, the nested error states that one region is nested inside the other, and the engine-owned-text tests reject both a region containing the heading `## Reduced build-review coverage` and a region containing the accepted-risk start marker, each error naming that exact text
 
 **Files:**
 - `src/conductor/src/engine/config.ts` — template read and region validation
@@ -234,7 +234,7 @@ Fifteen tasks let a project declare step-owned pull request body regions in its 
 - `createFinishPresentationRepair` in `src/conductor/src/engine/conductor.ts` re-inserts every captured region after `rehabilitateHaltPr` and `bodyFloor`, so the body after a body-floor or halt-PR rehabilitation rewrite contains each region with bytes identical to its capture, as asserted by the floor and rehabilitation re-insertion tests in `src/conductor/test/engine/conductor-finish-repair.test.ts`
 - the `ready_pr` presentation repair as composed by the production CLI and daemon composition roots re-reads the body and compares every region to its capture before `ensureShipReady`, marking the pull request ready when all match, and for a region edited after the last rewrite records one restore edit, then a matching re-read, then the ready-for-review call in that order, as asserted by the production-composition tests in `src/conductor/test/engine/finish-publication-production-wiring.test.ts`
 - when the restore edit is refused, or the re-read after a restore still differs from the capture, the pull request stays draft, no ready-for-review call is issued, and the run halts with a reason naming the region's step and, for the second case, a verification mismatch, as asserted by the refused-restore and persistent-mismatch tests
-- with no captured regions, the `ready_pr` presentation repair issues exactly the GitHub operation sequence it issued before this change and no region verification read, as asserted by the no-region operation-sequence test
+- with no captured regions, the `ready_pr` presentation repair issues exactly the GitHub operation sequence it issued before this change and no region verification read, as asserted by the no-region operation-sequence test, whose fixture is a repository whose pull request template has no region markers so FINISH captures no regions
 
 **Files:**
 - `src/conductor/src/engine/conductor.ts` — region restore-and-verify in presentation repair
@@ -383,6 +383,28 @@ Fifteen tasks let a project declare step-owned pull request body regions in its 
 
 **Dependencies:** none
 
+### Task 16: Region owners must be SHIP-phase steps
+**Story:** 1
+**Type:** negative-path
+
+> Added 2026-09-28 by #2616 (operator decision on as-built AB-013): the draft pull request exists only from SHIP entry, so a BUILD-phase owner halted at region preparation (ADR D4 amendment).
+
+**Steps:**
+1. Write a failing test in `src/conductor/test/engine/config.test.ts`: a marked `.github/pull_request_template.md` whose region names a declared custom step with `after: build`.
+2. Verify RED (today the step is accepted because it is ordered before `finish`).
+3. Implement in `src/conductor/src/engine/config.ts`: after the before-`finish` check, reject a region owner whose resolved step phase is not SHIP, naming the step and the rule.
+4. Verify GREEN; commit.
+
+**Done when:**
+- `loadConfig` fails with an error naming the step and stating that a region owner must run in the SHIP phase for a region whose declared owner's `after:` target is a BUILD-phase step, as asserted by the BUILD-phase-owner config test
+- a region owner whose `after:` target is a SHIP-phase step still loads, as asserted by the existing region-owner config tests
+
+**Files likely touched:**
+- src/conductor/src/engine/config.ts — SHIP-phase owner rule
+- src/conductor/test/engine/config.test.ts — BUILD-phase owner case
+
+**Dependencies:** 2
+
 ## Task Dependency Graph
 
 Task 2 ← Task 1; Task 3 ← Task 2; Task 4 ← Tasks 2, 3; Task 5 ← Task 1; Task 6 ← Tasks 2, 5; Task 7 ← Tasks 5, 6; Task 8 ← Tasks 5, 7; Task 9 ← Tasks 5, 7; Task 10 ← Task 9; Task 11 ← Task 5; Task 12 ← Tasks 4, 7, 8, 9, 11; Task 13 ← Task 2; Task 14 ← Tasks 8, 9, 10, 13; Task 15 independent.
@@ -410,6 +432,7 @@ Task 2 ← Task 1; Task 3 ← Task 2; Task 4 ← Tasks 2, 3; Task 5 ← Task 1; 
 | Story 1 negative: Given a template region whose marker names built-in step `finish`, when the project config loads, then loading fails with an error naming the marker key `finish` and stating that built-in steps cannot own a region. | 2 | "`loadConfig` fails with an error naming the marker key and the broken rule for a region naming built-in step `finish` (built-in steps cannot own a region), an undeclared key `release-disposiiton` (undeclared step), and a declared step whose `after:` orders it after `finish` (a region owner must run before `finish`), as asserted by the three owner-rule config tests" | diff-local |
 | Story 1 negative: Given a template region whose marker names `release-disposiiton` and no step of that name is declared, when the project config loads, then loading fails with an error naming `release-disposiiton` as an undeclared step. | 2 | "`loadConfig` fails with an error naming the marker key and the broken rule for a region naming built-in step `finish` (built-in steps cannot own a region), an undeclared key `release-disposiiton` (undeclared step), and a declared step whose `after:` orders it after `finish` (a region owner must run before `finish`), as asserted by the three owner-rule config tests" | diff-local |
 | Story 1 negative: Given a template region naming a declared custom step whose `after:` places it after `finish`, when the project config loads, then loading fails with an error naming that step and stating that a region owner must run before `finish`. | 2 | "`loadConfig` fails with an error naming the marker key and the broken rule for a region naming built-in step `finish` (built-in steps cannot own a region), an undeclared key `release-disposiiton` (undeclared step), and a declared step whose `after:` orders it after `finish` (a region owner must run before `finish`), as asserted by the three owner-rule config tests" | diff-local |
+| Story 1 negative: Given a template region naming a declared custom step whose `after:` target is a BUILD-phase step, when the project config loads, then loading fails with an error naming that step and stating that a region owner must run in the SHIP phase. | 16 | "`loadConfig` fails with an error naming the step and stating that a region owner must run in the SHIP phase for a region whose declared owner's `after:` target is a BUILD-phase step, as asserted by the BUILD-phase-owner config test" | diff-local |
 | Story 1 negative: Given a template with two regions that both name `compliance-attest`, when the project config loads, then loading fails with an error naming `compliance-attest` as owning more than one region. | 2 | "`loadConfig` fails with an error naming the offending step key for the duplicate-key, unclosed, and nested (naming both keys) templates, and naming the step key and the engine-owned text it contains for the engine-owned-text template, as asserted by the four template-shape config tests" | diff-local |
 | Story 1 negative: Given a template with an opening region marker and no closing marker, when the project config loads, then loading fails with an error naming the unclosed region's step key. | 2 | "`loadConfig` fails with an error naming the offending step key for the duplicate-key, unclosed, and nested (naming both keys) templates, and naming the step key and the engine-owned text it contains for the engine-owned-text template, as asserted by the four template-shape config tests" | diff-local |
 | Story 1 negative: Given a template with a region opened inside another region, when the project config loads, then loading fails with an error naming both step keys as nested. | 2 | "`loadConfig` fails with an error naming the offending step key for the duplicate-key, unclosed, and nested (naming both keys) templates, and naming the step key and the engine-owned text it contains for the engine-owned-text template, as asserted by the four template-shape config tests" | diff-local |
@@ -486,3 +509,11 @@ Task 2 ← Task 1; Task 3 ← Task 2; Task 4 ← Tasks 2, 3; Task 5 ← Task 1; 
 - [x] Every task has a `Done when:` block of falsifiable checks naming its mechanism
 - [x] Dependencies are explicit and acyclic
 - [x] No task directs an amendment to another feature's sealed artifact
+
+### Task rem-as-built-rem-adr-014-1: src/conductor/src/engine/build-review-accepted-risk.ts:10 export the accepted-risk heading as BUILD_REVIEW_ACCEPTED_RISK_HEADING (keep its existing SECTION use) and export ENGINE_OWNED_PR_BODY_TEXTS = [REDUCED_BUILD_REVIEW_COVERAGE_HEADING, BUILD_REVIEW_ACCEPTED_RISK_HEADING, BUILD_REVIEW_ACCEPTED_RISK_START, BUILD_REVIEW_ACCEPTED_RISK_END]; src/conductor/src/engine/pr-body-regions.ts:97 finds engine-owned text from that array instead of its inline two-item list; extend the engine-owned it.each in src/conductor/test/engine/pr-body-regions.test.ts:94 and the engine-owned rows in src/conductor/test/engine/config.test.ts with end-marker and accepted-risk-heading cases, each asserting the typed error or load failure names the step key and that exact text; keep the existing coverage-heading and start-marker cases (Task 1 and Task 2 Done-when)
+**Gate:** as-built
+**Rationale:** [verified 100%] parsePrTemplateRegions at src/conductor/src/engine/pr-body-regions.ts:97 rejects only REDUCED_BUILD_REVIEW_COVERAGE_HEADING and BUILD_REVIEW_ACCEPTED_RISK_START, while build-review-accepted-risk.ts:8 exports the engine-owned BUILD_REVIEW_ACCEPTED_RISK_END marker and :10 holds the private '## Accepted build-review risk' heading (const SECTION), violating adr-2026-09-24-project-owned-pr-body-regions D2; the approved architecture stands and the fix is mechanical conforming drift, so build. Task 1 Step 3 names 'the accepted-risk markers' but no Task 1/2 Done-when names the end marker or accepted-risk heading, so a remediation task is appended rather than bound. Matched pair: the rejection list is derived from one exported array so the parser and the pr-body-regions.test.ts:94 / config.test.ts engine-owned cases enumerate the same source. Swept siblings excluded: POINTER (:11) and closing/plan-declaration lines are not marker/heading texts D2 names and no finding raises them.
+**Governing clause:** adr-2026-09-24-project-owned-pr-body-regions decision 2
+**Done when:**
+- adr-2026-09-24-project-owned-pr-body-regions decision 2 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-014-1 is complete.

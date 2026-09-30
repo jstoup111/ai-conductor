@@ -6,6 +6,7 @@ import type {
   FinishPublicationEvent,
   FinishPublicationTransition,
 } from '../types/events.js';
+import { isRegionRestoreError } from './region-restore-error.js';
 
 /**
  * Closed domain vocabulary for resumable FINISH publication.  The coordinator
@@ -488,7 +489,9 @@ export type HumanRequiredReason =
   | 'interactive_intent_destructive_choice'
   | 'interactive_intent_unrecognized'
   | 'unattended_intent_destructive_choice'
-  | 'unattended_intent_unauthorized_outcome';
+  | 'unattended_intent_unauthorized_outcome'
+  | 'region_restore_refused'
+  | 'region_verification_mismatch';
 
 export type PublicationDisposition =
   | { kind: 'complete' }
@@ -612,6 +615,14 @@ export const HUMAN_REQUIRED_REASONS = {
   unattended_intent_unauthorized_outcome: {
     message: 'The requested publication outcome is not authorized by the unattended policy.',
     nextAction: 'Choose the outcome allowed by the current unattended policy.',
+  },
+  region_restore_refused: {
+    message: 'A project-owned PR body region could not be restored because the guarded edit was refused.',
+    nextAction: 'Review the named step and guarded-edit refusal, then resolve it before retrying FINISH.',
+  },
+  region_verification_mismatch: {
+    message: 'A project-owned PR body region did not match its captured bytes after restoration.',
+    nextAction: 'Review the named step and resolve the verification mismatch before retrying FINISH.',
   },
 } satisfies Record<HumanRequiredReason, { message: string; nextAction: string }>;
 
@@ -1339,7 +1350,12 @@ export type AdvanceFinishPublicationResult =
     }
   | {
       kind: 'human_required';
-      reason: 'halt_state_pr' | 'judgment_halt_prose' | 'judgment_refused';
+      reason:
+        | 'halt_state_pr'
+        | 'judgment_halt_prose'
+        | 'judgment_refused'
+        | 'region_restore_refused'
+        | 'region_verification_mismatch';
       detail?: string;
     };
 
@@ -1753,7 +1769,14 @@ async function advanceFinishPublicationUnreconciled(
       let dispatchFailure = false;
       try {
         await input.effects.authorProse!(prProseAuthoringRequest(pr));
-      } catch {
+      } catch (error) {
+        if (isRegionRestoreError(error)) {
+          return {
+            kind: 'human_required',
+            reason: error.kind === 'refused' ? 'region_restore_refused' : 'region_verification_mismatch',
+            detail: error.message,
+          };
+        }
         // A dispatcher can lose its response after the provider already edited
         // the PR. The mandatory re-observation below is the only authority.
         dispatchFailure = true;
@@ -1827,7 +1850,14 @@ async function advanceFinishPublicationUnreconciled(
         result = mapPrProseJudgmentResult(
           await input.effects.dispatchJudgment(prProseJudgmentRequest(pr)),
         );
-      } catch {
+      } catch (error) {
+        if (isRegionRestoreError(error)) {
+          return {
+            kind: 'human_required',
+            reason: error.kind === 'refused' ? 'region_restore_refused' : 'region_verification_mismatch',
+            detail: error.message,
+          };
+        }
         // The dispatcher can lose its response after the provider has returned.
         // A fresh observation determines whether judgment is still the stage
         // that can run before this attempt is allowed to retry it.
@@ -1944,7 +1974,14 @@ async function advanceFinishPublicationUnreconciled(
     return coalescePublicationEffect(input.effects, 'ready_pr', async () => {
       try {
         await input.effects.repairPresentation!();
-      } catch {
+      } catch (error) {
+        if (isRegionRestoreError(error)) {
+          return {
+            kind: 'human_required',
+            reason: error.kind === 'refused' ? 'region_restore_refused' : 'region_verification_mismatch',
+            detail: error.message,
+          };
+        }
         return {
           kind: 'publication_retry',
           transition: 'ready_pr',

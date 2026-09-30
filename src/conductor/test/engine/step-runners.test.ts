@@ -3591,6 +3591,7 @@ describe('DefaultStepRunner', () => {
     expect(opts.systemPrompt).toContain('base branch');
     expect(opts.systemPrompt).toContain('`/pr`');
     expect(opts.systemPrompt).toContain('`$pr`');
+    expect(opts.systemPrompt).toContain('leave every `ai-conductor:step` region and its markers unchanged');
     // It authors; it does not grade, and it makes no publication mechanics.
     expect(opts.systemPrompt).not.toContain('revision_required');
     expect(opts.systemPrompt).not.toContain('gh pr create');

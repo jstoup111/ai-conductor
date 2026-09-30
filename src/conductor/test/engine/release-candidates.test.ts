@@ -3,6 +3,31 @@ import { describe, expect, it, vi } from 'vitest';
 import { collectReleaseCandidates } from '../../src/engine/release-candidates.js';
 
 describe('engine/release-candidates — merged pull requests after the latest tag (Task 7)', () => {
+  it('reads every release disposition field from a project-owned region (Task 13)', async () => {
+    const collected = await collectReleaseCandidates({
+      git: { latestTag: async () => 'v1.0.0', mergeRange: async () => ['merge-1'] },
+      github: { listMergedPullRequests: async () => ({ items: [{
+        number: 1, merged: true, mergedAt: '2026-09-28T00:00:00Z', mergeSha: 'merge-1', body: [
+          '<!-- ai-conductor:step release-disposition -->', 'Release-Disposition: note',
+          'Release-Category: Fixed', 'Release-Semver: patch', 'Release-Note: Preserved.',
+          '<!-- /ai-conductor:step -->',
+        ].join('\n'),
+      }], hasNextPage: false, totalCount: 1 }) },
+    });
+    expect(collected).toMatchObject({
+      completeness: { status: 'complete' },
+      candidates: [{
+        number: 1,
+        mergeSha: 'merge-1',
+        disposition: {
+          disposition: 'note',
+          category: 'Fixed',
+          semver: 'patch',
+          note: 'Preserved.',
+        },
+      }],
+    });
+  });
   it('uses the latest tag boundary, follows two pages, excludes unmerged PRs, and returns a stable merge order', async () => {
     const git = {
       latestTag: vi.fn(async () => 'v1.2.3'),

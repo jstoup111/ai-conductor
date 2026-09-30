@@ -40,6 +40,14 @@ import {
   NEEDS_REMEDIATION_BODY_MARKER,
 } from './pr-labels.js';
 import { runTrackerUrlRead } from './tracker-client.js';
+import { maskProjectOwnedRegions } from './pr-body-regions.js';
+import {
+  PR_BODY_FLOOR_MARKER,
+  engineBodyIncludes,
+  engineBodyLines,
+  removeEngineBodyMarker,
+} from './pr-body-engine-markers.js';
+export { PR_BODY_FLOOR_MARKER } from './pr-body-engine-markers.js';
 
 export const NEEDS_REMEDIATION_TITLE_PREFIX = 'needs-remediation:';
 export const NEEDS_REMEDIATION_LABEL = 'needs-remediation';
@@ -131,7 +139,8 @@ function isRefusal(result: GithubOperationResult | { kind: 'refused'; reason: st
 
 function injectCloses(body: string, sourceRef: string | undefined | null): string {
   const ref = sourceRef?.trim();
-  if (!ref || /^(?:closes|fixes|resolves)\s+[^\s]*$/im.test(body) && body.includes(ref)) return body;
+  const searchable = maskProjectOwnedRegions(body);
+  if (!ref || /^(?:closes|fixes|resolves)\s+[^\s]*$/im.test(searchable) && searchable.includes(ref)) return body;
   return `${body.trim()}\n\nCloses ${ref}`.trim();
 }
 
@@ -170,7 +179,7 @@ export async function rehabilitateHaltPr(
     if (!deps.preserveDraft && view.isDraft) {
       mutations.push(() => rehabilitateMutation(deps.operations, prUrl, 'pull-request.ready'));
     }
-    const repairedBody = injectCloses((view.body ?? '').replace(NEEDS_REMEDIATION_BODY_MARKER, '').trim(), sourceRef);
+    const repairedBody = injectCloses(removeEngineBodyMarker(view.body ?? '', NEEDS_REMEDIATION_BODY_MARKER).trim(), sourceRef);
     if (repairedBody !== (view.body ?? '').trim()) {
       mutations.push(() => rehabilitateMutation(deps.operations, prUrl, 'pull-request.edit', { body: repairedBody }));
     }
@@ -211,7 +220,7 @@ export async function clearHaltStateForResume(
   }
 
   const hasLabel = view.labels.includes(NEEDS_REMEDIATION_LABEL);
-  const hasMarker = (view.body ?? '').includes(NEEDS_REMEDIATION_BODY_MARKER);
+  const hasMarker = engineBodyIncludes(view.body ?? '', NEEDS_REMEDIATION_BODY_MARKER);
   if (!hasLabel && !hasMarker) {
     log(`[halt-pr-rehab] resume clear found no halt state for ${prUrl}`);
     return 'not-halted';
@@ -227,7 +236,7 @@ export async function clearHaltStateForResume(
         operations,
         prUrl,
         'pull-request.edit',
-        { body: (view.body ?? '').replace(NEEDS_REMEDIATION_BODY_MARKER, '').trim() },
+        { body: removeEngineBodyMarker(view.body ?? '', NEEDS_REMEDIATION_BODY_MARKER).trim() },
       ));
     }
     // A denied clear must not become a successful-clear result and must not
@@ -440,7 +449,7 @@ export async function readStaleHaltBanner(
   try {
     const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
     const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
-    return body.includes(HALT_PR_BANNER_SENTINEL) ? HALT_PR_BANNER_SENTINEL : null;
+    return maskProjectOwnedRegions(body).includes(HALT_PR_BANNER_SENTINEL) ? HALT_PR_BANNER_SENTINEL : null;
   } catch (err) {
     log?.(`[halt-pr-rehab] gate read failed for ${prUrl} — fail-open: ${err}`);
     return null;
@@ -453,8 +462,6 @@ export async function readStaleHaltBanner(
  * remains a deterministic signal that no `/pr`-authored prose was ever written
  * for this PR.
  */
-export const PR_BODY_FLOOR_MARKER = '<!-- conductor:pr-body-floor -->';
-
 /**
  * Per-section "nobody wrote this yet" text the SHIP-entry draft body stamps
  * into every template slot, and the reader note that same body carries. Both
@@ -494,8 +501,20 @@ const FLOOR_FREE_TEXT_MAX_CHARS = 400;
  * literal floor texts above. What survives is content somebody chose to
  * write, which is exactly what distinguishes an authored body from a floor.
  */
-function authoredProseLength(body: string): number {
-  return body
+function authoredProseLength(body: string, templateBytes?: string): number {
+  // A template is project-owned starting structure, not prose authored by the
+  // FINISH authoring pass. Remove one exact seeded copy before measuring so a
+  // long template does not make an otherwise untouched draft look authored.
+  // Region content is opaque (ADR D6): drop whole regions on both sides so
+  // neither their words nor their markers count as authored or floor prose,
+  // and a template whose region was since authored still strips exactly.
+  const stripRegions = (text: string): string =>
+    text.replace(/<!-- ai-conductor:step [^\r\n]+ -->[\s\S]*?<!-- \/ai-conductor:step -->/g, '');
+  const stripped = stripRegions(body);
+  const bodyWithoutTemplate = templateBytes === undefined
+    ? stripped
+    : stripped.replace(stripRegions(templateBytes), '');
+  return bodyWithoutTemplate
     .replace(/```[\s\S]*?```/g, '')
     .replace(/<!--\s*[\w:-]+:start\s*-->[\s\S]*?<!--\s*[\w:-]+:end\s*-->/g, '')
     .replace(/<!--[\s\S]*?-->/g, '')
@@ -529,8 +548,8 @@ function authoredProseLength(body: string): number {
  * text, the SHIP-entry draft note, or free text no larger than the single
  * description slot a floor can fill.
  */
-export function isEngineFlooredBody(body: string): boolean {
-  if (!body.includes(PR_BODY_FLOOR_MARKER)) return false;
+export function isEngineFlooredBody(body: string, templateBytes?: string): boolean {
+  if (!maskProjectOwnedRegions(body).includes(PR_BODY_FLOOR_MARKER)) return false;
   // The floor TEXTS are provenance too, exactly like the marker above, and
   // the same reasoning applies: an authoring pass that writes real prose
   // around the SHIP-entry draft note leaves that note in place. Returning
@@ -543,7 +562,7 @@ export function isEngineFlooredBody(body: string): boolean {
   // No separate branch is needed: `authoredProseLength` already filters both
   // floor texts out, so a genuine floor measures ~zero and a body with prose
   // around the note measures far above the cap.
-  return authoredProseLength(body) <= FLOOR_FREE_TEXT_MAX_CHARS;
+  return authoredProseLength(body, templateBytes) <= FLOOR_FREE_TEXT_MAX_CHARS;
 }
 
 /**
@@ -625,7 +644,7 @@ export async function postHaltHistoryComment(
   const hasHaltTitle = view.title.startsWith(NEEDS_REMEDIATION_TITLE_PREFIX);
   const hasHaltLabel = view.labels.includes(NEEDS_REMEDIATION_LABEL);
   const body = view.body ?? '';
-  const hasHaltBanner = body.includes(HALT_PR_BANNER_SENTINEL);
+  const hasHaltBanner = maskProjectOwnedRegions(body).includes(HALT_PR_BANNER_SENTINEL);
   if (!hasHaltTitle && !hasHaltLabel && !hasHaltBanner) return 'not-halt-pr';
 
   if (existingComments.some((c) => c.includes(HALT_HISTORY_COMMENT_MARKER))) {
@@ -647,9 +666,9 @@ export async function postHaltHistoryComment(
     parts.push('', `**Halt label at rehabilitation:** \`${NEEDS_REMEDIATION_LABEL}\``);
   }
   if (hasHaltBanner) {
-    const banner = body
-      .split('\n')
-      .filter((line) => (HALT_PR_BANNER_LINES as readonly string[]).includes(line))
+    const banner = engineBodyLines(body)
+      .filter(({ masked }) => (HALT_PR_BANNER_LINES as readonly string[]).includes(masked))
+      .map(({ line }) => line)
       .join('\n');
     parts.push('', '**Original halt banner:**', '', '> ' + banner.split('\n').join('\n> '));
   }
@@ -701,8 +720,8 @@ export function hasHaltSignal(view: PrViewState): boolean {
   return (
     view.title.toLowerCase().startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ||
     view.labels.includes(NEEDS_REMEDIATION_LABEL) ||
-    (view.body ?? '').includes(NEEDS_REMEDIATION_BODY_MARKER) ||
-    (view.body ?? '').includes(HALT_PR_BANNER_SENTINEL)
+    engineBodyIncludes(view.body ?? '', NEEDS_REMEDIATION_BODY_MARKER) ||
+    engineBodyIncludes(view.body ?? '', HALT_PR_BANNER_SENTINEL)
   );
 }
 
@@ -867,14 +886,13 @@ export async function bodyFloor(
     return 'partial';
   }
 
-  if (!body.includes(HALT_PR_BANNER_SENTINEL)) {
+  if (!maskProjectOwnedRegions(body).includes(HALT_PR_BANNER_SENTINEL)) {
     return 'not-halt-body';
   }
 
   const bannerLines: readonly string[] = HALT_PR_BANNER_LINES;
-  const stripped = body
-    .split('\n')
-    .filter((line) => !bannerLines.includes(line));
+  const strippedLines = engineBodyLines(body).filter(({ masked }) => !bannerLines.includes(masked));
+  const stripped = strippedLines.map(({ line }) => line);
 
   // Collapse runs of 2+ consecutive blank lines down to a single blank line.
   const collapsed: string[] = [];
@@ -897,7 +915,7 @@ export async function bodyFloor(
   // SHIP-entry draft body does, and it has no `## Summary` heading), so keying
   // "already floored" on the heading alone would stack a SECOND floor block on
   // top of it.
-  if (!remainingBody.includes('## Summary') && !remainingBody.includes(PR_BODY_FLOOR_MARKER)) {
+  if (!engineBodyIncludes(remainingBody, '## Summary') && !engineBodyIncludes(remainingBody, PR_BODY_FLOOR_MARKER)) {
     const featureDesc = opts.featureDesc?.trim() || 'rehabilitated PR';
     // The floor never narrates remediation into the body: a shipped PR body
     // must read exactly like a clean first-pass finish produced it. Halt
@@ -933,7 +951,7 @@ export async function bodyFloor(
 
       const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'body']);
       const verifyBody = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
-      if (!verifyBody.includes(HALT_PR_BANNER_SENTINEL)) {
+      if (!engineBodyIncludes(verifyBody, HALT_PR_BANNER_SENTINEL)) {
         return 'floored';
       }
 

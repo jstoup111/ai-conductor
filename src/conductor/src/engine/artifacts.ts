@@ -16,6 +16,7 @@ import {
   readStaleHaltBanner,
   readStaleHaltTitle,
 } from './halt-pr-rehabilitation.js';
+import { readRegionCaptures } from './pr-body-region-store.js';
 import { seedTaskStatus } from './task-seed.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
@@ -1320,12 +1321,6 @@ export interface CompletionContext {
     prUrl: string,
     opts?: { mode?: 'capture-only' | 'full' },
   ) => Promise<void>;
-  /**
-   * Self-host release disposition preservation is a correctness boundary: a
-   * failed repair must block finish rather than use the normal warn-only
-   * presentation-repair fallback.
-   */
-  releaseMetadataPreservationRequired?: boolean;
   /**
    * Process-free current-PASS inspection for the native test_suite gate.
    * Conductor injects its shared verifier; standalone completion checks use a
@@ -3848,10 +3843,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         try {
           await ctx.repairFinishPr(prUrl, { mode: 'full' });
         } catch (error) {
-          if (ctx.releaseMetadataPreservationRequired) {
+          // A captured project-owned region is an explicit correctness
+          // boundary. Without one, retain the historical advisory repair.
+          const captures = await readRegionCaptures(dir, prUrl).catch(() => ({}));
+          const owners = Object.keys(captures);
+          if (owners.length > 0) {
             return {
               done: false,
-              reason: `release metadata preservation failed for ${prUrl}: ${error instanceof Error ? error.message : String(error)}`,
+              reason: `project-owned region preservation failed for ${prUrl} (${owners.join(', ')}): ${error instanceof Error ? error.message : String(error)}`,
               missing: 'other',
             };
           }

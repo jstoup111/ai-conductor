@@ -9,7 +9,6 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { writeSelfHostHalt } from '../../../src/engine/self-host/gate-halt.js';
 import {
   resolveReleaseMetadataFlow,
-  supersedesReleaseMetadataSnapshot,
 } from '../../../src/engine/self-host/release-metadata-flow.js';
 import type { GhRunner } from '../../../src/engine/tracker-client.js';
 
@@ -95,62 +94,6 @@ describe('self-host release metadata flow wiring', () => {
       releaseArtifactGateEnabled,
       steps: { 'release-disposition': { skill: '.agents/skills/renamed/SKILL.md' } },
     })).toBe('inactive');
-  });
-
-  it('does not snapshot or restore while the flow is inactive', async () => {
-    const projectRoot = await root();
-    const runGh = vi.fn(async () => ({ stdout: '' }));
-    const { conductor: subject } = conductor(projectRoot, {}, undefined, runGh);
-    (subject as any).selfHost = false;
-
-    await (subject as any).snapshotFinishReleaseMetadata('feat/task-13');
-    await (subject as any).restoreFinishReleaseMetadata('https://github.com/acme/conductor/pull/13');
-
-    expect(runGh).not.toHaveBeenCalled();
-  });
-
-  // Daemon dispatch never passes `featureDesc` to the Conductor constructor;
-  // the durable conduct state carries it. Without the fallback every daemon
-  // finish on a self-host feature failed its post-finish restore (PR #2667).
-  it('composes the post-finish restore guard from conduct state when constructor fields are absent', async () => {
-    const projectRoot = await root();
-    const prUrl = 'https://github.com/acme/conductor/pull/13';
-    const body = 'Release-Disposition: no-note';
-    const runGh = vi.fn(async () => ({ stdout: JSON.stringify({ body }) }));
-    const { conductor: subject } = conductor(
-      projectRoot,
-      { 'release-disposition': { skill: '.agents/skills/renamed/SKILL.md' } },
-      undefined,
-      runGh,
-    );
-    const resolvePublication = vi.fn(async () => undefined);
-    (subject as any).resolveShipDraftPublicationDependencies = resolvePublication;
-    (subject as any).releaseMetadataSnapshot = { prUrl, block: body };
-    (subject as any).gh = runGh;
-
-    await (subject as any).restoreFinishReleaseMetadata(prUrl, {
-      worktree_branch: 'feat/daemon-task-13',
-      feature_desc: 'task-13',
-    });
-
-    expect(resolvePublication).toHaveBeenCalledWith(expect.objectContaining({
-      branch: 'feat/daemon-task-13',
-      featureDesc: 'task-13',
-      prUrl,
-    }));
-  });
-
-  it.each([
-    ['outside a self-build', false, true],
-    ['when the release gate is disabled', true, false],
-  ])('does not clear a snapshot for release-disposition %s', (_name, isSelfBuild, releaseArtifactGateEnabled) => {
-    const flow = resolveReleaseMetadataFlow({
-      isSelfBuild,
-      releaseArtifactGateEnabled,
-      steps: { 'release-disposition': { skill: '.agents/skills/renamed/SKILL.md' } },
-    });
-
-    expect(supersedesReleaseMetadataSnapshot(flow, 'release-disposition')).toBe(false);
   });
 
   it('writes the missing-step halt as needs-human through the central halt seam', async () => {

@@ -1,3 +1,4 @@
+// Covers: task:3
 /**
  * Tests for the prefix-gated retitle-floor primitive (Task 6,
  * adr-2026-07-03-halt-pr-rehabilitation-at-finish).
@@ -594,6 +595,31 @@ describe('isEngineFlooredBody', () => {
     expect(isEngineFlooredBody(shipDraftPrBody('widget import flow'))).toBe(true);
   });
 
+  it('classifies a long template-seeded draft without prose as a floor', () => {
+    const template = `## Project-owned context\n\n${'Template guidance. '.repeat(30)}`;
+    const body = `${PR_BODY_FLOOR_MARKER}\n\n${template}\n\nDraft opened automatically.`;
+
+    expect(template.length).toBeGreaterThan(400);
+    expect(isEngineFlooredBody(body, template)).toBe(true);
+  });
+
+  it('classifies prose added to a template-seeded draft as authored', () => {
+    const template = `## Project-owned context\n\n${'Template guidance. '.repeat(30)}`;
+    const body = `${PR_BODY_FLOOR_MARKER}\n\n${template}\n\n${'a'.repeat(1_000)}`;
+
+    expect(isEngineFlooredBody(body, template)).toBe(false);
+  });
+
+  it('never reads the floor marker from inside a project-owned region', () => {
+    const body = `## Summary\n\n<!-- ai-conductor:step attest -->\n${PR_BODY_FLOOR_MARKER}\n<!-- /ai-conductor:step -->`;
+    expect(isEngineFlooredBody(body)).toBe(false);
+  });
+
+  it('does not count project-owned region words as authored prose', () => {
+    const body = `${PR_BODY_FLOOR_MARKER}\n\n<!-- ai-conductor:step attest -->\n${'Attested. '.repeat(100)}\n<!-- /ai-conductor:step -->`;
+    expect(isEngineFlooredBody(body)).toBe(true);
+  });
+
   it('classifies authored prose as authored even when the marker survived the rewrite', () => {
     expect(isEngineFlooredBody(`${PR_BODY_FLOOR_MARKER}\n\n${AUTHORED_BODY}`)).toBe(false);
   });
@@ -636,7 +662,7 @@ describe('isEngineFlooredBody', () => {
       'Release-Disposition: note',
       'Release-Category: Fixed',
       'Release-Semver: patch',
-      'Release-Note: A reader-facing summary of the delivered change, restored from the pre-finish snapshot.',
+      'Release-Note: A reader-facing summary of the delivered change, preserved in its project-owned region.',
       '',
       '<!-- build-review-accepted-risk:start -->',
       '## Accepted build-review risk',
@@ -766,6 +792,14 @@ describe('readStaleHaltBanner (Task 2)', () => {
     const result = await readStaleHaltBanner(gh, CWD, PR_URL);
 
     expect(result).toBe(HALT_PR_BANNER_SENTINEL);
+  });
+
+  it('returns null when the halt banner appears only inside a project-owned region', async () => {
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify({ body: `<!-- ai-conductor:step attest -->\n${HALT_PR_BANNER_SENTINEL}\n<!-- /ai-conductor:step -->` }) },
+    ]);
+
+    expect(await readStaleHaltBanner(gh, CWD, PR_URL)).toBeNull();
   });
 
   it('returns null for a clean body', async () => {

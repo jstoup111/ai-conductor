@@ -153,16 +153,11 @@ describe('operator park boundary contract', () => {
       // whose caller is one of the guarded scheduling-unit entries above.
       /return runGroupBranch\(member, state, \{\s*stepRunner: this\.stepRunner,\s*providerAvailability: this\.providerExecution\?\.providerAvailability,\s*onProviderSuppressed: this\.providerExecution\?\.onProviderSuppressed,\s*executionContext,/g,
       "return this.stepRunner.run('finish', state, options);",
-      // The two bounded FINISH prose passes. Both are reached only from inside
-      // the already-park-guarded FINISH dispatch.
-      "this.stepRunner.run('finish', state, { ...options, finishProsePass: 'judge' })",
-      `this.stepRunner.run('finish', state, {
-          ...options,
-          finishProsePass: 'author',
-          ...(request.revisionGuidance === undefined
-            ? {}
-            : { revisionGuidance: request.revisionGuidance }),
-        })`,
+      // The two bounded FINISH prose passes. Their cleanup wrapper may evolve,
+      // but both are reached only from inside the already-park-guarded FINISH
+      // dispatch.
+      /this\.stepRunner\.run\('finish', state, \{\s*\.\.\.options, finishProsePass: 'judge'\s*\}\)/g,
+      /this\.stepRunner\.run\('finish', state, \{\s*\.\.\.options,\s*finishProsePass: 'author',\s*\.\.\.\(request\.revisionGuidance === undefined\s*\? \{\}\s*:\s*\{ revisionGuidance: request\.revisionGuidance \}\),\s*\}\)/g,
     ];
     expect(conductorSource).toContain(prdWideningReconciliationDispatch);
     expect(conductorSource).toContain(buildReviewAdjudicationDispatch);

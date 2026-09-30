@@ -25,6 +25,17 @@ import {
 } from '../../src/engine/resolved-config.js';
 import * as resolvedConfig from '../../src/engine/resolved-config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import {
+  BUILD_REVIEW_ACCEPTED_RISK_END,
+  BUILD_REVIEW_ACCEPTED_RISK_HEADING,
+  BUILD_REVIEW_ACCEPTED_RISK_START,
+  REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
+} from '../../src/engine/build-review-accepted-risk.js';
+import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
+import {
+  HALT_PR_BANNER_SENTINEL,
+  NEEDS_REMEDIATION_BODY_MARKER,
+} from '../../src/engine/pr-labels.js';
 
 describe('config', () => {
   let tmpDir: string;
@@ -41,6 +52,140 @@ describe('config', () => {
   });
 
   describe('loadConfig', () => {
+    describe('pull request template regions', () => {
+      const configWithCustomSteps = (steps: string) => steps === '' ? '{}\n' : `steps:\n${steps}`;
+      const customStep = (
+        name: string,
+        after = 'manual_test',
+        options: { enforcement?: 'gating' | 'advisory'; completionArtifact?: boolean } = {},
+      ) =>
+        `  ${name}:\n    after: ${after}\n    skill: skills/${name}/SKILL.md\n    enforcement: ${options.enforcement ?? 'gating'}\n${options.completionArtifact === false ? '' : `    completion_artifact: .pipeline/${name}\n`}`;
+      const region = (name: string, content = `${name} content`) => [
+        `<!-- ai-conductor:step ${name} -->`,
+        content,
+        '<!-- /ai-conductor:step -->',
+      ].join('\n');
+
+      const writeCustomSkill = async (name: string) => {
+        const skillDir = join(tmpDir, 'skills', name);
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(join(skillDir, 'SKILL.md'), `---\nname: ${name}\n---\n`);
+      };
+
+      const writeConfig = async (steps: string) => {
+        await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), configWithCustomSteps(steps));
+      };
+
+      const writeTemplate = async (template: string) => {
+        await mkdir(join(tmpDir, '.github'), { recursive: true });
+        await writeFile(join(tmpDir, '.github', 'pull_request_template.md'), template);
+      };
+
+      it('loads template bytes and one declared pre-finish custom region owner', async () => {
+        await writeCustomSkill('compliance-attest');
+        await writeConfig(customStep('compliance-attest'));
+        const template = region('compliance-attest', 'Attested-By: security-bot');
+        await writeTemplate(template);
+
+        const result = await loadConfig(tmpDir);
+
+        expect(result).toMatchObject({
+          ok: true,
+          config: {
+            pr_template_bytes: template,
+            pr_template_region_owners: {
+              'compliance-attest': '\nAttested-By: security-bot\n',
+            },
+          },
+        });
+      });
+
+      it('loads two declared pre-finish custom region owners', async () => {
+        await writeCustomSkill('compliance-attest');
+        await writeCustomSkill('release-disposition');
+        await writeConfig(customStep('compliance-attest') + customStep('release-disposition', 'compliance-attest'));
+        await writeTemplate(`${region('compliance-attest')}\n\n${region('release-disposition')}`);
+
+        const result = await loadConfig(tmpDir);
+
+        expect(result).toMatchObject({
+          ok: true,
+          config: {
+            pr_template_region_owners: {
+              'compliance-attest': '\ncompliance-attest content\n',
+              'release-disposition': '\nrelease-disposition content\n',
+            },
+          },
+        });
+      });
+
+      it.each([
+        ['an advisory owner', { enforcement: 'advisory' as const }],
+        ['an artifact-free owner', { completionArtifact: false }],
+      ])('loads %s in the SHIP phase before finish', async (_name, options) => {
+        await writeCustomSkill('compliance-attest');
+        await writeConfig(customStep('compliance-attest', 'manual_test', options));
+        await writeTemplate(region('compliance-attest'));
+
+        const result = await loadConfig(tmpDir);
+
+        expect(result).toMatchObject({
+          ok: true,
+          config: { pr_template_region_owners: { 'compliance-attest': '\ncompliance-attest content\n' } },
+        });
+      });
+
+      it('keeps region owners empty for an unmarked template and ignores a root-only template', async () => {
+        await writeConfig('');
+        await writeTemplate('# Pull request\n\n## Summary\n');
+        const unmarked = await loadConfig(tmpDir);
+
+        await rm(join(tmpDir, '.github'), { recursive: true, force: true });
+        await writeFile(join(tmpDir, 'pull_request_template.md'), region('undeclared-root-step'));
+        const rootOnly = await loadConfig(tmpDir);
+
+        expect(unmarked).toMatchObject({
+          ok: true,
+          config: { pr_template_region_owners: {} },
+        });
+        expect(rootOnly).toMatchObject({
+          ok: true,
+          config: { pr_template_region_owners: {} },
+        });
+      });
+
+      it.each([
+        ['a built-in owner', region('finish'), '', ['finish', 'built-in steps cannot own a region']],
+        ['an undeclared owner', region('release-disposiiton'), '', ['release-disposiiton', 'undeclared step']],
+        ['a BUILD-phase owner', region('compliance-attest'), customStep('compliance-attest', 'build'), ['compliance-attest', 'must run in the SHIP phase']],
+        ['an owner ordered after finish', region('late-attest'), customStep('late-attest', 'finish'), ['late-attest', 'must run before finish']],
+        ['a duplicate owner', `${region('compliance-attest')}\n${region('compliance-attest')}`, customStep('compliance-attest'), ['compliance-attest', 'owns more than one region']],
+        ['an unclosed owner', '<!-- ai-conductor:step compliance-attest -->\nAttested', customStep('compliance-attest'), ['compliance-attest', 'unclosed']],
+        ['nested owners', '<!-- ai-conductor:step compliance-attest -->\n<!-- ai-conductor:step release-disposition -->\n<!-- /ai-conductor:step -->\n<!-- /ai-conductor:step -->', customStep('compliance-attest') + customStep('release-disposition', 'compliance-attest'), ['compliance-attest', 'release-disposition', 'nested inside']],
+        ['engine-owned heading', region('compliance-attest', REDUCED_BUILD_REVIEW_COVERAGE_HEADING), customStep('compliance-attest'), ['compliance-attest', REDUCED_BUILD_REVIEW_COVERAGE_HEADING]],
+        ['engine-owned accepted-risk heading', region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_HEADING), customStep('compliance-attest'), ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_HEADING]],
+        ['engine-owned accepted-risk marker', region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_START), customStep('compliance-attest'), ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_START]],
+        ['engine-owned accepted-risk end marker', region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_END), customStep('compliance-attest'), ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_END]],
+        ['engine-owned floor marker', region('compliance-attest', PR_BODY_FLOOR_MARKER), customStep('compliance-attest'), ['compliance-attest', PR_BODY_FLOOR_MARKER]],
+        ['engine-owned remediation-body marker', region('compliance-attest', NEEDS_REMEDIATION_BODY_MARKER), customStep('compliance-attest'), ['compliance-attest', NEEDS_REMEDIATION_BODY_MARKER]],
+        ['engine-owned halt sentinel', region('compliance-attest', HALT_PR_BANNER_SENTINEL), customStep('compliance-attest'), ['compliance-attest', HALT_PR_BANNER_SENTINEL]],
+      ])('rejects %s', async (_caseName, template, steps, expectedMessageParts) => {
+        for (const name of ['compliance-attest', 'release-disposition', 'late-attest']) {
+          await writeCustomSkill(name);
+        }
+        await writeConfig(steps);
+        await writeTemplate(template);
+
+        const result = await loadConfig(tmpDir);
+
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        for (const expected of expectedMessageParts) {
+          expect(result.error.message).toContain(expected);
+        }
+      });
+    });
+
     it('returns error with config-init remedy when config missing', async () => {
       const emptyDir = await mkdtemp(join(tmpdir(), 'config-missing-'));
       try {
