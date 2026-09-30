@@ -36,6 +36,8 @@ import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import type { GithubOperationRequest } from '../../src/engine/github-operations.js';
 import type { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
+import type { ConductorEvent } from '../../src/types/events.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCb);
 
@@ -172,6 +174,94 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     expect(outcome.kind).toBe(expected);
     expect(await remoteTip()).toBe(expected === 'refreshed' ? verifiedTip : concurrentPush ? baseTip : before);
     expect(logs.some(line => line.includes('stage=lease-push result=refreshed'))).toBe(expected === 'refreshed');
+  });
+
+  // Covers: task:2
+  it('reports passing acceptance guards and suite-gate progress before lease publication', async () => {
+    await writeFile(join(dir, 'base.txt'), 'base\n');
+    await gDir(['add', '.']);
+    await gDir(['commit', '-q', '-m', 'base']);
+    await gDir(['remote', 'add', 'origin', origin]);
+    await gDir(['push', 'origin', 'main']);
+
+    await gDir(['checkout', '-q', '-b', 'feat/widget']);
+    await writeFile(join(dir, 'feature.txt'), 'feature\n');
+    await gDir(['add', '.']);
+    await gDir(['commit', '-q', '-m', 'feature work']);
+    await gDir(['push', 'origin', 'feat/widget']);
+    const remoteTipBeforeResolution = (await gDir(['rev-parse', 'HEAD'])).stdout.trim();
+
+    await gDir(['checkout', '-q', 'main']);
+    await writeFile(join(dir, 'upstream.txt'), 'upstream\n');
+    await gDir(['add', '.']);
+    await gDir(['commit', '-q', '-m', 'upstream work']);
+    await gDir(['push', 'origin', 'main']);
+
+    const { resolveConflictingPr } = await import('../../src/engine/autoresolve.js');
+    const logs: string[] = [];
+    const stageEvents: Array<{
+      event: Extract<ConductorEvent, { type: 'rebase_resolution_stage' }>;
+      remoteTip: string;
+    }> = [];
+    const remoteTip = async () => (
+      await execFile('git', ['rev-parse', 'refs/heads/feat/widget'], { cwd: origin })
+    ).stdout.trim();
+    const events = new ConductorEventEmitter();
+    events.on('rebase_resolution_stage', async (event) => {
+      if (event.type === 'rebase_resolution_stage') {
+        stageEvents.push({ event, remoteTip: await remoteTip() });
+      }
+    });
+    let suiteWorktree: string | undefined;
+    let eventsAtSuiteStart: typeof stageEvents = [];
+    let resolvedTip: string | undefined;
+    const gh = fakeGhFor([], []);
+
+    const outcome = await resolveConflictingPr(
+      { prUrl: PR_URL, slug: 'widget', repoCwd: dir },
+      'feat/widget',
+      { enabled: true, suiteCommand: 'test', cooldownMinutes: 60, attemptCap: ATTEMPT_CAP },
+      {
+        runGh: gh,
+        operations: gh,
+        remoteGit: permittedRemoteGit,
+        events,
+        runSuite: async (worktree) => {
+          suiteWorktree = worktree;
+          eventsAtSuiteStart = [...stageEvents];
+          resolvedTip = (await execFile('git', ['rev-parse', 'HEAD'], { cwd: worktree })).stdout.trim();
+          return { exitCode: 0, configured: true, durationMs: 73 };
+        },
+        resolver: async () => ({ resolved: false, reason: 'unexpected resolver' }),
+        log: (line) => logs.push(line),
+      },
+    );
+
+    expect(outcome.kind).toBe('refreshed');
+    expect(suiteWorktree).toEqual(expect.any(String));
+    expect(eventsAtSuiteStart.map(({ event }) => [event.stage, event.status])).toEqual([
+      ['acceptance-guards', 'passed'],
+      ['suite-gate', 'started'],
+    ]);
+    expect(stageEvents.map(({ event }) => [event.stage, event.status])).toEqual([
+      ['acceptance-guards', 'passed'],
+      ['suite-gate', 'started'],
+      ['suite-gate', 'passed'],
+    ]);
+    expect(stageEvents.map(({ event }) => ({
+      prUrl: event.prUrl,
+      worktreePath: event.worktreePath,
+    }))).toEqual([
+      { prUrl: PR_URL, worktreePath: suiteWorktree },
+      { prUrl: PR_URL, worktreePath: suiteWorktree },
+      { prUrl: PR_URL, worktreePath: suiteWorktree },
+    ]);
+    expect(stageEvents[2].event).toMatchObject({ durationMs: 73 });
+    expect(stageEvents[2].remoteTip).toBe(remoteTipBeforeResolution);
+    expect(await remoteTip()).toBe(resolvedTip);
+    expect(logs.some((line) => line.includes(PR_URL) && line.includes('acceptance guards passed') && line.includes(suiteWorktree!))).toBe(true);
+    expect(logs.some((line) => line.includes(PR_URL) && line.includes('suite gate started') && line.includes(suiteWorktree!))).toBe(true);
+    expect(logs.some((line) => line.includes(PR_URL) && line.includes('suite gate passed') && line.includes('73'))).toBe(true);
   });
 
   it('a CHANGELOG-only conflict is handed to the generic resolver (FR-3/FR-4)', async () => {
