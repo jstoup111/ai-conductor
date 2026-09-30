@@ -29,6 +29,8 @@ export interface SpoolLeaseOptions {
   filesystem?: Partial<SpoolLeaseFilesystem>;
   isProcessAlive?: (pid: number) => boolean;
   now?: () => number;
+  /** Called once ownership is lost, so the associated drainer stops immediately. */
+  onLost?: () => void;
   scheduleInterval?: (callback: () => Promise<void>, milliseconds: number) => HeartbeatTimer;
 }
 
@@ -86,6 +88,7 @@ export class SpoolLease {
   private readonly isProcessAlive: (pid: number) => boolean;
   private readonly scheduleInterval: (callback: () => Promise<void>, milliseconds: number) => HeartbeatTimer;
   private readonly clearScheduledInterval: (timer: HeartbeatTimer) => void;
+  private readonly onLost: () => void;
   private readonly uuid = randomUUID();
   private heartbeatTimer: HeartbeatTimer | undefined;
   private owned = false;
@@ -96,6 +99,7 @@ export class SpoolLease {
     this.isProcessAlive = options.isProcessAlive ?? defaultIsProcessAlive;
     this.scheduleInterval = options.scheduleInterval ?? ((callback, milliseconds) => setInterval(callback, milliseconds));
     this.clearScheduledInterval = options.clearInterval ?? ((timer) => clearInterval(timer as NodeJS.Timeout));
+    this.onLost = options.onLost ?? (() => {});
   }
 
   async acquire(): Promise<SpoolLeaseAcquireResult> {
@@ -148,12 +152,7 @@ export class SpoolLease {
       return { acquired: false };
     }
 
-    try {
-      await this.create(this.successorPath(), record);
-    } catch (error) {
-      if (isAlreadyExists(error)) return { acquired: false };
-      throw error;
-    }
+    if (!await this.createSuccessor(record)) return { acquired: false };
 
     let current: string;
     try {
@@ -183,6 +182,57 @@ export class SpoolLease {
     }
   }
 
+  /**
+   * Recovers only a successor whose writer cannot still be holding it. The
+   * record is moved and re-read before removal so a racing replacement is
+   * never unlinked by this contender.
+   */
+  private async createSuccessor(record: LeaseRecord): Promise<boolean> {
+    try {
+      await this.create(this.successorPath(), record);
+      return true;
+    } catch (error) {
+      if (!isAlreadyExists(error)) throw error;
+    }
+    if (!await this.recoverOrphanSuccessor()) return false;
+    try {
+      await this.create(this.successorPath(), record);
+      return true;
+    } catch (error) {
+      if (isAlreadyExists(error)) return false;
+      throw error;
+    }
+  }
+
+  private async recoverOrphanSuccessor(): Promise<boolean> {
+    const successor = this.successorPath();
+    let serialized: string;
+    try {
+      serialized = await this.filesystem.readFile(successor, 'utf8');
+    } catch (error) {
+      if (isMissing(error)) return true;
+      throw error;
+    }
+    const holder = parseLeaseRecord(serialized);
+    if (holder !== null && this.isFresh(holder) && this.isProcessAlive(holder.pid)) return false;
+
+    const moved = `${successor}.${this.uuid}.${randomUUID()}.orphan`;
+    try {
+      await this.filesystem.rename(successor, moved);
+    } catch (error) {
+      if (isMissing(error)) return true;
+      throw error;
+    }
+    try {
+      if (await this.filesystem.readFile(moved, 'utf8') === serialized) {
+        await this.filesystem.rm(moved, { force: true });
+      }
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    return true;
+  }
+
   private record(): LeaseRecord {
     return { pid: process.pid, uuid: this.uuid, heartbeatAt: this.now() };
   }
@@ -204,17 +254,15 @@ export class SpoolLease {
     try {
       const serialized = await this.filesystem.readFile(this.path(), 'utf8');
       if (parseLeaseRecord(serialized)?.uuid !== this.uuid) {
-        this.owned = false;
-        this.stopHeartbeat();
+        this.loseOwnership();
         return;
       }
       const successor = this.successorPath();
-      await this.create(successor, this.record());
+      if (!await this.createSuccessor(this.record())) return;
       // A successor may have won while this holder prepared its atomic update.
       if (await this.filesystem.readFile(this.path(), 'utf8') !== serialized) {
         await this.filesystem.rm(successor, { force: true });
-        this.owned = false;
-        this.stopHeartbeat();
+        this.loseOwnership();
         return;
       }
       await this.filesystem.rename(successor, this.path());
@@ -226,6 +274,13 @@ export class SpoolLease {
   private stopHeartbeat(): void {
     if (this.heartbeatTimer !== undefined) this.clearScheduledInterval(this.heartbeatTimer);
     this.heartbeatTimer = undefined;
+  }
+
+  private loseOwnership(): void {
+    if (!this.owned) return;
+    this.owned = false;
+    this.stopHeartbeat();
+    this.onLost();
   }
 
   private path(): string {

@@ -14,7 +14,6 @@ export interface SpoolRuntime {
   drainer: SpoolDrainer;
 }
 
-const runtimes = new Map<string, SpoolRuntime>();
 const warnedStarts = new Set<string>();
 const disabledWarnings = new Map<string, Promise<void>>();
 
@@ -59,18 +58,17 @@ export function createSpoolRuntime(
   events?: ConductorEventEmitter,
 ): SpoolRuntime {
   const store = new SpoolStore(directory, { maxBytes: config.spool?.maxBytes });
-  return {
-    store,
-    lease: new SpoolLease(directory),
-    drainer: new SpoolDrainer(store, {
+  let drainer: SpoolDrainer | undefined;
+  const lease = new SpoolLease(directory, { onLost: () => { void drainer?.stop(); } });
+  drainer = new SpoolDrainer(store, {
       endpoint: config.endpoint,
       // Resolve references per POST. Credentials never enter the spool.
       headers: () => config.headerReferences
         ? Object.fromEntries(Object.entries(config.headerReferences).map(([name, reference]) => [name, process.env[reference.env] ?? '']))
         : config.headers ?? {},
       events,
-    }),
-  };
+    });
+  return { store, lease, drainer };
 }
 
 /** Builds direct exporters unless this OTLP process can anchor its spool in Git's main checkout. */
@@ -104,10 +102,4 @@ export function warnSpoolUnavailable(startDir: string, events?: ConductorEventEm
   if (warnedStarts.has(startDir)) return;
   warnedStarts.add(startDir);
   void events?.emit({ type: 'renderer_error', rendererName: 'otel', error: '[otel] spool disabled: main git checkout could not be resolved; exporting directly' });
-}
-
-export function __resetSpoolRuntimeForTests(): void {
-  runtimes.clear();
-  warnedStarts.clear();
-  disabledWarnings.clear();
 }

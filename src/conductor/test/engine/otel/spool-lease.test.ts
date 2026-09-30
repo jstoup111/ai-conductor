@@ -62,6 +62,27 @@ describe('SpoolLease', () => {
     });
   });
 
+  it('reclaims a stale lease when a dead successor was orphaned before rename', async () => {
+    const directory = await temporaryDirectory();
+    await writeLease(directory, { pid: 41, uuid: 'dead-holder', heartbeatAt: now - 60_001 });
+    await writeFile(join(directory, 'lease.json.next'), JSON.stringify({ pid: 42, uuid: 'dead-successor', heartbeatAt: now - 60_001 }));
+
+    const lease = new SpoolLease(directory, { now: () => now, isProcessAlive: () => false });
+    await expect(lease.acquire()).resolves.toEqual({ acquired: true });
+    await expect(readFile(join(directory, 'lease.json'), 'utf8').then(JSON.parse)).resolves.toMatchObject({ uuid: expect.not.stringMatching(/dead/) });
+    await expect(readFile(join(directory, 'lease.json.next'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not steal a fresh successor whose writer is alive', async () => {
+    const directory = await temporaryDirectory();
+    await writeLease(directory, { pid: 41, uuid: 'dead-holder', heartbeatAt: now - 60_001 });
+    await writeFile(join(directory, 'lease.json.next'), JSON.stringify({ pid: 42, uuid: 'live-successor', heartbeatAt: now }));
+
+    const lease = new SpoolLease(directory, { now: () => now, isProcessAlive: (pid) => pid === 42 });
+    await expect(lease.acquire()).resolves.toEqual({ acquired: false });
+    await expect(readFile(join(directory, 'lease.json.next'), 'utf8').then(JSON.parse)).resolves.toMatchObject({ uuid: 'live-successor' });
+  });
+
   it('schedules a held lease heartbeat every ten seconds without a real wait', async () => {
     const directory = await temporaryDirectory();
     const startedAt = 1_727_000_000_000;
@@ -178,5 +199,21 @@ describe('SpoolLease', () => {
       heartbeatAt: now,
     });
     await expect(observer.acquire()).resolves.toEqual({ acquired: false });
+  });
+
+  it('notifies its owner when a contender replaces the lease during heartbeat', async () => {
+    const directory = await temporaryDirectory();
+    let heartbeat: (() => Promise<void>) | undefined;
+    const lost: string[] = [];
+    const lease = new SpoolLease(directory, {
+      now: () => now,
+      isProcessAlive: () => true,
+      onLost: () => { lost.push('lost'); },
+      scheduleInterval: (callback) => { heartbeat = callback; return {}; },
+    });
+    await lease.acquire();
+    await writeLease(directory, { pid: 44, uuid: 'contender', heartbeatAt: now });
+    await heartbeat?.();
+    expect(lost).toEqual(['lost']);
   });
 });

@@ -56,7 +56,10 @@ describe("resolveSpoolDir", () => {
     const runtime = createSpoolRuntime(directory, config);
     await runtime.store.write("traces", Buffer.from("batch"));
     process.env[header] = "after";
-    await runtime.drainer.drain();
+    const draining = runtime.drainer.drainUntilStopped();
+    for (let turn = 0; turn < 1_000 && received === ''; turn += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+    await runtime.drainer.stop();
+    await draining;
     expect(received).toBe("after");
     if (previous === undefined) delete process.env[header]; else process.env[header] = previous;
   });

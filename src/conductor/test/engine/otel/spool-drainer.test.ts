@@ -42,6 +42,21 @@ async function reserveEndpoint(): Promise<number> {
   return Number(new URL(endpoint).port);
 }
 
+async function drainUntilEmpty(drainer: SpoolDrainer, store: SpoolStore): Promise<void> {
+  const draining = drainer.drainUntilStopped();
+  for (let turn = 0; turn < 1_000; turn += 1) {
+    const [traces, metrics] = await Promise.all([store.list('traces'), store.list('metrics')]);
+    if (traces.length === 0 && metrics.length === 0) {
+      await drainer.stop();
+      await draining;
+      return;
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  await drainer.stop();
+  throw new Error('spool did not drain');
+}
+
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => close(server)));
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -62,7 +77,7 @@ describe('SpoolDrainer', () => {
       },
     });
 
-    await drainer.drain();
+    await drainUntilEmpty(drainer, store);
 
     expect({ delivered, remaining: await store.list('traces') }).toEqual({
       delivered: ['first', 'appended-during-drain'], remaining: [],
@@ -87,7 +102,7 @@ describe('SpoolDrainer', () => {
     });
     const endpoint = await listen(server, reservedPort);
 
-    await new SpoolDrainer(store, { endpoint, headers: () => ({}) }).drain();
+    await drainUntilEmpty(new SpoolDrainer(store, { endpoint, headers: () => ({}) }), store);
 
     expect({
       received: received.map(({ path, body }) => ({ path, body: body.toString() })),
@@ -128,7 +143,7 @@ describe('SpoolDrainer', () => {
     });
     apiKey = 'value-at-drain-time';
 
-    await drainer.drain();
+    await drainUntilEmpty(drainer, store);
 
     expect(received).toEqual(expect.arrayContaining([
       { path: '/v1/traces', contentType: 'application/x-protobuf', authorization: 'Bearer value-at-drain-time', body: Buffer.from('trace-protobuf') },
@@ -149,7 +164,7 @@ describe('SpoolDrainer', () => {
     const store = new SpoolStore(await temporaryDirectory(), { now: () => daysOld });
     const batch = await store.write('traces', Buffer.from('days-old-protobuf-body'));
 
-    await new SpoolDrainer(store, { endpoint, headers: () => ({}) }).drain();
+    await drainUntilEmpty(new SpoolDrainer(store, { endpoint, headers: () => ({}) }), store);
 
     expect({ received, remaining: await store.list('traces'), batch: batch.name }).toEqual({
       received: [Buffer.from('days-old-protobuf-body')], remaining: [], batch: expect.any(String),
@@ -172,7 +187,7 @@ describe('SpoolDrainer', () => {
     });
     await store.write('traces', Buffer.from('rejected-days-old-batch'), 2);
 
-    await new SpoolDrainer(store, { endpoint, headers: () => ({}), events }).drain();
+    await drainUntilEmpty(new SpoolDrainer(store, { endpoint, headers: () => ({}), events }), store);
 
     expect(await store.list('traces')).toEqual([]);
     expect(drops).toEqual([
@@ -196,7 +211,7 @@ describe('SpoolDrainer', () => {
     const store = new SpoolStore(await temporaryDirectory());
     await store.write('traces', Buffer.from('partially-rejected-batch'), 5);
 
-    await new SpoolDrainer(store, { endpoint, headers: () => ({}), events }).drain();
+    await drainUntilEmpty(new SpoolDrainer(store, { endpoint, headers: () => ({}), events }), store);
 
     expect(received).toEqual(['partially-rejected-batch']);
     expect(await store.list('traces')).toEqual([]);
@@ -234,7 +249,7 @@ describe('SpoolDrainer', () => {
         signalSleepStarted();
       }),
     });
-    const draining = drainer.drain();
+    const draining = drainer.drainUntilStopped();
 
     try {
       await sleepStarted;
@@ -266,9 +281,9 @@ describe('SpoolDrainer', () => {
       delete: async () => { throw new Error('simulated crash after accept before delete'); },
     });
 
-    await expect(new SpoolDrainer(crashBeforeDelete, { endpoint, headers: () => ({}) }).drain())
+    await expect(new SpoolDrainer(crashBeforeDelete, { endpoint, headers: () => ({}) }).drainUntilStopped())
       .rejects.toThrow('simulated crash after accept before delete');
-    await new SpoolDrainer(store, { endpoint, headers: () => ({}) }).drain();
+    await drainUntilEmpty(new SpoolDrainer(store, { endpoint, headers: () => ({}) }), store);
 
     expect({
       received,
@@ -304,7 +319,7 @@ describe('SpoolDrainer', () => {
       now: () => now,
       sleep: async (delay: number) => { delays.push(delay); now += delay; },
       random: () => 0,
-    }).drain();
+    }).drainUntilStopped();
 
     expect(received).toEqual(['retry-me', 'retry-me', 'retry-me']);
     expect(delays).toEqual([1_000, 2_000]);
@@ -339,7 +354,7 @@ describe('SpoolDrainer', () => {
       }),
       random: () => 0,
     });
-    const draining = drainer.drain();
+    const draining = drainer.drainUntilStopped();
 
     try {
       await sleepStarted;
@@ -407,7 +422,7 @@ describe('SpoolDrainer', () => {
       },
       random: () => 0,
     });
-    const draining = drainer.drain();
+    const draining = drainer.drainUntilStopped();
 
     try {
       for (let turns = 0; turns < 50 && (!releaseFirstTraceRetry || !received.includes('/v1/metrics:independent-metric')); turns += 1) {
@@ -452,7 +467,7 @@ describe('SpoolDrainer', () => {
       now: () => now,
       sleep: async (delay: number) => { now += delay; },
     });
-    const draining = drainer.drain();
+    const draining = drainer.drainUntilStopped();
 
     try {
       for (let turns = 0; turns < 50 && !received; turns += 1) {
@@ -508,7 +523,7 @@ describe('SpoolDrainer', () => {
     });
 
     const firstBacklogSleep = nextBacklogSleep();
-    const draining = drainer.drain();
+    const draining = drainer.drainUntilStopped();
     await firstBacklogSleep;
     while (failures.length < 2) await new Promise<void>((resolve) => setImmediate(resolve));
     for (let interval = 0; interval < 3; interval += 1) {
@@ -538,7 +553,9 @@ describe('SpoolDrainer', () => {
     const emptyDrainer = new SpoolDrainer(emptyStore, { endpoint, headers: () => ({}), events: emptyEvents, now: () => now });
     for (let interval = 0; interval < 3; interval += 1) {
       now += 30_000;
-      await emptyDrainer.drain();
+      const draining = emptyDrainer.drainUntilStopped();
+      await emptyDrainer.stop();
+      await draining;
     }
     expect(emptyBacklog).toEqual([]);
   });
@@ -573,11 +590,11 @@ describe('SpoolDrainer', () => {
       }),
     });
     await store.write('traces', Buffer.from('healthy-trace'));
-    await drainer.drain();
+    await drainUntilEmpty(drainer, store);
 
     failNetworkRequests = true;
     await store.write('traces', Buffer.from('network-failure-trace'));
-    const draining = drainer.drain();
+    const draining = drainer.drainUntilStopped();
 
     try {
       for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) {
@@ -635,7 +652,7 @@ describe('SpoolDrainer', () => {
       events,
       sleep: async () => new Promise<void>((resolve) => { releaseRetry = resolve; }),
     });
-    const draining = drainer.drain();
+    const draining = drainer.drainUntilStopped();
 
     try {
       for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) {
@@ -647,7 +664,7 @@ describe('SpoolDrainer', () => {
       await draining;
 
       await store.write('traces', Buffer.from('network-refusal-after-recovery'));
-      const refusing = drainer.drain();
+      const refusing = drainer.drainUntilStopped();
       for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) {
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
@@ -702,7 +719,7 @@ describe('SpoolDrainer', () => {
         retryStarts.shift()?.();
       }),
     });
-    const draining = drainer.drain();
+    const draining = drainer.drainUntilStopped();
 
     try {
       await firstRetryStart;

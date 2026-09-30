@@ -71,34 +71,9 @@ export class SpoolDrainer {
     this.exportTimeoutMs = options.exportTimeoutMs ?? DEFAULT_EXPORT_TIMEOUT_MS;
   }
 
-  async drain(): Promise<void> {
-    if (this.stopped) return;
-    await this.drainPass();
-  }
-
-  private async drainPass(): Promise<void> {
-    const loops = (['traces', 'metrics'] as const).map((signal) => {
-      const loop = this.drainSignal(signal);
-      this.loops.add(loop);
-      void loop.then(
-        () => this.loops.delete(loop),
-        () => this.loops.delete(loop),
-      );
-      return loop;
-    });
-    const deliveriesDone = Promise.allSettled(loops).then(() => undefined);
-    const backlogLoop = this.reportBacklog(deliveriesDone);
-    this.loops.add(backlogLoop);
-    void backlogLoop.then(
-      () => this.loops.delete(backlogLoop),
-      () => this.loops.delete(backlogLoop),
-    );
-    await Promise.all(loops);
-  }
-
   /**
-   * Keeps polling the durable store until stopped. `drain()` deliberately
-   * remains a finite snapshot operation for one-shot recovery callers.
+   * Keeps independently polling and delivering each signal until stopped.
+   * A retained head batch for one signal never delays listing the other.
    */
   drainUntilStopped(): Promise<void> {
     if (this.stopped) return Promise.resolve();
@@ -180,18 +155,21 @@ export class SpoolDrainer {
   }
 
   private async runUntilStopped(): Promise<void> {
-    const loop = (async () => {
+    const signalLoops = (['traces', 'metrics'] as const).map((signal) => this.trackLoop((async () => {
       while (!this.stopped) {
-        await this.drainPass();
+        await this.drainSignal(signal);
         if (!this.stopped) await this.delay(IDLE_POLL_INTERVAL_MS);
       }
-    })();
+    })()));
+    // The continuous runtime owns the sole reporter; delivery loops do not.
+    const backlogLoop = this.trackLoop(this.reportBacklog());
+    await Promise.all([...signalLoops, backlogLoop]);
+  }
+
+  private trackLoop(loop: Promise<void>): Promise<void> {
     this.loops.add(loop);
     void loop.finally(() => this.loops.delete(loop));
-    const backlogLoop = this.reportBacklog(new Promise<void>(() => {}));
-    this.loops.add(backlogLoop);
-    void backlogLoop.finally(() => this.loops.delete(backlogLoop));
-    await loop;
+    return loop;
   }
 
   private async deliver(signal: SpoolSignal, body: Buffer) {
@@ -225,18 +203,11 @@ export class SpoolDrainer {
     return Math.min(MAX_BACKOFF_MS, Math.floor(backoffMs * (1 + this.random())));
   }
 
-  private async reportBacklog(deliveriesDone: Promise<void>): Promise<void> {
+  private async reportBacklog(): Promise<void> {
     while (!this.stopped) {
-      let deliveriesFinished = false;
       const controller = new AbortController();
-      await Promise.race([
-        this.backlogDelay(BACKLOG_REPORT_INTERVAL_MS, controller.signal),
-        deliveriesDone.then(() => {
-          deliveriesFinished = true;
-          controller.abort();
-        }),
-      ]);
-      if (this.stopped || deliveriesFinished) return;
+      await this.backlogDelay(BACKLOG_REPORT_INTERVAL_MS, controller.signal);
+      if (this.stopped) return;
 
       for (const signal of ['traces', 'metrics'] as const) {
         const batches = await this.store.list(signal);
