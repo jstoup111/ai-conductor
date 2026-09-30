@@ -29,6 +29,8 @@ export interface GuidedMonitorLoopDeps {
   readonly writeHaltMarker?: (halt: ProjectHalt, contents: Uint8Array) => Promise<void>;
   readonly recordDeferral?: (key: DeferralKey) => Promise<void>;
   readonly report?: (message: string) => void;
+  /** Existing halt-issue bookkeeping, started once for each monitor pass. */
+  readonly reconcileHaltIssues?: () => Promise<number>;
   /** Existing event spine for durable queue-transition telemetry. */
   readonly events?: MonitorEventEmitter;
 }
@@ -47,6 +49,53 @@ function waitForMonitorPass(untilStop: Promise<void>): Promise<void> {
 
 function sameHalt(left: ProjectHalt, right: ProjectHalt): boolean {
   return left.project === right.project && left.slug === right.slug;
+}
+
+interface HaltIssueReconciliationState {
+  networkFailureReported: boolean;
+}
+
+function reportHaltIssueReconciliationFailure(deps: GuidedMonitorLoopDeps, message: string): void {
+  try {
+    deps.report?.(message);
+  } catch {
+    // Reconciliation diagnostics must not stop the foreground queue.
+  }
+}
+
+function isNetworkFailure(error: unknown): boolean {
+  const detail = error instanceof Error ? error.message : String(error);
+  return /\b(?:network|offline|fetch failed|ENOTFOUND|EAI_AGAIN|ECONN\w*|ETIMEDOUT)\b/i.test(detail);
+}
+
+function startHaltIssueReconciliation(
+  deps: GuidedMonitorLoopDeps,
+  state: HaltIssueReconciliationState,
+): void {
+  const reconcile = deps.reconcileHaltIssues;
+  if (reconcile === undefined) return;
+
+  const reportFailure = (error: unknown): void => {
+    if (isNetworkFailure(error)) {
+      if (state.networkFailureReported) return;
+      state.networkFailureReported = true;
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    reportHaltIssueReconciliationFailure(deps, `Halt-issue reconciliation failed: ${detail}`);
+  };
+
+  try {
+    void reconcile().then(
+      (exitCode) => {
+        if (exitCode !== 0) {
+          reportHaltIssueReconciliationFailure(deps, `Halt-issue reconciliation exited with code ${exitCode}.`);
+        }
+      },
+      reportFailure,
+    );
+  } catch (error) {
+    reportFailure(error);
+  }
 }
 
 function wasSkipped(outcome: unknown): boolean {
@@ -122,6 +171,7 @@ export async function runGuidedMonitorQueue(
   deps: GuidedMonitorLoopDeps,
 ): Promise<GuidedMonitorLoopResult> {
   const offered = new Set<string>();
+  const reconciliationState: HaltIssueReconciliationState = { networkFailureReported: false };
   const untilStop = deps.untilStop;
   let stopped = false;
   void untilStop?.then(() => {
@@ -139,6 +189,7 @@ export async function runGuidedMonitorQueue(
   for (;;) {
     if (stopped) return stop();
 
+    startHaltIssueReconciliation(deps, reconciliationState);
     const membership = await deps.deriveMembership();
     if (stopped) return stop();
     if (membership.length === 0) {

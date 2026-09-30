@@ -1,4 +1,4 @@
-// Covers: task:14, task:16, task:17
+// Covers: task:14, task:16, task:17, task:19
 import { readFile } from 'node:fs/promises';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -16,6 +16,7 @@ type GuidedMonitorLoopDeps = {
   writeHaltMarker?: (halt: ProjectHalt, contents: Uint8Array) => Promise<void>;
   recordDeferral?: (key: DeferralKey) => Promise<void>;
   report?: (message: string) => void;
+  reconcileHaltIssues?: () => Promise<number>;
 };
 
 async function advanceAfterGuidedSession(deps: GuidedMonitorLoopDeps): Promise<void> {
@@ -477,5 +478,138 @@ describe('Task 17 — staying ready and stopping cleanly', () => {
       session.resolve({ kind: 'exited', exitCode: 0 });
       await running;
     }
+  });
+});
+
+describe('Task 19 — halt-issue reconciliation', () => {
+  it('starts the injected reconciliation on a monitoring cycle', async () => {
+    const reconcileHaltIssues = vi.fn(async () => 0);
+
+    const result = await runGuidedMonitorQueue({
+      deriveMembership: async () => [],
+      launch: vi.fn(),
+      offer: vi.fn(),
+      reconcileHaltIssues,
+    });
+
+    expect({ result, reconciliationCalls: reconcileHaltIssues.mock.calls }).toEqual({
+      result: { active: true },
+      reconciliationCalls: [[]],
+    });
+  });
+
+  it('reports a non-zero reconciliation exit while leaving the offered queue active', async () => {
+    const queued = halt('reconciliation-non-zero');
+    let membership: readonly ProjectHalt[] = [queued];
+    const offer = vi.fn();
+    const report = vi.fn();
+
+    const result = await runGuidedMonitorQueue({
+      deriveMembership: async () => membership,
+      launch: async () => {
+        membership = [];
+      },
+      offer,
+      report,
+      reconcileHaltIssues: async () => 1,
+    });
+
+    await vi.waitFor(() => expect(report).toHaveBeenCalledWith('Halt-issue reconciliation exited with code 1.'));
+    expect({ result, offered: offer.mock.calls.map(([item]) => item.slug) }).toEqual({
+      result: { active: true },
+      offered: ['reconciliation-non-zero'],
+    });
+  });
+
+  it('reports a repeated network failure once without affecting the queue', async () => {
+    const queued = halt('network-failure');
+    let membership: readonly ProjectHalt[] = [queued];
+    const offer = vi.fn();
+    const report = vi.fn();
+    const reconcileHaltIssues = vi.fn(async () => {
+      throw new Error('network unavailable');
+    });
+
+    const result = await runGuidedMonitorQueue({
+      deriveMembership: async () => membership,
+      launch: async () => {
+        membership = [];
+      },
+      offer,
+      report,
+      reconcileHaltIssues,
+    });
+
+    await vi.waitFor(() => expect(reconcileHaltIssues).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(report.mock.calls.filter(([message]) =>
+      message === 'Halt-issue reconciliation failed: network unavailable',
+    )).toHaveLength(1));
+    expect({ result, offered: offer.mock.calls.map(([item]) => item.slug) }).toEqual({
+      result: { active: true },
+      offered: ['network-failure'],
+    });
+  });
+
+  it('contains an unexpected reconciliation throw and keeps the next queue pass available', async () => {
+    const queued = halt('unexpected-reconciliation-failure');
+    const next = halt('queue-after-reconciliation-throw');
+    let membership: readonly ProjectHalt[] = [queued];
+    const offer = vi.fn();
+    const report = vi.fn();
+
+    const result = await runGuidedMonitorQueue({
+      deriveMembership: async () => membership,
+      launch: async (item) => {
+        membership = item.slug === queued.slug ? [next] : [];
+      },
+      offer,
+      report,
+      reconcileHaltIssues: () => {
+        throw new Error('unexpected reconciliation failure');
+      },
+    });
+
+    expect({
+      result,
+      offered: offer.mock.calls.map(([item]) => item.slug),
+      errors: report.mock.calls.filter(([message]) => message.startsWith('Halt-issue reconciliation failed:')),
+    }).toEqual({
+      result: { active: true },
+      offered: ['unexpected-reconciliation-failure', 'queue-after-reconciliation-throw'],
+      errors: [
+        ['Halt-issue reconciliation failed: unexpected reconciliation failure'],
+        ['Halt-issue reconciliation failed: unexpected reconciliation failure'],
+        ['Halt-issue reconciliation failed: unexpected reconciliation failure'],
+      ],
+    });
+  });
+
+  it('offers queue work before a slow reconciliation completes', async () => {
+    const queued = halt('slow-reconciliation');
+    const slowReconciliation = deferred<number>();
+    let membership: readonly ProjectHalt[] = [queued];
+    const offer = vi.fn();
+    const reconcileHaltIssues = vi.fn(() => slowReconciliation.promise);
+
+    const result = await runGuidedMonitorQueue({
+      deriveMembership: async () => membership,
+      launch: async () => {
+        membership = [];
+      },
+      offer,
+      reconcileHaltIssues,
+    });
+    slowReconciliation.resolve(0);
+    await Promise.resolve();
+
+    expect({
+      result,
+      offered: offer.mock.calls.map(([item]) => item.slug),
+      reconciliationCalls: reconcileHaltIssues.mock.calls,
+    }).toEqual({
+      result: { active: true },
+      offered: ['slow-reconciliation'],
+      reconciliationCalls: [[], []],
+    });
   });
 });
