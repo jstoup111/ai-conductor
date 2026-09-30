@@ -11,7 +11,7 @@ unavailability, timeouts, resource exhaustion, partial failure, concurrency, and
 
 ---
 
-## Story: Exporter is an additive, opt-out listener
+## Story 1: Exporter is an additive, opt-out listener
 
 **Requirement:** FR-1
 
@@ -44,66 +44,57 @@ off by default, so that observability can never alter or destabilize a conductor
 
 ---
 
-## Story: One trace per run via a root run span
+## Story 2: Connected bounded traces for a feature
 
-**Requirement:** FR-2
+**Requirement:** FR-2; ADR-014 D18–D23.
 
-As a harness operator, I want every run wrapped in a single root span, so that all step spans for
-that run group into one trace I can open as a waterfall.
-
-### Acceptance Criteria
-
-#### Happy Path
-- Given the exporter is enabled, when the first `ConductorEvent` of a run arrives, then a root run
-  span is opened.
-- Given a run completes, when `feature_complete` is emitted, then the run span is closed with OK
-  status and every step span produced during the run is a child of it (shared trace id).
-
-#### Negative Paths
-- Given a run that ends without a `feature_complete` event (process exit), when the exporter
-  flushes, then the still-open run span is closed (status set per FR-9) rather than dropped.
-- Given two events arrive before any run span exists due to a race, when the exporter processes
-  them, then exactly one run span is created (no duplicate root spans for a single run).
-
-### Done When
-- [ ] Decoded trace from a fixture run shows exactly one root span with no parent.
-- [ ] All step spans in that run share the root span's trace id and reference it as parent.
-- [ ] A run terminated before `feature_complete` still yields a closed root span on flush.
-
----
-
-## Story: Per-step spans with accurate duration and status
-
-**Requirement:** FR-3
-
-As a harness operator, I want each SDLC step to become a span timed from start to completion, so
-that "how long does each step take" is answered directly by span duration.
+As a harness operator, I want bounded trace segments connected by standard links and stable
+feature identity so that long features remain inspectable across dispatches.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a `step_started{step,index}`, when received, then a step span named for the step opens.
-- Given the matching `step_completed{status: done}`, when received, then the span closes with OK
-  status and a duration equal to the wall-clock between the two events (± timer resolution).
-- Given a `step_failed`, when received, then the open step span closes with ERROR status.
+- Given enabled tracing and actual trace-bearing activity, when a segment starts, then it has a fresh parentless root and stable feature/dispatch identity, and links to its valid predecessor when available.
+- Given a dispatch completes after one or more segments, when its terminal is observed, then only its final segment records complete with OK status and all work is attributable beneath its respective segment's logical-step groups.
 
 #### Negative Paths
-- Given a `step_completed` arrives with no preceding `step_started` (malformed stream), when
-  processed, then the exporter emits no orphan span and logs one structured warning (no crash).
-- Given a step is re-run (stale → re-dispatch emits a second `step_started` for the same step),
-  when processed, then a distinct new span is opened (re-runs are separate spans, not reused).
-- Given a `step_started` is never followed by completion/failure, when the run flushes, then that
-  span is closed incomplete per FR-9 (never left dangling).
+- Given a dispatch ends without feature_complete, when graceful shutdown flushes, then remaining children and the final segment close truthfully without reclassifying already ended segments.
+- Given concurrent boundary events, when projection processes them, then there is one root per segment, with no duplicate root or duplicate terminal for the dispatch.
 
 ### Done When
-- [ ] Fixture trace shows one span per executed step with name == step name and index attribute.
-- [ ] A step's span duration matches the start→complete delta within timer tolerance.
-- [ ] `step_failed` produces an ERROR-status span; `step_completed{done}` produces OK.
-- [ ] An orphan `step_completed` produces a warning and zero spans.
+- [ ] Decoded fixtures contain one parentless root per segment with distinct trace IDs and creation-time predecessor links.
+- [ ] Execution slices descend through a logical-step group within their segment; continuing work retains execution identity and links to its prior slice.
+- [ ] Terminal fixtures close every current child before its parent and record the dispatch outcome once.
 
 ---
 
-## Story: Step spans carry attributes and bus events
+## Story 3: Per-execution work slices with accurate timing and status
+
+**Requirement:** FR-3; ADR-014 D21–D22.
+
+As a harness operator, I want each execution's measured work interval and outcome retained
+across bounded slices so that segmentation does not distort duration or completion.
+
+### Acceptance Criteria
+
+#### Happy Path
+- Given step_started, when projected, then a distinct execution opens a work slice under its logical-step group with the step name and index.
+- Given a matching successful terminal for running work, when projected, then the current slice closes OK with one terminal marker and the measured execution interval; early-settled work instead receives a linked zero-duration outcome at classification time.
+- Given step_failed, when projected, then the execution's terminal-bearing span records ERROR while already ended continuation slices remain unchanged.
+
+#### Negative Paths
+- Given step_completed without a preceding start or pending settled execution, when processed, then no orphan span is emitted and one structured warning is recorded without a crash.
+- Given a later step re-run, when it starts, then it receives a new execution identity rather than reusing a preceding execution's slices.
+- Given an execution with no terminal event, when graceful shutdown runs, then its remaining work closes incomplete and no successful outcome is fabricated.
+
+### Done When
+- [ ] Decoded fixtures show step names/indexes and independent execution identities with one terminal-bearing span per authoritatively ended execution.
+- [ ] Measured execution intervals preserve start and settlement boundaries across rotation and delayed classification; group envelopes are not counted as active duration.
+- [ ] Failure/success terminal status and orphan-event refusal remain observable in the exported capture.
+
+---
+
+## Story 4: Step spans carry attributes and bus events
 
 **Requirement:** FR-4
 
@@ -133,7 +124,7 @@ can see retries, gate verdicts, and kickbacks inside the step's span without lea
 
 ---
 
-## Story: Metrics for duration and retries
+## Story 5: Metrics for duration and retries
 
 **Requirement:** FR-5
 
@@ -159,7 +150,7 @@ cross-run dashboards of slow and retry-heavy steps in Prometheus/Grafana.
 
 ---
 
-## Story: Run correlation via resource attributes
+## Story 6: Run correlation via resource attributes
 
 **Requirement:** FR-6
 
@@ -189,7 +180,7 @@ filter one run's trace and one feature's metrics even though bus events carry no
 
 ---
 
-## Story: Config-selected transport (OTLP or file)
+## Story 7: Config-selected transport (OTLP or file)
 
 **Requirement:** FR-7
 
@@ -221,7 +212,7 @@ to a file via config, so that I can drive a live collector or hand a file to an 
 
 ---
 
-## Story: Exporter failures never break the run
+## Story 8: Exporter failures never break the run
 
 **Requirement:** FR-8
 
@@ -256,7 +247,7 @@ that turning on observability can never make a build fail or hang.
 
 ---
 
-## Story: Incomplete spans are closed, not dropped
+## Story 9: Incomplete spans are closed, not dropped
 
 **Requirement:** FR-9
 
@@ -284,7 +275,7 @@ so that an interrupted run still produces a readable (if truncated) trace.
 
 ---
 
-## Story: Flush pending telemetry on exit
+## Story 10: Flush pending telemetry on exit
 
 **Requirement:** FR-10
 

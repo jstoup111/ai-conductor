@@ -238,7 +238,7 @@ cannot quietly turn a recoverable condition into a hard failure.
   `SESSION_IN_USE_RE`, `STALE_SESSION_RE`, `CODEX_SESSION_EXPIRED_RE`, the `sessionExpired`
   signal, and the `session_reset` recovery are **not** deleted as dead code.
 - Given per-invocation session identity, when an attempt dispatches, then the provider session
-  id is **not** written to `.pipeline/conduct-session-id` — that file remains the step runner's
+  id is **not** written to `.pipeline/conduct-session-id` — that file remains the shared feature-identity helper's
   run identity, so the run id does not churn per attempt.
 
 ### Done When

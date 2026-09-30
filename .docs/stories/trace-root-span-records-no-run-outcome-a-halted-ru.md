@@ -6,7 +6,7 @@ Source: jstoup111/ai-conductor#1978. Track: technical (no PRD). Tier: S.
 
 Approach (approved): bus-derived run outcome. `loop_halt` flips to `otel: true` in
 `EVENT_SINKS`; the `SpanManager` records `conductor.run.outcome` on the `conductor.run` root
-span — `complete` via `feature_complete`, `halted` via `loop_halt`, and `terminated` as the
+span of the final dispatch-ending segment — `complete` via `feature_complete`, `halted` via `loop_halt`, and `terminated` as the
 force-close default when no terminal event was observed. Span OK/ERROR status semantics are
 unchanged: a halted run closes OK; only incomplete step spans carry ERROR.
 
@@ -88,20 +88,20 @@ completed and halted runs.
 
 **Requirement:** #1978 desired outcomes 1 and 4 (pin step-close; in-progress distinguishable)
 
-As an operator watching a live dispatch, I want step spans to keep exporting at step
-completion while the root span stays open until a terminal state, so that an in-progress run
-remains identifiable (root unexported) without regressing step visibility.
+As an operator watching a live dispatch, I want completed work exported promptly and
+intermediate segments distinguished from terminal outcomes so that rotation preserves
+visibility without falsely reporting the dispatch complete.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an OTel-enabled run mid-dispatch, when `step_completed` is emitted for an open step, then that step span is ended and exported while the `conductor.run` root span remains open and unexported
+- Given an OTel-enabled run mid-dispatch, when `step_completed` is emitted for an open step, then its current work slice ends and becomes exportable before the dispatch terminal, independently of whether a segment boundary also closes the current root
 
 #### Negative Paths
-- Given a run with two completed steps and no terminal event, when the exporter's finished spans are inspected before `stop()`, then exactly the two step spans are present and no span named `conductor.run` — and no span anywhere carries a `conductor.run.outcome` attribute
+- Given a run with two completed steps and no terminal event, when the exporter's finished spans are inspected before `stop()`, then both completed executions are represented, any ended roots carry only segment boundary reasons, and no span carries a `conductor.run.outcome` attribute
 
 ### Done When
-- [ ] Test (regression pin) asserts step spans export at `step_completed` before any terminal event, the root span exports only after the terminal event, and `conductor.run.outcome` appears on no span until then
+- [ ] Test (regression pin) asserts completed work exports before dispatch termination, intermediate roots can export at segment boundaries, and only the dispatch-ending root receives `conductor.run.outcome`
 
 ## Story 5: Outcome taxonomy and terminal-event mapping are documented at the seam
 

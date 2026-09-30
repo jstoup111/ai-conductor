@@ -41,6 +41,11 @@ Honeycomb, etc.) can ingest and visualize harness runs.
 **Goals**
 - Emit one OTel **trace per harness run**, with a **span per SDLC step** carrying accurate
   start/end timing (answers "how long does each step take").
+
+> **Amended 2026-09-30 by #2011:** The approved portable-history extension uses
+> bounded linked traces for one feature, logical-step groups within each segment,
+> and individually identified execution slices. No multi-day root or universal
+> single-waterfall layout is required; measured work intervals remain truthful.
 - Emit OTel **metrics**: step-duration histogram, retry counter, token counters (answers
   "which step is slowest / retries most" aggregated across runs).
 - Support **two transports, config-selected**: live OTLP push to an endpoint, or a local
@@ -82,10 +87,20 @@ are separable units of work; each may ship in its own PR.
 - **FR-2:** On the first event of a run, the exporter opens a root **run span**; on
   `feature_complete` (or process end) it closes the run span. All step spans for that run are
   children of the run span (one trace per run).
+
+> **Amended 2026-09-30 by #2011:** FR-2 now follows approved ADR-014 D18–D23:
+> each segment has a fresh root with a predecessor link; step groups parent the
+> execution slices within it. Only the dispatch-ending segment carries run outcome.
 - **FR-3:** Each `step_started` opens a **step span** whose name is the step name; the
   matching `step_completed` / `step_failed` closes it. Span duration equals wall-clock between
   the two events. The span status is set OK on `step_completed` (`status: done`) and ERROR on
   `step_failed`.
+
+> **Amended 2026-09-30 by #2011:** FR-3 measures the logical execution separately
+> from bounded work slices. Rotation ends nonterminal slices, not engine work.
+> Early settlement ends observed work immediately; delayed classification adds
+> a linked zero-duration outcome at its real observation time. Terminal facts and
+> usage occur once; group/slice duration is not the whole execution duration.
 - **FR-4:** Step spans carry attributes derived from the event stream: `conductor.step`,
   `conductor.step.index`, `conductor.step.status`, `conductor.complexity_tier` (when known),
   and `conductor.retry.count` (from `step_failed.retryCount` / `step_retry`). `gate_verdict`,
@@ -183,6 +198,12 @@ are separable units of work; each may ship in its own PR.
 - With `otel.exporter: file` configured, a full `conduct` run produces an OTLP file whose
   decoded contents contain exactly one run span with one child span per executed step, each
   with a positive duration, correct status, and the FR-4 attributes.
+
+> **Amended 2026-09-30 by #2011:** The decoded-output criterion now checks bounded
+> linked segment roots, logical-step groups, and execution slices/outcomes under
+> ADR-014 D18–D23. Late outcome spans intentionally have zero duration. There is
+> one terminal-bearing span per authoritatively ended execution, not one total span.
+> Metrics and supported transport behavior remain unchanged.
 - With `otel.exporter: otlp` pointed at a local collector (or in-memory test collector), the
   same spans and the FR-5 metrics arrive at the collector.
 - Killing a collector mid-run leaves the harness run unaffected and surfaces exactly one
@@ -228,6 +249,11 @@ are separable units of work; each may ship in its own PR.
 5. **Exporter establishes run correlation.** Bus events carry no run/feature id (confirmed by a
    comment in `daemon-cli.ts`); the exporter derives a `conductor.run.id` and feature slug for
    OTel Resource attributes so spans group into one trace per run.
+
+> **Amended 2026-09-30 by #2011:** Stable feature identity is resolved before
+> enabled telemetry startup using the shared atomic helper. Fresh dispatch and
+> segment identities distinguish the bounded traces; only validated same-scope
+> contexts recovered from the existing event ledger may become predecessor links.
 6. **Coexists with Wave C, doesn't replace it.** `events.jsonl` and `conduct --report` stay;
    OTel is an additional sink for teams with existing observability stacks.
 7. **One PR per phase, each a separate conduct pass.** Phase 1, 2, and 3 each get their own
