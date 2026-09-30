@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { readKickbackLedger, type KickbackLedger, type PendingRepair } from '../../src/engine/kickback-ledger.js';
+import type { BuildOutcomeStore } from '../../src/engine/build-outcome.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
@@ -37,7 +38,12 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   async function runBuild(
     pendingRepair: PendingRepair | unknown,
     ledger: Omit<KickbackLedger, 'pendingRepair'>,
-    options: { refuseAtProtectedArtifact?: boolean } = {},
+    options: {
+      refuseAtProtectedArtifact?: boolean;
+      buildOutcome?: BuildOutcomeStore;
+      treeHash?: string | null;
+      effort?: 'low' | 'medium' | 'high';
+    } = {},
   ): Promise<{
     build: ReturnType<typeof vi.fn>;
   }> {
@@ -52,6 +58,9 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       tasks: [{ id: 'rem-1', status: 'pending' }],
     }));
     await writeKickbackLedger(dir, { ...ledger, pendingRepair } as KickbackLedger);
+    if (options.buildOutcome !== undefined) {
+      await writeFile(join(dir, '.pipeline', 'build-outcome.json'), JSON.stringify(options.buildOutcome));
+    }
     const build = vi.fn(async () => ({ success: true }));
     const runner: StepRunner = { run: async (step) => step === 'build' ? build() : { success: true } };
     if (options.refuseAtProtectedArtifact) {
@@ -61,6 +70,9 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
         reason: 'protected artifact changed before dispatch',
       } as never);
     }
+    if (options.treeHash !== undefined) {
+      vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue(options.treeHash);
+    }
     await new Conductor({
       stateFilePath: statePath,
       projectRoot: dir,
@@ -68,6 +80,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       events: new ConductorEventEmitter(),
       mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: 1,
       config: {
+        defaults: { model: 'test-model', effort: options.effort ?? 'medium', max_retries: 1, escalate: false },
         prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
         architecture_review_as_built: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
       },
@@ -168,6 +181,67 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     });
   });
 
+  it('refuses an exact no-op kickback cycle before settling its pending repair', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'no-op-repair', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 1 } },
+    };
+    const { build } = await runBuild(pendingRepair, {
+      version: 1,
+      gates: { prd_audit: { ...entry(), priorVerdict: false } },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, {
+      treeHash: 'tree-1',
+      buildOutcome: {
+        version: 1,
+        records: [{
+          outcome: 'no-movement', terminalOutcome: 'done', gate: 'prd_audit', verdict: false,
+          rung: { model: 'test-model', effort: 'medium' },
+          treeBefore: 'tree-1', treeAfter: 'tree-1', headBefore: 'head-1', headAfter: 'head-1',
+        }],
+      },
+    });
+
+    expect(build).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'prd_audit kickback-to-build refused',
+    );
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { prd_audit: { laps: 0 } },
+      growth: { added: 0 },
+      pendingRepair,
+    });
+    await expect(readFile(statePath, 'utf8')).resolves.not.toMatch(/"build": "done"/);
+  });
+
+  it.each([
+    ['moved tree', 'tree-2', 'medium'],
+    ['null tree', null, 'medium'],
+    ['higher rung', 'tree-1', 'high'],
+  ] as const)('dispatches BUILD when a no-op cycle has a %s', async (_case, treeHash, effort) => {
+    const { build } = await runBuild({
+      receiptId: `different-${_case}`, taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 1 } },
+    }, {
+      version: 1,
+      gates: { prd_audit: { ...entry(), priorVerdict: false } },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, {
+      treeHash,
+      effort,
+      buildOutcome: {
+        version: 1,
+        records: [{
+          outcome: 'no-movement', terminalOutcome: 'done', gate: 'prd_audit', verdict: false,
+          rung: { model: 'test-model', effort: 'medium' },
+          treeBefore: 'tree-1', treeAfter: 'tree-1', headBefore: 'head-1', headAfter: 'head-1',
+        }],
+      },
+    });
+
+    expect(build).toHaveBeenCalledOnce();
+  });
+
   it('leaves a pending repair uncharged when protected-artifact admission refuses BUILD', async () => {
     const pendingRepair: PendingRepair = {
       receiptId: 'refused-repair', taskIds: ['rem-1'],
@@ -231,8 +305,26 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       receiptId: expect.stringMatching(/^repair-/),
       charges: { prd_audit: { laps: 1, growth: 0 } },
       taskIds: ['1'],
+      prdAuditCriteria: ['S1.1'],
     });
     await expect(readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).resolves.toMatch(/"status": "pending"/);
+  });
+
+  it('names every existing-task PRD finding when its lap is exhausted at BUILD admission', async () => {
+    const { build } = await runBuild({
+      receiptId: 'existing-task-exhausted', taskIds: ['1'],
+      charges: { prd_audit: { laps: 1, growth: 0 } },
+      prdAuditCriteria: ['S1.1', 'S1.2'],
+    }, {
+      version: 1,
+      gates: { prd_audit: entry(1) },
+      growth: { authored: 4, added: 0, byGate: {} },
+    });
+
+    expect(build).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Findings: S1.1, S1.2',
+    );
   });
 
   it.each([

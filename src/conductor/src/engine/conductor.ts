@@ -345,8 +345,11 @@ import { scanPlanProtectedTargets } from './plan-protected-targets.js';
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import {
   classifyBuildSettle,
+  composeBuildOutcomeHaltReason,
+  latestBuildOutcome,
   readBuildOutcome,
   resolveBuildOutcomeCategory,
+  sameNoOpCycle,
   writeBuildOutcome,
 } from './build-outcome.js';
 import type { BuildOutcomeStore } from './build-outcome.js';
@@ -4931,6 +4934,14 @@ export class Conductor {
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
     const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config);
     const prdAuditFindings = new Map<string, { criterion: string; parentTask: string }>();
+    // Both appended and existing-task repairs retain the criteria that
+    // authorized them. The pending receipt is the only durable context at a
+    // later BUILD-boundary cap halt, so keep this derivation shared.
+    const prdAuditCriteriaForGapIds = (gapIds: Iterable<string>): string[] =>
+      [...new Set([...gapIds].flatMap((gapId) => {
+        const finding = prdAuditFindings.get(gapId.toUpperCase());
+        return finding === undefined ? [] : [finding.criterion];
+      }))];
     const asBuiltFindings = new Map<string, AsBuiltGoverningClauseResolution>();
     const asBuiltRecordedFindings = new Map<string, RecordedAsBuiltRemediationFinding>();
     const asBuiltUnresolvableClauses: Array<{ id: string; clause: string }> = [];
@@ -5441,10 +5452,10 @@ export class Conductor {
         }),
       };
       if (Object.keys(charges).length > 0) {
-        const prdAuditCriteria = [...new Set(admittedGaps.flatMap((gap) => {
-          const finding = prdAuditFindings.get(gap.id.toUpperCase());
-          return finding === undefined ? [] : [finding.criterion];
-        }))];
+        const prdAuditCriteria = prdAuditCriteriaForGapIds([
+          ...admittedGaps.map((gap) => gap.id),
+          ...resolvedExistingTaskIdsByGapId.keys(),
+        ]);
         await recordPendingRepair(this.projectRoot, {
           receiptId: randomUUID(),
           charges,
@@ -5641,10 +5652,12 @@ export class Conductor {
         // not overwrite that authorization with a second receipt.
         if (Object.keys(pendingCharges).length > 0 && appendedTaskIds.length === 0) {
           try {
+            const prdAuditCriteria = prdAuditCriteriaForGapIds(resolvedExistingTaskIdsByGapId.keys());
             await recordPendingRepair(this.projectRoot, {
               receiptId: admission.obligation.id,
               charges: pendingCharges,
               taskIds: boundTaskIds,
+              ...(prdAuditCriteria.length > 0 ? { prdAuditCriteria } : {}),
             });
           } catch (error) {
             const detail =
@@ -10412,6 +10425,31 @@ export class Conductor {
             // provider. Any earlier refusal leaves the pending receipt and its
             // allowances untouched for the next eligible dispatch.
             const missingWorktree = await this.missingWorktreeResult(step.name);
+            if (missingWorktree === undefined && step.name === 'build') {
+              const gate = await pendingBuildKickbackGate();
+              if (gate !== null) {
+                const [outcomes, treeHash] = await Promise.all([
+                  readBuildOutcome(this.projectRoot),
+                  currentTreeHash(this.projectRoot),
+                ]);
+                const prior = latestBuildOutcome(outcomes);
+                if (prior !== null && sameNoOpCycle(prior, {
+                  gate,
+                  treeHash,
+                  verdict: false,
+                  rung: { model: esc.model, effort: esc.effort },
+                })) {
+                  const reason = composeBuildOutcomeHaltReason(prior, gate);
+                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.emitLoopHalt(reason, prUrl);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+              }
+            }
             if (missingWorktree === undefined && await settleBuildPendingRepair()) return;
             result =
               missingWorktree ??
