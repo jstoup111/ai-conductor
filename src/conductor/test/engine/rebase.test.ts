@@ -315,18 +315,16 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
     };
 
     try {
-      // A thrown assessment is just as indeterminate as an unexpected exit:
-      // it must reach the old rebase failure conversion instead of escaping.
+      // A malformed merge listing is a pre-mutation refusal: it must never
+      // silently fall back to a plain rebase.
       await expect(
         performRebase(git, root, 'main', { finishMergeabilityCheck: true }),
-      ).resolves.toEqual({
-        kind: 'conflict_halt',
+      ).resolves.toMatchObject({
+        kind: 'flatten_refused',
         conflicts: [],
-        reason: rebaseStderr,
-        startFailure: true,
-        replaySeed: { preRebaseHead: '', mergeBase: '', target: '' },
+        reason: 'rev-list --merges returned malformed output',
       });
-      expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
+      expect(calls.some((args) => args[0] === 'rebase')).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

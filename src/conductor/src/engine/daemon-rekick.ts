@@ -973,7 +973,7 @@ export async function resumeRebaseFirst(opts: {
   }
   if (outcome.kind === 'flatten_refused') {
     // Task 6 replaces this conflict-halt stub with the refusal recipe.
-    await writeHalt(opts.worktreePath, outcome.conflicts, outcome.reason, opts.events);
+    await writeRebaseOutcomeHalt(opts.worktreePath, outcome, opts.events);
     opts.log?.(`re-kick ${basename(opts.worktreePath)}: flattened rebase refused — re-parked`);
     return 'halted';
   }

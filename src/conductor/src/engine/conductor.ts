@@ -1742,6 +1742,7 @@ export interface StepRunner {
     onto: string,
     origHead: string,
     head: string,
+    flatten?: import('./rebase.js').FlattenedReplayPlan,
   ): Promise<void>;
   /**
    * Dispatch a semantic attribution verifier session for spot-audit sampling.
@@ -15006,9 +15007,10 @@ export class Conductor {
       onto: string,
       origHead: string,
       head: string,
+      flatten?: import('./rebase.js').FlattenedReplayPlan,
     ): Promise<void> =>
       this.stepRunner.translateAfterRebase
-        ? this.stepRunner.translateAfterRebase(g, projectRoot, onto, origHead, head)
+        ? this.stepRunner.translateAfterRebase(g, projectRoot, onto, origHead, head, flatten)
         : defaultTranslateAfterRebase(
             g,
             projectRoot,
@@ -15017,6 +15019,7 @@ export class Conductor {
             head,
             this.events,
             (event) => this.surfaceProtectedArtifactRebaseline(event),
+            flatten,
           );
 
     let outcome: RebaseOutcome;
@@ -15189,7 +15192,7 @@ export class Conductor {
       await writeRebaseOutcomeHalt(this.projectRoot, outcome, this.events);
     } else if (outcome.kind === 'flatten_refused' && !sealRejectionReason) {
       // Task 6 replaces this conflict-halt stub with the refusal recipe.
-      await writeHalt(this.projectRoot, outcome.conflicts, outcome.reason, this.events);
+      await writeRebaseOutcomeHalt(this.projectRoot, outcome, this.events);
     } else if (outcome.kind === 'setup_stop') {
       // Setup-only resolver exhaustion leaves the rebase paused: park it for the
       // provider recovery action instead of stamping the gate satisfied.

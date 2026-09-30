@@ -186,7 +186,7 @@ describe('proveFlattenedReplay (Task 3)', () => {
         mergeTrees++;
         if (fail === 'merge-tree') return { exitCode: 2, stdout: '', stderr: 'unsupported' };
         if (fail === 'ordinary-conflict' && mergeTrees === 3) return { exitCode: 1, stdout: '', stderr: 'conflict' };
-        if (fail === 'flattened-conflict' && mergeTrees === 4) return { exitCode: 1, stdout: '', stderr: 'conflict' };
+        if (fail === 'flattened-conflict' && mergeTrees === 4) return { exitCode: 1, stdout: 'CONFLICT (content): Merge conflict in src/flattened.ts\n', stderr: 'conflict' };
         return { exitCode: 0, stdout: `${mergeTrees <= 2 ? HEAD_TREE : TARGET_TREE}\n`, stderr: '' };
       }
       if (args[0] === 'commit-tree') {
@@ -250,6 +250,15 @@ describe('proveFlattenedReplay (Task 3)', () => {
     const { git } = proofRunner(failure);
     await expect(proveFlattenedReplay(git, plan, MERGE_BASE, TARGET)).resolves.toMatchObject({
       kind: 'target_conflict', index, sha, entryKind,
+    });
+  });
+
+  it('retains merge-tree conflicted paths for a flattened refusal before mutation', async () => {
+    const { git } = proofRunner('flattened-conflict');
+    await expect(proveFlattenedReplay(git, plan, MERGE_BASE, TARGET)).resolves.toMatchObject({
+      kind: 'target_conflict',
+      sha: FLATTENED_CONTENT,
+      conflicts: ['src/flattened.ts'],
     });
   });
 });

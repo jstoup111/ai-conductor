@@ -33,6 +33,7 @@ import {
   conflictedFiles,
   resolveBase,
   startFeatureReplay,
+  flattenRefusalRecipe,
   runTier1,
   makeGitRunner,
 } from './rebase.js';
@@ -1150,8 +1151,11 @@ export async function resolveConflictingPr(
         ? replayStart.plan.entries[replayStart.proof.index]
         : undefined;
       const mergeSha = conflicted?.kind === 'flattened' ? conflicted.mergeSha : '';
+      const parents = mergeSha
+        ? (await git(['rev-list', '--parents', '-n', '1', mergeSha])).stdout.trim().split(/\s+/).slice(1, 3)
+        : [];
       await escalate(prUrl, 'merge-flatten-refused',
-        `${mergeSha ? `merge ${mergeSha}: ` : ''}${replayStart.proof.kind === 'refused' ? replayStart.proof.reason : 'flattened replay conflicts'}; recovery: park the feature and rebase with --rebase-merges`, {
+        `${mergeSha ? `merge ${mergeSha}: ` : 'merge unavailable: '}${replayStart.proof.kind === 'refused' ? replayStart.proof.reason : `flattened replay conflicts in ${replayStart.proof.conflicts.join(', ') || '(unknown path)'}`}; recovery: ${flattenRefusalRecipe(parents[0] || '<first-parent>', mergeSha || '<merge>')}`, {
           runGh: deps.runGh, operations, cwd: repoCwd, log,
         });
       logOutcome(log, prUrl, 'merge-flatten-refused', 'escalated');
