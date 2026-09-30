@@ -159,7 +159,7 @@ describe('SpoolDrainer', () => {
   it.each([400, 413])('drops a days-old rejected batch and emits its status for HTTP %i', async (status) => {
     const events = new ConductorEventEmitter();
     const drops: unknown[] = [];
-    events.on('otel_spool_drop', (event) => drops.push(event));
+    events.on('otel_spool_drop', (event) => { drops.push(event); });
     const server = createServer((request, response) => {
       request.resume();
       response.writeHead(status).end();
@@ -182,7 +182,7 @@ describe('SpoolDrainer', () => {
     const events = new ConductorEventEmitter();
     const drops: unknown[] = [];
     const received: string[] = [];
-    events.on('otel_spool_drop', (event) => drops.push(event));
+    events.on('otel_spool_drop', (event) => { drops.push(event); });
     const server = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -210,7 +210,7 @@ describe('SpoolDrainer', () => {
   ] as const)('keeps HTTP %i batches without emitting a drop event and preserves %s for backlog reporting', async (status, failureClass) => {
     const events = new ConductorEventEmitter();
     const drops: unknown[] = [];
-    events.on('otel_spool_drop', (event) => drops.push(event));
+    events.on('otel_spool_drop', (event) => { drops.push(event); });
     const server = createServer((request, response) => {
       request.resume();
       response.writeHead(status).end();
@@ -574,10 +574,12 @@ describe('SpoolDrainer', () => {
         }
       }
       await drainer.stop();
-      releaseRetry?.();
+      const releaseSecondRetry = releaseRetry as (() => void) | undefined;
+      releaseSecondRetry?.();
       await draining;
     } finally {
-      releaseRetry?.();
+      const releaseFinalRetry = releaseRetry as (() => void) | undefined;
+      releaseFinalRetry?.();
       await drainer.stop();
       await draining.catch(() => undefined);
     }
@@ -632,7 +634,7 @@ describe('SpoolDrainer', () => {
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
       await drainer.stop();
-      releaseRetry?.();
+      (releaseRetry as (() => void) | undefined)?.();
       await refusing;
     } finally {
       releaseRetry?.();
@@ -685,7 +687,7 @@ describe('SpoolDrainer', () => {
       releaseFirstRetry?.();
       for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) await new Promise<void>((resolve) => setImmediate(resolve));
       await drainer.stop();
-      releaseRetry?.();
+      (releaseRetry as (() => void) | undefined)?.();
       await draining;
     } finally {
       releaseRetry?.();

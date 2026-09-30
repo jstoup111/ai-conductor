@@ -173,7 +173,7 @@ describe('spooling exporters', () => {
   ] as const)('emits an evicted spool-drop event for a write result of %o', async (writeResult, counts) => {
     const events = new ConductorEventEmitter();
     const drops: unknown[] = [];
-    events.on('otel_spool_drop', (event) => drops.push(event));
+    events.on('otel_spool_drop', (event) => { drops.push(event); });
     const store = {
       write: async () => writeResult,
     } as unknown as SpoolStore;
@@ -192,7 +192,7 @@ describe('spooling exporters', () => {
   it('emits an evicted spool-drop event when a metrics write rejects an oversize batch', async () => {
     const events = new ConductorEventEmitter();
     const drops: unknown[] = [];
-    events.on('otel_spool_drop', (event) => drops.push(event));
+    events.on('otel_spool_drop', (event) => { drops.push(event); });
     const store = {
       write: async () => ({ rejectedOversize: true, rejectedItems: 7, evictedBatches: 0, evictedItems: 0 }),
     } as unknown as SpoolStore;

@@ -131,7 +131,7 @@ describe('daemon OTel spool wiring', () => {
     await events.emit({ type: 'otel_spool_backlog', signal: 'metrics', files: 1, bytes: 1, oldestAgeMs: 0, lastFailureClass: 'server' });
     persistence.stop();
 
-    expect((await readFile(join(mainRoot, '.daemon', 'events.jsonl'), 'utf8')).split('\n')).toSatisfy((lines) =>
+    expect((await readFile(join(mainRoot, '.daemon', 'events.jsonl'), 'utf8')).split('\n')).toSatisfy((lines: string[]) =>
       lines.some((line) => line.includes('otel_spool_drop')) && lines.some((line) => line.includes('otel_spool_backlog')),
     );
   });

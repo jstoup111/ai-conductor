@@ -1402,7 +1402,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const pipelineDir = join(worktree.path, '.pipeline');
     const persistedSessionId = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf8')
       .catch(() => undefined);
-    const visualizer = wireOtelVisualizer(config ?? {}, {
+    const visualizerContext = {
       pipelineDir,
       runId: persistedSessionId?.trim() || sessionId,
       feature: item.slug,
@@ -1412,7 +1412,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       metrics: false,
       harnessVersion: await resolveHarnessVersion(__dirname),
       ...(item.sourceRef ? { sourceRef: item.sourceRef } : {}),
-    }, featureEvents, daemonOtel?.spoolRuntime);
+    };
+    const visualizer = daemonOtel?.spoolRuntime
+      ? wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents, daemonOtel.spoolRuntime)
+      : wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents);
     const featureLog = featureLogFor(item.slug);
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
     const renderableEvents = renderedEventTypes();

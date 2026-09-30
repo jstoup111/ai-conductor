@@ -583,14 +583,14 @@ describe('event sink subscriptions', () => {
         rendered: renderedEventTypes().includes('otel_spool_drop'),
         persisted: persistedEventTypes().includes('otel_spool_drop'),
         audited: auditedEventTypes().includes('otel_spool_drop'),
-        otel: otelEventTypes().includes('otel_spool_drop'),
+        otel: (otelEventTypes() as readonly ConductorEvent['type'][]).includes('otel_spool_drop'),
       },
       backlog: {
         sink: EVENT_SINKS.otel_spool_backlog,
         rendered: renderedEventTypes().includes('otel_spool_backlog'),
         persisted: persistedEventTypes().includes('otel_spool_backlog'),
         audited: auditedEventTypes().includes('otel_spool_backlog'),
-        otel: otelEventTypes().includes('otel_spool_backlog'),
+        otel: (otelEventTypes() as readonly ConductorEvent['type'][]).includes('otel_spool_backlog'),
       },
     }).toEqual({
       drop: {

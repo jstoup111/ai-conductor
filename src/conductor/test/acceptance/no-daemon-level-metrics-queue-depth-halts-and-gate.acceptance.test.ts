@@ -303,7 +303,10 @@ describe('daemon-level metrics acceptance', () => {
     }, interactiveEvents);
     expect(interactive).not.toBeNull();
     await expect(interactive!.stop()).resolves.toBeUndefined();
-    expect(interactiveErrors).toEqual(['[otel] metric export failed: metric lifecycle timed out']);
+    expect(interactiveErrors).toEqual([
+      '[otel] spool disabled: main git checkout could not be resolved; exporting directly',
+      '[otel] metric export failed: metric lifecycle timed out',
+    ]);
   });
 
   it('keeps feature counters monotonic across exited dispatches and resets only with the daemon process', async () => {
