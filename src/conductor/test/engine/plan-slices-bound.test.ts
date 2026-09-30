@@ -20,37 +20,26 @@ function slicedPlan(rows: string[], taskCount = 6): string {
   ].join('\n');
 }
 
-const fiveSlices = [
-  '| 1 | First | 1 |',
-  '| 2 | Second | 2 |',
-  '| 3 | Third | 3 |',
-  '| 4 | Fourth | 4 |',
-  '| 5 | Fifth | 5, 6 |',
-];
-
-const sixSlices = [
-  '| 1 | First | 1 |',
-  '| 2 | Second | 2 |',
-  '| 3 | Third | 3 |',
-  '| 4 | Fourth | 4 |',
-  '| 5 | Fifth | 5 |',
-  '| 6 | Sixth | 6 |',
-];
+function sliceRows(count: number): string[] {
+  return Array.from({ length: count }, (_, index) => {
+    const position = index + 1;
+    const taskIds = position === count
+      ? Array.from({ length: 7 - position }, (_, taskIndex) => position + taskIndex).join(', ')
+      : String(position);
+    return `| ${position} | Slice ${position} | ${taskIds} |`;
+  });
+}
 
 describe('plan slice bound', () => {
-  it('exports a fixed bound and keeps the validator configuration-free', () => {
+  it('exports a fixed bound, keeps the validator configuration-free, and enforces that bound', () => {
     expect(MAX_PLAN_SLICES).toBe(5);
     expect(validatePlanSlices).toHaveLength(1);
-  });
 
-  it('accepts exactly five slices and one slice holding every task', () => {
-    expect(validatePlanSlices(slicedPlan(fiveSlices))).toMatchObject({ kind: 'sliced' });
-    expect(validatePlanSlices(slicedPlan(['| 1 | Everything | 1, 2, 3, 4, 5, 6 |']))).toMatchObject({ kind: 'sliced' });
-  });
+    const withinBound = validatePlanSlices(slicedPlan(sliceRows(MAX_PLAN_SLICES)));
+    expect(withinBound).toMatchObject({ kind: 'sliced' });
+    expect(withinBound.kind === 'sliced' && withinBound.slices).toHaveLength(5);
 
-  it('refuses six otherwise well-formed slices with the declared count and bound', () => {
-    const result = validatePlanSlices(slicedPlan(sixSlices));
-
+    const result = validatePlanSlices(slicedPlan(sliceRows(MAX_PLAN_SLICES + 1)));
     expect(result).toMatchObject({ kind: 'invalid' });
     expect(result.kind === 'invalid' && result.violations).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -60,9 +49,13 @@ describe('plan slice bound', () => {
     ]));
   });
 
+  it('accepts one slice holding every task', () => {
+    expect(validatePlanSlices(slicedPlan(['| 1 | Everything | 1, 2, 3, 4, 5, 6 |']))).toMatchObject({ kind: 'sliced' });
+  });
+
   it('aggregates the slice bound and an empty slice into one invalid result', () => {
     const result = validatePlanSlices(slicedPlan([
-      ...sixSlices.slice(0, 4),
+      ...sliceRows(MAX_PLAN_SLICES + 1).slice(0, 4),
       '| 5 | Fifth | |',
       '| 6 | Sixth | 5, 6 |',
     ]));

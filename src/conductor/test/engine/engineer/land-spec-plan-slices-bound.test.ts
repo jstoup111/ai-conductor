@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { LandGateError, landSpec } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
+import { validatePlanSlices } from '../../../src/engine/plan-slices.js';
 import type { OwnerConfig } from '../../../src/engine/owner-gate/identity.js';
 
 const execFile = promisify(execFileCb);
@@ -73,8 +74,9 @@ const sixSlices = [
   '| 6 | Sixth | 6 |',
 ];
 
-async function git(args: string[], cwd = repoPath): Promise<void> {
-  await execFile('git', args, { cwd });
+async function git(args: string[], cwd = repoPath): Promise<string> {
+  const result = await execFile('git', args, { cwd });
+  return result.stdout;
 }
 
 async function seed(planText: string): Promise<string> {
@@ -108,9 +110,23 @@ afterEach(async () => {
 });
 
 describe('plan-slices bound land rung', () => {
-  it('lands exactly five slices', async () => {
-    await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, await seed(plan(fiveSlices)), undefined, options))
+  it('lands exactly five slices and refuses the same fixture shape with one added slice', async () => {
+    const fiveSlicePlan = plan(fiveSlices);
+    const validation = validatePlanSlices(fiveSlicePlan);
+    expect(validation).toMatchObject({ kind: 'sliced' });
+    expect(validation.kind === 'sliced' && validation.slices).toHaveLength(5);
+
+    const sixSliceWorktree = await seed(plan(sixSlices));
+    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, sixSliceWorktree, undefined, options)
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(LandGateError);
+    expect(error).toMatchObject({ gate: 'plan-slices' });
+
+    await git(['worktree', 'remove', '--force', sixSliceWorktree]);
+    await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, await seed(fiveSlicePlan), undefined, options))
       .resolves.toMatchObject({ branch: 'spec/plan-slice-bound' });
+    expect((await git(['rev-parse', 'spec/plan-slice-bound'])).trim()).toMatch(/^[0-9a-f]{40}$/);
   });
 
   it('lands one slice holding every task', async () => {

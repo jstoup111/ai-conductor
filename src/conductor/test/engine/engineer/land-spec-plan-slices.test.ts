@@ -73,8 +73,9 @@ function slicedPlan(): string {
   );
 }
 
-async function git(args: string[], cwd = repoPath): Promise<void> {
-  await execFile('git', args, { cwd });
+async function git(args: string[], cwd = repoPath): Promise<string> {
+  const result = await execFile('git', args, { cwd });
+  return result.stdout;
 }
 
 async function seed(plan: string): Promise<string> {
@@ -117,10 +118,14 @@ afterEach(async () => {
 
 describe('plan-slices land rung', () => {
   it.each([false, true])('lands unsliced free-form Dependencies with stacked_prs.enabled=%s', async (enabled) => {
-    const worktreePath = await seed(planWithTasks([task(1, 'Tasks 1–9 all passing')]));
+    const planText = planWithTasks([task(1, 'Tasks 1–9 all passing')]);
+    const worktreePath = await seed(planText);
 
     await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options(enabled)))
       .resolves.toMatchObject({ branch: 'spec/plan-slices' });
+    expect(planSlices.validatePlanSlices).toHaveBeenCalledWith(planText);
+    expect(planSlices.validatePlanSlices).toHaveLastReturnedWith({ kind: 'unsliced' });
+    expect((await git(['rev-parse', 'spec/plan-slices'])).trim()).toMatch(/^[0-9a-f]{40}$/);
   });
 
   it('lands an unsliced plan with only a Task Dependency Graph', async () => {
