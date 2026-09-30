@@ -11,6 +11,8 @@ import type {
   LLMProvider,
 } from '../../src/execution/llm-provider.js';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
+import { PiProvider, type PiEnvironment } from '../../src/execution/pi-provider.js';
+import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import {
   CLAUDE_MODEL_POLICY,
@@ -1149,6 +1151,57 @@ describe('executeProviderCandidates', () => {
         commandUnresolved: undefined,
         commandUnresolvedName: undefined,
       },
+    });
+  });
+
+  it('settles a Pi pre-spawn unresolved skill without retrying or walking to Claude', async () => {
+    const piSpawn = vi.fn();
+    const environment: PiEnvironment = {
+      env: {},
+      homeDir: () => '/home/agent',
+      cwd: () => '/workspace',
+      stat: async (path) => ({
+        isFile: () => path === '/home/agent/.agents/skills/HARNESS.md',
+        isDirectory: () => false,
+      }),
+    };
+    const pi = new PiProvider('/resolved/pi', piSpawn, environment);
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true, output: 'must not run', exitCode: 0,
+    }));
+
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review',
+      memberId: 'coverage-binding',
+      policy: {
+        enabled: true, llm_provider: ['pi', 'claude'], model: '', effort: 'low',
+        model_fallback_ladder: [''], max_projection_bytes: 1_048_576, max_retries: 2, escalate: false, min_confidence: 0,
+      },
+      runtimes: new ProviderRuntimeSet([
+        {
+          key: 'pi', provider: pi, policy: providerDescriptor('pi').modelPolicy, builtIn: true,
+          availability: new ModelAvailability(providerDescriptor('pi').modelPolicy.modelFallbackLadder),
+        },
+        runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('pi-unresolved-session')),
+      options: { prompt: '/skill:coverage-binding', cwd: '/workspace' },
+    });
+
+    expect({
+      success: result.success,
+      commandUnresolved: result.commandUnresolved,
+      commandUnresolvedName: result.commandUnresolvedName,
+      piSpawns: piSpawn.mock.calls.length,
+      claudeCalls: claudeInvoke.mock.calls.length,
+      attempts: result.attempts.length,
+    }).toEqual({
+      success: false,
+      commandUnresolved: true,
+      commandUnresolvedName: 'coverage-binding',
+      piSpawns: 0,
+      claudeCalls: 0,
+      attempts: 1,
     });
   });
 
