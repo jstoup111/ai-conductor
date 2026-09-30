@@ -55,7 +55,7 @@ invocation syntax, so that the loop starts immediately on either host.
 - Given codex is selected and no idea is passed, when the launcher spawns, then the argv is exactly one positional prompt `$composer`.
 
 #### Negative Paths
-- Given `llm_provider: pi` is configured and pi does not declare `interactiveLaunch`, when the operator runs bare `ai-conductor compose`, then it exits non-zero with a message naming pi, `interactiveLaunch`, and #1007, and spawns nothing.
+- Given `llm_provider: pi` is configured with `llm_providers.pi.model`, `model_escalation_order` and `model_fallback_ladder` set and pi does not declare `interactiveLaunch`, when the operator runs bare `ai-conductor compose`, then it exits non-zero with a message naming pi, `interactiveLaunch`, and #1007, and spawns nothing.
 - Given claude is selected and `CONDUCT_ENGINEER_PERMISSION_MODE=plan`, when the launcher spawns, then the argv carries `--permission-mode default`, as it does today.
 - Given production source outside the catalog and adapter modules, when the provider-id-literal structural test runs, then the compose launcher module contains no built-in provider id literal.
 
