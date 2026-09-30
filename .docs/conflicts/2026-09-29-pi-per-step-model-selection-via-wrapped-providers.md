@@ -163,8 +163,8 @@ configuration error arrives before the capability refusal.
 
 **Resolution Options:**
 1. Narrow the #1007 criterion to configuration that also carries all three `llm_providers.pi` keys.
-   The story is replaced in place in a companion main-based PR, because the land stem gate rejects
-   edits to a foreign-stem story.
+   The story is replaced in place in companion PR #2847, because the land stem gate rejects edits to
+   a foreign-stem story.
 2. Leave the #1007 story unchanged, accepting that its criterion no longer holds for a
    configuration that names only the provider.
 
