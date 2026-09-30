@@ -1,4 +1,4 @@
-// Covers: task:1, task:5, S5.1, S5.2, S5.3, S5.4
+// Covers: task:1, task:3, task:5, S5.1, S5.2, S5.3, S5.4
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access as accessPath, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -829,6 +829,27 @@ describe('prd_audit kickback', () => {
       .replace('"criterion": "S3.3",\n    "summary": "Third.",\n    "relation": "outside-visible",\n    "decision": "pending"', '"criterion": "S3.3", "summary": "Third.", "decision": "accept", "rationale": ""');
     const parsed = parseClearedOverScopeDecisions(edited, new Map([['S3.1', 'First.'], ['S3.2', 'Second.'], ['S3.3', 'Third.']]));
     expect(parsed).toMatchObject({ kind: 'parsed', decisions: [{ criterion: 'S3.1', decision: 'accept' }, { criterion: 'S3.2', decision: 'refuse' }], defects: [{ kind: 'missing-rationale', criterion: 'S3.3' }] });
+  });
+
+  it('tells an operator that pending leaves a prior decision unchanged only for revise-decision offers', () => {
+    const reviseDecision = renderOverScopeDecisionBlock([{
+      kind: 'revise-decision',
+      criterion: 'NC.8',
+      summary: 'A previously refused scope expansion.',
+      relation: 'outside-visible',
+      offerEntryId: 'prd-case-8',
+      originalSource: { id: 'prd-audit:NC.8', snapshot: 'Original refusal evidence.' },
+      originalCaseId: 'prd-case-8',
+      priorDecision: { id: 'decision-8', revision: 1 },
+    }]);
+    const pendingOnly = renderOverScopeDecisionBlock([{
+      criterion: 'NC.9',
+      summary: 'A newly reported scope expansion.',
+      relation: 'outside-visible',
+    }]);
+
+    expect(reviseDecision).toContain('leaving `decision` as `pending` keeps the prior decision unchanged');
+    expect(pendingOnly).not.toContain('keeps the prior decision unchanged');
   });
 
   it('treats pending, absent, malformed, unknown, and invalid decision entries safely', () => {
