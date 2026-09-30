@@ -114,6 +114,9 @@ if run_fixture "$abort_fixture" "$abort_output"; then
 fi
 grep -Eq 'ABORT.*line [0-9]+.*exit 1' "$abort_output" \
   || fail "unguarded failure did not report its line and exit status"
+abort_count=$(grep -c '^ABORT:' "$abort_output" || true)
+[ "$abort_count" -eq 1 ] \
+  || fail "unguarded failure emitted ${abort_count} abort diagnostics instead of one"
 
 non_errexit_fixture="$WORKDIR/non-errexit-fixture.sh"
 extract_reporting_region "$SUITE" "$non_errexit_fixture" || fail "could not extract non-errexit fixture"
