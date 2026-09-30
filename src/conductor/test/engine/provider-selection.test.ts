@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import { bootDispatchingCliProviders } from '../../src/index.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { HarnessConfig, ProviderSelection } from '../../src/types/config.js';
 import type {
   InstalledProviderDiscovery,
@@ -91,6 +93,40 @@ describe.each([
     );
 
     expect(providerSelection?.normalizeProviderSelection(selection)).toEqual(expected);
+  });
+});
+
+describe('provider-dispatching CLI guard', () => {
+  it('does not discover or probe configured Pi for render-diagrams', async () => {
+    const discover = vi.fn();
+    const probe = vi.fn();
+
+    await expect(bootDispatchingCliProviders({
+      command: 'render-diagrams',
+      registry: new PluginRegistry(),
+      events: new ConductorEventEmitter(),
+      config: {
+        llm_provider: 'pi',
+        llm_providers: {
+          pi: {
+            model: 'anthropic/claude-opus-4-5',
+            model_escalation_order: ['anthropic/claude-opus-4-5'],
+            model_fallback_ladder: ['anthropic/claude-opus-4-5'],
+          },
+        },
+      },
+      rendererOpts: {
+        stateFilePath: '/tmp/provider-selection-render-diagrams.json',
+        steps: [],
+        readStateFn: async () => ({ ok: true, value: {} }),
+        projectRoot: '/tmp',
+      },
+      providerDiscoveryRunner: discover,
+      providerModelProbeRunner: probe,
+    })).resolves.toBeUndefined();
+
+    expect(discover).not.toHaveBeenCalled();
+    expect(probe).not.toHaveBeenCalled();
   });
 });
 

@@ -1,5 +1,6 @@
-// Covers: pi-per-step-model-selection-via-wrapped-providers:task:14
+// Covers: pi-per-step-model-selection-via-wrapped-providers:task:14,task:15
 import { describe, expect, it, vi } from 'vitest';
+import { execa } from 'execa';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { bootDispatchingCliProviders } from '../../src/index.js';
@@ -10,6 +11,8 @@ import {
 } from '../../src/engine/provider-model-probe.js';
 import type { InstalledProviderDiscovery } from '../../src/engine/provider-discovery.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+
+vi.mock('execa', () => ({ execa: vi.fn() }));
 
 const PI_LISTING = [
   'provider    model',
@@ -45,6 +48,39 @@ function runner(result: { exitCode: number; stdout: string }): ProviderModelProb
 }
 
 describe('validateConfiguredProviderModels', () => {
+  it('does not list Pi models when Pi is installed but no Pi model selection is configured', async () => {
+    const fake = runner({ exitCode: 0, stdout: PI_LISTING });
+
+    await expect(validateConfiguredProviderModels({
+      config: { llm_provider: 'claude' },
+      discovery: installedPi(),
+      runner: fake,
+    })).resolves.toBeUndefined();
+
+    expect(fake).not.toHaveBeenCalled();
+  });
+
+  it('fails installation before probing when configured Pi is missing', async () => {
+    const fake = runner({ exitCode: 0, stdout: PI_LISTING });
+
+    await expect(bootDispatchingCliProviders({
+      command: 'inline',
+      registry: new PluginRegistry(),
+      events: new ConductorEventEmitter(),
+      config: configuredPiModels,
+      rendererOpts: {
+        stateFilePath: '/tmp/provider-model-probe-missing-state.json',
+        steps: [],
+        readStateFn: async () => ({ ok: true, value: {} }),
+        projectRoot: '/tmp',
+      },
+      providerDiscoveryRunner: async () => ({ exitCode: 127 }),
+      providerModelProbeRunner: fake,
+    })).rejects.toThrow(/pi.*not installed/i);
+
+    expect(fake).not.toHaveBeenCalled();
+  });
+
   it('accepts every configured Pi id from steps, tier overrides, default, escalation, and fallback listing with one injected invocation', async () => {
     const fake = runner({ exitCode: 0, stdout: PI_LISTING });
 
@@ -117,6 +153,7 @@ describe('validateConfiguredProviderModels', () => {
       /unknown Pi model.*anthropic\/missing-model.*steps\.build\.by_tier\.L\.model.*build/i,
     );
     expect(modelProbeRunner).toHaveBeenCalledOnce();
+    expect(execa).not.toHaveBeenCalled();
   });
 
   it('fails when the injected listing runner exceeds its timeout', async () => {
