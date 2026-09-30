@@ -1,8 +1,9 @@
 // Covers: task:2
 // Covers: task:4
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { Conductor } from '../test-conductor.js';
 import type { ConductorEvent } from '../../src/types/events.js';
@@ -335,11 +336,26 @@ describe('Conductor step close events', () => {
     const failure = failures.find((event) => event.type === 'step_failed' && event.step === 'explore');
     expect(failure).toMatchObject({ error: 'ordinary failure', retryCount: 1 });
     expect(failure).not.toHaveProperty('providerExit');
-    for (const line of [
-      JSON.stringify({ type: 'step_retry', step: 'explore', attempt: 2, maxAttempts: 2, reason: 'legacy failure' }),
-      JSON.stringify({ type: 'step_failed', step: 'explore', error: 'legacy failure', retryCount: 2 }),
-    ]) {
-      expect(JSON.parse(line)).not.toHaveProperty('providerExit');
-    }
+    const legacyEvents = new ConductorEventEmitter();
+    const legacyEventsPath = join(projectRoot, '.pipeline', 'legacy-events.jsonl');
+    const persister = new EventPersister(legacyEventsPath, legacyEvents);
+    persister.start();
+    await legacyEvents.emit({
+      type: 'step_retry', step: 'explore', attempt: 2, maxAttempts: 2, reason: 'legacy failure',
+    });
+    await legacyEvents.emit({
+      type: 'step_failed', step: 'explore', error: 'legacy failure', retryCount: 2,
+    });
+    persister.stop();
+
+    const legacyRecords = (await readFile(legacyEventsPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as ConductorEvent);
+    expect(legacyRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'step_retry', reason: 'legacy failure' }),
+      expect.objectContaining({ type: 'step_failed', error: 'legacy failure' }),
+    ]));
+    for (const legacyRecord of legacyRecords) expect(legacyRecord).not.toHaveProperty('providerExit');
   });
 });
