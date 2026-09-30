@@ -1,4 +1,4 @@
-// Covers: task:9
+// Covers: task:9, task:10
 import { EventEmitter } from 'node:events';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -27,6 +27,8 @@ function request(provider: string) {
   };
 }
 
+const isInteractiveTerminal = () => true;
+
 describe('provider-agnostic interactive launch', () => {
   beforeEach(() => {
     spawnProcess.mockReset();
@@ -35,7 +37,7 @@ describe('provider-agnostic interactive launch', () => {
   it('preserves Claude\'s REPL invocation form and resolves its exit', async () => {
     const spawn = vi.fn<InteractiveLaunchProcess>().mockResolvedValue({ exitCode: 0 });
 
-    await expect(launchInteractiveSession(request('claude'), { spawn })).resolves.toEqual({
+    await expect(launchInteractiveSession(request('claude'), { spawn, isInteractiveTerminal })).resolves.toEqual({
       kind: 'exited',
       exitCode: 0,
     });
@@ -57,7 +59,7 @@ describe('provider-agnostic interactive launch', () => {
     const child = Object.assign(new EventEmitter(), { stdin });
     spawnProcess.mockReturnValue(child);
 
-    const launch = launchInteractiveSession(request('codex'));
+    const launch = launchInteractiveSession(request('codex'), { isInteractiveTerminal });
 
     try {
       expect({
@@ -85,7 +87,7 @@ describe('provider-agnostic interactive launch', () => {
     const spawn = vi.fn<InteractiveLaunchProcess>();
     const report = vi.fn();
 
-    await expect(launchInteractiveSession(request('unregistered-provider'), { spawn, report }))
+    await expect(launchInteractiveSession(request('unregistered-provider'), { spawn, report, isInteractiveTerminal }))
       .resolves.toEqual({
         kind: 'unavailable',
         provider: 'unregistered-provider',
@@ -95,12 +97,29 @@ describe('provider-agnostic interactive launch', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it('refuses launch without an attached interactive terminal before reaching the process boundary', async () => {
+    const spawn = vi.fn<InteractiveLaunchProcess>().mockResolvedValue({ exitCode: 0 });
+    const report = vi.fn();
+
+    const outcome = await launchInteractiveSession(request('codex'), {
+      spawn,
+      report,
+      isInteractiveTerminal: () => false,
+    });
+
+    expect({ outcome, reports: report.mock.calls, spawnCalls: spawn.mock.calls }).toEqual({
+      outcome: { kind: 'unavailable', provider: 'codex' },
+      reports: [[expect.stringContaining('interactive terminal')]],
+      spawnCalls: [],
+    });
+  });
+
   it('reports a missing provider binary and resolves without marking the launch successful', async () => {
     const spawn = vi.fn<InteractiveLaunchProcess>()
       .mockRejectedValue(Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }));
     const report = vi.fn();
 
-    await expect(launchInteractiveSession(request('codex'), { spawn, report })).resolves.toEqual({
+    await expect(launchInteractiveSession(request('codex'), { spawn, report, isInteractiveTerminal })).resolves.toEqual({
       kind: 'unavailable',
       provider: 'codex',
     });
@@ -117,7 +136,7 @@ describe('provider-agnostic interactive launch', () => {
     const report = vi.fn();
     spawnProcess.mockReturnValue(child);
 
-    const launch = launchInteractiveSession(request('codex'), { report });
+    const launch = launchInteractiveSession(request('codex'), { report, isInteractiveTerminal });
 
     expect(spawnProcess).toHaveBeenCalledWith('codex', ['exec'], {
       cwd: '/workspace/harness/.worktrees/repair-halt',
@@ -133,7 +152,7 @@ describe('provider-agnostic interactive launch', () => {
     const spawn = vi.fn<InteractiveLaunchProcess>()
       .mockRejectedValue(Object.assign(new Error('spawn claude EACCES'), { code: 'EACCES' }));
 
-    await expect(launchInteractiveSession(request('claude'), { spawn }))
+    await expect(launchInteractiveSession(request('claude'), { spawn, isInteractiveTerminal }))
       .rejects.toThrow('spawn claude EACCES');
 
     expect(spawn).toHaveBeenCalledOnce();

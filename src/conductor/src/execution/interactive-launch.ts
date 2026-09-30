@@ -36,6 +36,7 @@ interface InteractiveInvocation {
 export interface LaunchInteractiveSessionOptions {
   readonly spawn?: InteractiveLaunchProcess;
   readonly report?: (message: string) => void;
+  readonly isInteractiveTerminal?: () => boolean;
 }
 
 const interactiveInvocations: Record<string, (prompt: string) => InteractiveInvocation> = {
@@ -80,6 +81,13 @@ export async function launchInteractiveSession(
     request.provider as keyof typeof interactiveInvocations
   ];
   const report = options.report ?? ((message: string) => process.stderr.write(`${message}\n`));
+  const isInteractiveTerminal = options.isInteractiveTerminal
+    ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY));
+
+  if (!isInteractiveTerminal()) {
+    report('Interactive launch unavailable: no attached interactive terminal.');
+    return { kind: 'unavailable', provider: request.provider };
+  }
 
   if (!invocation) {
     report(`Interactive launch unavailable: unregistered provider ${request.provider}.`);
