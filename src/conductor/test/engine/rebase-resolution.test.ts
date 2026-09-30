@@ -146,7 +146,10 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
       await g(['add', 'a.ts']);
       await gc(['rebase', '--continue']);
       return { resolved: true };
-    }, 3, { translateAfterRebase });
+    }, 3, {
+      translateAfterRebase: (runner, root, onto, origHead, head, flatten) =>
+        translateAfterRebase(runner, root, onto, origHead, head, undefined, undefined, flatten),
+    });
 
     expect(outcome.kind).toBe('changed');
     const rewrites = JSON.parse(await readFile(join(repo, '.pipeline', 'rebase-rewrites.json'), 'utf-8')) as Record<string, string>;

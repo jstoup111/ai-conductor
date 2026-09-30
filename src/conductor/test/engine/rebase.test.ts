@@ -1940,7 +1940,8 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     });
 
     await performRebase(makeGitRunner(repo), repo, 'main', {
-      translateAfterRebase,
+      translateAfterRebase: (runner, root, onto, origHead, head, flatten) =>
+        translateAfterRebase(runner, root, onto, origHead, head, undefined, undefined, flatten),
     });
     const newHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
     const finalSeal = JSON.parse(await readFile(sealPath, 'utf8')) as {

@@ -408,7 +408,10 @@ describe('task-progress', () => {
       await execa('git', ['commit', '-m', 'advance base'], { cwd: dir });
       await execa('git', ['checkout', '-q', 'feature'], { cwd: dir });
 
-      const outcome = await performRebase(makeGitRunner(dir), dir, 'main', { translateAfterRebase });
+      const outcome = await performRebase(makeGitRunner(dir), dir, 'main', {
+        translateAfterRebase: (runner, root, onto, origHead, head, flatten) =>
+          translateAfterRebase(runner, root, onto, origHead, head, undefined, undefined, flatten),
+      });
       expect(outcome.kind).toBe('changed');
     }
 

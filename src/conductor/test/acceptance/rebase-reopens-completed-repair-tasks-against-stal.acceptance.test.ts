@@ -156,7 +156,8 @@ describe('acceptance: rebase translates persisted repair boundaries', () => {
   async function performProductionTranslation(): Promise<Record<string, string>> {
     const runner = makeGitRunner(projectRoot);
     const outcome = await performRebase(runner, projectRoot, 'main', {
-      translateAfterRebase,
+      translateAfterRebase: (runner, root, onto, origHead, head, flatten) =>
+        translateAfterRebase(runner, root, onto, origHead, head, undefined, undefined, flatten),
     });
     expect(outcome.kind).toBe('changed');
     return JSON.parse(
@@ -264,4 +265,3 @@ describe('acceptance: rebase translates persisted repair boundaries', () => {
     await expect(access(join(projectRoot, '.pipeline', 'engine-state.json'))).resolves.toBeUndefined();
   }, 20_000);
 });
-

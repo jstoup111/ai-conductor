@@ -745,6 +745,7 @@ export async function resumeRebaseFirst(opts: {
     onto: string,
     origHead: string,
     head: string,
+    flatten?: import('./rebase.js').FlattenedReplayPlan,
   ) => Promise<void>;
   /** Optional: gh runner for merged-PR guard (ADR-2026-07-09). Absent → no guard. */
   runGh?: GhRunner;
@@ -805,7 +806,10 @@ export async function resumeRebaseFirst(opts: {
       onto: string,
       origHead: string,
       head: string,
-    ): Promise<void> => defaultTranslateAfterRebase(g, projectRoot, onto, origHead, head, opts.events));
+      flatten?: import('./rebase.js').FlattenedReplayPlan,
+    ): Promise<void> => defaultTranslateAfterRebase(
+      g, projectRoot, onto, origHead, head, opts.events, undefined, flatten,
+    ));
   let outcome: RebaseOutcome;
   try {
     outcome = await performRebase(git, opts.worktreePath, opts.localBase, { translateAfterRebase });
