@@ -121,6 +121,19 @@ export interface PendingRepair {
   taskIds: string[];
 }
 
+/** Current allowance snapshot for one gate named by a pending repair. */
+export interface PendingRepairSettlementBudget {
+  gate: 'prd_audit' | 'architecture_review_as_built';
+  lapCap: number;
+  growthCap: number;
+  growth: PlanGrowth;
+}
+
+export type PendingRepairSettlementResult =
+  | { kind: 'none' }
+  | { kind: 'settled' }
+  | { kind: 'exhausted'; gate: PendingRepairSettlementBudget['gate']; allowance: 'laps' | 'growth' };
+
 export interface PlanGrowthEventSink {
   emit(event: Extract<ConductorEvent, { type: 'plan_growth' }>): void | Promise<void>;
 }
@@ -1244,6 +1257,74 @@ export async function discardPendingRepair(projectRoot: string): Promise<void> {
     const { pendingRepair: _pendingRepair, ...withoutPendingRepair } = ledger;
     await writeKickbackLedgerUnsafe(projectRoot, withoutPendingRepair);
   });
+}
+
+/**
+ * Atomically consume the durable repair authorization at BUILD dispatch.
+ * Budget helpers acquire their own lease, so settlement performs their same
+ * ledger transitions together here rather than exposing a partial charge.
+ */
+export async function settlePendingRepair(
+  projectRoot: string,
+  budgets: readonly PendingRepairSettlementBudget[],
+  options: { events?: PlanGrowthEventSink } = {},
+): Promise<PendingRepairSettlementResult> {
+  const settled: { result: PendingRepairSettlementResult; growth?: PlanGrowth } = await withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableLedger(ledger);
+    requireReadableGrowth(ledger);
+    const pendingRepair = ledger.pendingRepair;
+    if (pendingRepair === undefined) return { result: { kind: 'none' } as const };
+
+    const budgetByGate = new Map(budgets.map((budget) => [budget.gate, budget]));
+    const charges = Object.entries(pendingRepair.charges) as Array<[
+      PendingRepairSettlementBudget['gate'], PendingRepairGateCharge,
+    ]>;
+    const initialGrowth = ledger.growth ?? budgets[0]?.growth;
+    if (initialGrowth === undefined) throw new Error('pending repair settlement requires a growth budget');
+    const nextGrowth: PlanGrowthRecord = {
+      authored: initialGrowth.authored,
+      added: initialGrowth.added,
+      byGate: { ...initialGrowth.byGate },
+    };
+    const nextGates = { ...ledger.gates };
+    let growthCap: number | undefined;
+
+    for (const [gate, charge] of charges) {
+      const budget = budgetByGate.get(gate);
+      if (budget === undefined) throw new Error(`pending repair settlement is missing '${gate}' budget`);
+      requireReadableGate(ledger, gate);
+      const current = nextGates[gate] ?? {
+        count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+      };
+      if ((current.laps ?? 0) + charge.laps > budget.lapCap) {
+        return { result: { kind: 'exhausted', gate, allowance: 'laps' } as const };
+      }
+      const cap = growthCap ?? budget.growthCap;
+      if (nextGrowth.added + charge.growth > cap) {
+        return { result: { kind: 'exhausted', gate, allowance: 'growth' } as const };
+      }
+      growthCap = cap;
+      nextGates[gate] = { ...current, laps: (current.laps ?? 0) + charge.laps };
+      nextGrowth.added += charge.growth;
+      nextGrowth.byGate[gate] = (nextGrowth.byGate[gate] ?? 0) + charge.growth;
+    }
+
+    const { pendingRepair: _pendingRepair, ...withoutPendingRepair } = ledger;
+    const growthChanged = charges.some(([, charge]) => charge.growth > 0);
+    const nextLedger: KickbackLedger = {
+      ...withoutPendingRepair,
+      gates: nextGates,
+      ...(growthChanged ? { growth: nextGrowth } : {}),
+    };
+    await writeKickbackLedgerUnsafe(projectRoot, nextLedger);
+    return {
+      result: { kind: 'settled' } as const,
+      ...(growthChanged ? { growth: withRemaining(nextGrowth, growthCap ?? nextGrowth.added) } : {}),
+    };
+  });
+  if (settled.growth !== undefined) await options.events?.emit({ type: 'plan_growth', ...settled.growth });
+  return settled.result;
 }
 
 /**
