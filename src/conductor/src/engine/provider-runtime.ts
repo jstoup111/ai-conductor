@@ -11,6 +11,7 @@ import {
   resolveProviderModelPolicy,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
+import type { HarnessConfig } from '../types/config.js';
 import type { PluginRegistry } from './plugin-registry.js';
 import {
   findBuiltInProviderDescriptor,
@@ -100,10 +101,11 @@ export class ProviderRuntimeSet {
 export function createProviderRuntimeSet(
   registry: PluginRegistry,
   warn?: (message: string) => void,
+  config?: HarnessConfig,
 ): ProviderRuntimeSet {
   return new ProviderRuntimeSet(
     registry.list('llm_provider').map((key) => {
-      const policy = resolveProviderModelPolicy(key, warn);
+      const policy = resolveProviderModelPolicy(key, { config, warn });
       const provider = registry.get<LLMProvider>('llm_provider', key);
       return {
         key,

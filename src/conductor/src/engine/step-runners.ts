@@ -203,7 +203,7 @@ import {
   type BuildReviewScopedLauncher,
 } from './build-review-scoped-run.js';
 import {
-  CLAUDE_MODEL_POLICY,
+  resolveProviderModelPolicy,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
 import type {
@@ -965,14 +965,16 @@ export class DefaultStepRunner implements StepRunner {
     this.sleepFn = options?.sleepFn ?? defaultSleep;
     this.config = options?.config;
     this.stepRegistry = this.config ? buildStepRegistry(this.config) : ALL_STEPS;
-    this.modelPolicy = options?.modelPolicy ?? CLAUDE_MODEL_POLICY;
+    this.providerKey = options?.providerKey ?? DEFAULT_PROVIDER;
+    this.modelPolicy = options?.modelPolicy ?? resolveProviderModelPolicy(this.providerKey, {
+      config: this.config,
+    });
     this.modelOverride =
       options?.modelOverride ?? options?.providerExecution?.modelOverride;
     this.effortOverride =
       options?.effortOverride ?? options?.providerExecution?.effortOverride;
     this.mode = options?.mode ?? 'default';
     this.log = options?.log ?? ((message) => console.warn(message));
-    this.providerKey = options?.providerKey ?? DEFAULT_PROVIDER;
     this.modelAvailability = new ModelAvailability(
       selectFallbackLadder(this.modelPolicy, this.providerKey, this.config ?? {}),
       this.log,

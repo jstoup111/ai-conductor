@@ -4,7 +4,12 @@ import type { InvokeResult, LLMProvider } from '../../src/execution/llm-provider
 import { PiProvider } from '../../src/execution/pi-provider.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 import { resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
-import { ProviderRuntimeSet, type ProviderRuntime } from '../../src/engine/provider-runtime.js';
+import {
+  createProviderRuntimeSet,
+  ProviderRuntimeSet,
+  type ProviderRuntime,
+} from '../../src/engine/provider-runtime.js';
+import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { ProviderSessionScope, ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -27,6 +32,18 @@ function fakeProvider(result: InvokeResult): LLMProvider {
     lifecycleCapability: { synchronousSpawnPermit: true },
     invoke: vi.fn(async () => result),
   };
+}
+
+function runtimeSet(
+  config: HarnessConfig,
+  providers: Readonly<Record<string, LLMProvider>>,
+): ProviderRuntimeSet {
+  const registry = new PluginRegistry();
+  for (const [key, provider] of Object.entries(providers)) {
+    registry.register('llm_provider', key, provider);
+  }
+  registry.markInitialized();
+  return createProviderRuntimeSet(registry, undefined, config);
 }
 
 describe.each(['pi', 'codex'] as const)('provider fallback from %s', (firstProvider) => {
@@ -193,5 +210,104 @@ describe('DefaultStepRunner Pi model policy dispatch', () => {
     expect(warnings).toEqual([
       `Downgraded from ${configuredModel} to ${actualModel}: ${configuredModel} is not available (unavailable)`,
     ]);
+  });
+});
+
+describe('effective provider policy dispatch', () => {
+  it('uses each Pi step’s configured model in one mixed-provider runtime set', async () => {
+    const pi = fakeProvider({ success: true, output: 'Pi completed', exitCode: 0 });
+    const config: HarnessConfig = {
+      llm_provider: 'claude',
+      llm_providers: {
+        pi: {
+          model: 'openai/gpt-5.6-sol',
+          model_escalation_order: ['openai/gpt-5.6-sol'],
+          model_fallback_ladder: ['openai/gpt-5.6-sol'],
+        },
+      },
+      steps: {
+        explore: { llm_provider: 'pi', model: 'google/gemini-2.5-flash' },
+        plan: { llm_provider: 'pi', model: 'anthropic/claude-opus-4-5' },
+      },
+    };
+    const runtimes = runtimeSet(config, { pi });
+
+    await executeProviderCandidates({
+      step: 'explore', configuredProviders: ['claude'], preferredProvider: 'pi', runtimes,
+      sessions: new ProviderSessionScope(vi.fn()), config, options: { prompt: 'Explore.', cwd: '/workspace' },
+    });
+    await executeProviderCandidates({
+      step: 'plan', configuredProviders: ['claude'], preferredProvider: 'pi', runtimes,
+      sessions: new ProviderSessionScope(vi.fn()), config, options: { prompt: 'Plan.', cwd: '/workspace' },
+    });
+
+    expect(pi.invoke).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: 'google/gemini-2.5-flash' }));
+    expect(pi.invoke).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: 'anthropic/claude-opus-4-5' }));
+  });
+
+  it('applies Pi tier overrides without leaking them into other tiers', async () => {
+    const pi = fakeProvider({ success: true, output: 'Pi completed', exitCode: 0 });
+    const config: HarnessConfig = {
+      llm_providers: {
+        pi: {
+          model: 'anthropic/claude-sonnet-4-5',
+          model_escalation_order: ['anthropic/claude-sonnet-4-5'],
+          model_fallback_ladder: ['anthropic/claude-sonnet-4-5'],
+        },
+      },
+      steps: {
+        plan: {
+          llm_provider: 'pi', model: 'anthropic/claude-sonnet-4-5', effort: 'medium',
+          by_tier: { L: { model: 'anthropic/claude-opus-4-5', effort: 'xhigh' } },
+        },
+      },
+    };
+    const runtimes = runtimeSet(config, { pi });
+
+    await executeProviderCandidates({ step: 'plan', configuredProviders: ['claude'], preferredProvider: 'pi', runtimes, sessions: new ProviderSessionScope(vi.fn()), config, tier: 'L', options: { prompt: 'Plan L.', cwd: '/workspace' } });
+    await executeProviderCandidates({ step: 'plan', configuredProviders: ['claude'], preferredProvider: 'pi', runtimes, sessions: new ProviderSessionScope(vi.fn()), config, tier: 'M', options: { prompt: 'Plan M.', cwd: '/workspace' } });
+
+    expect(pi.invoke).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: 'anthropic/claude-opus-4-5', effort: 'xhigh' }));
+    expect(pi.invoke).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: 'anthropic/claude-sonnet-4-5', effort: 'medium' }));
+  });
+
+  it('keeps Claude defaults out of an explicitly Pi-routed step', async () => {
+    const pi = fakeProvider({ success: true, output: 'Pi completed', exitCode: 0 });
+    const claude = fakeProvider({ success: true, output: 'Claude completed', exitCode: 0 });
+    const config: HarnessConfig = {
+      llm_provider: 'claude', defaults: { model: 'opus' },
+      llm_providers: { pi: { model: 'openai/gpt-5.6-sol', model_escalation_order: ['openai/gpt-5.6-sol'], model_fallback_ladder: ['openai/gpt-5.6-sol'] } },
+      steps: { plan: { llm_provider: 'pi' } },
+    };
+    const runtimes = runtimeSet(config, { claude, pi });
+
+    await executeProviderCandidates({ step: 'plan', configuredProviders: ['claude'], preferredProvider: 'pi', runtimes, sessions: new ProviderSessionScope(vi.fn()), config, options: { prompt: 'Plan.', cwd: '/workspace' } });
+    await executeProviderCandidates({ step: 'build', configuredProviders: ['claude'], runtimes, sessions: new ProviderSessionScope(vi.fn()), config, options: { prompt: 'Build.', cwd: '/workspace' } });
+
+    expect(pi.invoke).toHaveBeenCalledWith(expect.objectContaining({ model: 'openai/gpt-5.6-sol' }));
+    expect(pi.invoke).not.toHaveBeenCalledWith(expect.objectContaining({ model: 'opus' }));
+    expect(claude.invoke).toHaveBeenCalledWith(expect.objectContaining({ model: 'opus' }));
+  });
+
+  it('uses the Pi effective policy after a run-scope Claude fallback', async () => {
+    const claude = fakeProvider({
+      success: false, output: 'Claude unavailable', exitCode: 127,
+      providerUnavailable: true, providerUnavailableScope: 'run', providerUnavailableReason: 'Claude unavailable',
+    });
+    const pi = fakeProvider({ success: true, output: 'Pi completed', exitCode: 0 });
+    const config: HarnessConfig = {
+      llm_provider: 'claude',
+      llm_providers: { pi: { model: 'anthropic/claude-opus-4-5', model_escalation_order: ['anthropic/claude-opus-4-5'], model_fallback_ladder: ['anthropic/claude-opus-4-5'] } },
+      steps: { plan: { llm_provider: ['claude', 'pi'], model: 'opus', effort: 'high' } },
+    };
+    const result = await executeProviderCandidates({
+      step: 'plan', configuredProviders: ['claude'], preferredProvider: ['claude', 'pi'],
+      runtimes: runtimeSet(config, { claude, pi }), sessions: new ProviderSessionScope(vi.fn()), config,
+      options: { prompt: 'Plan.', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({ success: true, actualProvider: 'pi' });
+    expect(pi.invoke).toHaveBeenCalledWith(expect.objectContaining({ model: 'anthropic/claude-opus-4-5', effort: 'high' }));
+    expect(pi.invoke).not.toHaveBeenCalledWith(expect.objectContaining({ model: 'opus' }));
   });
 });

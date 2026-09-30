@@ -3839,7 +3839,7 @@ export class Conductor {
     }
     return preferredProvider === undefined
       ? this.legacyModelPolicy ?? CLAUDE_MODEL_POLICY
-      : resolveProviderModelPolicy(preferredProvider);
+      : resolveProviderModelPolicy(preferredProvider, { config: this.config });
   }
 
   /**
