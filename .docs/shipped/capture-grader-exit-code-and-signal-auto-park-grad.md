@@ -4,6 +4,14 @@ spec_hash: 16864b3f826081fda88197046dbf8923c38c5f8bc85c763fb3d64d22df7b29b1
 pr: https://github.com/jstoup111/ai-conductor/pull/2853
 shipped: 2026-09-30
 engine_version: 20260930T225148Z-18b2a2a206ea
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/engine/build-review-coordinator.ts:802 — narrowed structuredResultWasRejected predicate also drops the rejection from read-only-review-unavailable failures, changing that settlement from an aggregate throw to a needs-human refusal (test/integration/build-review-custom-routing.integration.test.ts, commit b7a8e089e)"
+    accepted: true
+    decision: accept
+    rationale: "Fail-closed needs-human on unavailable read-only review matches harness convention; small adjacent change."
 ---
 
 ## Cost
