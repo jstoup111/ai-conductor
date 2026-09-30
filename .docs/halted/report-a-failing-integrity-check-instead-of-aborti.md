@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-30T10:51:08.335Z
 Slug: report-a-failing-integrity-check-instead-of-aborti
 Class: plan-gap
 Halting step: prd_audit
