@@ -488,6 +488,70 @@ Relevant existing facts (evidence):
 > `conductor.engine.version` remain trace-only. Omitted and unresolved versions use the same
 > `not-supplied` / `unresolved` markers as the trace Resource.
 
+> **Amended 2026-09-29 by operator DECIDE (durable OTLP export spool):** Decisions 4 and 5 left
+> every exported batch in SDK memory: the `BatchSpanProcessor` queue (2048 spans, dropped when full),
+> the HTTP exporter's in-memory retry (5 attempts bounded by the export timeout; the JS gRPC exporter
+> does not retry at all), and the `PeriodicExportingMetricReader`, which does not re-send a failed
+> export — so under `LOWMEMORY` temporality a failed interval's delta counters and histograms are lost
+> permanently. A backend outage, a local collector/agent outage, a daemon restart or crash, or a
+> network partition therefore lost telemetry. Decision 5's failure isolation is unchanged; three
+> decisions make delivery durable.
+>
+> 15. **Write-first spool: a batch is durable on disk before any network send.** For
+>     `exporter: otlp` over OTLP/HTTP, the span and metric exporters handed to the SDK are spooling
+>     exporters: each batch is serialized with `@opentelemetry/otlp-transformer`'s protobuf
+>     serializers to the exact OTLP/HTTP request body, written as one immutable file under
+>     `<mainRoot>/.daemon/otel-spool/<signal>/` (main root resolved from any checkout), fsynced and
+>     renamed into place, and only then acknowledged to the SDK. Header values are never written.
+>     The metric wrapper delegates `selectAggregationTemporality` and `selectAggregation` unchanged,
+>     so `LOWMEMORY` temporality is preserved. The write is async exporter I/O inside the SDK's
+>     processor, never on the bus, so Decision 4 holds; a failed spool write passes the batch to a
+>     direct send with Decision 5's bounded warning. The spool is on by default for
+>     `exporter: otlp` (`otel.spool.enabled`, default true; `otel.spool.max_bytes`, default 512 MiB);
+>     `exporter: file` is not spooled. The spool sends OTLP/HTTP only. `protocol: grpc` with the
+>     spool at its default exports unspooled over gRPC exactly as before and emits one bounded
+>     warning that the spool is inactive; only an explicit `otel.spool.enabled: true` with
+>     `protocol: grpc` is a config validation error naming `protocol: http/protobuf` as the remedy.
+>     Datadog Agent/DDOT and Grafana otel-lgtm/Alloy both accept OTLP/HTTP on 4318.
+> 16. **One lease-holding drainer per main root delivers oldest-first; the backend decides
+>     staleness.** Any process that owns an OTel provider (daemon or interactive run) may take the
+>     spool lease and drain; the drainer lives for its owning process, and a per-dispatch or
+>     per-run provider shutdown never stops it or releases the lease. The lease follows
+>     adr-010-pidfile-lock-daemon-liveness: a lockfile created with `O_EXCL` holding pid, a random
+>     uuid, and a heartbeat; a lease whose pid is dead, or whose heartbeat has expired and whose
+>     uuid does not match a live holder's (pid reuse), is stale and is reclaimed by `O_EXCL`
+>     succession, never delete-then-create. The drainer reads and sends one file at a time,
+>     oldest-first per signal and independently per signal, POSTing to the configured endpoint with
+>     the drainer process's own resolved headers under Decision 5's bounded export timeout; stop
+>     never waits on an in-flight POST beyond that bound. It classifies the response: a full 2xx
+>     accept deletes the file; `400`, `413`, or an OTLP partial-success response that rejects items
+>     deletes the file (a partial rejection is deleted whole, never re-sent in part) and counts a
+>     drop; `401`, `403`, `404`, `408`, `429`, `5xx`, and network errors keep the file and back off
+>     (honouring `Retry-After`), because an auth or endpoint misconfiguration must never delete
+>     spooled data. There is no client-side age cap: a backend's own acceptance window (Datadog
+>     metrics 1 h and spans 18 h; Prometheus/Mimir out-of-order window) is authoritative and surfaces
+>     as a counted rejection. `max_bytes` is the only local bound; exceeding it evicts the oldest
+>     files and counts them as drops. Delivery is at-least-once. Zero loss is best-effort at process
+>     exit: the daemon flushes its providers into the spool and releases the lease on SIGTERM and
+>     on SIGHUP (the tmux respawn path), and an ungraceful kill loses at most the SDK's un-exported
+>     in-memory window while its lease is recovered by staleness.
+> 17. **Spool health rides the spine as typed events; outages stay visible.** The drainer emits
+>     `otel_spool_drop` (`signal`, `reason: rejected | evicted`, batch and item counts, HTTP status)
+>     and a periodic `otel_spool_backlog` (`signal`, file count, bytes, oldest batch age, last
+>     failure class) as `ConductorEvent` union members with `EVENT_SINKS` rows that persist but do
+>     not feed OTel (`otel: false`, so spool telemetry never spools itself) and are excluded from
+>     cost and timing rollups. Backlog events are persisted, not rendered. Decision 5's visibility
+>     is preserved by transition, not by interval: the drainer emits one bounded `renderer_error`
+>     when a signal's delivery state changes from healthy to a failure class (network, auth,
+>     endpoint, throttled, server) and one notice when it recovers. Events go on the owning
+>     process's bus — the daemon bus persisted to `<mainRoot>/.daemon/events.jsonl` under
+>     Decision 9, or the interactive run's bus. A process with the spool disabled that finds a
+>     non-empty spool leaves it untouched and emits one bounded warning naming its size and path.
+>     The spool directory is transport state, not a telemetry channel: it carries no fact the spine
+>     lacks, and nothing reads it but the drainer. Known limit: a backend that accepts a payload and
+>     silently discards stale points (suspected, not verified, for Datadog metric intake) is
+>     invisible to the drop count.
+
 ## Consequences
 
 **Positive**
