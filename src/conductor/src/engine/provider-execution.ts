@@ -1179,6 +1179,9 @@ export async function executeProviderCandidates({
           ? { executionDisposition: 'not-started' as const }
           : {}),
         preferredProvider,
+        actualProvider: providerKey,
+        resolvedModel: invokedModel ?? resolved.model,
+        resolvedEffort: resolved.effort,
         attempts,
         ...(!anyCandidateInvoked && setupUnavailableCandidates.length === candidates.length
           ? {

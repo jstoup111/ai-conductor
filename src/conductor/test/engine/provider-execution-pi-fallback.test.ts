@@ -311,3 +311,59 @@ describe('effective provider policy dispatch', () => {
     expect(pi.invoke).not.toHaveBeenCalledWith(expect.objectContaining({ model: 'opus' }));
   });
 });
+
+describe('Pi provider event metadata', () => {
+  const model = 'anthropic/claude-opus-4-5';
+  const config: HarnessConfig = {
+    llm_providers: {
+      pi: {
+        model,
+        model_escalation_order: [model],
+        model_fallback_ladder: [model],
+      },
+    },
+    steps: { plan: { llm_provider: 'pi', effort: 'xhigh' } },
+  };
+
+  it('keeps the full Pi model id in successful attempt and completion metadata', async () => {
+    const pi = fakeProvider({ success: true, output: 'Pi completed', exitCode: 0 });
+    const attempts: unknown[] = [];
+
+    const result = await executeProviderCandidates({
+      step: 'plan', configuredProviders: ['pi'], preferredProvider: 'pi',
+      runtimes: runtimeSet(config, { pi }), sessions: new ProviderSessionScope(vi.fn()), config,
+      onAttempt: async (_step, attempt) => { attempts.push(attempt); },
+      options: { prompt: 'Plan.', cwd: '/workspace' },
+    });
+
+    expect(attempts).toEqual([
+      expect.objectContaining({ provider: 'pi', model, effort: 'xhigh', outcome: 'success' }),
+    ]);
+    expect(result).toMatchObject({
+      success: true, actualProvider: 'pi', resolvedModel: model, resolvedEffort: 'xhigh',
+    });
+  });
+
+  it('keeps the full Pi model id in failed attempt and retry metadata', async () => {
+    const pi = fakeProvider({
+      success: false, output: `${model} unavailable`, exitCode: 1, modelUnavailable: true,
+    });
+    const attempts: unknown[] = [];
+
+    const result = await executeProviderCandidates({
+      step: 'plan', configuredProviders: ['pi'], preferredProvider: 'pi',
+      runtimes: runtimeSet(config, { pi }), sessions: new ProviderSessionScope(vi.fn()), config,
+      attempt: 2,
+      onAttempt: async (_step, attempt) => { attempts.push(attempt); },
+      options: { prompt: 'Plan retry.', cwd: '/workspace' },
+    });
+
+    expect(attempts).toEqual([
+      expect.objectContaining({ provider: 'pi', model, effort: 'xhigh', outcome: 'unavailable' }),
+    ]);
+    expect(result).toMatchObject({
+      success: false, actualProvider: 'pi', resolvedModel: model, resolvedEffort: 'xhigh',
+    });
+    expect(result.attempts[0]?.model).toBe(model);
+  });
+});
