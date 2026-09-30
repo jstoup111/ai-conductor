@@ -918,7 +918,7 @@ describe('engine/conductor', () => {
       }).projectPendingAsBuiltRemediationFindings()).resolves.toContain('kickback ledger is unreadable');
     });
 
-    it('halts an existing-task lap at the as-built lap cap without naming plan growth', async () => {
+    it('records an existing-task lap at the as-built cap for build-boundary settlement', async () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
@@ -976,10 +976,11 @@ describe('engine/conductor', () => {
         },
       );
 
-      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
-      expect(outcome.detail).toContain('lap cap reached (1/1)');
-      expect(outcome.detail).not.toMatch(/plan-growth allowance/i);
-      expect(outcome.detail).not.toMatch(/growth cap reached/i);
+      expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+      expect((await readKickbackLedger(dir)).pendingRepair).toMatchObject({
+        charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+        taskIds: ['1'],
+      });
     });
 
     it('routes a validated prd_audit FIXABLE existing-task gap without appending', async () => {
@@ -1028,10 +1029,13 @@ describe('engine/conductor', () => {
       expect(await readFile(planPath, 'utf8')).toBe(authoredPlan);
       expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks)
         .toEqual([{ id: '1', name: 'Existing work', status: 'pending' }]);
-      expect((await readKickbackLedger(dir)).gates.prd_audit?.laps).toBe(1);
+      expect((await readKickbackLedger(dir)).pendingRepair).toMatchObject({
+        charges: { prd_audit: { laps: 1, growth: 0 } },
+        taskIds: ['1'],
+      });
     });
 
-    it('charges one lap to each owning gate in a mixed existing-task round without spending growth', async () => {
+    it('records the prd-audit existing-task lap without spending growth', async () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -1088,8 +1092,12 @@ describe('engine/conductor', () => {
 
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
       const ledger = await readKickbackLedger(dir);
-      expect(ledger.gates.prd_audit?.laps).toBe(1);
-      expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
+      expect(ledger.pendingRepair).toMatchObject({
+        charges: {
+          prd_audit: { laps: 1, growth: 0 },
+        },
+        taskIds: ['1'],
+      });
       expect(ledger.growth).toEqual({ authored: 2, added: 0, byGate: {} });
     });
 
@@ -1196,12 +1204,10 @@ describe('engine/conductor', () => {
       await expect((conductor as any).planRemediation(input, ALL_STEPS, 'append once', source))
         .resolves.toMatchObject({ kind: 'route', target: 'build' });
       expect(await readFile(planPath, 'utf8')).toContain('### Task rem-prd-audit-rem-fr-1: Appended repair');
-      expect((await readKickbackLedger(dir)).growth).toEqual({ authored: 4, added: 1, byGate: { prd_audit: 1 } });
-
-      const exhausted = await (conductor as any).planRemediation(input, ALL_STEPS, 'append beyond growth', source);
-      expect(exhausted).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
-      expect(exhausted.detail).toContain('growth cap reached (1/1 appended; 1 requested, 0 remaining)');
-      expect(exhausted.detail).toContain('Findings: S1.1.');
+      expect((await readKickbackLedger(dir)).growth).toEqual({ authored: 4, added: 0, byGate: {} });
+      expect((await readKickbackLedger(dir)).pendingRepair).toMatchObject({
+        charges: { prd_audit: { laps: 1, growth: 1 } },
+      });
     });
 
     it('reports only appended PRD-audit tasks as requested when mixed remediation exhausts growth', async () => {
@@ -1266,19 +1272,22 @@ describe('engine/conductor', () => {
           expect.objectContaining({ id: '3', status: 'pending' }),
         ]));
 
-      // The first route proves existing-task admission. Model the earlier
-      // appending lap that spent the sole growth slot before checking that a
-      // later mixed request renders only its appended task count.
+      // The first route proves existing-task admission. Clear its unspent
+      // boundary receipt while modeling an earlier settled append that spent
+      // the sole growth slot.
       const restagedLedger = await readKickbackLedger(dir);
+      const { pendingRepair: _pendingRepair, ...settledLedger } = restagedLedger;
       await writeKickbackLedger(dir, {
-        ...restagedLedger,
+        ...settledLedger,
         growth: { authored: 4, added: 1, byGate: { prd_audit: 1 } },
       });
       mixedRound = true;
       const outcome = await (conductor as any).planRemediation(input, ALL_STEPS, 'mixed growth exhaustion', source);
 
-      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
-      expect(outcome.detail).toContain('growth cap reached (1/1 appended; 1 requested, 0 remaining)');
+      expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+      expect((await readKickbackLedger(dir)).pendingRepair).toMatchObject({
+        charges: { prd_audit: { laps: 1, growth: 1 } },
+      });
     });
 
     it('charges a mixed appending and existing-task round to growth and laps independently', async () => {
@@ -1313,9 +1322,13 @@ describe('engine/conductor', () => {
 
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
       const ledger = await readKickbackLedger(dir);
-      expect(ledger.growth).toEqual({ authored: 8, added: 1, byGate: { prd_audit: 1 } });
-      expect(ledger.gates.prd_audit?.laps).toBe(1);
-      expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
+      expect(ledger.growth).toEqual({ authored: 8, added: 0, byGate: {} });
+      expect(ledger.pendingRepair).toMatchObject({
+        charges: {
+          prd_audit: { laps: 1, growth: 1 },
+          architecture_review_as_built: { laps: 1, growth: 0 },
+        },
+      });
     });
 
   });

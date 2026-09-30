@@ -4838,6 +4838,23 @@ export class Conductor {
       : isAbsolute(activePlanPath)
         ? activePlanPath
         : join(this.projectRoot, activePlanPath);
+    // Engineer-specced daemon features can reach remediation without the plan
+    // step having recorded this path. The fallback above is sufficient for
+    // this round's append, but build-boundary settlement derives its growth
+    // denominator from the durable engine state. Persist the same resolved
+    // authority before admitting work so the boundary does not see zero
+    // authored tasks and falsely exhaust the growth allowance.
+    if (activePlanPath === null && planPath) {
+      try {
+        await recordActivePlanPath(this.projectRoot, planPath);
+      } catch (error) {
+        const detail =
+          `remediation cannot persist the active plan path for build-boundary settlement: ` +
+          `${error instanceof Error ? error.message : String(error)}`;
+        await reportRefusal(detail);
+        return { kind: 'halt', haltClass: 'mechanical', detail };
+      }
+    }
     const sealedArtifactsByGapId = new Map<string, {
       artifact: string;
       directingClause: string;
@@ -5599,18 +5616,23 @@ export class Conductor {
           await reportRefusal(detail);
           return { kind: 'halt', haltClass: 'needs-human', detail };
         }
-        const pendingGate = hintSource.source === 'prd_audit' ||
-          hintSource.source === 'architecture_review_as_built'
-          ? hintSource.source
-          : undefined;
+        // Routing-source names are not ledger gate names (and a validation
+        // group has no single source gate). Charge the validated owners of
+        // the bound tasks, exactly as the append path does for a mixed round.
+        const pendingCharges = {
+          ...(prdAuditTasks.length > 0 ? { prd_audit: { laps: 1, growth: 0 } } : {}),
+          ...(asBuiltTasks.length > 0
+            ? { architecture_review_as_built: { laps: 1, growth: 0 } }
+            : {}),
+        };
         // An appending repair in this same round already holds the one
         // per-gate lap charge. Existing-task bindings add no growth and must
         // not overwrite that authorization with a second receipt.
-        if (pendingGate !== undefined && appendedTaskIds.length === 0) {
+        if (Object.keys(pendingCharges).length > 0 && appendedTaskIds.length === 0) {
           try {
             await recordPendingRepair(this.projectRoot, {
               receiptId: admission.obligation.id,
-              charges: { [pendingGate]: { laps: 1, growth: 0 } },
+              charges: pendingCharges,
               taskIds: boundTaskIds,
             });
           } catch (error) {
