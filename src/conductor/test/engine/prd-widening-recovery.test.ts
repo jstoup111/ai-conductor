@@ -1,4 +1,4 @@
-// Covers: task:24
+// Covers: task:2, task:24
 import { describe, expect, it } from 'vitest';
 import {
   renderPrdAuditProjectionHalt,
@@ -35,5 +35,15 @@ describe('renderPrdWideningRecovery', () => {
     ['uncertain-relation', 'submit a new explicit decision'],
   ] as const)('names the %s recovery action', (reason, action) => {
     expect(renderPrdWideningRecovery(reason, ['prd-audit:NC.1'])).toContain(action);
+  });
+
+  it('directs an unapplicable decision to correction or an inert pending entry without storage-failure wording', () => {
+    const recovery = renderPrdWideningRecovery('invalid-decision', ['case-1']);
+
+    expect(recovery).toContain('affected case-1');
+    expect(recovery).toContain('correct');
+    expect(recovery).toContain('pending');
+    expect(recovery).toContain('prior decision');
+    expect(recovery).not.toMatch(/store or lease failure/i);
   });
 });

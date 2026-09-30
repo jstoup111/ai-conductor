@@ -1,7 +1,7 @@
 /** Bounded, record-specific recovery text for PRD widening failures. */
 export type PrdWideningRecoveryReason =
   | 'malformed-history' | 'unsupported-history' | 'foreign-feature' | 'missing-operator'
-  | 'persistence-failed' | 'invalid-provider-result' | 'stale-relation' | 'context-overflow'
+  | 'persistence-failed' | 'invalid-decision' | 'invalid-provider-result' | 'stale-relation' | 'context-overflow'
   | 'projection-failed' | 'uncertain-relation' | 'provider-timeout'
   | 'provider-unavailable' | 'attempts-exhausted';
 
@@ -11,6 +11,7 @@ const ACTIONS: Record<PrdWideningRecoveryReason, string> = {
   'foreign-feature': 'use the worktree that owns the widening history; do not copy it between features.',
   'missing-operator': 'configure the machine owner and re-submit the explicit decision.',
   'persistence-failed': 'resolve the store or lease failure, verify the durable records, then resume.',
+  'invalid-decision': 'correct the named entry against the latest halt, or leave its decision pending to keep the prior decision, then clear the halt.',
   'invalid-provider-result': 'retry only after the selected provider supports the required native output schema.',
   'provider-timeout': 'retry after the provider timeout is resolved; no BUILD or plan-growth allowance was charged.',
   'provider-unavailable': 'select or restore a provider with native output-schema support, then resume.',
