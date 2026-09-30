@@ -1,4 +1,4 @@
-// Covers: task:16
+// Covers: task:16, task:17
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,6 +7,7 @@ import {
   spliceGeneratedRegion,
   assertNoDuplicateRowNames,
   renderModelTable,
+  assertCompleteProviderCells,
   buildEngineRows,
   buildAuxiliaryRows,
   buildExtraRows,
@@ -279,7 +280,7 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
           effort: modelFreeEngineSteps.has(step) ? '—' : renderPolicyField(CODEX_MODEL_POLICY, step, 'effort'),
         },
         pi: {
-          model: modelFreeEngineSteps.has(step) ? '—' : '',
+          model: modelFreeEngineSteps.has(step) ? '—' : 'config-required',
           effort: modelFreeEngineSteps.has(step)
             ? '—'
             : renderPolicyField(BUILT_IN_PROVIDERS[2].modelPolicy, step, 'effort'),
@@ -289,6 +290,44 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
     }));
 
     expect(buildEngineRows()).toEqual(expected);
+  });
+
+  it('renders Pi config-required engine models and n/a interactive cells as explicit sentinels', () => {
+    const rowsByName = new Map(buildEngineRows().map((row) => [row.name, row]));
+    const plan = rowsByName.get('plan')!;
+
+    expect(plan.providerCells.pi).toEqual({
+      model: 'config-required',
+      effort: BUILT_IN_PROVIDERS[2].modelPolicy.stepEfforts.plan,
+    });
+    expect(buildExtraRows().every((row) =>
+      row.providerCells.pi?.model === 'n/a' && row.providerCells.pi.effort === 'n/a',
+    )).toBe(true);
+  });
+
+  it('fails --check with a Pi-column diff when a committed table predates Pi', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'generate-model-table-no-pi-'));
+    const path = join(dir, 'ARCHITECTURE.md');
+    try {
+      const withoutPi = fixture(renderModelTable())
+        .replace(' | Pi model | Pi effort', '')
+        .replace(/ \| config-required \| [^|]+(?= \|)/g, '')
+        .replace(/ \| n\/a \| n\/a(?= \|)/g, '');
+      await writeFile(path, withoutPi, 'utf8');
+
+      let stderrOut = '';
+      const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+        stderrOut += String(chunk);
+        return true;
+      });
+      const exitCode = await runGenerateModelTable(['--check'], nodeIO, path);
+      spy.mockRestore();
+
+      expect(exitCode).toBe(EXIT_DRIFT);
+      expect(stderrOut).toContain('Pi model');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('fails closed and identifies the provider, field, and step for every missing policy value', () => {
@@ -395,7 +434,7 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
     expect(rowsByName.get('composer')).toMatchObject({
       executionPath: 'supported-host interactive',
       providerCells: {
-        claude: { model: 'opus', effort: '' },
+        claude: { model: 'opus', effort: 'n/a' },
         codex: {
           model: 'inherits model from the Codex session or spawned-agent configuration',
           effort: 'inherits effort from the Codex session or spawned-agent configuration',
@@ -490,6 +529,7 @@ describe('engine-managed auxiliary rows', () => {
           providerCells: {
             claude: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
             codex: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
+            pi: { model: 'n/a', effort: 'n/a' },
           },
         }),
         expect.objectContaining({
@@ -498,6 +538,7 @@ describe('engine-managed auxiliary rows', () => {
           providerCells: {
             claude: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
             codex: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
+            pi: { model: 'n/a', effort: 'n/a' },
           },
         }),
         expect.objectContaining({
@@ -506,6 +547,7 @@ describe('engine-managed auxiliary rows', () => {
           providerCells: {
             claude: { model: 'inherits resolved coverage-binding policy', effort: 'inherits resolved coverage-binding policy' },
             codex: { model: 'inherits resolved coverage-binding policy', effort: 'inherits resolved coverage-binding policy' },
+            pi: { model: 'n/a', effort: 'n/a' },
           },
         }),
       ],

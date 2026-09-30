@@ -1,4 +1,4 @@
-// Covers: task:1, task:16
+// Covers: task:1, task:16, task:17
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -17,7 +17,7 @@ import {
   AUXILIARY_MODEL_TABLE_ROWS,
   EXTRA_MODEL_TABLE_ROWS,
 } from '../src/engine/model-table-metadata.js';
-import { classifyPinnedSkill } from '../src/tools/generate-model-table.js';
+import { assertCompleteProviderCells, classifyPinnedSkill } from '../src/tools/generate-model-table.js';
 
 const CLAUDE_NATIVE_ALIASES = ['fable', 'opus', 'sonnet', 'haiku'] as const;
 const CODEX_NATIVE_MODEL_IDS = [
@@ -238,7 +238,7 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
       name: 'evaluator',
       executionPath: 'supported-host interactive',
       providerCells: {
-        claude: { model: 'sonnet (default) / fable (concurrency, state mutation, security, auth, money)', effort: '' },
+        claude: { model: 'sonnet (default) / fable (concurrency, state mutation, security, auth, money)', effort: 'n/a' },
         codex: {
           model: 'inherits model from the Codex session or spawned-agent configuration',
           effort: 'inherits effort from the Codex session or spawned-agent configuration',
@@ -278,7 +278,7 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
     expect(composer).toMatchObject({
       executionPath: 'supported-host interactive',
       providerCells: {
-        claude: { model: 'opus', effort: '' },
+        claude: { model: 'opus', effort: 'n/a' },
         codex: {
           model: expect.stringMatching(/inherits.*Codex.*session/i),
           effort: expect.stringMatching(/inherits.*Codex.*session/i),
@@ -311,6 +311,23 @@ describe('AUXILIARY_MODEL_TABLE_ROWS auxiliary-judge registration', () => {
       name: 'coverage-binding',
       executionPath: 'engine-managed auxiliary judge',
     });
+  });
+});
+
+describe('model-table provider-cell completeness', () => {
+  it('rejects a blank catalog-provider cell naming the row, while accepting explicit sentinels', () => {
+    const rows = [{
+      name: 'incomplete-row',
+      providerCells: {
+        claude: { model: 'opus', effort: 'high' },
+        codex: { model: 'gpt-5.6-sol', effort: 'high' },
+        pi: { model: '', effort: 'n/a' },
+      },
+    }];
+
+    expect(() => assertCompleteProviderCells(rows, ['claude', 'codex', 'pi'])).toThrow(/incomplete-row.*pi.*model/i);
+    rows[0]!.providerCells.pi.model = 'config-required';
+    expect(() => assertCompleteProviderCells(rows, ['claude', 'codex', 'pi'])).not.toThrow();
   });
 });
 

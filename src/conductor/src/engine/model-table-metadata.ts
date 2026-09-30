@@ -156,6 +156,7 @@ export type AuxiliaryModelTableRow = AuxiliaryModelTableRowBase & (
 
 const RESOLVED_RUBRIC_POLICY = 'inherits resolved rubric policy' as const;
 const RESOLVED_COVERAGE_BINDING_POLICY = 'inherits resolved coverage-binding policy' as const;
+const PI_NOT_APPLICABLE = 'n/a' as const;
 
 export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
   {
@@ -164,6 +165,7 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
     providerCells: {
       claude: { model: RESOLVED_RUBRIC_POLICY, effort: RESOLVED_RUBRIC_POLICY },
       codex: { model: RESOLVED_RUBRIC_POLICY, effort: RESOLVED_RUBRIC_POLICY },
+      pi: { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
     },
     why: 'Judges whether criterion-bound changed tests are insensitive to the behavior they claim to cover; preflight is evidence, never a verdict.',
   },
@@ -173,6 +175,7 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
     providerCells: {
       claude: { model: RESOLVED_RUBRIC_POLICY, effort: RESOLVED_RUBRIC_POLICY },
       codex: { model: RESOLVED_RUBRIC_POLICY, effort: RESOLVED_RUBRIC_POLICY },
+      pi: { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
     },
     why: 'Judges the whole feature diff for concrete, changed-hunk-anchored security defects in the closed security vocabulary.',
   },
@@ -182,6 +185,7 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
     providerCells: {
       claude: { model: RESOLVED_COVERAGE_BINDING_POLICY, effort: RESOLVED_COVERAGE_BINDING_POLICY },
       codex: { model: RESOLVED_COVERAGE_BINDING_POLICY, effort: RESOLVED_COVERAGE_BINDING_POLICY },
+      pi: { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
     },
     why: 'Fresh per-claim judgement of whether cited Done when checks assert the criterion; the engine scopes inputs, validates the closed verdict, and owns the gate outcome.',
   },
@@ -371,11 +375,12 @@ export const EXTRA_MODEL_TABLE_ROWS: ExtraModelTableRow[] =
     name: row.name,
     executionPath: INTERACTIVE_EXECUTION_PATH,
     providerCells: {
-      claude: { model: row.claudeModel, effort: row.claudeEffort },
+      claude: { model: row.claudeModel, effort: row.claudeEffort || PI_NOT_APPLICABLE },
       codex: {
         model: EXTRA_MODEL_TABLE_ROW_DEFAULTS.codexModel,
         effort: EXTRA_MODEL_TABLE_ROW_DEFAULTS.codexEffort,
       },
+      pi: { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
     },
     why: row.why,
   }));

@@ -258,7 +258,7 @@ function policyValue(
 ): string {
   const base = field === 'model' ? policy.stepModels[step] : policy.stepEfforts[step];
   if (field === 'model' && policy.requiresConfiguredModels && base === '') {
-    return '';
+    return 'config-required';
   }
   if (typeof base !== 'string' || base.trim() === '') {
     throw new Error(`Missing ${provider} ${field} for step ${step}`);
@@ -307,6 +307,30 @@ export interface ModelTableRow extends NamedRow {
   executionPath: string;
   providerCells: ModelTableProviderCellMap;
   why: string;
+}
+
+/**
+ * Reject an ambiguous generated row before it can be rendered as an empty
+ * markdown cell. `config-required` and `n/a` are intentional, non-empty
+ * statements; the gate deliberately accepts them.
+ */
+export function assertCompleteProviderCells(
+  rows: readonly Pick<ModelTableRow, 'name' | 'providerCells'>[],
+  providerIds: readonly string[],
+): void {
+  for (const row of rows) {
+    for (const providerId of providerIds) {
+      const cell = row.providerCells[providerId];
+      for (const field of ['model', 'effort'] as const) {
+        const value = cell?.[field];
+        if (typeof value !== 'string' || value.trim() === '') {
+          throw new Error(
+            `Incomplete model-table row "${row.name}": ${providerId} ${field} is blank`,
+          );
+        }
+      }
+    }
+  }
 }
 
 type TableProvider = Pick<BuiltInProviderDescriptor, 'id' | 'displayName' | 'modelPolicy'>;
@@ -382,6 +406,21 @@ export function buildAuxiliaryRows(): ModelTableRow[] {
   return AUXILIARY_MODEL_TABLE_ROWS.map((row) => ({ ...row }));
 }
 
+function withNotApplicableProviderCells(
+  rows: readonly ModelTableRow[],
+  providers: readonly TableProvider[],
+): ModelTableRow[] {
+  return rows.map((row) => ({
+    ...row,
+    providerCells: {
+      ...row.providerCells,
+      ...Object.fromEntries(providers
+        .filter((provider) => row.providerCells[provider.id] === undefined)
+        .map((provider) => [provider.id, { model: 'n/a', effort: 'n/a' }])),
+    },
+  }));
+}
+
 /** Rows for skills/agents with no corresponding engine step. */
 export function buildExtraRows(
   metadata: readonly ModelTableRow[] = EXTRA_MODEL_TABLE_ROWS,
@@ -422,10 +461,14 @@ function renderRow(row: ModelTableRow, providers: readonly TableProvider[]): str
  */
 export function renderModelTable(providers: readonly TableProvider[] = BUILT_IN_PROVIDERS): string {
   const engineRows = buildEngineRows(providers);
-  const auxiliaryRows = buildAuxiliaryRows();
-  const extraRows = buildExtraRows();
+  const auxiliaryRows = withNotApplicableProviderCells(buildAuxiliaryRows(), providers);
+  const extraRows = withNotApplicableProviderCells(buildExtraRows(), providers);
 
   assertNoDuplicateRowNames([...engineRows, ...auxiliaryRows], extraRows);
+  assertCompleteProviderCells(
+    [...engineRows, ...auxiliaryRows, ...extraRows],
+    providers.map((provider) => provider.id),
+  );
 
   const lines = [
     tableHeader(providers),
