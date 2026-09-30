@@ -175,6 +175,66 @@ D8. Order and scope of the startup check. Validation of configured provider name
 > key ends with exit 0, `stopReason: "error"`, `errorMessage: "No API key for provider: cline"`. It
 > stays an unclassified step failure until #2718 anchors the auth and rate-limit signatures.
 
+> **Amended 2026-09-29 by #1886 (operator decision, James Stoup, composer DECIDE):** D6 lists
+> `readOnlyReview` (renamed from `buildReviewContainment` by #2735) and `nativeSchema` among the
+> capabilities Pi does not declare. Pi now declares both. Every other statement in D1–D14 is
+> unchanged; in particular Pi still declares no `selfHost`, `reviewPolicyCatalog`, `writeFence`,
+> `costSelfReporting`, `readiness`, or `interactiveLaunch`, and `osSandbox` stays `false`. OS write
+> containment for unattended dispatches of any provider is out of scope and belongs to #2851. Four
+> decisions are added. Pi facts below were verified locally 2026-09-29 against pi 0.84.3
+> (`pi --help`, `docs/extensions.md`, `docs/json.md`, `docs/security.md`, and
+> `pi-ai/dist/utils/validation.js`).
+>
+> **D15.** The harness ships one Pi extension as an engine asset. Its source is a string constant
+> compiled into the engine bundle, since the engine build has no mechanism for copying non-TypeScript
+> assets. The engine materializes it as a content-addressed file,
+> `~/.ai-conductor/pi/harness-extension-«sha256 prefix».ts`. It writes atomically when the file is
+> absent or its bytes differ from the constant, and re-verifies the bytes before every use. Pi loads
+> it only through an explicit `-e «absolute asset path»`. The engine never writes it into `~/.pi` or
+> a project `.pi/`. The file imports nothing,
+> so it resolves no packages from the harness install. It registers its CLI flags with
+> `pi.registerFlag` and registers a tool only when that tool's flag is present, so loading it with
+> no harness flag registers no tools. Pi documents that explicit `-e` paths still load under
+> `--no-extensions`, and that `--tools` applies to extension tools.
+>
+> **D16.** Pi declares `nativeSchema`. When an invocation carries a native output schema, the
+> adapter writes the schema into the engine-owned native-schema scratch home and passes the
+> extension a flag naming that file. The extension registers a `submit_result` tool whose
+> `parameters` are that raw JSON schema and whose `execute` returns the arguments in `details`
+> with `terminate: true`. This is Pi's documented structured-output pattern
+> (`examples/extensions/structured-output.ts`). Pi validates tool arguments against a raw JSON
+> schema and returns a validation error to the model on a mismatch, so the model can correct
+> itself within the session. The adapter takes `finalStructuredResult` from the `details` of the
+> last successful `submit_result` `tool_execution_end` event in the `--mode json` stream. An
+> invocation that ends without one is a failed invocation naming the missing structured result,
+> never a success. The engine's existing parse and validation of `finalStructuredResult` is
+> unchanged.
+>
+> **D17.** Pi declares `readOnlyReview`. For the engine's read-only review option the adapter adds
+> `--no-extensions`, `-na`, `--tools` naming only `read,grep,find,ls,git_read` (plus
+> `submit_result` when D16 applies), `-e` for the D15 asset, and the flag that registers
+> `git_read`. Pi's `bash`, `edit` and `write` tools are therefore unavailable, and no project or
+> operator-global extension loads. `git_read` never runs a shell. It takes a subcommand from the
+> same fixed read-only set Claude's read-only review admits (`show`, `diff`, `log`, `ls-tree`,
+> `ls-files`, `cat-file`, `rev-parse`, `blame`, `grep`) plus an argv array. It refuses any argument
+> that makes git write a file or run another program (output-file, pager, external-diff and
+> textconv options), and it runs `git` with the pager and external-diff environment neutralized.
+> adr-2026-09-10-portable-build-review-policy D5.3's input digest still detects and discards a
+> lap if a write lands anyway. Read-only availability (that ADR's D5.5) is established by Pi's own
+> mechanism: `pi --help` exits 0 and lists `--tools`, `--no-extensions`, `--extension` and
+> `--no-approve`, and the D15 asset exists and is readable. A custom-policy lap still requires
+> `reviewPolicyCatalog`, so Pi serves custom-policy laps only after #1888 turns it on.
+>
+> **D18.** Every unattended Pi invocation passes `-na`, so project-local `.pi/` settings,
+> packages and extensions never load, even when `~/.pi/agent/trust.json` holds a saved trust
+> decision for the directory. The operator can deliberately enable them for ordinary steps with
+> `llm_providers.pi.trust_project_files: true` (boolean, default `false`). That key never
+> applies to a read-only review invocation, which keeps D17's `-na`. Operator-global `~/.pi`
+> extensions keep loading on ordinary steps, as operator-installed Claude plugins do. The Pi
+> subprocess env gets the same daemon treatment as the codex adapter: the daemon-session marker is
+> set, and the tmux variables are scrubbed. The harness launches no interactive Pi session (D9),
+> so interactive operator use of Pi is unaffected.
+
 ## Consequences
 
 - Adding a fourth provider is one descriptor plus one adapter. The structural test fails if a new id literal appears elsewhere.
