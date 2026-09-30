@@ -1,7 +1,7 @@
 // Covers: task:1, task:5, S5.1, S5.2, S5.3, S5.4
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { access as accessPath, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -184,6 +184,7 @@ async function createPrdAuditRemediationFixture(input: {
   priorLaps?: number;
   priorGrowthAdded?: number;
   existingTask?: boolean;
+  repairTaskId?: string;
   report?: string;
   beforePlanRemediation?: (root: string) => Promise<void>;
 }) {
@@ -245,6 +246,12 @@ async function createPrdAuditRemediationFixture(input: {
     } as never);
   }
 
+  await execa('git', ['init', '-q'], { cwd: root });
+  await execa('git', ['config', 'user.email', 'fixture@example.test'], { cwd: root });
+  await execa('git', ['config', 'user.name', 'Fixture'], { cwd: root });
+  await execa('git', ['add', '.docs'], { cwd: root });
+  await execa('git', ['commit', '-qm', 'fixture plan'], { cwd: root });
+
   const remediateDispatches: string[] = [];
   const runner: StepRunner = {
     run: async (step: StepName) => {
@@ -257,7 +264,7 @@ async function createPrdAuditRemediationFixture(input: {
             disposition: input.existingTask ? 'existing-task' : 'build',
             category: null,
             rationale: `Repair ${criterion}.`,
-            tasks: [{ id: input.existingTask ? '1' : `rem-${criterion.toLowerCase()}`, title: `Repair ${criterion}` }],
+            tasks: [{ id: input.existingTask ? '1' : (input.repairTaskId ?? `rem-${criterion.toLowerCase()}`), title: `Repair ${criterion}` }],
           })),
         }),
       );
@@ -1100,8 +1107,11 @@ describe('prd_audit kickback', () => {
       expect(appendedPlan).toContain(`**Done when:**\n- ${criterion} is satisfied by this task.`);
     }
     const ledger = await readKickbackLedger(root);
-    expect((ledger.gates.prd_audit as { laps?: number } | undefined)?.laps).toBe(1);
-    expect(ledger.growth).toMatchObject({ added: 3, byGate: { prd_audit: 3 } });
+    expect((ledger.gates.prd_audit as { laps?: number } | undefined)?.laps ?? 0).toBe(0);
+    expect(ledger.growth?.added ?? 0).toBe(0);
+    expect(ledger.pendingRepair).toMatchObject({
+      charges: { prd_audit: { laps: 1, growth: 3 } },
+    });
   });
 
   it('keeps as-built task append rejection unchanged when remediation is disabled', async () => {
@@ -1990,101 +2000,6 @@ describe('prd_audit kickback', () => {
     expect(await readFile(fixture.planPath, 'utf8')).toContain('**Criterion:** S2.1');
   });
 
-  it('halts without appending when FIXABLE work exceeds the growth cap, listing every finding', async () => {
-    const criteria = ['S2.1', 'S2.2', 'S2.3', 'S2.4'];
-    const fixture = await createPrdAuditRemediationFixture({ taskCount: 12, criteria });
-
-    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
-    expect(fixture.outcome.detail).toContain('growth cap');
-    for (const criterion of criteria) expect(fixture.outcome.detail).toContain(criterion);
-    expect(await readFile(fixture.planPath, 'utf8')).toBe(fixture.plan);
-  });
-
-  it('halts a second prd_audit lap without appending and lists the new finding', async () => {
-    const fixture = await createPrdAuditRemediationFixture({
-      taskCount: 12,
-      criteria: ['S2.5'],
-      priorLaps: 1,
-    });
-
-    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
-    expect(fixture.outcome.detail).toContain('S2.5');
-    expect(await readFile(fixture.planPath, 'utf8')).toBe(fixture.plan);
-  });
-
-  it('records the exhausted lap allowance and generation for a prd_audit cap halt', async () => {
-    const fixture = await createPrdAuditRemediationFixture({
-      taskCount: 12,
-      criteria: ['S2.1'],
-      priorLaps: 1,
-    });
-
-    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
-    const evidence = (await readKickbackLedger(fixture.root)).gates.prd_audit.capEvidence;
-    expect(evidence).toMatchObject({ allowance: 'laps', consumed: 1, limit: 1 });
-    expect(fixture.outcome.detail).toContain(`Kickback halt generation: ${evidence?.haltGeneration}`);
-    expect(fixture.outcome.detail).toContain('Lap allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature prd-audit-kickback --gate prd_audit --by «N» --rationale "«why»"');
-  });
-
-  it('records the exhausted growth allowance and generation for a prd_audit cap halt', async () => {
-    const fixture = await createPrdAuditRemediationFixture({
-      taskCount: 12,
-      criteria: ['S2.1', 'S2.2', 'S2.3', 'S2.4'],
-    });
-
-    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
-    const evidence = (await readKickbackLedger(fixture.root)).gates.prd_audit.capEvidence;
-    expect(evidence).toMatchObject({ allowance: 'growth', consumed: 0, limit: 3 });
-    expect(fixture.outcome.detail).toContain(`Kickback halt generation: ${evidence?.haltGeneration}`);
-    expect(fixture.outcome.detail).toContain('Plan-growth allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature prd-audit-kickback --gate prd_audit --by «N» --rationale "«why»"');
-  });
-
-  it('records the exhausted growth allowance and generation for an as-built cap halt', async () => {
-    const fixture = await createAsBuiltRemediationCapFixture({ priorGrowthAdded: 1 });
-
-    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
-    const evidence = (await readKickbackLedger(fixture.root)).gates.architecture_review_as_built.capEvidence;
-    expect(evidence).toMatchObject({ allowance: 'growth', consumed: 1, limit: 1 });
-    expect(fixture.outcome.detail).toContain(`Kickback halt generation: ${evidence?.haltGeneration}`);
-    expect(fixture.outcome.detail).toContain('Plan-growth allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature as-built-remediation-cap --gate architecture_review_as_built --by «N» --rationale "«why»"');
-  });
-
-  it('records prd_audit growth evidence at the shared validation-group growth exit', async () => {
-    const fixture = await createAsBuiltRemediationCapFixture({
-      withPrdEvidence: true,
-      appendCap: 2,
-    });
-
-    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
-    const evidence = (await readKickbackLedger(fixture.root)).gates.prd_audit.capEvidence;
-    expect(evidence).toMatchObject({ allowance: 'growth', consumed: 0, limit: 2 });
-    expect(fixture.outcome.detail).toContain(`Kickback halt generation: ${evidence?.haltGeneration}`);
-    expect(fixture.outcome.detail).toContain('Plan-growth allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature as-built-remediation-cap --gate prd_audit --by «N» --rationale "«why»"');
-    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
-  });
-
-  it('keeps existing-task remediation outside growth evidence until its lap allowance is exhausted', async () => {
-    const admitted = await createPrdAuditRemediationFixture({
-      taskCount: 12,
-      criteria: ['S2.1'],
-      existingTask: true,
-      priorGrowthAdded: 2,
-    });
-    const admittedLedger = await readKickbackLedger(admitted.root);
-    expect(admittedLedger.gates.prd_audit?.capEvidence).toBeUndefined();
-    expect(admittedLedger.growth?.added).toBe(2);
-
-    const exhausted = await createPrdAuditRemediationFixture({
-      taskCount: 12,
-      criteria: ['S2.1'],
-      existingTask: true,
-      priorLaps: 1,
-    });
-    const evidence = (await readKickbackLedger(exhausted.root)).gates.prd_audit.capEvidence;
-    expect(exhausted.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
-    expect(evidence).toMatchObject({ allowance: 'laps', consumed: 1, limit: 1 });
-  });
-
   it('does not record cap evidence or a budget-raise command when policy refuses plan growth', async () => {
     const root = await mkdtemp(join(tmpdir(), 'prd-audit-no-growth-allowance-'));
     dirs.push(root);
@@ -2150,26 +2065,30 @@ describe('prd_audit kickback', () => {
     expect(ledger.gates.prd_audit?.capEvidence).toBeUndefined();
   });
 
-  // #2753: a lap that cannot append must not pay for /remediate, and must not
-  // strand a remediation.json the resumed lap can no longer reuse.
-  it('halts an exhausted prd_audit lap before dispatching remediate, with unchanged halt evidence', async () => {
+  it('dispatches, appends, seeds, and records an exhausted prd_audit repair pending build', async () => {
     const fixture = await createPrdAuditRemediationFixture({
       taskCount: 12,
       criteria: ['S2.5'],
       priorLaps: 1,
     });
 
-    expect(fixture.remediateDispatches).toEqual([]);
-    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
-    expect(fixture.outcome.detail).toContain(
-      'prd_audit remediation lap cap reached (1/1) before appending fix tasks. Findings: S2.5.',
-    );
-    expect(fixture.outcome.detail).toMatch(/Kickback halt generation: \d+/);
+    expect(fixture.remediateDispatches).toEqual(['remediate']);
+    expect(fixture.outcome).toMatchObject({ kind: 'route', target: 'build' });
     const ledger = await readKickbackLedger(fixture.root);
     expect(ledger.gates.prd_audit).toMatchObject({
-      capEvidence: expect.objectContaining({ consumed: 1, limit: 1 }),
+      laps: 1,
     });
-    await expect(accessPath(join(fixture.root, '.pipeline', 'remediation.json'))).rejects.toThrow();
+    expect(ledger.pendingRepair).toMatchObject({
+      charges: { prd_audit: { laps: 1, growth: 1 } },
+    });
+    expect(ledger.pendingRepair?.taskIds).toHaveLength(1);
+    expect(await readFile(fixture.planPath, 'utf8')).toContain('**Criterion:** S2.5');
+    expect((await execa('git', ['log', '-1', '--format=%s'], { cwd: fixture.root })).stdout)
+      .toBe('chore(plan): record appended remediation tasks');
+    const taskStatus = JSON.parse(await readFile(join(fixture.root, '.pipeline', 'task-status.json'), 'utf8'));
+    expect(taskStatus.tasks).toContainEqual(expect.objectContaining({
+      id: ledger.pendingRepair!.taskIds[0], name: 'Repair S2.5', status: 'pending',
+    }));
   });
 
   it('still dispatches remediate and appends when the prd_audit lap is under the cap', async () => {
@@ -2182,6 +2101,28 @@ describe('prd_audit kickback', () => {
     expect(fixture.remediateDispatches).toEqual(['remediate']);
     expect(fixture.outcome).toMatchObject({ kind: 'route', target: 'build' });
     expect(await readFile(fixture.planPath, 'utf8')).toContain('**Criterion:** S2.5');
+    const ledger = await readKickbackLedger(fixture.root);
+    expect(ledger.gates.prd_audit?.laps ?? 0).toBe(0);
+    expect(ledger.growth?.added ?? 0).toBe(0);
+    expect(ledger.pendingRepair).toMatchObject({
+      charges: { prd_audit: { laps: 1, growth: 1 } },
+    });
+  });
+
+  it('records no pending charge when the admitted task cannot be appended', async () => {
+    const fixture = await createPrdAuditRemediationFixture({
+      taskCount: 12,
+      criteria: ['S2.5'],
+      repairTaskId: 'invalid task id',
+    });
+
+    expect(fixture.remediateDispatches).toEqual(['remediate']);
+    expect(fixture.outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(await readFile(fixture.planPath, 'utf8')).not.toContain('**Criterion:** S2.5');
+    const ledger = await readKickbackLedger(fixture.root);
+    expect(ledger.pendingRepair).toBeUndefined();
+    expect(ledger.gates.prd_audit?.laps ?? 0).toBe(0);
+    expect(ledger.growth?.added ?? 0).toBe(0);
   });
 
   it('honors a raised configurable growth cap before appending every FIXABLE task', async () => {
@@ -2904,16 +2845,19 @@ describe('prd_audit kickback', () => {
         });
 
         // The switch is the ONLY difference from the cell above: enabling it
-        // admits the as-built findings through the appender and charges their
-        // gate-local budget. These effects distinguish as-built authority
-        // from the PRD-only route that still exists in a mixed round.
+        // admits the as-built findings through the appender and records their
+        // gate-local charge for the build transition. These effects distinguish
+        // as-built authority from the PRD-only route that still exists in a
+        // mixed round.
         expect(fixture.outcome).toMatchObject({ kind: 'route', target: 'build' });
         const ledger = await readKickbackLedger(fixture.root);
         const plan = await readFile(fixture.planPath, 'utf8');
         expect(plan).toContain('rem-as-built-');
-        expect((ledger.gates?.architecture_review_as_built as { laps?: number } | undefined)?.laps)
-          .toBe(1);
-        expect(ledger.growth?.byGate?.architecture_review_as_built).toBe(2);
+        expect((ledger.gates?.architecture_review_as_built as { laps?: number } | undefined)?.laps ?? 0)
+          .toBe(0);
+        expect(ledger.growth?.byGate?.architecture_review_as_built ?? 0).toBe(0);
+        expect(ledger.pendingRepair?.charges.architecture_review_as_built)
+          .toEqual({ laps: 1, growth: 2 });
       });
     }
   });
