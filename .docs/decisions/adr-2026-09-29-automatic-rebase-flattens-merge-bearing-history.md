@@ -153,6 +153,21 @@ docs). It also stops at every conflicting merge, which would need a second conti
    evidence translation today and gains none. The flatten pairs are consumed only on the
    `performRebase` path.
 
+> **Amended 2026-09-30 by prd_audit AB-6 (operator decision, James Stoup):** D5's field list
+> presumes a merge has already been identified. Some pre-mutation refusals happen before any merge,
+> parent pair, or flattened commit exists. D5 now applies only to a refusal that names a real
+> content-bearing merge, both of its parents, and its flattened commit. Every other statement in
+> D1–D8 is unchanged. One decision is added:
+>
+> **D9.** A pre-mutation refusal that cannot name a merge, both parents, and a flattened commit is
+> a generic start failure, distinct from `flatten_refused`. Examples are a failed or malformed
+> `rev-list --merges`, a replay-planning failure, and a D3(a) tree mismatch before a
+> content-bearing merge is identified. `performRebase` returns `conflict_halt` with
+> `startFailure: true` and no conflicted paths, so the gated resolver is never dispatched and the
+> paused-conflict resume note is never written. Autoresolve escalates it with the reason
+> `rebase-error`. It never carries placeholder shas and never uses the D5 recovery recipe. Like
+> D5, it mutates nothing and blocks finish.
+
 ## Consequences
 
 ### Positive
