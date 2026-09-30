@@ -19,6 +19,8 @@ export interface OverlapSuggestions {
   preAccepted: OverlapSuggestion[];
   advisory: BranchOverlap[];
   omittedCount?: number;
+  /** Source failures are advisory and travel with the single preflight result. */
+  skipNotes?: Array<{ part: string; reason: string }>;
 }
 
 export interface BuildSuggestionsInput {

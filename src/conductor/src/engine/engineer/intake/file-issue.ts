@@ -39,6 +39,7 @@ export interface FileIntakeIssueOpts {
   dependsOn?: string[];
   interactive?: boolean;
   repo?: string;
+  declineOverlap?: string[];
 }
 
 export interface FileIntakeIssueDeps {
@@ -307,6 +308,7 @@ export async function fileIntakeIssue(
       dependsOn: opts.dependsOn ?? [],
       interactive: Boolean(opts.interactive),
       prompt: deps.prompt,
+      declineOverlap: opts.declineOverlap,
     }, deps.overlap)
     : undefined;
   if (overlap) result.overlap = overlap;

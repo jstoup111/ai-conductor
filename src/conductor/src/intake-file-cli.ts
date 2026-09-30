@@ -16,7 +16,8 @@
 import { createInterface } from 'node:readline/promises';
 import { makeProductionGh } from './engine/pr-labels.js';
 import { createIntakeFilingOperations, fileIntakeIssue, type FileIntakeIssueOpts } from './engine/engineer/intake/file-issue.js';
-import { describeRedactions } from './engine/engineer/intake/sanitize.js';
+import { renderIntakeFileOutput } from './engine/engineer/intake/filing-output.js';
+import { buildOverlapSources } from './engine/engineer/intake/overlap-preflight.js';
 import { runTrackerRead, type GhRunner } from './engine/tracker-client.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { ConductorEventEmitter } from './ui/events.js';
@@ -24,7 +25,7 @@ import { EventPersister } from './engine/event-persister.js';
 import { join } from 'node:path';
 
 function parseArgs(argv: string[]): FileIntakeIssueOpts | null {
-  const opts: Partial<FileIntakeIssueOpts> & { dependsOn: string[] } = { dependsOn: [] };
+  const opts: Partial<FileIntakeIssueOpts> & { dependsOn: string[]; declineOverlap: string[] } = { dependsOn: [], declineOverlap: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const next = (): string => {
@@ -55,6 +56,9 @@ function parseArgs(argv: string[]): FileIntakeIssueOpts | null {
       }
       case '--depends-on':
         opts.dependsOn.push(next());
+        break;
+      case '--decline-overlap':
+        opts.declineOverlap.push(next());
         break;
       case '--repo':
         opts.repo = next();
@@ -100,8 +104,8 @@ async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
   if (!opts) {
     console.error(
-      'Usage: intake-file --title <t> --body <b> [--size S|M|L] ' +
-        '[--priority critical|high|medium|low] [--depends-on owner/repo#N ...] [--repo owner/repo]',
+          'Usage: intake-file --title <t> --body <b> [--size S|M|L] ' +
+        '[--priority critical|high|medium|low] [--depends-on owner/repo#N ...] [--decline-overlap owner/repo#N ...] [--repo owner/repo]',
     );
     process.exitCode = 1;
     return;
@@ -111,7 +115,7 @@ async function main(): Promise<void> {
   let persister: EventPersister | undefined;
   try {
     const gh = makeProductionGh();
-    const cwd = '.';
+    const cwd = process.cwd();
     const repository = await resolveFilingRepository(gh, opts.repo, cwd);
     const resolveActor = makeMachineOwnerResolver(gh, cwd);
     const events = new ConductorEventEmitter();
@@ -119,6 +123,11 @@ async function main(): Promise<void> {
     persister.start();
     const result = await fileIntakeIssue({ ...opts, repo: repository }, {
       prompt: rl ? (question: string) => rl.question(`${question} `) : undefined,
+      overlap: {
+        repository,
+        events,
+        suggestions: buildOverlapSources({ cwd, repository, gh }),
+      },
       creation: {
         authority: { resolveActor, intent: { kind: 'explicit-intake', repository } },
         operations: createIntakeFilingOperations(gh, cwd, {
@@ -128,28 +137,10 @@ async function main(): Promise<void> {
       },
     });
 
-    if (result.issueUrl) console.log(`[intake-file] filed: ${result.issueUrl}`);
-    else console.error('[intake-file] filing did not return a canonical issue URL');
-    console.log(`[intake-file] size=${result.size} (${result.sizeSource})`);
-    console.log(`[intake-file] priority=${result.priority} (${result.prioritySource})`);
-    if (result.dependsOnDecision === 'linked') {
-      console.log(`[intake-file] depends-on: ${result.linked.join(', ') || '(none linked)'}`);
-    } else {
-      console.log('[intake-file] dependencies: none');
-    }
-    if (result.redactions.length > 0) {
-      console.error(
-        `[intake-file] redacted before filing: ${describeRedactions(result.redactions)} ` +
-          '— review the filed issue and restore any evidence the scrub clipped',
-      );
-    }
-    for (const w of result.warnings) console.error(`[intake-file] warning: ${w}`);
-    for (const bad of result.badRefs) console.error(`[intake-file] warning: bad --depends-on ref "${bad}"`);
-    for (const dependency of result.unlinked) {
-      console.error(
-        `[intake-file] NOT LINKED: ${result.issueUrl} is not blocked by ${dependency.ref} (${dependency.reason})`,
-      );
-    }
+    const output = renderIntakeFileOutput(result);
+    if (output.stdout) process.stdout.write(output.stdout);
+    if (output.stderr) process.stderr.write(output.stderr);
+    process.exitCode = output.exitCode;
   } finally {
     persister?.stop();
     rl?.close();
