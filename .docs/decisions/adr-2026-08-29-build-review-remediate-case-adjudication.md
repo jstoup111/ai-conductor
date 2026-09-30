@@ -179,6 +179,19 @@ A crash after reservation resumes the same effect. A crash after remote issue cr
 marker before attempting another create. An unavailable intake service leaves the effect pending or
 failed and blocks PASS; it never converts a deferral into a silent drop.
 
+> **Amended 2026-09-30 by #1810:** D4-D6 and D8's required-effect meaning for non-blocking
+> deferral is now the applied local `post-ship` handoff defined by
+> [adr-2026-09-30-durable-post-ship-action-cases](adr-2026-09-30-durable-post-ship-action-cases.md)
+> D1-D7. Persist the source observation and local effect together; intake title/body remain a
+> proposal and remote publication is an explicit later operator action. Do not label a local
+> handoff as an applied remote deferral. Migrate eligible unfiled/failed deferrals atomically,
+> retaining old marker aliases and existing issue URLs; unfinished BUILD effects remain blockers.
+> This also governs the narrow upheld remainder in D7's later refutation amendment. Optional
+> publication failure does not block PASS or mixed actionable routing once required local effects
+> are complete. Source-complete judgement, stable case identity, action effects, operator-risk
+> authority, and the successor's infrastructure/decision precedence are unchanged. D5 uses the
+> additive scoped v3 storage contract; repository action decisions do not govern review settlement.
+
 ### D7 — Only a new actionable work order consumes the existing kickback
 
 Budget granularity remains a **route/lap**, not one counter increment per finding. If an adjudication

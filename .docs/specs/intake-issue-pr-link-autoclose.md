@@ -69,6 +69,15 @@ Source-Ref: owner/repo#49
   **non-fatal** — it logs and continues, never rolling back a committed spec or a created PR
   (mirrors the existing FR-37 write-back contract).
 
+> **Amended 2026-09-30 by #1810:** FR-5's origin-only gate is now empty-target-set gating:
+> explicitly declared `Closes-Also` GitHub targets work without an originating issue, while
+> existing origin parsing and non-GitHub compatibility remain. FR-7 continues to preserve
+> committed specs and created PRs on error; implementation linkage now reports incomplete or
+> refused FINISH publication until the full approved set is observed, rather than treating an
+> attempted write as complete. Spec reference writeback stays non-closing and best-effort.
+> The approved #1810 workflow supports explicitly declared cross-repository GitHub targets;
+> its merge-time closure takes precedence over the older observed-close prescription.
+
 ## Out of scope
 
 - Changing the FR-39/40 re-eligibility (reopen-on-unmerged-spec) behavior.

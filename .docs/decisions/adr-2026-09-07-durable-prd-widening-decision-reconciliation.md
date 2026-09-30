@@ -46,6 +46,16 @@ This is the first real second-domain implementation. Shared storage and projecti
 > **D2.1** Source uniqueness for `build_review` records is lifecycle-scoped per that D6; nothing else in
 > this decision changes.
 
+> **Amended 2026-09-30 by #1810:** D2's shared persistence now admits the additive v3
+> `postShipSources`/`postShipCases` collections and explicit storage scopes in
+> [adr-2026-09-30-durable-post-ship-action-cases](adr-2026-09-30-durable-post-ship-action-cases.md)
+> D1. Feature-local state retains autonomous gate control and source observations; repository
+> action state owns operator follow-up decisions and has no gate-control records. Preserve v1/v2
+> cases, effects, suppressions, PRD relationships, decision history, and feature identity through
+> migration and sibling-domain mutation. Unknown versions and foreign scopes fail explicitly.
+> PRD operator accept/refuse authority and reconciliation remain unchanged; a post-ship action
+> resolution or publication is never PRD acceptance or cross-gate equivalence.
+
 ### D3 — Capture original decisions before current-report reconciliation
 
 When presenting a new over-scope halt, persist an engine-stamped decision offer with the feature, original finding evidence, report snapshot, and offered case reference before rendering the editable block. Capture runs at PRD-audit entry before dispatch and remains idempotently callable from both existing over-scope routing paths. Explicit accept/refuse plus rationale and resolved operator identity is required; pending or a machine clear grants nothing.

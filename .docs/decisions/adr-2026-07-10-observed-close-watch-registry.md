@@ -61,6 +61,16 @@ input (read from the build worktree's `.docs/observation/<plan-stem>.md`):
   **enroll** `.daemon/observation-watch.jsonl` with
   `{v: 1, sourceRef, prUrl, slug, signature, surface, windowDays, enrolledAt}`.
 
+**D5 — Implementation closure precedence.**
+
+> **Amended 2026-09-30 by #1810:** Implementation issue linkage governed by
+> `adr-2026-09-30-durable-post-ship-action-cases` D10-D11 closes the originating GitHub issue and
+> explicitly declared additional GitHub targets on implementation merge. For those targets,
+> a watched declaration does not replace the closing reference with `Refs`, require enrollment,
+> or delay closure until observation. The spec PR remains non-closing. This feature introduces
+> no observation-marker land prerequisite or watcher implementation, and does not remove or
+> mutate independently enrolled watches outside its publication operation.
+
 Enrollment reuses the mergeable-watch registry idioms (`src/engine/mergeable-sweep.ts`):
 append-only JSONL, `mkdir -p .daemon`, best-effort/non-throwing, malformed lines skipped on
 read, registry rewritten with survivors after each sweep. Entries carry an explicit `v: 1`
