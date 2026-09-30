@@ -13,7 +13,7 @@ import {
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
-const slicedPlan = (task4Slice = 1, remediation = false) => [
+const slicedPlan = (task4Slice = 1, remediation = false, secondTitle = 'Publication') => [
   '# Plan',
   '',
   '## Slices',
@@ -21,7 +21,7 @@ const slicedPlan = (task4Slice = 1, remediation = false) => [
   '| Slice | Title | Tasks |',
   '| --- | --- | --- |',
   `| 1 | Foundation | 1, 2${task4Slice === 1 ? ', 4' : ''} |`,
-  `| 2 | Publication | 3${task4Slice === 2 ? ', 4' : ''} |`,
+  `| 2 | ${secondTitle} | 3${task4Slice === 2 ? ', 4' : ''} |`,
   '',
   '### Task 1: Foundation',
   '**Dependencies:** none',
@@ -116,6 +116,18 @@ describe('coverage-binding slice membership', () => {
         expect(unchanged.events.filter((event) => (event as { type?: string }).type === 'plan_slices_changed')).toEqual([]);
       } finally {
         await rm(unchanged.projectDir, { recursive: true, force: true });
+      }
+
+      const retitled = await run(slicedPlan(1, false, 'Release'));
+      try {
+        retitled.envelope.files[coverageBindingEnvelopePath(retitled.projectDir)] = previous;
+        await expect(retitled.runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+        expect(retitled.envelope.writes.at(-1)?.sliceMembership?.titles).toEqual(['Foundation', 'Release']);
+        expect(retitled.events.filter((event) => (event as { type?: string }).type === 'plan_slices_changed')).toEqual([{
+          type: 'plan_slices_changed', step: 'coverage_binding', moved: [], added: [], removed: [], manifest: 'unchanged',
+        }]);
+      } finally {
+        await rm(retitled.projectDir, { recursive: true, force: true });
       }
 
       const remediationOnly = await run(slicedPlan(1, true));

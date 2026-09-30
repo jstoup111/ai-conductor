@@ -4546,8 +4546,9 @@ export class DefaultStepRunner implements StepRunner {
           type: 'plan_slices_changed', step: 'coverage_binding', moved: [], added: [], removed: [], manifest: 'dropped',
         });
       } else {
+        const currentMembership = sliceMembership;
         const previousTaskSlices = previous.sliceMembership.taskSlices;
-        const currentTaskSlices = sliceMembership.taskSlices;
+        const currentTaskSlices = currentMembership.taskSlices;
         const taskIds = [...new Set([...Object.keys(previousTaskSlices), ...Object.keys(currentTaskSlices)])].sort();
         const moved = taskIds.flatMap((taskId) => {
           const from = previousTaskSlices[taskId];
@@ -4556,7 +4557,9 @@ export class DefaultStepRunner implements StepRunner {
         });
         const added = taskIds.filter((taskId) => previousTaskSlices[taskId] === undefined && currentTaskSlices[taskId] !== undefined);
         const removed = taskIds.filter((taskId) => previousTaskSlices[taskId] !== undefined && currentTaskSlices[taskId] === undefined);
-        if (moved.length > 0 || added.length > 0 || removed.length > 0) {
+        const titlesChanged = previous.sliceMembership.titles.length !== currentMembership.titles.length ||
+          previous.sliceMembership.titles.some((title, index) => title !== currentMembership.titles[index]);
+        if (moved.length > 0 || added.length > 0 || removed.length > 0 || titlesChanged) {
           await this.events?.emit({
             type: 'plan_slices_changed', step: 'coverage_binding', moved, added, removed, manifest: 'unchanged',
           });
