@@ -2909,13 +2909,13 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       log: (message) => { logs.push(message); },
     })).resolves.toBe('rebased');
     if (changeBase) {
-      await Promise.all([
+      await Promise.all(([
         'coverage_binding',
         'test_suite',
         'build_review',
         'prd_audit',
         'architecture_review_as_built',
-      ].map(async (gate) => {
+      ] as const satisfies readonly StepName[]).map(async (gate) => {
         expect((await readVerdict(dir, gate))?.satisfied).toBe(false);
       }));
     }
