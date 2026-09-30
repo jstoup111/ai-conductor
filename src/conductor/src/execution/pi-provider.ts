@@ -29,6 +29,8 @@ type PiJsonEvent = {
   message?: {
     role?: unknown;
     content?: unknown;
+    stopReason?: unknown;
+    errorMessage?: unknown;
   };
   usage?: {
     input?: unknown;
@@ -69,10 +71,14 @@ export function parsePiJsonl(stdout: string): {
   output: string;
   tokenUsage?: TokenUsage;
   hasTerminalAssistantMessage: boolean;
+  terminalAssistantStopReason?: string;
+  terminalAssistantErrorMessage?: string;
 } {
   let output = '';
   let tokenUsage: TokenUsage | undefined;
   let hasTerminalAssistantMessage = false;
+  let terminalAssistantStopReason: string | undefined;
+  let terminalAssistantErrorMessage: string | undefined;
   let assistantTurns = 0;
 
   for (const line of stdout.split(/\r?\n/)) {
@@ -83,6 +89,12 @@ export function parsePiJsonl(stdout: string): {
         hasTerminalAssistantMessage = true;
         assistantTurns += 1;
         output = terminalAssistantText(event.message.content);
+        terminalAssistantStopReason = typeof event.message.stopReason === 'string'
+          ? event.message.stopReason
+          : undefined;
+        terminalAssistantErrorMessage = typeof event.message.errorMessage === 'string'
+          ? event.message.errorMessage
+          : undefined;
       }
       if ((event.type === 'message_update'
         || (event.type === 'message_end' && event.message?.role === 'assistant')) && event.usage) {
@@ -106,7 +118,13 @@ export function parsePiJsonl(stdout: string): {
     tokenUsage = { ...(tokenUsage ?? { input: 0, output: 0 }), numTurns: assistantTurns };
   }
 
-  return { output, tokenUsage, hasTerminalAssistantMessage };
+  return {
+    output,
+    tokenUsage,
+    hasTerminalAssistantMessage,
+    ...(terminalAssistantStopReason ? { terminalAssistantStopReason } : {}),
+    ...(terminalAssistantErrorMessage ? { terminalAssistantErrorMessage } : {}),
+  };
 }
 
 /** One-shot Pi adapter. */
@@ -173,6 +191,14 @@ export class PiProvider implements LLMProvider {
       return {
         success: false,
         output: `${piDisplayName()} provider parse failure: missing terminal assistant message.`,
+        exitCode,
+      };
+    }
+
+    if (exitCode === 0 && parsed.terminalAssistantStopReason === 'error') {
+      return {
+        success: false,
+        output: parsed.terminalAssistantErrorMessage || 'Pi reported an error stop with no message',
         exitCode,
       };
     }

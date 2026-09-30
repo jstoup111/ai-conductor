@@ -1,4 +1,4 @@
-// Covers: task:3, task:15, task:16, task:17, task:18
+// Covers: task:3, task:4, task:15, task:16, task:17, task:18
 import { readFile } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
@@ -71,7 +71,7 @@ describe('PiProvider', () => {
     expect(Object.getOwnPropertyNames(PiProvider.prototype)).toEqual(['constructor', 'invoke']);
   });
 
-  it('declares Pi without deferred capabilities and with a no-model policy rung', async () => {
+  it('declares Pi without deferred capabilities and requires configured models', async () => {
     const pi = providerDescriptor('pi');
 
     expect(pi).toMatchObject({
@@ -80,7 +80,8 @@ describe('PiProvider', () => {
       versionArgv: ['--version'],
       capabilities: {},
     });
-    expect(pi.modelPolicy.modelFallbackLadder).toEqual(['']);
+    expect(pi.modelPolicy.requiresConfiguredModels).toBe(true);
+    expect(pi.modelPolicy.modelFallbackLadder).toEqual([]);
     expect(Object.values(pi.modelPolicy.stepModels)).toEqual(
       expect.arrayContaining(['']),
     );
@@ -153,6 +154,57 @@ describe('PiProvider', () => {
       success: false,
       exitCode: 0,
       output: expect.stringContaining('missing terminal assistant message'),
+    });
+  });
+
+  it('fails an exit-zero error-stop stream as an ordinary step failure', async () => {
+    spawn.mockResolvedValue({
+      stdout: await readFile(new URL('../fixtures/pi-error-stop-stream.jsonl', import.meta.url), 'utf8'),
+      stderr: '',
+      exitCode: 0,
+    } as ExecaResult);
+
+    const result = await provider.invoke(invokeOptions);
+
+    expect(result).toMatchObject({
+      success: false,
+      exitCode: 0,
+      output: expect.stringContaining('No API key for provider: cline'),
+    });
+    expect(result).not.toHaveProperty('authFailure');
+    expect(result).not.toHaveProperty('rateLimited');
+    expect(result).not.toHaveProperty('modelUnavailable');
+  });
+
+  it('fails an exit-zero error stop without an error message', async () => {
+    spawn.mockResolvedValue({
+      stdout: JSON.stringify({
+        type: 'message_end',
+        message: { role: 'assistant', content: [], stopReason: 'error' },
+      }),
+      stderr: '',
+      exitCode: 0,
+    } as ExecaResult);
+
+    await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
+      success: false,
+      exitCode: 0,
+      output: 'Pi reported an error stop with no message',
+    });
+  });
+
+  it('retains an error stop before a malformed trailing JSONL line', async () => {
+    const errorStop = await readFile(new URL('../fixtures/pi-error-stop-stream.jsonl', import.meta.url), 'utf8');
+    spawn.mockResolvedValue({
+      stdout: `${errorStop}\nnot JSON`,
+      stderr: '',
+      exitCode: 0,
+    } as ExecaResult);
+
+    await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
+      success: false,
+      exitCode: 0,
+      output: expect.stringContaining('No API key for provider: cline'),
     });
   });
 
