@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-30T16:39:07.129Z
 Slug: automatic-rebase-preserves-merges-carrying-unique-
 Class: needs-human
 Halting step: prd_audit
