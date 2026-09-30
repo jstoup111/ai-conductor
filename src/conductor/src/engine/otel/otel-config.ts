@@ -123,6 +123,7 @@ export type ResolvedOtelConfig =
       endpoint: string;
       protocol?: 'http/protobuf' | 'grpc';
       spool?: { enabled: boolean; maxBytes: number };
+      spoolWarnings?: string[];
       headers?: Record<string, string>;
       projectName?: string;
       workerName?: string;
@@ -207,6 +208,15 @@ export function resolveOtelConfig(
       };
     }
 
+    if (protocol === 'grpc' && spool?.enabled === true) {
+      return {
+        enabled: false,
+        error: 'otel.spool.enabled: true is unsupported with protocol: grpc; use protocol: http/protobuf to enable the spool.',
+      };
+    }
+
+    const spoolIsInactiveForGrpc = protocol === 'grpc' && spool?.enabled === undefined;
+
     if (hasHeaderEntries(headers) && protocol === 'grpc') {
       return {
         enabled: false,
@@ -262,7 +272,8 @@ export function resolveOtelConfig(
       enabled: true,
       exporter: 'otlp',
       endpoint,
-      spool: { enabled: spool?.enabled ?? true, maxBytes },
+      spool: { enabled: spoolIsInactiveForGrpc ? false : spool?.enabled ?? true, maxBytes },
+      ...(spoolIsInactiveForGrpc ? { spoolWarnings: ['otel spool is inactive for grpc protocol; use protocol: http/protobuf to enable it.'] } : {}),
       ...(protocol ? { protocol } : {}),
       ...(hasHeaderEntries(headers) ? { headers: resolvedHeaders } : {}),
       ...(projectName ? { projectName } : {}),

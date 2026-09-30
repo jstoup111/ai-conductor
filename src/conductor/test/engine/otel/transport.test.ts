@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:2, task:3
 /**
  * T8: buildExporters(otelConfig) — transport factory.
  * FR-7: OTLP HTTP default (port 4318), gRPC (port 4317) selectable via config,
@@ -117,6 +117,48 @@ describe('buildExporters', () => {
       const exporters = buildExporters(resolved as Extract<typeof resolved, { enabled: true }>);
       expect(exporters.spanExporter).toBeInstanceOf(OTLPGrpcTraceExporter);
       expect(exporters.metricExporter).toBeInstanceOf(OTLPGrpcMetricExporter);
+    });
+
+    it('keeps default gRPC export unwrapped when the inactive spool falls back', () => {
+      const resolved = resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc' } },
+        pipelineDir,
+      );
+      const otlpConfig = resolved as Extract<typeof resolved, { enabled: true; exporter: 'otlp' }>;
+      const exporters = buildExporters(otlpConfig);
+
+      expect({
+        spool: otlpConfig.spool,
+        spanIsGrpc: exporters.spanExporter instanceof OTLPGrpcTraceExporter,
+        metricIsGrpc: exporters.metricExporter instanceof OTLPGrpcMetricExporter,
+      }).toEqual({
+        spool: { enabled: false, maxBytes: 536_870_912 },
+        spanIsGrpc: true,
+        metricIsGrpc: true,
+      });
+    });
+
+    it('keeps explicitly disabled gRPC spool export unwrapped without a warning', () => {
+      const resolved = resolveOtelConfig(
+        {
+          otel: {
+            exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc', spool: { enabled: false },
+          },
+        },
+        pipelineDir,
+      );
+      const otlpConfig = resolved as Extract<typeof resolved, { enabled: true; exporter: 'otlp' }>;
+      const exporters = buildExporters(otlpConfig);
+
+      expect({
+        spoolWarnings: otlpConfig.spoolWarnings,
+        spanIsGrpc: exporters.spanExporter instanceof OTLPGrpcTraceExporter,
+        metricIsGrpc: exporters.metricExporter instanceof OTLPGrpcMetricExporter,
+      }).toEqual({
+        spoolWarnings: undefined,
+        spanIsGrpc: true,
+        metricIsGrpc: true,
+      });
     });
 
     it('gRPC exporter is NOT an HTTP exporter instance', () => {

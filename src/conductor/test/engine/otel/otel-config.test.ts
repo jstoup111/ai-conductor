@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:6, task:11, task:1
+// Covers: task:2, task:1, task:6, task:11
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -82,6 +82,39 @@ describe('resolveOtelConfig', () => {
       expect(result).toMatchObject({
         enabled: false,
         error: expect.stringMatching(/otel\.spool\.max_bytes.*positive integer.*bytes/i),
+      });
+    });
+
+    it('keeps default gRPC export direct and records one inactive-spool warning', () => {
+      expect(
+        resolveOtelConfig(
+          { otel: { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc' } },
+          PIPELINE_DIR,
+        ),
+      ).toMatchObject({
+        enabled: true,
+        protocol: 'grpc',
+        spool: { enabled: false, maxBytes: 536_870_912 },
+        spoolWarnings: [expect.stringMatching(/spool.*inactive.*grpc/i)],
+      });
+    });
+
+    it('refuses an explicitly enabled spool for gRPC with the HTTP/protobuf remedy', () => {
+      expect(
+        resolveOtelConfig(
+          {
+            otel: {
+              exporter: 'otlp',
+              endpoint: 'http://localhost:4317',
+              protocol: 'grpc',
+              spool: { enabled: true },
+            },
+          },
+          PIPELINE_DIR,
+        ),
+      ).toMatchObject({
+        enabled: false,
+        error: expect.stringMatching(/protocol:\s*http\/protobuf/i),
       });
     });
   });
