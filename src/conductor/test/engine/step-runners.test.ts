@@ -5469,6 +5469,39 @@ TIER: M`,
       expect(dispatched!.endsWith(prompt!)).toBe(true);
     });
 
+    it('retains final failed-grader exit facts through the exhausted mechanical-fault aggregate', async () => {
+      await scopedPlan();
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: false,
+        output: '',
+        exitCode: 1,
+        exitFacts: { exitCode: 1, stdoutBytes: 0, stderrBytes: 0 },
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scopedGit(),
+        planPath,
+        config: {
+          test_suite: { scoped_command: 'true' },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+        } as HarnessConfig,
+        ...currentBuildReviewProof(),
+      });
+
+      await runner.run('build_review', emptyState);
+      await runner.run('build_review', emptyState);
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result).toMatchObject({ success: false });
+      expect(result.output).toContain('invalid-provider-result');
+      expect(result.output).toContain('exitCode=1');
+      expect(result.output).toContain('stdoutBytes=0');
+      expect(result.output).toContain('stderrBytes=0');
+      await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).resolves.toMatchObject(
+        expect.stringContaining('exitCode=1'),
+      );
+    });
+
     it('does not dispatch the coordinator or legacy scalar grader when the whole gate is disabled', async () => {
       const provider = createMockProvider();
       const coordinate = vi.fn(async () => ({ success: true, output: 'unexpected coordinator dispatch' }));
@@ -6199,13 +6232,16 @@ describe('build_review rubric dispatch', () => {
     });
   });
 
-  it('returns undefined (not a failure report) when the provider invocation itself fails', async () => {
+  it('returns a provider-result dispatch failure when the grader invocation itself fails', async () => {
     const invoke = vi.fn().mockResolvedValue({ success: false, output: 'crashed', exitCode: 1 });
     const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
 
-    await expect(dispatch(runner)).resolves.toBeUndefined();
+    await expect(dispatch(runner)).resolves.toMatchObject({
+      kind: 'dispatch-failure',
+      cause: 'invalid-provider-result',
+      detail: 'build_review grader invocation ended without a result.',
+    });
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
 });
-

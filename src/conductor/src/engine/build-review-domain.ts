@@ -922,7 +922,7 @@ export interface BuildReviewDispatchFailure {
   readonly detail: string;
   readonly providerSetupExhaustion?: ProviderSetupExhaustion;
   /** A native structured payload was present but rejected by the engine contract. */
-  readonly cause?: 'invalid-structured-result' | 'native-schema-unsupported' | 'read-only-review-unavailable';
+  readonly cause?: 'invalid-provider-result' | 'invalid-structured-result' | 'native-schema-unsupported' | 'read-only-review-unavailable';
   /** Kept typed so the existing fault event can carry it once its union admits the field. */
   readonly rejection?: BuildReviewJudgedResultRejection;
 }
@@ -936,7 +936,7 @@ function providerSetupExhaustion(value: unknown): ProviderSetupExhaustion | unde
 export function makeBuildReviewDispatchFailure(
   detail: string,
   setupExhaustion?: ProviderSetupExhaustion,
-  structuredFailure?: { readonly cause: 'invalid-structured-result'; readonly rejection: BuildReviewJudgedResultRejection } | { readonly cause: 'native-schema-unsupported' } | { readonly cause: 'read-only-review-unavailable' },
+  structuredFailure?: { readonly cause: 'invalid-provider-result' } | { readonly cause: 'invalid-structured-result'; readonly rejection: BuildReviewJudgedResultRejection } | { readonly cause: 'native-schema-unsupported' } | { readonly cause: 'read-only-review-unavailable' },
 ): BuildReviewDispatchFailure {
   return {
     kind: 'dispatch-failure', detail,
@@ -957,11 +957,13 @@ export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDisp
     : undefined;
   const nativeSchemaUnsupported = source?.cause === 'native-schema-unsupported';
   const readOnlyReviewUnavailable = source?.cause === 'read-only-review-unavailable';
+  const invalidProviderResult = source?.cause === 'invalid-provider-result';
   return source?.kind === 'dispatch-failure' && text(source.detail) && (source.providerSetupExhaustion === undefined || setupExhaustion)
     ? {
         kind: 'dispatch-failure', detail: source.detail,
         ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}),
         ...(invalidStructuredResult ? { cause: 'invalid-structured-result' as const, rejection: invalidStructuredResult } : {}),
+        ...(invalidProviderResult ? { cause: 'invalid-provider-result' as const } : {}),
         ...(nativeSchemaUnsupported ? { cause: 'native-schema-unsupported' as const } : {}),
         ...(readOnlyReviewUnavailable ? { cause: 'read-only-review-unavailable' as const } : {}),
       }

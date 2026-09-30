@@ -799,7 +799,7 @@ export async function coordinateBuildReviewRubrics(
             buildReviewCandidateScopeResolutionContext(projection),
           );
           const detail = cacheWriteDetail ?? failure?.detail ?? describeBuildReviewDispatchedResultRejection(candidate, rubric, projection);
-          const structuredResultWasRejected = failure?.cause === 'invalid-structured-result' || dispatched !== undefined;
+          const structuredResultWasRejected = failure?.cause === 'invalid-structured-result' || (failure?.cause === undefined && dispatched !== undefined);
           return {
             rubric,
             branch: infrastructure(
@@ -808,6 +808,8 @@ export async function coordinateBuildReviewRubrics(
                 ? 'native-schema-unsupported'
                 : failure?.cause === 'read-only-review-unavailable'
                 ? 'read-only-review-unavailable'
+                : failure?.cause === 'invalid-provider-result'
+                ? 'invalid-provider-result'
                 : structuredResultWasRejected
                 ? 'invalid-structured-result'
                 : 'invalid-provider-result',
