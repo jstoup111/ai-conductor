@@ -97,6 +97,13 @@ export const FALLBACK_EFFORT: EffortLevel = 'medium';
 export const FALLBACK_RETRIES = 3;
 export const FALLBACK_REVIEW: ReviewMode = 'manual';
 
+function fallbackModelForPolicy(policy: ProviderModelPolicy): string {
+  if (policy.requiresConfiguredModels) {
+    throw new Error('Provider model policy requires a configured model');
+  }
+  return FALLBACK_MODEL;
+}
+
 /** The serial daemon default when no executor-pool width is configured. */
 export const DEFAULT_DAEMON_CONCURRENCY = 1;
 
@@ -278,7 +285,7 @@ export function resolveProviderNativeStepConfig(
     defaultsCfg?.model ??
     policyStepTier?.model ??
     policy.stepModels[step] ??
-    FALLBACK_MODEL;
+    fallbackModelForPolicy(policy);
 
   const effort: EffortLevel =
     options.effortCliOverride ??
@@ -832,7 +839,7 @@ export function resolveBuildReviewConfig(
   const inheritedPrimaryProvider = normalizeProviderSelection(inheritedProviderSelection)[0] ?? DEFAULT_PROVIDER;
   const inheritedPolicy = outerStepConfig?.llm_provider === undefined && config?.llm_provider === undefined
     ? policy
-    : resolveProviderModelPolicy(inheritedPrimaryProvider);
+    : resolveProviderModelPolicy(inheritedPrimaryProvider, { config });
   const resolveRubricPolicy = (
     rubric: BuildReviewRubricConfig | BuildReviewCustomRubricConfig | undefined,
     defaultEnabled: boolean,
@@ -847,7 +854,7 @@ export function resolveBuildReviewConfig(
     const rubricPrimaryProvider = normalizeProviderSelection(rubricProvider)[0] ?? inheritedPrimaryProvider;
     const rubricPolicy = rubric?.llm_provider === undefined
       ? inheritedPolicy
-      : resolveProviderModelPolicy(rubricPrimaryProvider);
+      : resolveProviderModelPolicy(rubricPrimaryProvider, { config });
     const rubricConfig: HarnessConfig = {
       ...config,
       steps: {
