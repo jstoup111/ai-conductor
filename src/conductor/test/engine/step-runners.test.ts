@@ -41,6 +41,7 @@ import { scopedRunFailure } from '../../src/engine/build-review-test-quality-pre
 import type { BuildReviewScopedLauncher } from '../../src/engine/build-review-scoped-run.js';
 import { renderBuildReviewUnresolvedSkillRemedy } from '../../src/engine/build-review-domain.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
+import { BUILT_IN_PROVIDERS } from '../../src/execution/provider-catalog.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -6242,6 +6243,96 @@ describe('build_review rubric dispatch', () => {
       detail: 'build_review grader invocation ended without a result.',
     });
     expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips Pi for its unavailable review-policy catalog and dispatches the Claude fallback', async () => {
+    const piInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: '{"findings":[]}',
+      exitCode: 0,
+      finalStructuredResult: { findings: [] },
+    }));
+    const lifecycleCapability = { synchronousSpawnPermit: true } as const;
+    const nativeSchemaCapability = { nativeOutputSchema: true } as const;
+    const runtime = (key: 'pi' | 'claude', invoke: LLMProvider['invoke']) => ({
+      key,
+      provider: { lifecycleCapability, nativeSchemaCapability, invoke },
+      lifecycleCapability,
+      nativeSchemaCapability,
+      policy: CLAUDE_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+    });
+    const attempts: ProviderAttemptEvent[] = [];
+    const runner = new DefaultStepRunner(createMockProvider(), 'session-1', '/tmp/project', {
+      providerRuntimes: new ProviderRuntimeSet([
+        runtime('pi', piInvoke),
+        runtime('claude', claudeInvoke),
+      ]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['pi', 'claude'],
+      providerAttempt: (step, attempt) => { attempts.push({ type: 'provider_attempt', step, ...attempt }); },
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'build-review-test-quality', source: 'project', installationOrigin: '/fixture/project',
+        canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
+        declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Build review test quality\n') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+    });
+    const piThenClaudeBranch = {
+      ...branch,
+      policy: { ...policy, llm_provider: ['pi', 'claude'] as const },
+    };
+    const inputs = {
+      sourceMaterialization: {
+        contextFor: () => ({ source: undefined }),
+        settle: async () => {},
+      },
+      sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', sourceChanges: [] },
+    };
+    const engineIdentity = {
+      engineStamp: 'engine-stamp',
+      skillDigests: { testQuality: { kind: 'resolved' as const, digest: `sha256-v1:${'b'.repeat(64)}` } },
+    };
+    const piDescriptor = BUILT_IN_PROVIDERS.find((provider) => provider.id === 'pi')!;
+    const capabilities = piDescriptor.capabilities;
+    try {
+      // The catalog currently withholds native schema from Pi, which filters it
+      // before this review-policy seam. Give this fixture only that prerequisite
+      // so the test observes the later review-policy refusal.
+      Object.defineProperty(piDescriptor, 'capabilities', {
+        configurable: true,
+        value: { ...capabilities, nativeSchema: true },
+      });
+
+      await (runner as unknown as {
+        dispatchBuildReviewRubric: (
+          branch: unknown, projection: unknown, tier: undefined, context: undefined,
+          inputs: unknown, engineIdentity: unknown,
+        ) => Promise<unknown>;
+      }).dispatchBuildReviewRubric(piThenClaudeBranch, projection, undefined, undefined, inputs, engineIdentity);
+
+      expect(piInvoke).not.toHaveBeenCalled();
+      expect(claudeInvoke).toHaveBeenCalledOnce();
+      expect(attempts).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          provider: 'pi',
+          outcome: 'unavailable',
+          invoked: false,
+          skipReason: 'setup-unavailable',
+          reason: expect.stringContaining('#2852'),
+        }),
+        expect.objectContaining({ provider: 'claude', invoked: true }),
+      ]));
+    } finally {
+      Object.defineProperty(piDescriptor, 'capabilities', { configurable: true, value: capabilities });
+    }
   });
 
 });

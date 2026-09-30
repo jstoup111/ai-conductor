@@ -19,6 +19,7 @@ describe('production build-review policy catalog', () => {
         name: 'ProviderCapabilityUnsupportedError',
         provider: 'pi',
         capability: 'reviewPolicyCatalog',
+        owningIntake: '#2852',
       });
     expect(claudeCommand).not.toHaveBeenCalled();
     expect(codexOpen).not.toHaveBeenCalled();
