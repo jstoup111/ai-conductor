@@ -4,6 +4,7 @@ import type { HarnessConfig } from '../../types/config.js';
 
 const VALID_EXPORTERS = ['otlp', 'file'] as const;
 const VALID_OTLP_PROTOCOLS = ['http/protobuf', 'grpc'] as const;
+const DEFAULT_SPOOL_MAX_BYTES = 512 * 1024 * 1024;
 const DEFAULT_FILE = 'otel.jsonl';
 const MAX_ATTRIBUTES = 16;
 const PROVENANCE_KEYS = ['commit', 'pr', 'issue', 'feature'] as const;
@@ -121,6 +122,7 @@ export type ResolvedOtelConfig =
       exporter: 'otlp';
       endpoint: string;
       protocol?: 'http/protobuf' | 'grpc';
+      spool?: { enabled: boolean; maxBytes: number };
       headers?: Record<string, string>;
       projectName?: string;
       workerName?: string;
@@ -157,7 +159,7 @@ export function resolveOtelConfig(
     return { enabled: false };
   }
 
-  const { exporter, endpoint, file, protocol, headers, project_name, worker_name, attributes, provenance } = otel;
+  const { exporter, endpoint, file, protocol, headers, project_name, worker_name, attributes, provenance, spool } = otel;
   const projectName = project_name?.trim() || undefined;
   const workerName = worker_name?.trim() || undefined;
   const resolvedAttributes = resolveAttributes(attributes);
@@ -195,6 +197,13 @@ export function resolveOtelConfig(
       return {
         enabled: false,
         error: 'otel headers must be a mapping from header names to { env: <variable name> } references.',
+      };
+    }
+    const maxBytes = spool?.max_bytes ?? DEFAULT_SPOOL_MAX_BYTES;
+    if (!Number.isInteger(maxBytes) || maxBytes <= 0) {
+      return {
+        enabled: false,
+        error: 'otel.spool.max_bytes must be a positive integer number of bytes.',
       };
     }
 
@@ -253,6 +262,7 @@ export function resolveOtelConfig(
       enabled: true,
       exporter: 'otlp',
       endpoint,
+      spool: { enabled: spool?.enabled ?? true, maxBytes },
       ...(protocol ? { protocol } : {}),
       ...(hasHeaderEntries(headers) ? { headers: resolvedHeaders } : {}),
       ...(projectName ? { projectName } : {}),
