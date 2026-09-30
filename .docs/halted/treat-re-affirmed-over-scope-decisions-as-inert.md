@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-30T10:49:33.816Z
 Slug: treat-re-affirmed-over-scope-decisions-as-inert
 Class: needs-human
 Halting step: unknown
