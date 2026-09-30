@@ -38,15 +38,23 @@ export async function resolveSpoolDir(startDir: string): Promise<string | null> 
   return mainRoot === null ? null : join(mainRoot, '.daemon', 'otel-spool');
 }
 
-function runtimeFor(directory: string, config: Extract<ResolvedOtelConfig, { enabled: true; exporter: 'otlp' }>, events?: ConductorEventEmitter): SpoolRuntime {
-  const existing = runtimes.get(directory);
-  if (existing) return existing;
+export function createSpoolRuntime(
+  directory: string,
+  config: Extract<ResolvedOtelConfig, { enabled: true; exporter: 'otlp' }>,
+  events?: ConductorEventEmitter,
+): SpoolRuntime {
   const store = new SpoolStore(directory, { maxBytes: config.spool?.maxBytes });
-  const runtime = {
+  return {
     store,
     lease: new SpoolLease(directory),
     drainer: new SpoolDrainer(store, { endpoint: config.endpoint, headers: () => config.headers ?? {}, events }),
   };
+}
+
+function runtimeFor(directory: string, config: Extract<ResolvedOtelConfig, { enabled: true; exporter: 'otlp' }>, events?: ConductorEventEmitter): SpoolRuntime {
+  const existing = runtimes.get(directory);
+  if (existing) return existing;
+  const runtime = createSpoolRuntime(directory, config, events);
   runtimes.set(directory, runtime);
   return runtime;
 }

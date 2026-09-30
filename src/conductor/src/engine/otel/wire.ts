@@ -21,6 +21,8 @@ import { buildResource } from './resource.js';
 import { buildExporters } from './transport.js';
 import { MetricsRecorder } from './metrics.js';
 import { MetricsListener } from './metrics-listener.js';
+import { createSpoolRuntime, type SpoolRuntime } from './spool-wiring.js';
+import { OtelVisualizer } from './otel-visualizer.js';
 
 const METRIC_LIFECYCLE_TIMEOUT_MS = 250;
 
@@ -77,8 +79,19 @@ export function wireOtelVisualizer(
   config: HarnessConfig,
   context: OtelVisualizerStartContext,
   events: ConductorEventEmitter,
+  spoolRuntime?: SpoolRuntime,
 ): VisualizerPlugin | null {
-  if (!resolveOtelConfig(config, context.pipelineDir).enabled) return null;
+  const resolved = resolveOtelConfig(config, context.pipelineDir);
+  if (!resolved.enabled) return null;
+
+  if (spoolRuntime && resolved.exporter === 'otlp' && resolved.spool?.enabled) {
+    const exporters = buildExporters(resolved, { spoolStore: spoolRuntime.store, events });
+    const visualizer = new OtelVisualizer(resolved, { spanExporter: exporters.spanExporter, onWarning: (error) => {
+      void events.emit({ type: 'renderer_error', rendererName: 'otel', error });
+    } });
+    visualizer.start(events, context);
+    return visualizer;
+  }
 
   const registry = createOtelVisualizerRegistry(events);
   const factory = registry.get<VisualizerFactory>('visualizer', 'otel');
@@ -98,10 +111,15 @@ export function wireOtelVisualizer(
 export function wireDaemonOtel(
   config: HarnessConfig,
   context: { mainRoot: string; project: string; projectName: string; workerName?: string; harnessVersion?: string; rootEvents: ConductorEventEmitter },
-): { flush: () => Promise<void>; stop: () => Promise<void> } | null {
+): { flush: () => Promise<void>; stop: () => Promise<void>; spoolRuntime?: SpoolRuntime } | null {
   const resolved = resolveOtelConfig(config, join(context.mainRoot, '.pipeline'));
   if (!resolved.enabled) return null;
-  const exporters = buildExporters(resolved);
+  const spoolRuntime = resolved.exporter === 'otlp' && resolved.spool?.enabled
+    ? createSpoolRuntime(join(context.mainRoot, '.daemon', 'otel-spool'), resolved, context.rootEvents)
+    : undefined;
+  const exporters = spoolRuntime
+    ? buildExporters(resolved, { spoolStore: spoolRuntime.store, events: context.rootEvents })
+    : buildExporters(resolved);
   const workerName = context.workerName ?? resolveWorkerName(resolved);
   const reader = new PeriodicExportingMetricReader({
     exporter: warnOnceMetricExporter(exporters.metricExporter, context.rootEvents),
@@ -124,13 +142,31 @@ export function wireDaemonOtel(
     }).catch(() => {});
   }
   listener.start(context.rootEvents);
+  const leaseStart = spoolRuntime?.lease.acquire();
+  if (leaseStart) {
+    void leaseStart.then((result) => {
+      if (result.acquired) return spoolRuntime.drainer.drain();
+      return undefined;
+    }).catch(() => undefined);
+  }
   const settleMetricLifecycle = guardMetricLifecycle(context.rootEvents);
   let stopped: Promise<void> | undefined;
   return {
     // A feature dispatch can finish long before the daemon.  Flush the shared
     // meter at that boundary, but keep it alive for every other dispatch.
-    flush: () => settleMetricLifecycle(() => provider.forceFlush()),
-    stop: () => stopped ??= (async () => { listener.stop(); await settleMetricLifecycle(() => provider.forceFlush()); await settleMetricLifecycle(() => provider.shutdown()); })(),
+    flush: async () => {
+      await settleMetricLifecycle(() => provider.forceFlush());
+      if (spoolRuntime) void spoolRuntime.drainer.drain();
+    },
+    stop: () => stopped ??= (async () => {
+      listener.stop();
+      await settleMetricLifecycle(() => provider.forceFlush());
+      await settleMetricLifecycle(() => provider.shutdown());
+      await leaseStart?.catch(() => undefined);
+      await spoolRuntime?.drainer.stop();
+      await spoolRuntime?.lease.release();
+    })(),
+    ...(spoolRuntime ? { spoolRuntime } : {}),
   };
 }
 
