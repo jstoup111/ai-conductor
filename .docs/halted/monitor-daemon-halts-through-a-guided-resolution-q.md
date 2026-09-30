@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-30T23:04:34.627Z
 Slug: monitor-daemon-halts-through-a-guided-resolution-q
 Class: plan-gap
 Halting step: prd_audit
