@@ -90,6 +90,40 @@ describe('coverage binding envelope', () => {
     ]);
   });
 
+  it('round-trips optional slice membership while accepting legacy envelopes without it', () => {
+    const envelope = {
+      version: 1,
+      slug: 'feature',
+      runId: 'run-1',
+      status: 'done',
+      entries: [],
+      sliceMembership: {
+        taskSlices: { '1': 1, '2': 1, '3': 2 },
+        titles: ['Foundation', 'Publication'],
+      },
+    } as const;
+
+    expect([
+      parseCoverageBindingEnvelope(envelope),
+      parseCoverageBindingEnvelope({
+        version: 1, slug: 'legacy-feature', runId: 'legacy-run', status: 'done', entries: [],
+      }),
+      parseCoverageBindingEnvelope({
+        ...envelope,
+        sliceMembership: { taskSlices: { '1': 0 }, titles: ['Foundation'] },
+      }),
+      parseCoverageBindingEnvelope({
+        ...envelope,
+        sliceMembership: { taskSlices: { '1': 1 }, titles: ['Foundation'], extra: true },
+      }),
+    ]).toEqual([
+      envelope,
+      { version: 1, slug: 'legacy-feature', runId: 'legacy-run', status: 'done', entries: [] },
+      null,
+      null,
+    ]);
+  });
+
   it('round-trips amendment verdict entries and defaults legacy entries to criterion', () => {
     const envelope = {
       version: 1,

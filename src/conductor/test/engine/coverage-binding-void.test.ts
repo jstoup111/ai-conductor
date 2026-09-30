@@ -26,6 +26,10 @@ async function seed(): Promise<{ events: ConductorEventEmitter; statePath: strin
       kind: 'criterion', digest: 'sha256:claim', criterion: 'Given a claim',
       taskIds: ['4'], doneWhen: [['The claim is asserted.']], verdict: 'asserts',
     }],
+    sliceMembership: {
+      taskSlices: { '4': 1 },
+      titles: ['Foundation'],
+    },
   }) + '\n');
   await writeVerdict(projectRoot, 'coverage_binding', {
     satisfied: true, checkedAt: 1, reason: 'coverage binding complete',
@@ -60,6 +64,10 @@ describe('voidCoverageBindingForDecideChange', () => {
     expect(JSON.parse(await readFile(join(projectRoot, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({
       status: 'invalidated',
       entries: [{ digest: 'sha256:claim', verdict: 'asserts' }],
+      sliceMembership: {
+        taskSlices: { '4': 1 },
+        titles: ['Foundation'],
+      },
     });
     await expect(readVerdict(projectRoot, 'coverage_binding')).resolves.toMatchObject({
       satisfied: false,
