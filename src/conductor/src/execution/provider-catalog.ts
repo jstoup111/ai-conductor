@@ -195,7 +195,7 @@ export const BUILT_IN_PROVIDERS = [
     defaultExecutable: 'pi',
     executableOverrideEnv: 'PI_EXECUTABLE',
     versionArgv: ['--version'],
-    invocationPrefix: '',
+    invocationPrefix: '/skill:',
     environmentPrefix: 'PI_',
     homeVariable: 'PI_HOME',
     defaultHome: '.pi',
