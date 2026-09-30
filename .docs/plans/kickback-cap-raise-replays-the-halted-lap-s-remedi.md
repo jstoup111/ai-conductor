@@ -365,3 +365,11 @@ Task 12 <- Task 6
 - [ ] All negative path criteria covered by at least one task
 - [ ] Every task has a falsifiable Done when block
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-adr-ab-kcr5-1: conductor.ts:10415 — before settleBuildPendingRepair at the final BUILD admission, when a kickback into build is active read readBuildOutcome and refuse on sameNoOpCycle(latestBuildOutcome(store), { gate, treeHash, verdict, rung }) only on a definite match (null tree or any differing component dispatches normally), halting with composeBuildOutcomeHaltReason via writeHaltMarker needs-human (HaltClass unchanged per D6), persisting build not done and charging no pending repair; add build-outcome-stamp.test.ts or conductor-kickback-transition.test.ts cases for match-refuses-without-settlement, moved-tree dispatches, null-tree dispatches, and higher-rung dispatches, keeping existing Task 6/9/12 settlement and resume assertions green
+**Gate:** as-built
+**Rationale:** adr-2026-08-05-build-settle-outcome-stamp D3 (APPROVED) requires a definite-match pre-dispatch refusal before re-entering build under an active kickback, but sameNoOpCycle/latestBuildOutcome/composeBuildOutcomeHaltReason (build-outcome.ts:95-122) have no production caller and the final BUILD admission at conductor.ts:10414-10415 (settleBuildPendingRepair) dispatches the pending-repair resume without it; this is conforming implementation drift with a determinable fix, so it routes to build, and no existing Task 6/9/10 Done-when admits the refusal, so one task is appended. Excluded: the stale feature/legacy remediation diagrams named in the drift notes are sealed architecture artifacts owned by DECIDE and are non-blocking here, so no task edits them.
+**Governing clause:** adr-2026-08-05-build-settle-outcome-stamp decision 3
+**Done when:**
+- adr-2026-08-05-build-settle-outcome-stamp decision 3 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-ab-kcr5-1 is complete.
