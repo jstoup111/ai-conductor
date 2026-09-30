@@ -3,11 +3,10 @@ import type { ConductorEvent } from '../../../types/events.js';
 import { parseSourceRef } from '../issue-ref.js';
 import { buildSuggestions } from './overlap-suggestions.js';
 import { extractCitedPaths } from './cited-paths.js';
-import { collectInFlightOverlaps, collectOpenIssueOverlaps } from './overlap-sources.js';
+import { collectInFlightOverlaps, collectOpenIssueOverlaps, selectInFlightBranches } from './overlap-sources.js';
 import { resolveTargetCheckout, type ResolveTargetCheckoutOptions } from './target-checkout.js';
 import { makeGitRunner, resolveBase, type GitRunner } from '../../rebase.js';
 import type { GhRunner } from '../../tracker-client.js';
-import { enumerateUnmergedBranches } from '../../overlap-scan.js';
 import { changedPathsSinceMergeBase } from '../../rebase.js';
 
 export interface OverlapSkipNote {
@@ -65,21 +64,79 @@ export async function collectOverlaps({
   body,
   openIssues,
   inFlight,
+  gh,
+  cwd,
+  repository,
+  registryReader,
+  makeGit = makeGitRunner,
 }: {
   title: string;
   body: string;
   openIssues?: (citedPaths: readonly string[]) => Promise<IssueOverlap[]>;
   inFlight?: (citedPaths: readonly string[]) => Promise<{ overlaps: BranchOverlap[]; skipNotes?: string[] }>;
+  gh?: GhRunner;
+  cwd?: string;
+  repository?: string;
+  registryReader?: ResolveTargetCheckoutOptions['registryReader'];
+  makeGit?: (cwd: string) => GitRunner;
 }): Promise<OverlapCollection> {
-  const citedPaths = extractCitedPaths(`${title}\n${body}`);
   const skipNotes: OverlapSkipNote[] = [];
+  let git: GitRunner | undefined;
+  let baseRef: string | undefined;
+  let knownPaths: Set<string> | undefined;
+  let selectedBranches: Awaited<ReturnType<typeof selectInFlightBranches>> | undefined;
+
+  // Resolve independently of the tracker read: an invalid registry must never
+  // prevent the open-issue comparison or the eventual filing.
+  if (gh && cwd && repository) {
+    try {
+      const checkout = await resolveTargetCheckout({ cwd, repository, registryReader });
+      if (checkout.kind === 'none') {
+        skipNotes.push({ part: 'in-flight', reason: checkout.reason });
+      } else {
+        git = makeGit(checkout.path);
+        baseRef = (await resolveBase(git, 'main')).ref;
+        const verified = await git(['rev-parse', '--verify', baseRef]);
+        if (verified.exitCode !== 0) throw new Error(`base ref '${baseRef}' could not be resolved`);
+        const tree = await git(['ls-tree', '-r', '--name-only', baseRef]);
+        knownPaths = new Set(tree.stdout.split('\n').filter(Boolean));
+        selectedBranches = await selectInFlightBranches({ git, baseRef });
+        for (const reason of selectedBranches.skipNotes) skipNotes.push({ part: 'in-flight', reason });
+        for (const branch of selectedBranches.branches) {
+          try {
+            const changed = await changedPathsSinceMergeBase(git, baseRef, branch);
+            for (const path of changed ?? []) knownPaths.add(path);
+          } catch (error) {
+            skipNotes.push({ part: 'in-flight', reason: `skipped known-path diff for branch ${branch}: ${error instanceof Error ? error.message : String(error)}` });
+          }
+        }
+      }
+    } catch (error) {
+      git = undefined;
+      baseRef = undefined;
+      skipNotes.push({ part: 'in-flight', reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  const citedPaths = extractCitedPaths(`${title}\n${body}`, knownPaths);
   let issueOverlaps: IssueOverlap[] = [];
-  let branchOverlaps: BranchOverlap[] = [];
-  if (openIssues) {
+  if (gh && cwd && repository) {
+    try {
+      const result = await collectOpenIssueOverlaps({ gh, cwd, repository, citedPaths, knownPaths });
+      issueOverlaps = result.overlaps;
+      for (const reason of result.skipNotes) skipNotes.push({ part: 'open-issues', reason });
+    } catch (error) { skipNotes.push({ part: 'open-issues', reason: error instanceof Error ? error.message : String(error) }); }
+  } else if (openIssues) {
     try { issueOverlaps = await openIssues(citedPaths); }
     catch (error) { skipNotes.push({ part: 'open-issues', reason: error instanceof Error ? error.message : String(error) }); }
   }
-  if (inFlight) {
+  let branchOverlaps: BranchOverlap[] = [];
+  if (git && baseRef) {
+    try {
+      const result = await collectInFlightOverlaps({ git, baseRef, citedPaths, repository, gh, cwd, selectedBranches });
+      branchOverlaps = result.overlaps;
+      for (const reason of result.skipNotes) skipNotes.push({ part: 'in-flight', reason });
+    } catch (error) { skipNotes.push({ part: 'in-flight', reason: error instanceof Error ? error.message : String(error) }); }
+  } else if (inFlight) {
     try {
       const result = await inFlight(citedPaths);
       branchOverlaps = result.overlaps;
@@ -107,63 +164,19 @@ export function buildOverlapSources({
   makeGit?: (cwd: string) => GitRunner;
 }): OverlapPreflightDeps['suggestions'] {
   return async (input) => {
-    const checkout = await resolveTargetCheckout({ cwd, repository, registryReader });
-    const git = checkout.kind === 'checkout' ? makeGit(checkout.path) : undefined;
-    let knownPaths: Set<string> | undefined;
-    let baseRef: string | undefined;
-    const skips: OverlapSkipNote[] = [];
-    if (git) {
-      try {
-        baseRef = (await resolveBase(git, 'main')).ref;
-        const verified = await git(['rev-parse', '--verify', baseRef]);
-        if (verified.exitCode !== 0) throw new Error(`base ref '${baseRef}' could not be resolved`);
-        const tree = await git(['ls-tree', '-r', '--name-only', baseRef]);
-        knownPaths = new Set(tree.stdout.split('\n').filter(Boolean));
-        // A path first introduced on an in-flight branch is still meaningful
-        // evidence.  Include exactly the bounded branch population we may
-        // subsequently compare, without borrowing paths from another checkout.
-        const branches = await enumerateUnmergedBranches(git, baseRef, [
-          'refs/heads/spec/*', 'refs/remotes/*/spec/*',
-          'refs/heads/feat/daemon-*', 'refs/remotes/*/feat/daemon-*',
-        ]);
-        for (const branch of branches.slice(0, 100)) {
-          const changed = await changedPathsSinceMergeBase(git, baseRef, branch);
-          for (const path of changed ?? []) knownPaths.add(path);
-        }
-      } catch (error) {
-        skips.push({ part: 'in-flight', reason: error instanceof Error ? error.message : String(error) });
-        baseRef = undefined;
-      }
-    } else if (checkout.kind === 'none') {
-      skips.push({ part: 'in-flight', reason: checkout.reason });
-    }
-    const citedPaths = extractCitedPaths(`${input.title}\n${input.body}`, knownPaths);
-    let issueOverlaps: IssueOverlap[] = [];
-    try {
-      issueOverlaps = await collectOpenIssueOverlaps({ gh, cwd, repository, citedPaths, knownPaths });
-    } catch (error) {
-      skips.push({ part: 'open-issues', reason: error instanceof Error ? error.message : String(error) });
-    }
-    let branchOverlaps: BranchOverlap[] = [];
-    if (git && baseRef) {
-      try {
-        const result = await collectInFlightOverlaps({ git, baseRef, citedPaths, repository, gh, cwd });
-        branchOverlaps = result.overlaps;
-        for (const reason of result.skipNotes) skips.push({ part: 'in-flight', reason });
-      } catch (error) {
-        skips.push({ part: 'in-flight', reason: error instanceof Error ? error.message : String(error) });
-      }
-    }
+    const collected = await collectOverlaps({
+      title: input.title, body: input.body, gh, cwd, repository, registryReader, makeGit,
+    });
     const canonicalIssue = (issue: string) => issue.startsWith('#') ? `${repository}${issue}` : issue;
     const suggestions = buildSuggestions({
-      issueOverlaps: issueOverlaps.map((overlap) => ({ ...overlap, issue: canonicalIssue(overlap.issue) })),
-      branchOverlaps: branchOverlaps.map((overlap) => ({
+      issueOverlaps: collected.issueOverlaps.map((overlap) => ({ ...overlap, issue: canonicalIssue(overlap.issue) })),
+      branchOverlaps: collected.branchOverlaps.map((overlap) => ({
         ...overlap,
         issue: overlap.issue === null ? null : canonicalIssue(overlap.issue),
       })),
       alreadyNamed: input.dependsOn,
     });
-    return { ...suggestions, ...(skips.length > 0 ? { skipNotes: skips } : {}) };
+    return { ...suggestions, ...(collected.skipNotes.length > 0 ? { skipNotes: collected.skipNotes } : {}) };
   };
 }
 

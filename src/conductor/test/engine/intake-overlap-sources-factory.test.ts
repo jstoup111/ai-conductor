@@ -8,4 +8,18 @@ describe('target-scoped overlap source factory', () => {
     const result = await suggestions({ title: 't', body: 'src/a.ts', dependsOn: [], interactive: false });
     expect(result.skipNotes).toEqual([{ part: 'in-flight', reason: 'no-match' }]);
   });
+
+  it('keeps the tracker read independent when registry resolution throws', async () => {
+    const suggestions = buildOverlapSources({
+      cwd: '/definitely/not-a-checkout', repository: 'acme/widgets',
+      gh: async () => { throw new Error('tracker unavailable'); },
+      registryReader: {
+        listProjects: async () => { throw new Error('malformed registry'); },
+        getProject: async () => undefined,
+      },
+    });
+    const result = await suggestions({ title: 't', body: 'src/a.ts', dependsOn: [], interactive: false });
+    expect(result.skipNotes).toContainEqual({ part: 'in-flight', reason: 'malformed registry' });
+    expect(result.skipNotes).toContainEqual(expect.objectContaining({ part: 'open-issues', reason: expect.stringContaining('tracker unavailable') }));
+  });
 });
