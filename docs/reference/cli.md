@@ -263,6 +263,34 @@ Inline output includes every event the sink registry declares renderable. Halts,
 unsatisfied gate verdicts, and gate-loop convergence have dedicated lines; other renderable events
 are summarized by type.
 
+## `ai-conductor monitor`
+
+```bash
+ai-conductor monitor all
+ai-conductor monitor <project>
+```
+
+Runs the foreground guided-resolution queue for halted features. It does not start, attach to, or
+dispatch the daemon.
+
+| Selector | Effect |
+| --- | --- |
+| `all` | Monitor halted features across every registered project. |
+| `<project>` | Monitor halted features in one registered project by name. |
+
+The monitor remains active until interrupted. It offers one halted feature at a time in a guided
+session and re-derives the queue between passes, so resolved or parked work is not offered again.
+
+| Condition | Output and exit |
+| --- | --- |
+| Valid selector, then interrupt | Stops the foreground monitor; exits 0 unless an inventory error occurred during a pass. |
+| Unknown project, unreadable registry, or unreadable selected project | Reports the inventory error; exits 1 after the monitor stops. |
+| Missing selector, extra argument, or selector beginning with `-` | Prints `Usage: ai-conductor monitor all\|<project>` to stderr; exits 1. |
+| Invoked from a daemon-managed session | Refused by the daemon-session guard before queue enumeration; exits 1. |
+
+`monitor` is intentionally unavailable to daemon-managed provider sessions. Run it from an operator
+terminal, not from a dispatched build or review session.
+
 ### Auto-resume
 
 When a feature description is given and none of `--resume`, `--fresh`, or `--from` is

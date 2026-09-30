@@ -604,6 +604,12 @@ export function createProgram(): Command {
     .command('version')
     .description('Print the harness version and the pinned engine build, then exit');
 
+  // Foreground monitor. index.ts dispatches it before the daemon and pipeline
+  // boot paths; this declaration is help-only and must not add a second route.
+  program
+    .command('monitor <project>')
+    .description('Guide resolution of halted features across `all` registered projects or one named `<project>`');
+
   // Dispatched in index.ts before normal CLI bootstrapping.
   program
     .command('update [args...]')

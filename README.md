@@ -91,6 +91,10 @@ ai-conductor inline --interactive "add a CSV export"
 `ai-conductor inline --auto` is deprecated; use the daemon for unattended work. The `inline` token is
 required for foreground runs — the bare form `ai-conductor "<feature>"` is rejected.
 
+To work through halted features from an operator terminal, run `ai-conductor monitor all`; use
+`ai-conductor monitor <project>` to focus on one registered project. The monitor stays in the
+foreground and opens guided resolution sessions one at a time. See the [CLI reference](docs/reference/cli.md#ai-conductor-monitor).
+
 Self-host dispatches wait for root-refresh admission before starting their provider preparation timeout.
 Queued work resumes automatically when the earlier dispatch releases the root.
 
