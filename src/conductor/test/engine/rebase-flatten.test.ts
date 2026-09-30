@@ -1,7 +1,7 @@
 // Covers: task:2
 import { describe, expect, it } from 'vitest';
 
-import { planFlattenedReplay, type GitRunner } from '../../src/engine/rebase.js';
+import { planFlattenedReplay, proveFlattenedReplay, type FlattenedReplayPlan, type GitRunner } from '../../src/engine/rebase.js';
 
 const sha = (digit: string) => digit.repeat(40);
 
@@ -160,5 +160,96 @@ describe('planFlattenedReplay (Task 2)', () => {
 
     await expect(planFlattenedReplay(unavailableParents, MERGE_BASE))
       .rejects.toThrow(`could not read parents for replay entry ${CONTENT_MERGE_AUTHOR_DIFFERS}`);
+  });
+});
+
+describe('proveFlattenedReplay (Task 3)', () => {
+  const HEAD_TREE = sha('h');
+  const TARGET = sha('t');
+  const TARGET_TREE = sha('u');
+  const plan: FlattenedReplayPlan = {
+    entries: [
+      { kind: 'ordinary', sha: ORDINARY_ONE },
+      { kind: 'flattened', sha: FLATTENED_CONTENT, mergeSha: CONTENT_MERGE_AUTHOR_DIFFERS, firstParent: CONTENT_FIRST_PARENT, subject: 'merge feature' },
+    ],
+    audit: { flattenedMerges: [CONTENT_MERGE_AUTHOR_DIFFERS], ancestryOnlyMerges: [], sideLineageCount: 0 },
+    pairs: [{ from: CONTENT_MERGE_AUTHOR_DIFFERS, to: FLATTENED_CONTENT }],
+  };
+
+  function proofRunner(fail?: 'merge-tree' | 'commit-tree' | 'mismatch' | 'ordinary-conflict' | 'flattened-conflict') {
+    const calls: GitCall[] = [];
+    let mergeTrees = 0;
+    const git: GitRunner = async (args, opts) => {
+      calls.push({ args, input: opts?.input });
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD^{tree}') return { exitCode: 0, stdout: `${fail === 'mismatch' ? sha('m') : HEAD_TREE}\n`, stderr: '' };
+      if (args[0] === 'merge-tree') {
+        mergeTrees++;
+        if (fail === 'merge-tree') return { exitCode: 2, stdout: '', stderr: 'unsupported' };
+        if (fail === 'ordinary-conflict' && mergeTrees === 3) return { exitCode: 1, stdout: '', stderr: 'conflict' };
+        if (fail === 'flattened-conflict' && mergeTrees === 4) return { exitCode: 1, stdout: '', stderr: 'conflict' };
+        return { exitCode: 0, stdout: `${mergeTrees <= 2 ? HEAD_TREE : TARGET_TREE}\n`, stderr: '' };
+      }
+      if (args[0] === 'commit-tree') {
+        if (fail === 'commit-tree') return { exitCode: 2, stdout: '', stderr: 'object write failed' };
+        return { exitCode: 0, stdout: `${sha(String(mergeTrees))}\n`, stderr: '' };
+      }
+      throw new Error(`unexpected git command: ${args.join(' ')}`);
+    };
+    return { git, calls };
+  }
+
+  it('proves a tree-equal replay and dry-runs it onto the target without a rebase', async () => {
+    const { git, calls } = proofRunner();
+    await expect(proveFlattenedReplay(git, plan, MERGE_BASE, TARGET)).resolves.toEqual({
+      kind: 'proven', inPlaceTree: HEAD_TREE, targetTree: TARGET_TREE,
+    });
+    expect(calls.map(({ args }) => args)).toEqual([
+      ['merge-tree', '--write-tree', '--merge-base', `${ORDINARY_ONE}^`, MERGE_BASE, ORDINARY_ONE],
+      ['commit-tree', HEAD_TREE, '-p', MERGE_BASE],
+      ['merge-tree', '--write-tree', '--merge-base', `${FLATTENED_CONTENT}^`, sha('1'), FLATTENED_CONTENT],
+      ['commit-tree', HEAD_TREE, '-p', sha('1')],
+      ['rev-parse', 'HEAD^{tree}'],
+      ['merge-tree', '--write-tree', '--merge-base', `${ORDINARY_ONE}^`, TARGET, ORDINARY_ONE],
+      ['commit-tree', TARGET_TREE, '-p', TARGET],
+      ['merge-tree', '--write-tree', '--merge-base', `${FLATTENED_CONTENT}^`, sha('3'), FLATTENED_CONTENT],
+      ['commit-tree', TARGET_TREE, '-p', sha('3')],
+    ]);
+    expect(calls.some(({ args }) => ['rebase', 'update-ref', 'reset', 'checkout', 'add'].includes(args[0]))).toBe(false);
+  });
+
+  it('proves an all-ancestry-only plan from its base tree', async () => {
+    const emptyPlan: FlattenedReplayPlan = { ...plan, entries: [] };
+    const git: GitRunner = async (args) => {
+      if (args[0] !== 'rev-parse') throw new Error(`unexpected git command: ${args.join(' ')}`);
+      if (args[1] === `${MERGE_BASE}^{tree}` || args[1] === 'HEAD^{tree}') {
+        return { exitCode: 0, stdout: `${HEAD_TREE}\n`, stderr: '' };
+      }
+      if (args[1] === `${TARGET}^{tree}`) return { exitCode: 0, stdout: `${TARGET_TREE}\n`, stderr: '' };
+      throw new Error(`unexpected tree lookup: ${args[1]}`);
+    };
+
+    await expect(proveFlattenedReplay(git, emptyPlan, MERGE_BASE, TARGET)).resolves.toEqual({
+      kind: 'proven', inPlaceTree: HEAD_TREE, targetTree: TARGET_TREE,
+    });
+  });
+
+  it.each([
+    ['tree mismatch', 'mismatch', 'tree mismatch'],
+    ['failed merge-tree', 'merge-tree', 'merge-tree'],
+    ['failed commit-tree', 'commit-tree', 'commit-tree'],
+  ] as const)('refuses %s before mutation', async (_name, failure, reason) => {
+    const { git, calls } = proofRunner(failure);
+    await expect(proveFlattenedReplay(git, plan, MERGE_BASE, TARGET)).resolves.toMatchObject({ kind: 'refused', reason: expect.stringContaining(reason) });
+    expect(calls.some(({ args }) => ['rebase', 'update-ref', 'reset', 'checkout', 'add'].includes(args[0]))).toBe(false);
+  });
+
+  it.each([
+    ['ordinary-conflict', 0, ORDINARY_ONE, 'ordinary'],
+    ['flattened-conflict', 1, FLATTENED_CONTENT, 'flattened'],
+  ] as const)('reports the first target conflict with its replay kind', async (failure, index, sha, entryKind) => {
+    const { git } = proofRunner(failure);
+    await expect(proveFlattenedReplay(git, plan, MERGE_BASE, TARGET)).resolves.toMatchObject({
+      kind: 'target_conflict', index, sha, entryKind,
+    });
   });
 });

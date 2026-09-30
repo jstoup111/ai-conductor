@@ -749,6 +749,86 @@ export interface FlattenedReplayPlan {
   pairs: Array<{ from: string; to: string }>;
 }
 
+export type FlattenedReplayProof =
+  | { kind: 'proven'; inPlaceTree: string; targetTree: string }
+  | { kind: 'refused'; reason: string }
+  | { kind: 'target_conflict'; index: number; sha: string; entryKind: FlattenedReplayEntry['kind'] };
+
+export type FeatureReplayStart =
+  | { kind: 'started'; result: GitResult; rebaseArgs: string[]; expectedSubjects?: string[]; flatten?: FlattenedReplayPlan; proof?: FlattenedReplayProof }
+  | { kind: 'refused'; plan: FlattenedReplayPlan; proof: Extract<FlattenedReplayProof, { kind: 'refused' | 'target_conflict' }> };
+
+async function replayFlattenedEntries(
+  git: GitRunner,
+  entries: readonly FlattenedReplayEntry[],
+  base: string,
+  targetRun: boolean,
+): Promise<{ kind: 'complete'; tree: string } | { kind: 'refused'; reason: string } | { kind: 'conflict'; index: number; entry: FlattenedReplayEntry }> {
+  let accumulator = base;
+  let finalTree = '';
+  for (const [index, entry] of entries.entries()) {
+    const merged = await git(['merge-tree', '--write-tree', '--merge-base', `${entry.sha}^`, accumulator, entry.sha]);
+    if (merged.exitCode === 1) {
+      return targetRun
+        ? { kind: 'conflict', index, entry }
+        : { kind: 'refused', reason: `merge-tree conflict while proving replay at entry ${index} (${entry.sha})` };
+    }
+    if (merged.exitCode !== 0) {
+      return { kind: 'refused', reason: `merge-tree failed while proving replay at entry ${index} (${entry.sha}): ${merged.stderr}` };
+    }
+    finalTree = merged.stdout.trim();
+    const committed = await git(['commit-tree', finalTree, '-p', accumulator], { input: 'ai-conductor flattened replay proof\n' });
+    if (committed.exitCode !== 0) {
+      return { kind: 'refused', reason: `commit-tree failed while proving replay at entry ${index} (${entry.sha}): ${committed.stderr}` };
+    }
+    accumulator = committed.stdout.trim();
+  }
+  if (entries.length === 0) {
+    const baseTree = await git(['rev-parse', `${base}^{tree}`]);
+    if (baseTree.exitCode !== 0) {
+      return { kind: 'refused', reason: `rev-parse ${base}^{tree} failed: ${baseTree.stderr}` };
+    }
+    finalTree = baseTree.stdout.trim();
+  }
+  return { kind: 'complete', tree: finalTree };
+}
+
+/**
+ * Prove a planned replay produces HEAD's tree before dry-running it on target.
+ * All operations create Git objects only; refs, index, and worktree stay intact.
+ */
+export async function proveFlattenedReplay(
+  git: GitRunner,
+  plan: FlattenedReplayPlan,
+  mergeBase: string,
+  target: string,
+): Promise<FlattenedReplayProof> {
+  const inPlace = await replayFlattenedEntries(git, plan.entries, mergeBase, false);
+  if (inPlace.kind === 'refused') return inPlace;
+  if (inPlace.kind === 'conflict') return { kind: 'refused', reason: `unexpected in-place replay conflict at ${inPlace.entry.sha}` };
+
+  const headTreeResult = await git(['rev-parse', 'HEAD^{tree}']);
+  if (headTreeResult.exitCode !== 0) {
+    return { kind: 'refused', reason: `rev-parse HEAD^{tree} failed: ${headTreeResult.stderr}` };
+  }
+  const headTree = headTreeResult.stdout.trim();
+  if (inPlace.tree !== headTree) {
+    return { kind: 'refused', reason: `tree mismatch: replay produced ${inPlace.tree}, HEAD is ${headTree}` };
+  }
+
+  const targetReplay = await replayFlattenedEntries(git, plan.entries, target, true);
+  if (targetReplay.kind === 'refused') return targetReplay;
+  if (targetReplay.kind === 'conflict') {
+    return {
+      kind: 'target_conflict',
+      index: targetReplay.index,
+      sha: targetReplay.entry.sha,
+      entryKind: targetReplay.entry.kind,
+    };
+  }
+  return { kind: 'proven', inPlaceTree: inPlace.tree, targetTree: targetReplay.tree };
+}
+
 /**
  * Build the first-parent replay list for a merge-bearing feature branch.
  *
@@ -827,6 +907,45 @@ export async function planFlattenedReplay(
       sideLineageCount: Math.max(0, allCommits.length - firstParent.length),
     },
     pairs,
+  };
+}
+
+/**
+ * Start the one sanctioned replay shape for a feature branch.  Merge-free
+ * ranges deliberately retain the historical command byte-for-byte; a range
+ * carrying merges is proven before its generated todo is handed to git.
+ */
+export async function startFeatureReplay(
+  git: GitRunner,
+  baseRef: string,
+  mergeBase: string,
+  projectRoot?: string,
+): Promise<FeatureReplayStart> {
+  const merges = await git(['rev-list', '--merges', `${baseRef}..HEAD`]);
+  // A real `rev-list` emits object ids. Treat malformed runner output as an
+  // unavailable merge listing so legacy/fault fixtures retain the safe normal
+  // rebase path rather than attempting an unproven flatten.
+  if (merges.exitCode !== 0 || !/^[0-9a-f]{40}(?:\s|$)/i.test(merges.stdout.trim())) {
+    const rebaseArgs = ['rebase', '--autostash', baseRef];
+    return { kind: 'started', result: await git(rebaseArgs), rebaseArgs };
+  }
+  const plan = await planFlattenedReplay(git, mergeBase);
+  const target = (await git(['rev-parse', baseRef])).stdout.trim();
+  const proof = await proveFlattenedReplay(git, plan, mergeBase, target);
+  if (proof.kind === 'refused' || proof.kind === 'target_conflict' && plan.entries[proof.index]?.kind === 'flattened') {
+    return { kind: 'refused', plan, proof };
+  }
+  const todoPathResult = await git(['rev-parse', '--git-path', 'ai-conductor-flatten-todo']);
+  if (todoPathResult.exitCode !== 0 || todoPathResult.stdout.trim() === '') {
+    return { kind: 'refused', plan, proof: { kind: 'refused', reason: 'could not determine flattened replay todo path' } };
+  }
+  const todoPath = todoPathResult.stdout.trim();
+  await writeFile(projectRoot && !isAbsolute(todoPath) ? join(projectRoot, todoPath) : todoPath, `${plan.entries.map((entry) => `pick ${entry.sha}`).join('\n')}\n`);
+  const rebaseArgs = ['-c', `sequence.editor=cp ${todoPath}`, 'rebase', '-i', '--autostash', baseRef];
+  return {
+    kind: 'started', result: await git(rebaseArgs), rebaseArgs,
+    expectedSubjects: plan.entries.map((entry) => entry.kind === 'flattened' ? entry.subject : ''),
+    flatten: plan, proof,
   };
 }
 
@@ -1138,8 +1257,27 @@ export async function performRebase(
   // conflict" the operator can't resolve. Autostash stashes those changes, rebases,
   // and reapplies them — so a clean rebase still succeeds with a dirty tree. (A
   // genuine overlap makes the autostash pop conflict, still caught below.)
-  const rebaseArgs = ['rebase', '--autostash', base.ref];
-  const rebase = await git(rebaseArgs);
+  const replayStart = await startFeatureReplay(git, base.ref, mergeBase, projectRoot);
+  if (replayStart.kind === 'refused') {
+    const conflicted = replayStart.proof.kind === 'target_conflict'
+      ? replayStart.plan.entries[replayStart.proof.index]
+      : undefined;
+    const merge = conflicted?.kind === 'flattened' ? conflicted : undefined;
+    const parents = merge
+      ? (await git(['rev-list', '--parents', '-n', '1', merge.mergeSha])).stdout.trim().split(/\s+/).slice(1, 3)
+      : [];
+    return {
+      kind: 'flatten_refused',
+      mergeSha: merge?.mergeSha ?? '',
+      parents: [parents[0] ?? '', parents[1] ?? ''],
+      flattenedSha: merge?.sha ?? '',
+      conflicts: [],
+      reason: replayStart.proof.kind === 'refused' ? replayStart.proof.reason : `flattened merge conflicts at ${replayStart.proof.sha}`,
+      recipe: 'Park the feature, run git rebase -i --rebase-merges against the base, re-apply the merge diff, continue, then clear .pipeline/HALT.',
+    };
+  }
+  const rebaseArgs = replayStart.rebaseArgs;
+  const rebase = replayStart.result;
   if (rebase.exitCode === 0) {
     const outcome = await classifyClean(git, preTree, mergeBase, projectRoot);
     // Every clean rebase that reaches here rewrites commit shas (the parent
