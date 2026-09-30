@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-30T10:49:07.473Z
 Slug: surface-evidence-path-overlap-as-suggested-depende
 Class: needs-human
 Halting step: unknown
