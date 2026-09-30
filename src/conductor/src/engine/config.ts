@@ -34,6 +34,7 @@ import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
 import { parsePrTemplateRegions } from './pr-body-regions.js';
 import { buildStepRegistry } from './steps.js';
 import { BUILT_IN_PROVIDERS } from '../execution/provider-catalog.js';
+import { collectProviderModelSelections } from './provider-model-config.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -1781,6 +1782,9 @@ export function validateConfig(
     }
   }
 
+  const configuredModelErrors = validateRequiredProviderModelConfigs(obj as HarnessConfig);
+  if (configuredModelErrors.length > 0) return errVal(configuredModelErrors.join('; '));
+
   return { ok: true, config: obj as HarnessConfig, warnings, deprecatedKeys };
 }
 
@@ -2955,7 +2959,7 @@ function validateProviderModelConfigs(raw: unknown): ConfigError | null {
   }
 
   const catalogIds = BUILT_IN_PROVIDERS.map((provider) => provider.id);
-  const catalogIdSet = new Set(catalogIds);
+  const catalogIdSet = new Set<string>(catalogIds);
   const allowedKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS.llm_providers);
   for (const [providerId, policy] of Object.entries(raw)) {
     if (!catalogIdSet.has(providerId)) {
@@ -2993,6 +2997,25 @@ function validateProviderModelConfigs(raw: unknown): ConfigError | null {
     }
   }
   return null;
+}
+
+function validateRequiredProviderModelConfigs(config: HarnessConfig): string[] {
+  const selections = collectProviderModelSelections(config);
+  const errors: string[] = [];
+  for (const provider of BUILT_IN_PROVIDERS) {
+    if (!provider.modelPolicy.requiresConfiguredModels || !selections[provider.id].configured) continue;
+    const policy = config.llm_providers?.[provider.id];
+    if (policy?.model === undefined || policy.model.trim() === '') {
+      errors.push(`llm_providers.${provider.id}.model is required because ${provider.id} is configured`);
+    }
+    if (!policy?.model_escalation_order || policy.model_escalation_order.length === 0) {
+      errors.push(`llm_providers.${provider.id}.model_escalation_order is required because ${provider.id} is configured`);
+    }
+    if (!policy?.model_fallback_ladder || policy.model_fallback_ladder.length === 0) {
+      errors.push(`llm_providers.${provider.id}.model_fallback_ladder is required because ${provider.id} is configured`);
+    }
+  }
+  return errors;
 }
 
 function validateByTier(raw: unknown, path: string): ConfigError | null {

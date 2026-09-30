@@ -36,6 +36,7 @@ import {
   HALT_PR_BANNER_SENTINEL,
   NEEDS_REMEDIATION_BODY_MARKER,
 } from '../../src/engine/pr-labels.js';
+import { collectProviderModelSelections } from '../../src/engine/provider-model-config.js';
 
 describe('config', () => {
   let tmpDir: string;
@@ -3882,7 +3883,72 @@ steps:
     });
   });
 
-  describe('llm_providers config block (Pi model selection Task 5)', () => {
+  // Covers: pi-per-step-model-selection-via-wrapped-providers:task:6
+  describe('llm_providers config block (Pi model selection Tasks 5-6)', () => {
+    it('collects every pi configuration selection and its model values', () => {
+      const selections = collectProviderModelSelections({
+        llm_provider: 'pi',
+        provider_substitution: 'allow',
+        llm_providers: {
+          pi: {
+            model: 'anthropic/claude-sonnet-4-5',
+            model_escalation_order: ['anthropic/claude-opus-4-5'],
+            model_fallback_ladder: ['openai/gpt-5.6-sol'],
+          },
+        },
+        steps: {
+          build: { llm_provider: ['claude', 'pi'], model: 'anthropic/claude-haiku-4-5' },
+        },
+        build_review: {
+          rubrics: {
+            testQuality: { llm_provider: 'pi', model: 'anthropic/claude-opus-4-5' },
+          },
+        },
+      });
+
+      expect(selections.pi).toMatchObject({
+        configured: true,
+        models: expect.arrayContaining([
+          { model: 'anthropic/claude-sonnet-4-5', configPath: 'llm_providers.pi.model' },
+          { model: 'anthropic/claude-opus-4-5', configPath: 'llm_providers.pi.model_escalation_order[0]' },
+          { model: 'openai/gpt-5.6-sol', configPath: 'llm_providers.pi.model_fallback_ladder[0]' },
+          { model: 'anthropic/claude-haiku-4-5', configPath: 'steps.build.model', step: 'build' },
+          { model: 'anthropic/claude-opus-4-5', configPath: 'build_review.rubrics.testQuality.model', step: 'build_review:testQuality' },
+        ]),
+      });
+      expect(selections.claude.configured).toBe(true);
+      expect(selections.codex.configured).toBe(false);
+    });
+
+    it.each([
+      ['model', { model_escalation_order: ['anthropic/claude-opus-4-5'], model_fallback_ladder: ['openai/gpt-5.6-sol'] }],
+      ['model_escalation_order', { model: 'anthropic/claude-sonnet-4-5', model_fallback_ladder: ['openai/gpt-5.6-sol'] }],
+      ['model_fallback_ladder', { model: 'anthropic/claude-sonnet-4-5', model_escalation_order: ['anthropic/claude-opus-4-5'], model_fallback_ladder: [] }],
+    ])('requires llm_providers.pi.%s when pi is configured', (_key, pi) => {
+      const result = validateConfig({ llm_provider: 'pi', llm_providers: { pi } });
+
+      expect(result).toMatchObject({ ok: false, error: { type: 'validation_error' } });
+      if (result.ok) return;
+      expect(result.error.message).toContain(`llm_providers.pi.${_key}`);
+      expect(result.error.message).toContain('required because pi is configured');
+    });
+
+    it('reports all three missing pi model-policy keys together', () => {
+      const result = validateConfig({ steps: { build: { llm_provider: 'pi' } } });
+
+      expect(result).toMatchObject({ ok: false, error: { type: 'validation_error' } });
+      if (result.ok) return;
+      expect(result.error.message).toContain('llm_providers.pi.model');
+      expect(result.error.message).toContain('llm_providers.pi.model_escalation_order');
+      expect(result.error.message).toContain('llm_providers.pi.model_fallback_ladder');
+    });
+
+    it('does not require an llm_providers.pi block when pi is not configured', () => {
+      const result = validateConfig({ llm_provider: 'claude' });
+
+      expect(result).toMatchObject({ ok: true });
+    });
+
     it('accepts catalog provider model policy settings', () => {
       const result = validateConfig({
         llm_providers: {
