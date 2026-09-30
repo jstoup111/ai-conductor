@@ -4,7 +4,10 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { applyBuildReviewOutcome } from '../../src/engine/build-review-outcome.js';
+import {
+  applyBuildReviewOutcome,
+  describeBuildReviewScopeIncompleteFaults,
+} from '../../src/engine/build-review-outcome.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
@@ -159,5 +162,44 @@ describe('applyBuildReviewOutcome', () => {
     await expect(applyBuildReviewOutcome(settled)).resolves.toMatchObject({ kind: 'settled', lapId: aggregate.lapId });
     expect(judge).not.toHaveBeenCalled();
     expect(charge).not.toHaveBeenCalled();
+  });
+});
+
+describe('describeBuildReviewScopeIncompleteFaults', () => {
+  it('renders every indeterminate candidate with its rubric, source location, display, and missing evidence', () => {
+    const faults = [{
+      rubric: 'testQuality' as const,
+      reason: 'scope-incomplete' as const,
+      detail: 'scope evidence is incomplete',
+      candidates: [
+        {
+          candidateId: 'candidate:setup', status: 'indeterminate' as const,
+          sourceRegion: {
+            path: 'test/example.test.ts', startLine: 2, endLine: 3,
+            contentHash: 'sha256:setup', display: 'example setup',
+          },
+          obligationReferences: ['story:S6.2'],
+          missingEvidenceReason: 'the pinned binding is incomplete',
+        },
+        {
+          candidateId: 'candidate:assertion', status: 'indeterminate' as const,
+          sourceRegion: {
+            path: 'test/example.test.ts', startLine: 7, endLine: 9,
+            contentHash: 'sha256:assertion', display: 'example assertion',
+          },
+          obligationReferences: ['story:S6.3'],
+          missingEvidenceReason: 'the source region could not be read',
+        },
+      ],
+    }];
+
+    expect(describeBuildReviewScopeIncompleteFaults(faults)).toBe([
+      'scope-incomplete testQuality test/example.test.ts:2-3 (example setup): the pinned binding is incomplete',
+      'scope-incomplete testQuality test/example.test.ts:7-9 (example assertion): the source region could not be read',
+    ].join('\n'));
+  });
+
+  it('returns no lines when no scope faults are present', () => {
+    expect(describeBuildReviewScopeIncompleteFaults([])).toBe('');
   });
 });

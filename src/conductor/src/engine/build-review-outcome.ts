@@ -3,6 +3,7 @@ import {
   type BuildReviewAdjudicationCoordinatorInput,
 } from './build-review-adjudication-coordinator.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import type { BuildReviewScopeIncompleteFault } from './build-review-domain.js';
 
 export type BuildReviewOutcome =
   | { readonly kind: 'repair'; readonly lapId: string; readonly caseIds: readonly string[]; readonly trace: string; readonly remainingInfrastructure: boolean }
@@ -73,6 +74,16 @@ export function describeBuildReviewDecisionStops(
   return stops.map((stop) =>
     `decision stop ${stop.caseId} (owner: ${stop.owner ?? 'unassigned'}; sources: ${stop.sourceIds.join(', ') || 'none'}): ${stop.rationale}`,
   ).join('\n');
+}
+
+/** Operator-facing lines for each candidate whose scope evidence is incomplete. */
+export function describeBuildReviewScopeIncompleteFaults(
+  faults: readonly BuildReviewScopeIncompleteFault[],
+): string {
+  return faults.flatMap((fault) => fault.candidates.map((candidate) => {
+    const { path, startLine, endLine, display } = candidate.sourceRegion;
+    return `scope-incomplete ${fault.rubric} ${path}:${startLine}-${endLine} (${display}): ${candidate.missingEvidenceReason}`;
+  })).join('\n');
 }
 
 export const BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE =
