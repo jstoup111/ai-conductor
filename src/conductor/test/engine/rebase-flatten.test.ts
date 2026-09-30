@@ -1,7 +1,7 @@
 // Covers: task:2
 import { describe, expect, it } from 'vitest';
 
-import { planFlattenedReplay, proveFlattenedReplay, type FlattenedReplayPlan, type GitRunner } from '../../src/engine/rebase.js';
+import { flattenRefusalRecipe, planFlattenedReplay, proveFlattenedReplay, type FlattenedReplayPlan, type GitRunner } from '../../src/engine/rebase.js';
 
 const sha = (digit: string) => digit.repeat(40);
 
@@ -29,6 +29,12 @@ const CONTENT_TWO_FIRST_PARENT_TREE = sha('D');
 const CONTENT_TWO_TREE = sha('E');
 const FLATTENED_CONTENT = sha('F');
 const FLATTENED_CONTENT_TWO = sha('e');
+
+it('formats the complete, concrete flatten-refusal recovery procedure', () => {
+  expect(flattenRefusalRecipe('/worktree/feature', 'origin/main', 'first-parent', 'merge')).toBe(
+    'park the feature, then run git -C /worktree/feature rebase -i --rebase-merges origin/main; at the merge stop, re-apply git diff first-parent merge; run git rebase --continue; then clear .pipeline/HALT and .pipeline/HALT.class before re-queueing',
+  );
+});
 
 type GitCall = { args: string[]; input?: string };
 
@@ -64,6 +70,12 @@ function flattenFixture(): { git: GitRunner; calls: GitCall[] } {
     }
     if (args.join(' ') === ['rev-list', `${MERGE_BASE}..HEAD`].join(' ')) {
       return { exitCode: 0, stdout: `${allCommits.join('\n')}\n`, stderr: '' };
+    }
+    if (args.join(' ') === ['rev-list', `${CONTENT_FIRST_PARENT}..${CONTENT_SECOND_PARENT}`].join(' ')) {
+      return { exitCode: 0, stdout: `${CONTENT_SIDE_ONE}\n${CONTENT_SIDE_TWO}\n`, stderr: '' };
+    }
+    if (args.join(' ') === ['rev-list', `${CONTENT_TWO_FIRST_PARENT}..${CONTENT_TWO_SECOND_PARENT}`].join(' ')) {
+      return { exitCode: 0, stdout: '', stderr: '' };
     }
     const parentLines = new Map<string, string>([
       [ORDINARY_ONE, `${ORDINARY_ONE} ${MERGE_BASE}\n`],
@@ -128,6 +140,11 @@ describe('planFlattenedReplay (Task 2)', () => {
       { from: CONTENT_MERGE_AUTHOR_DIFFERS, to: FLATTENED_CONTENT },
       { from: CONTENT_MERGE_TWO, to: FLATTENED_CONTENT_TWO },
     ]);
+    expect(plan.absorptionPoints).toEqual([
+      { from: CONTENT_SIDE_ONE, to: FLATTENED_CONTENT },
+      { from: CONTENT_SIDE_TWO, to: FLATTENED_CONTENT },
+      { from: ANCESTRY_ONLY_MERGE, to: ORDINARY_TWO },
+    ]);
 
     for (const merge of [ANCESTRY_ONLY_MERGE, CONTENT_MERGE_AUTHOR_DIFFERS, CONTENT_MERGE_TWO]) {
       expect(calls.filter(({ args }) => args[0] === 'rev-parse' && args[1] === `${merge}^{tree}`)).toHaveLength(1);
@@ -174,6 +191,7 @@ describe('proveFlattenedReplay (Task 3)', () => {
     ],
     audit: { flattenedMerges: [CONTENT_MERGE_AUTHOR_DIFFERS], ancestryOnlyMerges: [], sideLineageCount: 0 },
     pairs: [{ from: CONTENT_MERGE_AUTHOR_DIFFERS, to: FLATTENED_CONTENT }],
+    absorptionPoints: [],
   };
 
   function proofRunner(fail?: 'merge-tree' | 'commit-tree' | 'mismatch' | 'ordinary-conflict' | 'flattened-conflict') {

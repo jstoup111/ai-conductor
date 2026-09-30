@@ -15191,7 +15191,6 @@ export class Conductor {
     if (outcome.kind === 'conflict_halt' && !sealRejectionReason) {
       await writeRebaseOutcomeHalt(this.projectRoot, outcome, this.events);
     } else if (outcome.kind === 'flatten_refused' && !sealRejectionReason) {
-      // Task 6 replaces this conflict-halt stub with the refusal recipe.
       await writeRebaseOutcomeHalt(this.projectRoot, outcome, this.events);
     } else if (outcome.kind === 'setup_stop') {
       // Setup-only resolver exhaustion leaves the rebase paused: park it for the

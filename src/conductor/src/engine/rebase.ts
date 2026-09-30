@@ -753,6 +753,8 @@ export interface FlattenedReplayPlan {
     sideLineageCount: number;
   };
   pairs: Array<{ from: string; to: string }>;
+  /** Pre-image shas absorbed by a flattened entry or a surviving successor. */
+  absorptionPoints: Array<{ from: string; to: string }>;
 }
 
 export type FlattenedReplayProof =
@@ -767,7 +769,16 @@ export type FeatureReplayStart =
     plan: FlattenedReplayPlan;
     proof: Extract<FlattenedReplayProof, { kind: 'refused' | 'target_conflict' }>;
     /** True only after a merge-bearing range selected flattened replay handling. */
-    flattened: boolean;
+    flattened: false;
+  }
+  | {
+    kind: 'refused';
+    plan: FlattenedReplayPlan;
+    proof: Extract<FlattenedReplayProof, { kind: 'refused' | 'target_conflict' }>;
+    /** True only after a merge-bearing range selected flattened replay handling. */
+    flattened: true;
+    /** D5 refusal payload, built once here and consumed by both callers. */
+    refusal: Extract<RebaseOutcome, { kind: 'flatten_refused' }>;
   };
 
 async function replayFlattenedEntries(
@@ -812,7 +823,7 @@ async function replayFlattenedEntries(
 function conflictedPathsFromMergeTree(stdout: string, stderr: string): string[] {
   const paths = new Set<string>();
   for (const line of `${stdout}\n${stderr}`.split('\n')) {
-    const match = line.match(/(?:CONFLICT .*? in|Auto-merging)\s+(.+)$/);
+    const match = line.match(/CONFLICT .*? in\s+(.+)$/);
     if (match?.[1]?.trim()) paths.add(match[1].trim());
   }
   return [...paths];
@@ -881,6 +892,7 @@ export async function planFlattenedReplay(
   const flattenedMerges: string[] = [];
   const ancestryOnlyMerges: string[] = [];
   const pairs: Array<{ from: string; to: string }> = [];
+  const absorptionPoints: Array<{ from: string; to: string }> = [];
 
   for (const sha of firstParent) {
     const parentsResult = await git(['rev-list', '--parents', '-n', '1', sha]);
@@ -923,6 +935,24 @@ export async function planFlattenedReplay(
     entries.push({ kind: 'flattened', sha: flattenedSha, mergeSha: sha, firstParent: firstParentSha, subject });
     flattenedMerges.push(sha);
     pairs.push({ from: sha, to: flattenedSha });
+    const side = await git(['rev-list', `${firstParentSha}..${parents[1]}`]);
+    if (side.exitCode !== 0) {
+      throw new Error(`could not list side lineage for merge ${sha}`);
+    }
+    for (const sideSha of side.stdout.split('\n').map((value) => value.trim()).filter(Boolean)) {
+      absorptionPoints.push({ from: sideSha, to: flattenedSha });
+    }
+  }
+
+  // An ancestry-only merge is absorbed by its first following replay entry.
+  // Store that relationship while the immutable first-parent plan is known;
+  // translation must not reconstruct it from post-replay history.
+  for (const merge of ancestryOnlyMerges) {
+    const mergeIndex = firstParent.indexOf(merge);
+    const successor = firstParent.slice(mergeIndex + 1)
+      .map((sha) => entries.find((entry) => entry.kind === 'ordinary' ? entry.sha === sha : entry.mergeSha === sha))
+      .find((entry): entry is FlattenedReplayEntry => entry !== undefined);
+    if (successor) absorptionPoints.push({ from: merge, to: successor.sha });
   }
 
   return {
@@ -933,6 +963,7 @@ export async function planFlattenedReplay(
       sideLineageCount: Math.max(0, allCommits.length - firstParent.length),
     },
     pairs,
+    absorptionPoints,
   };
 }
 
@@ -948,35 +979,66 @@ export async function startFeatureReplay(
   projectRoot?: string,
 ): Promise<FeatureReplayStart> {
   const merges = await git(['rev-list', '--merges', `${baseRef}..HEAD`]);
-  const emptyPlan = (): FlattenedReplayPlan => ({ entries: [], audit: { flattenedMerges: [], ancestryOnlyMerges: [], sideLineageCount: 0 }, pairs: [] });
+  const emptyPlan = (): FlattenedReplayPlan => ({ entries: [], audit: { flattenedMerges: [], ancestryOnlyMerges: [], sideLineageCount: 0 }, pairs: [], absorptionPoints: [] });
+  const refusal = async (
+    plan: FlattenedReplayPlan,
+    proof: Extract<FlattenedReplayProof, { kind: 'refused' | 'target_conflict' }>,
+    flattened: boolean,
+  ): Promise<FeatureReplayStart> => {
+    if (!flattened) return { kind: 'refused', plan, proof, flattened };
+    const conflicted = proof.kind === 'target_conflict' ? plan.entries[proof.index] : undefined;
+    const merge = conflicted?.kind === 'flattened'
+      ? conflicted
+      : plan.entries.find((entry): entry is Extract<FlattenedReplayEntry, { kind: 'flattened' }> => entry.kind === 'flattened');
+    const mergeSha = merge?.mergeSha ?? '';
+    const parentResult = mergeSha
+      ? await git(['rev-list', '--parents', '-n', '1', mergeSha])
+      : { exitCode: 1, stdout: '', stderr: '' };
+    const parents = parentResult.exitCode === 0
+      ? parentResult.stdout.trim().split(/\s+/).slice(1, 3)
+      : [];
+    const reason = proof.kind === 'refused'
+      ? proof.reason
+      : `flattened merge conflicts at ${proof.sha}`;
+    const refusalOutcome: Extract<RebaseOutcome, { kind: 'flatten_refused' }> = {
+      kind: 'flatten_refused',
+      mergeSha,
+      parents: [parents[0] ?? '', parents[1] ?? ''],
+      flattenedSha: merge?.sha ?? '',
+      conflicts: proof.kind === 'target_conflict' ? proof.conflicts : [],
+      reason,
+      recipe: flattenRefusalRecipe(projectRoot ?? '<worktree>', baseRef, parents[0] ?? '<first-parent>', mergeSha || '<merge>'),
+    };
+    return { kind: 'refused', plan, proof, flattened, refusal: refusalOutcome };
+  };
   if (merges.exitCode !== 0) {
-    return { kind: 'refused', plan: emptyPlan(), proof: { kind: 'refused', reason: `rev-list --merges failed: ${merges.stderr}` }, flattened: false };
+    return refusal(emptyPlan(), { kind: 'refused', reason: `rev-list --merges failed: ${merges.stderr}` }, false);
   }
   if (merges.stdout.trim() === '') {
     const rebaseArgs = ['rebase', '--autostash', baseRef];
     return { kind: 'started', result: await git(rebaseArgs), rebaseArgs };
   }
   if (!/^[0-9a-f]{40}(?:\s|$)/i.test(merges.stdout.trim())) {
-    return { kind: 'refused', plan: emptyPlan(), proof: { kind: 'refused', reason: 'rev-list --merges returned malformed output' }, flattened: true };
+    return refusal(emptyPlan(), { kind: 'refused', reason: 'rev-list --merges returned malformed output' }, true);
   }
   let plan: FlattenedReplayPlan;
   try {
     plan = await planFlattenedReplay(git, mergeBase);
   } catch (error) {
-    return { kind: 'refused', plan: emptyPlan(), proof: { kind: 'refused', reason: `flattened replay planning failed: ${(error as Error).message}` }, flattened: true };
+    return refusal(emptyPlan(), { kind: 'refused', reason: `flattened replay planning failed: ${(error as Error).message}` }, true);
   }
   const targetResult = await git(['rev-parse', baseRef]);
   if (targetResult.exitCode !== 0 || targetResult.stdout.trim() === '') {
-    return { kind: 'refused', plan, proof: { kind: 'refused', reason: `rev-parse ${baseRef} failed: ${targetResult.stderr}` }, flattened: true };
+    return refusal(plan, { kind: 'refused', reason: `rev-parse ${baseRef} failed: ${targetResult.stderr}` }, true);
   }
   const target = targetResult.stdout.trim();
   const proof = await proveFlattenedReplay(git, plan, mergeBase, target);
   if (proof.kind === 'refused' || proof.kind === 'target_conflict' && plan.entries[proof.index]?.kind === 'flattened') {
-    return { kind: 'refused', plan, proof, flattened: true };
+    return refusal(plan, proof, true);
   }
   const todoPathResult = await git(['rev-parse', '--git-path', 'ai-conductor-flatten-todo']);
   if (todoPathResult.exitCode !== 0 || todoPathResult.stdout.trim() === '') {
-    return { kind: 'refused', plan, proof: { kind: 'refused', reason: 'could not determine flattened replay todo path' }, flattened: true };
+    return refusal(plan, { kind: 'refused', reason: 'could not determine flattened replay todo path' }, true);
   }
   const todoPath = todoPathResult.stdout.trim();
   await writeFile(projectRoot && !isAbsolute(todoPath) ? join(projectRoot, todoPath) : todoPath, `${plan.entries.map((entry) => `pick ${entry.sha}`).join('\n')}\n`);
@@ -1029,8 +1091,8 @@ export async function writeRebaseOutcomeHalt(
 }
 
 /** One human recovery procedure for every pre-mutation flattened-replay refusal. */
-export function flattenRefusalRecipe(firstParent = '<first-parent>', merge = '<merge>'): string {
-  return `run git rebase -i --rebase-merges against the base, inspect the merge with git diff ${firstParent} ${merge}, re-apply that merge diff, then clear .pipeline/HALT and .pipeline/HALT.class before re-queueing`;
+export function flattenRefusalRecipe(worktree = '<worktree>', base = '<base>', firstParent = '<first-parent>', merge = '<merge>'): string {
+  return `park the feature, then run git -C ${worktree} rebase -i --rebase-merges ${base}; at the merge stop, re-apply git diff ${firstParent} ${merge}; run git rebase --continue; then clear .pipeline/HALT and .pipeline/HALT.class before re-queueing`;
 }
 
 /** A protected-artifact refusal raised before git starts a rebase. */
@@ -1327,22 +1389,7 @@ export async function performRebase(
         startFailure: true,
       });
     }
-    const conflicted = replayStart.proof.kind === 'target_conflict'
-      ? replayStart.plan.entries[replayStart.proof.index]
-      : undefined;
-    const merge = conflicted?.kind === 'flattened' ? conflicted : undefined;
-    const parents = merge
-      ? (await git(['rev-list', '--parents', '-n', '1', merge.mergeSha])).stdout.trim().split(/\s+/).slice(1, 3)
-      : [];
-    return {
-      kind: 'flatten_refused',
-      mergeSha: merge?.mergeSha ?? '',
-      parents: [parents[0] ?? '', parents[1] ?? ''],
-      flattenedSha: merge?.sha ?? '',
-      conflicts: replayStart.proof.kind === 'target_conflict' ? replayStart.proof.conflicts : [],
-      reason: replayStart.proof.kind === 'refused' ? replayStart.proof.reason : `flattened merge conflicts at ${replayStart.proof.sha}`,
-      recipe: flattenRefusalRecipe(parents[0] || '<first-parent>', merge?.mergeSha || '<merge>'),
-    };
+    return replayStart.refusal;
   }
   const rebaseArgs = replayStart.rebaseArgs;
   const rebase = replayStart.result;
@@ -1903,11 +1950,12 @@ async function resolveRebaseConflictsInner(
   // A flattened todo deliberately omits side lineage and ancestry-only merges.
   // Its captured list, rather than mutable ORIG_HEAD history, is FR-9's authority.
   // Merge-free replays retain the historical ORIG_HEAD calculation.
-  const subjR = await git(['log', '--format=%s', `${onto}..ORIG_HEAD`]);
-  const subjectsBefore = conflictOutcome.expectedSubjects ??
-    subjR.exitCode === 0
+  const subjectsBefore = conflictOutcome.expectedSubjects ?? await (async () => {
+    const subjR = await git(['log', '--format=%s', `${onto}..ORIG_HEAD`]);
+    return subjR.exitCode === 0
       ? subjR.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)
       : [];
+  })();
 
   // Use the conflict list already captured in the outcome (avoids a redundant
   // git call and is consistent with the snapshot at conflict time).
@@ -2756,7 +2804,14 @@ export async function emitRebaseEvent(
           step: 'rebase',
           reason: outcome.reason,
           conflicts: outcome.conflicts,
-          mergeAudit: { flattenedMerges: outcome.mergeSha ? [outcome.mergeSha] : [], ancestryOnlyMerges: [], sideLineageCount: 0 },
+          mergeAudit: {
+            flattenedMerges: outcome.mergeSha ? [outcome.mergeSha] : [],
+            ancestryOnlyMerges: [],
+            sideLineageCount: 0,
+            parents: outcome.parents,
+            flattenedSha: outcome.flattenedSha,
+            conflicts: outcome.conflicts,
+          },
         });
         break;
       case 'setup_stop':

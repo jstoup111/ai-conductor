@@ -1473,6 +1473,9 @@ export type ConductorEvent =
         flattenedMerges: string[];
         ancestryOnlyMerges: string[];
         sideLineageCount: number;
+        parents?: [string, string];
+        flattenedSha?: string;
+        conflicts?: string[];
       };
     }
   | {

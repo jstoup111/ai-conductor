@@ -33,7 +33,6 @@ import {
   conflictedFiles,
   resolveBase,
   startFeatureReplay,
-  flattenRefusalRecipe,
   runTier1,
   makeGitRunner,
 } from './rebase.js';
@@ -434,6 +433,7 @@ export async function runTier2(
   cap: number,
   resolver: RebaseResolver,
   scope: 'test-only' | 'mixed' = 'mixed',
+  replay?: Pick<RebaseOutcome, 'flatten' | 'expectedSubjects'>,
 ): Promise<RebaseOutcome> {
   // FR-7: cap=0 disables resolution entirely — return the conflict unchanged
   if (cap <= 0) {
@@ -441,6 +441,7 @@ export async function runTier2(
       kind: 'conflict_halt',
       conflicts: remaining,
       reason: 'tier 2 resolution disabled (cap=0)',
+      ...(replay?.flatten ? { flatten: replay.flatten, expectedSubjects: replay.expectedSubjects } : {}),
     };
   }
 
@@ -449,6 +450,7 @@ export async function runTier2(
     kind: 'conflict_halt',
     conflicts: remaining,
     reason: 'remaining conflicts after tier 1',
+    ...(replay?.flatten ? { flatten: replay.flatten, expectedSubjects: replay.expectedSubjects } : {}),
   };
 
   // Delegate to resolveRebaseConflicts with the bounded cap
@@ -1147,18 +1149,17 @@ export async function resolveConflictingPr(
     }
     const replayStart = await startFeatureReplay(git, baseRef, mergeBase, worktreePath);
     if (replayStart.kind === 'refused') {
-      const conflicted = replayStart.proof.kind === 'target_conflict'
-        ? replayStart.plan.entries[replayStart.proof.index]
-        : undefined;
-      const mergeSha = conflicted?.kind === 'flattened' ? conflicted.mergeSha : '';
-      const parents = mergeSha
-        ? (await git(['rev-list', '--parents', '-n', '1', mergeSha])).stdout.trim().split(/\s+/).slice(1, 3)
-        : [];
-      await escalate(prUrl, 'merge-flatten-refused',
-        `${mergeSha ? `merge ${mergeSha}: ` : 'merge unavailable: '}${replayStart.proof.kind === 'refused' ? replayStart.proof.reason : `flattened replay conflicts in ${replayStart.proof.conflicts.join(', ') || '(unknown path)'}`}; recovery: ${flattenRefusalRecipe(parents[0] || '<first-parent>', mergeSha || '<merge>')}`, {
+      const escalationReason = replayStart.flattened ? 'merge-flatten-refused' : 'rebase-error';
+      await escalate(prUrl, escalationReason,
+        replayStart.flattened
+          ? `merge ${replayStart.refusal.mergeSha}: ${replayStart.refusal.reason}; recovery: ${replayStart.refusal.recipe}`
+          : replayStart.proof.kind === 'refused'
+            ? replayStart.proof.reason
+            : `replay conflicts at ${replayStart.proof.sha}`,
+        {
           runGh: deps.runGh, operations, cwd: repoCwd, log,
         });
-      logOutcome(log, prUrl, 'merge-flatten-refused', 'escalated');
+      logOutcome(log, prUrl, escalationReason, 'escalated');
       return { kind: 'escalated' };
     }
     if (replayStart.flatten) {
@@ -1202,6 +1203,7 @@ export async function resolveConflictingPr(
           config.attemptCap,
           capturingResolver,
           conflictScope,
+          replayStart.flatten ? { flatten: replayStart.flatten, expectedSubjects: replayStart.expectedSubjects } : undefined,
         );
         log(`${prUrl}: tier2 outcome: ${tier2Outcome.kind}`);
 

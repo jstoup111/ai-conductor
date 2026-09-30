@@ -40,7 +40,7 @@ describe('proveFlattenedReplay real local Git (Task 3)', () => {
       await git(['add', '.']); await git(['commit', '-qm', 'target']);
       const target = (await git(['rev-parse', 'HEAD'])).stdout.trim();
       await git(['checkout', '-q', 'feature']);
-      const plan: FlattenedReplayPlan = { entries: [{ kind: 'ordinary', sha: feature }], audit: { flattenedMerges: [], ancestryOnlyMerges: [], sideLineageCount: 0 }, pairs: [] };
+      const plan: FlattenedReplayPlan = { entries: [{ kind: 'ordinary', sha: feature }], audit: { flattenedMerges: [], ancestryOnlyMerges: [], sideLineageCount: 0 }, pairs: [], absorptionPoints: [] };
       const before = await snapshot(repo);
       const real = makeGitRunner(repo);
       const mismatch: GitRunner = async (args, opts) => args[0] === 'rev-parse' && args[1] === 'HEAD^{tree}' ? { exitCode: 0, stdout: `${'f'.repeat(40)}\n`, stderr: '' } : real(args, opts);

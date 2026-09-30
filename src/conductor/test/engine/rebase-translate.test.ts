@@ -38,7 +38,7 @@ import {
   translateAfterRebase,
 } from '../../src/engine/rebase-translate.js';
 import { applyMapToStores } from '../../src/engine/rebase-translate.js';
-import type { GitRunner } from '../../src/engine/rebase.js';
+import type { FlattenedReplayPlan, GitRunner } from '../../src/engine/rebase.js';
 import {
   createProtectedArtifactSeal,
   PROTECTED_ARTIFACT_DIRECTORIES,
@@ -186,6 +186,39 @@ describe('selectRepairBoundaryTranslation (Task 2)', () => {
 });
 
 describe('buildRewriteMap (RED — module does not exist yet)', () => {
+  it('keeps a patch-id mapping when a recorded absorption point names the same side commit', async () => {
+    const side = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const merge = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const flattened = 'cccccccccccccccccccccccccccccccccccccccc';
+    const directPost = 'dddddddddddddddddddddddddddddddddddddddd';
+    const flattenedPost = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+    const flatten: FlattenedReplayPlan = {
+      entries: [],
+      audit: { flattenedMerges: [merge], ancestryOnlyMerges: [], sideLineageCount: 1 },
+      pairs: [{ from: merge, to: flattened }],
+      absorptionPoints: [{ from: side, to: flattened }],
+    };
+    const git = makeFakeGit({
+      revList: {
+        [`${ONTO}..orig-head`]: [side, merge],
+        [`${ONTO}..new-head`]: [directPost, flattenedPost],
+      },
+      show: {
+        [side]: 'side patch', [merge]: 'merge patch', [flattened]: 'flattened patch',
+        [directPost]: 'side patch', [flattenedPost]: 'flattened patch',
+      },
+      patchId: {
+        'side patch': 'side-id', 'merge patch': 'merge-id', 'flattened patch': 'flattened-id',
+      },
+    });
+
+    const { map, residue } = await buildRewriteMap(git, ONTO, 'orig-head', 'new-head', flatten);
+
+    expect(map[side]).toBe(directPost);
+    expect(map[merge]).toBe(flattenedPost);
+    expect(residue).toEqual([]);
+  });
+
   it('maps each pre-image sha to its post-image sha by matching patch-id (1:1 unconflicted)', async () => {
     const origHead = 'orig-head';
     const head = 'new-head';

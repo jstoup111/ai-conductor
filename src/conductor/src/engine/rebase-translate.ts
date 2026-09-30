@@ -110,6 +110,10 @@ export async function buildRewriteMap(
   // and absorb both the merge citation and its second-parent-only lineage.
   if (flatten) {
     const add = (from: string, to: string) => {
+      // Patch-id is the authoritative correspondence. Absorption only repairs
+      // shas that survived that pass unmapped; it must never overwrite a
+      // patch-identical side-lineage commit's direct post-image.
+      if (map[from] !== undefined || map[from.slice(0, SHORT_SHA_LEN)] !== undefined) return;
       map[from] = to;
       map[from.slice(0, SHORT_SHA_LEN)] = to;
       const i = residue.indexOf(from);
@@ -120,20 +124,13 @@ export async function buildRewriteMap(
       const post = id ? postByPatchId.get(id) : undefined;
       if (!post) continue;
       add(pair.from, post);
-      const parents = await gitAny(['rev-list', '--parents', '-n', '1', pair.from]);
-      const [merge, first, second] = parents.stdout.trim().split(/\s+/);
-      if (!merge || !first || !second) continue;
-      const side = await gitAny(['rev-list', `${first}..${second}`]);
-      for (const sha of parseShaList(side.stdout)) add(sha, post);
     }
-    // An ancestry-only merge has no patch. Its first surviving first-parent
-    // successor is its absorption point; absent one, it remains residue.
-    const spine = await gitAny(['rev-list', '--first-parent', '--reverse', `${onto}..${origHead}`]);
-    const ordered = parseShaList(spine.stdout);
-    for (const merge of flatten.audit.ancestryOnlyMerges) {
-      const start = ordered.indexOf(merge);
-      const successor = ordered.slice(start + 1).map((sha) => map[sha]).find(Boolean);
-      if (successor) add(merge, successor);
+    // Planning records every non-patch absorption point while the pre-image
+    // first-parent topology is still available. Consume only those recorded
+    // relationships after patch-id, never by reconstructing history here.
+    for (const point of flatten.absorptionPoints) {
+      const post = map[point.to] ?? map[point.to.slice(0, SHORT_SHA_LEN)];
+      if (post) add(point.from, post);
     }
   }
 
