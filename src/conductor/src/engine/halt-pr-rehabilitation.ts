@@ -209,19 +209,23 @@ export async function clearHaltStateForResume(
   log: (msg: string) => void = () => {},
   sleep: (ms: number) => Promise<void> = defaultSleep,
   operations?: GithubOperationRunner,
+  opts: { featureDesc?: string; branch?: string } = {},
 ): Promise<ClearHaltStateForResumeOutcome> {
   let view: PrViewState;
   try {
-    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'isDraft,labels,body']);
+    const stdout = await runTrackerUrlRead(gh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body']);
     view = parsePrView(stdout);
   } catch (err) {
     log(`[halt-pr-rehab] resume clear state read failed for ${prUrl}: ${err}`);
     return 'gh-unavailable';
   }
 
+  // Gate on the same four signals FINISH's publication guard reads
+  // (hasHaltSignal): a title prefix or banner left alone here survives to
+  // FINISH and halts it as halt_state_pr.
   const hasLabel = view.labels.includes(NEEDS_REMEDIATION_LABEL);
   const hasMarker = engineBodyIncludes(view.body ?? '', NEEDS_REMEDIATION_BODY_MARKER);
-  if (!hasLabel && !hasMarker) {
+  if (!hasHaltSignal(view)) {
     log(`[halt-pr-rehab] resume clear found no halt state for ${prUrl}`);
     return 'not-halted';
   }
@@ -231,13 +235,14 @@ export async function clearHaltStateForResume(
     if (hasLabel) {
       mutations.push(() => rehabilitateMutation(operations, prUrl, 'pull-request.label.remove', { label: NEEDS_REMEDIATION_LABEL }));
     }
-    if (hasMarker) {
-      mutations.push(() => rehabilitateMutation(
-        operations,
-        prUrl,
-        'pull-request.edit',
-        { body: removeEngineBodyMarker(view.body ?? '', NEEDS_REMEDIATION_BODY_MARKER).trim() },
-      ));
+    if (view.title.toLowerCase().startsWith(NEEDS_REMEDIATION_TITLE_PREFIX)) {
+      const featureDesc =
+        opts.featureDesc?.trim() || (opts.branch ? branchToFeatureDesc(opts.branch) : '') || 'rehabilitated PR';
+      mutations.push(() => rehabilitateMutation(operations, prUrl, 'pull-request.edit', { title: `feat: ${featureDesc}` }));
+    }
+    const clearedBody = stripHaltBanner(removeEngineBodyMarker(view.body ?? '', NEEDS_REMEDIATION_BODY_MARKER)).trim();
+    if (hasMarker || clearedBody !== (view.body ?? '').trim()) {
+      mutations.push(() => rehabilitateMutation(operations, prUrl, 'pull-request.edit', { body: clearedBody }));
     }
     // A denied clear must not become a successful-clear result and must not
     // enter the resolution-comment recovery path.
@@ -853,6 +858,27 @@ export async function makeRetainedPrPresentable(
   return anyFailed ? 'partial' : 'repaired';
 }
 
+/**
+ * Remove the engine-authored halt banner lines from a PR body, collapse blank
+ * runs, and trim. A body without banner lines is returned trimmed/collapsed.
+ */
+export function stripHaltBanner(body: string): string {
+  const bannerLines: readonly string[] = HALT_PR_BANNER_LINES;
+  const stripped = engineBodyLines(body).filter(({ masked }) => !bannerLines.includes(masked)).map(({ line }) => line);
+  if (stripped.length === engineBodyLines(body).length) return body;
+  // Collapse runs of 2+ consecutive blank lines down to a single blank line.
+  const collapsed: string[] = [];
+  for (const line of stripped) {
+    if (line.trim() === '' && collapsed.length > 0 && collapsed[collapsed.length - 1].trim() === '') continue;
+    collapsed.push(line);
+  }
+  let start = 0;
+  let end = collapsed.length;
+  while (start < end && collapsed[start].trim() === '') start++;
+  while (end > start && collapsed[end - 1].trim() === '') end--;
+  return collapsed.slice(start, end).join('\n');
+}
+
 export type BodyFloorOutcome = 'not-halt-body' | 'floored' | 'partial' | 'refused';
 
 /**
@@ -890,25 +916,7 @@ export async function bodyFloor(
     return 'not-halt-body';
   }
 
-  const bannerLines: readonly string[] = HALT_PR_BANNER_LINES;
-  const strippedLines = engineBodyLines(body).filter(({ masked }) => !bannerLines.includes(masked));
-  const stripped = strippedLines.map(({ line }) => line);
-
-  // Collapse runs of 2+ consecutive blank lines down to a single blank line.
-  const collapsed: string[] = [];
-  for (const line of stripped) {
-    if (line.trim() === '' && collapsed.length > 0 && collapsed[collapsed.length - 1].trim() === '') {
-      continue;
-    }
-    collapsed.push(line);
-  }
-
-  // Trim leading/trailing blank lines.
-  let start = 0;
-  let end = collapsed.length;
-  while (start < end && collapsed[start].trim() === '') start++;
-  while (end > start && collapsed[end - 1].trim() === '') end--;
-  const remainingBody = collapsed.slice(start, end).join('\n');
+  const remainingBody = stripHaltBanner(body);
 
   let newBody = remainingBody;
   // An engine-authored placeholder already carries the floor marker (the

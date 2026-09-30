@@ -6975,6 +6975,7 @@ export class Conductor {
       this.log ?? console.warn,
       this.sleep,
       publication?.operations,
+      { featureDesc: state.feature_desc, branch: state.worktree_branch },
     );
     // A partial clear leaves the marker visible to reconciliation. Do not
     // consume this run's retry until the cleanup has been verified, otherwise
