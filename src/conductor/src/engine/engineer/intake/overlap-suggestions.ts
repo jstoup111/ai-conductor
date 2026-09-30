@@ -18,19 +18,21 @@ export interface OverlapSuggestions {
   shown: OverlapSuggestion[];
   preAccepted: OverlapSuggestion[];
   advisory: BranchOverlap[];
+  omittedCount?: number;
 }
 
 export interface BuildSuggestionsInput {
   issueOverlaps: readonly IssueOverlap[];
   branchOverlaps: readonly BranchOverlap[];
   alreadyNamed: readonly string[];
-  cap: number;
+  cap?: number;
 }
 
 export function buildSuggestions({
   issueOverlaps,
   branchOverlaps,
   alreadyNamed,
+  cap = 5,
 }: BuildSuggestionsInput): OverlapSuggestions {
   const pathsByIssue = new Map<string, string[]>();
   const addPaths = (issue: string, sharedPaths: readonly string[]) => {
@@ -58,5 +60,27 @@ export function buildSuggestions({
     else shown.push(suggestion);
   }
 
-  return { shown, preAccepted, advisory };
+  const issueNumber = (issue: string) => Number.parseInt(issue.slice(issue.lastIndexOf("#") + 1), 10);
+  const rankedShown = [...shown].sort((left, right) => {
+    const pathCountOrder = right.sharedPaths.length - left.sharedPaths.length;
+    if (pathCountOrder !== 0) return pathCountOrder;
+
+    const leftIssueNumber = issueNumber(left.issue);
+    const rightIssueNumber = issueNumber(right.issue);
+    if (Number.isFinite(leftIssueNumber) && Number.isFinite(rightIssueNumber)) {
+      const issueNumberOrder = leftIssueNumber - rightIssueNumber;
+      if (issueNumberOrder !== 0) return issueNumberOrder;
+    }
+
+    return left.issue < right.issue ? -1 : left.issue > right.issue ? 1 : 0;
+  });
+  const cappedShown = rankedShown.slice(0, cap);
+  const omittedCount = rankedShown.length - cappedShown.length;
+
+  return {
+    shown: cappedShown,
+    preAccepted,
+    advisory,
+    ...(omittedCount > 0 ? { omittedCount } : {}),
+  };
 }
