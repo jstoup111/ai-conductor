@@ -2866,6 +2866,87 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       'completed BUILD evidence is unavailable after rebase: unreadable completed evidence',
     );
   });
+
+  it.each([
+    ['a changed rebase', true],
+    ['a no-op rebase', false],
+  ])('dispatches pending BUILD before re-opened gates after %s', async (_caseName, changeBase) => {
+    await initFeatureRepo(['1'], ['1']);
+    if (changeBase) await advanceBaseWithCode();
+
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      build: 'pending',
+      feature_desc: 'foo',
+      session_started_at: Date.now() - 1_000,
+      run_started_at: Date.now() - 1_000,
+    });
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        prd_audit: {
+          count: 0, cumulative: 0, laps: 1, treeHash: null,
+          lastReason: 'cap', priorVerdict: true, resolvedBefore: 0,
+          effectiveLapCap: 2,
+        },
+      },
+      growth: { authored: 1, added: 0, byGate: {} },
+      pendingRepair: {
+        receiptId: 'raised-repair',
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 0 } },
+      },
+    } as never);
+
+    const logs: string[] = [];
+    await expect(resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: true,
+      preVerify: async () => { throw new Error('BUILD must not be re-verified'); },
+      log: (message) => { logs.push(message); },
+    })).resolves.toBe('rebased');
+    if (changeBase) {
+      await Promise.all([
+        'coverage_binding',
+        'test_suite',
+        'build_review',
+        'prd_audit',
+        'architecture_review_as_built',
+      ].map(async (gate) => {
+        expect((await readVerdict(dir, gate))?.satisfied).toBe(false);
+      }));
+    }
+
+    const dispatched: string[] = [];
+    let releaseBuild: (() => void) | undefined;
+    let signalBuildStarted: (() => void) | undefined;
+    const buildStarted = new Promise<void>((resolve) => { signalBuildStarted = resolve; });
+    const waitForBuildRelease = new Promise<void>((resolve) => { releaseBuild = resolve; });
+    const run = new Conductor({
+      stateFilePath: statePath,
+      projectRoot: dir,
+      events,
+      mode: 'auto', daemon: true, resume: true, verifyArtifacts: false,
+      config: { prd_audit: { max_remediation_laps: 1 } } as never,
+      stepRunner: { run: async (step) => {
+        dispatched.push(step);
+        if (step === 'build') {
+          signalBuildStarted?.();
+          await waitForBuildRelease;
+        }
+        return { success: true };
+      } },
+    }).run();
+
+    await buildStarted;
+    expect(dispatched).toEqual(['build']);
+    expect(logs).not.toContain(expect.stringMatching(/build gate re-verified mechanically/i));
+    releaseBuild?.();
+    await run;
+  });
 });
 
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

@@ -6912,6 +6912,7 @@ export class Conductor {
 
     // Determine starting index
     let startIndex = 0;
+    let pendingRepairBuildResume = false;
     if (this.fromStep) {
       startIndex = indexOf(this.fromStep);
     } else if (this.resume) {
@@ -6942,6 +6943,7 @@ export class Conductor {
           buildIndex >= 0
         ) {
           startIndex = buildIndex;
+          pendingRepairBuildResume = true;
         }
       } catch {
         // The ordinary resume route retains ownership when the ledger cannot
@@ -7006,6 +7008,7 @@ export class Conductor {
       // missing or unreadable verdict directory must not leave a refused
       // state-derived entry to return markerlessly from the loop.
       const candidate =
+        !pendingRepairBuildResume &&
         resumeClamp &&
         resumeClamp.earliestGateIdx >= 0 &&
         resumeClamp.earliestGateIdx < startIndex
