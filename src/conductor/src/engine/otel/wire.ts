@@ -16,7 +16,7 @@ import {
   type ResourceMetrics,
 } from '@opentelemetry/sdk-metrics';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { buildResource } from './resource.js';
 import { buildExporters } from './transport.js';
 import { MetricsRecorder } from './metrics.js';
@@ -25,6 +25,16 @@ import { createSpoolRuntime, type SpoolRuntime } from './spool-wiring.js';
 import { OtelVisualizer } from './otel-visualizer.js';
 
 const METRIC_LIFECYCLE_TIMEOUT_MS = 250;
+
+interface InteractiveSpoolLifecycle {
+  runtime: SpoolRuntime;
+  visualizerOpen: boolean;
+  metricsOpen: boolean;
+  leaseStart?: Promise<{ acquired: boolean }>;
+  stopped?: Promise<void>;
+}
+
+const interactiveSpoolLifecycles = new Map<string, InteractiveSpoolLifecycle>();
 
 /** Keeps metric lifecycle I/O from turning a collector failure into a run failure. */
 function guardMetricLifecycle(events: ConductorEventEmitter): (operation: () => Promise<void>) => Promise<void> {
@@ -69,6 +79,35 @@ export function createOtelVisualizerRegistry(events: ConductorEventEmitter): Plu
 }
 
 /**
+ * Interactive runs are rooted at their checkout's `.pipeline` directory, so
+ * their spool shares the durable checkout location used by daemon runs.
+ */
+function interactiveSpoolLifecycle(
+  resolved: Extract<ReturnType<typeof resolveOtelConfig>, { enabled: true; exporter: 'otlp' }>,
+  context: OtelVisualizerStartContext,
+  events: ConductorEventEmitter,
+): InteractiveSpoolLifecycle | undefined {
+  if (!resolved.spool?.enabled) return undefined;
+  const directory = join(dirname(context.pipelineDir), '.daemon', 'otel-spool');
+  const existing = interactiveSpoolLifecycles.get(directory);
+  if (existing) return existing;
+  const lifecycle = { runtime: createSpoolRuntime(directory, resolved, events), visualizerOpen: false, metricsOpen: false };
+  interactiveSpoolLifecycles.set(directory, lifecycle);
+  return lifecycle;
+}
+
+async function stopInteractiveSpoolIfUnused(directory: string, lifecycle: InteractiveSpoolLifecycle): Promise<void> {
+  if (lifecycle.visualizerOpen || lifecycle.metricsOpen) return;
+  lifecycle.stopped ??= (async () => {
+    await lifecycle.leaseStart?.catch(() => undefined);
+    await lifecycle.runtime.drainer.stop();
+    await lifecycle.runtime.lease.release();
+    interactiveSpoolLifecycles.delete(directory);
+  })();
+  await lifecycle.stopped;
+}
+
+/**
  * Create and start the OTel visualizer for one event stream.
  *
  * The built-in registry factory owns visualizer construction; this helper owns
@@ -84,13 +123,28 @@ export function wireOtelVisualizer(
   const resolved = resolveOtelConfig(config, context.pipelineDir);
   if (!resolved.enabled) return null;
 
-  if (spoolRuntime && resolved.exporter === 'otlp' && resolved.spool?.enabled) {
-    const exporters = buildExporters(resolved, { spoolStore: spoolRuntime.store, events });
+  const interactiveLifecycle = !spoolRuntime && resolved.exporter === 'otlp'
+    ? interactiveSpoolLifecycle(resolved, context, events)
+    : undefined;
+  if (interactiveLifecycle) interactiveLifecycle.visualizerOpen = true;
+  const activeSpoolRuntime = spoolRuntime ?? interactiveLifecycle?.runtime;
+  if (activeSpoolRuntime && resolved.exporter === 'otlp' && resolved.spool?.enabled) {
+    const exporters = buildExporters(resolved, { spoolStore: activeSpoolRuntime.store, events });
     const visualizer = new OtelVisualizer(resolved, { spanExporter: exporters.spanExporter, onWarning: (error) => {
       void events.emit({ type: 'renderer_error', rendererName: 'otel', error });
     } });
     visualizer.start(events, context);
-    return visualizer;
+    if (!interactiveLifecycle) return visualizer;
+    const directory = join(dirname(context.pipelineDir), '.daemon', 'otel-spool');
+    return {
+      name: visualizer.name,
+      start: visualizer.start.bind(visualizer),
+      stop: async () => {
+        await visualizer.stop();
+        interactiveLifecycle.visualizerOpen = false;
+        await stopInteractiveSpoolIfUnused(directory, interactiveLifecycle);
+      },
+    };
   }
 
   const registry = createOtelVisualizerRegistry(events);
@@ -178,7 +232,14 @@ export function wireInteractiveOtelMetrics(
 ): { name: string; start: () => void; stop: () => Promise<void> } | null {
   const resolved = resolveOtelConfig(config, context.pipelineDir);
   if (!resolved.enabled) return null;
-  const exporters = buildExporters(resolved);
+  const spoolLifecycle = resolved.exporter === 'otlp'
+    ? interactiveSpoolLifecycle(resolved, context, events)
+    : undefined;
+  if (spoolLifecycle) spoolLifecycle.metricsOpen = true;
+  const spoolRuntime = spoolLifecycle?.runtime;
+  const exporters = spoolRuntime
+    ? buildExporters(resolved, { spoolStore: spoolRuntime.store, events })
+    : buildExporters(resolved);
   const workerName = resolveWorkerName(resolved);
   const projectName = resolved.projectName ?? (context.project ? basename(context.project) : 'unknown');
   const provider = new MeterProvider({
@@ -205,12 +266,27 @@ export function wireInteractiveOtelMetrics(
     context.feature,
   );
   listener.start(events);
+  const leaseStart = spoolRuntime ? (spoolLifecycle!.leaseStart ??= spoolRuntime.lease.acquire()) : undefined;
+  if (leaseStart) {
+    void leaseStart.then((result) => {
+      if (result.acquired) return spoolRuntime.drainer.drain();
+      return undefined;
+    }).catch(() => undefined);
+  }
   const settleMetricLifecycle = guardMetricLifecycle(events);
   let stopped: Promise<void> | undefined;
   return {
     name: 'otel-metrics',
     start: () => {},
-    stop: () => stopped ??= (async () => { listener.stop(); await settleMetricLifecycle(() => provider.forceFlush()); await settleMetricLifecycle(() => provider.shutdown()); })(),
+    stop: () => stopped ??= (async () => {
+      listener.stop();
+      await settleMetricLifecycle(() => provider.forceFlush());
+      await settleMetricLifecycle(() => provider.shutdown());
+      if (spoolLifecycle) {
+        spoolLifecycle.metricsOpen = false;
+        await stopInteractiveSpoolIfUnused(join(dirname(context.pipelineDir), '.daemon', 'otel-spool'), spoolLifecycle);
+      }
+    })(),
   };
 }
 
