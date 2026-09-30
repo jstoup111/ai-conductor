@@ -437,8 +437,8 @@ else
 
   model_table_fixture_ok=1
   if [ "$model_table_fixture_exit" -eq 1 ] &&
-     echo "$model_table_fixture_output" | grep -Fq -- '-| Skill/Agent | Execution path | Claude model | Claude effort | Codex model-drift | Codex effort | Why |' &&
-     echo "$model_table_fixture_output" | grep -Fq -- '+| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |'; then
+     echo "$model_table_fixture_output" | grep -Fq -- '-| Skill/Agent | Execution path | Claude model | Claude effort | Codex model-drift | Codex effort | Pi model | Pi effort | Why |' &&
+     echo "$model_table_fixture_output" | grep -Fq -- '+| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Pi model | Pi effort | Why |'; then
     model_table_fixture_ok=0
   fi
   assert "bin/generate-model-table --check — provider-label fixture reports useful drift diff" \
