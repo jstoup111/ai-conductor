@@ -4,6 +4,8 @@ import {
 } from '../../overlap-scan.js';
 import { changedPathsSinceMergeBase, type GitRunner } from '../../rebase.js';
 import { runTrackerRead, type GhRunner } from '../../tracker-client.js';
+import { parseIntakeSourceRef } from '../../artifacts.js';
+import { parseSourceRef } from '../issue-ref.js';
 import { extractCitedPaths } from './cited-paths.js';
 import type { IssueOverlap } from './overlap-suggestions.js';
 import type { BranchOverlap } from './overlap-suggestions.js';
@@ -23,6 +25,7 @@ interface OpenIssue {
 }
 
 type OpenIssueLister = (limit: number) => Promise<readonly OpenIssue[]>;
+export type IssueStateReader = (issue: string) => Promise<'OPEN' | 'CLOSED' | string | null>;
 
 function parseOpenIssues(stdout: string): OpenIssue[] {
   const parsed: unknown = JSON.parse(stdout || '[]');
@@ -100,6 +103,48 @@ function inFlightSlug(branch: string): string | null {
   return null;
 }
 
+function makeIssueStateReader(gh: GhRunner, cwd: string, repository: string): IssueStateReader {
+  return async (issue) => runTrackerRead(
+    gh,
+    cwd,
+    'issue.read',
+    repository,
+    { kind: 'issue', number: Number(issue) },
+    ['issue', 'view', issue, '--repo', repository, '--json', 'state', '-q', '.state'],
+  ).then((stdout) => stdout.trim());
+}
+
+/**
+ * Resolves an in-flight branch's own intake marker to an open issue in the
+ * filing repository. Every unreadable or non-GitHub state remains advisory.
+ */
+export async function traceBranchIssue({
+  git,
+  branch,
+  repository,
+  readIssueState,
+}: {
+  git: GitRunner;
+  branch: string;
+  repository: string;
+  readIssueState: IssueStateReader;
+}): Promise<string | null> {
+  const slug = inFlightSlug(branch);
+  if (!slug) return null;
+
+  try {
+    const marker = await git(['show', `${branch}:.docs/intake/${slug}.md`]);
+    if (marker.exitCode !== 0) return null;
+    const parsed = parseSourceRef(parseIntakeSourceRef(marker.stdout));
+    if (!parsed || parsed.repo !== repository) return null;
+    return await readIssueState(parsed.number) === 'OPEN'
+      ? `${parsed.repo}#${parsed.number}`
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function isShippedBranch(git: GitRunner, baseRef: string, branch: string): Promise<boolean> {
   const slug = inFlightSlug(branch);
   if (!slug) return false;
@@ -122,11 +167,19 @@ export async function collectInFlightOverlaps({
   baseRef,
   citedPaths,
   maxBranches = DEFAULT_IN_FLIGHT_BRANCH_LIMIT,
+  repository,
+  readIssueState,
+  gh,
+  cwd,
 }: {
   git: GitRunner;
   baseRef: string;
   citedPaths: readonly string[];
   maxBranches?: number;
+  repository?: string;
+  readIssueState?: IssueStateReader;
+  gh?: GhRunner;
+  cwd?: string;
 }): Promise<{ overlaps: BranchOverlap[]; skipNotes: string[] }> {
   const skipNotes: string[] = [];
   let branches: string[];
@@ -149,6 +202,8 @@ export async function collectInFlightOverlaps({
   unshipped.sort((left, right) => right.committedAt - left.committedAt || left.branch.localeCompare(right.branch));
 
   const overlaps: BranchOverlap[] = [];
+  const issueStateReader = readIssueState
+    ?? (gh && cwd && repository ? makeIssueStateReader(gh, cwd, repository) : undefined);
   for (const { branch } of unshipped.slice(0, Math.max(0, maxBranches))) {
     try {
       const changedPaths = await changedPathsSinceMergeBase(git, baseRef, branch);
@@ -157,7 +212,12 @@ export async function collectInFlightOverlaps({
         continue;
       }
       const sharedPaths = intersectFiles([...citedPaths], changedPaths);
-      if (sharedPaths.length > 0) overlaps.push({ branch, sharedPaths, issue: null });
+      if (sharedPaths.length > 0) {
+        const issue = repository && issueStateReader
+          ? await traceBranchIssue({ git, branch, repository, readIssueState: issueStateReader })
+          : null;
+        overlaps.push({ branch, sharedPaths, issue });
+      }
     } catch (error) {
       skipNotes.push(`skipped in-flight diff for branch ${branch}: ${error instanceof Error ? error.message : String(error)}`);
     }
