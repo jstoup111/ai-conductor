@@ -114,6 +114,26 @@ HEAD-moved, per this ADR's own Context — the feature exists because SHAs are r
 > the engine did not perform writes no map, so both paths refuse and the existing recovery owners
 > (#1752, #2488) apply.
 
+> **Amended 2026-09-29 by #2498 (first-parent flattening, adr-2026-09-29-automatic-rebase-flattens-merge-bearing-history):**
+> Decision 1 builds the map only by patch-id. After a flattened replay, a merge sha, an
+> ancestry-only merge sha, and a side-lineage commit with no patch-id twin would all land in residue,
+> which would orphan evidence and repair boundaries that cite the ancestry flattening exists to keep.
+> Decisions 1 through 9 stand; Decision 5 is extended once more, as follows.
+>
+> D10. **Flattened history resolves through engine-recorded absorption pairs, after patch-id.**
+> `translateAfterRebase` first builds the patch-id map exactly as Decision 1 describes. Then, for a
+> pre-image sha that is still unmapped and that the same `performRebase` call recorded in its flatten
+> audit, it adds one entry:
+> - a content-bearing merge maps to the post-image of its flattened merge commit;
+> - an ancestry-only merge maps to the post-image of the first surviving first-parent commit
+>   after it;
+> - a side-lineage commit maps to the entry of the first-parent merge that absorbed it.
+>
+> A sha with no surviving successor stays residue under Decision 4. Only pairs the engine recorded
+> for this rebase may enter the map; nothing is inferred afterward from subjects, trailers, or
+> paths. Every substitute is a genuine post-image reachable from `HEAD` at or after the point
+> where the cited content arrived, so, as in D7, an evidence range can only shrink.
+
 All git calls go through the injected `GitRunner` (`makeGitRunner`, rebase.ts:22-59) so tests
 never touch a real rebase/remote. Absence of the capability (legacy callers, unit tests) is a
 no-op → today's behavior, fail-closed.
