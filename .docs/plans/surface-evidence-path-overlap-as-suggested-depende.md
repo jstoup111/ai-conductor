@@ -336,6 +336,7 @@ Before the intake filer creates an issue, it compares the paths the intake cites
 **Done when:**
 - The `intake-overlap-degraded` Vitest test asserts that a throwing open-issue lister with no other overlaps yields a non-interactive filing that records `issue.create`, returns a proceed decision whose skip notes include `open-issues` with the thrown reason, and renders stdout containing `[intake-file] overlap: skipped open-issues` with that reason.
 - The same test asserts that a lister returning exactly 500 issues and a fixture with 101 unmerged branches produce `partial` skip notes naming the 500-issue and 100-branch bounds, that only 100 branches were diffed, and that the filing proceeds.
+- The same test asserts that a lister returning 501 open issues with no other overlaps produces a `partial` `open-issues` skip note naming the 500-issue bound, that only 500 issues were compared, and that the filing proceeds.
 - The same test asserts that a timed-out open-issue read plus an undecided branch suggestion traced to #1477 returns a refused decision listing only #1477 and renders stdout naming the skipped `open-issues` comparison.
 - The same test asserts that an unresolvable base ref yields skip note `in-flight` while the open-issue lister is still called once.
 - The same test asserts that when every collector fails, a non-interactive filing records the same create, label and dependency operations as a filing with no `overlap` dependency, and renders stdout naming both skipped parts, `open-issues` and `in-flight`.
@@ -385,6 +386,7 @@ Before the intake filer creates an issue, it compares the paths the intake cites
 - The same test asserts that a refused filing emits one event with outcome `refused` and `undecided` listing the undecided refs.
 - The same test asserts that a skipped open-issue comparison appears in the event's `skipped` with part `open-issues` and its reason.
 - The same test asserts that a no-overlap filing emits exactly one event with an empty `suggested` list, and that the check performs no filesystem write (asserted with a spied `node:fs` write surface).
+- The same test asserts that the no-overlap filing's overlap check writes no separate log: no log-file append or write stream is opened (spied `node:fs` `appendFile*` and `createWriteStream`), so the single `intake_overlap_checked` event is its only record.
 - The existing event-sink exhaustiveness test passes with the new `intake_overlap_checked` row declared.
 
 **Files likely touched:**
