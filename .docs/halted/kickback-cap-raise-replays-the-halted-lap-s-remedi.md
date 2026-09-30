@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-30T01:07:57.397Z
+Status: halted
 Slug: kickback-cap-raise-replays-the-halted-lap-s-remedi
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-kickback-cap-raise-replays-the-halted-lap-s-remedi
-Head SHA: bac9a1e5448148ef1d2e16d5e758059ea2d1c92e
-Halted at: 2026-09-30T00:50:32.468Z
+Head SHA: 20ab711f2a05aa6b4b0b7a822a2ff056c0d8746f
+Halted at: 2026-09-30T01:29:25.070Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
