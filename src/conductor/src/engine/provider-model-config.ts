@@ -49,6 +49,14 @@ export function collectProviderModelSelections(
   addSelection(config.llm_provider, undefined, 'llm_provider');
   for (const [stepName, stepConfig] of Object.entries(config.steps ?? {})) {
     addSelection(stepConfig.llm_provider, stepConfig.model, `steps.${stepName}.model`, stepName);
+    for (const [tier, tierConfig] of Object.entries(stepConfig.by_tier ?? {})) {
+      addModels(
+        select(stepConfig.llm_provider),
+        tierConfig?.model,
+        `steps.${stepName}.by_tier.${tier}.model`,
+        stepName,
+      );
+    }
   }
   for (const [rubricId, rubric] of Object.entries(config.build_review?.rubrics ?? {})) {
     if (!rubric) continue;

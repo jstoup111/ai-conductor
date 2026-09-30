@@ -3920,6 +3920,23 @@ steps:
       expect(selections.codex.configured).toBe(false);
     });
 
+    it('collects a Pi step tier model selection', () => {
+      const selections = collectProviderModelSelections({
+        steps: {
+          build: {
+            llm_provider: 'pi',
+            by_tier: { S: { model: 'anthropic/claude-haiku-4-5' } },
+          },
+        },
+      });
+
+      expect(selections.pi.models).toContainEqual({
+        model: 'anthropic/claude-haiku-4-5',
+        configPath: 'steps.build.by_tier.S.model',
+        step: 'build',
+      });
+    });
+
     it.each([
       ['model', { model_escalation_order: ['anthropic/claude-opus-4-5'], model_fallback_ladder: ['openai/gpt-5.6-sol'] }],
       ['model_escalation_order', { model: 'anthropic/claude-sonnet-4-5', model_fallback_ladder: ['openai/gpt-5.6-sol'] }],
