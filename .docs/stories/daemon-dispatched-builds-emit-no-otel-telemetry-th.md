@@ -69,12 +69,12 @@ As an operator without an OTel collector, I want the daemon to behave exactly as
 - Given no otel block or a disabled otel config, when the daemon dispatches features, then no visualizer is constructed, no OTel dependency work runs, and dispatch behavior and log output are unchanged
 
 #### Negative Paths
-- Given OTel enabled with an unreachable endpoint, when a dispatch emits events, then export failures surface as bounded renderer_error warnings on the bus and the build's outcome is unaffected
+- Given OTel enabled with an unreachable endpoint, when a dispatch emits events, then the delivery failure surfaces as one bounded renderer_error per failure-class transition on the bus of the process that holds the export spool lease (the daemon bus under the daemon) and the build's outcome is unaffected
 - Given OTel enabled with an invalid config value, when config resolves, then resolution yields enabled false with an error message and the daemon runs as if OTel were absent
 
 ### Done When
 - [ ] A test asserts a daemon dispatch with otel absent constructs no visualizer and produces byte-identical event handling
-- [ ] A test asserts an unreachable endpoint yields renderer_error warnings while the dispatch completes successfully
+- [ ] A test asserts an unreachable endpoint yields one renderer_error per delivery failure-class transition on the lease holder's bus while the dispatch completes successfully
 
 ## Story 5: A parity test fails when a signal reaches one path's exporter but not the other
 
