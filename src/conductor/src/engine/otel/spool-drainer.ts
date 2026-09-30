@@ -43,6 +43,7 @@ export class SpoolDrainer {
   private readonly pendingDelays = new Set<() => void>();
   private readonly loops = new Set<Promise<void>>();
   private readonly lastFailures = new Map<SpoolSignal, DeliveryFailureClass>();
+  private readonly reportedFailures = new Map<SpoolSignal, DeliveryFailureClass>();
   private stopped = false;
 
   constructor(
@@ -119,6 +120,13 @@ export class SpoolDrainer {
         if (this.stopped) return;
         if (classification.action !== 'keep') {
           await this.store.delete(batch);
+          if (classification.action === 'delete' && this.reportedFailures.delete(signal)) {
+            await this.events?.emit({
+              type: 'renderer_error',
+              rendererName: 'otel',
+              error: `OTLP ${signal} delivery recovered`,
+            });
+          }
           if (classification.action === 'drop') {
             await this.events?.emit({
               type: 'otel_spool_drop',
@@ -133,6 +141,14 @@ export class SpoolDrainer {
         }
 
         this.lastFailures.set(signal, classification.failureClass);
+        if (this.reportedFailures.get(signal) !== classification.failureClass) {
+          this.reportedFailures.set(signal, classification.failureClass);
+          await this.events?.emit({
+            type: 'renderer_error',
+            rendererName: 'otel',
+            error: `OTLP ${signal} delivery failed: ${classification.failureClass}`,
+          });
+        }
 
         // A server-directed delay takes precedence over the ordinary backoff.
         if (classification.retryAfterMs !== undefined) {

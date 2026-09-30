@@ -1,4 +1,4 @@
-// Covers: task:10, task:11, task:12, task:13
+// Covers: task:10, task:11, task:12, task:13, task:14
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -507,5 +507,174 @@ describe('SpoolDrainer', () => {
       await emptyDrainer.drain();
     }
     expect(emptyBacklog).toEqual([]);
+  });
+
+  it('reports a traces network failure once after a healthy export and suppresses further network failures', async () => {
+    const events = new ConductorEventEmitter();
+    const rendererErrors: unknown[] = [];
+    events.on('renderer_error', (event) => { rendererErrors.push(event); });
+    let failNetworkRequests = false;
+    let networkAttempts = 0;
+    const server = createServer((request, response) => {
+      request.resume();
+      if (!failNetworkRequests) {
+        response.writeHead(200).end();
+        return;
+      }
+      networkAttempts += 1;
+      request.socket.destroy();
+    });
+    const endpoint = await listen(server);
+    const store = new SpoolStore(await temporaryDirectory());
+    let releaseRetry: (() => void) | undefined;
+    const drainer = new SpoolDrainer(store, {
+      endpoint,
+      headers: () => ({}),
+      events,
+      sleep: async () => new Promise<void>((resolve) => { releaseRetry = resolve; }),
+    });
+    await store.write('traces', Buffer.from('healthy-trace'));
+    await drainer.drain();
+
+    failNetworkRequests = true;
+    await store.write('traces', Buffer.from('network-failure-trace'));
+    const draining = drainer.drain();
+
+    try {
+      for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      for (let failures = 0; failures < 5; failures += 1) {
+        const release = releaseRetry;
+        releaseRetry = undefined;
+        release?.();
+        for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+      }
+      await drainer.stop();
+      releaseRetry?.();
+      await draining;
+    } finally {
+      releaseRetry?.();
+      await drainer.stop();
+      await draining.catch(() => undefined);
+    }
+
+    expect({ networkAttempts, rendererErrors }).toEqual({
+      networkAttempts: 6,
+      rendererErrors: [expect.objectContaining({
+        type: 'renderer_error',
+        rendererName: 'otel',
+        error: expect.stringMatching(/traces.*network/i),
+      })],
+    });
+  });
+
+  it('reports recovery after a network failure, then reports a later network refusal again', async () => {
+    const events = new ConductorEventEmitter();
+    const rendererErrors: unknown[] = [];
+    events.on('renderer_error', (event) => { rendererErrors.push(event); });
+    let releaseRetry: (() => void) | undefined;
+    let traceAttempts = 0;
+    const server = createServer(async (request, response) => {
+      request.resume();
+      if (request.url === '/v1/traces' && ++traceAttempts === 2) {
+        response.writeHead(200).end();
+        return;
+      }
+      request.socket.destroy();
+    });
+    const endpoint = await listen(server);
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('traces', Buffer.from('network-failure-trace'));
+    const drainer = new SpoolDrainer(store, {
+      endpoint,
+      headers: () => ({}),
+      events,
+      sleep: async () => new Promise<void>((resolve) => { releaseRetry = resolve; }),
+    });
+    const draining = drainer.drain();
+
+    try {
+      for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      const releaseFirstRetry = releaseRetry;
+      releaseRetry = undefined;
+      releaseFirstRetry?.();
+      await draining;
+
+      await store.write('traces', Buffer.from('network-refusal-after-recovery'));
+      const refusing = drainer.drain();
+      for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      await drainer.stop();
+      releaseRetry?.();
+      await refusing;
+    } finally {
+      releaseRetry?.();
+      await drainer.stop();
+      await draining.catch(() => undefined);
+    }
+
+    expect(rendererErrors).toEqual([
+      expect.objectContaining({
+        type: 'renderer_error',
+        rendererName: 'otel',
+        error: expect.stringMatching(/traces.*network/i),
+      }),
+      expect.objectContaining({
+        type: 'renderer_error',
+        rendererName: 'otel',
+        error: expect.stringMatching(/recover/i),
+      }),
+      expect.objectContaining({
+        type: 'renderer_error',
+        rendererName: 'otel',
+        error: expect.stringMatching(/traces.*network/i),
+      }),
+    ]);
+  });
+
+  it('reports an auth error when a traces failure changes from network to HTTP 401', async () => {
+    const events = new ConductorEventEmitter();
+    const rendererErrors: unknown[] = [];
+    events.on('renderer_error', (event) => { rendererErrors.push(event); });
+    let releaseRetry: (() => void) | undefined;
+    let attempts = 0;
+    const server = createServer((request, response) => {
+      request.resume();
+      if (++attempts === 1) request.socket.destroy();
+      else response.writeHead(401).end();
+    });
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('traces', Buffer.from('network-then-auth'));
+    const drainer = new SpoolDrainer(store, {
+      endpoint: await listen(server), headers: () => ({}), events,
+      sleep: async () => new Promise<void>((resolve) => { releaseRetry = resolve; }),
+    });
+    const draining = drainer.drain();
+
+    try {
+      for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+      const releaseFirstRetry = releaseRetry;
+      releaseRetry = undefined;
+      releaseFirstRetry?.();
+      for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+      await drainer.stop();
+      releaseRetry?.();
+      await draining;
+    } finally {
+      releaseRetry?.();
+      await drainer.stop();
+      await draining.catch(() => undefined);
+    }
+
+    expect(rendererErrors).toEqual([
+      expect.objectContaining({ rendererName: 'otel', error: expect.stringMatching(/traces.*network/i) }),
+      expect.objectContaining({ rendererName: 'otel', error: expect.stringMatching(/traces.*auth/i) }),
+    ]);
   });
 });
