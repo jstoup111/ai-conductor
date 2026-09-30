@@ -633,3 +633,11 @@ Task 14 ────────────────────────
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-adr-1: overlap-sources.ts collectOpenIssueOverlaps (lines 51-95) — pass each open-issue body through sanitizeInboundText([body], { repository, issue number WorkRef }) from sanitize-inbound.ts before extractCitedPaths, extracting only from the sanitized body with the armor open/close lines excluded so sourceRef/digest tokens never become cited paths; extend intake-overlap-open-issues.test.ts to assert a body containing a directive-shaped line plus `src/review/rubric.ts` still yields the #1579 shared path, and that the collector calls the sanitizer (no raw-body extraction path remains)
+**Gate:** as-built
+**Rationale:** adr-2026-09-06-inbound-intake-trust-boundary D1 requires that no consumer receive raw tracker text except through sanitizeInboundText (sanitize-inbound.ts:133, used by github-issues.ts:182), but overlap-sources.ts:51-95 feeds raw `issue list --json number,body` bodies straight into extractCitedPaths; the approved ADR stays authoritative and the conforming fix is determinable (sanitize each body with its WorkRef before extraction, exactly as buildText does), so this is build, not architecture_review. Task 3's Done-when neither requires nor forbids the sanitizer, so no existing task admits it and one task is appended.
+**Governing clause:** adr-2026-09-06-inbound-intake-trust-boundary decision 1
+**Done when:**
+- adr-2026-09-06-inbound-intake-trust-boundary decision 1 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-1 is complete.
