@@ -5344,28 +5344,36 @@ export class Conductor {
     let asBuiltBudget: RemediationGateAppendBudget | undefined;
     if (allTasks.length > 0 || prdAuditTasks.length > 0 || asBuiltTasks.length > 0) {
       const authoredTaskCount = activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0;
-      prdAuditBudget = prdAuditCapEnforced
-        ? await readRemediationGateAppendBudget(
-          this.projectRoot,
-          this.config,
-          'prd_audit',
-          prdAuditLapCap,
-          prdAuditTasks.length,
-          prdAuditGrowthTasks.length,
-          authoredTaskCount,
-        )
-        : undefined;
-      asBuiltBudget = asBuiltCapEnforced
-        ? await readRemediationGateAppendBudget(
-          this.projectRoot,
-          this.config,
-          'architecture_review_as_built',
-          asBuiltLapCap,
-          asBuiltTasks.length,
-          asBuiltGrowthTasks.length,
-          authoredTaskCount,
-        )
-        : undefined;
+      try {
+        prdAuditBudget = prdAuditCapEnforced
+          ? await readRemediationGateAppendBudget(
+            this.projectRoot,
+            this.config,
+            'prd_audit',
+            prdAuditLapCap,
+            prdAuditTasks.length,
+            prdAuditGrowthTasks.length,
+            authoredTaskCount,
+          )
+          : undefined;
+        asBuiltBudget = asBuiltCapEnforced
+          ? await readRemediationGateAppendBudget(
+            this.projectRoot,
+            this.config,
+            'architecture_review_as_built',
+            asBuiltLapCap,
+            asBuiltTasks.length,
+            asBuiltGrowthTasks.length,
+            authoredTaskCount,
+          )
+          : undefined;
+      } catch (error) {
+        return {
+          kind: 'halt',
+          haltClass: 'needs-human',
+          detail: error instanceof Error ? error.message : 'kickback ledger is unreadable',
+        };
+      }
       // Existing-task remediation deliberately reaches the budget block above
       // and records a gate lap below, but never enters plan append/staging.
       if (allTasks.length > 0 && planPath) {
