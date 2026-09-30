@@ -68,7 +68,8 @@ source and active feature artifacts, then derives established test regions and c
 candidates from changed declarations, current-feature-owned `Covers` bindings introduced or updated
 after the review base, and relevant shared setup or helper evidence. An unchanged bare marker remains
 owned by the feature that landed it; a coincidentally matching active-plan ordinal cannot make it
-current authority. The engine does not make every title in a changed marked file a review target. A candidate's
+current authority. Only a `Covers` marker in a real comment binds; `Covers:` text inside a string or
+template literal is test data, not a marker. The engine does not make every title in a changed marked file a review target. A candidate's
 file can be selected for conservative counterfactual execution without making unchanged sibling tests
 quality targets.
 

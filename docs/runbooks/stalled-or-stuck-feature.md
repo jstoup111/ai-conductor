@@ -1301,8 +1301,10 @@ provider or record reduced coverage; clearing the halt alone re-runs into the sa
 
 **Symptom:** `build_review` reports a mechanical fault whose cause is `scope-incomplete`; after the
 shared mechanical-fault allowance is exhausted, `.pipeline/HALT` names `testQuality` and
-`scope-incomplete`. The diagnostic identifies the concrete candidate, its available marker/obligation
-evidence, and the evidence that remains missing.
+`scope-incomplete`, then lists one line per uncovered candidate:
+`scope-incomplete <rubric> <path>:<start>-<end> (<display>): <missing evidence>`. The diagnostic
+identifies the concrete candidate, its available marker/obligation evidence, and the evidence that
+remains missing.
 
 **Diagnosis:** this is not an instruction to add a test merely because a test path appears in the plan,
 and it is not a test-insensitive finding. The engine already formed a frozen, feature-local candidate
