@@ -23,7 +23,7 @@ export type PiSubprocessFactory = (
 
 /** Filesystem and process environment Pi uses to locate installed skills. */
 export interface PiEnvironment {
-  readonly stat: (path: string) => Promise<{ isFile: () => boolean }>;
+  readonly stat: (path: string) => Promise<{ isFile: () => boolean; isDirectory: () => boolean }>;
   readonly env: NodeJS.ProcessEnv;
   readonly homeDir: () => string;
   readonly cwd: () => string;
@@ -48,6 +48,14 @@ const defaultPiEnvironment: PiEnvironment = {
 async function isFile(path: string, environment: PiEnvironment): Promise<boolean> {
   try {
     return (await environment.stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function isDirectory(path: string, environment: PiEnvironment): Promise<boolean> {
+  try {
+    return (await environment.stat(path)).isDirectory();
   } catch {
     return false;
   }
@@ -251,6 +259,7 @@ export class PiProvider implements LLMProvider {
   constructor(
     private readonly executable = 'pi',
     private readonly subprocessFactory: PiSubprocessFactory = execa,
+    private readonly environment: PiEnvironment = defaultPiEnvironment,
   ) {}
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
@@ -262,7 +271,44 @@ export class PiProvider implements LLMProvider {
       throw new Error(`${piDisplayName()} process spawn denied: ${permit.reason}`);
     }
 
-    const args = ['-p', '--no-session', '--mode', 'json'];
+    const harnessPath = join(this.environment.homeDir(), '.agents', 'skills', 'HARNESS.md');
+    if (!await isFile(harnessPath, this.environment)) {
+      const reason = `${piDisplayName()} provider requires HARNESS.md at ${harnessPath}. Run bin/install to provision it.`;
+      return {
+        success: false,
+        output: reason,
+        exitCode: 1,
+        providerUnavailable: true,
+        providerUnavailableScope: 'run',
+        providerUnavailableReason: reason,
+      };
+    }
+
+    const promptCommand = options.prompt.trim().split(/\s+/, 1)[0];
+    const prefix = providerDescriptor('pi').invocationPrefix;
+    const cwd = options.cwd ?? this.environment.cwd();
+    if (promptCommand?.startsWith(prefix)) {
+      const name = promptCommand.slice(prefix.length);
+      const resolution = await resolvePiSkill(name, {
+        ...this.environment,
+        cwd: () => cwd,
+      });
+      if (!resolution.found) {
+        return {
+          success: false,
+          output: `${piDisplayName()} skill '${name}' was not found. Searched: ${resolution.searchedRoots.join(', ')}`,
+          exitCode: 1,
+          commandUnresolved: true,
+          commandUnresolvedName: name,
+        };
+      }
+    }
+
+    const args = ['-p', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath];
+    const projectSkillsPath = join(cwd, '.agents', 'skills');
+    if (await isDirectory(projectSkillsPath, this.environment)) {
+      args.push('--skill', projectSkillsPath);
+    }
     if (options.model) {
       const parsedModel = parsePiModelId(options.model);
       if ('provider' in parsedModel) {
@@ -270,6 +316,9 @@ export class PiProvider implements LLMProvider {
       }
     }
     if (options.effort) args.push('--thinking', options.effort);
+    // Filesystem preflight is asynchronous. An abort that arrives during it
+    // must not create an unobservable subprocess after the signal fired.
+    if (abortSignal?.aborted) return abortedInvocationResult();
 
     const subprocess = this.subprocessFactory(this.executable, args, {
       reject: false,
