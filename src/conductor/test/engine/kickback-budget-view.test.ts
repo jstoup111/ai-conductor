@@ -40,8 +40,9 @@ describe('kickback budget view', () => {
   it.each([
     ['none', {}, 'live-halt', undefined, 'Resume authorization: none'],
     ['consumed', { resumeAuthorization: { adjustmentId: 'adjustment-1', haltGeneration: 'bound-halt', consumed: true } }, 'live-halt', 'consumed', 'Resume authorization: consumed'],
-    ['awaiting-sweep', { resumeAuthorization: { adjustmentId: 'adjustment-1', haltGeneration: 'live-halt', consumed: false } }, 'live-halt', 'awaiting-sweep', 'Resume authorization: awaiting daemon sweep'],
+    ['awaiting-sweep', { capEvidence: { gate: 'build_review', consumed: 1, limit: 5, latestReason: 'cap', haltGeneration: 'live-halt' }, resumeAuthorization: { adjustmentId: 'adjustment-1', haltGeneration: 'live-halt', consumed: false } }, 'live-halt', 'awaiting-sweep', 'Resume authorization: awaiting daemon sweep'],
     ['stale', { resumeAuthorization: { adjustmentId: 'adjustment-1', haltGeneration: 'bound-halt', consumed: false } }, 'live-halt', 'stale', 'Resume authorization: stale (bound to halt generation bound-halt; live halt generation live-halt); the daemon will not consume it'],
+    ['stale-conflicting-cap-evidence', { capEvidence: { gate: 'build_review', consumed: 1, limit: 5, latestReason: 'cap', haltGeneration: 'evidence-halt' }, resumeAuthorization: { adjustmentId: 'adjustment-1', haltGeneration: 'live-halt', consumed: false } }, 'live-halt', 'stale', 'Resume authorization: stale (bound to halt generation live-halt; live halt generation live-halt); the daemon will not consume it'],
     ['live-halt-not-read', { resumeAuthorization: { adjustmentId: 'adjustment-1', haltGeneration: 'bound-halt', consumed: false } }, undefined, 'pending', 'Resume authorization: pending (live halt not read)'],
   ] as const)('renders resume authorization %s in JSON and human output', (_name, additions, liveHaltGeneration, state, line) => {
     const entry = { ...baseEntry, adjustmentsKnown: true as const, ...additions };
@@ -50,7 +51,7 @@ describe('kickback budget view', () => {
     else expect(view.resumeAuthorization).toEqual({
       state,
       adjustmentId: 'adjustment-1',
-      boundHaltGeneration: state === 'awaiting-sweep' ? 'live-halt' : 'bound-halt',
+      boundHaltGeneration: state === 'awaiting-sweep' || _name === 'stale-conflicting-cap-evidence' ? 'live-halt' : 'bound-halt',
       liveHaltGeneration: liveHaltGeneration ?? '',
     });
     expect(renderKickbackBudgetView(entry, 'build_review', 5, undefined, liveHaltGeneration)).toContain(line);

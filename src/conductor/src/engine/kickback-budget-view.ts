@@ -56,7 +56,8 @@ export function kickbackBudgetView(
       ? 'consumed'
       : liveHaltGeneration === undefined
         ? 'pending'
-        : authorization.haltGeneration === liveHaltGeneration
+        : authorization.haltGeneration === liveHaltGeneration &&
+            authorization.haltGeneration === entry?.capEvidence?.haltGeneration
           ? 'awaiting-sweep'
           : 'stale',
     adjustmentId: authorization.adjustmentId,
