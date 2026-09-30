@@ -196,6 +196,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'coverage_binding_disabled',
   'coverage_binding_invalidated',
   'coverage_binding_task_reopened',
+  'plan_slices_changed',
   'config_deprecated_key',
   'contained_live_checkout_drift',
   'provider_suppressed',
@@ -539,6 +540,33 @@ describe('event sink subscriptions', () => {
       rendered: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_disabled']),
       audited: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_disabled']),
       otel: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_disabled']),
+    });
+  });
+
+  it('persists plan slice membership changes without rendering, audit, or OpenTelemetry', () => {
+    const changed = {
+      type: 'plan_slices_changed',
+      step: 'coverage_binding',
+      moved: [{ taskId: '4', from: 1, to: 2 }],
+      added: ['9'],
+      removed: ['3'],
+      manifest: 'unchanged',
+    } satisfies ConductorEvent;
+
+    expect({
+      changed,
+      sink: EVENT_SINKS.plan_slices_changed,
+      persisted: persistedEventTypes(),
+      rendered: renderedEventTypes(),
+      audited: auditedEventTypes(),
+      otel: otelEventTypes(),
+    }).toMatchObject({
+      changed,
+      sink: { render: false, persist: true, audit: false, otel: false },
+      persisted: expect.arrayContaining(['plan_slices_changed']),
+      rendered: expect.not.arrayContaining(['plan_slices_changed']),
+      audited: expect.not.arrayContaining(['plan_slices_changed']),
+      otel: expect.not.arrayContaining(['plan_slices_changed']),
     });
   });
 
