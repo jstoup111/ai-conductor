@@ -20,7 +20,7 @@ import {
   observeInterval,
   type IntervalClock,
 } from './observed-interval.js';
-import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
+import { deriveProviderExitFacts, summarizeProviderDiagnostic } from './provider-diagnostics.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
@@ -917,38 +917,7 @@ export class CodexProvider implements LLMProvider {
   }
 
   private executionProbeFacts(error: unknown): CodexProbeFailure['facts'] {
-    const facts: CodexProbeFailure['facts'] = {};
-    if (typeof error !== 'object' || error === null) return facts;
-    const record = error as Record<string, unknown>;
-    const code = record.code;
-    if (code === 'EACCES' || code === 'EAGAIN' || code === 'ENOENT' || code === 'EPERM') {
-      facts.processErrorCode = code;
-    } else if (code !== undefined) {
-      facts.processErrorCode = 'UNKNOWN';
-    }
-    const exitCode = record.exitCode;
-    if (typeof exitCode === 'number' && Number.isInteger(exitCode) && exitCode >= 0) {
-      facts.exitCode = exitCode;
-    }
-    const signal = record.signal;
-    if (
-      signal === 'SIGABRT' || signal === 'SIGALRM' || signal === 'SIGHUP' || signal === 'SIGINT' ||
-      signal === 'SIGKILL' || signal === 'SIGPIPE' || signal === 'SIGQUIT' || signal === 'SIGTERM'
-    ) {
-      facts.signal = signal;
-    } else if (signal !== undefined) {
-      facts.signal = 'UNKNOWN';
-    }
-    const stdoutBytes = this.outputByteLength(record.stdout);
-    if (stdoutBytes !== undefined) facts.stdoutBytes = stdoutBytes;
-    const stderrBytes = this.outputByteLength(record.stderr);
-    if (stderrBytes !== undefined) facts.stderrBytes = stderrBytes;
-    return facts;
-  }
-
-  private outputByteLength(output: unknown): number | undefined {
-    if (typeof output === 'string' || Buffer.isBuffer(output)) return Buffer.byteLength(output);
-    return undefined;
+    return deriveProviderExitFacts(error);
   }
 
   private probeFailedReadiness(
