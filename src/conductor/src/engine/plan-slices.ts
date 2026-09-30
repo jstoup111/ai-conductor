@@ -1,4 +1,5 @@
 import { resolvePlanTaskReference, TASK_HEADER_PATTERN } from './plan-task-parse.js';
+import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 
 export interface PlanSlice {
   position: number;
@@ -113,11 +114,14 @@ export function validatePlanSlices(planText: string): PlanSlicesValidation {
 
   const taskIds = planTaskIds(lines, fenced);
   const slices: PlanSlice[] = [];
+  const sliceHasTaskReferences: boolean[] = [];
   for (let index = tableStart + 2; index < lines.length; index += 1) {
     if (fenced[index]) break;
     const cells = tableCells(lines[index]);
     if (!cells || cells.length !== 3) break;
-    const resolved = resolvePlanTaskReference(cells[2], taskIds);
+    const resolved = cells[2] === ''
+      ? undefined
+      : resolvePlanTaskReference(cells[2], taskIds);
     const position = Number(cells[0]);
     if (!/^[1-9]\d*$/.test(cells[0])) {
       violations.push({
@@ -132,18 +136,81 @@ export function validatePlanSlices(planText: string): PlanSlicesValidation {
         message: `slice ${cells[0]} has an empty Title cell; titles must be non-empty`,
       });
     }
-    if (resolved.kind === 'malformed') {
+    if (resolved?.kind === 'malformed') {
       violations.push({
         code: 'malformed-tasks',
         position,
         message: `slice ${cells[0]} has a malformed Tasks cell "${cells[2]}"`,
       });
     }
+    const resolvedIds: string[] = [];
+    if (resolved?.kind !== 'malformed' && resolved !== undefined) {
+      for (const reference of cells[2].split(',')) {
+        const individual = resolvePlanTaskReference(reference, taskIds);
+        if (individual.kind === 'resolved') {
+          resolvedIds.push(...individual.ids);
+        } else if (individual.kind === 'unresolvable') {
+          for (const taskId of individual.ids) {
+            violations.push({
+              code: 'unknown-task',
+              position,
+              taskId,
+              message: `Task ${taskId} cited by slice ${cells[0]} is an unknown task id`,
+            });
+          }
+        }
+      }
+    }
     slices.push({
       position,
       title: cells[1],
-      taskIds: resolved.kind === 'malformed' ? [] : resolved.ids,
+      taskIds: [...new Set(resolvedIds)],
     });
+    sliceHasTaskReferences.push(cells[2] !== '');
+  }
+
+  const slicesByTaskId = new Map<string, number[]>();
+  const positions = new Set<number>();
+  for (let index = 0; index < slices.length; index += 1) {
+    const slice = slices[index];
+    if (positions.has(slice.position)) {
+      violations.push({
+        code: 'duplicate-position',
+        position: slice.position,
+        message: `duplicate slice position ${slice.position}`,
+      });
+    }
+    positions.add(slice.position);
+    if (!sliceHasTaskReferences[index]) {
+      violations.push({
+        code: 'empty-slice',
+        position: slice.position,
+        message: `slice ${slice.position} is empty`,
+      });
+    }
+    for (const taskId of slice.taskIds) {
+      const memberships = slicesByTaskId.get(taskId) ?? [];
+      memberships.push(slice.position);
+      slicesByTaskId.set(taskId, memberships);
+    }
+  }
+
+  for (const taskId of taskIds) {
+    if (isEngineAppendedRemediationTaskId(taskId)) continue;
+    const memberships = slicesByTaskId.get(taskId) ?? [];
+    if (memberships.length === 0) {
+      violations.push({
+        code: 'unassigned-task',
+        taskId,
+        message: `Task ${taskId} is in no slice`,
+      });
+    } else if (memberships.length > 1) {
+      violations.push({
+        code: 'duplicate-task-membership',
+        taskId,
+        message: `Task ${taskId} appears in slices ${memberships.join(' and ')}`,
+      });
+    }
   }
 
   if (violations.length > 0) return { kind: 'invalid', violations };
