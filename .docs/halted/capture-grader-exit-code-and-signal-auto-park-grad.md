@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-30T12:31:11.063Z
 Slug: capture-grader-exit-code-and-signal-auto-park-grad
 Class: plan-gap
 Halting step: prd_audit
