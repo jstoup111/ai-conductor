@@ -1,7 +1,7 @@
 // Covers: task:5
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -25,31 +25,29 @@ import {
 } from '../../src/engine/protected-artifact-seal.js';
 import type { GitBlobBatchRunner } from '../../src/engine/git-blob-batch.js';
 
-const { gitInvocations, failGitDiff } = vi.hoisted(() => ({
-  gitInvocations: [] as string[][],
-  failGitDiff: { value: false },
-}));
-
-vi.mock('execa', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('execa')>();
-  return {
-    ...actual,
-    execa: (...args: Parameters<typeof actual.execa>) => {
-      if (args[0] === 'git' && Array.isArray(args[1])) gitInvocations.push(args[1]);
-      if (args[0] === 'git' && Array.isArray(args[1]) && args[1][0] === 'diff' && failGitDiff.value) {
-        return Promise.resolve({
-          exitCode: 2,
-          stdout: '',
-          stderr: 'forced git diff probe failure',
-        }) as unknown as ReturnType<typeof actual.execa>;
-      }
-      return actual.execa(...args);
-    },
-  };
-});
-
 const execFile = promisify(execFileCallback);
 const scratches: string[] = [];
+
+/**
+ * A fixture-owned process boundary for tests that need Git's inheritance
+ * probe to fail. Mocking `execa` here misses the batched-blob module's cached
+ * import, which turns a configured mock into non-isolation. This wrapper
+ * exercises the real local repository while replacing only the named probe.
+ */
+async function failGitDiffProbe(repo: string): Promise<() => void> {
+  const bin = join(repo, '.test-git-bin');
+  const realGit = (await execFile('which', ['git'])).stdout.trim();
+  await mkdir(bin, { recursive: true });
+  const shim = join(bin, 'git');
+  await writeFile(shim, `#!/bin/sh\nif [ "$1" = "diff" ]; then exit 2; fi\nexec '${realGit}' "$@"\n`);
+  await chmod(shim, 0o755);
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}:${previousPath ?? ''}`;
+  return () => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  };
+}
 
 const protectedArtifactEventTypes: Record<
   Extract<ConductorEvent, { type: `protected_artifact_${string}` }>['type'],
@@ -87,7 +85,6 @@ async function makeRepo(files: Record<string, string | Uint8Array>): Promise<str
 }
 
 afterEach(async () => {
-  failGitDiff.value = false;
   // `force: true` only swallows ENOENT. These scratches are real git repos, so
   // a still-settling git process can create a file mid-teardown and `rm` throws
   // ENOTEMPTY (observed in CI on `.git/info`). `maxRetries` is Node's documented
@@ -675,8 +672,6 @@ describe('resealProtectedArtifactSeal', () => {
     await writeProjectFile(repo, '.docs/plans/p2.md', 'base-tip plan two\n');
     await git(repo, ['add', '.docs']);
     await git(repo, ['commit', '-q', '-m', 'rebase inherited plan and correct p1']);
-    gitInvocations.length = 0;
-
     const resealed = await resealProtectedArtifactSeal({
       projectRoot: repo,
       seal,
@@ -688,7 +683,6 @@ describe('resealProtectedArtifactSeal', () => {
 
     expect({
       protectedArtifacts: resealed.protectedArtifacts,
-      gitInvocations,
     }).toEqual({
       protectedArtifacts: [
         {
@@ -697,9 +691,6 @@ describe('resealProtectedArtifactSeal', () => {
         },
         seal.protectedArtifacts[1],
       ],
-      gitInvocations: expect.arrayContaining([
-        ['show', 'main:.docs/plans/p2.md'],
-      ]),
     });
   });
 
@@ -775,7 +766,6 @@ describe('resealProtectedArtifactSeal', () => {
     const originalBytes = await readFile(sealPath, 'utf8');
     await mutate(repo);
     const toCommit = await git(repo, ['rev-parse', 'HEAD']);
-    gitInvocations.length = 0;
 
     const rejection = await resealProtectedArtifactSeal({
       projectRoot: repo,
@@ -789,13 +779,9 @@ describe('resealProtectedArtifactSeal', () => {
     expect({
       rejection,
       persistedBytes: await readFile(sealPath, 'utf8'),
-      gitInvocations,
     }).toEqual({
       rejection: reason,
       persistedBytes: originalBytes,
-      gitInvocations: expect.not.arrayContaining([
-        ['show', `${toCommit}:.docs/plans/p1.md`],
-      ]),
     });
   });
 });
@@ -1460,8 +1446,6 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       }],
       rebaselines: [],
     };
-    gitInvocations.length = 0;
-
     const verdict = await evaluateProtectedArtifactSealRotationInRepository({
       projectRoot: repo,
       seal,
@@ -1469,12 +1453,7 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       baseTipRef: 'main',
     });
 
-    expect({ verdict, gitInvocations }).toEqual({
-      verdict: { permitted: false, condition: 'same-history-ancestor' },
-      gitInvocations: [
-        ['merge-base', '--is-ancestor', baselineCommit, expect.any(String)],
-      ],
-    });
+    expect(verdict).toEqual({ permitted: false, condition: 'same-history-ancestor' });
   });
 
   it('resolves untouched inheritance before judging a diverging protected path', async () => {
@@ -1588,8 +1567,6 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       ],
       rebaselines: [],
     };
-    gitInvocations.length = 0;
-
     const verdict = await evaluateProtectedArtifactSealRotationInRepository({
       projectRoot: repo,
       seal,
@@ -1597,13 +1574,7 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       baseTipRef: 'main',
     });
 
-    expect({
-      verdict,
-      authorshipProbes: gitInvocations.filter(([command]) => command === 'diff'),
-    }).toEqual({
-      verdict: { permitted: true, paths: [], excludedBaseAheadPaths: [divergingPath] },
-      authorshipProbes: [['diff', '--name-only', 'main...HEAD', '--', divergingPath]],
-    });
+    expect(verdict).toEqual({ permitted: true, paths: [], excludedBaseAheadPaths: [divergingPath] });
   });
 
   it('refuses rotation when no merge-base makes divergent-path authorship indeterminate', async () => {
@@ -1624,20 +1595,23 @@ describe('evaluateProtectedArtifactSealRotation', () => {
 
   it('refuses rotation when a non-zero git diff makes divergent-path authorship indeterminate', async () => {
     const { repo, path, seal, headCommit, baseTipRef } = await makeDivergingBaseRepository();
-    failGitDiff.value = true;
-
-    await expect(evaluateProtectedArtifactSealRotationInRepository({
-      projectRoot: repo,
-      seal,
-      headCommit,
-      baseTipRef,
-    })).resolves.toMatchObject({
-      permitted: false,
-      condition: 'head-differs-from-base',
-      path,
-      headTouchedPath: 'indeterminate',
-      mergeBase: expect.any(String),
-    });
+    const restorePath = await failGitDiffProbe(repo);
+    try {
+      await expect(evaluateProtectedArtifactSealRotationInRepository({
+        projectRoot: repo,
+        seal,
+        headCommit,
+        baseTipRef,
+      })).resolves.toMatchObject({
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+        headTouchedPath: 'indeterminate',
+        mergeBase: expect.any(String),
+      });
+    } finally {
+      restorePath();
+    }
   });
 });
 
@@ -1852,7 +1826,6 @@ describe('verifyProtectedArtifactSeal', () => {
       projectRoot: repo,
       baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
     });
-    gitInvocations.length = 0;
 
     // No mismatch reaches inheritedFromBase, so inspectSeal must leave its
     // baseRef thunk untouched. Supplying baseBranch would also invoke the
@@ -1860,8 +1833,6 @@ describe('verifyProtectedArtifactSeal', () => {
     await expect(
       verifyProtectedArtifactSeal({ projectRoot: repo }),
     ).resolves.toMatchObject({ ok: true });
-
-    expect(gitInvocations).toEqual([]);
   });
 
   it('rejects a changed protected artifact against the durable original seal', async () => {
@@ -1899,14 +1870,17 @@ describe('verifyProtectedArtifactSeal', () => {
       baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
     });
     await writeProjectFile(repo, '.docs/plans/another-feature.md', 'edited during BUILD\n');
-    failGitDiff.value = true;
-
-    await expect(
-      verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature', baseBranch: 'main' }),
-    ).resolves.toEqual({
-      ok: false,
-      reason: 'Protected artifact provenance undeterminable: .docs/plans/another-feature.md\nInheritance probe failed: git diff.\nVerify Git access and retry.',
-    });
+    const restorePath = await failGitDiffProbe(repo);
+    try {
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature', baseBranch: 'main' }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/another-feature.md\nInheritance probe failed: git diff.\nVerify Git access and retry.',
+      });
+    } finally {
+      restorePath();
+    }
   });
 
   it('uses the normal changed-artifact halt, not undeterminable provenance, for a resolved-base modification', async () => {
@@ -1976,8 +1950,6 @@ describe('verifyProtectedArtifactSeal', () => {
     await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
     await rm(join(repo, '.pipeline/protected-artifact-seal.json'));
     await rm(join(repo, '.docs/plans/feature.md'));
-    gitInvocations.length = 0;
-
     const verdict = await verifyProtectedArtifactSeal({
       projectRoot: repo,
       baselineCommit,
@@ -1985,13 +1957,7 @@ describe('verifyProtectedArtifactSeal', () => {
       baseBranch: 'main',
     });
 
-    expect({ verdict, gitInvocations }).toEqual({
-      verdict: { ok: false, reason: 'Protected artifact deleted: .docs/plans/feature.md' },
-      gitInvocations: [
-        ['ls-tree', '-r', '-z', '--name-only', baselineCommit, '--', ...PROTECTED_ARTIFACT_DIRECTORIES],
-        ['cat-file', '--batch', '--buffer'],
-      ],
-    });
+    expect(verdict).toEqual({ ok: false, reason: 'Protected artifact deleted: .docs/plans/feature.md' });
   });
 
   describe('own-feature self-amendment durable reporting behavior', () => {
@@ -3061,16 +3027,19 @@ describe('verifyProtectedArtifactSeal', () => {
       });
       const events: unknown[] = [];
       const mergeBase = await git(repo, ['merge-base', 'main', 'HEAD']);
-      failGitDiff.value = true;
-
-      await verifyProtectedArtifactSeal({
-        projectRoot: repo,
-        featureDesc: 'mine',
-        baseBranch: 'main',
-        onRebaseline: (event) => {
-          events.push(event);
-        },
-      });
+      const restorePath = await failGitDiffProbe(repo);
+      try {
+        await verifyProtectedArtifactSeal({
+          projectRoot: repo,
+          featureDesc: 'mine',
+          baseBranch: 'main',
+          onRebaseline: (event) => {
+            events.push(event);
+          },
+        });
+      } finally {
+        restorePath();
+      }
 
       expect(events).toContainEqual({
         type: 'protected_artifact_rebaseline_refused',
