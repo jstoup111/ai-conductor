@@ -35,6 +35,16 @@ afterEach(async () => {
 });
 
 describe('resolveTargetCheckout', () => {
+  it('matches an invoking SSH checkout regardless of repository casing', async () => {
+    const cwd = await checkout('ssh://git@github.com/acme/widgets.git');
+    await registry([]);
+
+    await expect(resolveTargetCheckout({
+      cwd,
+      repository: 'AcMe/WidGets',
+    })).resolves.toEqual({ kind: 'checkout', path: cwd });
+  });
+
   it('prefers a matching invoking checkout, otherwise selects exactly one registry checkout', async () => {
     const cwd = await checkout('git@github.com:acme/widgets.git');
     const targetPath = await checkout('https://github.com/acme/widgets');

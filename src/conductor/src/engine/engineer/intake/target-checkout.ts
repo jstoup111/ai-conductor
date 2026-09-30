@@ -16,7 +16,7 @@ export interface ResolveTargetCheckoutOptions {
 
 function repositoryFromRemote(remote: string | undefined): string | undefined {
   if (!remote) return undefined;
-  const match = /^(?:git@github\.com:|https:\/\/github\.com\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(remote.trim());
+  const match = /^(?:git@github\.com:|https:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(remote.trim());
   return match ? `${match[1].toLowerCase()}/${match[2].toLowerCase()}` : undefined;
 }
 
