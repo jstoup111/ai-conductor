@@ -44,6 +44,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       buildOutcome?: BuildOutcomeStore;
       treeHash?: string | null;
       effort?: 'low' | 'medium' | 'high';
+      buildResult?: { success: true; model?: string; effort?: 'low' | 'medium' | 'high' };
     } = {},
   ): Promise<{
     build: ReturnType<typeof vi.fn>;
@@ -62,7 +63,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     if (options.buildOutcome !== undefined) {
       await writeFile(join(dir, '.pipeline', 'build-outcome.json'), JSON.stringify(options.buildOutcome));
     }
-    const build = vi.fn(async () => ({ success: true }));
+    const build = vi.fn(async () => options.buildResult ?? ({ success: true }));
     const runner: StepRunner = { run: async (step) => step === 'build' ? build() : { success: true } };
     if (options.refuseAtProtectedArtifact) {
       vi.spyOn(projectPrelude, 'currentCommitSha').mockResolvedValue('approved-commit');
@@ -244,14 +245,20 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('stamps an escalated no-movement attempt at its actual rung, so a base-rung re-dispatch proceeds', async () => {
-    const stamped = buildOutcomeRung(
-      { model: 'test-model', effort: 'high' },
-      { model: 'test-model', effort: 'medium' },
-    );
+    await runBuild(undefined, {
+      version: 1,
+      gates: { prd_audit: { ...entry(), priorVerdict: false } },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, {
+      treeHash: 'tree-1',
+      buildResult: { success: true, model: 'test-model', effort: 'high' },
+    });
+    const outcomes = JSON.parse(await readFile(join(dir, '.pipeline', 'build-outcome.json'), 'utf8')) as BuildOutcomeStore;
+    const stamped = outcomes.records.at(-1)?.rung;
     expect(stamped).toEqual({ model: 'test-model', effort: 'high' });
     expect(sameNoOpCycle({
       outcome: 'no-movement', terminalOutcome: 'done', gate: 'prd_audit', verdict: false,
-      rung: stamped, treeBefore: 'tree-1', treeAfter: 'tree-1', headBefore: 'head-1', headAfter: 'head-1',
+      rung: stamped!, treeBefore: 'tree-1', treeAfter: 'tree-1', headBefore: 'head-1', headAfter: 'head-1',
     }, {
       gate: 'prd_audit', treeHash: 'tree-1', verdict: false,
       rung: buildOutcomeRung(undefined, { model: 'test-model', effort: 'medium' }),
