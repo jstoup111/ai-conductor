@@ -729,6 +729,107 @@ type RebaseOutcomeKind =
 /** A quarantine applies to every outcome after an untracked-collision heal. */
 export type RebaseOutcome = RebaseOutcomeKind & { quarantine?: RebaseQuarantine };
 
+export type FlattenedReplayEntry =
+  | { kind: 'ordinary'; sha: string }
+  | {
+      kind: 'flattened';
+      sha: string;
+      mergeSha: string;
+      firstParent: string;
+      subject: string;
+    };
+
+export interface FlattenedReplayPlan {
+  entries: FlattenedReplayEntry[];
+  audit: {
+    flattenedMerges: string[];
+    ancestryOnlyMerges: string[];
+    sideLineageCount: number;
+  };
+  pairs: Array<{ from: string; to: string }>;
+}
+
+/**
+ * Build the first-parent replay list for a merge-bearing feature branch.
+ *
+ * The only writes are `commit-tree` object writes through the injected runner;
+ * this helper never advances a ref or touches the index/worktree.
+ */
+export async function planFlattenedReplay(
+  git: GitRunner,
+  mergeBase: string,
+): Promise<FlattenedReplayPlan> {
+  const range = `${mergeBase}..HEAD`;
+  const firstParentResult = await git(['rev-list', '--reverse', '--first-parent', range]);
+  if (firstParentResult.exitCode !== 0) {
+    throw new Error(`could not list first-parent replay history: ${firstParentResult.stderr}`);
+  }
+  const firstParent = firstParentResult.stdout.split('\n').map((sha) => sha.trim()).filter(Boolean);
+  const allResult = await git(['rev-list', range]);
+  if (allResult.exitCode !== 0) {
+    throw new Error(`could not list replay history: ${allResult.stderr}`);
+  }
+  const allCommits = allResult.stdout.split('\n').map((sha) => sha.trim()).filter(Boolean);
+
+  const entries: FlattenedReplayEntry[] = [];
+  const flattenedMerges: string[] = [];
+  const ancestryOnlyMerges: string[] = [];
+  const pairs: Array<{ from: string; to: string }> = [];
+
+  for (const sha of firstParent) {
+    const parentsResult = await git(['rev-list', '--parents', '-n', '1', sha]);
+    if (parentsResult.exitCode !== 0) {
+      throw new Error(`could not read parents for replay entry ${sha}`);
+    }
+    const parents = parentsResult.stdout.trim().split(/\s+/).slice(1);
+    if (parents.length < 2) {
+      entries.push({ kind: 'ordinary', sha });
+      continue;
+    }
+
+    const [firstParentSha] = parents;
+    const [mergeTreeResult, parentTreeResult] = await Promise.all([
+      git(['rev-parse', `${sha}^{tree}`]),
+      git(['rev-parse', `${sha}^1^{tree}`]),
+    ]);
+    if (mergeTreeResult.exitCode !== 0 || parentTreeResult.exitCode !== 0) {
+      throw new Error(`could not read tree identity for merge ${sha}`);
+    }
+    const mergeTree = mergeTreeResult.stdout.trim();
+    if (mergeTree === parentTreeResult.stdout.trim()) {
+      ancestryOnlyMerges.push(sha);
+      continue;
+    }
+
+    const metadata = await git(['show', '-s', '--format=%an%n%ae%n%cn%n%ce%n%s', sha]);
+    if (metadata.exitCode !== 0) {
+      throw new Error(`could not read author metadata for merge ${sha}`);
+    }
+    const [authorName, authorEmail, _committerName, _committerEmail, subject] = metadata.stdout.trim().split('\n');
+    const commitTree = await git(
+      ['-c', `user.name=${authorName}`, '-c', `user.email=${authorEmail}`, 'commit-tree', mergeTree, '-p', firstParentSha],
+      { input: `${subject}\n\nFlattened-merge: ${sha}\n` },
+    );
+    if (commitTree.exitCode !== 0) {
+      throw new Error(`could not create flattened merge commit for ${sha}: ${commitTree.stderr}`);
+    }
+    const flattenedSha = commitTree.stdout.trim();
+    entries.push({ kind: 'flattened', sha: flattenedSha, mergeSha: sha, firstParent: firstParentSha, subject });
+    flattenedMerges.push(sha);
+    pairs.push({ from: sha, to: flattenedSha });
+  }
+
+  return {
+    entries,
+    audit: {
+      flattenedMerges,
+      ancestryOnlyMerges,
+      sideLineageCount: Math.max(0, allCommits.length - firstParent.length),
+    },
+    pairs,
+  };
+}
+
 /**
  * Select the human recovery note from the classified rebase outcome. A refusal
  * before git created rebase state must never instruct the operator to continue
