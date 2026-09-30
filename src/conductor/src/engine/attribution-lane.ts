@@ -42,6 +42,7 @@ import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
+import { CLAUDE_PROVIDER } from '../execution/provider-catalog.js';
 import { resolveStepConfig } from './resolved-config.js';
 import { collectCandidateCommits } from './attribution-inputs.js';
 import { assembleAttributionInputs } from './attribution-inputs.js';
@@ -267,7 +268,7 @@ export async function dispatchAttributionVerifier(
     featureWorktreePath,
     config,
     modelPolicy = CLAUDE_MODEL_POLICY,
-    providerKey = 'claude',
+    providerKey = CLAUDE_PROVIDER,
     commitRange = 'origin/main..HEAD',
     gitRunner: injectedGit,
     bookkeepingCommits,

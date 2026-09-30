@@ -7,7 +7,6 @@ import {
   spliceGeneratedRegion,
   assertNoDuplicateRowNames,
   renderModelTable,
-  assertCompleteProviderCells,
   buildEngineRows,
   buildAuxiliaryRows,
   buildExtraRows,

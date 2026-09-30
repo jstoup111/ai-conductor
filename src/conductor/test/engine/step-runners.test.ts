@@ -3149,7 +3149,7 @@ describe('DefaultStepRunner', () => {
         dangerouslySkipPermissions: false,
         interactive: true,
       },
-      differingInvocationFields: ['sessionId'],
+      differingInvocationFields: ['model', 'sessionId'],
     });
   });
 

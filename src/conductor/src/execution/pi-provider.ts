@@ -261,7 +261,7 @@ export class PiProvider implements LLMProvider {
     if (exitCode === 0 && parsed.terminalAssistantStopReason === 'error') {
       return {
         success: false,
-        output: parsed.terminalAssistantErrorMessage || 'Pi reported an error stop with no message',
+        output: parsed.terminalAssistantErrorMessage || `${piDisplayName()} reported an error stop with no message`,
         exitCode,
       };
     }

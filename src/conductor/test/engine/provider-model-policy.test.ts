@@ -42,6 +42,7 @@ const STEP_EFFORTS = {
 
 const EXPECTED_POLICIES = {
   claude: {
+    requiresConfiguredModels: false,
     stepModels: {
       bootstrap: 'sonnet',
       memory: 'haiku',
@@ -98,6 +99,7 @@ const EXPECTED_POLICIES = {
     modelFallbackLadder: ['fable', 'opus', 'sonnet'],
   },
   codex: {
+    requiresConfiguredModels: false,
     stepModels: {
       bootstrap: 'gpt-5.6-terra',
       memory: 'gpt-5.6-luna',

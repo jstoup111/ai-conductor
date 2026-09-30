@@ -1,5 +1,10 @@
 import type { StepName } from '../types/steps.js';
-import { CLAUDE_DISPLAY_NAME, CODEX_DISPLAY_NAME } from '../execution/provider-catalog.js';
+import {
+  BUILT_IN_PROVIDERS,
+  CLAUDE_DISPLAY_NAME,
+  CLAUDE_PROVIDER,
+  CODEX_DISPLAY_NAME,
+} from '../execution/provider-catalog.js';
 
 // These steps retain exhaustive provider-policy placeholders for StepName
 // type safety, but execute entirely in-process and never dispatch a model.
@@ -158,35 +163,38 @@ const RESOLVED_RUBRIC_POLICY = 'inherits resolved rubric policy' as const;
 const RESOLVED_COVERAGE_BINDING_POLICY = 'inherits resolved coverage-binding policy' as const;
 const PI_NOT_APPLICABLE = 'n/a' as const;
 
+function providerCellsForReview(
+  model: string,
+  effort: string,
+): ModelTableProviderCellMap {
+  return Object.fromEntries(BUILT_IN_PROVIDERS.map((provider) => [
+    provider.id,
+    'readOnlyReview' in provider.capabilities && provider.capabilities.readOnlyReview === true
+      ? { model, effort }
+      : { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
+  ]));
+}
+
 export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
   {
     name: 'build-review-test-quality',
     executionPath: 'engine-managed auxiliary rubric',
-    providerCells: {
-      claude: { model: RESOLVED_RUBRIC_POLICY, effort: RESOLVED_RUBRIC_POLICY },
-      codex: { model: RESOLVED_RUBRIC_POLICY, effort: RESOLVED_RUBRIC_POLICY },
-      pi: { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
-    },
+    providerCells: providerCellsForReview(RESOLVED_RUBRIC_POLICY, RESOLVED_RUBRIC_POLICY),
     why: 'Judges whether criterion-bound changed tests are insensitive to the behavior they claim to cover; preflight is evidence, never a verdict.',
   },
   {
     name: 'build-review-security',
     executionPath: 'engine-managed auxiliary rubric',
-    providerCells: {
-      claude: { model: RESOLVED_RUBRIC_POLICY, effort: RESOLVED_RUBRIC_POLICY },
-      codex: { model: RESOLVED_RUBRIC_POLICY, effort: RESOLVED_RUBRIC_POLICY },
-      pi: { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
-    },
+    providerCells: providerCellsForReview(RESOLVED_RUBRIC_POLICY, RESOLVED_RUBRIC_POLICY),
     why: 'Judges the whole feature diff for concrete, changed-hunk-anchored security defects in the closed security vocabulary.',
   },
   {
     name: 'coverage-binding',
     executionPath: 'engine-managed auxiliary judge',
-    providerCells: {
-      claude: { model: RESOLVED_COVERAGE_BINDING_POLICY, effort: RESOLVED_COVERAGE_BINDING_POLICY },
-      codex: { model: RESOLVED_COVERAGE_BINDING_POLICY, effort: RESOLVED_COVERAGE_BINDING_POLICY },
-      pi: { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
-    },
+    providerCells: providerCellsForReview(
+      RESOLVED_COVERAGE_BINDING_POLICY,
+      RESOLVED_COVERAGE_BINDING_POLICY,
+    ),
     why: 'Fresh per-claim judgement of whether cited Done when checks assert the criterion; the engine scopes inputs, validates the closed verdict, and owns the gate outcome.',
   },
 ];
@@ -374,13 +382,16 @@ export const EXTRA_MODEL_TABLE_ROWS: ExtraModelTableRow[] =
   EXTRA_MODEL_TABLE_ROW_INPUTS.map((row) => ({
     name: row.name,
     executionPath: INTERACTIVE_EXECUTION_PATH,
-    providerCells: {
-      claude: { model: row.claudeModel, effort: row.claudeEffort || PI_NOT_APPLICABLE },
-      codex: {
-        model: EXTRA_MODEL_TABLE_ROW_DEFAULTS.codexModel,
-        effort: EXTRA_MODEL_TABLE_ROW_DEFAULTS.codexEffort,
-      },
-      pi: { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
-    },
+    providerCells: Object.fromEntries(BUILT_IN_PROVIDERS.map((provider) => [
+      provider.id,
+      !('interactiveLaunch' in provider && provider.interactiveLaunch !== undefined)
+        ? { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE }
+        : provider.id === CLAUDE_PROVIDER
+          ? { model: row.claudeModel, effort: row.claudeEffort || PI_NOT_APPLICABLE }
+          : {
+              model: EXTRA_MODEL_TABLE_ROW_DEFAULTS.codexModel,
+              effort: EXTRA_MODEL_TABLE_ROW_DEFAULTS.codexEffort,
+            },
+    ])),
     why: row.why,
   }));
