@@ -315,14 +315,15 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
     };
 
     try {
-      // A malformed merge listing is a pre-mutation refusal: it must never
-      // silently fall back to a plain rebase.
+      // A malformed merge listing is a pre-mutation start failure: it must
+      // never silently fall back to a plain rebase.
       await expect(
         performRebase(git, root, 'main', { finishMergeabilityCheck: true }),
       ).resolves.toMatchObject({
-        kind: 'flatten_refused',
+        kind: 'conflict_halt',
         conflicts: [],
         reason: 'rev-list --merges returned malformed output',
+        startFailure: true,
       });
       expect(calls.some((args) => args[0] === 'rebase')).toBe(false);
     } finally {

@@ -936,7 +936,7 @@ export async function planFlattenedReplay(
     const [authorName, authorEmail, _committerName, _committerEmail, subject] = metadata.stdout.trim().split('\n');
     const commitTree = await git(
       ['-c', `user.name=${authorName}`, '-c', `user.email=${authorEmail}`, 'commit-tree', mergeTree, '-p', firstParentSha],
-      { input: `${subject}\n\nFlattened-merge: ${sha}\n` },
+      { input: withDaemonCoAuthorTrailer(`${subject}\n\nFlattened-merge: ${sha}`) },
     );
     if (commitTree.exitCode !== 0) {
       throw new Error(`could not create flattened merge commit for ${sha}: ${commitTree.stderr}`);
@@ -1047,7 +1047,8 @@ export async function startFeatureReplay(
     const rebaseArgs = ['rebase', '--autostash', baseRef];
     return { kind: 'started', result: await git(rebaseArgs), rebaseArgs };
   }
-  if (!/^[0-9a-f]{40}(?:\s|$)/i.test(merges.stdout.trim())) {
+  const mergeLines = merges.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (mergeLines.some((line) => !/^[0-9a-f]{40}$/i.test(line))) {
     return refusal(emptyPlan(), { kind: 'refused', reason: 'rev-list --merges returned malformed output' }, true);
   }
   let plan: FlattenedReplayPlan;

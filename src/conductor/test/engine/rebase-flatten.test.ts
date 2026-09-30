@@ -1,7 +1,11 @@
 // Covers: task:2
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
-import { flattenRefusalRecipe, planFlattenedReplay, proveFlattenedReplay, type FlattenedReplayPlan, type GitRunner } from '../../src/engine/rebase.js';
+import { flattenRefusalRecipe, planFlattenedReplay, proveFlattenedReplay, startFeatureReplay, type FlattenedReplayPlan, type GitRunner } from '../../src/engine/rebase.js';
+import { installDaemonBotCoAuthor } from '../../src/engine/bot-co-author.js';
 
 const sha = (digit: string) => digit.repeat(40);
 
@@ -160,11 +164,11 @@ describe('planFlattenedReplay (Task 2)', () => {
     expect(flattenedCommits).toHaveLength(2);
     expect(flattenedCommits[0]).toMatchObject({
       args: ['-c', 'user.name=Ada Author', '-c', 'user.email=ada@example.test', 'commit-tree', CONTENT_TREE, '-p', CONTENT_FIRST_PARENT],
-      input: 'merge feature with authored content\n\nFlattened-merge: ' + CONTENT_MERGE_AUTHOR_DIFFERS + '\n',
+      input: 'merge feature with authored content\n\nFlattened-merge: ' + CONTENT_MERGE_AUTHOR_DIFFERS,
     });
     expect(flattenedCommits[1]).toMatchObject({
       args: ['-c', 'user.name=Bryn Author', '-c', 'user.email=bryn@example.test', 'commit-tree', CONTENT_TWO_TREE, '-p', CONTENT_TWO_FIRST_PARENT],
-      input: 'merge follow-up content\n\nFlattened-merge: ' + CONTENT_MERGE_TWO + '\n',
+      input: 'merge follow-up content\n\nFlattened-merge: ' + CONTENT_MERGE_TWO,
     });
 
     expect(calls.some(({ args }) => ['rebase', 'update-ref', 'reset', 'checkout', 'add'].includes(args[0]))).toBe(false);
@@ -179,6 +183,100 @@ describe('planFlattenedReplay (Task 2)', () => {
 
     await expect(planFlattenedReplay(unavailableParents, MERGE_BASE))
       .rejects.toThrow(`could not read parents for replay entry ${CONTENT_MERGE_AUTHOR_DIFFERS}`);
+  });
+
+  it('adds a configured daemon bot exactly once without changing the flattened subject or trailer', async () => {
+    const { git, calls } = flattenFixture();
+    installDaemonBotCoAuthor({
+      current: () => ({ kind: 'resolved', login: 'release-bot', id: 42, trailer: 'Co-authored-by: release-bot <42+release-bot@users.noreply.github.com>' }),
+      prepare: async () => ({ kind: 'resolved', login: 'release-bot', id: 42, trailer: 'Co-authored-by: release-bot <42+release-bot@users.noreply.github.com>' }),
+    });
+    try {
+      await planFlattenedReplay(git, MERGE_BASE);
+      expect(calls.find(({ args }) => args[4] === 'commit-tree')?.input).toBe(
+        `merge feature with authored content\n\nFlattened-merge: ${CONTENT_MERGE_AUTHOR_DIFFERS}\n\nCo-authored-by: release-bot <42+release-bot@users.noreply.github.com>`,
+      );
+    } finally {
+      installDaemonBotCoAuthor(undefined);
+    }
+  });
+});
+
+describe('startFeatureReplay (Task 4)', () => {
+  const BASE = 'main';
+
+  it.each([
+    ['an empty merge range', ''],
+    ['a range whose only merge is reachable from the base', ''],
+  ])('uses the byte-identical plain rebase for %s', async (_name, merges) => {
+    const calls: GitCall[] = [];
+    const git: GitRunner = async (args, opts) => {
+      calls.push({ args, input: opts?.input });
+      if (args[0] === 'rev-list') return { exitCode: 0, stdout: merges, stderr: '' };
+      if (args[0] === 'rebase') return { exitCode: 0, stdout: '', stderr: '' };
+      throw new Error(`unexpected git command: ${args.join(' ')}`);
+    };
+    await expect(startFeatureReplay(git, BASE, MERGE_BASE)).resolves.toMatchObject({ kind: 'started' });
+    expect(calls.map(({ args }) => args)).toEqual([
+      ['rev-list', '--merges', `${BASE}..HEAD`],
+      ['rebase', '--autostash', BASE],
+    ]);
+  });
+
+  it('writes a proven merge-bearing replay todo through sequence.editor', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-flatten-todo-'));
+    const todoPath = join(root, 'flatten-todo');
+    const { git: fixtureGit, calls } = flattenFixture();
+    let proofMergeTreeCalls = 0;
+    const git: GitRunner = async (args, opts) => {
+      if (args.join(' ') === ['rev-list', '--merges', `${BASE}..HEAD`].join(' ')) {
+        calls.push({ args, input: opts?.input });
+        return { exitCode: 0, stdout: `${CONTENT_MERGE_AUTHOR_DIFFERS}\n`, stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args[1] === BASE) {
+        calls.push({ args, input: opts?.input });
+        return { exitCode: 0, stdout: `${sha('t')}\n`, stderr: '' };
+      }
+      if (args.join(' ') === 'rev-parse --git-path ai-conductor-flatten-todo') {
+        calls.push({ args, input: opts?.input });
+        return { exitCode: 0, stdout: `${todoPath}\n`, stderr: '' };
+      }
+      if (args[0] === 'merge-tree') {
+        calls.push({ args, input: opts?.input });
+        proofMergeTreeCalls++;
+        return { exitCode: 0, stdout: `${sha('p')}\n`, stderr: '' };
+      }
+      if (args[0] === 'commit-tree') {
+        calls.push({ args, input: opts?.input });
+        return { exitCode: 0, stdout: `${sha(String(proofMergeTreeCalls))}\n`, stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD^{tree}') {
+        calls.push({ args, input: opts?.input });
+        return { exitCode: 0, stdout: `${sha('p')}\n`, stderr: '' };
+      }
+      if (args.join(' ') === ['show', '-s', '--format=%s', ORDINARY_ONE].join(' ')) {
+        calls.push({ args, input: opts?.input });
+        return { exitCode: 0, stdout: 'ordinary one\n', stderr: '' };
+      }
+      if (args.join(' ') === ['show', '-s', '--format=%s', ORDINARY_TWO].join(' ')) {
+        calls.push({ args, input: opts?.input });
+        return { exitCode: 0, stdout: 'ordinary two\n', stderr: '' };
+      }
+      if (args[0] === '-c' && args[2] === 'rebase') {
+        calls.push({ args, input: opts?.input });
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      return fixtureGit(args, opts);
+    };
+    try {
+      await expect(startFeatureReplay(git, BASE, MERGE_BASE, root)).resolves.toMatchObject({
+        kind: 'started', rebaseArgs: ['-c', `sequence.editor=cp ${todoPath}`, 'rebase', '-i', '--autostash', BASE],
+      });
+      expect(await readFile(todoPath, 'utf8')).toContain(`pick ${FLATTENED_CONTENT}`);
+      expect(calls.some(({ args }) => args.join(' ') === `-c sequence.editor=cp ${todoPath} rebase -i --autostash ${BASE}`)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
