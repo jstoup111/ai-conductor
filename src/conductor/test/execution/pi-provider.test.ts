@@ -1,9 +1,9 @@
-// Covers: task:2, task:3, task:4, task:15, task:16, task:17, task:18
+// Covers: task:2, task:3, task:4, task:13, task:15, task:16, task:17, task:18
 import { readFile } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 import { classifyMetering } from '../../src/engine/metering.js';
-import { parsePiModelId, PiProvider } from '../../src/execution/pi-provider.js';
+import { parsePiModelId, parsePiModelListing, PiProvider } from '../../src/execution/pi-provider.js';
 import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
@@ -23,6 +23,41 @@ const invokeOptions: InvokeOptions = {
 };
 
 const readFixture = (name: string) => readFile(new URL(`../fixtures/pi/${name}`, import.meta.url), 'utf8');
+
+describe('parsePiModelListing', () => {
+  it('parses the captured Pi 0.84.3 listing into canonical provider/model ids', async () => {
+    const listing = parsePiModelListing(await readFile(
+      new URL('../fixtures/pi-list-models-0.84.3.txt', import.meta.url),
+      'utf8',
+    ));
+
+    expect(listing).toEqual({
+      kind: 'parsed',
+      modelIds: [
+        'anthropic/claude-opus-4-5',
+        'cline/google/gemma-4-31b-it:free',
+        'openai/gpt-5',
+      ],
+    });
+  });
+
+  it('locates provider and model columns by their header names rather than their positions', () => {
+    expect(parsePiModelListing([
+      'model                    context  provider',
+      'google/gemma-4-31b-it:free  128K     cline',
+    ].join('\n'))).toEqual({
+      kind: 'parsed',
+      modelIds: ['cline/google/gemma-4-31b-it:free'],
+    });
+  });
+
+  it('returns the first line when no provider and model header is available', () => {
+    expect(parsePiModelListing('Pi failed to load models\ntry again later')).toEqual({
+      kind: 'unparseable',
+      firstLine: 'Pi failed to load models',
+    });
+  });
+});
 
 describe('PiProvider', () => {
   const spawn = vi.fn<PiSubprocessFactory>();

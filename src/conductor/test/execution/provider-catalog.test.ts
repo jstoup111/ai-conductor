@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:13
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   BUILT_IN_PROVIDERS,
@@ -12,7 +12,7 @@ import {
   type ProviderCapabilityFlags,
   type ProviderWith,
 } from '../../src/execution/provider-catalog.js';
-import { parsePiModelId } from '../../src/execution/pi-provider.js';
+import { parsePiModelId, parsePiModelListing } from '../../src/execution/pi-provider.js';
 import { rateCardModelIds } from '../../src/engine/provider-model-policy.js';
 
 const executableOverrides = ['CLAUDE_EXECUTABLE', 'CODEX_EXECUTABLE', 'PI_EXECUTABLE'] as const;
@@ -64,6 +64,18 @@ describe('built-in provider catalog', () => {
       claude: undefined,
       codex: undefined,
       pi: parsePiModelId,
+    });
+  });
+
+  it('declares Pi model listing only on the Pi descriptor', () => {
+    const catalogByProvider = Object.fromEntries(
+      BUILT_IN_PROVIDERS.map((provider) => [provider.id, provider.modelCatalog]),
+    );
+
+    expect(catalogByProvider).toEqual({
+      claude: undefined,
+      codex: undefined,
+      pi: { argv: ['--list-models'], parse: parsePiModelListing },
     });
   });
 

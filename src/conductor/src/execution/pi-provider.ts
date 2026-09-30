@@ -4,6 +4,7 @@ import { enforceFreshSessionOptions } from './fresh-session.js';
 import { deriveProviderExitFacts, formatProviderExitFacts } from './provider-diagnostics.js';
 import { validateSpawnPermit } from './spawn-permit.js';
 import { providerDescriptor } from './provider-catalog.js';
+import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -48,6 +49,33 @@ export function parsePiModelId(modelId: string): PiModelIdParseResult {
   if (!model) return { reason: 'empty-model' };
 
   return { provider, model };
+}
+
+/** Parse Pi's whitespace-aligned --list-models table into canonical ids. */
+export function parsePiModelListing(stdout: string): ProviderModelCatalogParseResult {
+  const lines = stdout.split(/\r?\n/);
+  const firstLine = lines[0] ?? '';
+  const columns = (line: string) => line.trim().split(/\s{2,}/);
+  const headerIndex = lines.findIndex((line) => {
+    const header = columns(line);
+    return header.includes('provider') && header.includes('model');
+  });
+
+  if (headerIndex === -1) return { kind: 'unparseable', firstLine };
+
+  const header = columns(lines[headerIndex]!);
+  const providerIndex = header.indexOf('provider');
+  const modelIndex = header.indexOf('model');
+  const modelIds = lines.slice(headerIndex + 1)
+    .filter((line) => line.trim())
+    .flatMap((line) => {
+      const row = columns(line);
+      const provider = row[providerIndex];
+      const model = row[modelIndex];
+      return provider && model ? [`${provider}/${model}`] : [];
+    });
+
+  return { kind: 'parsed', modelIds };
 }
 
 type PiJsonEvent = {

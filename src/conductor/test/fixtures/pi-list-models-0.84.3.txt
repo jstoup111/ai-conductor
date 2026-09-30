@@ -1,0 +1,4 @@
+provider   model                         context  max-out  thinking  images
+anthropic  claude-opus-4-5               200K     32K      yes       yes
+cline      google/gemma-4-31b-it:free    128K     8K       no        no
+openai     gpt-5                         400K     128K     yes       yes
