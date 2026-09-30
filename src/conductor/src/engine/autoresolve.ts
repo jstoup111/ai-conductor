@@ -32,6 +32,7 @@ import {
   rebaseStateActive,
   conflictedFiles,
   resolveBase,
+  startFeatureReplay,
   runTier1,
   makeGitRunner,
 } from './rebase.js';
@@ -1131,8 +1132,36 @@ export async function resolveConflictingPr(
       return result;
     };
 
-    // Start the rebase; this will fail with conflicts if base and feature diverged
-    const rebaseAttempt = await git(['rebase', '--autostash', baseRef]);
+    // Start through the same primitive as the feature gate.  It either keeps
+    // the exact legacy merge-free invocation or proves and starts a flattened
+    // todo without letting this open-PR path invent a second replay shape.
+    const mergeBaseResult = await git(['merge-base', 'HEAD', baseRef]);
+    const mergeBase = mergeBaseResult.exitCode === 0 ? mergeBaseResult.stdout.trim() : '';
+    if (!mergeBase) {
+      await escalate(prUrl, 'rebase-error', 'could not determine merge base for replay', {
+        runGh: deps.runGh, operations, cwd: repoCwd, log,
+      });
+      logOutcome(log, prUrl, 'rebase-error', 'escalated');
+      return { kind: 'escalated' };
+    }
+    const replayStart = await startFeatureReplay(git, baseRef, mergeBase, worktreePath);
+    if (replayStart.kind === 'refused') {
+      const conflicted = replayStart.proof.kind === 'target_conflict'
+        ? replayStart.plan.entries[replayStart.proof.index]
+        : undefined;
+      const mergeSha = conflicted?.kind === 'flattened' ? conflicted.mergeSha : '';
+      await escalate(prUrl, 'merge-flatten-refused',
+        `${mergeSha ? `merge ${mergeSha}: ` : ''}${replayStart.proof.kind === 'refused' ? replayStart.proof.reason : 'flattened replay conflicts'}; recovery: park the feature and rebase with --rebase-merges`, {
+          runGh: deps.runGh, operations, cwd: repoCwd, log,
+        });
+      logOutcome(log, prUrl, 'merge-flatten-refused', 'escalated');
+      return { kind: 'escalated' };
+    }
+    if (replayStart.flatten) {
+      await deps.events?.emit({ type: 'rebase_merge_audit', ...replayStart.flatten.audit });
+    }
+    const rebaseAttempt = replayStart.result;
+    const replaySubjects = replayStart.expectedSubjects ?? subjectsBefore;
     if (rebaseAttempt.exitCode === 0) {
       log(`${prUrl}: rebase completed without conflicts; verifying before publication`);
     } else {
@@ -1238,8 +1267,8 @@ export async function resolveConflictingPr(
     // Work-preservation guards: verify the rebase succeeded correctly.
     const acceptanceGuards = deps.runAcceptanceGuards ?? runAcceptanceGuards;
     const guardsResult = acceptedVerdicts.length === 0
-      ? await acceptanceGuards(git, baseRef, subjectsBefore)
-      : await acceptanceGuards(git, baseRef, subjectsBefore, [...declaredSuperseded]);
+      ? await acceptanceGuards(git, baseRef, replaySubjects)
+      : await acceptanceGuards(git, baseRef, replaySubjects, [...declaredSuperseded]);
     if (!guardsResult.ok) {
       const reason = `${guardsResult.guard}: ${guardsResult.reason}`;
       log(`${prUrl}: acceptance guard failed: ${reason}`);

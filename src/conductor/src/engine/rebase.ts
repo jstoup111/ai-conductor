@@ -942,9 +942,18 @@ export async function startFeatureReplay(
   const todoPath = todoPathResult.stdout.trim();
   await writeFile(projectRoot && !isAbsolute(todoPath) ? join(projectRoot, todoPath) : todoPath, `${plan.entries.map((entry) => `pick ${entry.sha}`).join('\n')}\n`);
   const rebaseArgs = ['-c', `sequence.editor=cp ${todoPath}`, 'rebase', '-i', '--autostash', baseRef];
+  // FR-9 judges what the generated todo actually replays.  In particular it
+  // must not require dropped ancestry-only merges or side-lineage commits.
+  // Flattened entries retain their subject in the plan; look up ordinary
+  // first-parent entries here rather than widening the immutable plan shape.
+  const expectedSubjects = await Promise.all(plan.entries.map(async (entry) => {
+    if (entry.kind === 'flattened') return entry.subject;
+    const subject = await git(['show', '-s', '--format=%s', entry.sha]);
+    return subject.exitCode === 0 ? subject.stdout.trim() : '';
+  }));
   return {
     kind: 'started', result: await git(rebaseArgs), rebaseArgs,
-    expectedSubjects: plan.entries.map((entry) => entry.kind === 'flattened' ? entry.subject : ''),
+    expectedSubjects: expectedSubjects.filter(Boolean),
     flatten: plan, proof,
   };
 }
@@ -2636,6 +2645,12 @@ export async function emitRebaseEvent(
         directory: outcome.quarantine.directory,
       });
     }
+    // The audit is an observation of a flattened replay, independent of the
+    // later changed/noop classification.  Emit it once and only on the event
+    // spine; it deliberately has no sidecar or daemon-log representation.
+    if (outcome.flatten) {
+      await events.emit({ type: 'rebase_merge_audit', ...outcome.flatten.audit });
+    }
     switch (outcome.kind) {
       case 'noop':
         await events.emit(
@@ -2664,10 +2679,6 @@ export async function emitRebaseEvent(
             ? {}
             : { allChangedPaths: outcome.allChangedPaths }),
         });
-        if ((outcome as RebaseOutcome & { flatten?: FlattenedReplayPlan }).flatten) {
-          const audit = (outcome as RebaseOutcome & { flatten: FlattenedReplayPlan }).flatten.audit;
-          await events.emit({ type: 'rebase_merge_audit', ...audit });
-        }
         break;
       case 'conflict_halt':
         await events.emit({
