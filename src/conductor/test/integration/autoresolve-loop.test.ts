@@ -3,7 +3,7 @@
  * (.docs/specs/2026-07-04-auto-resolve-open-pr-conflicts.md,
  * .docs/plans/auto-resolve-open-pr-conflicts.md).
  *
- * Covers: FR-3, FR-4, FR-6, FR-7, FR-10, FR-12, FR-13, FR-16
+ * Covers: FR-3, FR-4, FR-6, FR-7, FR-10, FR-12, FR-13, FR-16, task:3
  *
  * These drive the REAL orchestrator this feature introduces —
  * `resolveConflictingPr` in the not-yet-existing `src/engine/autoresolve.ts` —
@@ -262,6 +262,189 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     expect(logs.some((line) => line.includes(PR_URL) && line.includes('acceptance guards passed') && line.includes(suiteWorktree!))).toBe(true);
     expect(logs.some((line) => line.includes(PR_URL) && line.includes('suite gate started') && line.includes(suiteWorktree!))).toBe(true);
     expect(logs.some((line) => line.includes(PR_URL) && line.includes('suite gate passed') && line.includes('73'))).toBe(true);
+  });
+
+  // Covers: task:3
+  it('continues to refresh when stage-event emission rejects or no emitter is provided', async () => {
+    for (const events of [
+      { emit: async () => { throw new Error('event sink unavailable'); } } as unknown as ConductorEventEmitter,
+      undefined,
+    ]) {
+      await writeFile(join(dir, 'base.txt'), 'base\n');
+      await gDir(['add', '.']);
+      await gDir(['commit', '-q', '-m', 'base']);
+      await gDir(['remote', 'add', 'origin', origin]);
+      await gDir(['push', 'origin', 'main']);
+      await gDir(['checkout', '-q', '-b', 'feat/widget']);
+      await writeFile(join(dir, 'feature.txt'), 'feature\n');
+      await gDir(['add', '.']);
+      await gDir(['commit', '-q', '-m', 'feature work']);
+      await gDir(['push', 'origin', 'feat/widget']);
+      const remoteTipBeforeResolution = (await gDir(['rev-parse', 'HEAD'])).stdout.trim();
+      await gDir(['checkout', '-q', 'main']);
+      await writeFile(join(dir, 'upstream.txt'), 'upstream\n');
+      await gDir(['add', '.']);
+      await gDir(['commit', '-q', '-m', 'upstream work']);
+      await gDir(['push', 'origin', 'main']);
+
+      const { resolveConflictingPr } = await import('../../src/engine/autoresolve.js');
+      const logs: string[] = [];
+      let resolvedTip: string | undefined;
+      const gh = fakeGhFor([], []);
+      const outcome = await resolveConflictingPr(
+        { prUrl: PR_URL, slug: 'widget', repoCwd: dir },
+        'feat/widget',
+        { enabled: true, suiteCommand: 'test', cooldownMinutes: 60, attemptCap: ATTEMPT_CAP },
+        {
+          runGh: gh,
+          operations: gh,
+          remoteGit: permittedRemoteGit,
+          events,
+          runSuite: async (worktree) => {
+            resolvedTip = (await execFile('git', ['rev-parse', 'HEAD'], { cwd: worktree })).stdout.trim();
+            return { exitCode: 0, configured: true, durationMs: 1 };
+          },
+          resolver: async () => ({ resolved: false, reason: 'unexpected resolver' }),
+          log: (line) => logs.push(line),
+        },
+      );
+
+      const remoteTip = (await execFile('git', ['rev-parse', 'refs/heads/feat/widget'], { cwd: origin })).stdout.trim();
+      expect(outcome.kind).toBe('refreshed');
+      expect(resolvedTip).not.toBe(remoteTipBeforeResolution);
+      expect(remoteTip).toBe(resolvedTip);
+      expect(logs.some((line) => line.includes('acceptance guards passed'))).toBe(true);
+      expect(logs.some((line) => line.includes('suite gate started'))).toBe(true);
+      expect(logs.some((line) => line.includes('suite gate passed'))).toBe(true);
+
+      await rm(origin, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true });
+      origin = await mkdtemp(join(tmpdir(), 'autoresolve-loop-origin-'));
+      await execFile('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: origin });
+      dir = await mkdtemp(join(tmpdir(), 'autoresolve-loop-work-'));
+      await execFile('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+      await gDir(['config', 'user.email', 't@t.com']);
+      await gDir(['config', 'user.name', 'T']);
+      await gDir(['config', 'commit.gpgsign', 'false']);
+    }
+  });
+
+  // Covers: task:3
+  it('keeps suite failure and escalation observable without a passed stage or push', async () => {
+    await writeFile(join(dir, 'base.txt'), 'base\n');
+    await gDir(['add', '.']);
+    await gDir(['commit', '-q', '-m', 'base']);
+    await gDir(['remote', 'add', 'origin', origin]);
+    await gDir(['push', 'origin', 'main']);
+    await gDir(['checkout', '-q', '-b', 'feat/widget']);
+    await writeFile(join(dir, 'feature.txt'), 'feature\n');
+    await gDir(['add', '.']);
+    await gDir(['commit', '-q', '-m', 'feature work']);
+    await gDir(['push', 'origin', 'feat/widget']);
+    const remoteTipBeforeResolution = (await gDir(['rev-parse', 'HEAD'])).stdout.trim();
+    await gDir(['checkout', '-q', 'main']);
+    await writeFile(join(dir, 'upstream.txt'), 'upstream\n');
+    await gDir(['add', '.']);
+    await gDir(['commit', '-q', '-m', 'upstream work']);
+    await gDir(['push', 'origin', 'main']);
+
+    const { resolveConflictingPr } = await import('../../src/engine/autoresolve.js');
+    const logs: string[] = [];
+    const stageEvents: Array<Extract<ConductorEvent, { type: 'rebase_resolution_stage' }>> = [];
+    const events = new ConductorEventEmitter();
+    events.on('rebase_resolution_stage', (event) => { if (event.type === 'rebase_resolution_stage') stageEvents.push(event); });
+    let pushAttempts = 0;
+    const gh = fakeGhFor([], []);
+    const outcome = await resolveConflictingPr(
+      { prUrl: PR_URL, slug: 'widget', repoCwd: dir },
+      'feat/widget',
+      { enabled: true, suiteCommand: 'test', cooldownMinutes: 60, attemptCap: ATTEMPT_CAP },
+      {
+        runGh: gh,
+        operations: gh,
+        remoteGit: async (args, dependencies) => {
+          if (args.includes('push')) pushAttempts++;
+          return permittedRemoteGit(args, dependencies);
+        },
+        events,
+        runSuite: async () => ({ exitCode: 1, configured: true, durationMs: 1 }),
+        resolver: async () => ({ resolved: false, reason: 'unexpected resolver' }),
+        log: (line) => logs.push(line),
+      },
+    );
+
+    const remoteTip = (await execFile('git', ['rev-parse', 'refs/heads/feat/widget'], { cwd: origin })).stdout.trim();
+    expect(outcome.kind).toBe('escalated');
+    expect(remoteTip).toBe(remoteTipBeforeResolution);
+    expect(pushAttempts).toBe(0);
+    expect(logs.some((line) => line.includes('suite gate failed'))).toBe(true);
+    expect(logs).toContain(`outcome: pr=${PR_URL} stage=suite-gate result=escalated`);
+    expect(logs.some((line) => line.includes('suite gate passed'))).toBe(false);
+    expect(stageEvents.some((event) => event.stage === 'suite-gate' && event.status === 'passed')).toBe(false);
+  });
+
+  // Covers: task:3
+  it('short-circuits a rejected acceptance guard before suite start or publication', async () => {
+    await writeFile(join(dir, 'base.txt'), 'base\n');
+    await gDir(['add', '.']);
+    await gDir(['commit', '-q', '-m', 'base']);
+    await gDir(['remote', 'add', 'origin', origin]);
+    await gDir(['push', 'origin', 'main']);
+    await gDir(['checkout', '-q', '-b', 'feat/widget']);
+    await writeFile(join(dir, 'feature.txt'), 'feature\n');
+    await gDir(['add', '.']);
+    await gDir(['commit', '-q', '-m', 'feature work']);
+    await gDir(['push', 'origin', 'feat/widget']);
+    const remoteTipBeforeResolution = (await gDir(['rev-parse', 'HEAD'])).stdout.trim();
+    await gDir(['checkout', '-q', 'main']);
+    await writeFile(join(dir, 'upstream.txt'), 'upstream\n');
+    await gDir(['add', '.']);
+    await gDir(['commit', '-q', '-m', 'upstream work']);
+    await gDir(['push', 'origin', 'main']);
+
+    const { resolveConflictingPr } = await import('../../src/engine/autoresolve.js');
+    const logs: string[] = [];
+    const stageEvents: Array<Extract<ConductorEvent, { type: 'rebase_resolution_stage' }>> = [];
+    const events = new ConductorEventEmitter();
+    events.on('rebase_resolution_stage', (event) => { if (event.type === 'rebase_resolution_stage') stageEvents.push(event); });
+    let pushAttempts = 0;
+    let suiteCalls = 0;
+    const gh = fakeGhFor([], []);
+    const outcome = await resolveConflictingPr(
+      { prUrl: PR_URL, slug: 'widget', repoCwd: dir },
+      'feat/widget',
+      { enabled: true, suiteCommand: 'test', cooldownMinutes: 60, attemptCap: ATTEMPT_CAP },
+      {
+        runGh: gh,
+        operations: gh,
+        remoteGit: async (args, dependencies) => {
+          if (args.includes('push')) pushAttempts++;
+          return permittedRemoteGit(args, dependencies);
+        },
+        events,
+        runAcceptanceGuards: async () => ({
+          ok: false,
+          guard: 'isBranchCurrent',
+          reason: 'guard rejected',
+        }),
+        runSuite: async () => { suiteCalls++; return { exitCode: 0, configured: true, durationMs: 1 }; },
+        resolver: async () => ({ resolved: false, reason: 'unexpected resolver' }),
+        log: (line) => logs.push(line),
+      },
+    );
+
+    const remoteTip = (await execFile('git', ['rev-parse', 'refs/heads/feat/widget'], { cwd: origin })).stdout.trim();
+    expect(outcome.kind).toBe('escalated');
+    expect(remoteTip).toBe(remoteTipBeforeResolution);
+    expect(pushAttempts).toBe(0);
+    expect(suiteCalls).toBe(0);
+    expect(logs.some((line) => line.includes('acceptance guard failed'))).toBe(true);
+    expect(logs).toContain(`outcome: pr=${PR_URL} stage=acceptance-guards result=escalated`);
+    expect(logs.some((line) => line.includes('acceptance guards passed') || line.includes('suite gate started'))).toBe(false);
+    expect(stageEvents.some((event) => (
+      (event.stage === 'acceptance-guards' && event.status === 'passed')
+      || (event.stage === 'suite-gate' && event.status === 'started')
+    ))).toBe(false);
   });
 
   it('a CHANGELOG-only conflict is handed to the generic resolver (FR-3/FR-4)', async () => {
