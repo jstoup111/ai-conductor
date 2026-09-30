@@ -1,4 +1,4 @@
-// Covers: task:7
+// Covers: task:7, task:8
 import { describe, expect, it, vi } from 'vitest';
 
 import { createPriorityResolver, type IssueLabelReader } from '../../../src/engine/backlog-priority.js';
@@ -168,5 +168,91 @@ describe('Task 7 — monitor queue ordering', () => {
         { slug: 'unlinked', band: 'unresolved', orderingBasis: 'fallback' },
       ],
     });
+  });
+});
+
+describe('Task 8 — monitor priority outage fallback', () => {
+  it('keeps every halt in stable deferral-partition fallback order throughout an outage', async () => {
+    const warnings: string[] = [];
+    const resolver = createPriorityResolver(async () => {
+      throw new Error('priority provider unavailable');
+    }, (warning) => warnings.push(warning));
+    const halts = [
+      halt('deferred-critical', 'owner/repo#critical', true),
+      halt('unseen-low', 'owner/repo#low'),
+      halt('unseen-high', 'owner/repo#high'),
+      halt('deferred-low', 'owner/repo#deferred-low', true),
+    ];
+
+    const first = await orderMonitorQueue(halts, resolver);
+    const second = await orderMonitorQueue(halts, resolver);
+
+    expect({
+      warnings,
+      first: first.map(({ slug, band, orderingBasis }) => ({ slug, band, orderingBasis })),
+      byteIdentical: JSON.stringify(first) === JSON.stringify(second),
+    }).toEqual({
+      warnings: ['Priority resolution outage (reader failed): priority provider unavailable'],
+      first: [
+        { slug: 'unseen-low', band: 'unresolved', orderingBasis: 'fallback' },
+        { slug: 'unseen-high', band: 'unresolved', orderingBasis: 'fallback' },
+        { slug: 'deferred-critical', band: 'unresolved', orderingBasis: 'fallback' },
+        { slug: 'deferred-low', band: 'unresolved', orderingBasis: 'fallback' },
+      ],
+      byteIdentical: true,
+    });
+  });
+
+  it('restores priority-band ordering after the same resolver recovers', async () => {
+    const warnings: string[] = [];
+    let available = false;
+    const resolver = createPriorityResolver(async (refs) => {
+      if (!available) throw new Error('priority provider unavailable');
+      return new Map(refs.map((ref) => [ref, ref.endsWith('#high') ? ['priority: high'] : ['priority: low']]));
+    }, (warning) => warnings.push(warning));
+    const halts = [
+      halt('low', 'owner/repo#low'),
+      halt('high', 'owner/repo#high'),
+    ];
+
+    const duringOutage = await orderMonitorQueue(halts, resolver);
+    available = true;
+    await resolver.resolve(halts.map(({ slug, sourceRef }) => ({ slug, ...(sourceRef === undefined ? {} : { sourceRef }) })), { refresh: true });
+    const afterRecovery = await orderMonitorQueue(halts, resolver);
+
+    expect({
+      warnings,
+      duringOutage: duringOutage.map(({ slug, orderingBasis }) => ({ slug, orderingBasis })),
+      afterRecovery: afterRecovery.map(({ slug, band, orderingBasis }) => ({ slug, band, orderingBasis })),
+    }).toEqual({
+      warnings: ['Priority resolution outage (reader failed): priority provider unavailable'],
+      duringOutage: [
+        { slug: 'low', orderingBasis: 'fallback' },
+        { slug: 'high', orderingBasis: 'fallback' },
+      ],
+      afterRecovery: [
+        { slug: 'high', band: 'high', orderingBasis: 'priority-band' },
+        { slug: 'low', band: 'low', orderingBasis: 'priority-band' },
+      ],
+    });
+  });
+
+  it('keeps missing issues unlabeled and unlinked halts in the inherited no-issue band', async () => {
+    const resolver = createPriorityResolver(readerFor({
+      'owner/repo#high': ['priority: high'],
+      'owner/repo#missing': 'not-found',
+    }), () => {});
+
+    const ordered = await orderMonitorQueue([
+      halt('missing', 'owner/repo#missing'),
+      halt('high', 'owner/repo#high'),
+      halt('unlinked', undefined),
+    ], resolver);
+
+    expect(ordered.map(({ slug, band, orderingBasis }) => ({ slug, band, orderingBasis }))).toEqual([
+      { slug: 'unlinked', band: 'no-issue', orderingBasis: 'priority-band' },
+      { slug: 'high', band: 'high', orderingBasis: 'priority-band' },
+      { slug: 'missing', band: 'unlabeled', orderingBasis: 'priority-band' },
+    ]);
   });
 });
