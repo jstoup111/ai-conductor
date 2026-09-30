@@ -33,6 +33,7 @@ import type { ComplexityTier, StepName } from '../../src/types/index.js';
 import type { EffortLevel, HarnessConfig, TierOverride } from '../../src/types/config.js';
 
 interface AcceptancePolicy {
+  requiresConfiguredModels: boolean;
   stepModels: Record<StepName, string>;
   stepEfforts: Record<StepName, EffortLevel>;
   stepTierOverrides: Partial<
@@ -149,6 +150,7 @@ const COMMON_TIER_OVERRIDES: AcceptancePolicy['stepTierOverrides'] = {
 };
 
 const CLAUDE_POLICY: AcceptancePolicy = {
+  requiresConfiguredModels: false,
   stepModels: CLAUDE_MODELS,
   stepEfforts: STEP_EFFORTS,
   stepTierOverrides: {
@@ -165,6 +167,7 @@ const CLAUDE_POLICY: AcceptancePolicy = {
 };
 
 const CODEX_POLICY: AcceptancePolicy = {
+  requiresConfiguredModels: false,
   stepModels: CODEX_MODELS,
   stepEfforts: STEP_EFFORTS,
   stepTierOverrides: {
