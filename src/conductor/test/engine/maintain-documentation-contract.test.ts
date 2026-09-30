@@ -87,6 +87,7 @@ describe('repository-local maintain-documentation contract', () => {
         repoConfigValid: true,
         configuredStep: {
           llm_provider: 'claude',
+          model: 'opus',
           after: 'rebase',
           skill: '.agents/skills/maintain-documentation/SKILL.md',
           enforcement: 'gating',

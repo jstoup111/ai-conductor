@@ -267,6 +267,7 @@ steps:
   # 2026-09-29 by operator order.
   maintain-documentation:
     llm_provider: claude
+    model: opus
     after: rebase
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating
