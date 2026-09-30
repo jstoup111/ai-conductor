@@ -198,6 +198,7 @@ Twenty-three tasks deliver an engine-generated `git` argv guard, provisioned fai
 - A Claude dispatch whose `cwd` is an unprepared directory passes a child `PATH` equal to the inherited one, and `process.env.PATH` is identical before and after every guarded Claude dispatch, as asserted by the unprepared and no-bleed tests.
 - A guarded Claude dispatch's child env still omits `CLAUDE_CODE_OAUTH_TOKEN` wherever it is stripped today, and the contained-review env still equals the allowlisted set with only `PATH` changed, as asserted by the existing credential and review-allowlist tests extended with the guarded `PATH`.
 - When `ensureGitGuardForDispatch` throws, `ClaudeProvider.invoke` resolves a failed result whose output names the guard path and the recorded spawn function is never called.
+- A Claude dispatch into a prepared worktree whose `.pipeline/bin` directory is read-only and whose guard is missing makes `ensureGitGuardForDispatch` throw during dispatch preparation, so `ClaudeProvider.invoke` resolves a failed result whose output names the guard path and the recorded spawn function is never called, as asserted by the unrewritable-guard dispatch test.
 - A Claude dispatch into a prepared worktree whose guard was deleted, edited, or chmod 0644 finds, at the moment the recorded spawn function is called, `.pipeline/bin/git` already rewritten to `GIT_GUARD_SCRIPT` with mode 0755, and that same spawn receives a child `PATH` beginning with the worktree's `.pipeline/bin`, as asserted by the repair-before-launch tests.
 
 **Files likely touched:**
@@ -223,6 +224,7 @@ Twenty-three tasks deliver an engine-generated `git` argv guard, provisioned fai
 - `CodexProvider` invocation for non-self-host and self-host dispatches into a prepared worktree, with `HOME` pointing at an empty directory, passes a child env whose `PATH` begins with that worktree's `.pipeline/bin`, as asserted by the two Codex env-cell tests.
 - The Codex argv for a guarded dispatch contains `--config` with `shell_environment_policy.set.PATH` equal to the guarded child `PATH`, and an unguarded dispatch's argv contains no `shell_environment_policy.set.PATH`, as asserted by the argv tests.
 - When `ensureGitGuardForDispatch` throws, `CodexProvider.invoke` resolves a failed result naming the guard path without calling the spawn function, and `process.env.PATH` is unchanged after every Codex dispatch.
+- A Codex dispatch into a prepared worktree whose `.pipeline/bin` directory is read-only and whose guard is missing makes `ensureGitGuardForDispatch` throw during dispatch preparation, so `CodexProvider.invoke` resolves a failed result naming the guard path without calling the spawn function, as asserted by the unrewritable-guard dispatch test.
 - A Codex dispatch whose `cwd` is an unprepared directory passes an env overlay with no `PATH` override, and a guarded Codex review-profile env still equals the allowlisted set with only `PATH` changed and no credential variable added, as asserted by the unprepared and review-allowlist tests.
 
 **Files likely touched:**
