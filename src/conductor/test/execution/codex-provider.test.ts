@@ -57,12 +57,17 @@ vi.mock('../../src/execution/spawn-permit.js', () => ({
     mockValidateSpawnPermit(...args),
 }));
 
-const { mockEnforceFreshSessionOptions } = vi.hoisted(() => ({
+const { mockEnforceFreshSessionOptions, mockEnsureGitGuardForDispatch } = vi.hoisted(() => ({
   mockEnforceFreshSessionOptions: vi.fn(),
+  mockEnsureGitGuardForDispatch: vi.fn(),
 }));
 vi.mock('../../src/execution/fresh-session.js', () => ({
   enforceFreshSessionOptions: (...args: Parameters<typeof mockEnforceFreshSessionOptions>) =>
     mockEnforceFreshSessionOptions(...args),
+}));
+vi.mock('../../src/engine/git-guard.js', () => ({
+  ensureGitGuardForDispatch: (...args: Parameters<typeof mockEnsureGitGuardForDispatch>) =>
+    mockEnsureGitGuardForDispatch(...args),
 }));
 
 vi.resetModules();
@@ -159,6 +164,7 @@ describe('CodexProvider', () => {
       sessionId: '00000000-0000-4000-8000-000000000002',
       resume: false,
     }));
+    mockEnsureGitGuardForDispatch.mockResolvedValue(null);
     provider = new CodexProvider(
       vi.fn(async (_command, _args, options) =>
         readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
@@ -167,6 +173,17 @@ describe('CodexProvider', () => {
       undefined,
       mockExeca as never,
     );
+  });
+
+  it('fails before launch when a missing guard cannot be rewritten in its read-only directory', async () => {
+    const guardPath = '/prepared/.pipeline/bin/git';
+    mockEnsureGitGuardForDispatch.mockRejectedValue(new Error(`git guard repair failed: ${guardPath}`));
+
+    const result = await provider.invoke({ ...baseOptions, cwd: '/prepared' });
+
+    expect(mockEnsureGitGuardForDispatch).toHaveBeenCalledWith('/prepared');
+    expect(result).toEqual({ success: false, output: `git guard repair failed: ${guardPath}`, exitCode: 1 });
+    expect(mockExeca).not.toHaveBeenCalled();
   });
 
   it.each([

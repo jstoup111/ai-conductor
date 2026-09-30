@@ -2,11 +2,12 @@
 // Covers: task:5
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockExeca, mockValidateSpawnPermit, mockEnforceFreshSessionOptions } = vi.hoisted(() => ({
+const { mockExeca, mockValidateSpawnPermit, mockEnforceFreshSessionOptions, mockEnsureGitGuardForDispatch } = vi.hoisted(() => ({
   mockExeca: vi.fn(),
   mockValidateSpawnPermit: vi.fn((permit, purpose) =>
     permit?.(purpose) ?? { permitted: true as const }),
   mockEnforceFreshSessionOptions: vi.fn(),
+  mockEnsureGitGuardForDispatch: vi.fn(),
 }));
 vi.mock('execa', () => ({ execa: mockExeca }));
 vi.mock('../../src/execution/spawn-permit.js', () => ({
@@ -16,6 +17,10 @@ vi.mock('../../src/execution/spawn-permit.js', () => ({
 vi.mock('../../src/execution/fresh-session.js', () => ({
   enforceFreshSessionOptions: (...args: Parameters<typeof mockEnforceFreshSessionOptions>) =>
     mockEnforceFreshSessionOptions(...args),
+}));
+vi.mock('../../src/engine/git-guard.js', () => ({
+  ensureGitGuardForDispatch: (...args: Parameters<typeof mockEnsureGitGuardForDispatch>) =>
+    mockEnsureGitGuardForDispatch(...args),
 }));
 
 vi.resetModules();
@@ -84,6 +89,7 @@ describe('ClaudeProvider', () => {
       sessionId: '00000000-0000-4000-8000-000000000001',
       resume: false,
     }));
+    mockEnsureGitGuardForDispatch.mockResolvedValue(null);
     provider = new ClaudeProvider(undefined, mockExeca as never);
   });
 
@@ -142,6 +148,17 @@ describe('ClaudeProvider', () => {
   });
 
   describe('invoke', () => {
+    it('fails before launch when a missing guard cannot be rewritten in its read-only directory', async () => {
+      const guardPath = '/prepared/.pipeline/bin/git';
+      mockEnsureGitGuardForDispatch.mockRejectedValue(new Error(`git guard repair failed: ${guardPath}`));
+
+      const result = await provider.invoke({ ...baseOptions, cwd: '/prepared' });
+
+      expect(mockEnsureGitGuardForDispatch).toHaveBeenCalledWith('/prepared');
+      expect(result).toEqual({ success: false, output: `git guard repair failed: ${guardPath}`, exitCode: 1 });
+      expect(mockExeca).not.toHaveBeenCalled();
+    });
+
     it('declares synchronous spawn-permit lifecycle capability', () => {
       expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
     });
