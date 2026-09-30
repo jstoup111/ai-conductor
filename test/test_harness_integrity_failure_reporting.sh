@@ -37,9 +37,24 @@ extract_reporting_region() {
 reject_raw_reporter_statuses() {
   local source=$1
   awk '
-    /(assert|warn_check)[[:space:]].*\$\?/ {
+    function reject() {
       printf "%s:%d: raw reporter status: %s\\n", FILENAME, FNR, $0
       found=1
+    }
+    reporter_continuation {
+      if ($0 ~ /\$\?/) {
+        reject()
+      }
+      if ($0 !~ /\\[[:space:]]*$/) {
+        reporter_continuation=0
+      }
+      next
+    }
+    /(assert|warn_check)[[:space:]].*\$\?/ {
+      reject()
+    }
+    $1 ~ /^(assert|warn_check)$/ && /\\[[:space:]]*$/ {
+      reporter_continuation=1
     }
     END { exit(found ? 1 : 0) }
   ' "$source"
@@ -104,6 +119,15 @@ if reject_raw_reporter_statuses "$chain_raw_status_fixture" >"$WORKDIR/chain-raw
 fi
 grep -Fq "${chain_raw_status_fixture}:" "$WORKDIR/chain-raw-status-fixture.out" \
   || fail "multi-line raw-status rejection omitted its line number"
+
+multiline_reporter_raw_status_fixture="$WORKDIR/multiline-reporter-raw-status-suite.sh"
+cp "$SUITE" "$multiline_reporter_raw_status_fixture"
+printf '\nfalse\nassert \\\n  "multiline reporter raw status fixture" \\\n  $?\n' >> "$multiline_reporter_raw_status_fixture"
+if reject_raw_reporter_statuses "$multiline_reporter_raw_status_fixture" >"$WORKDIR/multiline-reporter-raw-status-fixture.out" 2>&1; then
+  fail "multi-line reporter raw-status mutation passed the drift guard"
+fi
+grep -Eq ':[0-9]+: raw reporter status:.*[$][?]' "$WORKDIR/multiline-reporter-raw-status-fixture.out" \
+  || fail "multi-line reporter raw-status rejection omitted its line number"
 
 abort_fixture="$WORKDIR/abort-fixture.sh"
 extract_reporting_region "$SUITE" "$abort_fixture" || fail "could not extract abort fixture"
