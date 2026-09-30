@@ -3580,6 +3580,52 @@ describe('FullSuiteVerifier', () => {
     });
   });
 
+  it('rechecks a PASS published just after a lock-contention timeout', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-contention-publication-');
+    await writeProjectFile(
+      projectRoot,
+      '.pipeline/test-suite.lock/owner.json',
+      JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        token: 'live-owner',
+        acquiredAt: '2026-09-30T12:00:00.000Z',
+      }),
+    );
+    const evidence = attestedPassEvidence(projectRoot);
+    let now = 0;
+    let reads = 0;
+
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true as const,
+        fingerprint: {
+          digest: evidence.fingerprint,
+          headSha: evidence.provenanceHeadSha,
+          categoryFingerprints: evidence.categoryFingerprints,
+        },
+      }),
+      readEvidence: async () => {
+        reads += 1;
+        return reads === 1
+          ? { usable: false as const, reason: 'missing' as const }
+          : { usable: true as const, evidence };
+      },
+      lock: {
+        waitTimeoutMs: 1,
+        clock: () => now,
+        wait: async () => { now = 1; },
+        processOwnsRecordedLock: () => true,
+      },
+    }).ensure();
+
+    expect({ result, reads }).toEqual({
+      result: { status: 'REUSED', evidence },
+      reads: 2,
+    });
+  });
+
   it('reclaims orphaned recovery claims while recovering a dead full-suite owner', async () => {
     const now = Date.parse('2026-09-07T12:00:00.000Z');
     const cases = [
