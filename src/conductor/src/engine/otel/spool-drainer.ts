@@ -25,6 +25,7 @@ const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 60_000;
 const DEFAULT_EXPORT_TIMEOUT_MS = 5_000;
 const BACKLOG_REPORT_INTERVAL_MS = 30_000;
+const IDLE_POLL_INTERVAL_MS = 1_000;
 type DeliveryFailureClass = Extract<DeliveryClassification, { action: 'keep' }>['failureClass'];
 
 /**
@@ -44,6 +45,7 @@ export class SpoolDrainer {
   private readonly loops = new Set<Promise<void>>();
   private readonly lastFailures = new Map<SpoolSignal, DeliveryFailureClass>();
   private readonly reportedFailures = new Map<SpoolSignal, DeliveryFailureClass>();
+  private continuousDrain: Promise<void> | undefined;
   private stopped = false;
 
   constructor(
@@ -95,6 +97,18 @@ export class SpoolDrainer {
     await Promise.all(loops);
   }
 
+  /**
+   * Keeps polling the durable store until stopped. `drain()` deliberately
+   * remains a finite snapshot operation for one-shot recovery callers.
+   */
+  drainUntilStopped(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    this.continuousDrain ??= this.runUntilStopped().finally(() => {
+      this.continuousDrain = undefined;
+    });
+    return this.continuousDrain;
+  }
+
   /** Stops retries and asks every currently active request to abort. */
   async stop(): Promise<void> {
     this.stopped = true;
@@ -110,7 +124,10 @@ export class SpoolDrainer {
   }
 
   private async drainSignal(signal: SpoolSignal): Promise<void> {
-    for (const batch of await this.store.list(signal)) {
+    while (!this.stopped) {
+      const batches = await this.store.list(signal);
+      if (batches.length === 0) return;
+      for (const batch of batches) {
       if (this.stopped) return;
       const body = await this.store.read(batch);
       let backoffMs = INITIAL_BACKOFF_MS;
@@ -159,7 +176,26 @@ export class SpoolDrainer {
         await this.delay(this.backoffWithJitter(backoffMs));
         backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs * 2);
       }
+      }
     }
+  }
+
+  private async runUntilStopped(): Promise<void> {
+    const loops = (['traces', 'metrics'] as const).map((signal) => {
+      const loop = (async () => {
+        while (!this.stopped) {
+          await this.drainSignal(signal);
+          if (!this.stopped) await this.delay(IDLE_POLL_INTERVAL_MS);
+        }
+      })();
+      this.loops.add(loop);
+      void loop.finally(() => this.loops.delete(loop));
+      return loop;
+    });
+    const backlogLoop = this.reportBacklog(new Promise<void>(() => {}));
+    this.loops.add(backlogLoop);
+    void backlogLoop.finally(() => this.loops.delete(backlogLoop));
+    await Promise.all(loops);
   }
 
   private async deliver(signal: SpoolSignal, body: Buffer) {
@@ -246,7 +282,7 @@ export class SpoolDrainer {
     const abort = () => controller.abort();
     signal.addEventListener('abort', abort, { once: true });
     const interrupted = new Promise<void>((resolve) => {
-      controller.signal.addEventListener('abort', resolve, { once: true });
+      controller.signal.addEventListener('abort', () => resolve(), { once: true });
     });
     const release = abort;
     this.pendingDelays.add(release);

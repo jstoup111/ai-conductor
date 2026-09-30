@@ -37,7 +37,7 @@ const resolveMainRepoRootCache = new Map<string, Promise<string>>();
  */
 export async function resolveMainRepoRootStrict(startDir: string): Promise<string | null> {
   try {
-    const { stdout } = await execFile('git', ['rev-parse', '--git-common-dir'], { cwd: startDir });
+    const { stdout } = await execFile('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: startDir });
     const gitCommonDir = stdout.trim();
     if (!gitCommonDir) return null;
 

@@ -21,7 +21,7 @@ import { buildResource } from './resource.js';
 import { buildExporters } from './transport.js';
 import { MetricsRecorder } from './metrics.js';
 import { MetricsListener } from './metrics-listener.js';
-import { createSpoolRuntime, type SpoolRuntime } from './spool-wiring.js';
+import { createSpoolRuntime, resolveSpoolDirSync, type SpoolRuntime, warnDisabledSpoolBacklog, warnSpoolUnavailable } from './spool-wiring.js';
 import { OtelVisualizer } from './otel-visualizer.js';
 
 const METRIC_LIFECYCLE_TIMEOUT_MS = 250;
@@ -88,7 +88,8 @@ function interactiveSpoolLifecycle(
   events: ConductorEventEmitter,
 ): InteractiveSpoolLifecycle | undefined {
   if (!resolved.spool?.enabled) return undefined;
-  const directory = join(dirname(context.pipelineDir), '.daemon', 'otel-spool');
+  const directory = resolveSpoolDirSync(dirname(context.pipelineDir));
+  if (directory === null) return undefined;
   const existing = interactiveSpoolLifecycles.get(directory);
   if (existing) return existing;
   const lifecycle = { runtime: createSpoolRuntime(directory, resolved, events), visualizerOpen: false, metricsOpen: false };
@@ -122,10 +123,14 @@ export function wireOtelVisualizer(
 ): VisualizerPlugin | null {
   const resolved = resolveOtelConfig(config, context.pipelineDir);
   if (!resolved.enabled) return null;
+  void warnDisabledSpoolBacklog(resolved, context.project ?? dirname(context.pipelineDir), events);
 
   const interactiveLifecycle = !spoolRuntime && resolved.exporter === 'otlp'
     ? interactiveSpoolLifecycle(resolved, context, events)
     : undefined;
+  if (!spoolRuntime && resolved.exporter === 'otlp' && resolved.spool?.enabled && !interactiveLifecycle) {
+    warnSpoolUnavailable(context.project ?? dirname(context.pipelineDir), events);
+  }
   if (interactiveLifecycle) interactiveLifecycle.visualizerOpen = true;
   const activeSpoolRuntime = spoolRuntime ?? interactiveLifecycle?.runtime;
   if (activeSpoolRuntime && resolved.exporter === 'otlp' && resolved.spool?.enabled) {
@@ -135,7 +140,7 @@ export function wireOtelVisualizer(
     } });
     visualizer.start(events, context);
     if (!interactiveLifecycle) return visualizer;
-    const directory = join(dirname(context.pipelineDir), '.daemon', 'otel-spool');
+    const directory = resolveSpoolDirSync(dirname(context.pipelineDir))!;
     return {
       name: visualizer.name,
       start: visualizer.start.bind(visualizer),
@@ -168,6 +173,7 @@ export function wireDaemonOtel(
 ): { flush: () => Promise<void>; stop: () => Promise<void>; spoolRuntime?: SpoolRuntime } | null {
   const resolved = resolveOtelConfig(config, join(context.mainRoot, '.pipeline'));
   if (!resolved.enabled) return null;
+  void warnDisabledSpoolBacklog(resolved, context.mainRoot, context.rootEvents);
   const spoolRuntime = resolved.exporter === 'otlp' && resolved.spool?.enabled
     ? createSpoolRuntime(join(context.mainRoot, '.daemon', 'otel-spool'), resolved, context.rootEvents)
     : undefined;
@@ -196,10 +202,11 @@ export function wireDaemonOtel(
     }).catch(() => {});
   }
   listener.start(context.rootEvents);
-  const leaseStart = spoolRuntime?.lease.acquire();
+  const activeSpoolRuntime = spoolRuntime;
+  const leaseStart = activeSpoolRuntime?.lease.acquire();
   if (leaseStart) {
     void leaseStart.then((result) => {
-      if (result.acquired) return spoolRuntime.drainer.drain();
+      if (result.acquired) return activeSpoolRuntime!.drainer.drainUntilStopped();
       return undefined;
     }).catch(() => undefined);
   }
@@ -210,7 +217,7 @@ export function wireDaemonOtel(
     // meter at that boundary, but keep it alive for every other dispatch.
     flush: async () => {
       await settleMetricLifecycle(() => provider.forceFlush());
-      if (spoolRuntime) void spoolRuntime.drainer.drain();
+      if (activeSpoolRuntime) void activeSpoolRuntime.drainer.drainUntilStopped();
     },
     stop: () => stopped ??= (async () => {
       listener.stop();
@@ -232,9 +239,13 @@ export function wireInteractiveOtelMetrics(
 ): { name: string; start: () => void; stop: () => Promise<void> } | null {
   const resolved = resolveOtelConfig(config, context.pipelineDir);
   if (!resolved.enabled) return null;
+  void warnDisabledSpoolBacklog(resolved, context.project ?? dirname(context.pipelineDir), events);
   const spoolLifecycle = resolved.exporter === 'otlp'
     ? interactiveSpoolLifecycle(resolved, context, events)
     : undefined;
+  if (resolved.exporter === 'otlp' && resolved.spool?.enabled && !spoolLifecycle) {
+    warnSpoolUnavailable(context.project ?? dirname(context.pipelineDir), events);
+  }
   if (spoolLifecycle) spoolLifecycle.metricsOpen = true;
   const spoolRuntime = spoolLifecycle?.runtime;
   const exporters = spoolRuntime
@@ -268,8 +279,9 @@ export function wireInteractiveOtelMetrics(
   listener.start(events);
   const leaseStart = spoolRuntime ? (spoolLifecycle!.leaseStart ??= spoolRuntime.lease.acquire()) : undefined;
   if (leaseStart) {
+    const activeSpoolRuntime = spoolRuntime;
     void leaseStart.then((result) => {
-      if (result.acquired) return spoolRuntime.drainer.drain();
+      if (result.acquired) return activeSpoolRuntime!.drainer.drainUntilStopped();
       return undefined;
     }).catch(() => undefined);
   }
@@ -284,7 +296,8 @@ export function wireInteractiveOtelMetrics(
       await settleMetricLifecycle(() => provider.shutdown());
       if (spoolLifecycle) {
         spoolLifecycle.metricsOpen = false;
-        await stopInteractiveSpoolIfUnused(join(dirname(context.pipelineDir), '.daemon', 'otel-spool'), spoolLifecycle);
+        const directory = resolveSpoolDirSync(dirname(context.pipelineDir));
+        if (directory !== null) await stopInteractiveSpoolIfUnused(directory, spoolLifecycle);
       }
     })(),
   };

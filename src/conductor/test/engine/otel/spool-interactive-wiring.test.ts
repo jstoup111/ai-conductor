@@ -1,7 +1,7 @@
-// Covers: task:17
+// Covers: task:10, task:17
 import { execFile as execFileCallback } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -21,6 +21,20 @@ async function temporaryProject(): Promise<string> {
   directories.push(directory);
   await execFile('git', ['init', '--initial-branch=main', directory]);
   return directory;
+}
+
+async function temporaryLinkedWorktree(): Promise<{ mainRoot: string; worktree: string }> {
+  const root = await mkdtemp(join(tmpdir(), 'spool-interactive-main-'));
+  const mainRoot = join(root, 'main');
+  const worktree = join(root, 'linked');
+  directories.push(root);
+  await mkdir(mainRoot, { recursive: true });
+  await execFile('git', ['init', '--initial-branch=main', mainRoot]);
+  await execFile('git', ['-C', mainRoot, 'config', 'user.email', 'test@example.com']);
+  await execFile('git', ['-C', mainRoot, 'config', 'user.name', 'Test User']);
+  await execFile('git', ['-C', mainRoot, 'commit', '--allow-empty', '-m', 'initial']);
+  await execFile('git', ['-C', mainRoot, 'worktree', 'add', '-b', 'interactive-linked', worktree]);
+  return { mainRoot, worktree };
 }
 
 async function endpoint(onRequest: () => void): Promise<string> {
@@ -74,6 +88,33 @@ afterEach(async () => {
 });
 
 describe('interactive OTel spool wiring', () => {
+  it('anchors an interactive worktree run to the main checkout spool', async () => {
+    const { mainRoot, worktree } = await temporaryLinkedWorktree();
+    const mainStore = new SpoolStore(join(mainRoot, '.daemon', 'otel-spool'));
+    await mainStore.write('traces', Buffer.from('from-main-spool'));
+    let received = 0;
+    const wiring = start({
+      otel: { exporter: 'otlp', endpoint: await endpoint(() => { received += 1; }), spool: { enabled: true } },
+    }, worktree, new ConductorEventEmitter());
+
+    await eventually(async () => {
+      try {
+        return (await mainStore.list('traces')).length === 0;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw error;
+      }
+    });
+    await Promise.all([wiring.visualizer?.stop(), wiring.metrics?.stop()]);
+
+    expect({
+      received,
+      mainRemaining: await mainStore.list('traces'),
+      worktreeSpool: join(worktree, '.daemon', 'otel-spool'),
+    }).toEqual({ received: 1, mainRemaining: [], worktreeSpool: join(worktree, '.daemon', 'otel-spool') });
+    await expect(access(join(worktree, '.daemon', 'otel-spool'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('acquires a lease and drains pre-existing spool files during an interactive run', async () => {
     const project = await temporaryProject();
     const store = new SpoolStore(join(project, '.daemon', 'otel-spool'));

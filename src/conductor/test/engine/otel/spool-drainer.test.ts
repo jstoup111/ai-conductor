@@ -48,6 +48,27 @@ afterEach(async () => {
 });
 
 describe('SpoolDrainer', () => {
+  it('keeps draining batches appended while an earlier batch is being delivered', async () => {
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('traces', Buffer.from('first'));
+    const delivered: string[] = [];
+    const drainer = new SpoolDrainer(store, {
+      endpoint: 'http://collector.test',
+      headers: () => ({}),
+      fetch: async (_url, init) => {
+        delivered.push(Buffer.from(init?.body as ArrayBuffer).toString());
+        if (delivered.length === 1) await store.write('traces', Buffer.from('appended-during-drain'));
+        return new Response(undefined, { status: 200 });
+      },
+    });
+
+    await drainer.drain();
+
+    expect({ delivered, remaining: await store.list('traces') }).toEqual({
+      delivered: ['first', 'appended-during-drain'], remaining: [],
+    });
+  });
+
   it('posts three traces batches oldest-first after the closed endpoint starts, then deletes each accepted batch', async () => {
     const reservedPort = await reserveEndpoint();
     let now = 1_727_000_000_000;
