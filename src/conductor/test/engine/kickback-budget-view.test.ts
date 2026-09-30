@@ -37,6 +37,25 @@ describe('kickback budget view', () => {
     expect(renderKickbackBudgetView(legacy, 'build_review', 5)).toContain('Adjustment history: unavailable');
   });
 
+  it.each([
+    ['none', {}, 'live-halt', undefined, 'Resume authorization: none'],
+    ['consumed', { resumeAuthorization: { adjustmentId: 'adjustment-1', haltGeneration: 'bound-halt', consumed: true } }, 'live-halt', 'consumed', 'Resume authorization: consumed'],
+    ['awaiting-sweep', { resumeAuthorization: { adjustmentId: 'adjustment-1', haltGeneration: 'live-halt', consumed: false } }, 'live-halt', 'awaiting-sweep', 'Resume authorization: awaiting daemon sweep'],
+    ['stale', { resumeAuthorization: { adjustmentId: 'adjustment-1', haltGeneration: 'bound-halt', consumed: false } }, 'live-halt', 'stale', 'Resume authorization: stale (bound to halt generation bound-halt; live halt generation live-halt); the daemon will not consume it'],
+    ['live-halt-not-read', { resumeAuthorization: { adjustmentId: 'adjustment-1', haltGeneration: 'bound-halt', consumed: false } }, undefined, 'pending', 'Resume authorization: pending (live halt not read)'],
+  ] as const)('renders resume authorization %s in JSON and human output', (_name, additions, liveHaltGeneration, state, line) => {
+    const entry = { ...baseEntry, adjustmentsKnown: true as const, ...additions };
+    const view = kickbackBudgetView(entry, 'build_review', 5, undefined, liveHaltGeneration);
+    if (state === undefined) expect(view.resumeAuthorization).toBeUndefined();
+    else expect(view.resumeAuthorization).toEqual({
+      state,
+      adjustmentId: 'adjustment-1',
+      boundHaltGeneration: state === 'awaiting-sweep' ? 'live-halt' : 'bound-halt',
+      liveHaltGeneration: liveHaltGeneration ?? '',
+    });
+    expect(renderKickbackBudgetView(entry, 'build_review', 5, undefined, liveHaltGeneration)).toContain(line);
+  });
+
   it('renders config-derived plan growth without inventing a raised cap', () => {
     const rendered = renderKickbackBudgetView(
       { ...baseEntry, laps: 1, adjustmentsKnown: true },

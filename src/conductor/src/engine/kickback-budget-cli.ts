@@ -14,6 +14,7 @@ import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
 import { isAcceptableOperatorRationale, resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { HALT_CLASS_MARKER } from './halt-marker.js';
 import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
+import { readKickbackHaltGeneration } from './daemon-rekick.js';
 import { loadConfig } from './config.js';
 import { prdAuditAppendCap } from './conductor.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -134,11 +135,12 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     // its healthy siblings still render their authoritative values.
     const unavailable = unreadableKickbackGates(ledger).filter((gate) => GATES.has(gate));
     const readable = [...GATES].filter((gate) => !unavailable.includes(gate));
-    const views = readable.map((gate) => kickbackBudgetView(ledger.gates[gate], gate, defaults[gate], planGrowth));
+    const liveHaltGeneration = await readKickbackHaltGeneration(worktree);
+    const views = readable.map((gate) => kickbackBudgetView(ledger.gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration));
     print(command.format === 'json'
       ? JSON.stringify({ feature: command.feature, gates: views, ...(unavailable.length > 0 ? { unavailableGates: unavailable } : {}) })
       : [
-        ...views.map((view) => renderKickbackBudgetView(ledger.gates[view.gate], view.gate, defaults[view.gate], planGrowth)),
+        ...views.map((view) => renderKickbackBudgetView(ledger.gates[view.gate], view.gate, defaults[view.gate], planGrowth, liveHaltGeneration)),
         ...unavailable.map((gate) => `${gate}: budget unavailable (durable entry failed validation)`),
       ].join('\n\n'));
     return unavailable.length > 0 ? 1 : 0;
