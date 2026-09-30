@@ -240,27 +240,21 @@ describe('SpoolDrainer', () => {
     const endpoint = await listen(server);
     const store = new SpoolStore(await temporaryDirectory());
     await store.write('traces', Buffer.from(`keep-${status}`));
-    let releaseSleep: (() => void) | undefined;
-    let signalSleepStarted!: () => void;
-    const sleepStarted = new Promise<void>((resolve) => { signalSleepStarted = resolve; });
+    const failure = events.waitFor('renderer_error');
     const drainer = new SpoolDrainer(store, {
       endpoint,
       headers: () => ({}),
       events,
-      sleep: async () => new Promise<void>((resolve) => {
-        releaseSleep = resolve;
-        signalSleepStarted();
-      }),
+      sleep: async () => new Promise<void>(() => undefined),
     });
     const draining = drainer.drainUntilStopped();
 
     try {
-      await sleepStarted;
+      await failure;
       expect(await store.list('traces')).toHaveLength(1);
       expect(drops).toEqual([]);
       expect(failures).toContainEqual(expect.objectContaining({ error: `OTLP traces delivery failed: ${failureClass}` }));
     } finally {
-      releaseSleep?.();
       await drainer.stop();
       await draining.catch(() => undefined);
     }
@@ -355,9 +349,11 @@ describe('SpoolDrainer', () => {
       headers: () => ({}),
       now: () => now,
       sleep: async (delay: number) => new Promise<void>((resolve) => {
-        delays.push(delay);
-        releaseSleep = resolve;
-        signalSleepStarted();
+        if (delay === 30_000) {
+          delays.push(delay);
+          releaseSleep = resolve;
+          signalSleepStarted();
+        }
       }),
       random: () => 0,
     });
@@ -586,14 +582,12 @@ describe('SpoolDrainer', () => {
     });
     const endpoint = await listen(server);
     const store = new SpoolStore(await temporaryDirectory());
-    let releaseRetry: (() => void) | undefined;
+    const pendingSleeps: Array<() => void> = [];
     const drainer = new SpoolDrainer(store, {
       endpoint,
       headers: () => ({}),
       events,
-      sleep: async () => new Promise<void>((resolve) => {
-        releaseRetry = resolve;
-      }),
+      sleep: async () => new Promise<void>((resolve) => { pendingSleeps.push(resolve); }),
     });
     await store.write('traces', Buffer.from('healthy-trace'));
     const healthyDrain = drainer.drainUntilStopped();
@@ -604,24 +598,15 @@ describe('SpoolDrainer', () => {
     const draining = healthyDrain;
 
     try {
-      for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) {
+      for (let turns = 0; turns < 1_000 && networkAttempts < 6; turns += 1) {
+        pendingSleeps.splice(0).forEach((release) => release());
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
-      for (let failures = 0; failures < 5; failures += 1) {
-        const release = releaseRetry;
-        releaseRetry = undefined;
-        release?.();
-        for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) {
-          await new Promise<void>((resolve) => setImmediate(resolve));
-        }
-      }
+      expect(networkAttempts).toBe(6);
       await drainer.stop();
-      const releaseSecondRetry = releaseRetry as (() => void) | undefined;
-      releaseSecondRetry?.();
       await draining;
     } finally {
-      const releaseFinalRetry = releaseRetry as (() => void) | undefined;
-      releaseFinalRetry?.();
+      pendingSleeps.splice(0).forEach((release) => release());
       await drainer.stop();
       await draining.catch(() => undefined);
     }
@@ -707,10 +692,7 @@ describe('SpoolDrainer', () => {
     const events = new ConductorEventEmitter();
     const rendererErrors: unknown[] = [];
     events.on('renderer_error', (event) => { rendererErrors.push(event); });
-    let releaseRetry: (() => void) | undefined;
-    const retryStarts: Array<() => void> = [];
-    const nextRetryStart = () => new Promise<void>((resolve) => retryStarts.push(resolve));
-    const firstRetryStart = nextRetryStart();
+    const pendingSleeps: Array<() => void> = [];
     let attempts = 0;
     const server = createServer((request, response) => {
       request.resume();
@@ -721,25 +703,20 @@ describe('SpoolDrainer', () => {
     await store.write('traces', Buffer.from('network-then-auth'));
     const drainer = new SpoolDrainer(store, {
       endpoint: await listen(server), headers: () => ({}), events,
-      sleep: async () => new Promise<void>((resolve) => {
-        releaseRetry = resolve;
-        retryStarts.shift()?.();
-      }),
+      sleep: async () => new Promise<void>((resolve) => { pendingSleeps.push(resolve); }),
     });
     const draining = drainer.drainUntilStopped();
 
     try {
-      await firstRetryStart;
-      const releaseFirstRetry = releaseRetry;
-      releaseRetry = undefined;
-      const secondRetryStart = nextRetryStart();
-      releaseFirstRetry?.();
-      await secondRetryStart;
+      for (let turns = 0; turns < 1_000 && rendererErrors.length < 2; turns += 1) {
+        pendingSleeps.splice(0).forEach((release) => release());
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(rendererErrors).toHaveLength(2);
       await drainer.stop();
-      (releaseRetry as (() => void) | undefined)?.();
       await draining;
     } finally {
-      releaseRetry?.();
+      pendingSleeps.splice(0).forEach((release) => release());
       await drainer.stop();
       await draining.catch(() => undefined);
     }

@@ -168,7 +168,12 @@ export class SpoolDrainer {
 
   private trackLoop(loop: Promise<void>): Promise<void> {
     this.loops.add(loop);
-    void loop.finally(() => this.loops.delete(loop));
+    // Do not create an unobserved rejected promise while keeping the loop
+    // registry current. The caller of runUntilStopped owns the original error.
+    void loop.then(
+      () => this.loops.delete(loop),
+      () => this.loops.delete(loop),
+    );
     return loop;
   }
 
