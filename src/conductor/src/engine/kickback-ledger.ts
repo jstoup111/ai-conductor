@@ -846,6 +846,7 @@ function growthTotalsAgree(growth: PlanGrowthRecord): boolean {
 
 async function deriveGrowthFromActivePlan(
   projectRoot: string,
+  pendingTaskIds: ReadonlySet<string> = new Set(),
 ): Promise<{ growth: PlanGrowthRecord; resolved: boolean }> {
   let activePlanPath: string | undefined;
   try {
@@ -868,7 +869,8 @@ async function deriveGrowthFromActivePlan(
       isAbsolute(activePlanPath) ? activePlanPath : join(projectRoot, activePlanPath),
       'utf-8',
     );
-    const authored = [...plan.matchAll(/^#{1,6}\s+Task\s+[A-Za-z0-9._-]+(?::|\s[—–]|\s*$)/gim)].length;
+    const authored = [...plan.matchAll(/^#{1,6}\s+Task\s+([A-Za-z0-9._-]+)(?::|\s[—–]|\s*$)/gim)]
+      .filter((match) => !pendingTaskIds.has(match[1]!)).length;
     return { growth: { authored, added: 0, byGate: {} }, resolved: true };
   } catch (error) {
     console.warn(
@@ -889,7 +891,10 @@ export async function readGrowth(projectRoot: string, cap: number): Promise<Plan
     const ledger = await readKickbackLedger(projectRoot);
     requireReadableLedger(ledger);
     requireReadableGrowth(ledger);
-    const derived = await deriveGrowthFromActivePlan(projectRoot);
+    const derived = await deriveGrowthFromActivePlan(
+      projectRoot,
+      new Set(ledger.pendingRepair?.taskIds ?? []),
+    );
     const stored = ledger.growth;
 
     if (!stored) return withRemaining(derived.growth, cap);

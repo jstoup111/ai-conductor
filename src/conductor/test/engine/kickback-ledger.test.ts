@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:5, task:7, task:8, task:rem-as-built-rem-ab4-1
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:rem-as-built-rem-ab4-1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { applyRebaseTransition } from '../../src/engine/rebase-transition.js';
-import { readRemediationGateAppendBudget } from '../../src/engine/conductor.js';
+import { prdAuditAppendCap, readRemediationGateAppendBudget } from '../../src/engine/conductor.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -588,6 +588,46 @@ describe('kickback-ledger', () => {
         added: 0,
         byGate: {},
         remaining: 4,
+      });
+    });
+
+    it.each([
+      ['without a stored growth record', undefined],
+      ['with a stored growth record', { authored: 6, added: 0, byGate: {} }],
+    ])('excludes only pending task ids from authored growth %s', async (_case, growth) => {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/active.md',
+      }));
+      await writeFile(join(dir, '.docs/plans/active.md'), [
+        '### Task 1: Original work',
+        '### Task 2: More original work',
+        '### Task 3: More original work',
+        '### Task 4: More original work',
+        '### Task rem-legacy: Earlier remediation still authored',
+        '### Task 5: Final original work',
+        '### Task rem-pending-1: Uncharged repair',
+        '### Task rem-pending-2: Uncharged repair',
+      ].join('\n'));
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {},
+        ...(growth === undefined ? {} : { growth }),
+        pendingRepair: {
+          receiptId: 'repair-round-1',
+          charges: { prd_audit: { laps: 1, growth: 2 } },
+          taskIds: ['rem-pending-1', 'rem-pending-2'],
+        },
+      });
+
+      const cap = prdAuditAppendCap({} as HarnessConfig, 6);
+
+      await expect(readGrowth(dir, cap)).resolves.toEqual({
+        authored: 6,
+        added: 0,
+        byGate: {},
+        remaining: 1,
       });
     });
 
