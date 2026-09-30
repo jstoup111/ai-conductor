@@ -1,12 +1,16 @@
 // Covers: task:14
 import { describe, expect, it, vi } from 'vitest';
 
+import type { DeferralKey } from '../../../src/engine/monitor/deferrals.js';
 import type { ProjectHalt } from '../../../src/engine/monitor/halt-inventory.js';
 
 type GuidedMonitorLoopDeps = {
   deriveMembership: () => Promise<readonly ProjectHalt[]>;
   launch: (halt: ProjectHalt) => Promise<unknown>;
   offer: (halt: ProjectHalt) => void;
+  snapshotHaltMarker?: (halt: ProjectHalt) => Promise<DeferralKey['haltIdentity']>;
+  writeHaltMarker?: (halt: ProjectHalt, contents: Uint8Array) => Promise<void>;
+  recordDeferral?: (key: DeferralKey) => Promise<void>;
   report?: (message: string) => void;
 };
 
@@ -108,6 +112,97 @@ describe('Task 14 — returning to the monitor queue', () => {
     }).toEqual({
       offered: ['unchanged', 'remaining', 'unchanged'],
       emptyReport: [['Monitor queue is empty; staying active.']],
+    });
+  });
+});
+
+describe('Task 15 — deferring a skipped guided session', () => {
+  it('persists the skip without changing its marker and keeps it behind unseen work after restart', async () => {
+    const skipped = halt('deferred-critical');
+    const unseenCritical = halt('unseen-critical');
+    const unseenLow = halt('unseen-low');
+    const haltMarkerBytes = Buffer.from('needs-human: defer me without resolving me');
+    const markerBeforeSkip = Buffer.from(haltMarkerBytes);
+    const skippedIdentity = { present: true, mtimeMs: 17, size: haltMarkerBytes.length } as const;
+    const durableDeferrals: DeferralKey[] = [];
+    let liveHalts: readonly ProjectHalt[] = [skipped, unseenCritical, unseenLow];
+    const recordDeferral = vi.fn(async (key: DeferralKey) => {
+      durableDeferrals.push(key);
+    });
+    const deriveMembership = vi.fn(async () => {
+      const skippedIsDeferred = durableDeferrals.some((key) =>
+        key.project === skipped.project &&
+        key.feature === skipped.slug &&
+        key.haltIdentity.mtimeMs === skippedIdentity.mtimeMs &&
+        key.haltIdentity.size === skippedIdentity.size,
+      );
+      return skippedIsDeferred
+        ? liveHalts.filter((item) => item.slug !== skipped.slug).concat(liveHalts.filter((item) => item.slug === skipped.slug))
+        : liveHalts;
+    });
+    const snapshotHaltMarker = vi.fn(async (item: ProjectHalt) => {
+      expect(item).toEqual(skipped);
+      return skippedIdentity;
+    });
+    const writeHaltMarker = vi.fn(async (_item: ProjectHalt, _contents: Uint8Array) => {});
+    const firstOffer = vi.fn();
+
+    await advanceAfterGuidedSession({
+      deriveMembership,
+      launch: async () => ({ kind: 'operator-skip' }),
+      offer: firstOffer,
+      snapshotHaltMarker,
+      writeHaltMarker,
+      recordDeferral,
+    });
+
+    expect({
+      recorded: recordDeferral.mock.calls,
+      markerAfterSkip: haltMarkerBytes,
+      markerWrites: writeHaltMarker.mock.calls,
+      offeredAfterSkip: firstOffer.mock.calls.map(([item]) => item.slug),
+    }).toEqual({
+      recorded: [[{
+        project: skipped.project,
+        feature: skipped.slug,
+        haltIdentity: skippedIdentity,
+      }]],
+      markerAfterSkip: markerBeforeSkip,
+      markerWrites: [],
+      offeredAfterSkip: ['deferred-critical', 'unseen-critical'],
+    });
+
+    const restartOffer = vi.fn();
+    const restartLaunch = vi.fn(async (item: ProjectHalt) => {
+      liveHalts = liveHalts.filter((candidate) => candidate.slug !== item.slug);
+      return { kind: 'exited', exitCode: 0 };
+    });
+
+    await runGuidedMonitorQueue({
+      deriveMembership,
+      launch: restartLaunch,
+      offer: restartOffer,
+      snapshotHaltMarker,
+      writeHaltMarker,
+      recordDeferral,
+    });
+
+    expect({
+      launchedAfterRestart: restartLaunch.mock.calls.map(([item]) => item.slug),
+      offeredAfterRestart: restartOffer.mock.calls.map(([item]) => item.slug),
+      durableDeferrals,
+      markerAfterRestart: haltMarkerBytes,
+      markerWrites: writeHaltMarker.mock.calls,
+    }).toEqual({
+      launchedAfterRestart: ['unseen-critical', 'unseen-low', 'deferred-critical'],
+      offeredAfterRestart: ['unseen-critical', 'unseen-low', 'deferred-critical'],
+      durableDeferrals: [{
+        project: skipped.project,
+        feature: skipped.slug,
+        haltIdentity: skippedIdentity,
+      }],
+      markerAfterRestart: markerBeforeSkip,
+      markerWrites: [],
     });
   });
 });
