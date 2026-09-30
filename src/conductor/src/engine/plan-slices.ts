@@ -1,4 +1,8 @@
-import { resolvePlanTaskReference, TASK_HEADER_PATTERN } from './plan-task-parse.js';
+import {
+  parsePlanTaskBodies,
+  resolvePlanTaskReference,
+  TASK_HEADER_PATTERN,
+} from './plan-task-parse.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 
 export interface PlanSlice {
@@ -22,6 +26,7 @@ export type PlanSlicesValidation =
 const FENCE_LINE = /^\s*(`{3,}|~{3,})(.*)$/;
 const SLICES_HEADING = /^##\s+Slices\s*$/i;
 const REQUIRED_HEADER = ['Slice', 'Title', 'Tasks'];
+const DEPENDENCIES_LINE = /^\s*\*\*Dependencies:\*\*\s*(.*?)\s*$/;
 
 function fencedLineStates(lines: string[]): boolean[] {
   const states: boolean[] = [];
@@ -170,6 +175,7 @@ export function validatePlanSlices(planText: string): PlanSlicesValidation {
   }
 
   const slicesByTaskId = new Map<string, number[]>();
+  const sliceByTaskId = new Map<string, number>();
   const positions = new Set<number>();
   for (let index = 0; index < slices.length; index += 1) {
     const slice = slices[index];
@@ -192,6 +198,7 @@ export function validatePlanSlices(planText: string): PlanSlicesValidation {
       const memberships = slicesByTaskId.get(taskId) ?? [];
       memberships.push(slice.position);
       slicesByTaskId.set(taskId, memberships);
+      if (!sliceByTaskId.has(taskId)) sliceByTaskId.set(taskId, slice.position);
     }
   }
 
@@ -210,6 +217,64 @@ export function validatePlanSlices(planText: string): PlanSlicesValidation {
         taskId,
         message: `Task ${taskId} appears in slices ${memberships.join(' and ')}`,
       });
+    }
+  }
+
+  const taskBodies = parsePlanTaskBodies(planText);
+  const parsedTaskIds = new Set(taskBodies.keys());
+  for (const [taskId, body] of taskBodies) {
+    if (isEngineAppendedRemediationTaskId(taskId)) continue;
+    const bodyLines = body.split('\n');
+    const bodyFenced = fencedLineStates(bodyLines);
+    const dependencyLines = bodyLines
+      .map((line, index) => (bodyFenced[index] ? null : line.match(DEPENDENCIES_LINE)))
+      .filter((match): match is RegExpMatchArray => match !== null);
+    if (dependencyLines.length !== 1) {
+      violations.push({
+        code: 'dependencies-line',
+        taskId,
+        message: `Task ${taskId} must declare exactly one Dependencies line`,
+      });
+      continue;
+    }
+
+    const rawDependencies = dependencyLines[0][1].trim();
+    if (rawDependencies.toLowerCase() === 'none') continue;
+    const resolved = resolvePlanTaskReference(
+      rawDependencies
+        .split(',')
+        .map((segment) => segment.trim().replace(/^Tasks?\s+/i, ''))
+        .join(','),
+      parsedTaskIds,
+    );
+    if (resolved.kind === 'malformed') {
+      violations.push({
+        code: 'malformed-dependencies',
+        taskId,
+        message: `Task ${taskId} has malformed Dependencies "${rawDependencies}"`,
+      });
+      continue;
+    }
+    if (resolved.kind === 'unresolvable') {
+      for (const dependencyId of resolved.ids) {
+        violations.push({
+          code: 'unknown-dependency',
+          taskId,
+          message: `Task ${dependencyId} cited by Task ${taskId}'s Dependencies is an unknown task id`,
+        });
+      }
+      continue;
+    }
+    const sourceSlice = sliceByTaskId.get(taskId);
+    for (const dependencyId of resolved.ids) {
+      const dependencySlice = sliceByTaskId.get(dependencyId);
+      if (sourceSlice !== undefined && dependencySlice !== undefined && dependencySlice > sourceSlice) {
+        violations.push({
+          code: 'later-slice-dependency',
+          taskId,
+          message: `Task ${taskId} in slice ${sourceSlice} depends on Task ${dependencyId} in later slice ${dependencySlice}`,
+        });
+      }
     }
   }
 
