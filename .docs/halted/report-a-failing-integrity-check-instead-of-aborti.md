@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-30T10:51:08.335Z
+Status: halted
 Slug: report-a-failing-integrity-check-instead-of-aborti
-Class: plan-gap
-Halting step: prd_audit
-Phase: SHIP
+Class: needs-human
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-report-a-failing-integrity-check-instead-of-aborti
-Head SHA: 956223bb218239f1c14c21cc1cc405cb385e4029
-Halted at: 2026-09-30T02:06:32.198Z
+Head SHA: d5d71d1f35335030698563c379d06d0d311c2719
+Halted at: 2026-09-30T14:04:46.156Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review found PLAN_GAP and records outcome undelivered — Story 2 negative criterion requiring clean real-tree pass, fail, and warning counts to remain unchanged apart from one new failure-reporting check.
+coverage_binding could not reopen contradicted work: gates.coverage_binding has exhausted the remediation lap cap (2)
 ```
