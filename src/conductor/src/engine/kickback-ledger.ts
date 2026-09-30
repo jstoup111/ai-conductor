@@ -1213,6 +1213,40 @@ export async function updateKickbackLedger<T>(
 }
 
 /**
+ * Persist an admitted repair's authorization without spending its eventual
+ * lap or plan-growth charges. The receipt makes admission replay-safe.
+ */
+export async function recordPendingRepair(
+  projectRoot: string,
+  pendingRepair: PendingRepair,
+): Promise<void> {
+  if (!isPendingRepair(pendingRepair)) throw new Error('pending repair must be well-formed');
+  await withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableLedger(ledger);
+    requireReadableGrowth(ledger);
+    for (const gate of Object.keys(pendingRepair.charges)) requireReadableGate(ledger, gate);
+    const existing = ledger.pendingRepair;
+    if (existing !== undefined) {
+      if (existing.receiptId === pendingRepair.receiptId) return;
+      throw new Error(`pending repair '${existing.receiptId}' is already recorded`);
+    }
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, pendingRepair });
+  });
+}
+
+/** Remove an unsettled repair authorization without charging its allowances. */
+export async function discardPendingRepair(projectRoot: string): Promise<void> {
+  await withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableLedger(ledger);
+    if (ledger.pendingRepair === undefined) return;
+    const { pendingRepair: _pendingRepair, ...withoutPendingRepair } = ledger;
+    await writeKickbackLedgerUnsafe(projectRoot, withoutPendingRepair);
+  });
+}
+
+/**
  * Consume one remediation lap for `gate` under a SINGLE lease transaction.
  *
  * adr-2026-08-29 D4 carries forward "all ledger read-modify-write paths share

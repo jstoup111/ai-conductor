@@ -33,6 +33,8 @@ import {
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   MAX_SUITE_INFRASTRUCTURE_RETRIES,
   recordGrowth,
+  recordPendingRepair,
+  discardPendingRepair,
   recordKickbackCapEvidence,
   settleRemediationRound,
   readGrowth,
@@ -44,6 +46,7 @@ import {
   applyKickbackBudgetAdjustment,
   type KickbackGateEntry,
   type KickbackLedger,
+  type PendingRepair,
 } from '../../src/engine/kickback-ledger.js';
 
 describe('kickback-ledger', () => {
@@ -93,6 +96,73 @@ describe('kickback-ledger', () => {
     } as unknown as KickbackLedger);
 
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({ pendingRepair });
+  });
+
+  it('records one pending repair idempotently without charging laps or growth', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'repair-round-1',
+      charges: { prd_audit: { laps: 1, growth: 2 } },
+      taskIds: ['rem-prd-1', 'rem-prd-2'],
+    };
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        prd_audit: { count: 0, cumulative: 0, laps: 2, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+      },
+      growth: { authored: 4, added: 1, byGate: { prd_audit: 1 } },
+    });
+
+    await recordPendingRepair(dir, pendingRepair);
+    await recordPendingRepair(dir, pendingRepair);
+
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      pendingRepair,
+      gates: { prd_audit: { laps: 2 } },
+      growth: { added: 1, byGate: { prd_audit: 1 } },
+    });
+  });
+
+  it('refuses to overwrite a pending repair with a different receipt', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'repair-round-1', charges: { prd_audit: { laps: 1, growth: 1 } }, taskIds: ['rem-prd-1'],
+    };
+    await recordPendingRepair(dir, pendingRepair);
+
+    await expect(Promise.all([
+      recordPendingRepair(dir, { ...pendingRepair, receiptId: 'repair-round-2' })
+        .then(() => 'accepted', (error: unknown) => error instanceof Error ? error.message : String(error)),
+      readKickbackLedger(dir),
+    ])).resolves.toEqual([
+      expect.stringContaining('pending repair'),
+      expect.objectContaining({ pendingRepair }),
+    ]);
+  });
+
+  it('discards a pending repair without charging its gate laps or growth', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'repair-round-1', charges: { architecture_review_as_built: { laps: 1, growth: 2 } }, taskIds: ['rem-as-built-1', 'rem-as-built-2'],
+    };
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        architecture_review_as_built: { count: 0, cumulative: 0, laps: 3, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+      },
+      growth: { authored: 4, added: 1, byGate: { prd_audit: 1 } },
+      pendingRepair,
+    });
+
+    await discardPendingRepair(dir);
+
+    const ledger = await readKickbackLedger(dir);
+    expect({
+      pendingRepair: ledger.pendingRepair,
+      laps: ledger.gates.architecture_review_as_built?.laps,
+      growth: ledger.growth,
+    }).toEqual({
+      pendingRepair: undefined,
+      laps: 3,
+      growth: { authored: 4, added: 1, byGate: { prd_audit: 1 } },
+    });
   });
 
   it('scopes a malformed pending repair to remediation gates and plan growth', async () => {
