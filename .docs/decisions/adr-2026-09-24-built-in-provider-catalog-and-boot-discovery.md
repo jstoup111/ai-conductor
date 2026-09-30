@@ -139,6 +139,42 @@ D8. Order and scope of the startup check. Validation of configured provider name
 > that declares `interactiveLaunch`. When it finds one, it refuses to nest. It tells the operator to
 > run that host's in-session invocation, rendered with the host's own skill-invocation prefix.
 
+> **Amended 2026-09-29 by #1885 (operator decision, James Stoup, composer DECIDE):** D6's
+> sentence "Its model policy is a single-rung ladder that passes no `--model`, so Pi uses its own
+> configured default" no longer holds. Pi now runs every step on an operator-configured model.
+> Every other statement in D1–D11 is unchanged. Three decisions are added:
+>
+> **D12.** No new capability flag is added. Every built-in adapter already receives the resolved
+> model and effort, so a flag would have no consumer. The Pi adapter passes the canonical Pi model id as
+> `--provider <provider> --model <model>`, splitting it at the first `/`: the model part may itself
+> contain `/` and `:`, as in `cline/google/gemma-4-31b-it:free`. It maps the harness effort to
+> `--thinking` one-to-one (`low|medium|high|xhigh|max`) and never appends a `:thinking` suffix.
+> Verified locally 2026-09-29 against pi 0.84.3: `--provider X --model Y` and `--model X/Y` resolve
+> to the same provider and model, and an unknown provider exits 1 with `Unknown provider "…"`.
+> With an explicit provider, an unknown model id is passed through to the upstream API rather
+> than rejected by Pi.
+>
+> **D13.** Pi's built-in model policy ships no model ids. When pi appears anywhere in configuration
+> (run-level `llm_provider`, a step's `llm_provider` or candidate ladder, or a build-review policy),
+> `llm_providers.pi.model`, `llm_providers.pi.model_escalation_order` and
+> `llm_providers.pi.model_fallback_ladder` are all required, and config validation fails naming
+> each missing key. `llm_providers.pi.model` is Pi's native default: it is used by every Pi
+> dispatch that has no step-level Pi model, including pi as a fallback candidate (per
+> adr-2026-07-24's native-defaults-on-fallback rule). A Pi dispatch never falls through to
+> `FALLBACK_MODEL`. Config load checks only the id's syntax: a non-empty provider segment, a `/`,
+> a non-empty model segment, and no whitespace. On the provider-dispatching entry points of D8, and
+> only after D3 discovery finds Pi installed, boot runs `pi --list-models` once through an
+> injected runner guarded by `assertRealExecAllowed`. It then fails startup when a configured Pi
+> id names a provider or a model absent from that listing, with distinct errors naming the id, the
+> config path, and the step. Every configured Pi id is probed: step models, `llm_providers.pi.model`,
+> and every escalation and ladder entry. Default-suite tests fake the runner.
+>
+> **D14.** D5's classification list gains a precedence rule for an exit-0 stream. When Pi's
+> terminal assistant message has `stopReason: "error"`, the invocation fails and carries Pi's
+> `errorMessage` rather than returning a successful empty result. Verified 2026-09-29: a missing API
+> key ends with exit 0, `stopReason: "error"`, `errorMessage: "No API key for provider: cline"`. It
+> stays an unclassified step failure until #2718 anchors the auth and rate-limit signatures.
+
 ## Consequences
 
 - Adding a fourth provider is one descriptor plus one adapter. The structural test fails if a new id literal appears elsewhere.

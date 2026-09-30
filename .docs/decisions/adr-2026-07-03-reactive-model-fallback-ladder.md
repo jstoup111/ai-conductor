@@ -82,6 +82,25 @@ happy path needs strong justification.
    than configured.
 6. **Cache lifetime:** process lifetime; restart clears it (re-probe by first use).
 
+> **Amended 2026-09-29 by #1885 (operator decision, James Stoup, composer DECIDE):** item 2's
+> "top-level `model_fallback_ladder` key" is one run-wide list, which is wrong for a step that
+> specializes to a provider with a different model vocabulary. Items 1–6 are otherwise unchanged.
+>
+> 7. **Per-provider ladder and escalation order.** A new top-level `llm_providers.<catalog id>`
+>    map accepts `model_fallback_ladder` and `model_escalation_order`. Both are non-empty-string
+>    arrays whose entries use that provider's model vocabulary. When a step dispatches to a
+>    provider, its ladder is `llm_providers.<id>.model_fallback_ladder`, else the top-level
+>    `model_fallback_ladder`, else the provider policy's ladder. This preserves today's behavior,
+>    where the top-level key applies to every provider. The one exception is a provider whose
+>    built-in policy ships no models (Pi,
+>    adr-2026-09-24-built-in-provider-catalog-and-boot-discovery D13): it never inherits the
+>    top-level key, and its `llm_providers.<id>` ladder and escalation order are required. The
+>    escalation order is `llm_providers.<id>.model_escalation_order`, else the policy's order;
+>    there is no top-level escalation key.
+> 8. **Observable Pi rungs.** Item 5's downgrade warning and the existing `provider_attempt` /
+>    `step_retry` / `step_completed` events carry the full `provider/model` id and the effort for
+>    Pi, never an empty string.
+
 ## Consequences
 
 ### Positive
