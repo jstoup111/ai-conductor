@@ -378,6 +378,7 @@ describe('resolveOtelConfig', () => {
           endpoint: 'http://localhost:4318',
           headers: { Authorization: 'valid-token' },
           provenance: DEFAULT_PROVENANCE,
+          headerReferences: { Authorization: { env: 'OTEL_TEST_AUTHORIZATION' } },
           spool: { enabled: true, maxBytes: 536_870_912 },
         });
         expect((result as { error?: string }).error).toBeUndefined();
