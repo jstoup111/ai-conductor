@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-30T10:46:00.665Z
 Slug: compose-launcher-honors-llm-provider-for-codex
 Class: needs-human
 Halting step: unknown
