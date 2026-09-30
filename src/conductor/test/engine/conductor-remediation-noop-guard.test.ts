@@ -23,6 +23,8 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
+import { readKickbackLedger, settlePendingRepair } from '../../src/engine/kickback-ledger.js';
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
 
 const execFile = promisify(execFileCb);
 
@@ -64,7 +66,7 @@ function makeRunner(onRun?: (step: StepName) => Promise<void>): StepRunner {
   };
 }
 
-function makeConductor(runner: StepRunner): Conductor {
+function makeConductor(runner: StepRunner, config?: object): Conductor {
   return new Conductor({
     stateFilePath: join(dir, 'conduct-state.json'),
     stepRunner: runner,
@@ -74,6 +76,7 @@ function makeConductor(runner: StepRunner): Conductor {
     daemon: true,
     verifyArtifacts: true,
     maxRetries: 1,
+    config,
   } as never);
 }
 
@@ -98,6 +101,89 @@ afterEach(async () => {
 });
 
 describe('planRemediation D1: route-into-no-op guard (plan Task 2)', () => {
+  it('discards an appended repair authorization when the no-op guard halts, leaving a later build settlement uncharged', async () => {
+    const taskId = 'rem-1';
+    // Criterion-bound PRD appends namespace the planner's raw task id.
+    const remId = 'rem-prd-audit-rem-1';
+    await writeFile(planPath, `### Task ${remId}: already completed repair\n`);
+    await mkdir(join(dir, '.docs/stories'), { recursive: true });
+    await writeFile(join(dir, '.docs/stories/p.md'), [
+      '# Stories', '', '## Story 1: repair', '', '#### Happy Path',
+      '- Given S1.1, when repaired, then it holds.',
+    ].join('\n'));
+    await writeFile(join(dir, '.pipeline/prd-audit.md'), [
+      '**PRD:** present', '', '## Verdict Table',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      `| S1.1 | FIXABLE | ${remId} | Missing repair behavior |`,
+    ].join('\n'));
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/remediated.ts'), 'fix\n');
+    await git('add', '.');
+    await git('commit', '-q', '-m', `fix: remediate ${remId}\n\nTask: ${remId}`);
+    await writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks: [{ id: remId, status: 'completed' }] }),
+    );
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        prd_audit: {
+          count: 0, cumulative: 0, laps: 0, treeHash: null,
+          lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+      growth: { authored: 1, added: 0, byGate: {} },
+    });
+
+    const conductor = makeConductor({
+      run: async (step) => {
+        expect(step).toBe('remediate');
+        await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify({
+          dispositions: [{
+            id: 'S1.1', disposition: 'build', category: null, rationale: 'repair it',
+            tasks: [{ id: taskId, title: 'already completed repair' }],
+          }],
+        }));
+        return { success: true };
+      },
+    }, { prd_audit: { max_remediation_laps: 2, max_appended_tasks: 5, max_appended_ratio: 1 } });
+    const result = await (conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
+      ) => Promise<{ kind: string; haltClass?: string; detail?: string }>;
+    }).planRemediation(
+      { ...baseState, feature_desc: 'p' } as ConductState,
+      ALL_STEPS,
+      'prd audit blocked',
+      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    );
+
+    expect(result).toMatchObject({
+      kind: 'halt',
+      haltClass: 'needs-human',
+      detail: expect.stringMatching(/no dispatchable build work.*already evidence-complete/i),
+    });
+    const discarded = await readKickbackLedger(dir);
+    expect(discarded).not.toHaveProperty('pendingRepair');
+    expect(discarded).toMatchObject({
+      gates: { prd_audit: { laps: 0 } },
+      growth: { added: 0, byGate: {} },
+    });
+    await expect(settlePendingRepair(dir, [{
+      gate: 'prd_audit', lapCap: 1, growthCap: 10,
+      growth: { authored: 1, added: 0, byGate: {}, remaining: 10 },
+    }])).resolves.toEqual({ kind: 'none' });
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { prd_audit: { laps: 0 } },
+      growth: { added: 0, byGate: {} },
+    });
+  });
+
   it('empty-tasks build disposition (nothing to append) with all-complete task-status → halt, not route', async () => {
     // No active plan / task-status: nothing appended, but the underlying
     // build predicate falls back to trusting task-status.json which shows

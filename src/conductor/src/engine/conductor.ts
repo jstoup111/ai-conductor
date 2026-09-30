@@ -325,6 +325,7 @@ import {
   isUnreadableKickbackGrowth,
   readSuiteInfrastructureRetries,
   recordPendingRepair,
+  discardPendingRepair,
   updateKickbackLedger,
   recordKickbackCapEvidence,
   type KickbackGateEntry,
@@ -5631,9 +5632,15 @@ export class Conductor {
             routedFixes.map((g) => `${g.id} (${g.disposition}: ${g.rationale})`).join('; ') +
             ' — remediation produced no dispatchable build work; the implicated task(s) ' +
             `are already evidence-complete — human needed${droppedSuffix}`;
+          // The append authorization is intentionally uncharged until BUILD
+          // dispatches. This guard prevents that dispatch, so remove the
+          // authorization before halting rather than leaving a later build
+          // entry to settle a repair that never ran.
+          await discardPendingRepair(this.projectRoot);
           await reportRefusal(detail);
           return {
             kind: 'halt',
+            haltClass: 'needs-human',
             detail,
             // #647 D3: this HALT is specifically the D1 no-op guard (target
             // was already evidence-complete before build ever ran) — the
