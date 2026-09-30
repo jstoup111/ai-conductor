@@ -68,8 +68,8 @@ Tests follow the repository write-tests rules: store and capture unit tests use 
 
 **Done when:**
 1. Capture maps a store invalid-decision result to an invalid-decision defect with the offer entry id.
-2. Capture still maps lock, lease, and atomic-replace append failures to write-failed.
-3. The invalid-decision recovery text mentions pending and contains neither store failure nor lease failure wording.
+2. Capture still maps lock, lease, and atomic-replace append failures to write-failed, and PRD entry then halts with reason persistence-failed naming the entry.
+3. The invalid-decision recovery text mentions pending and contains neither store failure nor lease failure wording, and tells the operator to correct the entry or leave it pending to keep the prior decision.
 
 ### Task 3: Tell the operator how to keep a prior decision
 **Story:** Story 3
