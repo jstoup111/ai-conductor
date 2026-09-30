@@ -362,8 +362,11 @@ describe('Pi provider event metadata', () => {
       expect.objectContaining({ provider: 'pi', model, effort: 'xhigh', outcome: 'unavailable' }),
     ]);
     expect(result).toMatchObject({
-      success: false, actualProvider: 'pi', resolvedModel: model, resolvedEffort: 'xhigh',
+      success: false,
     });
+    expect(result.actualProvider).toBeUndefined();
+    expect(result.resolvedModel).toBeUndefined();
+    expect(result.resolvedEffort).toBeUndefined();
     expect(result.attempts[0]?.model).toBe(model);
   });
 });

@@ -3090,9 +3090,6 @@ describe('executeProviderCandidates', () => {
         exitCode: 127,
         executionDisposition: 'not-started',
         preferredProvider: 'codex',
-        actualProvider: 'codex',
-        resolvedModel: 'gpt-cli-primary',
-        resolvedEffort: 'max',
         attempts: [
           {
             provider: 'codex',
@@ -3997,9 +3994,6 @@ describe('executeProviderCandidates', () => {
             'All configured providers are unavailable for step build: codex (codex binary missing); claude (claude cached missing, cached unavailable); third (third integration missing).',
           exitCode: 127,
           preferredProvider: 'codex',
-          actualProvider: 'third',
-          resolvedModel: 'sonnet',
-          resolvedEffort: 'medium',
           attempts: [
             {
               provider: 'codex',
