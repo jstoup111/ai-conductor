@@ -32,6 +32,25 @@ describe('validatePlanSlices manifest grammar', () => {
     expect(message).toMatch(/Slices section.*before.*first task/i);
   });
 
+  it('rejects a trailing table-less Slices section after the first task heading', () => {
+    const message = invalidMessage(['# Plan', '', task(1), '', '## Slices'].join('\n'));
+
+    expect(message).toMatch(/Slices section.*before.*first task/i);
+  });
+
+  it('rejects a content-free Slices section with table violations', () => {
+    const message = invalidMessage(['# Plan', '', '## Slices'].join('\n'));
+
+    expect(message).toContain('Slice, Title, Tasks');
+    expect(message).toContain('must contain a pipe table');
+  });
+
+  it('rejects a final Slices header without a delimiter', () => {
+    const message = invalidMessage(['# Plan', '', '## Slices', '', '| Slice | Title | Tasks |'].join('\n'));
+
+    expect(message).toContain('must contain a pipe table');
+  });
+
   it('rejects header columns other than Slice, Title, Tasks', () => {
     const message = invalidMessage(planWithManifest(VALID_TABLE.replace('| Slice | Title | Tasks |', '| Slice | Name | Tasks |')));
 

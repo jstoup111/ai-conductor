@@ -69,7 +69,8 @@ function planTaskIds(lines: string[], fenced: boolean[]): Set<string> {
   return ids;
 }
 
-function tableCells(line: string): string[] | undefined {
+function tableCells(line: string | undefined): string[] | undefined {
+  if (line === undefined) return undefined;
   const trimmed = line.trim();
   if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return undefined;
   return trimmed.slice(1, -1).split('|').map((cell) => cell.trim());

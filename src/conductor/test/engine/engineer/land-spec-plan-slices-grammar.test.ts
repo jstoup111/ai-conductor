@@ -41,6 +41,9 @@ const TABLE = [
 
 const FIXTURES = [
   { name: 'placement', plan: () => plan([task(1), TABLE].join('\n\n')), message: /Slices section.*before.*first task/i },
+  { name: 'trailing table-less placement', plan: () => plan('', [task(1), '## Slices']), message: /Slices section.*before.*first task/i },
+  { name: 'content-free section', plan: () => plan('## Slices', []), message: /must contain a pipe table/ },
+  { name: 'final header without delimiter', plan: () => plan(['## Slices', '', '| Slice | Title | Tasks |'].join('\n'), []), message: /must contain a pipe table/ },
   { name: 'header', plan: () => plan(TABLE.replace('| Slice | Title | Tasks |', '| Slice | Name | Tasks |')), message: /Slice, Title, Tasks/ },
   { name: 'delimiter', plan: () => plan(TABLE.replace('| --- | --- | --- |', '| a | b | c |')), message: /\| a \| b \| c \|/ },
   { name: 'wide row', plan: () => plan(`${TABLE}\n| 3 | Extra | 4 | x |`), message: /\| 3 \| Extra \| 4 \| x \|/ },
