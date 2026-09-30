@@ -1380,6 +1380,8 @@ export function getNavigableSteps(
 
 export interface StepRunResult {
   success: boolean;
+  /** Pending-repair settlement halted BUILD at its final admission boundary. */
+  pendingRepairSettlementHalt?: true;
   /** A queued self-host dispatch was parked before admission; no provider ran. */
   operatorParkedBeforeDispatch?: true;
   output?: string;
@@ -1510,6 +1512,22 @@ export interface StepRunResult {
    * step outcome.
    */
   repairProvenance?: BuildReviewRepairProvenance;
+}
+
+/**
+ * Keep the persisted BUILD outcome rung identical to the rung used by the
+ * no-movement admission guard.  A runner can resolve a different actual
+ * model/effort than the base configuration, so `resolved` is deliberately not
+ * an input here.
+ */
+export function buildOutcomeRung(
+  result: Pick<StepRunResult, 'model' | 'effort'> | undefined,
+  escalation: { model: string; effort: EffortLevel },
+): { model: string; effort: EffortLevel } {
+  return {
+    model: result?.model ?? escalation.model,
+    effort: result?.effort ?? escalation.effort,
+  };
 }
 
 export interface SpotAuditDispatchResult {
@@ -6226,9 +6244,11 @@ export class Conductor {
     verdictRunId?: string,
     /** The serial lifecycle scope that owns this provider invocation. */
     executionContext?: ExecutionContext,
+    /** Charges an admitted BUILD repair immediately before provider invocation. */
+    settlePendingRepair?: () => Promise<boolean>,
   ): Promise<StepRunResult> {
     if (!this.liveBoundaryCoordinator) {
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext);
+      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext, settlePendingRepair);
     }
     await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'queued' });
     return this.liveBoundaryCoordinator.runDispatch(async (openWindow) => {
@@ -6238,7 +6258,7 @@ export class Conductor {
         return { success: false, operatorParkedBeforeDispatch: true };
       }
       await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'admitted' });
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext);
+      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext, settlePendingRepair);
     });
   }
 
@@ -6255,6 +6275,8 @@ export class Conductor {
     openWindow?: OpenAdmittedWindow,
     /** The serial lifecycle scope that owns this provider invocation. */
     executionContext?: ExecutionContext,
+    /** Charges an admitted BUILD repair immediately before provider invocation. */
+    settlePendingRepair?: () => Promise<boolean>,
   ): Promise<StepRunResult> {
     const identityOption = verdictRunId ? { runId: verdictRunId } : {};
     const executionContextOption = executionContext ? { executionContext } : {};
@@ -6319,6 +6341,13 @@ export class Conductor {
         // Either HALT (timeout <= 0) or parking timeout reached (Task 14)
         return preflight;
       }
+    }
+
+    // Deferred remediation allowances are spent only once all self-host
+    // admission preflights have accepted this BUILD attempt.  A park, safety,
+    // auth, or credentials refusal above therefore leaves its receipt intact.
+    if (name === 'build' && await settlePendingRepair?.()) {
+      return { success: false, pendingRepairSettlementHalt: true };
     }
 
     // Task 9 (TR-2): Read the daemon build token in daemon-token mode. The token
@@ -9888,6 +9917,12 @@ export class Conductor {
         let attempt = 0;
         let lastError: string = '';
         let succeeded = false;
+        // Terminal BUILD stamps run after the retry loop, so retain the exact
+        // escalation rung selected for its most recent attempted dispatch.
+        let lastBuildEscalation: { model: string; effort: EffortLevel } = {
+          model: resolved.model,
+          effort: resolved.effort,
+        };
         // Seed from any kickback hint queued for this step (e.g. the prd_audit
         // impl-gap → BUILD handoff), then clear it so it only affects attempt 1.
         let retryHint: string | undefined = pendingRetryHints.get(step.name);
@@ -10228,6 +10263,7 @@ export class Conductor {
             resolved.escalate,
             stepModelPolicy,
           );
+          if (step.name === 'build') lastBuildEscalation = esc;
 
           if (step.name === 'build') {
             await seedBuildTaskTelemetry(
@@ -10437,7 +10473,7 @@ export class Conductor {
                   gate,
                   treeHash,
                   verdict: false,
-                  rung: { model: esc.model, effort: esc.effort },
+                  rung: buildOutcomeRung(undefined, esc),
                 })) {
                   const reason = composeBuildOutcomeHaltReason(prior, gate);
                   await this.writeHaltMarker(reason + '\n', 'needs-human');
@@ -10450,7 +10486,11 @@ export class Conductor {
                 }
               }
             }
-            if (missingWorktree === undefined && await settleBuildPendingRepair()) return;
+            // Non-self-host dispatches have no additional admission layer, so
+            // settlement remains at this final generic boundary. Self-host
+            // dispatches settle inside runAdmittedSelfBuildDispatch, after its
+            // safety and auth preflights have accepted the attempt.
+            if (missingWorktree === undefined && !usesSelfBuildDispatch && await settleBuildPendingRepair()) return;
             result =
               missingWorktree ??
               (step.name === 'complexity'
@@ -10484,6 +10524,7 @@ export class Conductor {
                                 ? this.currentRunId
                                 : undefined,
                               serialExecutionContext,
+                              settleBuildPendingRepair,
                             )
                           : await (async (): Promise<StepRunResult> => {
                             // PRD widening preparation stays outside the
@@ -10543,6 +10584,10 @@ export class Conductor {
             });
             if (parked) return parked;
           }
+
+          // Settlement owns its HALT marker and loop-halt event. Preserve the
+          // pre-existing terminal routing without retry or failure accounting.
+          if (result.pendingRepairSettlementHalt) return;
 
           // Rebase setup exhaustion is a pre-invocation environmental refusal.
           // Its native handler has already written the HALT and recorded the
@@ -10722,7 +10767,7 @@ export class Conductor {
                     terminalOutcome: 'no-verdict',
                     gate,
                     verdict: gate === null ? null : false,
-                    rung: { model: result.model ?? resolved.model, effort: resolved.effort },
+                    rung: buildOutcomeRung(result, esc),
                     treeBefore: treeHashBeforeBuild,
                     treeAfter,
                     headBefore: headShaBeforeBuild,
@@ -12340,7 +12385,7 @@ export class Conductor {
                   terminalOutcome: 'failed',
                   gate,
                   verdict: gate === null ? null : false,
-                  rung: { model: failedStepResult?.model ?? resolved.model, effort: resolved.effort },
+                  rung: buildOutcomeRung(failedStepResult, lastBuildEscalation),
                   treeBefore: treeHashBeforeBuild,
                   treeAfter,
                   headBefore: headShaBeforeBuild,
@@ -13888,7 +13933,7 @@ export class Conductor {
                   terminalOutcome: 'done',
                   gate,
                   verdict: gate === null ? null : false,
-                  rung: { model: stepResult?.model ?? resolved.model, effort: resolved.effort },
+                  rung: buildOutcomeRung(stepResult, lastBuildEscalation),
                   treeBefore: treeHashBeforeBuild,
                   treeAfter,
                   headBefore: headShaBeforeBuild,

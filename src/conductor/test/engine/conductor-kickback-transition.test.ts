@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { buildOutcomeRung, Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { readKickbackLedger, type KickbackLedger, type PendingRepair } from '../../src/engine/kickback-ledger.js';
 import type { BuildOutcomeStore } from '../../src/engine/build-outcome.js';
+import { sameNoOpCycle } from '../../src/engine/build-outcome.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
@@ -240,6 +241,21 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     });
 
     expect(build).toHaveBeenCalledOnce();
+  });
+
+  it('stamps an escalated no-movement attempt at its actual rung, so a base-rung re-dispatch proceeds', async () => {
+    const stamped = buildOutcomeRung(
+      { model: 'test-model', effort: 'high' },
+      { model: 'test-model', effort: 'medium' },
+    );
+    expect(stamped).toEqual({ model: 'test-model', effort: 'high' });
+    expect(sameNoOpCycle({
+      outcome: 'no-movement', terminalOutcome: 'done', gate: 'prd_audit', verdict: false,
+      rung: stamped, treeBefore: 'tree-1', treeAfter: 'tree-1', headBefore: 'head-1', headAfter: 'head-1',
+    }, {
+      gate: 'prd_audit', treeHash: 'tree-1', verdict: false,
+      rung: buildOutcomeRung(undefined, { model: 'test-model', effort: 'medium' }),
+    })).toBe(false);
   });
 
   it('leaves a pending repair uncharged when protected-artifact admission refuses BUILD', async () => {
