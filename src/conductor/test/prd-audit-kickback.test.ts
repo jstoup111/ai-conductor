@@ -2065,6 +2065,25 @@ describe('prd_audit kickback', () => {
     expect(ledger.gates.prd_audit?.capEvidence).toBeUndefined();
   });
 
+  it('does not append when the entire kickback ledger is unreadable', async () => {
+    let root = '';
+    let planPath = '';
+    let plan = '';
+    await expect(createPrdAuditRemediationFixture({
+      taskCount: 12,
+      criteria: ['S2.1'],
+      beforePlanRemediation: async (fixtureRoot) => {
+        root = fixtureRoot;
+        planPath = join(root, '.docs', 'plans', 'feature.md');
+        plan = await readFile(planPath, 'utf8');
+        await writeFile(join(root, '.pipeline', 'kickback-ledger.json'), '{not-json');
+      },
+    })).rejects.toThrow('kickback ledger is unreadable');
+
+    await expect(readFile(planPath, 'utf8')).resolves.toBe(plan);
+    await expect(readKickbackLedger(root)).resolves.not.toHaveProperty('pendingRepair');
+  });
+
   it('dispatches, appends, seeds, and records an exhausted prd_audit repair pending build', async () => {
     const fixture = await createPrdAuditRemediationFixture({
       taskCount: 12,

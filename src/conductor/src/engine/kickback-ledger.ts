@@ -119,6 +119,8 @@ export interface PendingRepair {
   receiptId: string;
   charges: Partial<Record<'prd_audit' | 'architecture_review_as_built', PendingRepairGateCharge>>;
   taskIds: string[];
+  /** Authoritative prd_audit criteria that admitted this repair. */
+  prdAuditCriteria?: string[];
 }
 
 /** Current allowance snapshot for one gate named by a pending repair. */
@@ -487,6 +489,11 @@ function isPendingRepair(value: unknown): value is PendingRepair {
     new Set(repair.taskIds).size !== repair.taskIds.length ||
     typeof repair.charges !== 'object' || repair.charges === null || Array.isArray(repair.charges)
   ) return false;
+  if (repair.prdAuditCriteria !== undefined && (
+    !Array.isArray(repair.prdAuditCriteria) ||
+    !repair.prdAuditCriteria.every((criterion) => typeof criterion === 'string' && criterion.trim().length > 0) ||
+    new Set(repair.prdAuditCriteria).size !== repair.prdAuditCriteria.length
+  )) return false;
   const charges = repair.charges as Record<string, unknown>;
   const permittedGates = new Set(['prd_audit', 'architecture_review_as_built']);
   const entries = Object.entries(charges);
@@ -936,17 +943,21 @@ export async function readGrowth(projectRoot: string, cap: number): Promise<Plan
 export async function recordGrowth(
   projectRoot: string,
   growth: PlanGrowthRecord,
-  options: { cap?: number; events?: PlanGrowthEventSink } = {},
+  options: { cap?: number; events?: PlanGrowthEventSink; prepareOnly?: true } = {},
 ): Promise<PlanGrowth> {
   if (!isPlanGrowthRecord(growth) || !growthTotalsAgree(growth)) {
     throw new Error('plan growth must have non-negative counts whose gate total equals added');
   }
 
+  const cap = options.cap ?? growth.added;
+  // Settlement already owns the ledger lease and must remain all-or-nothing
+  // with its lap writes. Reuse this growth transition there without taking a
+  // nested lease; the caller persists the returned record in its one write.
+  if (options.prepareOnly) return withRemaining(growth, cap);
   const recorded = await withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
     requireReadableLedger(ledger);
     requireReadableGrowth(ledger);
-    const cap = options.cap ?? growth.added;
     const next = withRemaining(growth, cap);
     await writeKickbackLedgerUnsafe(projectRoot, {
       ...ledger,
@@ -1329,6 +1340,12 @@ export async function settlePendingRepair(
 
     const { pendingRepair: _pendingRepair, ...withoutPendingRepair } = ledger;
     const growthChanged = charges.some(([, charge]) => charge.growth > 0);
+    const recordedGrowth = growthChanged
+      ? await recordGrowth(projectRoot, nextGrowth, {
+          cap: growthCap ?? nextGrowth.added,
+          prepareOnly: true,
+        })
+      : undefined;
     const nextLedger: KickbackLedger = {
       ...withoutPendingRepair,
       gates: nextGates,
@@ -1337,7 +1354,7 @@ export async function settlePendingRepair(
     await writeKickbackLedgerUnsafe(projectRoot, nextLedger);
     return {
       result: { kind: 'settled' } as const,
-      ...(growthChanged ? { growth: withRemaining(nextGrowth, growthCap ?? nextGrowth.added) } : {}),
+      ...(recordedGrowth === undefined ? {} : { growth: recordedGrowth }),
     };
   });
   if (settled.growth !== undefined) await options.events?.emit({ type: 'plan_growth', ...settled.growth });

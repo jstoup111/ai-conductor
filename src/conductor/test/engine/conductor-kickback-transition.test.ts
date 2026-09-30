@@ -11,6 +11,8 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
+import * as projectPrelude from '../../src/engine/project-prelude.js';
+import * as protectedArtifactSeal from '../../src/engine/protected-artifact-seal.js';
 
 describe('BUILD pending-repair settlement transition (Task 6)', () => {
   let dir: string;
@@ -23,6 +25,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -31,7 +34,11 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     lastReason: 'blocking finding', priorVerdict: true, resolvedBefore: 0,
   });
 
-  async function runBuild(pendingRepair: PendingRepair | unknown, ledger: Omit<KickbackLedger, 'pendingRepair'>): Promise<{
+  async function runBuild(
+    pendingRepair: PendingRepair | unknown,
+    ledger: Omit<KickbackLedger, 'pendingRepair'>,
+    options: { refuseAtProtectedArtifact?: boolean } = {},
+  ): Promise<{
     build: ReturnType<typeof vi.fn>;
   }> {
     await writeState(statePath, {
@@ -46,13 +53,20 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     }));
     await writeKickbackLedger(dir, { ...ledger, pendingRepair } as KickbackLedger);
     const build = vi.fn(async () => ({ success: true }));
-    const runner: StepRunner = { run: async (step) => step === 'build' ? build(step) : { success: true } };
+    const runner: StepRunner = { run: async (step) => step === 'build' ? build() : { success: true } };
+    if (options.refuseAtProtectedArtifact) {
+      vi.spyOn(projectPrelude, 'currentCommitSha').mockResolvedValue('approved-commit');
+      vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockResolvedValue({
+        ok: false,
+        reason: 'protected artifact changed before dispatch',
+      } as never);
+    }
     await new Conductor({
       stateFilePath: statePath,
       projectRoot: dir,
       stepRunner: runner,
       events: new ConductorEventEmitter(),
-      mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false,
+      mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: 1,
       config: {
         prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
         architecture_review_as_built: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
@@ -154,6 +168,26 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     });
   });
 
+  it('leaves a pending repair uncharged when protected-artifact admission refuses BUILD', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'refused-repair', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 1 } },
+      prdAuditCriteria: ['S2.1'],
+    };
+    const { build } = await runBuild(pendingRepair, {
+      version: 1,
+      gates: { prd_audit: entry() },
+      growth: { authored: 4, added: 0, byGate: {} },
+    }, { refuseAtProtectedArtifact: true });
+
+    expect(build).not.toHaveBeenCalled();
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { prd_audit: { laps: 0 } },
+      growth: { authored: 4, added: 0, byGate: {} },
+      pendingRepair,
+    });
+  });
+
   it('records a prd-audit existing-task repair as an obligation-keyed lap-only pending charge', async () => {
     await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
     await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
@@ -207,17 +241,25 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     ['mixed as-built lap', { prd_audit: entry(), architecture_review_as_built: entry(1) }, { prd_audit: { laps: 1, growth: 1 }, architecture_review_as_built: { laps: 1, growth: 1 } }, 'laps'],
     ['growth', { prd_audit: entry() }, { prd_audit: { laps: 1, growth: 1 } }, 'growth'],
   ])('halts before BUILD without charging a %s exhaustion', async (_name, gates, charges, allowance) => {
-    const initialGrowth = {
+    const initialGrowth: NonNullable<KickbackLedger['growth']> = {
       authored: 4,
       added: allowance === 'growth' ? 4 : 0,
       byGate: allowance === 'growth' ? { prd_audit: 4 } : {},
     };
-    const { build } = await runBuild({ receiptId: `exhausted-${allowance}`, taskIds: ['rem-1'], charges }, {
+    const { build } = await runBuild({
+      receiptId: `exhausted-${allowance}`,
+      taskIds: ['rem-1'],
+      charges,
+      ...(Object.hasOwn(charges, 'prd_audit') ? { prdAuditCriteria: ['S2.1'] } : {}),
+    }, {
       version: 1, gates, growth: initialGrowth,
     });
 
     expect(build).not.toHaveBeenCalled();
-    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(new RegExp(`${allowance}|Kickback halt generation`, 'i'));
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(new RegExp(allowance, 'i'));
+    if (Object.hasOwn(charges, 'prd_audit')) {
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('Findings: S2.1');
+    }
     await expect(readFile(statePath, 'utf8')).resolves.not.toMatch(/"build": "done"/);
     await expect(readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).resolves.toMatch(/"status":"pending"/);
     const haltedLedger = await readKickbackLedger(dir);

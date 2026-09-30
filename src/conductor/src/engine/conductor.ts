@@ -895,7 +895,13 @@ export async function readRemediationGateAppendBudget(
   // budget recovery is an explicit operator decision, not a best-effort
   // fallback. Scoped to THIS gate (adr-2026-08-31 decision 3) so a sibling
   // gate's malformed entry does not halt a healthy one.
+  if (isUnreadableKickbackLedger(ledger)) {
+    throw new Error('kickback ledger is unreadable');
+  }
   if (isUnreadableKickbackGate(ledger, gate)) {
+    // A malformed pending repair is deliberately scoped to its remediation
+    // gates and growth accounting. Preserve its exhausted-budget projection;
+    // only an unreadable ledger envelope blocks append before mutation.
     if (isUnreadableKickbackGrowth(ledger)) {
       return {
         gate,
@@ -5435,10 +5441,15 @@ export class Conductor {
         }),
       };
       if (Object.keys(charges).length > 0) {
+        const prdAuditCriteria = [...new Set(admittedGaps.flatMap((gap) => {
+          const finding = prdAuditFindings.get(gap.id.toUpperCase());
+          return finding === undefined ? [] : [finding.criterion];
+        }))];
         await recordPendingRepair(this.projectRoot, {
           receiptId: randomUUID(),
           charges,
           taskIds: appendedTaskIds,
+          ...(prdAuditCriteria.length > 0 ? { prdAuditCriteria } : {}),
         });
       }
     }
@@ -9675,11 +9686,11 @@ export class Conductor {
         }
 
         // A remediation append records its authorization, but deliberately
-        // does not spend it.  BUILD is the only point at which the pending
-        // work may become chargeable: it is late enough that a cap halt leaves
-        // the newly appended tasks pending, and early enough that no provider
-        // attempt can run on work the operator has not authorized.
-        if (step.name === 'build') {
+        // does not spend it.  This closure is invoked at the final BUILD
+        // admission point below, after every refusal that can decline the
+        // dispatch (including the protected-artifact seal).
+        const settleBuildPendingRepair = async (): Promise<boolean> => {
+          if (step.name !== 'build') return false;
           let settlement:
             | Awaited<ReturnType<typeof settlePendingRepair>>
             | undefined;
@@ -9719,8 +9730,11 @@ export class Conductor {
             const gate = settlement?.kind === 'exhausted' ? settlement.gate : 'prd_audit';
             const allowance = settlement?.kind === 'exhausted' ? settlement.allowance : 'growth';
             const pendingTasks = settlementLedger?.pendingRepair?.taskIds ?? [];
+            const prdAuditCriteria = settlementLedger?.pendingRepair?.prdAuditCriteria ?? [];
             const pendingAsBuiltFindings = settlementLedger?.pendingAsBuiltRemediationFindings ?? [];
-            const findings = pendingTasks.length > 0
+            const findings = prdAuditCriteria.length > 0
+              ? `Findings: ${prdAuditCriteria.join(', ')}`
+              : pendingTasks.length > 0
               ? `Pending remediation tasks: ${pendingTasks.join(', ')}`
               : 'Pending remediation findings are unavailable because the repair record is malformed.';
             const asBuiltFindingDetail = pendingAsBuiltFindings.length > 0
@@ -9788,9 +9802,10 @@ export class Conductor {
             await this.emitLoopHalt(reason, prUrl);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
-            return;
+            return true;
           }
-        }
+          return false;
+        };
 
         // Mark in_progress before running
         await this.saveConductorStepStatus(state, step.name, 'in_progress');
@@ -10393,8 +10408,13 @@ export class Conductor {
             // the provider is dispatched.  This keeps the region boundary
             // mechanical rather than relying on the provider to recreate it.
             await this.ensureOwnedStepRegion(state, step.name);
+            // Settlement is the last durable admission before BUILD invokes a
+            // provider. Any earlier refusal leaves the pending receipt and its
+            // allowances untouched for the next eligible dispatch.
+            const missingWorktree = await this.missingWorktreeResult(step.name);
+            if (missingWorktree === undefined && await settleBuildPendingRepair()) return;
             result =
-              (await this.missingWorktreeResult(step.name)) ??
+              missingWorktree ??
               (step.name === 'complexity'
                 ? await this.runComplexityStep(state)
                 : step.name === 'worktree'
