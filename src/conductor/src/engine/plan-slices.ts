@@ -26,6 +26,7 @@ export type PlanSlicesValidation =
 const FENCE_LINE = /^\s*(`{3,}|~{3,})(.*)$/;
 const SLICES_HEADING = /^##\s+Slices\s*$/i;
 const REQUIRED_HEADER = ['Slice', 'Title', 'Tasks'];
+const TABLE_DELIMITER_CELL = /^:?-{3,}:?$/;
 const DEPENDENCIES_LINE = /^\s*\*\*Dependencies:\*\*\s*(.*?)\s*$/;
 
 export const MAX_PLAN_SLICES = 5;
@@ -109,10 +110,17 @@ export function validatePlanSlices(planText: string): PlanSlicesValidation {
       message: 'the Slices table header columns must be exactly Slice, Title, Tasks',
     });
   }
-  if (!tableCells(lines[tableStart + 1])) {
+  const delimiterLine = lines[tableStart + 1];
+  const delimiter = tableCells(delimiterLine);
+  if (!delimiter) {
     violations.push({
       code: 'missing-table',
       message: 'the Slices section must contain a pipe table with header columns Slice, Title, Tasks',
+    });
+  } else if (delimiter.length !== REQUIRED_HEADER.length || delimiter.some((cell) => !TABLE_DELIMITER_CELL.test(cell))) {
+    violations.push({
+      code: 'malformed-delimiter',
+      message: `the Slices table delimiter "${delimiterLine}" must have exactly three markdown delimiter cells`,
     });
   }
   if (violations.length > 0) {
@@ -123,9 +131,16 @@ export function validatePlanSlices(planText: string): PlanSlicesValidation {
   const slices: PlanSlice[] = [];
   const sliceHasTaskReferences: boolean[] = [];
   for (let index = tableStart + 2; index < lines.length; index += 1) {
-    if (fenced[index]) break;
-    const cells = tableCells(lines[index]);
-    if (!cells || cells.length !== 3) break;
+    const line = lines[index];
+    if (!line.trim() || !line.trim().startsWith('|')) break;
+    const cells = tableCells(line);
+    if (!cells || cells.length !== REQUIRED_HEADER.length) {
+      violations.push({
+        code: 'malformed-row',
+        message: `the Slices table row "${line}" must have exactly three cells`,
+      });
+      continue;
+    }
     const resolved = cells[2] === ''
       ? undefined
       : resolvePlanTaskReference(cells[2], taskIds);

@@ -38,6 +38,20 @@ describe('validatePlanSlices manifest grammar', () => {
     expect(message).toContain('Slice, Title, Tasks');
   });
 
+  it('rejects a non-delimiter second table line and names it', () => {
+    const delimiter = '| a | b | c |';
+    const message = invalidMessage(planWithManifest(VALID_TABLE.replace('| --- | --- | --- |', delimiter)));
+
+    expect(message).toContain(delimiter);
+  });
+
+  it('rejects a pipe row with more than three cells after complete assignments', () => {
+    const row = '| 3 | Extra | 4 | x |';
+    const message = invalidMessage(planWithManifest(`${VALID_TABLE}\n${row}`));
+
+    expect(message).toContain(row);
+  });
+
   it('rejects an empty Title cell and names its slice position', () => {
     const message = invalidMessage(planWithManifest(VALID_TABLE.replace('| 1 | First | 1 |', '| 1 |  | 1 |')));
 
