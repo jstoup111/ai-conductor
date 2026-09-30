@@ -116,16 +116,20 @@ export const PIN_EXEMPT_SKILLS: readonly string[] = [
 // trip assertNoDuplicateRowNames.
 // ────────────────────────────────────────────────────────────────────────────
 
+export interface ModelTableProviderCells {
+  readonly model: string;
+  readonly effort: string;
+}
+
+export type ModelTableProviderCellMap = Readonly<Record<string, ModelTableProviderCells>>;
+
 export interface ExtraModelTableRow {
   /** Row name as it appears in the "Skill/Agent" column. Must be unique across
    *  both this list and the engine-derived rows — enforced by
    *  assertNoDuplicateRowNames() in generate-model-table.ts. */
   name: string;
   executionPath: 'supported-host interactive';
-  claudeModel: string;
-  claudeEffort: '';
-  codexModel: string;
-  codexEffort: string;
+  providerCells: ModelTableProviderCellMap;
   why: string;
 }
 
@@ -142,17 +146,11 @@ interface AuxiliaryModelTableRowBase {
 export type AuxiliaryModelTableRow = AuxiliaryModelTableRowBase & (
   | {
       executionPath: 'engine-managed auxiliary rubric';
-      claudeModel: 'inherits resolved rubric policy';
-      claudeEffort: 'inherits resolved rubric policy';
-      codexModel: 'inherits resolved rubric policy';
-      codexEffort: 'inherits resolved rubric policy';
+      providerCells: ModelTableProviderCellMap;
     }
   | {
       executionPath: 'engine-managed auxiliary judge';
-      claudeModel: 'inherits resolved coverage-binding policy';
-      claudeEffort: 'inherits resolved coverage-binding policy';
-      codexModel: 'inherits resolved coverage-binding policy';
-      codexEffort: 'inherits resolved coverage-binding policy';
+      providerCells: ModelTableProviderCellMap;
     }
 );
 
@@ -163,28 +161,28 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
   {
     name: 'build-review-test-quality',
     executionPath: 'engine-managed auxiliary rubric',
-    claudeModel: RESOLVED_RUBRIC_POLICY,
-    claudeEffort: RESOLVED_RUBRIC_POLICY,
-    codexModel: RESOLVED_RUBRIC_POLICY,
-    codexEffort: RESOLVED_RUBRIC_POLICY,
+    providerCells: {
+      claude: { model: RESOLVED_RUBRIC_POLICY, effort: RESOLVED_RUBRIC_POLICY },
+      codex: { model: RESOLVED_RUBRIC_POLICY, effort: RESOLVED_RUBRIC_POLICY },
+    },
     why: 'Judges whether criterion-bound changed tests are insensitive to the behavior they claim to cover; preflight is evidence, never a verdict.',
   },
   {
     name: 'build-review-security',
     executionPath: 'engine-managed auxiliary rubric',
-    claudeModel: RESOLVED_RUBRIC_POLICY,
-    claudeEffort: RESOLVED_RUBRIC_POLICY,
-    codexModel: RESOLVED_RUBRIC_POLICY,
-    codexEffort: RESOLVED_RUBRIC_POLICY,
+    providerCells: {
+      claude: { model: RESOLVED_RUBRIC_POLICY, effort: RESOLVED_RUBRIC_POLICY },
+      codex: { model: RESOLVED_RUBRIC_POLICY, effort: RESOLVED_RUBRIC_POLICY },
+    },
     why: 'Judges the whole feature diff for concrete, changed-hunk-anchored security defects in the closed security vocabulary.',
   },
   {
     name: 'coverage-binding',
     executionPath: 'engine-managed auxiliary judge',
-    claudeModel: RESOLVED_COVERAGE_BINDING_POLICY,
-    claudeEffort: RESOLVED_COVERAGE_BINDING_POLICY,
-    codexModel: RESOLVED_COVERAGE_BINDING_POLICY,
-    codexEffort: RESOLVED_COVERAGE_BINDING_POLICY,
+    providerCells: {
+      claude: { model: RESOLVED_COVERAGE_BINDING_POLICY, effort: RESOLVED_COVERAGE_BINDING_POLICY },
+      codex: { model: RESOLVED_COVERAGE_BINDING_POLICY, effort: RESOLVED_COVERAGE_BINDING_POLICY },
+    },
     why: 'Fresh per-claim judgement of whether cited Done when checks assert the criterion; the engine scopes inputs, validates the closed verdict, and owns the gate outcome.',
   },
 ];
@@ -201,9 +199,14 @@ const EXTRA_MODEL_TABLE_ROW_DEFAULTS = {
   codexEffort: CODEX_EFFORT_INHERITANCE,
 } as const;
 
-const EXTRA_MODEL_TABLE_ROW_INPUTS: Array<
-  Omit<ExtraModelTableRow, keyof typeof EXTRA_MODEL_TABLE_ROW_DEFAULTS>
-> = [
+interface ExtraModelTableRowInput {
+  name: string;
+  claudeModel: string;
+  claudeEffort: '';
+  why: string;
+}
+
+const EXTRA_MODEL_TABLE_ROW_INPUTS: ExtraModelTableRowInput[] = [
   {
     name: 'verify-claims',
     claudeModel: 'inherits caller',
@@ -365,6 +368,14 @@ const EXTRA_MODEL_TABLE_ROW_INPUTS: Array<
 
 export const EXTRA_MODEL_TABLE_ROWS: ExtraModelTableRow[] =
   EXTRA_MODEL_TABLE_ROW_INPUTS.map((row) => ({
-    ...EXTRA_MODEL_TABLE_ROW_DEFAULTS,
-    ...row,
+    name: row.name,
+    executionPath: INTERACTIVE_EXECUTION_PATH,
+    providerCells: {
+      claude: { model: row.claudeModel, effort: row.claudeEffort },
+      codex: {
+        model: EXTRA_MODEL_TABLE_ROW_DEFAULTS.codexModel,
+        effort: EXTRA_MODEL_TABLE_ROW_DEFAULTS.codexEffort,
+      },
+    },
+    why: row.why,
   }));

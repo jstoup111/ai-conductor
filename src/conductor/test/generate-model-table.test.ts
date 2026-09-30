@@ -1,3 +1,4 @@
+// Covers: task:16
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -29,7 +30,11 @@ import {
   CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
 } from '../src/engine/provider-model-policy.js';
-import { DEFAULT_PROVIDER, providerDescriptor } from '../src/execution/provider-catalog.js';
+import {
+  BUILT_IN_PROVIDERS,
+  DEFAULT_PROVIDER,
+  providerDescriptor,
+} from '../src/execution/provider-catalog.js';
 import {
   SKILL_STEP_MAP,
   PIN_EXEMPT_SKILLS,
@@ -196,11 +201,44 @@ describe('assertNoDuplicateRowNames (TS-1 negative path 3)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('renderModelTable (TS-2 happy path 2)', () => {
-  it('outputs the exact provider-labelled seven-column header', () => {
+  // Covers: task:16 — the catalog, rather than a positional Claude/Codex
+  // pairing, owns the generated table's provider columns.
+  it('renders a model and effort column for every catalog provider in catalog order', () => {
+    expect(renderModelTable().split('\n')[0]).toBe(
+      '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Pi model | Pi effort | Why |',
+    );
+  });
+
+  it('renders an added catalog provider without generator changes', () => {
+    const testProvider = {
+      ...BUILT_IN_PROVIDERS[0],
+      id: 'test-provider',
+      displayName: 'Test provider',
+    };
+    const catalog = [...BUILT_IN_PROVIDERS, testProvider] as unknown as typeof BUILT_IN_PROVIDERS;
+
+    expect(renderModelTable(catalog).split('\n')[0]).toContain(
+      '| Test provider model | Test provider effort |',
+    );
+  });
+
+  it('keeps every Claude and Codex cell equal to the pre-Pi two-provider rendering', () => {
+    const beforePi = renderModelTable(BUILT_IN_PROVIDERS.slice(0, 2));
+    const withPi = renderModelTable();
+    const rows = (table: string) => table.split('\n').slice(2).map((line) =>
+      line.split('|').slice(1, -1).map((cell) => cell.trim()),
+    );
+
+    expect(rows(withPi).map((cells) => [cells[0], ...cells.slice(2, 6)])).toEqual(
+      rows(beforePi).map((cells) => [cells[0], ...cells.slice(2, 6)]),
+    );
+  });
+
+  it('outputs the exact provider-labelled catalog header', () => {
     const table = renderModelTable();
     expect(table.split('\n').slice(0, 2)).toEqual([
-      '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |',
-      '|---|---|---|---|---|---|---|',
+      '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Pi model | Pi effort | Why |',
+      '|---|---|---|---|---|---|---|---|---|',
     ]);
   });
 
@@ -231,18 +269,22 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
       executionPath: modelFreeEngineSteps.has(step)
         ? 'engine machinery'
         : 'autonomous engine',
-      claudeModel: modelFreeEngineSteps.has(step)
-        ? '—'
-        : renderPolicyField(CLAUDE_MODEL_POLICY, step, 'model'),
-      claudeEffort: modelFreeEngineSteps.has(step)
-        ? '—'
-        : renderPolicyField(CLAUDE_MODEL_POLICY, step, 'effort'),
-      codexModel: modelFreeEngineSteps.has(step)
-        ? '—'
-        : renderPolicyField(CODEX_MODEL_POLICY, step, 'model'),
-      codexEffort: modelFreeEngineSteps.has(step)
-        ? '—'
-        : renderPolicyField(CODEX_MODEL_POLICY, step, 'effort'),
+      providerCells: {
+        claude: {
+          model: modelFreeEngineSteps.has(step) ? '—' : renderPolicyField(CLAUDE_MODEL_POLICY, step, 'model'),
+          effort: modelFreeEngineSteps.has(step) ? '—' : renderPolicyField(CLAUDE_MODEL_POLICY, step, 'effort'),
+        },
+        codex: {
+          model: modelFreeEngineSteps.has(step) ? '—' : renderPolicyField(CODEX_MODEL_POLICY, step, 'model'),
+          effort: modelFreeEngineSteps.has(step) ? '—' : renderPolicyField(CODEX_MODEL_POLICY, step, 'effort'),
+        },
+        pi: {
+          model: modelFreeEngineSteps.has(step) ? '—' : '',
+          effort: modelFreeEngineSteps.has(step)
+            ? '—'
+            : renderPolicyField(BUILT_IN_PROVIDERS[2].modelPolicy, step, 'effort'),
+        },
+      },
       why: STEP_RATIONALE[step],
     }));
 
@@ -250,10 +292,11 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
   });
 
   it('fails closed and identifies the provider, field, and step for every missing policy value', () => {
-    const buildRowsWithPolicies = buildEngineRows as unknown as (
-      claudePolicy: ProviderModelPolicy,
-      codexPolicy: ProviderModelPolicy,
-    ) => ReturnType<typeof buildEngineRows>;
+    const buildRowsWithPolicies = (claudePolicy: ProviderModelPolicy, codexPolicy: ProviderModelPolicy) =>
+      buildEngineRows([
+        { ...BUILT_IN_PROVIDERS[0], modelPolicy: claudePolicy },
+        { ...BUILT_IN_PROVIDERS[1], modelPolicy: codexPolicy },
+      ]);
 
     const withoutStepValue = (
       policy: ProviderModelPolicy,
@@ -337,8 +380,8 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
         !/\b(?:haiku|sonnet|opus|fable)\b/i.test(value);
       const hasSupportedHostContract =
         row.executionPath === 'supported-host interactive' &&
-        describesCodexInheritance(row.codexModel) &&
-        describesCodexInheritance(row.codexEffort);
+        describesCodexInheritance(row.providerCells.codex!.model) &&
+        describesCodexInheritance(row.providerCells.codex!.effort);
 
       return hasSupportedHostContract ? [] : [row.name];
     });
@@ -351,10 +394,13 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
 
     expect(rowsByName.get('composer')).toMatchObject({
       executionPath: 'supported-host interactive',
-      claudeModel: 'opus',
-      claudeEffort: '',
-      codexModel: 'inherits model from the Codex session or spawned-agent configuration',
-      codexEffort: 'inherits effort from the Codex session or spawned-agent configuration',
+      providerCells: {
+        claude: { model: 'opus', effort: '' },
+        codex: {
+          model: 'inherits model from the Codex session or spawned-agent configuration',
+          effort: 'inherits effort from the Codex session or spawned-agent configuration',
+        },
+      },
       why: expect.stringMatching(/canonical.*authoring/i),
     });
     expect(rowsByName.get('engineer')).toMatchObject({
@@ -380,7 +426,19 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
 
     const messages = invalidCases.map(({ field, value }) => {
       try {
-        buildExtraRows([{ ...canonical, name: 'invalid-row', [field]: value }]);
+        if (field === 'executionPath') {
+          buildExtraRows([{ ...canonical, name: 'invalid-row', executionPath: value }]);
+          return '<no error>';
+        }
+        const cellField = field === 'codexModel' ? 'model' : 'effort';
+        buildExtraRows([{
+          ...canonical,
+          name: 'invalid-row',
+          providerCells: {
+            ...canonical.providerCells,
+            codex: { ...canonical.providerCells.codex!, [cellField]: value },
+          },
+        }]);
         return '<no error>';
       } catch (error) {
         return error instanceof Error ? error.message : String(error);
@@ -429,26 +487,26 @@ describe('engine-managed auxiliary rows', () => {
         expect.objectContaining({
           name: 'build-review-test-quality',
           executionPath: 'engine-managed auxiliary rubric',
-          claudeModel: 'inherits resolved rubric policy',
-          claudeEffort: 'inherits resolved rubric policy',
-          codexModel: 'inherits resolved rubric policy',
-          codexEffort: 'inherits resolved rubric policy',
+          providerCells: {
+            claude: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
+            codex: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
+          },
         }),
         expect.objectContaining({
           name: 'build-review-security',
           executionPath: 'engine-managed auxiliary rubric',
-          claudeModel: 'inherits resolved rubric policy',
-          claudeEffort: 'inherits resolved rubric policy',
-          codexModel: 'inherits resolved rubric policy',
-          codexEffort: 'inherits resolved rubric policy',
+          providerCells: {
+            claude: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
+            codex: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
+          },
         }),
         expect.objectContaining({
           name: 'coverage-binding',
           executionPath: 'engine-managed auxiliary judge',
-          claudeModel: 'inherits resolved coverage-binding policy',
-          claudeEffort: 'inherits resolved coverage-binding policy',
-          codexModel: 'inherits resolved coverage-binding policy',
-          codexEffort: 'inherits resolved coverage-binding policy',
+          providerCells: {
+            claude: { model: 'inherits resolved coverage-binding policy', effort: 'inherits resolved coverage-binding policy' },
+            codex: { model: 'inherits resolved coverage-binding policy', effort: 'inherits resolved coverage-binding policy' },
+          },
         }),
       ],
     );
@@ -729,16 +787,23 @@ describe('runGenerateModelTable --check mode — drift detection (TS-3)', () => 
     // Capture the unmocked table before replacing the provider-policy module.
     const cleanForOldDefaults = fixture(renderModelTable());
     vi.resetModules();
-    vi.doMock('../src/engine/provider-model-policy.js', async () => {
-      const actual = await vi.importActual<typeof import('../src/engine/provider-model-policy.js')>(
-        '../src/engine/provider-model-policy.js',
+    vi.doMock('../src/execution/provider-catalog.js', async () => {
+      const actual = await vi.importActual<typeof import('../src/execution/provider-catalog.js')>(
+        '../src/execution/provider-catalog.js',
       );
       return {
         ...actual,
-        CLAUDE_MODEL_POLICY: {
-          ...actual.CLAUDE_MODEL_POLICY,
-          stepModels: { ...actual.CLAUDE_MODEL_POLICY.stepModels, stories: 'fable' },
-        },
+        BUILT_IN_PROVIDERS: actual.BUILT_IN_PROVIDERS.map((provider) =>
+          provider.id === 'claude'
+            ? {
+                ...provider,
+                modelPolicy: {
+                  ...provider.modelPolicy,
+                  stepModels: { ...provider.modelPolicy.stepModels, stories: 'fable' },
+                },
+              }
+            : provider,
+        ),
       };
     });
 
@@ -753,7 +818,7 @@ describe('runGenerateModelTable --check mode — drift detection (TS-3)', () => 
       const after = await readFile(harnessPath, 'utf8');
       expect(after).toBe(before);
     } finally {
-      vi.doUnmock('../src/engine/provider-model-policy.js');
+      vi.doUnmock('../src/execution/provider-catalog.js');
       vi.resetModules();
     }
   });
