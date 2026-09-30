@@ -144,7 +144,6 @@ export function wireOtelVisualizer(
   if (!spoolRuntime && resolved.exporter === 'otlp' && resolved.spool?.enabled && !interactiveLifecycle) {
     warnSpoolUnavailable(context.project ?? dirname(context.pipelineDir), events);
   }
-  if (interactiveLifecycle) interactiveLifecycle.visualizerOpen = true;
   const activeSpoolRuntime = spoolRuntime ?? interactiveLifecycle?.runtime;
   const registry = createOtelVisualizerRegistry(events);
   const factory = registry.get<VisualizerFactory>('visualizer', 'otel');
@@ -153,14 +152,30 @@ export function wireOtelVisualizer(
     pipelineDir: context.pipelineDir,
     startContext: context,
     emitter: events,
+    resolvedWarningsHandled: true,
     ...(activeSpoolRuntime && resolved.exporter === 'otlp' && resolved.spool?.enabled
       ? { otelSpanExporter: buildExporters(resolved, { spoolStore: activeSpoolRuntime.store, events }).spanExporter }
       : {}),
   });
 
   if (!visualizer) return null;
+  if (interactiveLifecycle) interactiveLifecycle.visualizerOpen = true;
   visualizer.start(events, context);
-  return visualizer;
+  if (!interactiveLifecycle) return visualizer;
+  const directory = resolveSpoolDirSync(dirname(context.pipelineDir));
+  if (directory === null) return visualizer;
+  return {
+    name: visualizer.name,
+    start: visualizer.start.bind(visualizer),
+    stop: async () => {
+      try {
+        await visualizer.stop();
+      } finally {
+        interactiveLifecycle.visualizerOpen = false;
+        await stopInteractiveSpoolIfUnused(directory, interactiveLifecycle);
+      }
+    },
+  };
 }
 
 /** Daemon-lifetime meter: one recorder/listener survives feature process exits. */

@@ -88,6 +88,8 @@ export interface OtelVisualizerContext {
   metricExporter?: unknown;
   /** Optional warning callback. Receives O(1) warning strings; never throws. */
   onWarning?: (msg: string) => void;
+  /** True when the construction caller already emitted resolved-config warnings. */
+  resolvedWarningsHandled?: boolean;
   /** Event-time clock. Defaults to wall time; injectable for deterministic consumers. */
   now?: () => number;
   /**
@@ -200,7 +202,7 @@ export class OtelVisualizer implements VisualizerPlugin {
       ? config.provenance
       : { commit: true, pr: true, issue: true, feature: true };
     if (config.enabled && config.projectName) this.projectNameOverride = config.projectName;
-    if (config.enabled && config.attributeWarnings?.length) {
+    if (!ctx.resolvedWarningsHandled && config.enabled && config.attributeWarnings?.length) {
       ctx.onWarning?.(`[otel] ${config.attributeWarnings.join(' ')}`);
     }
   }
