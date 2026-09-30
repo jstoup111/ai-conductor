@@ -1,9 +1,21 @@
-import { intersectFiles } from '../../overlap-scan.js';
+import {
+  enumerateUnmergedBranches,
+  intersectFiles,
+} from '../../overlap-scan.js';
+import { changedPathsSinceMergeBase, type GitRunner } from '../../rebase.js';
 import { runTrackerRead, type GhRunner } from '../../tracker-client.js';
 import { extractCitedPaths } from './cited-paths.js';
 import type { IssueOverlap } from './overlap-suggestions.js';
+import type { BranchOverlap } from './overlap-suggestions.js';
 
 const DEFAULT_OPEN_ISSUES_LIMIT = 500;
+const DEFAULT_IN_FLIGHT_BRANCH_LIMIT = 100;
+const IN_FLIGHT_REF_PATTERNS = [
+  'refs/heads/spec/*',
+  'refs/remotes/*/spec/*',
+  'refs/heads/feat/daemon-*',
+  'refs/remotes/*/feat/daemon-*',
+];
 
 interface OpenIssue {
   number: number;
@@ -78,4 +90,77 @@ export async function collectOpenIssueOverlaps({
   }
 
   return overlaps;
+}
+
+function inFlightSlug(branch: string): string | null {
+  const localName = branch.match(/(?:^|\/)(spec\/.+|feat\/daemon-.+)$/)?.[1];
+  if (!localName) return null;
+  if (localName.startsWith('spec/')) return localName.slice('spec/'.length);
+  if (localName.startsWith('feat/daemon-')) return localName.slice('feat/daemon-'.length);
+  return null;
+}
+
+async function isShippedBranch(git: GitRunner, baseRef: string, branch: string): Promise<boolean> {
+  const slug = inFlightSlug(branch);
+  if (!slug) return false;
+  const shipped = await git(['cat-file', '-e', `${baseRef}:.docs/shipped/${slug}.md`]);
+  return shipped.exitCode === 0;
+}
+
+async function committedAt(git: GitRunner, branch: string): Promise<number> {
+  const result = await git(['log', '-1', '--format=%ct', branch]);
+  const timestamp = result.exitCode === 0 ? Number.parseInt(result.stdout.trim(), 10) : NaN;
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+/**
+ * Finds cited paths changed by in-flight spec and daemon branches. Errors on
+ * individual branches remain advisory so a damaged ref cannot block filing.
+ */
+export async function collectInFlightOverlaps({
+  git,
+  baseRef,
+  citedPaths,
+  maxBranches = DEFAULT_IN_FLIGHT_BRANCH_LIMIT,
+}: {
+  git: GitRunner;
+  baseRef: string;
+  citedPaths: readonly string[];
+  maxBranches?: number;
+}): Promise<{ overlaps: BranchOverlap[]; skipNotes: string[] }> {
+  const skipNotes: string[] = [];
+  let branches: string[];
+  try {
+    branches = await enumerateUnmergedBranches(git, baseRef, IN_FLIGHT_REF_PATTERNS);
+  } catch (error) {
+    skipNotes.push(`skipped in-flight branch enumeration: ${error instanceof Error ? error.message : String(error)}`);
+    return { overlaps: [], skipNotes };
+  }
+
+  const unshipped: Array<{ branch: string; committedAt: number }> = [];
+  for (const branch of branches) {
+    try {
+      if (await isShippedBranch(git, baseRef, branch)) continue;
+      unshipped.push({ branch, committedAt: await committedAt(git, branch) });
+    } catch (error) {
+      skipNotes.push(`skipped in-flight branch ${branch}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  unshipped.sort((left, right) => right.committedAt - left.committedAt || left.branch.localeCompare(right.branch));
+
+  const overlaps: BranchOverlap[] = [];
+  for (const { branch } of unshipped.slice(0, Math.max(0, maxBranches))) {
+    try {
+      const changedPaths = await changedPathsSinceMergeBase(git, baseRef, branch);
+      if (changedPaths === null) {
+        skipNotes.push(`skipped merge-base comparison for branch ${branch}: no merge base`);
+        continue;
+      }
+      const sharedPaths = intersectFiles([...citedPaths], changedPaths);
+      if (sharedPaths.length > 0) overlaps.push({ branch, sharedPaths, issue: null });
+    } catch (error) {
+      skipNotes.push(`skipped in-flight diff for branch ${branch}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { overlaps, skipNotes };
 }
