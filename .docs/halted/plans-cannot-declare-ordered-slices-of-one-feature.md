@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-30T10:48:11.358Z
 Slug: plans-cannot-declare-ordered-slices-of-one-feature
 Class: needs-human
 Halting step: unknown
