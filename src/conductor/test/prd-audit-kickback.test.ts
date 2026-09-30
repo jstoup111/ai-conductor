@@ -2046,7 +2046,7 @@ describe('prd_audit kickback', () => {
     let root = '';
     let planPath = '';
     let plan = '';
-    await expect(createPrdAuditRemediationFixture({
+    const fixture = await createPrdAuditRemediationFixture({
       taskCount: 12,
       criteria: ['S2.1'],
       beforePlanRemediation: async (fixtureRoot) => {
@@ -2058,8 +2058,13 @@ describe('prd_audit kickback', () => {
           JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'unreadable' } } }),
         );
       },
-    })).rejects.toThrow("kickback ledger gate 'prd_audit' is unreadable");
+    });
 
+    expect(fixture.outcome).toMatchObject({
+      kind: 'halt',
+      haltClass: 'needs-human',
+      detail: "kickback ledger gate 'prd_audit' is unreadable",
+    });
     await expect(readFile(planPath, 'utf8')).resolves.toBe(plan);
     const ledger = await readKickbackLedger(root);
     expect(ledger.gates.prd_audit?.capEvidence).toBeUndefined();
@@ -2069,7 +2074,7 @@ describe('prd_audit kickback', () => {
     let root = '';
     let planPath = '';
     let plan = '';
-    await expect(createPrdAuditRemediationFixture({
+    const fixture = await createPrdAuditRemediationFixture({
       taskCount: 12,
       criteria: ['S2.1'],
       beforePlanRemediation: async (fixtureRoot) => {
@@ -2078,8 +2083,13 @@ describe('prd_audit kickback', () => {
         plan = await readFile(planPath, 'utf8');
         await writeFile(join(root, '.pipeline', 'kickback-ledger.json'), '{not-json');
       },
-    })).rejects.toThrow('kickback ledger is unreadable');
+    });
 
+    expect(fixture.outcome).toMatchObject({
+      kind: 'halt',
+      haltClass: 'needs-human',
+      detail: 'kickback ledger is unreadable',
+    });
     await expect(readFile(planPath, 'utf8')).resolves.toBe(plan);
     await expect(readKickbackLedger(root)).resolves.not.toHaveProperty('pendingRepair');
   });
