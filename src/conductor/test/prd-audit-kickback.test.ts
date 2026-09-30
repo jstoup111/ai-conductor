@@ -246,7 +246,7 @@ async function createPrdAuditRemediationFixture(input: {
     } as never);
   }
 
-  await execa('git', ['init', '-q'], { cwd: root });
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: root });
   await execa('git', ['config', 'user.email', 'fixture@example.test'], { cwd: root });
   await execa('git', ['config', 'user.name', 'Fixture'], { cwd: root });
   await execa('git', ['add', '.docs'], { cwd: root });

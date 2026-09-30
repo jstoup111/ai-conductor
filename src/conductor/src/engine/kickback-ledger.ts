@@ -891,15 +891,25 @@ export async function readGrowth(projectRoot: string, cap: number): Promise<Plan
     const ledger = await readKickbackLedger(projectRoot);
     requireReadableLedger(ledger);
     requireReadableGrowth(ledger);
+    const pendingGrowth = Object.values(ledger.pendingRepair?.charges ?? {})
+      .some((charge) => charge.growth > 0);
     const derived = await deriveGrowthFromActivePlan(
       projectRoot,
-      new Set(ledger.pendingRepair?.taskIds ?? []),
+      pendingGrowth ? new Set(ledger.pendingRepair?.taskIds ?? []) : new Set(),
     );
     const stored = ledger.growth;
 
     if (!stored) return withRemaining(derived.growth, cap);
 
-    const matchesPlan = !derived.resolved || stored.authored + stored.added === derived.growth.authored;
+    // A pending append is already present in the plan but deliberately has
+    // not consumed `growth.added` until BUILD dispatch. Its task ids are
+    // excluded from the derived authored count above, so compare that count
+    // with the stored authored baseline rather than adding settled growth a
+    // second time. Lap-only existing-task repairs do not change plan growth
+    // and must not be excluded from the denominator at all.
+    const matchesPlan = !derived.resolved || (pendingGrowth
+      ? stored.authored === derived.growth.authored
+      : stored.authored + stored.added === derived.growth.authored);
     if (growthTotalsAgree(stored) && matchesPlan) return withRemaining(stored, cap);
 
     // A plan can contain an old unrecorded foreign append from before append
@@ -1311,8 +1321,10 @@ export async function settlePendingRepair(
       }
       growthCap = cap;
       nextGates[gate] = { ...current, laps: (current.laps ?? 0) + charge.laps };
-      nextGrowth.added += charge.growth;
-      nextGrowth.byGate[gate] = (nextGrowth.byGate[gate] ?? 0) + charge.growth;
+      if (charge.growth > 0) {
+        nextGrowth.added += charge.growth;
+        nextGrowth.byGate[gate] = (nextGrowth.byGate[gate] ?? 0) + charge.growth;
+      }
     }
 
     const { pendingRepair: _pendingRepair, ...withoutPendingRepair } = ledger;

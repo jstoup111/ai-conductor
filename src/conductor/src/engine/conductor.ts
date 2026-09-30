@@ -9719,9 +9719,19 @@ export class Conductor {
             const gate = settlement?.kind === 'exhausted' ? settlement.gate : 'prd_audit';
             const allowance = settlement?.kind === 'exhausted' ? settlement.allowance : 'growth';
             const pendingTasks = settlementLedger?.pendingRepair?.taskIds ?? [];
+            const pendingAsBuiltFindings = settlementLedger?.pendingAsBuiltRemediationFindings ?? [];
             const findings = pendingTasks.length > 0
               ? `Pending remediation tasks: ${pendingTasks.join(', ')}`
               : 'Pending remediation findings are unavailable because the repair record is malformed.';
+            const asBuiltFindingDetail = pendingAsBuiltFindings.length > 0
+              ? `\n\nBlocking findings:\n${pendingAsBuiltFindings.map((finding) =>
+                  `${finding.finding} (${finding.class}; ${finding.reference === undefined
+                    ? finding.governingClause
+                    : finding.reference.kind === 'plan-task'
+                      ? `plan task ${finding.reference.taskId}`
+                      : `${finding.reference.stem} decision ${finding.reference.decision}`}): ${finding.summary}`,
+                ).join('; ')}`
+              : '';
             const fallbackLapCap = remediationLapCapForGate(gate, this.config);
             const growthView = settlementGrowth === undefined || growthCap === undefined
               ? undefined
@@ -9759,7 +9769,7 @@ export class Conductor {
             }
             const reason =
               `BUILD dispatch halted: ${gate} ${allowance} allowance exhausted.\n` +
-              `${detail}\n${findings}\n` +
+              `${detail}\n${findings}${asBuiltFindingDetail}\n` +
               renderKickbackRecoveryHint({
                 slug: state.feature_desc,
                 gate,

@@ -892,7 +892,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       expect(remediationReasons).toHaveLength(2);
       await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
-        'architecture_review_as_built remediation lap cap reached (1/1)',
+        'BUILD dispatch halted: architecture_review_as_built laps allowance exhausted.',
       );
       await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('kickback-cap');
       const afterSecondBlocked = JSON.parse(
@@ -905,7 +905,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     }
   });
 
-  it('halts a mixed valid group before appending when its shared growth allowance has one task left', async () => {
+  it('stages a mixed valid group before halting at the BUILD growth boundary when one task remains', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'parvalid-mixed-remediation-cap-'));
     const statePath = join(dir, 'conduct-state.json');
     const slug = 'parallel-validation-phase-fan-out-manual-test-prd-';
@@ -958,14 +958,14 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       });
       await conductor.run();
 
-      expect(await readFile(planPath, 'utf8')).not.toContain('rem-prd-audit-prd-fix');
-      expect(await readFile(planPath, 'utf8')).not.toContain('rem-as-built-as-built-fix');
+      expect(await readFile(planPath, 'utf8')).toContain('rem-prd-audit-prd-fix');
+      expect(await readFile(planPath, 'utf8')).toContain('rem-as-built-as-built-fix');
       await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('kickback-cap');
       // AB-R8 / APPROVED decision 4 + Story 4: this consolidated exit names the
       // allowance AND every as-built finding. Asserting only the class let the
       // finding-less halt body pass unnoticed.
       const mixedHalt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
-      expect(mixedHalt).toContain('shared plan-growth allowance exhausted');
+      expect(mixedHalt).toContain('Plan-growth allowance exhausted.');
       expect(mixedHalt).toContain('Blocking findings:');
       expect(mixedHalt).toContain('ARCH-1 (REMEDIABLE; plan task 1): Add the missing guard');
     } finally {

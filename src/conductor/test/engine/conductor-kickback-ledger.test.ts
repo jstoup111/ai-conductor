@@ -145,7 +145,10 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         growth: { authored: 10, added: 6, byGate: { prd_audit: 6 } },
       }));
 
-      await expect(runPrdAuditGrowthRemediation(dir)).rejects.toThrow(/kickback ledger/i);
+      const { outcome } = await runPrdAuditGrowthRemediation(dir);
+
+      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+      expect(outcome.detail).toMatch(/kickback ledger/i);
 
       const plan = await readFile(join(dir, '.docs', 'plans', 'feature.md'), 'utf8');
       expect(plan).not.toContain('### Task rem-s2.1:');
@@ -167,9 +170,12 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
 
         const { outcome, planPath } = await runPrdAuditGrowthRemediation(secondFeature);
 
-        expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
-        expect(outcome.detail).toContain('6/10 appended');
-        expect((await readFile(planPath, 'utf8'))).not.toContain('### Task rem-s2.1:');
+        expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+        const appendedPlan = await readFile(planPath, 'utf8');
+        expect(appendedPlan.match(/^### Task rem-prd-audit-rem-s2\.\d+:/gm)).toHaveLength(6);
+        expect((await readKickbackLedger(secondFeature)).pendingRepair).toMatchObject({
+          charges: { prd_audit: { laps: 1, growth: 6 } },
+        });
         expect(await readFile(configPath)).toEqual(configBefore);
       } finally {
         await rm(secondFeature, { recursive: true, force: true });

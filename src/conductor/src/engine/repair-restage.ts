@@ -82,9 +82,14 @@ export async function admitAndRestageRepair(
   // prd_audit and as-built repairs use the obligation as their pending-repair
   // receipt and charge only when BUILD dispatches. coverage_binding retains
   // its independent restage-time lap (ADR 2026-09-06 D10).
-  const chargesAtBuild =
-    input.sourceAuthority === 'prd_audit' ||
-    input.sourceAuthority === 'architecture_review_as_built';
+  // The route label is presentation-facing (`architecture-review-as-built`,
+  // or a validation-group label), while `gates` carries the canonical ledger
+  // owners.  Classifying by the label charged an as-built repair here and
+  // then recorded the same deferred charge below, so BUILD saw an already
+  // exhausted lap and never dispatched the reopened task.
+  const chargesAtBuild = input.gates.some(
+    (gate) => gate === 'prd_audit' || gate === 'architecture_review_as_built',
+  );
   if (!chargesAtBuild) {
     try {
       const settlement = await settleRemediationRound(input.projectRoot, admission.obligation.id, input.gates, input.lapCap);
