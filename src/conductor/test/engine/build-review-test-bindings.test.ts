@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:1, task:4
 import { describe, expect, it } from 'vitest';
 import { bindCoversMarkers, compareCoversMarkerBindings } from '../../src/engine/build-review-test-bindings.js';
 
@@ -82,6 +82,26 @@ it('unmarked', () => {});
       { kind: 'unresolved-reference', target: { titleChain: ['foreign'] }, marker: { reference: { kind: 'unresolved', id: 'task:' } } },
       { kind: 'unbound', target: { titleChain: ['unmarked'] } },
     ]);
+  });
+
+  it('ignores Covers-like text inside string literals while retaining later leading comments', () => {
+    const text = `
+const doubleQuoted = "// Covers: task:missing, task:";
+const singleQuoted = '// Covers: task:';
+const substitutedTemplate = \`// Covers: task:missing \${String('substitution')}\`;
+// Covers: task:7
+it('after literal content', () => {});
+`;
+
+    expect(bindings(text).bindings).toMatchObject([
+      {
+        kind: 'bound',
+        target: { titleChain: ['after literal content'] },
+        marker: { reference: { kind: 'task', id: '7' } },
+        owner: { kind: 'test', association: 'leading-comment', declaration: { titleChain: ['after literal content'] } },
+      },
+    ]);
+    expect(bindings(text).bindings).toHaveLength(1);
   });
 
   it('keeps a duplicate sibling suite marker within its lexical suite occurrence', () => {

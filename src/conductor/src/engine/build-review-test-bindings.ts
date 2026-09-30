@@ -109,17 +109,22 @@ function coversMarkers(text: string, offset: number): readonly CoversMarker[] {
   return Object.freeze(markers);
 }
 
-function comments(text: string): readonly { readonly start: number; readonly end: number; readonly text: string }[] {
-  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
-  const found: { start: number; end: number; text: string }[] = [];
-  for (;;) {
-    const kind = scanner.scan();
-    if (kind === ts.SyntaxKind.EndOfFileToken) break;
-    if (kind === ts.SyntaxKind.SingleLineCommentTrivia || kind === ts.SyntaxKind.MultiLineCommentTrivia) {
-      found.push(Object.freeze({ start: scanner.getTokenPos(), end: scanner.getTextPos(), text: scanner.getTokenText() }));
+function comments(fileName: string, text: string): readonly { readonly start: number; readonly end: number; readonly text: string }[] {
+  const sourceFile = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
+  const found = new Map<number, { start: number; end: number; text: string }>();
+  const collect = (ranges: readonly ts.CommentRange[] | undefined): void => {
+    for (const range of ranges ?? []) {
+      found.set(range.pos, Object.freeze({ start: range.pos, end: range.end, text: text.slice(range.pos, range.end) }));
     }
-  }
-  return Object.freeze(found);
+  };
+  const visit = (node: ts.Node): void => {
+    collect(ts.getLeadingCommentRanges(text, node.pos));
+    collect(ts.getTrailingCommentRanges(text, node.end));
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  collect(ts.getLeadingCommentRanges(text, sourceFile.endOfFileToken.pos));
+  return Object.freeze([...found.values()].sort((left, right) => left.start - right.start));
 }
 
 function nextNonTriviaStart(text: string, position: number): number | undefined {
@@ -230,7 +235,7 @@ export function bindCoversMarkers(input: BuildReviewTestBindingsInput): BuildRev
     attached.set(key, markers);
   };
 
-  for (const comment of comments(text)) {
+  for (const comment of comments(input.source.fileName, text)) {
     const markers = coversMarkers(comment.text, comment.start);
     if (markers.length === 0) continue;
     const declaration = byStart.get(nextNonTriviaStart(text, comment.end) ?? -1);
