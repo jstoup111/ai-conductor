@@ -319,6 +319,24 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
 export type ConductorEvent =
   | BotCoAuthorSkippedEvent
   | {
+      /** A durable spool batch was evicted locally or rejected by the backend. */
+      type: 'otel_spool_drop';
+      signal: 'traces' | 'metrics';
+      reason: 'rejected' | 'evicted';
+      batches: number;
+      items: number;
+      status?: number;
+    }
+  | {
+      /** Periodic durable-spool backlog health, persisted for operational inspection. */
+      type: 'otel_spool_backlog';
+      signal: 'traces' | 'metrics';
+      files: number;
+      bytes: number;
+      oldestAgeMs: number;
+      lastFailureClass: 'network' | 'auth' | 'endpoint' | 'throttled' | 'server';
+    }
+  | {
       type: 'daemon_backlog_snapshot';
       counts: Record<BacklogState, number>;
       oldestAgeSeconds: Partial<Record<BacklogState, number>>;
