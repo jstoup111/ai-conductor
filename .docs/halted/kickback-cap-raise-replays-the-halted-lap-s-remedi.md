@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-30T01:07:57.397Z
 Slug: kickback-cap-raise-replays-the-halted-lap-s-remedi
 Class: needs-human
 Halting step: unknown
