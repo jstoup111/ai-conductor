@@ -322,6 +322,7 @@ import {
   isUnreadableKickbackLedger,
   refundBuildReviewKickback,
   isUnreadableKickbackGate,
+  isUnreadableKickbackGrowth,
   readSuiteInfrastructureRetries,
   recordGrowth,
   recordRemediationGateLap,
@@ -864,9 +865,9 @@ export function prdAuditAppendCap(config: HarnessConfig, authoredTaskCount: numb
   return Math.min(maximum, Math.floor(authoredTaskCount * ratio));
 }
 
-type RemediationLedgerGate = 'prd_audit' | 'architecture_review_as_built';
+export type RemediationLedgerGate = 'prd_audit' | 'architecture_review_as_built';
 
-interface RemediationGateAppendBudget {
+export interface RemediationGateAppendBudget {
   gate: RemediationLedgerGate;
   priorLaps: number;
   lapCap: number;
@@ -879,7 +880,7 @@ interface RemediationGateAppendBudget {
 }
 
 /** Read the shared append allowance for a remediation gate without choosing its halt wording. */
-async function readRemediationGateAppendBudget(
+export async function readRemediationGateAppendBudget(
   projectRoot: string,
   config: HarnessConfig,
   gate: RemediationLedgerGate,
@@ -890,14 +891,25 @@ async function readRemediationGateAppendBudget(
 ): Promise<RemediationGateAppendBudget> {
   const ledger = await readKickbackLedger(projectRoot);
   const growthCap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(config, authoredTaskCount);
-  const growth = await readGrowth(projectRoot, growthCap);
   // A corrupt ledger must not be mistaken for fresh remediation allowance:
   // budget recovery is an explicit operator decision, not a best-effort
   // fallback. Scoped to THIS gate (adr-2026-08-31 decision 3) so a sibling
   // gate's malformed entry does not halt a healthy one.
   if (isUnreadableKickbackGate(ledger, gate)) {
+    if (isUnreadableKickbackGrowth(ledger)) {
+      return {
+        gate,
+        priorLaps: lapCap,
+        lapCap,
+        taskCount,
+        growthTaskCount,
+        growthCap,
+        growth: { authored: 0, added: growthCap, byGate: {}, remaining: 0 },
+      };
+    }
     throw new Error(`kickback ledger gate '${gate}' is unreadable`);
   }
+  const growth = await readGrowth(projectRoot, growthCap);
   const priorLaps = (
     ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined
   )?.laps ?? 0;

@@ -108,6 +108,19 @@ export interface PendingAsBuiltRemediationFinding {
   outcome: 'remediated';
 }
 
+/** One gate's uncharged authorization in the durable pending repair. */
+export interface PendingRepairGateCharge {
+  laps: number;
+  growth: number;
+}
+
+/** Durable repair authorization that is charged only when BUILD dispatches. */
+export interface PendingRepair {
+  receiptId: string;
+  charges: Partial<Record<'prd_audit' | 'architecture_review_as_built', PendingRepairGateCharge>>;
+  taskIds: string[];
+}
+
 export interface PlanGrowthEventSink {
   emit(event: Extract<ConductorEvent, { type: 'plan_growth' }>): void | Promise<void>;
 }
@@ -120,10 +133,13 @@ export interface KickbackLedger {
   unreadable?: true;
   /** Invalid entries do not erase healthy sibling accounting, but still fail closed. */
   unreadableGates?: string[];
+  /** A malformed pending repair leaves plan-growth accounting unavailable. */
+  unreadableGrowth?: true;
   growth?: PlanGrowthRecord;
   /** Feature-specific plan-growth cap authorized by an operator. */
   effectiveGrowthCap?: number;
   pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
+  pendingRepair?: PendingRepair;
   settlementReceipts?: Record<string, { gates: string[] }>;
   /** Applied-rebase operation ids whose build-review convergence laps were refunded. */
   convergenceCreditReceipts?: Record<string, { gate: 'build_review' }>;
@@ -144,6 +160,7 @@ interface PersistedKickbackLedger {
   growth?: PlanGrowthRecord;
   effectiveGrowthCap?: number;
   pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
+  pendingRepair?: PendingRepair;
   settlementReceipts?: Record<string, { gates: string[] }>;
   convergenceCreditReceipts?: Record<string, { gate: 'build_review' }>;
 }
@@ -289,13 +306,18 @@ function emptyLedger(): KickbackLedger {
   return { version: 1, gates: {} };
 }
 
-function unreadableLedger(gates: Record<string, KickbackGateEntry> = {}, unreadableGates?: string[]): KickbackLedger {
+function unreadableLedger(
+  gates: Record<string, KickbackGateEntry> = {},
+  unreadableGates?: string[],
+  unreadableGrowth = false,
+): KickbackLedger {
   const ledger: KickbackLedger = { version: 1, gates };
   // Keep the durable-state result structurally compatible with legacy readers;
   // the typed sentinel is intentionally non-enumerable so it can never be
   // persisted accidentally by a spread/write path.
   Object.defineProperty(ledger, 'unreadable', { value: true, enumerable: false });
   if (unreadableGates?.length) Object.defineProperty(ledger, 'unreadableGates', { value: unreadableGates, enumerable: false });
+  if (unreadableGrowth) Object.defineProperty(ledger, 'unreadableGrowth', { value: true, enumerable: false });
   return ledger;
 }
 
@@ -436,6 +458,30 @@ function isPendingAsBuiltRemediationFindings(
     new Set(value.map((finding) => finding.finding)).size === value.length;
 }
 
+function isPendingRepairGateCharge(value: unknown): value is PendingRepairGateCharge {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const charge = value as Record<string, unknown>;
+  return isPositiveSafeInteger(charge.laps) && isNonNegativeInteger(charge.growth);
+}
+
+function isPendingRepair(value: unknown): value is PendingRepair {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const repair = value as Record<string, unknown>;
+  if (
+    typeof repair.receiptId !== 'string' || repair.receiptId.trim().length === 0 ||
+    !Array.isArray(repair.taskIds) || repair.taskIds.length === 0 ||
+    !repair.taskIds.every((taskId) => typeof taskId === 'string' && taskId.trim().length > 0) ||
+    new Set(repair.taskIds).size !== repair.taskIds.length ||
+    typeof repair.charges !== 'object' || repair.charges === null || Array.isArray(repair.charges)
+  ) return false;
+  const charges = repair.charges as Record<string, unknown>;
+  const permittedGates = new Set(['prd_audit', 'architecture_review_as_built']);
+  const entries = Object.entries(charges);
+  return entries.length > 0 && entries.every(([gate, charge]) =>
+    permittedGates.has(gate) && isPendingRepairGateCharge(charge),
+  );
+}
+
 function isSettlementReceipts(value: unknown): value is Record<string, { gates: string[] }> {
   return typeof value === 'object' && value !== null && !Array.isArray(value) &&
     Object.entries(value).every(([key, receipt]) =>
@@ -547,6 +593,13 @@ function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
     ledger.pendingAsBuiltRemediationFindings !== undefined &&
     !isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
   ) return unreadableLedger(normalizeKickbackLedger({ version: 1, gates }).gates);
+  if (ledger.pendingRepair !== undefined && !isPendingRepair(ledger.pendingRepair)) {
+    return unreadableLedger(
+      normalizeKickbackLedger({ version: 1, gates }).gates,
+      ['prd_audit', 'architecture_review_as_built'],
+      true,
+    );
+  }
   const receipts = ledger.convergenceCreditReceipts;
   if (receipts !== undefined && (
     typeof receipts !== 'object' || receipts === null || Array.isArray(receipts) ||
@@ -563,6 +616,9 @@ function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
       : {}),
     ...(ledger.pendingAsBuiltRemediationFindings !== undefined && isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
       ? { pendingAsBuiltRemediationFindings: ledger.pendingAsBuiltRemediationFindings }
+      : {}),
+    ...(ledger.pendingRepair !== undefined && isPendingRepair(ledger.pendingRepair)
+      ? { pendingRepair: ledger.pendingRepair }
       : {}),
     ...(ledger.settlementReceipts === undefined || isSettlementReceipts(ledger.settlementReceipts)
       ? { settlementReceipts: ledger.settlementReceipts }
@@ -589,6 +645,11 @@ export function isUnreadableKickbackGate(ledger: KickbackLedger, gate: string): 
   return isUnreadableKickbackLedger(ledger) || (ledger.unreadableGates?.includes(gate) ?? false);
 }
 
+/** True when durable plan-growth accounting must not authorize new work. */
+export function isUnreadableKickbackGrowth(ledger: KickbackLedger): boolean {
+  return isUnreadableKickbackLedger(ledger) || ledger.unreadableGrowth === true;
+}
+
 /** Every gate whose own entry failed validation, for reporting it as unavailable. */
 export function unreadableKickbackGates(ledger: KickbackLedger): readonly string[] {
   return ledger.unreadableGates ?? [];
@@ -597,6 +658,12 @@ export function unreadableKickbackGates(ledger: KickbackLedger): readonly string
 function requireReadableLedger(ledger: KickbackLedger): void {
   if (isUnreadableKickbackLedger(ledger)) {
     throw new Error('kickback ledger is unreadable');
+  }
+}
+
+function requireReadableGrowth(ledger: KickbackLedger): void {
+  if (isUnreadableKickbackGrowth(ledger)) {
+    throw new Error('plan growth is unreadable');
   }
 }
 
@@ -703,16 +770,24 @@ async function withPreservedUnreadableGates(
   } catch {
     return ledger;
   }
-  const gates = (stored as { gates?: unknown } | null)?.gates;
+  const storedLedger = stored as { gates?: unknown; pendingRepair?: unknown } | null;
+  const gates = storedLedger?.gates;
   if (typeof gates !== 'object' || gates === null || Array.isArray(gates)) return ledger;
   const preserved: Record<string, unknown> = {};
   for (const [gate, entry] of Object.entries(gates as Record<string, unknown>)) {
     if (gate in ledger.gates) continue;
     if (normalizeKickbackGateEntry(entry) === undefined) preserved[gate] = entry;
   }
-  return Object.keys(preserved).length === 0
+  const withPreservedGates = Object.keys(preserved).length === 0
     ? ledger
     : ({ ...ledger, gates: { ...ledger.gates, ...preserved } } as KickbackLedger);
+  // A malformed pending repair must remain durable across a healthy sibling
+  // write. Otherwise that write would silently turn a fail-closed repair
+  // allowance into a fresh one on the next read.
+  if (storedLedger?.pendingRepair !== undefined && !isPendingRepair(storedLedger.pendingRepair)) {
+    return { ...withPreservedGates, pendingRepair: storedLedger.pendingRepair } as unknown as KickbackLedger;
+  }
+  return withPreservedGates;
 }
 
 /** Write the ledger atomically, so readers never observe a partially written file. */
@@ -800,6 +875,7 @@ export async function readGrowth(projectRoot: string, cap: number): Promise<Plan
   return withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
     requireReadableLedger(ledger);
+    requireReadableGrowth(ledger);
     const derived = await deriveGrowthFromActivePlan(projectRoot);
     const stored = ledger.growth;
 
@@ -841,6 +917,7 @@ export async function recordGrowth(
   const recorded = await withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
     requireReadableLedger(ledger);
+    requireReadableGrowth(ledger);
     const cap = options.cap ?? growth.added;
     const next = withRemaining(growth, cap);
     await writeKickbackLedgerUnsafe(projectRoot, {

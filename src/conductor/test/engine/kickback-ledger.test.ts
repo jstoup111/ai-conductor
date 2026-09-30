@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { applyRebaseTransition } from '../../src/engine/rebase-transition.js';
+import { readRemediationGateAppendBudget } from '../../src/engine/conductor.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -73,6 +75,82 @@ describe('kickback-ledger', () => {
 
   it('returns an empty ledger when the ledger file is absent', async () => {
     await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+  });
+
+  it('round-trips an optional pending repair with its per-gate charges and task ids', async () => {
+    const pendingRepair = {
+      receiptId: 'repair-round-1',
+      charges: {
+        prd_audit: { laps: 1, growth: 2 },
+        architecture_review_as_built: { laps: 1, growth: 1 },
+      },
+      taskIds: ['rem-prd-1', 'rem-as-built-1', 'rem-as-built-2'],
+    };
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {},
+      pendingRepair,
+    } as unknown as KickbackLedger);
+
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({ pendingRepair });
+  });
+
+  it('scopes a malformed pending repair to remediation gates and plan growth', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2, cumulative: 3, treeHash: null, lastReason: 'healthy', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+      pendingRepair: { receiptId: '', charges: {}, taskIds: [] },
+    }));
+
+    const config = {} as HarnessConfig;
+    const [prdAudit, asBuilt] = await Promise.all([
+      readRemediationGateAppendBudget(dir, config, 'prd_audit', 2, 1, 1, 4),
+      readRemediationGateAppendBudget(dir, config, 'architecture_review_as_built', 2, 1, 1, 4),
+    ]);
+
+    expect({
+      buildReview: (await readKickbackLedger(dir)).gates.build_review,
+      prdAudit: { priorLaps: prdAudit.priorLaps, growthRemaining: prdAudit.growth.remaining },
+      asBuilt: { priorLaps: asBuilt.priorLaps, growthRemaining: asBuilt.growth.remaining },
+    }).toEqual({
+      buildReview: expect.objectContaining({ count: 2, cumulative: 3 }),
+      prdAudit: { priorLaps: 2, growthRemaining: 0 },
+      asBuilt: { priorLaps: 2, growthRemaining: 0 },
+    });
+  });
+
+  it('refuses direct growth reads when a pending repair is malformed', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {},
+      pendingRepair: { receiptId: '', charges: {}, taskIds: [] },
+    }));
+
+    await expect(readGrowth(dir, 1)).rejects.toThrow('plan growth is unreadable');
+  });
+
+  it('retains a malformed pending repair across a healthy build-review write', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+      pendingRepair: { receiptId: '', charges: {}, taskIds: [] },
+    }));
+    await bumpKickbackGateInLedger(dir, 'build_review', {
+      treeHash: '0123456789abcdef0123456789abcdef01234567', resolvedCount: 0, reason: 'healthy write',
+    });
+
+    await expect(readGrowth(dir, 1)).rejects.toThrow('plan growth is unreadable');
   });
 
   it('reads absent and present pending as-built remediation findings', async () => {
