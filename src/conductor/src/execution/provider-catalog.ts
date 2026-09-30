@@ -13,6 +13,7 @@ import {
 export type ProviderCapability =
   | 'readiness'
   | 'selfHost'
+  | 'interactiveLaunch'
   | 'readOnlyReview'
   | 'reviewPolicyCatalog'
   | 'supportsSessionResume'
@@ -29,6 +30,7 @@ export type ProviderDiagnosticEnvelope = 'claude-json' | 'codex-jsonl';
 /** Follow-up intakes that own capability-specific provider behavior. */
 export const PROVIDER_CAPABILITY_OWNERS = {
   selfHost: '#1887',
+  interactiveLaunch: '#1007',
   readOnlyReview: '#1886',
   reviewPolicyCatalog: '#1888',
   costSelfReporting: '#1889',
@@ -36,6 +38,11 @@ export const PROVIDER_CAPABILITY_OWNERS = {
 
 export interface ProviderFactoryOptions {
   readonly codexDoctorTimeoutMs?: number;
+}
+
+export interface InteractiveLaunch {
+  readonly sessionMarkers: readonly string[];
+  readonly argv: (prompt: string, env: NodeJS.ProcessEnv) => string[];
 }
 
 export interface BuiltInProviderDescriptor {
@@ -56,6 +63,8 @@ export interface BuiltInProviderDescriptor {
   /** Whether unattended provider commands run in an OS sandbox. */
   readonly osSandbox: boolean;
   readonly capabilities: ProviderCapabilityFlags;
+  /** Provider-native mechanics for launching an interactive composer session. */
+  readonly interactiveLaunch?: InteractiveLaunch;
   /** Known machine-envelope formats, ordered by the adapter's native output. */
   readonly diagnosticEnvelopes: readonly ProviderDiagnosticEnvelope[];
   /** Registered discovery mechanism for installed build-review policies. */
@@ -101,6 +110,7 @@ export const BUILT_IN_PROVIDERS = [
     osSandbox: false,
     capabilities: {
       selfHost: true,
+      interactiveLaunch: true,
       readOnlyReview: true,
       reviewPolicyCatalog: true,
       supportsSessionResume: false,
@@ -108,6 +118,14 @@ export const BUILT_IN_PROVIDERS = [
       writeFence: true,
       nativeSchema: true,
     } as const satisfies ProviderCapabilityFlags,
+    interactiveLaunch: {
+      sessionMarkers: ['CLAUDECODE'],
+      argv: (prompt, env) => {
+        const configuredMode = env.CONDUCT_ENGINEER_PERMISSION_MODE;
+        const permissionMode = configuredMode === 'plan' ? 'default' : configuredMode ?? 'default';
+        return ['--permission-mode', permissionMode, prompt];
+      },
+    },
     diagnosticEnvelopes: ['claude-json', 'codex-jsonl'],
     reviewPolicyCatalog: 'claude-metadata',
   },
@@ -134,11 +152,16 @@ export const BUILT_IN_PROVIDERS = [
     capabilities: {
       readiness: true,
       selfHost: true,
+      interactiveLaunch: true,
       readOnlyReview: true,
       reviewPolicyCatalog: true,
       supportsSessionResume: false,
       nativeSchema: true,
     } as const satisfies ProviderCapabilityFlags,
+    interactiveLaunch: {
+      sessionMarkers: ['CODEX_THREAD_ID', 'CODEX_SESSION_ID'],
+      argv: (prompt) => [prompt],
+    },
     diagnosticEnvelopes: ['codex-jsonl', 'claude-json'],
     reviewPolicyCatalog: 'codex-app-server',
   },

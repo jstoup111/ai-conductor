@@ -9,7 +9,6 @@ import {
   CLI_PROVIDER_DISPATCHING_COMMANDS,
   bootDispatchingCliProviders,
   dispatchNonDispatchingCliCommand,
-  validateComposeEngineerClaudeInstallation,
 } from '../../src/index.js';
 import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
@@ -284,31 +283,4 @@ describe('runDaemonMode provider discovery at boot', () => {
     expect(CLI_PROVIDER_DISPATCHING_COMMANDS).not.toContain('render-diagrams');
   });
 
-  it('refuses a missing Claude during compose pre-launch validation', async () => {
-    const events = new ConductorEventEmitter();
-    const discoveries: unknown[] = [];
-    events.on('provider_discovery', async (event) => { discoveries.push(event); });
-
-    await expect(validateComposeEngineerClaudeInstallation({
-      events,
-      providerDiscoveryRunner: async (executable) => {
-        if (executable === 'claude') throw Object.assign(new Error('missing claude'), { code: 'ENOENT' });
-        return { exitCode: 0 };
-      },
-    })).rejects.toThrow(/claude.*not installed.*not-found/i);
-    expect({ discoveries }).toEqual({
-      discoveries: [{
-        type: 'provider_discovery',
-        installed: ['codex', 'pi'],
-        missing: [{ id: 'claude', reason: 'not-found' }],
-      }],
-    });
-  });
-
-  it('allows compose pre-launch validation when Claude is installed', async () => {
-    await expect(validateComposeEngineerClaudeInstallation({
-      events: new ConductorEventEmitter(),
-      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
-    })).resolves.toBeUndefined();
-  });
 });

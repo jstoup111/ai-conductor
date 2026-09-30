@@ -91,7 +91,9 @@ know how to fix it instead of seeing a raw spawn failure.
 
 **Requirement:** TI-4. When the launcher runs inside a session of any host that declares
 `interactiveLaunch`, it tells the operator to invoke the skill in place and launches nothing
-(ADR D9, D11).
+(ADR D9, D11). The existing `gh` version floor (adr-2026-09-05) still runs first, so with `gh`
+missing or below the floor the launcher exits 1 before this guard; the exit-0 outcomes below assume
+`gh` passes it.
 
 As an operator already inside Claude Code or Codex, I want the launcher to point me at the
 in-session command, so that I do not end up with a nested interactive session.
@@ -99,8 +101,8 @@ in-session command, so that I do not end up with a nested interactive session.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `CLAUDECODE` is set in the environment, when the operator runs bare `ai-conductor compose`, then it prints that `/composer` should be run directly, exits 0, and spawns nothing.
-- Given `CODEX_THREAD_ID` is set in the environment, when the operator runs bare `ai-conductor compose`, then it prints that `$composer` should be run directly, exits 0, and spawns nothing.
+- Given `CLAUDECODE` is set in the environment and `gh` passes the launcher's version floor, when the operator runs bare `ai-conductor compose`, then it prints that `/composer` should be run directly, exits 0, and spawns nothing.
+- Given `CODEX_THREAD_ID` is set in the environment and `gh` passes the launcher's version floor, when the operator runs bare `ai-conductor compose`, then it prints that `$composer` should be run directly, exits 0, and spawns nothing.
 - Given no session marker of any capable host is set, when the operator runs bare `ai-conductor compose`, then the selected host is launched.
 
 #### Negative Paths

@@ -30,7 +30,6 @@ vi.mock('node:child_process', async (importOriginal) => {
 import {
   detectEngineerCommand,
   dispatchEngineer,
-  engineerLaunchArgs,
   missingRegistrationEpisodes,
   prePollIntake,
   trackerExclusionEpisodes,
@@ -42,6 +41,7 @@ import { parseEnvelope } from '../../../src/engine/engineer/intake/port.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
 import type { ConductorEvent } from '../../../src/types/events.js';
+import { DEFAULT_PROVIDER, requireProviderCapability } from '../../../src/execution/provider-catalog.js';
 
 const execFile = promisify(execFileCb);
 const argv = (...rest: string[]) => ['node', 'conduct-ts', 'engineer', ...rest];
@@ -151,6 +151,7 @@ function baseOpts(extra: Partial<DispatchEngineerOpts>): DispatchEngineerOpts {
     engineerDir,
     print: () => {},
     printErr: () => {},
+    isAttachedTerminal: () => true,
     intakeResolveActor: async () => ({ resolved: true, id: 'test-owner' }),
     ...extra,
   };
@@ -242,20 +243,26 @@ describe('detectEngineerCommand: idea sources, claim, --source-ref', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 2. engineerLaunchArgs — idea is appended to the slash command prompt
+// 2. catalog interactive launch argv — idea is appended to the composer prompt
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe('engineerLaunchArgs: idea passthrough', () => {
+describe('catalog interactive launch argv: idea passthrough', () => {
+  const defaultHost = requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch');
+  const argvFor = (idea?: string) => {
+    const prompt = `${defaultHost.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
+    return defaultHost.interactiveLaunch.argv(prompt, {});
+  };
+
   it('no idea → exactly /composer', () => {
-    expect(engineerLaunchArgs({})).toEqual(['--permission-mode', 'default', '/composer']);
+    expect(argvFor()).toEqual(['--permission-mode', 'default', '/composer']);
   });
   it('idea → appended to the /composer prompt', () => {
-    expect(engineerLaunchArgs({}, 'add a /metrics endpoint')).toEqual([
+    expect(argvFor('add a /metrics endpoint')).toEqual([
       '--permission-mode', 'default', '/composer add a /metrics endpoint',
     ]);
   });
   it('blank idea is treated as no idea', () => {
-    expect(engineerLaunchArgs({}, '   ')).toEqual(['--permission-mode', 'default', '/composer']);
+    expect(argvFor('   ')).toEqual(['--permission-mode', 'default', '/composer']);
   });
 });
 
@@ -403,6 +410,7 @@ describe('dispatchEngineer({kind:"launch"}): defers to a live brain loop', () =>
         print: (s) => out.push(s),
         brainLoopAlive: () => true,
         insideClaudeSession: false,
+        loadLaunchConfig: async () => ({ ok: true, config: {}, warnings: [] }),
       }),
     );
     expect(code).toBe(0);
@@ -425,6 +433,7 @@ describe('dispatchEngineer({kind:"launch"}): defers to a live brain loop', () =>
         print: (s) => out.push(s),
         brainLoopAlive: () => false,
         insideClaudeSession: false,
+        loadLaunchConfig: async () => ({ ok: true, config: {}, warnings: [] }),
       }),
     );
     expect(code).toBe(0);

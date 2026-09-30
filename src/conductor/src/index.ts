@@ -44,11 +44,9 @@ import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
 import {
   normalizeProviderSelection,
-  ProviderNotInstalledError,
   validateProviderInstallation,
   validateRegisteredProviderSelections,
 } from './engine/provider-selection.js';
-import { CLAUDE_PROVIDER } from './execution/provider-catalog.js';
 import {
   discoverInstalledProviders,
   type ProviderVersionProbeRunner,
@@ -538,25 +536,6 @@ export async function bootDispatchingCliProviders(options: {
   return subscriber;
 }
 
-/** Validate the Claude executable before compose or engineer launches it. */
-export async function validateComposeEngineerClaudeInstallation(options: {
-  readonly events: ConductorEventEmitter;
-  readonly providerDiscoveryRunner?: ProviderVersionProbeRunner;
-}): Promise<void> {
-  const discovery = await discoverInstalledProviders({
-    events: options.events,
-    ...(options.providerDiscoveryRunner ? { runner: options.providerDiscoveryRunner } : {}),
-  });
-  // Compose/engineer launches Claude directly, independently of the selected
-  // build provider. Check that executable only: validating the configured
-  // selection here would reject an otherwise-launchable external plugin or a
-  // missing provider this entry point never dispatches.
-  if (!discovery.installed.includes(CLAUDE_PROVIDER)) {
-    const reason = discovery.missing.find(({ id }) => id === CLAUDE_PROVIDER)?.reason ?? 'version-failed';
-    throw new ProviderNotInstalledError(CLAUDE_PROVIDER, 'compose/engineer launch', reason);
-  }
-}
-
 // Harness VERSION lookup for the migration check. Probes the invocation cwd
 // first, then falls back to the shared module-relative probe in
 // engine/version-report.ts — the installed layout is a symlink chain
@@ -960,19 +939,8 @@ async function main(): Promise<void> {
     const spine = startOperatorEventSpine(process.cwd());
     let code: number;
     try {
-      let launchBoot: Promise<void> | undefined;
       code = await dispatchEngineer(engineerCmd, {
         events: spine.events,
-        ...(engineerCmd.kind === 'launch' ? {
-          beforeLaunch: async () => {
-            launchBoot ??= (async () => {
-              await validateComposeEngineerClaudeInstallation({
-                events: spine.events,
-              });
-            })();
-            await launchBoot;
-          },
-        } : {}),
       });
     } finally {
       spine.stop();

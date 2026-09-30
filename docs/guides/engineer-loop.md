@@ -18,7 +18,8 @@ picks it up from the default branch afterwards.
 | Requirement | Check |
 | --- | --- |
 | `ai-conductor` on PATH | `ai-conductor --help` |
-| `claude` on PATH (the loop launches an interactive session) | `claude --version` |
+| `claude` on PATH (for a Claude launch) | `claude --version` |
+| `codex` on PATH or `CODEX_EXECUTABLE` (for a Codex launch) | `codex --version` |
 | At least one registered project | `ai-conductor compose projects` prints a non-empty JSON array |
 | `gh` authenticated, for intake and PR steps | `gh auth status` |
 
@@ -29,8 +30,8 @@ Register a repo with `ai-conductor register <path>`, or scaffold a new one with
 
 There are two surfaces and you use both:
 
-- **The front door.** Bare `ai-conductor compose` spawns an interactive `claude` session running the
-  `/composer` skill, with stdio inherited. The human stays in the loop.
+- **The front door.** Bare `ai-conductor compose` starts the selected interactive host with stdio
+  inherited: Claude runs `/composer`; Codex runs `$composer`. The human stays in the loop.
 - **The primitives.** `projects`, `claim`, `worktree`, `land`, `handoff`, and the recovery verbs are
   deterministic CLI commands. The skill calls them from in-chat reasoning; you can also call them by
   hand.
@@ -47,8 +48,8 @@ artifact, allowing the daemon to begin at BUILD after the spec PR merges.
 ai-conductor compose
 ```
 
-You should see an interactive Claude session start on the `/composer` prompt. Before the session
-launches, the CLI polls GitHub issues into the durable inbox and prints `Intake: N issue(s) queued.`
+You should see the selected interactive host start on its composer prompt: Claude uses `/composer`
+and Codex uses `$composer`. Before the session launches, the CLI polls GitHub issues into the durable inbox and prints `Intake: N issue(s) queued.`
 when N is above zero. That pre-poll is skipped when a background brain loop is already running
 (it owns polling) and skipped when you supply an idea on the command line.
 
@@ -57,22 +58,26 @@ Variants:
 ```bash
 ai-conductor compose --idea "<your idea>"
 ai-conductor compose <free text idea>
+ai-conductor compose --provider codex
+ai-conductor compose --provider codex --idea "<your idea>"
 ```
 
 Both drive the first session with that idea and skip the intake pre-poll. The idea is one-shot: it
 applies only to the first session, and later iterations fall back to intake or chat.
 
+`--provider` selects the interactive host for the session and overrides the configured provider.
+It can be used with or without `--idea`.
+
 When the session exits, the launcher asks `Process another idea in a fresh session? [Y/n]` on a TTY.
 Answering yes starts a clean session — one idea per session, by design. On a non-TTY stdin the
 launcher never loops.
 
-**If you are already inside a Claude Code session**, `ai-conductor compose` refuses to nest a second
-one. It prints `You're already inside a Claude Code session — run /composer directly…` and exits 0.
-Run `/composer` in that session instead.
+**If you are already inside a supported host session**, `ai-conductor compose` refuses to nest a
+second one. It prints guidance and exits 0: run `/composer` in Claude Code or `$composer` in Codex.
 
-The permission mode of the launched session comes from `CONDUCT_ENGINEER_PERMISSION_MODE` and
-defaults to `default`. The value `plan` is rejected and coerced back to `default`, because a
-read-only session cannot run the git and `gh` primitives. See
+For Claude launches, the permission mode comes from `CONDUCT_ENGINEER_PERMISSION_MODE` and defaults
+to `default`. The value `plan` is rejected and coerced back to `default`, because a read-only session
+cannot run the git and `gh` primitives. Codex ignores this setting. See
 [environment reference](../reference/environment.md).
 
 ## Step 1 — Capture the idea
@@ -312,8 +317,10 @@ moving to the next step.
 allow-list. `--help` and `-h` are checked before the subcommand's own logic, so
 `ai-conductor compose land --help` always prints help and exits 0 with zero side effects.
 
-**`engineer: could not launch an interactive Claude session`.** The `claude` binary is not on PATH.
-The command prints the guide and exits 1.
+**`engineer: could not launch <provider> executable <executable>`.** The selected host executable is
+unavailable. Install it or set the named override environment variable (for example,
+`CODEX_EXECUTABLE`), or run the named in-session command (`/composer` or `$composer`). The command
+prints the guide and exits 1.
 
 **`Cannot land spec: identity unresolved.`** Set `spec_owner` in `~/.ai-conductor/config.yml` or run
 `gh auth login`. See [configuration reference](../reference/configuration.md).

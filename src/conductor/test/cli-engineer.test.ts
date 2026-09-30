@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3, task:6
 // Specs for the `conduct engineer` subcommand wiring (Phase 9.3, ADR-008 conformance).
 //
 // Mirrors the structural detection pattern used by the registry-cli tests:
@@ -13,6 +13,18 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execa } from 'execa';
 import { join } from 'node:path';
 import { ENGINEER_SUBCOMMANDS } from '../src/engine/engineer-cli.js';
+import { DEFAULT_PROVIDER, requireProviderCapability } from '../src/execution/provider-catalog.js';
+import { discoverInstalledProviders } from '../src/engine/provider-discovery.js';
+
+vi.mock('../src/engine/provider-discovery.js', () => ({
+  discoverInstalledProviders: vi.fn(),
+}));
+
+function defaultComposerArgs(env: NodeJS.ProcessEnv, idea?: string): string[] {
+  const host = requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch');
+  const prompt = `${host.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
+  return host.interactiveLaunch.argv(prompt, env);
+}
 
 // ─── 1. Structural: `createProgram()` registers a `engineer` subcommand ──────────
 
@@ -44,6 +56,36 @@ describe('legacy engineer CLI alias — process dispatch boundary', () => {
     expect(engineer.stdout).toBe(compose.stdout);
     expect(compose.stderr).toBe('');
     expect(engineer.stderr).toBe('Warning: `engineer` is deprecated; use `compose` instead.\n');
+  });
+
+  it('launches compose once without provider discovery or a version probe', async () => {
+    const { detectEngineerCommand, dispatchEngineer } = await import('../src/engine/engineer-cli.js');
+    const dispatch = detectEngineerCommand(['node', 'conduct', 'compose']);
+    const spawnHost = vi.fn(async () => 0);
+    const loadLaunchConfig = vi.fn(async () => ({
+      ok: true as const,
+      config: { llm_provider: 'codex' },
+      warnings: [],
+    }));
+    const prePoll = vi.fn(async () => 0);
+
+    expect(dispatch).toEqual({ kind: 'launch' });
+    const code = await dispatchEngineer(dispatch!, {
+      spawnHost,
+      loadLaunchConfig,
+      env: {},
+      prePoll,
+      isAttachedTerminal: () => true,
+      confirmAnother: () => false,
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+    });
+
+    expect(code).toBe(0);
+    expect(loadLaunchConfig).toHaveBeenCalledOnce();
+    expect(prePoll).toHaveBeenCalledOnce();
+    expect(spawnHost).toHaveBeenCalledOnce();
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], process.cwd());
+    expect(vi.mocked(discoverInstalledProviders)).not.toHaveBeenCalled();
   });
 });
 
@@ -79,6 +121,17 @@ describe('detectEngineerCommand — argv detection', () => {
   it.each(['engineer', 'compose'])('returns launch for a bare %s command', async (verb) => {
     const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
     expect(detectEngineerCommand(['node', 'conduct', verb])).toEqual({ kind: 'launch' });
+  });
+
+  it.each(['engineer', 'compose'])('parses --provider on %s launch forms in either flag order', async (verb) => {
+    const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
+
+    expect(detectEngineerCommand(['node', 'conduct', verb, '--provider', 'codex']))
+      .toEqual({ kind: 'launch', provider: 'codex' });
+    expect(detectEngineerCommand(['node', 'conduct', verb, '--provider', 'claude', '--idea', 'add retries']))
+      .toEqual({ kind: 'launch', provider: 'claude', idea: 'add retries' });
+    expect(detectEngineerCommand(['node', 'conduct', verb, '--idea', 'add retries', '--provider', 'claude']))
+      .toEqual({ kind: 'launch', provider: 'claude', idea: 'add retries' });
   });
 
   it.each(subcommandCases)('returns the same help descriptor for %s %s', async (subcommand, args) => {
@@ -157,9 +210,26 @@ describe('dispatchEngineer — routes to engineer entry', () => {
     const mod = await import('../src/engine/engineer-cli.js');
     // Injected launcher stands in for spawning a real `claude /composer`.
     const launchInteractive = vi.fn().mockResolvedValue(0);
-    const code = await mod.dispatchEngineer({ kind: 'launch' }, { launchInteractive });
+    const code = await mod.dispatchEngineer({ kind: 'launch' }, { launchInteractive, isAttachedTerminal: () => true });
     expect(launchInteractive).toHaveBeenCalledOnce();
     expect(code).toBe(0);
+  });
+
+  it('reports a usage error for a valueless --provider before launching', async () => {
+    const mod = await import('../src/engine/engineer-cli.js');
+    const dispatch = mod.detectEngineerCommand(['node', 'conduct', 'compose', '--provider']);
+    const launchInteractive = vi.fn().mockResolvedValue(0);
+    const errors: string[] = [];
+
+    expect(dispatch).not.toBeNull();
+    const code = await mod.dispatchEngineer(dispatch!, {
+      launchInteractive,
+      printErr: (message) => errors.push(message),
+    });
+
+    expect(code).toBe(1);
+    expect(errors.join('\n')).toMatch(/--provider/);
+    expect(launchInteractive).not.toHaveBeenCalled();
   });
 
   it('dispatchEngineer({kind:"launch"}) loops one fresh session per idea until confirmAnother is false', async () => {
@@ -169,7 +239,7 @@ describe('dispatchEngineer — routes to engineer entry', () => {
     const launchInteractive = vi.fn().mockResolvedValue(0);
     const answers = [true, true, false];
     const confirmAnother = vi.fn().mockImplementation(() => answers.shift());
-    const code = await mod.dispatchEngineer({ kind: 'launch' }, { launchInteractive, confirmAnother });
+    const code = await mod.dispatchEngineer({ kind: 'launch' }, { launchInteractive, confirmAnother, isAttachedTerminal: () => true });
     expect(launchInteractive).toHaveBeenCalledTimes(3);
     expect(confirmAnother).toHaveBeenCalledTimes(3);
     expect(code).toBe(0);
@@ -182,7 +252,7 @@ describe('dispatchEngineer — routes to engineer entry', () => {
     const out: string[] = [];
     const code = await mod.dispatchEngineer(
       { kind: 'launch' },
-      { launchInteractive, confirmAnother, printErr: (s) => out.push(s) },
+      { launchInteractive, confirmAnother, printErr: (s) => out.push(s), isAttachedTerminal: () => true },
     );
     expect(code).toBe(1);
     // A launch failure must NOT keep looping.
@@ -209,18 +279,16 @@ describe('dispatchEngineer — routes to engineer entry', () => {
 
 // ─── 4. Launch argv: never plan mode (the engineer must be able to write) ────────
 
-describe('engineerLaunchArgs — permission mode', () => {
+describe('catalog interactive launch argv — permission mode', () => {
   it('uses the canonical composer prompt with the default writable mode', async () => {
-    const { engineerLaunchArgs } = await import('../src/engine/engineer-cli.js');
-    const args = engineerLaunchArgs({});
+    const args = defaultComposerArgs({});
     expect(args).toEqual(['--permission-mode', 'default', '/composer']);
     // Hard invariant: a launched composer is never read-only.
     expect(args).not.toContain('plan');
   });
 
   it('appends a compose idea to the canonical composer prompt', async () => {
-    const { engineerLaunchArgs } = await import('../src/engine/engineer-cli.js');
-    expect(engineerLaunchArgs({}, 'add a CSV export')).toEqual([
+    expect(defaultComposerArgs({}, 'add a CSV export')).toEqual([
       '--permission-mode',
       'default',
       '/composer add a CSV export',
@@ -228,8 +296,7 @@ describe('engineerLaunchArgs — permission mode', () => {
   });
 
   it('honors CONDUCT_ENGINEER_PERMISSION_MODE override', async () => {
-    const { engineerLaunchArgs } = await import('../src/engine/engineer-cli.js');
-    expect(engineerLaunchArgs({ CONDUCT_ENGINEER_PERMISSION_MODE: 'acceptEdits' })).toEqual([
+    expect(defaultComposerArgs({ CONDUCT_ENGINEER_PERMISSION_MODE: 'acceptEdits' })).toEqual([
       '--permission-mode',
       'acceptEdits',
       '/composer',
@@ -237,8 +304,7 @@ describe('engineerLaunchArgs — permission mode', () => {
   });
 
   it('coerces an explicit "plan" override back to default (plan would defeat the loop)', async () => {
-    const { engineerLaunchArgs } = await import('../src/engine/engineer-cli.js');
-    expect(engineerLaunchArgs({ CONDUCT_ENGINEER_PERMISSION_MODE: 'plan' })).toEqual([
+    expect(defaultComposerArgs({ CONDUCT_ENGINEER_PERMISSION_MODE: 'plan' })).toEqual([
       '--permission-mode',
       'default',
       '/composer',
