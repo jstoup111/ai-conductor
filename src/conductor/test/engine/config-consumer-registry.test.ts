@@ -1,4 +1,5 @@
-// Covers: task:3, task:21
+// Covers: task:3, task:21, rem-ab5-1
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CONFIG_CONSUMER_KEY_SETS } from '../../src/engine/config.js';
 import {
@@ -22,10 +23,23 @@ describe('config consumer registry', () => {
 
   it('does not count validation as a key consumer', () => {
     for (const [key, declaration] of Object.entries(configConsumerRegistry)) {
+      if (key === 'harness_version') continue;
       expect(declaration.consumer, `${key} must name its runtime consumer`).not.toBe(
         'src/conductor/src/engine/config.ts',
       );
     }
+  });
+
+  it('declares loadProjectConfig’s satisfiesVersion gate as harness_version’s runtime consumer', () => {
+    const configSource = readFileSync(new URL('../../src/engine/config.ts', import.meta.url), 'utf8');
+    const loadProjectConfigStart = configSource.indexOf('async function loadProjectConfig');
+    const loadProjectConfig = configSource.slice(
+      loadProjectConfigStart,
+      configSource.indexOf('export async function loadMergedConfig'),
+    );
+
+    expect(configConsumerRegistry.harness_version.consumer).toBe('src/conductor/src/engine/config.ts');
+    expect(loadProjectConfig).toContain('satisfiesVersion(harnessVersion, validation.config.harness_version)');
   });
 
   it('covers every nested validator block', () => {

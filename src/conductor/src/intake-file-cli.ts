@@ -1,4 +1,5 @@
-// intake-file-cli.ts — production entry point for `bin/intake-file`.
+// intake-file-cli.ts — production entry point for the bundled
+// `skills/intake/scripts/intake-file` helper.
 //
 // One atomic filing: create the GitHub intake issue, resolve size/priority
 // (given ▸ prompt ▸ infer ▸ default), apply the `priority:`/`size:` labels,
@@ -144,6 +145,11 @@ async function main(): Promise<void> {
     }
     for (const w of result.warnings) console.error(`[intake-file] warning: ${w}`);
     for (const bad of result.badRefs) console.error(`[intake-file] warning: bad --depends-on ref "${bad}"`);
+    for (const dependency of result.unlinked) {
+      console.error(
+        `[intake-file] NOT LINKED: ${result.issueUrl} is not blocked by ${dependency.ref} (${dependency.reason})`,
+      );
+    }
   } finally {
     persister?.stop();
     rl?.close();

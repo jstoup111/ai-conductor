@@ -233,6 +233,84 @@ describe('as-built verdict contract', () => {
     });
   });
 
+  it('accepts an empty caller chain as the unreachable record of a BLOCKED verdict', () => {
+    // Shape observed from Codex on link-intake-depends-on-with-a-typed-issue-id: the unreachable
+    // primitive is listed with no chain and blocked by a DESIGN finding.
+    const verdict = {
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [
+        { primitive: 'fileIntakeIssue', callerChain: ['skills/intake/scripts/intake-file:12', 'intake-file-cli.ts:119'] },
+        { primitive: 'createGithubTrackerClient().addIssueDependency', callerChain: [] },
+      ],
+      driftNotes: [],
+      findings: [{ id: 'as-built-unreachable-add-issue-dependency', class: 'DESIGN', summary: 'Every invocation is test-only.' }],
+      violations: 'One unreachable production rung.',
+      resolution: 'Wire or remove the method.',
+    };
+
+    expect(validateAsBuiltVerdict(verdict)).toMatchObject({
+      ok: true,
+      verdict: { verdict: 'BLOCKED', reachability: verdict.reachability },
+    });
+  });
+
+  it('drops blank caller-chain hops and treats an all-blank chain as unreachable', () => {
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [
+        { primitive: 'wired', callerChain: ['bin/conduct:1', ' ', 'step-runners.ts:10'] },
+        { primitive: 'unwired', callerChain: [''] },
+      ],
+      driftNotes: [],
+      findings: [{ id: 'AB-1', class: 'DESIGN', summary: 'unwired has no production caller.' }],
+      violations: 'One unreachable production rung.',
+      resolution: 'Wire it.',
+    })).toMatchObject({
+      ok: true,
+      verdict: {
+        reachability: [
+          { primitive: 'wired', callerChain: ['bin/conduct:1', 'step-runners.ts:10'] },
+          { primitive: 'unwired', callerChain: [] },
+        ],
+      },
+    });
+  });
+
+  it.each(['APPROVED', 'APPROVED WITH DRIFT NOTES', 'PLAN_GAP'] as const)(
+    'rejects an unreachable primitive on a %s verdict instead of admitting it as reachable',
+    (verdict) => {
+      expect(validateAsBuiltVerdict({
+        version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+        verdict,
+        reachability: [{ primitive: 'addIssueDependency', callerChain: [] }],
+        driftNotes: [],
+        ...(verdict === 'PLAN_GAP' ? { outcomeDelivered: true, affectedOutcome: 'The sealed outcome.' } : {}),
+      })).toEqual({
+        ok: false,
+        field: 'reachability[0].callerChain',
+        requirement: 'an empty caller chain records an unreachable primitive, which requires a BLOCKED verdict',
+      });
+    },
+  );
+
+  it('rejects a caller chain that is not an array of strings', () => {
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION,
+      verdict: 'BLOCKED',
+      reachability: [{ primitive: 'addIssueDependency', callerChain: ['bin/conduct:1', 7] }],
+      driftNotes: [],
+      findings: [{ id: 'AB-1', class: 'DESIGN', summary: 'x' }],
+      violations: 'v',
+      resolution: 'r',
+    })).toEqual({
+      ok: false,
+      field: 'reachability[0].callerChain',
+      requirement: 'an array of caller strings is required; use an empty array only for a primitive with no production caller',
+    });
+  });
+
   it('exports a verdict-discriminated union with arm-specific fields', () => {
     expectTypeOf<Extract<AsBuiltVerdict, { verdict: 'PLAN_GAP' }>>().toHaveProperty('outcomeDelivered');
     expectTypeOf<Extract<Exclude<AsBuiltVerdict, { verdict: 'PLAN_GAP' }>, Record<'outcomeDelivered', unknown>>>().toEqualTypeOf<never>();
@@ -368,13 +446,26 @@ describe('as-built verdict contract', () => {
     });
   });
 
-  it('drops empty BLOCKED fields on a PLAN_GAP verdict but keeps rejecting non-empty ones', () => {
+  it('drops BLOCKED prose on a PLAN_GAP verdict but keeps rejecting non-empty findings', () => {
     const planGap = {
       version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict: 'PLAN_GAP', reachability: [], driftNotes: [],
       outcomeDelivered: false, affectedOutcome: 'Story 2 is undelivered.',
     };
     expect(validateAsBuiltVerdict({ ...planGap, findings: [], violations: null, resolution: '' })).toEqual({ ok: true, verdict: planGap });
-    expect(validateAsBuiltVerdict({ ...planGap, violations: 'Something is wrong.' })).toMatchObject({ ok: false, field: 'violations' });
+    expect(validateAsBuiltVerdict({ ...planGap, violations: 'Something is wrong.', resolution: 'Fix it.' })).toEqual({ ok: true, verdict: planGap });
+    expect(validateAsBuiltVerdict({
+      ...planGap,
+      findings: [{ id: 'AB-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Wire it.' }],
+    })).toMatchObject({ ok: false, field: 'findings' });
+  });
+
+  // Codex strict mode fills every flat-schema field, so an approval arrives carrying
+  // explanatory violation/resolution prose; that prose is not a contradiction.
+  it.each(['APPROVED', 'APPROVED WITH DRIFT NOTES'])('drops non-empty BLOCKED prose on an %s verdict', (verdict) => {
+    expect(validateAsBuiltVerdict({
+      version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict, reachability: [], driftNotes: [],
+      findings: [], violations: 'None.', resolution: 'No action required.',
+    })).toEqual({ ok: true, verdict: { version: AS_BUILT_VERDICT_CONTRACT_VERSION, verdict, reachability: [], driftNotes: [] } });
   });
 
   it('rejects an unknown top-level key with the admitted APPROVED keys', () => {

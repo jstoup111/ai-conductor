@@ -1,8 +1,23 @@
-// Covers: task:1, task:2, task:11
-import { describe, it, expect } from 'vitest';
+// Covers: task:1, task:2, task:6, task:11
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
+import { buildExporters } from '../../../src/engine/otel/transport.js';
+import { OTLPTraceExporter as OTLPHttpTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { loadConfig } from '../../../src/engine/config.js';
+import { PluginRegistry } from '../../../src/engine/plugin-registry.js';
+import { registerBuiltins } from '../../../src/engine/plugin-loader.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import type { VisualizerFactory } from '../../../src/types/plugin.js';
 
 const PIPELINE_DIR = '/tmp/test-pipeline';
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 describe('resolveOtelConfig', () => {
   describe('absent otel block', () => {
@@ -85,6 +100,89 @@ describe('resolveOtelConfig', () => {
       );
       expect(result.enabled).toBe(true);
       expect((result as { protocol?: string }).protocol).toBe('grpc');
+    });
+
+    it.each(['grpc', 'http/protobuf'] as const)('enables the supported %s protocol', (protocol) => {
+      const result = resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', protocol } },
+        PIPELINE_DIR,
+      );
+
+      expect(result).toMatchObject({ enabled: true, protocol });
+    });
+
+    it('leaves an absent protocol unresolved so the transport defaults to HTTP/protobuf', () => {
+      const resolved = resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+        PIPELINE_DIR,
+      );
+
+      expect(resolved).toEqual({
+        enabled: true,
+        exporter: 'otlp',
+        endpoint: 'http://localhost:4318',
+      });
+      expect(buildExporters(resolved as Extract<typeof resolved, { enabled: true }>).spanExporter)
+        .toBeInstanceOf(OTLPHttpTraceExporter);
+    });
+
+    it.each(['http/json', 'gprc'])('disables unsupported protocol %s with its accepted alternatives', (protocol) => {
+      const result = resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', protocol } } as never,
+        PIPELINE_DIR,
+      );
+
+      expect(result.enabled).toBe(false);
+      expect((result as { error?: string }).error).toContain('otel.protocol');
+      expect((result as { error?: string }).error).toContain(protocol);
+      expect((result as { error?: string }).error).toContain('http/protobuf');
+      expect((result as { error?: string }).error).toContain('grpc');
+    });
+
+    it.each(['gprc', 'http/json'])('keeps the registered visualizer inert for unsupported protocol %s', (protocol) => {
+      const registry = new PluginRegistry();
+      const events = new ConductorEventEmitter();
+      registerBuiltins(registry, events, () => {});
+      const factory = registry.tryGet<VisualizerFactory>('visualizer', 'otel');
+
+      expect(factory).toBeTypeOf('function');
+      expect(() => factory!({
+        config: { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', protocol } } as never,
+        pipelineDir: PIPELINE_DIR,
+        startContext: { feature: 'protocol-test', project: 'ai-conductor' },
+        emitter: events,
+      })).not.toThrow();
+      expect(factory!({
+        config: { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', protocol } } as never,
+        pipelineDir: PIPELINE_DIR,
+        startContext: { feature: 'protocol-test', project: 'ai-conductor' },
+        emitter: events,
+      })).toBeNull();
+    });
+
+    it('loads an unsupported protocol without blocking config loading, then leaves the visualizer inert', async () => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'otel-unsupported-protocol-'));
+      tempDirs.push(projectRoot);
+      await mkdir(join(projectRoot, '.ai-conductor'));
+      await writeFile(
+        join(projectRoot, '.ai-conductor', 'config.yml'),
+        'otel:\n  exporter: otlp\n  endpoint: http://localhost:4318\n  protocol: http/json\n',
+      );
+
+      const loaded = await loadConfig(projectRoot);
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+
+      const registry = new PluginRegistry();
+      const events = new ConductorEventEmitter();
+      registerBuiltins(registry, events, () => {});
+      const factory = registry.tryGet<VisualizerFactory>('visualizer', 'otel');
+      expect(factory!({
+        config: loaded.config,
+        pipelineDir: join(projectRoot, '.pipeline'),
+        startContext: { feature: 'protocol-test', project: 'ai-conductor' },
+        emitter: events,
+      })).toBeNull();
     });
   });
 

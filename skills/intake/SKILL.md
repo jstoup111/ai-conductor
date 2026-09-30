@@ -182,7 +182,8 @@ traces, command output — is exactly the material that carries secrets. Scrub b
 file, not after: an issue edit does not remove what was published, and a leaked credential
 is compromised the moment it lands, not when someone notices.
 
-**The filer already runs a mechanical net.** The configured intake filer redacts
+**The filer already runs a mechanical net.** The bundled intake helper,
+`<this skill's directory>/scripts/intake-file`, redacts
 high-confidence credential shapes and operator-identifying paths from the title and body
 before the issue is created — provider and cloud tokens, PEM private-key blocks, JWTs, auth
 headers, URL-embedded credentials, values assigned to secret-named keys, absolute home
@@ -251,7 +252,7 @@ is never a window where an issue exists unlabeled or with a silently-skipped
 dependency check.
 
 ```bash
-bin/intake-file \
+<this skill's directory>/scripts/intake-file \
   --title "<symptom-or-outcome title>" \
   --body "$(cat <<'EOF'
 ## Observed
@@ -278,6 +279,9 @@ EOF
   --priority high \
   --depends-on owner/repo#123
 ```
+
+For Claude, `<this skill's directory>` is the injected loaded-skill base directory.
+For Codex, it is the directory of the listed `SKILL.md` path.
 
 - **`--title` and `--body` are required**; the script exits non-zero without them.
 - **`--size S|M|L`** (optional): if omitted, the script prompts interactively when
@@ -337,5 +341,5 @@ filer's design. DECIDE has nothing to weigh and everything to anchor on.
 - [ ] Title states the symptom or outcome, not a solution
 - [ ] Draft scrubbed per §7; any `[intake-file] redacted before filing:` line was read and the
       filed issue checked for over-redaction
-- [ ] Filed via `bin/intake-file`; `size=` reported in its output; `priority=` applied if warranted; `--depends-on` given or an explicit `dependencies: none` accepted
+- [ ] Filed via `<this skill's directory>/scripts/intake-file`; `size=` reported in its output; `priority=` applied if warranted; `--depends-on` given or an explicit `dependencies: none` accepted
 - [ ] Issue URL reported to the operator

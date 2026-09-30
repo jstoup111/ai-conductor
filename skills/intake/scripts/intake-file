@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REAL_PATH="$(readlink -f "$0")"
+SEARCH_DIR="$(dirname "$REAL_PATH")"
+
+is_harness_root() {
+  [ -f "$1/src/conductor/src/intake-file-cli.ts" ] \
+    && [ -x "$1/src/conductor/node_modules/.bin/tsx" ]
+}
+
+run_intake_file() {
+  local harness_root="$1"
+  shift
+  exec "$harness_root/src/conductor/node_modules/.bin/tsx" \
+    --tsconfig "$harness_root/src/conductor/tsconfig.json" \
+    "$harness_root/src/conductor/src/intake-file-cli.ts" "$@"
+}
+
+while :; do
+  if is_harness_root "$SEARCH_DIR"; then
+    run_intake_file "$SEARCH_DIR" "$@"
+  fi
+
+  if [ "$SEARCH_DIR" = / ]; then
+    break
+  fi
+  SEARCH_DIR="$(dirname "$SEARCH_DIR")"
+done
+
+if PATH_COMMAND="$(command -v ai-conductor 2>/dev/null)"; then
+  PATH_REAL_PATH="$(readlink -f "$PATH_COMMAND")"
+  PATH_ROOT="$(dirname "$(dirname "$PATH_REAL_PATH")")"
+  if is_harness_root "$PATH_ROOT"; then
+    run_intake_file "$PATH_ROOT" "$@"
+  fi
+  echo "intake-file: could not find a qualifying harness root while walking from $REAL_PATH; ai-conductor on PATH: $PATH_COMMAND (resolved: $PATH_REAL_PATH) is not in a qualifying harness root" >&2
+else
+  echo "intake-file: could not find a qualifying harness root while walking from $REAL_PATH; no ai-conductor found on PATH" >&2
+fi
+exit 1

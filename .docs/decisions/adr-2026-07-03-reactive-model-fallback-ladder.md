@@ -93,7 +93,7 @@ happy path needs strong justification.
 >    `model_fallback_ladder`, else the provider policy's ladder. This preserves today's behavior,
 >    where the top-level key applies to every provider. The one exception is a provider whose
 >    built-in policy ships no models (Pi,
->    adr-2026-09-24-built-in-provider-catalog-and-boot-discovery D10): it never inherits the
+>    adr-2026-09-24-built-in-provider-catalog-and-boot-discovery D13): it never inherits the
 >    top-level key, and its `llm_providers.<id>` ladder and escalation order are required. The
 >    escalation order is `llm_providers.<id>.model_escalation_order`, else the policy's order;
 >    there is no top-level escalation key.

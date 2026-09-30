@@ -131,9 +131,9 @@ async function makeConfiguredProject(prefix: string): Promise<string> {
 }
 
 afterEach(async () => {
-  await Promise.all(
-    scratches.splice(0).map((path) => rm(path, { recursive: true, force: true })),
-  );
+  for (const path of scratches.splice(0)) {
+    await rm(path, { recursive: true, force: true });
+  }
 });
 
 describe('FullSuiteVerifier', () => {

@@ -34,6 +34,7 @@ import {
   writeRunRootOwnerMarker,
   IGNORED_TMPDIR_PREFIXES,
   RUN_TMP_ROOT_PREFIX,
+  vitestOwnTmpdirEntries,
   type TmpdirSnapshot,
 } from './tmpdir-leak-guard.js';
 import { VITEST_TMP_BASE_ENV } from '../scripts/vitest-temp.mjs';
@@ -372,6 +373,39 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
 
   it('exempts the run root prefix by default so the guard never trips on its own root', () => {
     expect(IGNORED_TMPDIR_PREFIXES).toContain(RUN_TMP_ROOT_PREFIX);
+  });
+
+  it('exempts only an exact Vitest tmpdir entry', () => {
+    const diff = diffTmpdirEntries(
+      snap([]),
+      snap(['vitest-abc', 'vitest-abc-lookalike', 'genuine-leak']),
+      undefined,
+      ['vitest-abc']
+    );
+
+    expect(diff).toEqual({
+      stray: ['vitest-abc-lookalike', 'genuine-leak'],
+      ignored: [],
+    });
+  });
+
+  it('keeps the default diff behavior when no exempt entries are supplied', () => {
+    expect(diffTmpdirEntries(snap([]), snap(['vitest-abc']))).toEqual({
+      stray: ['vitest-abc'],
+      ignored: [],
+    });
+  });
+});
+
+describe('tmpdir-leak-guard: vitestOwnTmpdirEntries', () => {
+  it('returns only direct children of the real tmpdir', () => {
+    expect(vitestOwnTmpdirEntries([
+      '/fixture/real-tmpdir/vitest-direct',
+      '/fixture/real-tmpdir/nested/vitest-nested',
+      '/fixture/other-tmpdir/vitest-foreign',
+      '',
+      undefined,
+    ], '/fixture/real-tmpdir')).toEqual(['vitest-direct']);
   });
 });
 

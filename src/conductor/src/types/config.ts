@@ -46,7 +46,7 @@ export interface ParallelBranch {
   /** Unique name within the group. Used to form synthetic state key: <group>__<branch>. */
   name: string;
   /** Skill to run for this branch. */
-  skill?: string;
+  skill: string;
   /** Model override for this branch. */
   model?: string;
   /** Effort override for this branch. */
@@ -64,10 +64,10 @@ export interface ParallelBranch {
  * back through phases > defaults > hardcoded baselines.
  *
  * Built-in steps (those declared in ALL_STEPS) may set any subset of keys.
- * Custom steps (not in ALL_STEPS) MUST set both `after` and `skill` so the
- * registry knows where and how to insert them.
+ * Custom steps (not in ALL_STEPS) MUST set `after` plus either `skill` or a
+ * `parallel` group so the registry knows where and how to insert them.
  */
-export interface StepConfig {
+interface SharedStepConfig {
   /** Provider selection for this step. Unset steps inherit the first run-level entry. */
   llm_provider?: ProviderSelection;
   /** Overrides the run-level provider substitution policy for this step. */
@@ -91,9 +91,6 @@ export interface StepConfig {
    * model/effort across every retry (identical-retry, pre-#188 behavior).
    */
   escalate?: boolean;
-
-  /** Replace the default SKILL.md file with this path. */
-  skill?: string;
 
   /** Shell hooks run before/after the step. Paths are project-relative. */
   hooks?: {
@@ -134,7 +131,8 @@ export interface StepConfig {
   /**
    * Boolean expression evaluated against current conductor state. When the
    * expression evaluates to false the step is skipped and a `when_skip` event
-   * is emitted. Mutually exclusive with `parallel`.
+   * is emitted. On a `parallel` group, this skips every branch (ADR
+   * `004-when-parallel-workflow-dsl`).
    *
    * Supported forms:
    *   tier == L
@@ -152,8 +150,24 @@ export interface StepConfig {
    * Synthetic state keys written to conduct-state.json:
    *   <step_name>__<branch_name>  → "done" | "skipped" | "failed"
    */
-  parallel?: ParallelBranch[];
 }
+
+/**
+ * Configuration for a single step. A step can dispatch one skill or a
+ * parallel branch group, but never both.
+ */
+export type StepConfig = SharedStepConfig & (
+  | {
+      /** Replace the default SKILL.md file with this path. */
+      skill?: string;
+      parallel?: never;
+    }
+  | {
+      skill?: never;
+      /** Concurrent branch group. */
+      parallel?: ParallelBranch[];
+    }
+);
 
 /**
  * Phase-wide defaults. Apply to every step in the phase unless overridden.
@@ -198,9 +212,9 @@ export interface ConductorConfig {
  */
 export interface MarkdownViewerConfig {
   preset?: string;
-  command: string;
-  args: string[];
-  mode: 'inline' | 'blocking' | 'external';
+  command?: string;
+  args?: string[];
+  mode?: 'inline' | 'blocking' | 'external';
 }
 
 /**
@@ -212,9 +226,9 @@ export interface MarkdownViewerConfig {
  */
 export interface MermaidRendererConfig {
   preset?: string;
-  command: string;
-  args: string[];
-  mode: 'inline' | 'blocking' | 'external';
+  command?: string;
+  args?: string[];
+  mode?: 'inline' | 'blocking' | 'external';
 }
 
 /**
@@ -457,6 +471,17 @@ export type AggregateTestSuiteConfig = TestSuiteConfig & (
   | { commands: TestSuiteCommandConfig[] }
 );
 
+/** Per-project work-tracker backend selection. */
+export type TrackerConfig =
+  | { backend: 'github' }
+  | {
+      backend: 'jira';
+      transport?: 'api' | 'mcp';
+      credentials?: string;
+      site?: string;
+      project_key?: string;
+    };
+
 export interface HarnessConfig {
   harness_version?: string;
   defaults?: DefaultsConfig;
@@ -505,6 +530,8 @@ export interface HarnessConfig {
    * memory-using step sees the same active provider (adr-2026-06-29-per-project-memory-provider-selection).
    */
   memory_provider?: string;
+  /** Per-project work-tracker backend selection. Absent defaults at the intake composition root. */
+  tracker?: TrackerConfig;
   /** OpenTelemetry exporter config. Absent = disabled (default off, FR-1). */
   otel?: OtelConfig;
   /**
@@ -699,7 +726,6 @@ export interface HarnessConfig {
    * Malformed values also resolve to enabled without throwing.
    */
   ci_watch?: CiWatchConfig;
-  /** Entry points supplied to the build_review wiring rubric. */
 }
 
 /**

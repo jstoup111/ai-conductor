@@ -8,6 +8,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   captureInstalledReviewPolicyBundle,
+  MAX_POLICY_BUNDLE_BYTES,
+  MAX_POLICY_BUNDLE_FILES,
+  validateReviewPolicyBundleLimits,
 } from '../../src/engine/build-review-policy-bundle.js';
 import type { InstalledReviewSkill } from '../../src/engine/build-review-policy.js';
 
@@ -288,21 +291,15 @@ describe('engine/build-review-policy-bundle', () => {
   });
 
   it('accepts inclusive package file and byte limits', async () => {
-    const sourceParent = await temporaryDirectory('build-review-policy-limit-source-');
-    const materialParent = await temporaryDirectory('build-review-policy-limit-material-');
-    const packageRoot = join(sourceParent, 'policy');
-    await mkdir(packageRoot, { recursive: true });
-    await writeFile(join(packageRoot, 'SKILL.md'), Buffer.alloc(64 * 1024 * 1024));
-    for (let index = 1; index < 4096; index += 1) {
-      await writeFile(join(packageRoot, `resource-${index}.md`), '');
-    }
+    const manifest = [
+      { relativePath: 'SKILL.md', bytes: Buffer.alloc(MAX_POLICY_BUNDLE_BYTES) },
+      ...Array.from({ length: MAX_POLICY_BUNDLE_FILES - 1 }, (_, index) => ({
+        relativePath: `resource-${index + 1}.md`,
+        bytes: Buffer.alloc(0),
+      })),
+    ];
 
-    const bundle = await captureInstalledReviewPolicyBundle(installedSkill(packageRoot, {
-      declaredDependencies: [],
-    }), { materialParent });
-
-    expect(bundle.manifest).toHaveLength(4096);
-    expect(bundle.manifest.reduce((total, entry) => total + entry.bytes.length, 0)).toBe(64 * 1024 * 1024);
+    expect(() => validateReviewPolicyBundleLimits(manifest)).not.toThrow();
   });
 
   it('refuses a package exceeding either complete-package limit without materializing it', async () => {

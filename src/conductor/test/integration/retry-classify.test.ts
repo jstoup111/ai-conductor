@@ -111,13 +111,13 @@ async function seedTailAt(
   );
 }
 
-/** Return a contract-valid batched refusal for every digest issued to the judge. */
+/** Return a contract-valid batched refusal for every claim id issued to the judge. */
 function coverageBindingRefusalBatch(prompt: string): string {
   const body = prompt.slice(prompt.lastIndexOf('\n\n{') + 2);
-  const { claims } = JSON.parse(body) as { claims: Array<{ digest: string }> };
+  const { claims } = JSON.parse(body) as { claims: Array<{ id: string }> };
   return JSON.stringify({
-    verdicts: claims.map(({ digest }) => ({
-      digest,
+    verdicts: claims.map(({ id }) => ({
+      id,
       verdict: 'does-not-assert',
       missingAssertion: 'No check requires the record.',
     })),

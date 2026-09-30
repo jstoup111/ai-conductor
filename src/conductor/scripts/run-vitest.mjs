@@ -1,10 +1,15 @@
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { installVitestTmpRoot } from './vitest-temp.mjs';
 
 const installation = installVitestTmpRoot({ fresh: true });
 const runRoot = installation.root;
-const child = spawn('vitest', process.argv.slice(2), {
+const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const packageVitest = join(packageRoot, 'node_modules', '.bin', 'vitest');
+const vitestCommand = existsSync(packageVitest) ? packageVitest : 'vitest';
+const child = spawn(vitestCommand, process.argv.slice(2), {
   env: {
     ...process.env,
     AI_CONDUCTOR_TEST_TMP_ROOT: runRoot,

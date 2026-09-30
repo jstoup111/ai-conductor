@@ -744,6 +744,7 @@ async function runGroupBranchInner(
         providerSessions
           ? {
               providerSessions, attempt, escalate, runId: deps.runId, executionContext: deps.executionContext,
+              ...(member.skill ? { branchSkill: member.skill } : {}),
               ...(member.name === 'prd_audit' && deps.prdWideningReviewContext
                 ? { prdWideningReviewContext: deps.prdWideningReviewContext }
                 : {}),
@@ -755,6 +756,7 @@ async function runGroupBranchInner(
               escalate,
               runId: deps.runId,
               executionContext: deps.executionContext,
+              ...(member.skill ? { branchSkill: member.skill } : {}),
               ...(member.name === 'prd_audit' && deps.prdWideningReviewContext
                 ? { prdWideningReviewContext: deps.prdWideningReviewContext }
                 : {}),

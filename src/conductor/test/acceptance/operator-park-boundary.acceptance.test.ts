@@ -272,7 +272,10 @@ describe('boundary-aware operator parking acceptance', () => {
       validation_concurrency: 2,
       steps: {
         memory: {
-          parallel: [{ name: 'alpha' }, { name: 'beta' }],
+          parallel: [
+            { name: 'alpha', skill: 'skills/memory/SKILL.md' },
+            { name: 'beta', skill: 'skills/memory/SKILL.md' },
+          ],
         },
       },
     };

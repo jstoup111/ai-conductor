@@ -1,3 +1,4 @@
+// Covers: task:1
 // Test: deterministic dependency-edge parser (issue-dep-migration.ts)
 //
 // Task 22 scope ONLY: given an issue's source ref + body prose, deterministically
@@ -280,7 +281,10 @@ describe('createDependencyLinks (writer)', () => {
     expect(posts.length).toBe(1);
     expect(posts[0].args).toContain('repos/acme/app/issues/230/dependencies/blocked_by');
     // Live contract (#260): payload is the blocking issue's database id, not its ref/number.
+    expect(posts[0].args).toContain('-F');
     expect(posts[0].args).toContain('issue_id=1000217');
+    expect(posts[0].args.indexOf('-F') + 1).toBe(posts[0].args.indexOf('issue_id=1000217'));
+    expect(posts[0].args).not.toContain('-f');
     expect(posts[0].args.some((a) => a.startsWith('issue='))).toBe(false);
   });
 
@@ -355,6 +359,59 @@ describe('createDependencyLinks (writer)', () => {
 
     expect(results).toEqual([{ edge, status: 'already-present' }]);
     expect(calls.some((c) => c.args.includes('POST'))).toBe(false);
+  });
+
+  it('treats a 422 POST as already-present only when a follow-up GET finds the edge', async () => {
+    const calls: Call[] = [];
+    let blockedByReads = 0;
+    const gh: GhRunner = async (args, opts) => {
+      calls.push({ args: [...args], cwd: opts.cwd });
+      const path = args.find((arg) => arg.includes('/dependencies/blocked_by'));
+      const isPost = args.includes('POST');
+      if (path && !isPost) {
+        blockedByReads += 1;
+        return {
+          stdout: JSON.stringify(blockedByReads === 1 ? [] : [
+            { number: 217, repository_url: 'https://api.github.com/repos/acme/app' },
+          ]),
+        };
+      }
+      const issuePath = args.find((arg) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(arg));
+      if (issuePath) {
+        const number = Number(issuePath.split('/').pop());
+        return { stdout: JSON.stringify({ id: 1_000_000 + number, number }) };
+      }
+      throw new Error('HTTP 422 dependency already exists');
+    };
+
+    await expect(createDependencyLinks([edge], writerDeps(gh))).resolves.toEqual([
+      { edge, status: 'already-present' },
+    ]);
+    expect(calls.filter((call) => call.args.includes('POST'))).toHaveLength(1);
+    expect(blockedByReads).toBe(2);
+  });
+
+  it('keeps a 422 POST failure when a follow-up GET does not find the edge', async () => {
+    let blockedByReads = 0;
+    const gh: GhRunner = async (args) => {
+      const path = args.find((arg) => arg.includes('/dependencies/blocked_by'));
+      const isPost = args.includes('POST');
+      if (path && !isPost) {
+        blockedByReads += 1;
+        return { stdout: '[]' };
+      }
+      const issuePath = args.find((arg) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(arg));
+      if (issuePath) {
+        const number = Number(issuePath.split('/').pop());
+        return { stdout: JSON.stringify({ id: 1_000_000 + number, number }) };
+      }
+      throw new Error('HTTP 422 invalid dependency input');
+    };
+
+    await expect(createDependencyLinks([edge], writerDeps(gh))).rejects.toThrow(
+      'dependency link acme/app#230 -> acme/app#217 was not written: HTTP 422 invalid dependency input',
+    );
+    expect(blockedByReads).toBe(2);
   });
 
   // Task 25 (FR-11 negatives): a mid-run failure must not corrupt or re-attempt

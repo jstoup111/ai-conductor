@@ -86,6 +86,7 @@ export const EVENT_SINKS = {
   // the event excludes payloads and request bodies by construction.
   github_operation_refused: { render: true, persist: true, audit: false, otel: false },
   github_write_credential_fallback: { render: true, persist: true, audit: false, otel: false },
+  bot_co_author_skipped: { render: true, persist: true, audit: false, otel: false },
   provider_discovery: { render: false, persist: true, audit: false, otel: false },
   provider_attempt: { render: true, persist: true, audit: false, otel: true },
   // Daemon-origin only: this is the durable restart projection, not a second
@@ -148,6 +149,7 @@ export const EVENT_SINKS = {
   build_member_evidence_recomputed: { render: true, persist: true, audit: false, otel: false },
   kickback: { render: true, persist: true, audit: true, otel: true },
   loop_halt: { render: true, persist: true, audit: true, otel: true },
+  tracker_backend_unavailable: { render: true, persist: true, audit: false, otel: false },
   over_scope_decision: { render: false, persist: true, audit: false, otel: false },
   halt_marker_write_failed: { render: true, persist: true, audit: true, otel: false },
   halt_record_written: { render: true, persist: true, audit: true, otel: false },

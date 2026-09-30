@@ -268,8 +268,8 @@ describe('parallel: group execution (T15-T22)', () => {
         steps: {
           explore: {
             parallel: [
-              { name: 'alpha' },
-              { name: 'beta' },
+              { name: 'alpha', skill: 'skills/explore/SKILL.md' },
+              { name: 'beta', skill: 'skills/explore/SKILL.md' },
             ],
           },
         },
@@ -315,9 +315,9 @@ describe('parallel: group execution (T15-T22)', () => {
         steps: {
           explore: {
             parallel: [
-              { name: 'alpha' },
-              { name: 'beta' },
-              { name: 'gamma' },
+              { name: 'alpha', skill: 'skills/explore/SKILL.md' },
+              { name: 'beta', skill: 'skills/explore/SKILL.md' },
+              { name: 'gamma', skill: 'skills/explore/SKILL.md' },
             ],
           },
         },
@@ -380,8 +380,8 @@ describe('parallel: group execution (T15-T22)', () => {
             // The first failed result is the group outcome under test.
             max_retries: 1,
             parallel: [
-              { name: 'gating-branch' },   // advisory defaults to false → gating
-              { name: 'other-branch' },
+              { name: 'gating-branch', skill: 'skills/explore/SKILL.md' },   // advisory defaults to false → gating
+              { name: 'other-branch', skill: 'skills/explore/SKILL.md' },
             ],
           },
         },
@@ -427,8 +427,8 @@ describe('parallel: group execution (T15-T22)', () => {
         steps: {
           explore: {
             parallel: [
-              { name: 'permission-denied-member' },
-              { name: 'passing-member' },
+              { name: 'permission-denied-member', skill: 'skills/explore/SKILL.md' },
+              { name: 'passing-member', skill: 'skills/explore/SKILL.md' },
             ],
           },
         },
@@ -477,8 +477,8 @@ describe('parallel: group execution (T15-T22)', () => {
             // The first failed result is the advisory outcome under test.
             max_retries: 1,
             parallel: [
-              { name: 'advisory-branch', advisory: true },
-              { name: 'other-branch' },
+              { name: 'advisory-branch', skill: 'skills/explore/SKILL.md', advisory: true },
+              { name: 'other-branch', skill: 'skills/explore/SKILL.md' },
             ],
           },
         },
@@ -523,8 +523,8 @@ describe('parallel: group execution (T15-T22)', () => {
           explore: {
             when: 'tier == L',
             parallel: [
-              { name: 'branch-a' },
-              { name: 'branch-b' },
+              { name: 'branch-a', skill: 'skills/explore/SKILL.md' },
+              { name: 'branch-b', skill: 'skills/explore/SKILL.md' },
             ],
           },
         },
@@ -564,9 +564,9 @@ describe('parallel: group execution (T15-T22)', () => {
         steps: {
           explore: {
             parallel: [
-              { name: 'a' },
-              { name: 'b' },
-              { name: 'c' },
+              { name: 'a', skill: 'skills/explore/SKILL.md' },
+              { name: 'b', skill: 'skills/explore/SKILL.md' },
+              { name: 'c', skill: 'skills/explore/SKILL.md' },
             ],
           },
         },
@@ -632,7 +632,7 @@ describe('parallel: group execution (T15-T22)', () => {
       stateFilePath: statePath,
       stepRunner: runner,
       events,
-      config: { steps: { explore: { parallel: [{ name: 'backend' }] } } },
+      config: { steps: { explore: { parallel: [{ name: 'backend', skill: 'skills/explore/SKILL.md' }] } } },
       mode: 'auto',
       providerExecution: {
         runtimes: {} as never,
@@ -699,7 +699,7 @@ describe('config validation: when: and parallel: (T13)', () => {
         explore: {
           parallel: [
             { name: 'a', skill: 'skills/explore/SKILL.md' },
-            { name: 'b', advisory: true },
+            { name: 'b', skill: 'skills/explore/SKILL.md', advisory: true },
           ],
         },
       },
@@ -713,8 +713,8 @@ describe('config validation: when: and parallel: (T13)', () => {
       steps: {
         explore: {
           parallel: [
-            { name: 'dup' },
-            { name: 'dup' },
+            { name: 'dup', skill: 'skills/explore/SKILL.md' },
+            { name: 'dup', skill: 'skills/explore/SKILL.md' },
           ],
         },
       },

@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -26,6 +26,7 @@ const STEPS = 'src/conductor/src/engine/steps.ts';
 const DAEMON_CLI = 'src/conductor/src/daemon-cli.ts';
 const STEP_RUNNERS = 'src/conductor/src/engine/step-runners.ts';
 const AUTORESOLVE = 'src/conductor/src/engine/autoresolve.ts';
+const CONFIG_LOADER = 'src/conductor/src/engine/config.ts';
 const AS_BUILT_POLICY = 'src/conductor/src/engine/as-built-policy.ts';
 const PROJECT_PRELUDE = 'src/conductor/src/engine/project-prelude.ts';
 const BUILD_PROGRESS_WATCHER = 'src/conductor/src/engine/build-progress-watcher.ts';
@@ -43,7 +44,8 @@ const OTEL_CONFIG = 'src/conductor/src/engine/otel/otel-config.ts';
  */
 export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   // ── Top-level keys ────────────────────────────────────────────────────────
-  harness_version: consumer(PROJECT_PRELUDE),
+  // loadProjectConfig's satisfiesVersion gate consumes the installed constraint.
+  harness_version: consumer(CONFIG_LOADER),
   defaults: consumer(RESOLVED_CONFIG),
   phases: consumer(RESOLVED_CONFIG),
   steps: consumer(STEPS),
@@ -59,6 +61,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   ui_renderer: consumer('src/conductor/src/engine/plugin-loader.ts'),
   visualizers: consumer('src/conductor/src/index.ts'),
   memory_provider: consumer('src/conductor/src/engine/local-memory-provider.ts'),
+  tracker: consumer('src/conductor/src/engine/tracker-selection.ts'),
   otel: consumer(OTEL_CONFIG),
   build_progress: consumer(BUILD_PROGRESS_WATCHER),
   provider_stream: consumer(STEP_RUNNERS),
@@ -151,6 +154,13 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     'typed and validated but unread: GroupMember carries name/skill/outcome only, so a branch effort override cannot reach dispatch (#1025)',
   ),
   'steps.parallel.advisory': consumer(CONDUCTOR),
+
+  // ── tracker ───────────────────────────────────────────────────────────────
+  'tracker.backend': consumer('src/conductor/src/engine/tracker-selection.ts'),
+  'tracker.transport': consumer('src/conductor/src/engine/tracker-selection.ts'),
+  'tracker.credentials': consumer('src/conductor/src/engine/tracker-selection.ts'),
+  'tracker.site': consumer('src/conductor/src/engine/tracker-selection.ts'),
+  'tracker.project_key': consumer('src/conductor/src/engine/tracker-selection.ts'),
 
   // ── conductor (per-user update state) ─────────────────────────────────────
   // `conductor_cfg_key` maps each legacy field name onto the schema key and

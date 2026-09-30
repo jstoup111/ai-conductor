@@ -9,7 +9,7 @@ import {
 } from 'fs';
 import type { Dirent } from 'fs';
 import { mkdtemp, readdir, rm } from 'fs/promises';
-import { basename, join } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import { installVitestTmpRoot, VITEST_TMP_BASE_ENV } from '../scripts/vitest-temp.mjs';
 
 /**
@@ -261,6 +261,27 @@ export const IGNORED_TMPDIR_PREFIXES: readonly string[] = [
   'v8-compile-cache-',
   'puppeteer_dev_chrome_profile',
 ];
+
+/**
+ * Return Vitest project temp entries that are direct children of the real tmpdir.
+ *
+ * Vitest creates its project temp directory before the suite redirects TMPDIR.
+ * Only that exact top-level entry may be exempted from the teardown leak diff.
+ */
+export function vitestOwnTmpdirEntries(
+  projectTmpDirs: readonly (string | undefined)[],
+  realTmpdir: string
+): string[] {
+  const resolvedRealTmpdir = resolve(realTmpdir);
+
+  return projectTmpDirs.flatMap(projectTmpDir => {
+    if (!projectTmpDir) return [];
+    const resolvedProjectTmpDir = resolve(projectTmpDir);
+    return dirname(resolvedProjectTmpDir) === resolvedRealTmpdir
+      ? [basename(resolvedProjectTmpDir)]
+      : [];
+  });
+}
 
 /** Snapshot of a directory's top-level entry names at a moment in time. */
 export interface TmpdirSnapshot {
@@ -536,7 +557,8 @@ export async function snapshotTmpdirEntries(dir: string): Promise<TmpdirSnapshot
 export function diffTmpdirEntries(
   before: TmpdirSnapshot,
   after: TmpdirSnapshot,
-  ignoredPrefixes: readonly string[] = IGNORED_TMPDIR_PREFIXES
+  ignoredPrefixes: readonly string[] = IGNORED_TMPDIR_PREFIXES,
+  exemptEntries: readonly string[] = []
 ): TmpdirDiff {
   // A failed BEFORE snapshot has no baseline, so every entry would read as
   // new. Fail open (report nothing) rather than fail the run on a phantom
@@ -552,6 +574,7 @@ export function diffTmpdirEntries(
 
   for (const entry of after.entries) {
     if (baseline.has(entry)) continue;
+    if (exemptEntries.includes(entry)) continue;
     if (ignoredPrefixes.some(prefix => entry.startsWith(prefix))) {
       ignored.push(entry);
     } else {

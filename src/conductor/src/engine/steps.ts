@@ -531,7 +531,7 @@ export function buildStepRegistry(config: HarnessConfig): StepDefinition[] {
   type Addition = {
     name: string;
     after: string;
-    skill: string;
+    skill?: string;
     enforcement: import('../types/index.js').EnforcementLevel;
     gate?: boolean;
     kickbackTarget?: boolean;
@@ -543,11 +543,12 @@ export function buildStepRegistry(config: HarnessConfig): StepDefinition[] {
     const c = cfg as {
       after?: string;
       skill?: string;
+      parallel?: unknown[];
       enforcement?: import('../types/index.js').EnforcementLevel;
       gate?: boolean;
       kickback_target?: boolean;
     };
-    if (!c.after || !c.skill) continue;
+    if (!c.after || (!c.skill && (!Array.isArray(c.parallel) || c.parallel.length === 0))) continue;
     additions.push({
       name,
       after: c.after,

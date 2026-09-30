@@ -41,6 +41,7 @@ import { renderBuildReviewReducedCoverageEvidence } from './build-review-project
 import { computeCostRollup } from './cost-rollup.js';
 import { computeTimingRollup } from './timing-rollup.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
+import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail-rollup.js';
@@ -276,7 +277,7 @@ export async function dispatchShippedRecord(
       reject: false,
     });
     if (staged.exitCode !== 0) {
-      await execa('git', ['commit', '-m', `shipped record: ${identity.slug}`, '--no-verify'], {
+      await execa('git', ['commit', '-m', withDaemonCoAuthorTrailer(`shipped record: ${identity.slug}`), '--no-verify'], {
         cwd,
         env: withEngineCommitEnv(),
       });

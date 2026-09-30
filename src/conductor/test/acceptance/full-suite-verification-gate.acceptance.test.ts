@@ -15,7 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execa, type ResultPromise } from 'execa';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, copyFileSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -120,30 +120,35 @@ function invokeScriptWithFakeVitest(
   argumentsToForward: string[],
 ): { exitCode: number | null; stdout: string; stderr: string; runnerArguments: string[] } {
   const binDirectory = join(scratchParent, 'fake-bin');
+  const fixturePackageRoot = join(scratchParent, 'fake-conductor');
   const runnerArgumentsPath = join(scratchParent, 'fake-vitest-arguments');
   mkdirSync(binDirectory, { recursive: true });
-  const fakeVitestPath = join(binDirectory, 'vitest');
-  writeFileSync(
-    fakeVitestPath,
-    [
-      '#!/bin/sh',
-      'printf "%s\\n" "$@" > "$FAKE_VITEST_ARGUMENTS"',
-      'for argument in "$@"; do',
-      '  if [ "$argument" = "__fake_vitest_failure__" ]; then',
-      '    exit 23',
-      '  fi',
-      'done',
-      '',
-    ].join('\n'),
-    'utf8',
-  );
+  mkdirSync(join(fixturePackageRoot, 'scripts'), { recursive: true });
+  const fakeVitestPath = join(fixturePackageRoot, 'node_modules', '.bin', 'vitest');
+  const pathFakeVitestPath = join(binDirectory, 'vitest');
+  mkdirSync(dirname(fakeVitestPath), { recursive: true });
+  copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'run-vitest.mjs'), join(fixturePackageRoot, 'scripts', 'run-vitest.mjs'));
+  copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'vitest-temp.mjs'), join(fixturePackageRoot, 'scripts', 'vitest-temp.mjs'));
+  const fakeVitest = [
+    '#!/bin/sh',
+    'printf "%s\\n" "$@" > "$FAKE_VITEST_ARGUMENTS"',
+    'for argument in "$@"; do',
+    '  if [ "$argument" = "__fake_vitest_failure__" ]; then',
+    '    exit 23',
+    '  fi',
+    'done',
+    '',
+  ].join('\n');
+  writeFileSync(fakeVitestPath, fakeVitest, 'utf8');
+  writeFileSync(pathFakeVitestPath, fakeVitest, 'utf8');
   chmodSync(fakeVitestPath, 0o755);
+  chmodSync(pathFakeVitestPath, 0o755);
 
   const result = spawnSync(
     'sh',
     ['-c', `${script} ${argumentsToForward.map(shellQuote).join(' ')}`],
     {
-      cwd: CONDUCTOR_ROOT,
+      cwd: fixturePackageRoot,
       encoding: 'utf8',
       env: {
         ...process.env,

@@ -4,7 +4,7 @@
 
 Technical track (no PRD). Requirements come from issue jstoup111/ai-conductor#1885 and the
 operator-confirmed scope boundary in `.docs/track/pi-per-step-model-selection-via-wrapped-providers.md`.
-Two amended ADRs govern them: adr-2026-09-24-built-in-provider-catalog-and-boot-discovery (D9–D11)
+Two amended ADRs govern them: adr-2026-09-24-built-in-provider-catalog-and-boot-discovery (D12–D14)
 and adr-2026-07-03-reactive-model-fallback-ladder (items 7–8).
 
 Terms used below:
@@ -17,7 +17,7 @@ Terms used below:
 ## Story 1: Pi steps run on the configured model and thinking level
 
 **Requirement:** TI-1. Every Pi step passes its resolved model as `--provider`/`--model` and its
-effort as `--thinking`, and never relies on Pi's own default (catalog D9).
+effort as `--thinking`, and never relies on Pi's own default (catalog D12).
 
 As an operator, I want every Pi step to run on the underlying model and thinking level I configured, so that the harness, not Pi's defaults, decides which model does the work.
 
@@ -45,7 +45,7 @@ As an operator, I want every Pi step to run on the underlying model and thinking
 **Requirement:** TI-2. When pi is configured, `llm_providers.pi.model`,
 `llm_providers.pi.model_escalation_order` and `llm_providers.pi.model_fallback_ladder` are required.
 A malformed Pi model id fails config validation with a specific error, and a valid selection
-round-trips unchanged (catalog D10, issue outcome 5).
+round-trips unchanged (catalog D13, issue outcome 5).
 
 As an operator, I want config validation to reject a missing or malformed Pi model selection, so that no Pi step ever runs on an accidental model.
 
@@ -75,7 +75,7 @@ As an operator, I want config validation to reject a missing or malformed Pi mod
 
 **Requirement:** TI-3. On provider-dispatching entry points, when Pi is installed and configured,
 boot checks every configured Pi model id against `pi --list-models` and fails on an unknown provider
-or model (catalog D10).
+or model (catalog D13).
 
 As an operator, I want the daemon to refuse to start when a configured Pi model does not exist, so that a typo fails at boot instead of silently mid-build, since Pi passes unknown model ids through.
 
@@ -185,7 +185,7 @@ As the harness maintainer, I want the generated model table to show Pi next to c
 ## Story 7: A Pi error stream that exits 0 fails the step
 
 **Requirement:** TI-7. A Pi run whose terminal assistant message has `stopReason: "error"` is a
-failed invocation carrying Pi's `errorMessage`, never a successful empty result (catalog D11).
+failed invocation carrying Pi's `errorMessage`, never a successful empty result (catalog D14).
 
 As an operator, I want a Pi run that ended in an error to fail its step, so that a missing key or bad model never counts as a completed step.
 

@@ -16,6 +16,7 @@ import { type GhRunner, type GitRunner } from './pr-labels.js';
 import { executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
+import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { hasHaltSignal, isEngineFlooredBody } from './halt-pr-rehabilitation.js';
 import { readState, replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
 import { readAllVerdicts } from './gate-verdicts.js';
@@ -337,7 +338,7 @@ export function createProductionFinishPublicationCoordinator(
     await writeFile(recordPath, next, 'utf8');
     await deps.git(['add', relativeRecordPath], { cwd: deps.projectRoot });
     await deps.git([
-      'commit', '-m', `shipped record findings: ${slug}`, '--no-verify',
+      'commit', '-m', withDaemonCoAuthorTrailer(`shipped record findings: ${slug}`), '--no-verify',
     ], { cwd: deps.projectRoot });
   };
   // A real provider session is expensive. Retain terminal prose verdicts for

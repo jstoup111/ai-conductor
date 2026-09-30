@@ -82,11 +82,17 @@ import { heapDumpOptionsFromConfig, startDaemonMemorySampler } from './engine/da
 import { renderedEventTypes } from './engine/event-sinks.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
 import { formatGithubCredentialFallback, formatGithubOperationRefusal } from './engine/github-operations.js';
+import { createBotCoAuthorResolver, formatBotCoAuthorSkipped, installDaemonBotCoAuthor } from './engine/bot-co-author.js';
 import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { LiveBoundaryCoordinator } from './engine/self-host/live-boundary-coordinator.js';
-import { loadMergedConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
+import {
+  emitDeprecatedConfigKeyEvents,
+  loadMergedConfig,
+  resolveMemoryProvider,
+  BUILD_PROGRESS_HALT_DEFAULTS,
+} from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
 import { readLastResolvedCount } from './engine/task-evidence.js';
 import { countResolvedTasks } from './engine/task-progress.js';
@@ -117,7 +123,7 @@ import {
   probeStampedShaBehindOrigin,
 } from './engine/engine-refresh.js';
 import { makeIsProcessed, resolveEngineVersion } from './engine/shipped-record.js';
-import { resolveHarnessVersion } from './engine/version-report.js';
+import { installedHarnessVersionForConfig, resolveHarnessVersion } from './engine/version-report.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
 import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerUrlRead } from './engine/tracker-client.js';
@@ -852,7 +858,8 @@ export function createForcedSetupPrepare(
  */
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
-  const configResult = await loadMergedConfig(projectRoot);
+  const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
+  const configResult = await loadMergedConfig(projectRoot, installedHarnessVersion);
   if (!configResult.ok && configResult.error.type !== 'missing') {
     throw new Error(`Config error: ${configResult.error.message}`);
   }
@@ -1133,9 +1140,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // One daemon-wide forwarding bus keeps rendering global. Each feature owns a
   // local persistence bus plus provider runtime/session state; rate limits remain shared.
   const events = new ConductorEventEmitter();
+  installDaemonBotCoAuthor(createBotCoAuthorResolver({ runner: makeProductionGh(), cwd: projectRoot, events }));
   // Both daemon-only occurrences and forwarded feature events share one bus;
   // the sibling ledger deliberately persists only daemon-origin copies.
   const daemonEventPersistence = startDaemonEventPersistence(projectRoot, events, log);
+  await emitDeprecatedConfigKeyEvents(configResult, events);
   const daemonMemorySampler = startDaemonMemorySampler(events, heapDumpOptionsFromConfig(config));
   const daemonOtel = wireDaemonOtel(config ?? {}, {
     mainRoot: projectRoot,
@@ -2946,6 +2955,12 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'github_write_credential_fallback':
       log(`${dot} ${chalk.yellow('↻')} ${chalk.yellow(formatGithubCredentialFallback(event))}`);
+      break;
+    case 'bot_co_author_skipped':
+      log(`${dot} ${chalk.yellow('↻')} ${chalk.yellow(formatBotCoAuthorSkipped(event))}`);
+      break;
+    case 'tracker_backend_unavailable':
+      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`tracker backend unavailable: ${event.project} selected ${event.backend} (${event.reason})`)}`);
       break;
     case 'step_retry': {
       const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);

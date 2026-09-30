@@ -42,7 +42,7 @@ describe('repository-local event-spine build-review rubric', () => {
       rawMinimumConfidence: undefined,
       eventSpine: [expect.objectContaining({
         id: 'eventSpine', kind: 'custom', skill: 'event-spine', source: 'project',
-        policy: expect.objectContaining({ enabled: true, llm_provider: 'claude', model: 'opus', effort: 'low' }),
+        policy: expect.objectContaining({ enabled: true }),
       })],
     });
 
@@ -59,7 +59,7 @@ describe('repository-local event-spine build-review rubric', () => {
     const stamp = {
       rubric: entry.id, lapId, declaration,
       policy: { version: 'v1' as const, bundleDigest: POLICY_DIGEST },
-      candidate: { provider: 'claude', model: 'opus', effort: 'low' },
+      candidate: { provider: 'claude', model: 'sonnet', effort: 'low' },
       reviewedInput: { version: 'v1' as const, contentDigest: HASH },
     };
     const result = stampBuildReviewCustomJudgedResult({

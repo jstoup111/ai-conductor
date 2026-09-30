@@ -3,7 +3,7 @@
  * priority + size + linking" (Story 1, FR-1; #695 intake-only-enforcement).
  *
  * `syncIssueLabels` is what `.github/workflows/intake-label-sync.yml` (and any
- * other caller — `bin/intake-file`, `bin/intake-backfill`) drives directly: given
+ * other caller — bundled `skills/intake/scripts/intake-file`, `bin/intake-backfill`) drives directly: given
  * the parsed issue-form fields and the issue's ref, it
  *   1. resolves the priority/size value to a closed-vocab label, defaulting to
  *      `priority: medium` / `size: M` on anything unparsable,
@@ -65,7 +65,8 @@ const SIZE_VALUES = new Set(['S', 'M', 'L']);
  *
  * This is the discriminator the label-sync Action needs before it defaults
  * anything: only a form submission has fields to read, and only a form
- * submission is missing labels at open time. Issues filed by `bin/intake-file`
+ * submission is missing labels at open time. Issues filed by bundled
+ * `skills/intake/scripts/intake-file`
  * carry a hand-authored markdown body with no field headings, and that command
  * already applies the operator's chosen `priority:`/`size:` labels itself — so
  * defaulting over them adds a SECOND, contradictory band (`addLabel` is

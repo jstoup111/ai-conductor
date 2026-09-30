@@ -26,7 +26,9 @@ graph TD
     V -->|ok| RO["resolveOtelConfig<br/>protocol in http/protobuf or grpc"]
     RO -->|"unsupported protocol"| TD["telemetry disabled<br/>named error, run continues"]
     V -->|ok| G["satisfiesVersion<br/>semver.satisfies(installed, constraint)"]
-    RV["readHarnessVersion<br/>VERSION file"] --> G
+    EP["CLI run path (index.ts)<br/>+ daemon startup (daemon-cli.ts)"] --> RV["installedHarnessVersionForConfig<br/>module-relative VERSION, undefined when unknown"]
+    RV -->|"harnessVersion argument<br/>loadConfig / loadMergedConfig"| G
+    EP -->|"merged deprecatedKeys"| EV
     G -->|"not satisfied"| VM["ConfigResult version_mismatch"]
     G -->|satisfied| OK["ConfigResult ok:true"]
     SV[("semver dependency<br/>already used by plugin-manifest.ts")] --> HV

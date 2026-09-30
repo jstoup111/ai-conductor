@@ -9,6 +9,7 @@ export const AS_BUILT_VERDICT_CONTRACT_VERSION = 'v1' as const;
 
 export interface AsBuiltReachability {
   readonly primitive: string;
+  /** Production caller hops; empty only for an unreachable primitive, which a BLOCKED verdict must carry. */
   readonly callerChain: readonly string[];
 }
 
@@ -172,10 +173,12 @@ function parseReachability(value: unknown): Parsed<readonly AsBuiltReachability[
   for (const [index, entry] of value.entries()) {
     if (!record(entry) || !exactKeys(entry, ['primitive', 'callerChain'])) return rejected(`reachability[${index}]`, 'exactly primitive and callerChain are required');
     if (!nonEmptyText(entry.primitive)) return rejected(`reachability[${index}].primitive`, 'a non-empty primitive is required');
-    if (!Array.isArray(entry.callerChain) || entry.callerChain.length === 0 || !entry.callerChain.every(nonEmptyText)) {
-      return rejected(`reachability[${index}].callerChain`, 'a non-empty caller chain of non-empty strings is required');
+    if (!Array.isArray(entry.callerChain) || !entry.callerChain.every((hop) => typeof hop === 'string')) {
+      return rejected(`reachability[${index}].callerChain`, 'an array of caller strings is required; use an empty array only for a primitive with no production caller');
     }
-    entries.push({ primitive: entry.primitive, callerChain: entry.callerChain });
+    // Blank hops carry no caller; an entry left with no hops is the reviewer's explicit
+    // "no production caller" record, which validateAsBuiltVerdict admits only under BLOCKED.
+    entries.push({ primitive: entry.primitive, callerChain: entry.callerChain.filter(nonEmptyText) });
   }
   return { ok: true, value: entries };
 }
@@ -267,14 +270,17 @@ function isEmptyValue(value: unknown): boolean {
 /**
  * AS_BUILT_VERDICT_SCHEMA is one flat object, so a provider may legally fill a field that
  * belongs to another verdict (Codex strict mode requires every field). Outcome commentary
- * is dropped outside PLAN_GAP; BLOCKED-only fields are dropped only when empty. An APPROVED
- * verdict that lists findings or reports an undelivered outcome stays a rejected contradiction.
+ * is dropped outside PLAN_GAP, and BLOCKED's violation/resolution prose is dropped outside
+ * BLOCKED even when non-empty. Findings are dropped only when empty: an APPROVED verdict
+ * that lists findings or reports an undelivered outcome stays a rejected contradiction.
  */
 function withoutForeignVariantFields(value: Record<string, unknown>): Record<string, unknown> {
   const foreign = new Set<string>();
   if (value.verdict !== 'PLAN_GAP') for (const key of PLAN_GAP_ONLY_KEYS) foreign.add(key);
   if (value.verdict !== 'BLOCKED') {
-    for (const key of BLOCKED_ONLY_KEYS) if (isEmptyValue(value[key])) foreign.add(key);
+    for (const key of BLOCKED_ONLY_KEYS) {
+      if (key !== 'findings' || isEmptyValue(value[key])) foreign.add(key);
+    }
   }
   return Object.fromEntries(Object.entries(value).filter(([key]) => !foreign.has(key)));
 }
@@ -290,6 +296,10 @@ export function validateAsBuiltVerdict(input: unknown): ValidateAsBuiltVerdictRe
   if (!AS_BUILT_VERDICTS.includes(value.verdict as typeof AS_BUILT_VERDICTS[number])) return rejected('verdict', `one of ${AS_BUILT_VERDICTS.join(', ')} is required`);
   const reachability = parseReachability(value.reachability);
   if (!reachability.ok) return reachability;
+  const unreachable = reachability.value.findIndex((entry) => entry.callerChain.length === 0);
+  if (unreachable !== -1 && value.verdict !== 'BLOCKED') {
+    return rejected(`reachability[${unreachable}].callerChain`, 'an empty caller chain records an unreachable primitive, which requires a BLOCKED verdict');
+  }
   const driftNotes = parseDriftNotes(value.driftNotes);
   if (!driftNotes.ok) return driftNotes;
 

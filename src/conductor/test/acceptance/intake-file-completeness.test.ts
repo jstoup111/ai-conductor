@@ -1,3 +1,4 @@
+// Covers: task:1
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Agent/operator gh issue create files are born
 // complete" (Story 2, FR-2; #695 intake-only-enforcement).
@@ -7,13 +8,13 @@
 //          and bad-ref capture — folded in here per the writing-system-tests
 //          plan, since Story 4 overlaps Story 2's filing flow and a separate
 //          file would duplicate coverage).
-// Plan:    .docs/plans/intake-only-enforcement.md (Task 4 — `bin/intake-file`).
+// Plan:    .docs/plans/intake-only-enforcement.md (Task 4 — bundled intake helper).
 //
-// NONE of this feature's production code exists yet: `bin/intake-file` does
+// NONE of this feature's production code exists yet: the bundled intake helper does
 // not exist, nor does the shared label-sync seam it is expected to call.
 //
 // ASSUMED SEAM (not settled fact — the implementation task must fill this in):
-// per the plan, `bin/intake-file` is expected to compose:
+// per the plan, the bundled intake helper is expected to compose:
 //   1. `gh issue create` (via an injected GhRunner) to create the issue,
 //   2. the SAME `src/engine/engineer/intake/label-sync.ts#syncIssueLabels`
 //      seam assumed in intake-form-label-sync.test.ts, reused rather than
@@ -21,14 +22,14 @@
 //   3. prompt/infer/default logic for missing size/priority when invoked
 //      interactively vs non-interactively.
 //
-// This spec does NOT invent bin/intake-file's CLI contract beyond what the
+// This spec does NOT invent the bundled intake helper's CLI contract beyond what the
 // stories/plan already fix: `--depends-on`, prompt vs infer vs default, and
 // "exit success even on partial (label) failure". It drives the assumed
 // underlying function this binary should delegate to — call it
 // `fileIntakeIssue(opts, deps)` — rather than shelling out to a not-yet-built
 // binary, exactly as `dependency-ordered-intake-and-dispatch.test.ts`'s Flow D
 // drives `runMigration` directly rather than a CLI wrapper. A later pass can
-// add a thin process-spawn smoke test once `bin/intake-file` itself exists.
+// add a thin process-spawn smoke test once the bundled helper itself exists.
 //
 // Seams faked vs real:
 //   - FAKED: the `gh` CLI runner (GhRunner-shaped fake) — the system boundary
@@ -107,7 +108,7 @@ function creation(gh: ReturnType<typeof makeFakeGh>['run']) {
   };
 }
 
-describe('Story 2 — bin/intake-file files criteria-complete issues', () => {
+describe('Story 2 — bundled intake helper files criteria-complete issues', () => {
   describe('Happy path', () => {
     it('given size and priority, files the issue AND applies labels + records blocked_by in one filing', async () => {
       const fileIntakeIssue = requireFileIssueFn(await loadFileIssueModule());
@@ -235,7 +236,11 @@ describe('Story 2 — bin/intake-file files criteria-complete issues', () => {
       expect(linkCall).toBeDefined();
       expect(linkCall!.args).toContain('POST');
       expect(linkCall!.args).not.toContain('PUT');
-      expect(linkCall!.args.some((a) => a === 'issue_id=1000300')).toBe(true);
+      expect(linkCall!.args).toContain('-F');
+      expect(linkCall!.args).toContain('issue_id=1000300');
+      expect(linkCall!.args.indexOf('-F') + 1).toBe(linkCall!.args.indexOf('issue_id=1000300'));
+      expect(linkCall!.args).not.toContain('-f');
+      expect(linkCall!.args.some((a) => a.startsWith('issue_number='))).toBe(false);
       expect(linkCall!.args.some((a) => a.includes('#'))).toBe(false);
     });
   });

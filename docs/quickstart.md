@@ -347,13 +347,19 @@ bin/migrate
 ./bin/install --uninstall
 ```
 
-> **Known limitation.** `--uninstall` removes the harness-owned skill symlinks, the
-> `HARNESS.md` links, and all three installer-owned launchers: `conduct`, `conduct-ts`, and
-> `ai-conductor`. It still leaves 18
-> permission entries and 10 hook commands written into `~/.claude/settings.json`, all of
-> `~/.ai-conductor/`, and any legacy `~/.claude/ai-conductor.config.json` or
-> `~/.claude/ai-conductor.config.json.migrated` artifact. If you then delete the checkout,
-> those hooks point at a directory that no longer exists and every Claude Code session in every
-> project runs them. Strip the harness entries from `~/.claude/settings.json` by hand — see
-> [reference/settings-and-hooks.md](reference/settings-and-hooks.md).
-> Tracked in [#1004](https://github.com/jstoup111/ai-conductor/issues/1004).
+`--uninstall` removes harness-owned skill and reference links, the `conduct`, `conduct-ts`, and
+`ai-conductor` launchers, the harness's entries in `~/.claude/settings.json`, and the global
+rate-card link when it points at this checkout. It preserves operator-authored settings, links, and
+rate cards.
+
+The command keeps `~/.ai-conductor/`, including operator configuration and runtime data such as
+the project registry and memory. Remove that state only when you want a clean slate:
+
+```bash
+./bin/install --uninstall --purge
+```
+
+`--purge` is valid only with `--uninstall`. It removes `~/.ai-conductor/`; if that path is a
+symlink, it removes only the symlink. Legacy `~/.claude/ai-conductor.config.json` and
+`~/.claude/ai-conductor.config.json.migrated` files are not installer-owned and remain unchanged.
+See [settings and hooks](reference/settings-and-hooks.md) for the global settings surface.

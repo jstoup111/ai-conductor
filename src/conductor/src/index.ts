@@ -117,6 +117,7 @@ import { resolveEngineVersion } from './engine/shipped-record.js';
 import {
   detectVersionCommand,
   dispatchVersionCommand,
+  installedHarnessVersionForConfig,
   resolveHarnessVersion,
 } from './engine/version-report.js';
 import { detectUpdateCommand, dispatchUpdateCommand } from './engine/update-cli.js';
@@ -227,6 +228,7 @@ import { runOverlapScan, renderReport as renderOverlapReport } from './engine/ov
 import { makeProductionGh } from './engine/pr-labels.js';
 import { buildDaemonExitWitnessCommand, hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveDaemonForegroundCommand } from './engine/daemon-supervisor-cli.js';
+import { shellQuote } from './engine/canonical-launcher.js';
 
 // ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
 
@@ -415,7 +417,11 @@ export async function buildDaemonModeOptions(
   const sessionName = deps.sessionNameForRepo(projectRoot);
   const triggerSelfRestart = (await deps.hasSession(sessionName))
     ? async () => {
-        const command = await (deps.resolveDaemonForegroundCommand ?? resolveDaemonForegroundCommand)(projectRoot);
+        const foregroundCommand = await (deps.resolveDaemonForegroundCommand ?? resolveDaemonForegroundCommand)(projectRoot);
+        const replayedFlags = daemonCmd.operatorFlagArgs?.length
+          ? ` ${daemonCmd.operatorFlagArgs.map(shellQuote).join(' ')}`
+          : '';
+        const command = `${foregroundCommand}${replayedFlags}`;
         const witnessCommand = (deps.buildDaemonExitWitnessCommand ?? buildDaemonExitWitnessCommand)(command, projectRoot);
         await deps.respawnPane(sessionName, undefined, witnessCommand);
       }
@@ -980,7 +986,13 @@ async function main(): Promise<void> {
   // mirroring the engineer/registry subcommand pattern.
   const intakeLoopCmd = detectIntakeLoopCommand(process.argv);
   if (intakeLoopCmd) {
-    const code = await dispatchIntakeLoop(intakeLoopCmd);
+    const spine = startOperatorEventSpine(process.cwd());
+    let code: number;
+    try {
+      code = await dispatchIntakeLoop(intakeLoopCmd, { events: spine.events });
+    } finally {
+      spine.stop();
+    }
     process.exit(code);
   }
 
@@ -1345,7 +1357,8 @@ async function main(): Promise<void> {
   const events = new ConductorEventEmitter();
 
   // Load config (optional — conductor works without it)
-  const configResult = await loadConfig(projectRoot);
+  const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
+  const configResult = await loadConfig(projectRoot, installedHarnessVersion);
   const config = configResult.ok ? configResult.config : undefined;
   if (configResult.ok && configResult.warnings.length > 0) {
     for (const w of configResult.warnings) {
@@ -1369,7 +1382,7 @@ async function main(): Promise<void> {
   // ~/.ai-conductor/config.yml is where `install` writes the chosen preset).
   // The host renders diagrams at the approval gate; best-effort, with a notice
   // on any skip/failure so the human knows to fall back to the raw Markdown.
-  const mergedResult = await loadMergedConfig(projectRoot);
+  const mergedResult = await loadMergedConfig(projectRoot, installedHarnessVersion);
   const mermaidCfg = mergedResult.ok ? mergedResult.config.mermaid_renderer : undefined;
   const renderDeps = defaultRenderDeps((m) => console.error(m));
   const promptHost = new TerminalPromptHost(liveRegion, {
@@ -1677,7 +1690,7 @@ async function main(): Promise<void> {
   const renderer = registry.get<UIRenderer>('ui_renderer', config?.ui_renderer ?? 'terminal');
   subscriber.start([renderer]);
 
-  await emitDeprecatedConfigKeyEvents(configResult, events);
+  await emitDeprecatedConfigKeyEvents(mergedResult, events);
   // Every foreground mode can reach build_review.  The daemon performs this
   // once at daemon start; foreground runs establish the same frozen evidence
   // before constructing their Conductor.

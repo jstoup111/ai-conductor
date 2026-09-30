@@ -3,13 +3,21 @@ import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCb);
 
+const SPEC_SLUG_MAX_LENGTH = 50;
+const SPEC_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*-?$/;
+
 /** Convert an idea into the bounded branch-name segment used by engineer specs. */
 export function slugify(idea: string): string {
   return idea
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 50);
+    .slice(0, SPEC_SLUG_MAX_LENGTH);
+}
+
+/** Return whether a string is a canonical bounded engineer spec branch slug. */
+export function isSpecSlug(slug: string): boolean {
+  return slug.length <= SPEC_SLUG_MAX_LENGTH && SPEC_SLUG_PATTERN.test(slug);
 }
 
 /** Resolve the checked-out branch used as the base for engineer spec worktrees. */

@@ -4,21 +4,21 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { parseJudgeBatchPayload } from '../../src/engine/coverage-binding-envelope.js';
+import { issueJudgeClaimIds, parseJudgeBatchPayload } from '../../src/engine/coverage-binding-envelope.js';
 
 const skillPath = fileURLToPath(new URL('../../../../skills/coverage-binding/SKILL.md', import.meta.url));
 
-type ExampleEntry = Record<string, unknown> & { digest: string };
+type ExampleEntry = Record<string, unknown> & { id: string };
 
-/** The published example, with its `...` digest placeholders replaced by issued digests. */
-async function publishedExample(): Promise<{ entries: ExampleEntry[]; digests: string[] }> {
+/** The published example, checked against claim ids issued for engine-side digests. */
+async function publishedExample(): Promise<{ entries: ExampleEntry[]; issued: ReadonlyMap<string, string> }> {
   const skill = await readFile(skillPath, 'utf8');
   const contract = skill.slice(skill.indexOf('## Result contract'));
   const fence = /```json\n([\s\S]*?)\n```/.exec(contract);
   if (!fence) throw new Error('coverage-binding SKILL.md publishes no JSON example under "## Result contract"');
   const example = JSON.parse(fence[1]!) as { verdicts: Array<Record<string, unknown>> };
-  const entries = example.verdicts.map((entry, index) => ({ ...entry, digest: `issued-${index}` }));
-  return { entries, digests: entries.map((entry) => entry.digest) };
+  const entries = example.verdicts as ExampleEntry[];
+  return { entries, issued: issueJudgeClaimIds(entries.map((_, index) => `sha256:issued-${index}`), 'criterion') };
 }
 
 async function judgementPolicy(): Promise<string> {
@@ -37,13 +37,13 @@ describe('coverage-binding skill contract', () => {
   });
 
   it('publishes an example payload the engine batch parser accepts', async () => {
-    const { entries, digests } = await publishedExample();
+    const { entries, issued } = await publishedExample();
 
-    const parsed = parseJudgeBatchPayload(batch(entries), digests);
+    const parsed = parseJudgeBatchPayload(batch(entries), issued);
 
     expect(parsed).toEqual({
       ok: true,
-      verdicts: new Map(entries.map(({ digest, ...verdict }) => [digest, verdict])),
+      verdicts: new Map(entries.map(({ id, ...verdict }) => [issued.get(id), verdict])),
     });
     expect(entries.map((entry) => entry.verdict).sort()).toEqual(['asserts', 'does-not-assert']);
   });
@@ -61,18 +61,18 @@ describe('coverage-binding skill contract', () => {
     },
     {
       rule: 'does-not-assert without a missingAssertion',
-      mutate: (entries: ExampleEntry[]) => entries.map((entry) => entry.verdict === 'does-not-assert' ? { digest: entry.digest, verdict: entry.verdict } : entry),
+      mutate: (entries: ExampleEntry[]) => entries.map((entry) => entry.verdict === 'does-not-assert' ? { id: entry.id, verdict: entry.verdict } : entry),
       reason: 'does-not-assert payload requires a non-empty missingAssertion',
     },
     {
       rule: 'an omitted entry for a supplied claim',
       mutate: (entries: ExampleEntry[]) => entries.slice(1),
-      reason: 'batch verdict is missing issued digest issued-0',
+      reason: 'batch verdict is missing issued claim id c1',
     },
   ])('rejects the published example once it carries $rule', async ({ mutate, reason }) => {
-    const { entries, digests } = await publishedExample();
+    const { entries, issued } = await publishedExample();
 
-    const parsed = parseJudgeBatchPayload(batch(mutate(entries)), digests);
+    const parsed = parseJudgeBatchPayload(batch(mutate(entries)), issued);
 
     expect(parsed.ok).toBe(false);
     expect(parsed.ok ? '' : parsed.reason).toContain(reason);

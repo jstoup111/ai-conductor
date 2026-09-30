@@ -52,7 +52,7 @@ state.
 
 ## Alignment
 
-- **Provider catalog (adr-2026-09-24, amended D9, D10).** The Pi-specific parsing (`provider/model`
+- **Provider catalog (adr-2026-09-24, amended D12, D13).** The Pi-specific parsing (`provider/model`
   split, effort→thinking) lives in the Pi adapter module and a Pi-owned helper. That keeps D1's
   rule that no production file outside the catalog and the provider's own adapter names a
   provider id literal. The `llm_providers` map is keyed by catalog ids, not by a literal `pi`
@@ -68,7 +68,7 @@ state.
   `provider_attempt`, `step_retry` and `step_completed` `model`/`effort` fields (ladder item 8).
   Probe failures are startup errors, the same shape as D4's not-installed error.
 - **State.** "Pi with no configured model" is unrepresentable after config load, because
-  validation rejects it (D10). `FALLBACK_MODEL='sonnet'` can no longer reach a Pi dispatch.
+  validation rejects it (D13). `FALLBACK_MODEL='sonnet'` can no longer reach a Pi dispatch.
 - **Diagrams.** They were updated in this review: the capability flag was dropped, validation is
   syntax-only, and the `llm_providers` block was added. They match the amended ADRs.
 
@@ -107,14 +107,14 @@ The advisory overlap scan over these paths reported no overlap and no open block
 
 None. Two APPROVED ADRs were amended additively, with operator approval in this DECIDE session:
 - adr-2026-09-24-built-in-provider-catalog-and-boot-discovery. The D6 model-policy sentence is
-  superseded, and D9, D10 and D11 (exit-0 `stopReason: "error"` fails the invocation) are added.
+  superseded, and D12, D13 and D14 (exit-0 `stopReason: "error"` fails the invocation) are added.
 - adr-2026-07-03-reactive-model-fallback-ladder. Items 7 and 8 are added: a per-provider ladder
   and escalation order, and observable Pi rungs.
 
 ## Conditions
 
 1. The plan's `## Architecture Obligation Coverage` covers every decision of both amended ADRs:
-   catalog D1–D11 and ladder 1–8. Decisions left unchanged are dispositioned `existing`.
+   catalog D1–D14 and ladder 1–8. Decisions left unchanged are dispositioned `existing`.
 2. The probe parser is fixture-driven, and a test proves the default suite never spawns a real `pi`
    (injected runner, `assertRealExecAllowed`).
 3. The existing #1884 tests that assert "passes no `--model`" and "one rung with no model id" are
@@ -124,7 +124,7 @@ None. Two APPROVED ADRs were amended additively, with operator approval in this 
 ## Conflict-check follow-up (2026-09-29, operator decisions)
 
 - Pi as a fallback candidate: when pi is configured, `llm_providers.pi.model`, the escalation order
-  and the fallback ladder are all required. `llm_providers.pi.model` is Pi's native default (D10).
+  and the fallback ladder are all required. `llm_providers.pi.model` is Pi's native default (D13).
 - The top-level `model_fallback_ladder` keeps applying to every provider except Pi (ladder item 7),
   so #902's claude/codex ladder behavior is unchanged.
 - Model table: engine rows show Pi model `config-required`; interactive-skill rows show Pi model and

@@ -119,6 +119,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // are deliberately outside the audit-trail friction vocabulary.
   github_operation_refused: 'not-audited-by-design',
   github_write_credential_fallback: 'not-audited-by-design',
+  bot_co_author_skipped: 'not-audited-by-design',
   provider_discovery: 'not-audited-by-design',
   provider_attempt: 'not-audited-by-design',
   // Daemon-only suppression durability is not an operator-friction record.
@@ -184,6 +185,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_member_evidence_recomputed: 'not-audited-by-design',
   kickback: 'friction-mapped',
   loop_halt: 'friction-mapped',
+  tracker_backend_unavailable: 'not-audited-by-design',
   over_scope_decision: 'not-audited-by-design',
   halt_marker_write_failed: 'friction-mapped',
   halt_record_written: 'friction-mapped',
@@ -394,6 +396,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     target: { repository: 'acme/repo', kind: 'issue', number: 1 },
     reason: 'auth-refused',
   },
+  bot_co_author_skipped: { type: 'bot_co_author_skipped', reason: 'token-unavailable' },
   provider_discovery: {
     type: 'provider_discovery',
     installed: ['claude', 'codex'],
@@ -651,6 +654,9 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   kickback: { type: 'kickback', from: 'conflict_check', to: 'architecture_review', evidence: 'missing seam', count: 1 },
   loop_halt: { type: 'loop_halt', reason: 'kickback cap exceeded' },
+  tracker_backend_unavailable: {
+    type: 'tracker_backend_unavailable', project: 'project-b', backend: 'jira', reason: 'no-adapter',
+  },
   over_scope_decision: {
     type: 'over_scope_decision',
     criteria: ['S2.1'],

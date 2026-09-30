@@ -62,6 +62,19 @@ describe('renderAsBuiltReport', () => {
     expect(report).not.toContain('## Blocking Findings');
   });
 
+  it('renders an empty caller chain as an unreachable primitive', () => {
+    const report = renderAsBuiltReport(persisted({
+      version: 'v1', verdict: 'BLOCKED',
+      reachability: [{ primitive: 'addIssueDependency', callerChain: [] }],
+      driftNotes: [],
+      findings: [{ id: 'AB-1', class: 'DESIGN', summary: 'test-only callers' }],
+      violations: 'One unreachable production rung.',
+      resolution: 'Wire it.',
+    }));
+
+    expect(report).toContain('## Production reachability\n- addIssueDependency: no production caller (unreachable)\n');
+  });
+
   it.each([
     [true, 'yes'],
     [false, 'no'],

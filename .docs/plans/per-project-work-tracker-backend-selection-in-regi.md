@@ -123,7 +123,7 @@ None. #846 (`engine/tracker-client.ts`) and #847 (`parseWorkRef`) are on main; n
 **Steps:**
 1. Write failing parity test. It drives `buildIntake` and a pre-change reference composition, which constructs the GitHub issues adapter directly with today's registry mapping. Both get the same registry and the same scripted gh runner. Cover four registry shapes: projects without `tracker`; a project with no config file; a project with an invalid unrelated key; a project with explicit `tracker: { backend: github }`. Record envelopes, ledger entries, gh argv, and emitted events.
 2. Verify test fails (RED)
-3. Implement a new intake-backend composite module that does not import any concrete adapter (FR-13). It takes a backend factory map, `resolveTrackerSelection`, the registry reader and an events emitter. It builds the GitHub adapter once with a registry `list()` that resolves each project lazily and returns only github-selected projects, mapped exactly as today (`parseGhRepo` name/ghRepo/path). `buildIntake` keeps its synchronous signature and return fields; it passes `{ github: createGithubIssuesAdapter }` and widens its `events` parameter to an emitter that also admits `tracker_backend_unavailable`.
+3. Implement a new intake-backend composite module that does not import any concrete adapter (FR-13). It takes a backend factory map, `resolveTrackerSelection`, the registry reader and an events emitter. It builds the GitHub adapter once with a registry `list()` that resolves each project lazily and returns only github-selected projects, mapped exactly as today (`parseGhRepo` name/ghRepo/path). `buildIntake` keeps its synchronous signature and return fields; it passes `{ github: createGithubIssuesAdapter }` and widens its `events` parameter to an emitter that also admits `tracker_backend_unavailable`. Composition stays in `engineer-cli.ts` over the canonical `GhRunner` seam of `tracker-client.ts`; the removed `engineer/loop.ts` harness is not reintroduced.
 4. Verify test passes (GREEN)
 5. Commit with message: "feat(intake): tracker-aware composite at the intake composition root"
 
@@ -132,7 +132,7 @@ None. #846 (`engine/tracker-client.ts`) and #847 (`parseWorkRef`) are on main; n
 - the recorded gh argv sequence of the composite-backed poll equals the reference sequence exactly for the same registry
 - a project with no config.yml and a project whose config.yml has an invalid unrelated key are both polled through the GitHub adapter, and zero tracker_backend_unavailable events are emitted for the whole registry
 - a project with explicit `tracker: { backend: github }` yields envelopes and gh argv identical to the same project with no tracker key
-- buildIntake keeps its synchronous signature and constructing it performs no config read, asserted by a spy on resolveTrackerSelection that records zero calls before poll
+- buildIntake keeps its synchronous signature and constructing it performs no config read, asserted by a spy on resolveTrackerSelection that records zero calls before poll. The live engineer tracker composition happens only in `engineer-cli.ts` `buildIntake`, which hands the composite's GitHub adapter the canonical `GhRunner` runner from `tracker-client.ts`, and no source or test file under src/conductor imports or references `engineer/loop.ts`.
 
 **Files likely touched:**
 - src/conductor/src/engine/intake-backend-composite.ts — new composite source/port
@@ -267,6 +267,7 @@ None. #846 (`engine/tracker-client.ts`) and #847 (`parseWorkRef`) are on main; n
 - dispatchEngineer land with --source-ref ENG-42 exits 0, prints its normal JSON result, records zero gh argv for the write-back, advances the ledger to routed without a pending write-back, and emits tracker_backend_unavailable with reason no-adapter on the supplied spine emitter
 - dispatchEngineer handoff with a GitHub source ref owned by a jira-selected project makes no gh write for the write-back, emits the event, advances the ledger to done with the PR URL and branch without a pending write-back, and still prints the pr-opened result
 - the production engineer dispatch passes spine.events into buildIntake so the event reaches the persisted event spine, and the buildIntake events parameter type admits the tracker_backend_unavailable variant
+- the land and handoff integration tests obtain their tracker composition from `engineer-cli.ts` `buildIntake` with a scripted runner typed as `tracker-client.ts` `GhRunner`, and `src/conductor/src/engine/engineer/loop.ts` does not exist in the worktree
 
 **Files likely touched:**
 - src/conductor/src/engine/engineer-cli.ts — events threading if needed
@@ -334,3 +335,55 @@ Task 4 ────────────────────────�
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-ar001-1: src/conductor/src/intake-loop-cli.ts — add an optional `events?: IntakeEventEmitter` to DispatchIntakeLoopOpts and pass `events: opts.events` into the buildIntake call (line ~137); src/conductor/src/index.ts:853 — wrap dispatchIntakeLoop in startOperatorEventSpine(process.cwd()) exactly like the engineer root at index.ts:837-843 (pass spine.events, call spine.stop() in finally)
+**Gate:** as-built
+**Rationale:** Verified (99%, as-built reachability + source read): index.ts:853 calls dispatchIntakeLoop(intakeLoopCmd) with no emitter and intake-loop-cli.ts:137 calls buildIntake({engineerDir, registryPath, gh, printErr}) without events, so the composite's tracker_backend_unavailable emissions (intake-backend-composite.ts:73/:88/:125/:145) are skipped on the background poll path, violating adr-2026-07-22-canonical-tracker-client-seam D4; the approved architecture stays authoritative and the fix is conforming wiring that mirrors the engineer root (index.ts:837 startOperatorEventSpine), so this is build, not architecture_review or plan. Sibling sweep: the engineer path (index.ts:837-840) and prePollIntake (engineer-cli.ts:821) already thread events; no other buildIntake caller exists in src. No existing test or assertion is removed; Task 5 parity and Task 6-8 composite coverage are untouched.
+**Governing clause:** adr-2026-07-22-canonical-tracker-client-seam decision 4
+**Done when:**
+- adr-2026-07-22-canonical-tracker-client-seam decision 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ar001-1 is complete.
+
+### Task rem-as-built-rem-ar001-2: src/conductor/test/acceptance/background-intake-conduct-loop.test.ts — add a RED-first case: dispatchIntakeLoop with --once, a registry containing one jira-selected project, a scripted gh runner and a recording emitter passed as opts.events emits exactly one tracker_backend_unavailable {project, backend: 'jira', reason: 'no-adapter'} and records no gh argv for that project; assert it fails on the pre-change intake-loop-cli.ts
+**Gate:** as-built
+**Rationale:** Verified (99%, as-built reachability + source read): index.ts:853 calls dispatchIntakeLoop(intakeLoopCmd) with no emitter and intake-loop-cli.ts:137 calls buildIntake({engineerDir, registryPath, gh, printErr}) without events, so the composite's tracker_backend_unavailable emissions (intake-backend-composite.ts:73/:88/:125/:145) are skipped on the background poll path, violating adr-2026-07-22-canonical-tracker-client-seam D4; the approved architecture stays authoritative and the fix is conforming wiring that mirrors the engineer root (index.ts:837 startOperatorEventSpine), so this is build, not architecture_review or plan. Sibling sweep: the engineer path (index.ts:837-840) and prePollIntake (engineer-cli.ts:821) already thread events; no other buildIntake caller exists in src. No existing test or assertion is removed; Task 5 parity and Task 6-8 composite coverage are untouched.
+**Governing clause:** adr-2026-07-22-canonical-tracker-client-seam decision 4
+**Done when:**
+- adr-2026-07-22-canonical-tracker-client-seam decision 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ar001-2 is complete.
+
+### Task rem-as-built-rem-ar002-1: RETIRED by operator decision 2026-09-29 — keep the `case 'tracker_backend_unavailable'` in renderDaemonEventUnsafe (src/conductor/src/daemon-cli.ts); every EVENT_SINKS render:true event keeps a daemon renderer case (daemon-render.test.ts render-completeness guard), matching the github_operation_refused / github_write_credential_fallback precedent; no code change
+**Gate:** as-built
+**Rationale:** Verified (97%, grep of src): the tracker_backend_unavailable case at daemon-cli.ts:2936 (added by commit 40155c5e3, outside every plan task's files) has no production producer because the daemon never calls buildIntake/prePollIntake — the only emitters are the engineer and intake-loop composites, which persist to .pipeline/events.jsonl via the operator spine and never reach daemon buses; Task 4's Done-when only requires the EVENT_SINKS row with render enabled (event-sinks.ts:150), which is preserved, and no test asserts the daemon line, so removing the dead branch drops no delivered coverage. The render obligation is made reachable instead on the intake-loop console, the process that actually produces the event after AR-001's wiring. Matched pair: event-sinks.ts:150 render:true and the renderer must agree — the new intake-loop renderer is the counterpart that keeps render:true truthful.
+**Parent task:** 4
+**Governing clause:** Task 4
+**Done when:**
+- Task 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ar002-1 is complete.
+
+### Task rem-as-built-rem-ar002-2: src/conductor/src/intake-loop-cli.ts — when opts.events is supplied, subscribe `tracker_backend_unavailable` on it and render one warning line through the loop's `log`/`printErr` (`tracker backend unavailable: <project> selected <backend> (<reason>)`), unsubscribing before return; add a test in src/conductor/test/acceptance/background-intake-conduct-loop.test.ts asserting that line is printed once for a jira-selected project on a --once tick and absent for an all-github registry
+**Gate:** as-built
+**Rationale:** Verified (97%, grep of src): the tracker_backend_unavailable case at daemon-cli.ts:2936 (added by commit 40155c5e3, outside every plan task's files) has no production producer because the daemon never calls buildIntake/prePollIntake — the only emitters are the engineer and intake-loop composites, which persist to .pipeline/events.jsonl via the operator spine and never reach daemon buses; Task 4's Done-when only requires the EVENT_SINKS row with render enabled (event-sinks.ts:150), which is preserved, and no test asserts the daemon line, so removing the dead branch drops no delivered coverage. The render obligation is made reachable instead on the intake-loop console, the process that actually produces the event after AR-001's wiring. Matched pair: event-sinks.ts:150 render:true and the renderer must agree — the new intake-loop renderer is the counterpart that keeps render:true truthful.
+**Parent task:** 4
+**Governing clause:** Task 4
+**Done when:**
+- Task 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ar002-2 is complete.
+
+### Task rem-prd-audit-rem-s34-1: src/conductor/src/engine/intake-backend-composite.ts:64 — accept an optional `trackerExclusionEpisodes?: Set<string>` dep and use `deps.trackerExclusionEpisodes ?? new Set<string>()` for excludedProjects (per-composite default preserves Task 8 Done-when); src/conductor/src/engine/engineer-cli.ts — add a module-level exported `trackerExclusionEpisodes = new Set<string>()` beside missingRegistrationEpisodes (line ~773), add the optional field to buildIntake deps and forward it to createIntakeBackendComposite, and pass it from prePollIntake (line ~832) alongside missingRegistrationEpisodes
+**Gate:** prd-audit
+**Rationale:** Verified (85%, source read): intake-backend-composite.ts:64 scopes excludedProjects to one composite, but prePollIntake (engineer-cli.ts:832) rebuilds the composite on every compose-launcher session, so a jira-selected project re-emits tracker_backend_unavailable each pre-poll, violating S3.4's one-event-per-episode in a long-running process; Task 8's Steps name the missingRegistrationEpisodes process-lifetime pattern (engineer-cli.ts:773, threaded through buildIntake exactly so episodes survive this rebuild) as the model, so this is conforming build work under Task 8/Story 3, not a plan miss. The per-composite default is kept so Task 8's three Done-when tests (intake-backend-composite.test.ts:255 and neighbours) are preserved unchanged. Matched pair: the new episode set is threaded through the same two seams as missingRegistrationEpisodes (composite deps and buildIntake deps) so the two episode mechanisms cannot diverge. Sibling sweep: intake-loop-cli.ts:132 builds its composite once per process (already correct, no change); land/handoff buildIntake calls are single-shot per process (one write-back each), found-and-excluded because S3.4 concerns polling and no episode spans them.
+**Criterion:** S3.4
+**Parent task:** 8
+**Done when:**
+- S3.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s34-1 is complete.
+
+### Task rem-prd-audit-rem-s34-2: src/conductor/test/engine/engineer/engineer-cli-launch-intake.test.ts — RED-first: call prePollIntake twice with the same recording events emitter over a registry holding one jira-selected project and assert exactly one tracker_backend_unavailable {backend: 'jira', reason: 'no-adapter'} in total, then flip the project to github for one call and back to jira and assert one new event; clear trackerExclusionEpisodes in the existing beforeEach/afterEach next to missingRegistrationEpisodes.clear() (lines 120, 128); prove it fails against the pre-change engineer-cli.ts
+**Gate:** prd-audit
+**Rationale:** Verified (85%, source read): intake-backend-composite.ts:64 scopes excludedProjects to one composite, but prePollIntake (engineer-cli.ts:832) rebuilds the composite on every compose-launcher session, so a jira-selected project re-emits tracker_backend_unavailable each pre-poll, violating S3.4's one-event-per-episode in a long-running process; Task 8's Steps name the missingRegistrationEpisodes process-lifetime pattern (engineer-cli.ts:773, threaded through buildIntake exactly so episodes survive this rebuild) as the model, so this is conforming build work under Task 8/Story 3, not a plan miss. The per-composite default is kept so Task 8's three Done-when tests (intake-backend-composite.test.ts:255 and neighbours) are preserved unchanged. Matched pair: the new episode set is threaded through the same two seams as missingRegistrationEpisodes (composite deps and buildIntake deps) so the two episode mechanisms cannot diverge. Sibling sweep: intake-loop-cli.ts:132 builds its composite once per process (already correct, no change); land/handoff buildIntake calls are single-shot per process (one write-back each), found-and-excluded because S3.4 concerns polling and no episode spans them.
+**Criterion:** S3.4
+**Parent task:** 8
+**Done when:**
+- S3.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s34-2 is complete.

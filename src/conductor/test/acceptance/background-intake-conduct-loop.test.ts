@@ -37,7 +37,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -760,6 +760,98 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     expect(enqueued).toHaveLength(1);
     expect(notified).toHaveLength(1);
     expect(sleepCalls).toBe(0);
+  });
+
+  it('reports a Jira-selected project on the event spine and loop console without polling GitHub', async () => {
+    const mod = await load(CLI_MOD);
+    const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+    const { ConductorEventEmitter } = await import('../../src/ui/events.js');
+    const root = await mkdtemp(join(runTmpRoot, 'intake-loop-jira-event-'));
+    const projectPath = join(root, 'jira-project');
+    const registryPath = join(root, 'registry.json');
+    const events = new ConductorEventEmitter();
+    const emitted: unknown[] = [];
+    const logs: string[] = [];
+    const ghArgv: string[][] = [];
+    events.on('tracker_backend_unavailable', (event) => { emitted.push(event); });
+
+    try {
+      await mkdir(join(projectPath, '.ai-conductor'), { recursive: true });
+      await writeFile(join(projectPath, '.ai-conductor', 'config.yml'), 'tracker:\n  backend: jira\n', 'utf8');
+      await writeFile(registryPath, JSON.stringify([{
+        schemaVersion: 1,
+        name: 'acme/jira-project',
+        path: projectPath,
+        remote: 'git@github.com:acme/jira-project.git',
+        status: 'registered',
+        registeredAt: '2026-09-29T00:00:00.000Z',
+      }]), 'utf8');
+
+      const code = await dispatch(
+        { kind: 'run', once: true, intervalMs: 1 },
+        {
+          engineerDir: join(root, 'engineer'),
+          registryPath,
+          events,
+          gh: async (argv: string[]) => {
+            ghArgv.push(argv);
+            return { stdout: '[]' };
+          },
+          log: (line: string) => logs.push(line),
+          printErr: (line: string) => logs.push(line),
+          sendNotification: async () => {},
+        },
+      );
+
+      expect(code).toBe(0);
+      expect(emitted).toEqual([{
+        type: 'tracker_backend_unavailable', project: 'acme/jira-project', backend: 'jira', reason: 'no-adapter',
+      }]);
+      expect(ghArgv).toEqual([]);
+      expect(logs.filter((line) => line === 'tracker backend unavailable: acme/jira-project selected jira (no-adapter)')).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not render a backend warning for an all-GitHub registry', async () => {
+    const mod = await load(CLI_MOD);
+    const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+    const { ConductorEventEmitter } = await import('../../src/ui/events.js');
+    const root = await mkdtemp(join(runTmpRoot, 'intake-loop-github-event-'));
+    const projectPath = join(root, 'github-project');
+    const registryPath = join(root, 'registry.json');
+    const events = new ConductorEventEmitter();
+    const logs: string[] = [];
+
+    try {
+      await mkdir(projectPath, { recursive: true });
+      await writeFile(registryPath, JSON.stringify([{
+        schemaVersion: 1,
+        name: 'acme/github-project',
+        path: projectPath,
+        remote: 'git@github.com:acme/github-project.git',
+        status: 'registered',
+        registeredAt: '2026-09-29T00:00:00.000Z',
+      }]), 'utf8');
+
+      await dispatch(
+        { kind: 'run', once: true, intervalMs: 1 },
+        {
+          engineerDir: join(root, 'engineer'),
+          registryPath,
+          events,
+          gh: async () => ({ stdout: '[]' }),
+          log: (line: string) => logs.push(line),
+          printErr: (line: string) => logs.push(line),
+          sendNotification: async () => {},
+        },
+      );
+
+      expect(logs).not.toContain('tracker backend unavailable: acme/github-project selected github (no-adapter)');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('the production continuous entry point reports each ledger-corruption episode once', async () => {

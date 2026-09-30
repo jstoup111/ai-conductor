@@ -7,6 +7,8 @@
  *  - Span attributes: conductor.step, index, status, retry count, tier (FR-4).
  *  - Span events: retries, gate verdicts, kickbacks (FR-4).
  *  - Orphan events (no open span): warn + no-op, never throw (FR-3 negatives).
+ *    Context-free provider attempts attach to the sole open lifecycle execution
+ *    of their step; out-of-band steps record them on the run span.
  *  - Step re-run (second step_started same step): closes old span, opens new one (FR-3).
  *  - Force-close of all open spans on flush (FR-9).
  *  - Run outcome taxonomy: `complete` from `feature_complete`; `halted` from
@@ -29,6 +31,7 @@ import {
 import type { ConductorEvent } from '../../types/events.js';
 import type { DispatchMeteringObservation } from '../dispatch-metering.js';
 import { resolveExecutionIdentity, type ExecutionScope } from '../execution-identity.js';
+import { OUT_OF_BAND_STEPS } from '../steps.js';
 
 interface StepState {
   span: Span;
@@ -38,6 +41,8 @@ interface StepState {
   subjectLabel: string;
   /** Explicit scopes have a shared event-time clock; legacy spans retain SDK timing. */
   usesEventClock: boolean;
+  /** True for spans opened under an explicit `lifecycle-step` execution context. */
+  lifecycleStep: boolean;
   settlementEndTimeMs?: number;
   dispatch?: DispatchMeteringObservation;
 }
@@ -137,6 +142,7 @@ export class SpanManager {
       startTimeMs,
       subjectLabel: identity.subjectLabel,
       usesEventClock: event.executionContext !== undefined,
+      lifecycleStep: event.executionContext?.subject.kind === 'lifecycle-step',
     });
   }
 
@@ -255,8 +261,10 @@ export class SpanManager {
     observation: DispatchMeteringObservation,
   ): void {
     const identity = this.resolve(event.step, event.executionContext);
-    const state = identity ? this.openSteps.get(identity.correlationKey) : undefined;
+    const state = (identity ? this.openSteps.get(identity.correlationKey) : undefined)
+      ?? (event.executionContext === undefined ? this.soleOpenLifecycleSpan(event.step) : undefined);
     if (!state) {
+      if (event.executionContext === undefined && this.recordOutOfBandAttempt(event, observation)) return;
       this.warn(`provider_attempt for '${event.step}' received but no open span exists — ignoring`);
       return;
     }
@@ -272,6 +280,47 @@ export class SpanManager {
           ? { fallbackReason: state.dispatch.fallbackReason }
           : {}),
     };
+  }
+
+  /**
+   * Sub-dispatches that run inside an explicit lifecycle execution — the
+   * SHIP-tail rebase resolver and custom build_review rubrics — emit
+   * `provider_attempt` without that execution's context, so their legacy key
+   * never matches the span `step_started` opened. A lifecycle step has at most
+   * one live execution, so a context-free attempt belongs to the single open
+   * execution span for its step. Two or more candidates are ambiguous and stay
+   * unattributed rather than guessed.
+   */
+  private soleOpenLifecycleSpan(step: string): StepState | undefined {
+    let match: StepState | undefined;
+    for (const state of this.openSteps.values()) {
+      if (!state.lifecycleStep || state.subjectLabel !== step) continue;
+      if (match !== undefined) return undefined;
+      match = state;
+    }
+    return match;
+  }
+
+  /**
+   * Out-of-band steps (e.g. `remediate`, dispatched by a gate's adjudication or
+   * a validation-group remediation lap) never emit `step_started`, so no step
+   * span can exist for them. Their provider dispatch is recorded as an event on
+   * the run span, like other out-of-band observations, instead of warning.
+   */
+  private recordOutOfBandAttempt(
+    event: Extract<ConductorEvent, { type: 'provider_attempt' }>,
+    observation: DispatchMeteringObservation,
+  ): boolean {
+    if (!Object.hasOwn(OUT_OF_BAND_STEPS, event.step) || !this.runSpan) return false;
+    const attrs: Record<string, string> = { step: event.step, outcome: event.outcome };
+    if (observation.provider !== undefined) attrs.provider = observation.provider;
+    if (observation.preferredProvider !== undefined) attrs.preferredProvider = observation.preferredProvider;
+    if (observation.model !== undefined) attrs.model = observation.model;
+    if (observation.effort !== undefined) attrs.effort = observation.effort;
+    if (observation.tier !== undefined) attrs.tier = observation.tier;
+    if (observation.fallbackReason !== undefined) attrs.fallbackReason = observation.fallbackReason;
+    this.runSpan.addEvent('provider_attempt', attrs);
+    return true;
   }
 
   private setDispatchAttributes(

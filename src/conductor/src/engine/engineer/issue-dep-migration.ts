@@ -371,6 +371,17 @@ export async function createDependencyLinks(
         dependencyDatabaseId: targetId,
       },
     }, deps.operations);
+    if (operation.kind === 'failed' && operation.error.includes('HTTP 422')) {
+      // A concurrent writer may have created this link after our initial GET.
+      // Confirm that precise already-present condition with the authoritative
+      // read instead of treating every validation error as idempotent success.
+      existing = await fetchExistingBlockedBy(source.repo, source.number, gh, cwd);
+      existingBySource.set(edge.source, existing);
+      if (existing.has(edge.target)) {
+        results.push({ edge, status: 'already-present' });
+        continue;
+      }
+    }
     if (operation.kind !== 'executed') {
       const detail = operation.kind === 'refused'
         ? operation.reason

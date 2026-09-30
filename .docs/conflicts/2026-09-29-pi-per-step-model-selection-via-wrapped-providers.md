@@ -5,7 +5,7 @@
 - Stories: every file in `.docs/stories/` was keyword-scanned. Twenty-five provider, model,
   ladder and table story files were compared pairwise in both directions.
 - ADRs examined (APPROVED):
-  - adr-2026-09-24-built-in-provider-catalog-and-boot-discovery (D1–D11)
+  - adr-2026-09-24-built-in-provider-catalog-and-boot-discovery (D1–D14)
   - adr-2026-07-03-reactive-model-fallback-ladder (items 1–8)
   - adr-2026-07-05-retry-as-escalation-ladder
   - adr-2026-07-03-generated-model-table-single-source
@@ -47,7 +47,7 @@ fallback to pi would have no model to run.
 1. When pi is configured anywhere, require `llm_providers.pi.model`, `model_escalation_order` and `model_fallback_ladder`, and make `llm_providers.pi.model` Pi's native default.
 2. Refuse pi anywhere but first in a candidate ladder.
 
-**Recommendation and selection:** Option 1, selected by the operator. Catalog D10 is updated in
+**Recommendation and selection:** Option 1, selected by the operator. Catalog D13 is updated in
 this spec's amendment. Stories 2, 3 and 4 are updated in place.
 
 ## Conflict: Top-level fallback ladder scope
@@ -83,7 +83,7 @@ its normal verdict."
 
 **Resolution:** That criterion is narrowed to a terminal message whose stop reason is not an error.
 It is replaced in place in a companion main-based PR, because the land stem gate rejects edits to a
-foreign-stem story (catalog D11).
+foreign-stem story (catalog D14).
 
 ## Conflict: Pi ladder trigger under an explicit provider
 

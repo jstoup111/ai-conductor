@@ -92,6 +92,19 @@ export async function resolveHarnessVersion(
   return UNKNOWN_HARNESS_VERSION;
 }
 
+/**
+ * Resolve the installed harness version for config compatibility checks.
+ * Unlike the version report, an unidentifiable installation must not block a
+ * project from starting, so its sentinel is represented as undefined.
+ */
+export async function installedHarnessVersionForConfig(
+  moduleDir: string,
+  readText: ReadText = realReadText,
+): Promise<string | undefined> {
+  const version = await resolveHarnessVersion(moduleDir, readText);
+  return version === UNKNOWN_HARNESS_VERSION ? undefined : version;
+}
+
 /** One line naming the harness version and the engine build behind it. */
 export function renderVersionReport(report: VersionReport): string {
   return `ai-conductor ${report.harnessVersion} (engine ${report.engineVersion})`;

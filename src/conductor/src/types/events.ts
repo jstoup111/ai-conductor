@@ -67,6 +67,10 @@ export interface GithubWriteCredentialFallbackEvent {
   target: GithubOperationTarget;
   reason: GithubBotAuthRefusalReason;
 }
+export interface BotCoAuthorSkippedEvent {
+  type: 'bot_co_author_skipped';
+  reason: 'token-unavailable' | 'identity-read-failed' | 'worktree-write-failed';
+}
 
 /** Daemon-lifetime backlog dimensions. Kept closed so metric cardinality is bounded. */
 export type BacklogState = 'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked';
@@ -309,6 +313,7 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
 };
 
 export type ConductorEvent =
+  | BotCoAuthorSkippedEvent
   | {
       type: 'daemon_backlog_snapshot';
       counts: Record<BacklogState, number>;
@@ -1327,6 +1332,13 @@ export type ConductorEvent =
        * not create a PR (zero commits, push failure, gh error).
        */
       prUrl?: string;
+    }
+  | {
+      /** A project's selected tracker backend has no configured adapter. */
+      type: 'tracker_backend_unavailable';
+      project: string;
+      backend: 'github' | 'jira';
+      reason: 'no-adapter' | 'invalid-config';
     }
   | {
       /** Recorded OVER_SCOPE decisions and any evidentiary defects from one clear. */

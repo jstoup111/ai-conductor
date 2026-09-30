@@ -25,6 +25,7 @@
 # Usage:
 #   test/lint_shell.sh           # check; non-zero exit on any finding
 #   test/lint_shell.sh --list    # print the enumerated file set, one per line
+#   test/lint_shell.sh --syntax  # parse every enumerated script with bash -n
 #
 # DECLARED_EXCLUSIONS is the only sanctioned way to keep a shell file out of
 # both lint gates. Paths are repo-relative and exact; never rely on a glob
@@ -47,10 +48,11 @@ print_unless_excluded() {
 }
 
 # Enumerate the same surface integrity check 1 syntax-checks: every bash script
-# under bin/, hooks/, test/, and .github/scripts/. bin/ holds extensionless
-# executables, so it is selected by shebang rather than by suffix.
+# under bin/, hooks/, test/, .github/scripts/, and skills/*/scripts/. bin/ and
+# bundled skill helpers hold extensionless executables, so they are selected by
+# shebang rather than by suffix.
 collect_scripts() {
-  local script
+  local script scripts_dir
   while IFS= read -r -d '' script; do
     head -1 "$script" | grep -qE '^#!.*(bash|sh)' || continue
     print_unless_excluded "$script"
@@ -59,6 +61,13 @@ collect_scripts() {
     print_unless_excluded "$script"
   done < <(find "${HARNESS_DIR}/hooks" "${HARNESS_DIR}/test" "${HARNESS_DIR}/.github/scripts" \
     -type f -name '*.sh' -print0 2>/dev/null)
+  for scripts_dir in "${HARNESS_DIR}"/skills/*/scripts; do
+    [ -d "$scripts_dir" ] || continue
+    while IFS= read -r -d '' script; do
+      head -1 "$script" | grep -qE '^#!.*(bash|sh)' || continue
+      print_unless_excluded "$script"
+    done < <(find -L "$scripts_dir" -type f -print0 2>/dev/null)
+  done
 }
 
 # Sort for stable, reviewable output ordering across machines.
@@ -78,6 +87,17 @@ fi
 if [ "${1:-}" = "--list" ]; then
   printf '%s\n' "${SCRIPTS[@]}"
   exit 0
+fi
+
+if [ "${1:-}" = "--syntax" ]; then
+  syntax_status=0
+  for script in "${SCRIPTS[@]}"; do
+    if ! bash -n "$script" 2>/dev/null; then
+      printf '%s\n' "$script"
+      syntax_status=1
+    fi
+  done
+  exit "$syntax_status"
 fi
 
 if ! command -v shellcheck >/dev/null 2>&1; then

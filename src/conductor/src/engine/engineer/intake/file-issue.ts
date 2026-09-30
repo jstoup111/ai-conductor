@@ -1,6 +1,7 @@
 // engineer/intake/file-issue.ts — deterministic-completeness issue filer.
 //
-// `bin/intake-file` delegates to `fileIntakeIssue` here: create the GitHub
+// The bundled `skills/intake/scripts/intake-file` helper delegates to
+// `fileIntakeIssue` here: create the GitHub
 // issue, resolve size/priority (prompt ▸ infer ▸ default), apply the
 // `priority:`/`size:` labels, and record a `--depends-on` link (or an
 // explicit "no dependencies" acknowledgement) — all as ONE atomic filing
@@ -58,6 +59,7 @@ export interface FileIntakeIssueResult {
   prioritySource: 'given' | 'prompted' | 'inferred' | 'default';
   dependsOnDecision: 'none' | 'linked';
   linked: string[];
+  unlinked: Array<{ ref: string; reason: string }>;
   badRefs: string[];
   warnings: string[];
   /** Per-operation outcomes for a created issue whose follow-up metadata was partial. */
@@ -286,6 +288,7 @@ export async function fileIntakeIssue(
     prioritySource,
     dependsOnDecision: 'none',
     linked: [],
+    unlinked: [],
     badRefs: [],
     warnings,
     metadataFailures: [],
@@ -376,6 +379,7 @@ export async function fileIntakeIssue(
             const metadataResponse = await deps.creation.operations.run(entry.request);
             const error = metadataFailureError(metadataResponse);
             if (error) {
+              if (entry.dependency) result.unlinked.push({ ref: entry.dependency.source, reason: error });
               metadataFailures.push({
                 operation: entry.request.operation,
                 error: entry.dependency
@@ -386,11 +390,13 @@ export async function fileIntakeIssue(
               linked.add(entry.dependency.source);
             }
           } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (entry.dependency) result.unlinked.push({ ref: entry.dependency.source, reason: message });
             metadataFailures.push({
               operation: entry.request.operation,
               error: entry.dependency
-                ? `depends-on link failed for "${entry.dependency.source}": ${error instanceof Error ? error.message : String(error)}`
-                : error instanceof Error ? error.message : String(error),
+                ? `depends-on link failed for "${entry.dependency.source}": ${message}`
+                : message,
             });
           }
         }
