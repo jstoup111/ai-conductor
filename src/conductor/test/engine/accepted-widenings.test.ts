@@ -1,4 +1,4 @@
-// Covers: task:4, task:5
+// Covers: task:1, task:4, task:5
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -245,6 +245,64 @@ describe('accepted widening decision store', () => {
       ok: true,
       decision: { id: 'decision-2', offerEntryId: 'offer-nc-1', supersedes: { id: 'decision-1', revision: 1 } },
     });
+  });
+
+  it('treats a same-authority revision of the latest decision as inert', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new AcceptedWideningDecisionStore(projectRoot, FEATURE, {
+      newDecisionId: () => 'decision-1',
+    });
+    const refusedOffer = {
+      ...DECISION_INPUT,
+      authority: 'refuse' as const,
+      rationale: 'The operator declined this expansion.',
+      offerEntryId: 'offer-nc-1',
+    };
+
+    const first = await store.append(refusedOffer);
+    await expect(store.append({
+      ...refusedOffer,
+      rationale: 'The operator re-affirmed the existing refusal.',
+      supersedes: { id: 'decision-1', revision: 1 },
+    })).resolves.toEqual(first);
+
+    const state = await store.read();
+    expect(state).toMatchObject({
+      kind: 'valid',
+      state: { decisions: [{ id: 'decision-1', authority: 'refuse', revision: 1 }] },
+    });
+    if (state.kind === 'valid') expect(state.state.decisions).toHaveLength(1);
+  });
+
+  it('rejects a same-authority revision that names a superseded decision', async () => {
+    const projectRoot = await createProjectRoot();
+    const path = join(projectRoot, ACCEPTED_WIDENINGS_PATH);
+    const identifiers = ['decision-1', 'decision-2'];
+    const store = new AcceptedWideningDecisionStore(projectRoot, FEATURE, {
+      newDecisionId: () => identifiers.shift()!,
+    });
+    const acceptedOffer = { ...DECISION_INPUT, offerEntryId: 'offer-nc-1' };
+
+    await store.append(acceptedOffer);
+    await store.append({
+      ...acceptedOffer,
+      authority: 'refuse',
+      rationale: 'The operator explicitly reversed the earlier acceptance.',
+      offerEntryId: 'offer-nc-1-reversal',
+      supersedes: { id: 'decision-1', revision: 1 },
+    });
+    const before = await store.read();
+    const serializedBefore = await readFile(path, 'utf8');
+
+    await expect(store.append({
+      ...acceptedOffer,
+      authority: 'accept',
+      rationale: 'The operator re-affirmed the superseded acceptance.',
+      offerEntryId: 'offer-nc-1-reaffirmation',
+      supersedes: { id: 'decision-1', revision: 1 },
+    })).resolves.toEqual({ ok: false, reason: 'invalid-decision' });
+    await expect(store.read()).resolves.toEqual(before);
+    await expect(readFile(path, 'utf8')).resolves.toBe(serializedBefore);
   });
 
   it.each([

@@ -452,8 +452,10 @@ export class AcceptedWideningDecisionStore {
           prior.supersedes.revision === parsedInput.supersedes.revision &&
           prior.offerEntryId === parsedInput.offerEntryId &&
           prior.authority === parsedInput.authority) return { ok: true, decision: prior };
-        if (!prior || parsedInput.supersedes.id !== prior.id || parsedInput.supersedes.revision !== prior.revision ||
-          parsedInput.authority === prior.authority) return { ok: false, reason: 'invalid-decision' };
+        if (!prior || parsedInput.supersedes.id !== prior.id || parsedInput.supersedes.revision !== prior.revision) {
+          return { ok: false, reason: 'invalid-decision' };
+        }
+        if (parsedInput.authority === prior.authority) return { ok: true, decision: prior };
       } else if (prior !== undefined) {
         return { ok: false, reason: 'invalid-decision' };
       }
