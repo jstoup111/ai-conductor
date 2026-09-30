@@ -284,7 +284,10 @@ so it never even mentions that a waiver exists.
 **Migration** (answer it even when the answer is `none`), **Documentation**, and **Test plan**. The
 Release metadata section defaults to `Release-Disposition: no-note`; a notable reader-visible change
 replaces it with `Release-Disposition: note` plus `Release-Category`, `Release-Semver`, and
-`Release-Note`. A required check validates this section on every PR open/update. Its checkboxes are:
+`Release-Note`. The release-metadata and migration sections are the project-owned
+`release-disposition` region; only that step may rewrite its contents, and later PR-body authoring
+preserves the region and its markers. A required check validates this section on every PR open/update.
+Its checkboxes are:
 
 - Canonical affected documentation updated, or not applicable
 - README landing-page contract updated, or not affected

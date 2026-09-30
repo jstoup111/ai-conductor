@@ -1812,6 +1812,7 @@ async function main(): Promise<void> {
       projectRoot,
       stateFilePath,
       baseBranch: finishPublicationBaseBranch,
+      prTemplateBytes: config?.pr_template_bytes,
       git: finishPublicationGit,
       gh: finishPublicationGh,
       events,

@@ -33,6 +33,17 @@ import {
 import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
 import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
 import { classifyGitPushAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
+import {
+  HALT_PR_BANNER_SENTINEL,
+  NEEDS_REMEDIATION_BODY_MARKER,
+  engineBodyIncludes,
+  maskProjectOwnedRegions,
+  removeEngineBodyMarker,
+} from './pr-body-engine-markers.js';
+export {
+  HALT_PR_BANNER_SENTINEL,
+  NEEDS_REMEDIATION_BODY_MARKER,
+} from './pr-body-engine-markers.js';
 export { makeProductionGh, assertRealExecAllowed, type GhRunner };
 
 /**
@@ -580,7 +591,7 @@ export async function prMergeState(
       state,
       mergeable,
       hasFailingOrPendingChecks,
-      hasHaltBodyMarker: typeof data.body === 'string' && data.body.includes(NEEDS_REMEDIATION_BODY_MARKER),
+      hasHaltBodyMarker: typeof data.body === 'string' && maskProjectOwnedRegions(data.body).includes(NEEDS_REMEDIATION_BODY_MARKER),
       labels,
       checksOutcome,
       statusCheckRollup: checks,
@@ -752,8 +763,6 @@ export const NEEDS_REMEDIATION_MARKER = '<!-- conductor:needs-remediation -->';
  * Distinct from {@link NEEDS_REMEDIATION_MARKER} which is embedded in comments.
  * Used for marking the PR body when a HALT marks a PR as needing remediation.
  */
-export const NEEDS_REMEDIATION_BODY_MARKER = '<!-- conductor:needs-remediation -->';
-
 /**
  * Stable hidden marker identifying the single harness-authored owner-gate
  * status comment on a PR for a spec that is currently owner-gated. Embedded
@@ -768,8 +777,6 @@ export const OWNER_GATED_MARKER = '<!-- conductor:owner-gated -->';
  * Stable sentinel: its presence in a PR body is a stateless halt signal
  * (issue #632).
  */
-export const HALT_PR_BANNER_SENTINEL =
-  'This PR was opened automatically after an irrecoverable daemon HALT.';
 export const HALT_PR_BANNER_LINES = [
   HALT_PR_BANNER_SENTINEL,
   'Manual remediation is required to unblock this feature.',
@@ -1082,7 +1089,7 @@ export async function ensureBodyMarker(
     }
 
     // ── Step 2: check if marker is present; if so, idempotent-exit ────────
-    if (body.includes(NEEDS_REMEDIATION_BODY_MARKER)) {
+    if (maskProjectOwnedRegions(body).includes(NEEDS_REMEDIATION_BODY_MARKER)) {
       // Marker already present — no edit needed
       return undefined;
     }
@@ -1190,7 +1197,7 @@ export async function ensureHaltPresentation(
     // ── Step 6: verify all three markers ──────────────────────────────────
     const hasDraft = afterWrite.isDraft;
     const hasLabel = afterWrite.labels.includes('needs-remediation');
-    const hasBodyMarker = afterWrite.body.includes(NEEDS_REMEDIATION_BODY_MARKER);
+    const hasBodyMarker = maskProjectOwnedRegions(afterWrite.body).includes(NEEDS_REMEDIATION_BODY_MARKER);
 
     if (hasDraft && hasLabel && hasBodyMarker) {
       return 'confirmed';
@@ -1235,12 +1242,12 @@ export async function removeBodyMarker(
 ): Promise<PrMutationResult | undefined> {
   try {
     // Check if marker is present; if not, idempotent-exit
-    if (!currentBody.includes(NEEDS_REMEDIATION_BODY_MARKER)) {
+    if (!engineBodyIncludes(currentBody, NEEDS_REMEDIATION_BODY_MARKER)) {
       return undefined;
     }
 
     // Strip the marker and submit the same guarded edit primitive.
-    const newBody = currentBody.replace(NEEDS_REMEDIATION_BODY_MARKER, '').trim();
+    const newBody = removeEngineBodyMarker(currentBody, NEEDS_REMEDIATION_BODY_MARKER).trim();
     const target = prTarget(prUrl);
     if (!target) return refused('pull-request.edit', 'invalid-target');
     return await runMutation(runGh, 'pull-request.edit', target.repository, target, { body: newBody });
@@ -1344,7 +1351,7 @@ export async function cleanupHaltPresentation(
     // Under preserveDraft a still-draft PR is the intended end state, so it is
     // never a residual marker.
     const isDraft = preserveDraft ? false : afterCleanup.isDraft;
-    const hasBodyMarker = afterCleanup.body.includes(NEEDS_REMEDIATION_BODY_MARKER);
+    const hasBodyMarker = maskProjectOwnedRegions(afterCleanup.body).includes(NEEDS_REMEDIATION_BODY_MARKER);
 
     if (!hasResidualLabel && !isDraft && !hasBodyMarker) {
       return 'confirmed';

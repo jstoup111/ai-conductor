@@ -71,6 +71,12 @@ template entirely (`ship-draft-pr.ts` hard-codes a `/pr` shape).
    `adr-2026-07-11-pipeline-state-durability`. A region that is absent or holds only whitespace and
    HTML comments halts the run naming the step. A capture is authoritative for its pull request once
    taken and is discarded only when its owning step dispatches again.
+
+   > **Amended 2026-09-28 by #2616 (operator decision):** a region owner must be a SHIP-phase
+   > custom step, because the retained draft this decision writes into is opened only at SHIP entry.
+   > Config load rejects a region whose owning step inherits a phase earlier than SHIP from its
+   > `after:` target, naming the step and the rule. Opening the draft earlier was considered and
+   > rejected.
 6. **Every FINISH body rewrite re-inserts every captured region byte-for-byte.** The prose authoring
    effect and the judge's repair effect re-insert regions before their revision is observed, so the
    judged revision already carries them; the body floor, halt-PR rehabilitation, and the finish

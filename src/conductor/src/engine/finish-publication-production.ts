@@ -44,6 +44,7 @@ import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisite
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
 import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
+import { maskProjectOwnedRegions } from './pr-body-regions.js';
 import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
@@ -83,6 +84,8 @@ export interface ProductionFinishPublicationDeps {
   stateFilePath: string;
   /** Resolved PR base branch from the owning production composition root. */
   baseBranch: string;
+  /** Loaded `.github/pull_request_template.md` bytes, when the project has one. */
+  prTemplateBytes?: string;
   git: GitRunner;
   gh: GhRunner;
   /** The existing fail-closed finish-record entry, injectable for tests. */
@@ -188,8 +191,18 @@ async function mutateRetainedPullRequest(input: {
 
 function upsertReducedCoverageEvidence(body: string, section: string | undefined): { ok: true; body: string; changed: boolean } | { ok: false; message: string } {
   const heading = '## Reduced build-review coverage';
-  const start = body.indexOf(heading);
-  const end = start === -1 ? -1 : body.indexOf('\n## ', start + heading.length);
+  // Project-owned regions are opaque. Mask them at identical byte offsets so
+  // the engine never mistakes a project heading for its own section.
+  const searchable = maskProjectOwnedRegions(body);
+  const start = searchable.indexOf(heading);
+  const nextHeading = start === -1 ? -1 : searchable.indexOf('\n## ', start + heading.length);
+  // The masked view deliberately hides project-owned regions, so it cannot be
+  // used alone to find the end of an engine-owned section: a region appended
+  // after the section would otherwise be included in the replacement span.
+  const nextRegion = start === -1 ? -1 : body.indexOf('\n<!-- ai-conductor:step ', start + heading.length);
+  const end = nextHeading === -1 ? nextRegion
+    : nextRegion === -1 ? nextHeading
+      : Math.min(nextHeading, nextRegion);
   const withoutExisting = start === -1
     ? body
     : `${body.slice(0, start).trimEnd()}${end === -1 ? '' : `\n\n${body.slice(end + 1).trimStart()}`}`.trimEnd();
@@ -276,6 +289,7 @@ function prProse(
   body: unknown,
   halted: boolean,
   verdict: 'accepted' | 'deficient' | 'none',
+  templateBytes?: string,
 ): 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt' {
   const prTitle = typeof title === 'string' ? title : '';
   const prBody = typeof body === 'string' ? body : '';
@@ -289,7 +303,7 @@ function prProse(
   // (#1703). `isEngineFlooredBody` reads the body content instead, so an
   // intact floor still classifies as a placeholder and authored prose does
   // not.
-  if (isEngineFlooredBody(prBody) || /Draft opened automatically/i.test(text)) {
+  if (isEngineFlooredBody(prBody, templateBytes) || /Draft opened automatically/i.test(maskProjectOwnedRegions(text))) {
     return 'placeholder';
   }
   // Existing prose is a judgment candidate until this coordinator either
@@ -613,7 +627,7 @@ export function createProductionFinishPublicationCoordinator(
                   proseRevisionByPr.set(pr.url, revision);
                   await seedJudgmentStore();
                   if (authoredPlaceholderProsePendingByPr.delete(pr.url) && !halted) {
-                    const observedProse = prProse(pr.title, pr.body, false, 'none');
+                    const observedProse = prProse(pr.title, pr.body, false, 'none', deps.prTemplateBytes);
                     if (observedProse !== 'placeholder') {
                       // The authoring pass, not an independently observed
                       // reader-facing revision, owns this exact replacement.
@@ -645,6 +659,7 @@ export function createProductionFinishPublicationCoordinator(
                     pr.body,
                     halted,
                     verdict,
+                    deps.prTemplateBytes,
                   );
                   if (prose === 'placeholder' || prose === 'revision_required') {
                     authoringOriginByPr.set(pr.url, prose);
@@ -755,6 +770,7 @@ export function createProductionFinishPublicationCoordinator(
             branch: state.worktree_branch,
             baseBranch: deps.baseBranch,
             featureDesc: state.feature_desc,
+            prTemplateBytes: deps.prTemplateBytes,
             remoteMutation: deps.remoteMutation ?? publication?.remoteMutation,
             remoteGit: deps.remoteGit,
             operations,

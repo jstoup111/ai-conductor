@@ -11,6 +11,8 @@ For consumer projects without this custom-step configuration, the global harness
 
 <!-- What and why, in 1-3 sentences. -->
 
+<!-- ai-conductor:step release-disposition -->
+
 ## Release metadata
 
 <!--
@@ -46,6 +48,8 @@ Otherwise, write "none".
 -->
 
 none
+
+<!-- /ai-conductor:step -->
 
 ## Documentation
 

@@ -156,9 +156,12 @@ const REDUCED_COVERAGE_REASONS = new Set<BuildReviewInfrastructureFailureReason>
 ]);
 
 /** Retired, shipped rubric ids are tolerated only for compatibility reads. */
-const RETIRED_BUILD_REVIEW_RUBRIC_IDS = new Set<string>(DEPRECATED_BUILD_REVIEW_RUBRIC_IDS);
 export function isRetiredBuildReviewRubric(value: unknown): value is string {
-  return typeof value === 'string' && RETIRED_BUILD_REVIEW_RUBRIC_IDS.has(value);
+  // `config` loads pull-request regions, which read accepted-risk helpers and
+  // arrive back here.  Do not dereference its live binding during module
+  // initialization; it is available by the time this compatibility predicate
+  // is called.
+  return typeof value === 'string' && DEPRECATED_BUILD_REVIEW_RUBRIC_IDS.includes(value as never);
 }
 
 const defaultFilesystem: BuildReviewDispositionFilesystem = {

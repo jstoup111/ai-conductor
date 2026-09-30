@@ -51,14 +51,20 @@ vi.mock('../../src/engine/halt-pr-rehabilitation.js', async (importOriginal) => 
   };
 });
 
-import { Conductor as ProductionConductor } from '../../src/engine/conductor.js';
+import { Conductor as ProductionConductor, createFinishPresentationRepair } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
-import { HALT_PR_BANNER_LINES, NEEDS_REMEDIATION_BODY_MARKER } from '../../src/engine/pr-labels.js';
-import { HALT_HISTORY_COMMENT_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import type { CompletionContext } from '../../src/engine/artifacts.js';
+import { writeRegionCapture } from '../../src/engine/pr-body-region-store.js';
+import type {
+  GithubOperationRequest,
+  GithubOperationRunner,
+  GithubOperationRunnerRefusal,
+  GithubOperationRunnerResponse,
+} from '../../src/engine/github-operations.js';
 
 class Conductor extends ProductionConductor {
   constructor(options: ConstructorParameters<typeof ProductionConductor>[0]) {
@@ -90,6 +96,122 @@ function makeSuccessfulRunner(): StepRunner {
       return { success: true };
     }),
   };
+}
+
+const REGION_PR_URL = 'https://github.com/example/repo/pull/1';
+const REGION_OWNER = 'compliance-attest';
+const REGION_CAPTURE = '\nAttested-By: security-bot\n';
+
+function regionBody(contents: string): string {
+  return `## Summary\n\n<!-- ai-conductor:step ${REGION_OWNER} -->${contents}<!-- /ai-conductor:step -->`;
+}
+
+function repairFixture(
+  projectRoot: string,
+  options: { halted?: boolean; refuseRestore?: boolean; persistRestore?: boolean } = {},
+) {
+  const operations: GithubOperationRequest[] = [];
+  const calls: string[] = [];
+  const pr = {
+    title: options.halted ? 'needs-remediation: test feature' : 'feat: test feature',
+    isDraft: true,
+    labels: options.halted ? ['needs-remediation'] : [] as string[],
+    body: regionBody('\nAttested-By: altered\n'),
+    comments: [] as string[],
+  };
+  const gh: GhRunner = async (args) => {
+    if (args[0] === 'pr' && args[1] === 'view') {
+      if (args.includes('--json') && args[args.indexOf('--json') + 1] === 'body') calls.push('region-read');
+      return { stdout: JSON.stringify(pr) };
+    }
+    throw new Error(`unexpected raw mutation: ${args.join(' ')}`);
+  };
+  const guarded: GithubOperationRunner = {
+    run: vi.fn(async (request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> => {
+      operations.push(request);
+      if (request.operation === 'pull-request.edit' && 'body' in (request.payload ?? {})) {
+        calls.push('region-restore');
+        if (options.refuseRestore) return { kind: 'refused' as const, reason: 'other-owner' as const };
+        if (!options.persistRestore) pr.body = (request.payload as { body: string }).body;
+      }
+      if (request.operation === 'pull-request.edit' && 'title' in (request.payload ?? {})) {
+        pr.title = (request.payload as { title: string }).title;
+      }
+      if (request.operation === 'pull-request.label.remove') pr.labels = [];
+      if (request.operation === 'pull-request.ready') {
+        calls.push('ready');
+        pr.isDraft = false;
+      }
+      return {};
+    }),
+  };
+  const repair = createFinishPresentationRepair({ projectRoot, gh, operations: guarded, log: () => {} });
+  const request = { prUrl: REGION_PR_URL, state: { feature_desc: 'test feature', worktree_branch: 'feat/test-feature' } };
+  return { calls, guarded, operations, pr, repair, request };
+}
+
+async function prepareFinishCompletion(dir: string, prUrl = REGION_PR_URL): Promise<void> {
+  await mkdir(join(dir, '.pipeline'), { recursive: true });
+  await writeFile(join(dir, '.pipeline/finish-choice'), 'pr', 'utf8');
+  await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ pr_url: prUrl }), 'utf8');
+}
+
+function validFinishEvidence() {
+  return async () => ({
+    kind: 'valid' as const,
+    slug: 'test-feature',
+    pr: REGION_PR_URL,
+    recordPath: '.docs/shipped/test-feature.md',
+    hash: 'test-hash',
+    commit: 'test-commit',
+  });
+}
+
+function completionRepairFixture(projectRoot: string, failVerificationRead = false) {
+  const calls: string[] = [];
+  let awaitingVerification = false;
+  const pr = {
+    title: 'feat: test feature',
+    isDraft: true,
+    labels: [] as string[],
+    body: `## What Changed\n\nReader-facing prose.\n${regionBody('\nAttested-By: altered\n')}`,
+    comments: [] as string[],
+  };
+  const gh: GhRunner = async (args) => {
+    if (args[0] !== 'pr' || args[1] !== 'view') throw new Error(`unexpected gh call: ${args.join(' ')}`);
+    if (args.some((arg) => arg.includes('body')) && awaitingVerification) {
+      calls.push('region-verification-read');
+      if (failVerificationRead) throw new Error('verification read unavailable');
+      awaitingVerification = false;
+    }
+    return { stdout: JSON.stringify(pr) };
+  };
+  const operations: GithubOperationRunner = {
+    run: vi.fn(async (request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> => {
+      if (request.operation === 'pull-request.edit' && 'body' in (request.payload ?? {})) {
+        calls.push('region-restore');
+        pr.body = (request.payload as { body: string }).body;
+        awaitingVerification = true;
+      }
+      if (request.operation === 'pull-request.ready') {
+        calls.push('ready');
+        pr.isDraft = false;
+      }
+      return {};
+    }),
+  };
+  const repair = createFinishPresentationRepair({ projectRoot, gh, operations, log: () => {} });
+  const ctx: CompletionContext = {
+    featureDesc: 'test-feature',
+    gh,
+    shipmentEvidence: validFinishEvidence(),
+    repairFinishPr: async (prUrl, opts) => repair({
+      prUrl,
+      state: { feature_desc: 'test feature', worktree_branch: 'feat/test-feature' },
+      mode: opts?.mode,
+    }),
+  };
+  return { calls, ctx, pr };
 }
 
 // ── suite ────────────────────────────────────────────────────────────────────
@@ -153,6 +275,103 @@ describe('conductor/finish-repair', () => {
     // Verify repairFinishPr is present and callable
     expect(ctx.repairFinishPr).toBeDefined();
     expect(typeof ctx.repairFinishPr).toBe('function');
+  });
+
+  it('restores the captured region after halt rehabilitation and body-floor rewrites before the ready flip', async () => {
+    await writeRegionCapture(dir, REGION_PR_URL, REGION_OWNER, REGION_CAPTURE);
+    const fixture = repairFixture(dir, { halted: true });
+
+    await fixture.repair(fixture.request);
+
+    expect(fixture.pr.body).toContain(
+      `<!-- ai-conductor:step ${REGION_OWNER} -->${REGION_CAPTURE}<!-- /ai-conductor:step -->`,
+    );
+    expect(fixture.calls).toEqual(expect.arrayContaining(['region-read', 'region-restore', 'ready']));
+    expect(fixture.calls.indexOf('region-restore')).toBeGreaterThan(fixture.calls.indexOf('region-read'));
+    expect(fixture.calls.lastIndexOf('region-read')).toBeGreaterThan(fixture.calls.indexOf('region-restore'));
+    expect(fixture.calls.indexOf('ready')).toBeGreaterThan(fixture.calls.lastIndexOf('region-read'));
+  });
+
+  it('keeps the draft and names the owner when the guarded region restore is refused', async () => {
+    await writeRegionCapture(dir, REGION_PR_URL, REGION_OWNER, REGION_CAPTURE);
+    const fixture = repairFixture(dir, { refuseRestore: true });
+
+    await expect(fixture.repair(fixture.request)).rejects.toThrow(
+      `guarded region restore refused for ${REGION_OWNER}`,
+    );
+
+    expect(fixture.pr.isDraft).toBe(true);
+    expect(fixture.calls).not.toContain('ready');
+  });
+
+  it('keeps the draft and names a verification mismatch when a restore does not persist', async () => {
+    await writeRegionCapture(dir, REGION_PR_URL, REGION_OWNER, REGION_CAPTURE);
+    const fixture = repairFixture(dir, { persistRestore: true });
+
+    await expect(fixture.repair(fixture.request)).rejects.toThrow(
+      `region verification mismatch for ${REGION_OWNER}`,
+    );
+
+    expect(fixture.pr.isDraft).toBe(true);
+    expect(fixture.calls.slice(-3)).toEqual(['region-read', 'region-restore', 'region-read']);
+  });
+
+  it('keeps the existing ready path operation sequence when there are no captures', async () => {
+    const fixture = repairFixture(dir);
+
+    await fixture.repair(fixture.request);
+
+    // The one body read belongs to the pre-existing body floor. A capture
+    // would add the restore read plus the verification read after it.
+    expect(fixture.calls).toEqual(['region-read', 'ready']);
+    expect(fixture.operations.map(({ operation }) => operation)).toEqual(['pull-request.ready']);
+  });
+
+  it('completion repair restores and verifies captured regions before marking the PR ready', async () => {
+    await prepareFinishCompletion(dir);
+    await writeRegionCapture(dir, REGION_PR_URL, REGION_OWNER, REGION_CAPTURE);
+    const fixture = completionRepairFixture(dir);
+
+    const result = await checkStepCompletion(dir, 'finish', fixture.ctx);
+
+    expect(result).toEqual({ done: true });
+    expect(fixture.pr.body).toContain(
+      `<!-- ai-conductor:step ${REGION_OWNER} -->${REGION_CAPTURE}<!-- /ai-conductor:step -->`,
+    );
+    expect(fixture.calls).toEqual(['region-restore', 'region-verification-read', 'ready']);
+  });
+
+  it('fails finish completion closed when a captured region verification read fails', async () => {
+    await prepareFinishCompletion(dir);
+    await writeRegionCapture(dir, REGION_PR_URL, REGION_OWNER, REGION_CAPTURE);
+    const fixture = completionRepairFixture(dir, true);
+
+    const result = await checkStepCompletion(dir, 'finish', fixture.ctx);
+
+    expect(result).toMatchObject({ done: false, missing: 'other' });
+    expect(result.reason).toContain(REGION_OWNER);
+    expect(result.reason).toContain('verification read unavailable');
+    expect(fixture.calls).toEqual(['region-restore', 'region-verification-read']);
+    expect(fixture.pr.isDraft).toBe(true);
+  });
+
+  it('keeps a capture-free completion repair warn-only when GitHub is unavailable', async () => {
+    await prepareFinishCompletion(dir);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const unavailableGh: GhRunner = async () => { throw new Error('GitHub unavailable'); };
+    const ctx: CompletionContext = {
+      featureDesc: 'test-feature',
+      gh: unavailableGh,
+      shipmentEvidence: validFinishEvidence(),
+      repairFinishPr: async () => { throw new Error('GitHub unavailable'); },
+    };
+
+    try {
+      await expect(checkStepCompletion(dir, 'finish', ctx)).resolves.toEqual({ done: true });
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('continuing (warn-only)'));
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it('repairFinishPr invokes repair functions in correct order via composition', async () => {
@@ -426,478 +645,4 @@ describe('conductor/finish-repair', () => {
     expect(fakeGh.calls.some(({ args }) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
   });
 
-  it('restores the pre-finish release metadata without replacing finish-authored reader content', async () => {
-    const prUrl = 'https://github.com/example/repo/pull/1';
-    const metadata = [
-      'Release-Disposition: note',
-      'Release-Category: Fixed',
-      'Release-Semver: patch',
-      'Release-Note: Preserve release metadata after finish.',
-    ].join('\n');
-    let body = `${metadata}\n\nDraft reader content.`;
-    const edits: string[] = [];
-    const gh: GhRunner = async (args: string[]) => {
-      if (args[0] === 'pr' && args[1] === 'view') {
-        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
-      }
-      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
-        body = args[args.indexOf('--body') + 1]!;
-        edits.push(body);
-      }
-      return { stdout: '{}' };
-    };
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: makeSuccessfulRunner(),
-      events,
-      projectRoot: dir,
-      daemon: true,
-      selfHost: true,
-      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
-      gh,
-    });
-    (conductor as any).shipDraftPrUrl = prUrl;
-    await (conductor as any).snapshotFinishReleaseMetadata();
-
-    body = '## What Changed\n\nFinish-authored reader content.';
-    const ctx = await (conductor as any).completionCtx({
-      feature_desc: 'test feature',
-      worktree_branch: 'feat/test-feature',
-    } satisfies ConductState);
-    await ctx.repairFinishPr(prUrl);
-
-    expect({ body, edits }).toEqual({
-      body: `## What Changed\n\nFinish-authored reader content.\n\n${metadata}`,
-      edits: [`## What Changed\n\nFinish-authored reader content.\n\n${metadata}`],
-    });
-  });
-
-  it('replaces altered and duplicate metadata with exactly the captured block', async () => {
-    const prUrl = 'https://github.com/example/repo/pull/1';
-    const snapshot = [
-      'Release-Disposition: note',
-      'Release-Category: Fixed',
-      'Release-Semver: patch',
-      'Release-Note: Preserve release metadata after finish.',
-    ].join('\n');
-    let body = snapshot;
-    const gh: GhRunner = async (args: string[]) => {
-      if (args[0] === 'pr' && args[1] === 'view') {
-        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
-      }
-      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
-        body = args[args.indexOf('--body') + 1]!;
-      }
-      return { stdout: '{}' };
-    };
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: makeSuccessfulRunner(),
-      events,
-      projectRoot: dir,
-      daemon: true,
-      selfHost: true,
-      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
-      gh,
-    });
-    (conductor as any).shipDraftPrUrl = prUrl;
-    await (conductor as any).snapshotFinishReleaseMetadata();
-
-    body = [
-      '## What Changed',
-      '',
-      'Finish-authored reader content.',
-      '',
-      'Release-Disposition: no-note',
-      'Release-Disposition: note',
-      'Release-Category: Changed',
-      'Release-Semver: minor',
-      'Release-Note: Altered metadata.',
-    ].join('\n');
-    const ctx = await (conductor as any).completionCtx({
-      feature_desc: 'test feature',
-      worktree_branch: 'feat/test-feature',
-    } satisfies ConductState);
-    await ctx.repairFinishPr(prUrl);
-
-    expect(body).toBe(`## What Changed\n\nFinish-authored reader content.\n\n${snapshot}`);
-  });
-
-  it('preserves the metadata snapshot/restore when a halt PR was already repaired at SHIP adoption', async () => {
-    // Full sequence with the new SHIP-adoption repair in front of it:
-    //   adoption repair (halt placeholder → presentable, still draft)
-    //   → release-disposition writes metadata → pre-finish snapshot
-    //   → finish repair rewrites the body → metadata restored, PR ready.
-    const prUrl = 'https://github.com/example/repo/pull/1';
-    const metadata = [
-      'Release-Disposition: note',
-      'Release-Category: Fixed',
-      'Release-Semver: patch',
-      'Release-Note: Preserve release metadata after finish.',
-    ].join('\n');
-    const pr = {
-      title: 'needs-remediation: feat/test-feature — manual remediation required',
-      body: [NEEDS_REMEDIATION_BODY_MARKER, '', ...HALT_PR_BANNER_LINES].join('\n'),
-      isDraft: true,
-      labels: ['needs-remediation'] as string[],
-      comments: [] as string[],
-    };
-    const gh: GhRunner = async (args: string[]) => {
-      if (args[0] === 'pr' && args[1] === 'view') {
-        return {
-          stdout: JSON.stringify({
-            title: pr.title,
-            isDraft: pr.isDraft,
-            labels: pr.labels.map((name) => ({ name })),
-            body: pr.body,
-            comments: pr.comments.map((body) => ({ body })),
-          }),
-        };
-      }
-      if (args[0] === 'pr' && args[1] === 'edit') {
-        const t = args.indexOf('--title');
-        if (t >= 0) pr.title = args[t + 1]!;
-        const b = args.indexOf('--body');
-        if (b >= 0) pr.body = args[b + 1]!;
-      }
-      if (args[0] === 'pr' && args[1] === 'ready') pr.isDraft = args.includes('--undo');
-      if (args[0] === 'pr' && args[1] === 'comment') {
-        pr.comments.push(args[args.indexOf('--body') + 1] ?? '');
-      }
-      if (args[0] === 'api' && args[args.indexOf('--method') + 1] === 'DELETE') {
-        const name = decodeURIComponent(String(args[3] ?? '').split('/labels/')[1] ?? '');
-        pr.labels = pr.labels.filter((l) => l !== name);
-      }
-      return { stdout: '{}' };
-    };
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: makeSuccessfulRunner(),
-      events,
-      projectRoot: dir,
-      daemon: true,
-      selfHost: true,
-      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
-      gh,
-    });
-    const state = {
-      feature_desc: 'test feature',
-      worktree_branch: 'feat/test-feature',
-    } satisfies ConductState;
-
-    // 1. SHIP adoption: the placeholder becomes presentable, and stays a draft.
-    await (conductor as any).makeRetainedShipPrPresentable(prUrl, state, 'release-disposition');
-    expect(pr.title).not.toContain('needs-remediation:');
-    expect(pr.labels).not.toContain('needs-remediation');
-    expect(pr.isDraft).toBe(true);
-
-    // 2. release-disposition writes its metadata into the retained draft body.
-    pr.body = `${pr.body}\n\n${metadata}`;
-    (conductor as any).shipDraftPrUrl = prUrl;
-    await (conductor as any).snapshotFinishReleaseMetadata();
-
-    // 3. finish authors reader content over the body, then repairs.
-    pr.body = '## What Changed\n\nFinish-authored reader content.';
-    const ctx = await (conductor as any).completionCtx(state);
-    await ctx.repairFinishPr(prUrl);
-
-    expect(pr.body).toBe(`## What Changed\n\nFinish-authored reader content.\n\n${metadata}`);
-    // Only finish flips the retained PR ready-for-review.
-    expect(pr.isDraft).toBe(false);
-    // The halt narrative was captured exactly once, at adoption.
-    expect(pr.comments.filter((c) => c.includes(HALT_HISTORY_COMMENT_MARKER))).toHaveLength(1);
-  });
-
-  it('does not read or mutate metadata outside the self-host release-disposition flow', async () => {
-    const prUrl = 'https://github.com/example/repo/pull/1';
-    let body = 'Finish-authored reader content.';
-    const calls: string[][] = [];
-    const gh: GhRunner = async (args: string[]) => {
-      calls.push(args);
-      if (args[0] === 'pr' && args[1] === 'view') {
-        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
-      }
-      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
-        body = args[args.indexOf('--body') + 1]!;
-      }
-      return { stdout: '{}' };
-    };
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: makeSuccessfulRunner(),
-      events,
-      projectRoot: dir,
-      daemon: true,
-      selfHost: false,
-      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
-      gh,
-    });
-    (conductor as any).shipDraftPrUrl = prUrl;
-    await (conductor as any).snapshotFinishReleaseMetadata();
-    const ctx = await (conductor as any).completionCtx({
-      feature_desc: 'test feature',
-      worktree_branch: 'feat/test-feature',
-    } satisfies ConductState);
-    await ctx.repairFinishPr(prUrl);
-
-    expect({ body, metadataEdits: calls.filter((args) => args.includes('--body')) }).toEqual({
-      body: 'Finish-authored reader content.',
-      metadataEdits: [],
-    });
-  });
-
-  it('fails closed before finish completion when the release metadata snapshot is unavailable', async () => {
-    const prUrl = 'https://github.com/example/repo/pull/1';
-    const calls: string[][] = [];
-    const gh: GhRunner = async (args: string[]) => {
-      calls.push(args);
-      if (args[0] === 'pr' && args[1] === 'view') throw new Error('GitHub unavailable');
-      return { stdout: '{}' };
-    };
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: makeSuccessfulRunner(),
-      events,
-      projectRoot: dir,
-      daemon: true,
-      selfHost: true,
-      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
-      gh,
-    });
-    (conductor as any).shipDraftPrUrl = prUrl;
-
-    await expect((conductor as any).snapshotFinishReleaseMetadata()).rejects.toThrow(
-      'pre-finish snapshot unavailable',
-    );
-    const ctx = await (conductor as any).completionCtx({
-      feature_desc: 'test feature', worktree_branch: 'feat/test-feature',
-    } satisfies ConductState);
-    await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(join(dir, '.pipeline/finish-choice'), 'pr', 'utf-8');
-    await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ pr_url: prUrl }), 'utf-8');
-    ctx.isHeadPushed = undefined;
-    ctx.shipmentEvidence = async () => ({
-      kind: 'valid', slug: 'test-feature', pr: prUrl,
-      recordPath: '.docs/shipped/test-feature.md', hash: 'test-hash', commit: 'test-commit',
-    });
-
-    const result = await checkStepCompletion(dir, 'finish', ctx);
-
-    expect(result).toMatchObject({ done: false });
-    expect(result.reason).toContain('release metadata preservation failed');
-    expect(calls.some((args) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
-  });
-
-  it('fails finish completion and never readies the PR when restore readback cannot verify metadata', async () => {
-    const prUrl = 'https://github.com/example/repo/pull/1';
-    const metadata = [
-      'Release-Disposition: note', 'Release-Category: Fixed', 'Release-Semver: patch',
-      'Release-Note: Preserve release metadata after finish.',
-    ].join('\n');
-    const calls: string[][] = [];
-    let body = metadata;
-    let readCount = 0;
-    const gh: GhRunner = async (args: string[]) => {
-      calls.push(args);
-      if (args[0] === 'pr' && args[1] === 'view' && args.some((arg) => arg.includes('body'))) {
-        readCount++;
-        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
-      }
-      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
-        body = 'finish body without release metadata';
-        return { stdout: '{}' };
-      }
-      if (args[0] === 'pr' && args[1] === 'view') {
-        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [] }) };
-      }
-      return { stdout: '{}' };
-    };
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: makeSuccessfulRunner(),
-      events,
-      projectRoot: dir,
-      daemon: true,
-      selfHost: true,
-      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
-      gh,
-    });
-    (conductor as any).shipDraftPrUrl = prUrl;
-    await (conductor as any).snapshotFinishReleaseMetadata();
-    body = 'Finish-authored reader content.';
-    const ctx = await (conductor as any).completionCtx({
-      feature_desc: 'test feature', worktree_branch: 'feat/test-feature',
-    } satisfies ConductState);
-    await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(join(dir, '.pipeline/finish-choice'), 'pr', 'utf-8');
-    await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ pr_url: prUrl }), 'utf-8');
-    ctx.isHeadPushed = undefined;
-    ctx.shipmentEvidence = async () => ({
-      kind: 'valid',
-      slug: 'test-feature',
-      pr: prUrl,
-      recordPath: '.docs/shipped/test-feature.md',
-      hash: 'test-hash',
-      commit: 'test-commit',
-    });
-
-    const result = await checkStepCompletion(dir, 'finish', ctx);
-
-    expect(result).toMatchObject({ done: false });
-    expect(result.reason).toContain('release metadata preservation failed');
-    expect(readCount).toBeGreaterThanOrEqual(3);
-    expect(calls.some((args) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
-  });
-
-  // FINISH runs one publication transition per dispatch, so the pre-dispatch
-  // snapshot hook fires again AFTER `author_pr_prose` has legitimately rewritten
-  // the body without the metadata. Re-deriving the capture from that body found
-  // nothing and halted the feature at the very last step.
-  it('retains the captured block when finish re-dispatches after the prose author stripped the body', async () => {
-    const prUrl = 'https://github.com/example/repo/pull/1';
-    const metadata = [
-      'Release-Disposition: note',
-      'Release-Category: Fixed',
-      'Release-Semver: patch',
-      'Release-Note: Preserve release metadata after finish.',
-    ].join('\n');
-    let body = metadata;
-    const gh: GhRunner = async (args: string[]) => {
-      if (args[0] === 'pr' && args[1] === 'view') {
-        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
-      }
-      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
-        body = args[args.indexOf('--body') + 1]!;
-      }
-      return { stdout: '{}' };
-    };
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: makeSuccessfulRunner(),
-      events,
-      projectRoot: dir,
-      daemon: true,
-      selfHost: true,
-      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
-      gh,
-    });
-    (conductor as any).shipDraftPrUrl = prUrl;
-    await (conductor as any).snapshotFinishReleaseMetadata();
-
-    // author_pr_prose rewrote the whole body; the next finish dispatch re-enters
-    // the snapshot hook against that stripped body.
-    body = '## What Changed\n\nFinish-authored reader content.';
-    await expect((conductor as any).snapshotFinishReleaseMetadata()).resolves.toBeUndefined();
-
-    const ctx = await (conductor as any).completionCtx({
-      feature_desc: 'test feature',
-      worktree_branch: 'feat/test-feature',
-    } satisfies ConductState);
-    await ctx.repairFinishPr(prUrl);
-
-    expect(body).toBe(`## What Changed\n\nFinish-authored reader content.\n\n${metadata}`);
-  });
-
-  // The daemon re-dispatches a feature in a fresh process, so an in-memory-only
-  // capture is lost between the prose rewrite and the next finish dispatch.
-  it('restores from the persisted capture when finish re-dispatches in a fresh process', async () => {
-    const prUrl = 'https://github.com/example/repo/pull/1';
-    const metadata = [
-      'Release-Disposition: note',
-      'Release-Category: Fixed',
-      'Release-Semver: patch',
-      'Release-Note: Preserve release metadata after finish.',
-    ].join('\n');
-    let body = metadata;
-    const gh: GhRunner = async (args: string[]) => {
-      if (args[0] === 'pr' && args[1] === 'view') {
-        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
-      }
-      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
-        body = args[args.indexOf('--body') + 1]!;
-      }
-      return { stdout: '{}' };
-    };
-    const options = {
-      stateFilePath: statePath,
-      stepRunner: makeSuccessfulRunner(),
-      events,
-      projectRoot: dir,
-      daemon: true,
-      selfHost: true,
-      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
-      gh,
-    };
-    const first = new Conductor(options);
-    (first as any).shipDraftPrUrl = prUrl;
-    await (first as any).snapshotFinishReleaseMetadata();
-
-    body = '## What Changed\n\nFinish-authored reader content.';
-
-    const resumed = new Conductor(options);
-    (resumed as any).shipDraftPrUrl = prUrl;
-    await (resumed as any).snapshotFinishReleaseMetadata();
-    const ctx = await (resumed as any).completionCtx({
-      feature_desc: 'test feature',
-      worktree_branch: 'feat/test-feature',
-    } satisfies ConductState);
-    await ctx.repairFinishPr(prUrl);
-
-    expect(body).toBe(`## What Changed\n\nFinish-authored reader content.\n\n${metadata}`);
-  });
-
-  // A kickback can re-run release-disposition after a capture exists. The newly
-  // written disposition is authoritative; restoring the superseded one would
-  // silently ship the wrong release note.
-  it('discards a stale capture when release-disposition is dispatched again', async () => {
-    const prUrl = 'https://github.com/example/repo/pull/1';
-    const stale = [
-      'Release-Disposition: note',
-      'Release-Category: Fixed',
-      'Release-Semver: patch',
-      'Release-Note: Superseded note.',
-    ].join('\n');
-    const fresh = [
-      'Release-Disposition: note',
-      'Release-Category: Added',
-      'Release-Semver: minor',
-      'Release-Note: The disposition actually written last.',
-    ].join('\n');
-    let body = stale;
-    const gh: GhRunner = async (args: string[]) => {
-      if (args[0] === 'pr' && args[1] === 'view') {
-        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
-      }
-      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
-        body = args[args.indexOf('--body') + 1]!;
-      }
-      return { stdout: '{}' };
-    };
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: makeSuccessfulRunner(),
-      events,
-      projectRoot: dir,
-      daemon: true,
-      selfHost: true,
-      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
-      gh,
-    });
-    (conductor as any).shipDraftPrUrl = prUrl;
-    await (conductor as any).snapshotFinishReleaseMetadata();
-
-    // release-disposition re-runs and rewrites the block, then finish captures again.
-    await (conductor as any).clearFinishReleaseMetadataSnapshot();
-    body = fresh;
-    await (conductor as any).snapshotFinishReleaseMetadata();
-
-    body = '## What Changed\n\nFinish-authored reader content.';
-    const ctx = await (conductor as any).completionCtx({
-      feature_desc: 'test feature',
-      worktree_branch: 'feat/test-feature',
-    } satisfies ConductState);
-    await ctx.repairFinishPr(prUrl);
-
-    expect(body).toBe(`## What Changed\n\nFinish-authored reader content.\n\n${fresh}`);
-  });
 });

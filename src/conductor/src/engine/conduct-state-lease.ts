@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -90,11 +90,16 @@ const defaultFilesystem: ConductStateLeaseFilesystem = {
     const temporaryPath = `${path}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporaryPath, contents, { encoding: 'utf8', flag: 'wx' });
-      await rename(temporaryPath, path);
+      // `rename` replaces an existing destination on POSIX. Linking the fully
+      // written temporary file instead creates the owner record only when the
+      // destination remains absent, so a delayed publisher cannot overwrite a
+      // newly-visible owner.
+      await link(temporaryPath, path);
     } catch (error) {
       await rm(temporaryPath, { force: true }).catch(() => undefined);
       throw error;
     }
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
   },
   readOwner: (path) => readFile(path, 'utf8'),
   writeRecoveryClaim: (path, contents) => writeFile(path, contents, { encoding: 'utf8', flag: 'wx' }),

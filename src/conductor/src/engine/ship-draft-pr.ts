@@ -80,8 +80,21 @@ export const SHIP_DRAFT_PR_NOTE =
  * Deliberately carries NO release metadata: choosing a release disposition is
  * the pre-finish `release-disposition` step's job, judged from the real diff.
  */
-export function shipDraftPrBody(featureDesc: string): string {
+export function shipDraftPrBody(featureDesc: string, prTemplateBytes?: string): string {
   const placeholder = '_Not yet authored — `/finish` replaces this placeholder with the real body._';
+  if (prTemplateBytes !== undefined) {
+    return [
+      PR_BODY_FLOOR_MARKER,
+      '',
+      prTemplateBytes,
+      '<!-- Closes <owner/repo#N> — added automatically when this feature came from an intake issue. -->',
+      '',
+      '---',
+      '',
+      SHIP_DRAFT_PR_NOTE,
+      '',
+    ].join('\n');
+  }
   return [
     PR_BODY_FLOOR_MARKER,
     '',
@@ -119,6 +132,8 @@ export interface OpenShipDraftPrDeps {
   baseBranch: string | undefined;
   /** Feature description used for the placeholder title. */
   featureDesc?: string;
+  /** Bytes from `.github/pull_request_template.md`, when the project has one. */
+  prTemplateBytes?: string;
   /**
    * How the feature branch is published. Defaults to `'plain'`.
    *
@@ -409,7 +424,7 @@ export async function openShipDraftPr(
 
     const featureDesc = deps.featureDesc?.trim() || branchToFeatureDesc(branch);
     const title = `feat: ${featureDesc}`;
-    const body = shipDraftPrBody(featureDesc);
+    const body = shipDraftPrBody(featureDesc, deps.prTemplateBytes);
 
     let prUrl = await reobserveOpenPr(gh, cwd, branch, log);
     if (!prUrl) {

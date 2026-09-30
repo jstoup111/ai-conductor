@@ -10,6 +10,7 @@
 
 import type { GhRunner, GitRunner } from './pr-labels.js';
 import type { GithubOperationRunner } from './github-operations.js';
+import { engineBodyIncludes } from './pr-body-engine-markers.js';
 import {
   makeProductionGh,
   makeProductionGit,
@@ -136,7 +137,7 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, ru
     // ── Step 2: filter to marked PRs ───────────────────────────────────────
     const markedPrs = prList.filter((pr) => {
       const body = pr.body ?? '';
-      return body.includes(NEEDS_REMEDIATION_BODY_MARKER);
+      return engineBodyIncludes(body, NEEDS_REMEDIATION_BODY_MARKER);
     });
 
     const summaryLine = `[halt-pr-reconciliation] enumerated ${prList.length} open PRs, found ${markedPrs.length} marked`;

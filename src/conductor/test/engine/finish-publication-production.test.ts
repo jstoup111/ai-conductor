@@ -15,6 +15,7 @@ import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-agg
 import type { BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import { routeFinishPublicationDisposition } from '../../src/engine/finish-publication.js';
 import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
+import { maskProjectOwnedRegions } from '../../src/engine/pr-body-regions.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import { recordSkipVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
@@ -1283,6 +1284,42 @@ describe('production FINISH publication composition', () => {
     })).resolves.toMatchObject({ ok: false });
   });
 
+  it('appends accepted build-review risk after a final project-owned region without interpreting its bytes', async () => {
+    const finding = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+      anchor: {
+        rubric: 'testQuality',
+        locus: {
+          path: 'test/a.test.ts',
+          contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          display: 'test a',
+        },
+      },
+    })!;
+    const accepted: BuildReviewDispositionRecord = {
+      version: 'v1', feature: { version: 'v1', repository: 'github.com/acme/conductor', feature: 'review-rubrics' },
+      finding, sourceLapId: parseBuildReviewLapId('lap-7')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
+    };
+    const capturedRegion = [
+      '<!-- ai-conductor:step compliance-attest -->',
+      '<!-- build-review-accepted-risk:start -->',
+      'Attested-By: security-bot',
+      '<!-- /ai-conductor:step -->',
+    ].join('\n');
+    const body = `## Summary\n\n${capturedRegion}`;
+    const run = vi.fn(async (_request: Parameters<GithubOperationRunner['run']>[0]) => ({}));
+    const operations: GithubOperationRunner = { run };
+
+    await expect(publishAcceptedBuildReviewRiskToRetainedPr({
+      prUrl: 'https://github.com/acme/conductor/pull/1', body, records: [accepted], operations,
+    })).resolves.toEqual({ ok: true, changed: true });
+
+    const request = run.mock.calls[0]![0];
+    const published = (request.payload as { body: string }).body;
+    expect(published).toContain(capturedRegion);
+    expect(published.indexOf('## Accepted build-review risk', published.indexOf(capturedRegion) + capturedRegion.length)).toBeGreaterThan(-1);
+  });
+
   it('reports a verified advance as publication progress', async () => {
     const advanceFinishPublication = vi.fn(async () => ({
       kind: 'advanced' as const,
@@ -1982,6 +2019,21 @@ describe('production FINISH publication composition', () => {
       await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
       await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
       const prUrl = 'https://github.com/acme/widget/pull/1173';
+      // This is runtime content, so it may contain an engine-owned heading
+      // that template validation would reject. It remains opaque to FINISH.
+      const capturedRegion = [
+        '<!-- ai-conductor:step compliance-attest -->',
+        '## Reduced build-review coverage',
+        '',
+        'Attested-By: security-bot',
+        '<!-- /ai-conductor:step -->',
+      ].join('\n');
+      // A prior FINISH attempt left coverage before a region restored at the
+      // tail. Replacing that existing section must stop at the region opener.
+      let body = [
+        'Reader-facing summary.', '', '## Reduced build-review coverage', '',
+        'Stale reduced coverage.', '', capturedRegion,
+      ].join('\n');
       const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
       const finding = canonicalizeBuildReviewFindingIdentity({
         rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
@@ -2013,8 +2065,8 @@ describe('production FINISH publication composition', () => {
       const edits: string[][] = [];
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body: 'Reader-facing summary.', isDraft: true }) };
-        if (args[0] === 'pr' && args[1] === 'edit') { edits.push(args); return commandResult; }
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body, isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'edit') { body = args[args.indexOf('--body') + 1]!; edits.push(args); return commandResult; }
         throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
       });
       const coordinator = createProductionFinishPublicationCoordinator({
@@ -2046,16 +2098,21 @@ describe('production FINISH publication composition', () => {
       }
 
       expect(edits.length).toBe(1);
-      const body = edits[0][edits[0].indexOf('--body') + 1];
-      expect(body).toContain('Reader-facing summary.');
-      expect(body).toContain('Accepted build-review risk');
-      expect(body).toContain('## Reduced build-review coverage');
-      expect(body).toContain('Current diagnostic: provider unavailable');
-      expect(body).toContain(`- Finding: \`${finding.id}\` — rubric: testQuality`);
-      expect(body).not.toContain('**Rationale:**');
-      expect(body).not.toContain('reason');
-      expect(body).toContain('Operator: james');
-      expect(body).toContain('Decision time: 2026-08-20T00:00:00.000Z');
+      const publishedBody = edits[0][edits[0].indexOf('--body') + 1];
+      expect(publishedBody).toContain('Reader-facing summary.');
+      expect(publishedBody).toContain(capturedRegion);
+      expect(publishedBody).toContain('Accepted build-review risk');
+      expect(publishedBody).toContain('## Reduced build-review coverage');
+      const regionEnd = publishedBody.indexOf(capturedRegion) + capturedRegion.length;
+      expect(publishedBody.indexOf('## Reduced build-review coverage', regionEnd)).toBeGreaterThan(regionEnd);
+      expect(publishedBody.indexOf('## Accepted build-review risk', regionEnd)).toBeGreaterThan(regionEnd);
+      expect(publishedBody).toContain('Current diagnostic: provider unavailable');
+      expect(publishedBody).toContain(`- Finding: \`${finding.id}\` — rubric: testQuality`);
+      expect(publishedBody).not.toContain('**Rationale:**');
+      expect(publishedBody).not.toContain('reason');
+      expect(publishedBody).toContain('Operator: james');
+      expect(publishedBody).toContain('Decision time: 2026-08-20T00:00:00.000Z');
+      expect(maskProjectOwnedRegions(publishedBody).match(/## Reduced build-review coverage/g)).toHaveLength(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -2260,6 +2317,66 @@ describe('production FINISH publication composition', () => {
         authoringScope: ['title', 'body'],
         maximumPasses: 1,
       });
+      expect(dispatchJudgment).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('selects authoring for an unauthored template-seeded draft', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-template-floor-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const prUrl = 'https://github.com/acme/widget/pull/2616';
+      const template = `## Project-owned context\n\n${'Template guidance. '.repeat(30)}`;
+      let body = `${PR_BODY_FLOOR_MARKER}\n\n${template}\n\nDraft opened automatically.`;
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ url: prUrl, title: 'feat: draft publication', body, isDraft: true }) };
+        }
+        throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
+      });
+      const dispatchJudgment = vi.fn(async () => ({ success: true }));
+      const dispatchAuthoring = vi.fn(async () => {
+        body = '## Why\n\nThe project template now retains its long project-owned context.\n';
+        return { success: true };
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        gh,
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        observeReleaseReadiness: async () => 'present',
+        writeShippedRecord: vi.fn(async () => 0),
+        repairPresentation: async () => {},
+        prTemplateBytes: template,
+      });
+
+      await expect(coordinator.advance({
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: prUrl,
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto' as const,
+        daemon: true,
+        dispatchJudgment,
+        dispatchAuthoring,
+        emit: async () => {},
+      })).resolves.toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+
+      expect(dispatchAuthoring).toHaveBeenCalledOnce();
       expect(dispatchJudgment).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
