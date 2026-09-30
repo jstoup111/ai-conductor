@@ -28,13 +28,6 @@ function assertSkillSliceExample(skillText: string): string {
   return example;
 }
 
-function invalidMessages(plan: string): string[] {
-  const result = validatePlanSlices(plan);
-  expect(result.kind).toBe('invalid');
-  if (result.kind !== 'invalid') throw new Error('expected invalid sliced plan');
-  return result.violations.map(({ message }) => message);
-}
-
 describe('plan skill slice-manifest contract', () => {
   it('documents one valid, fully assigned sliced plan example', async () => {
     const example = assertSkillSliceExample(await readFile(planSkillPath, 'utf8'));
@@ -50,16 +43,17 @@ describe('plan skill slice-manifest contract', () => {
   });
 
   it('keeps the documented example sensitive to unknown slice task references', async () => {
-    const example = assertSkillSliceExample(await readFile(planSkillPath, 'utf8'));
-    const messages = invalidMessages(example.replace('| 2 | Follow-up | 3 |', '| 2 | Follow-up | 99 |'));
+    const skill = await readFile(planSkillPath, 'utf8');
+    const unknownTask = skill.replace('| 2 | Follow-up | 3 |', '| 2 | Follow-up | 99 |');
 
-    expect(messages.join('; ')).toMatch(/Task 99.*unknown task id/i);
+    expect(() => assertSkillSliceExample(unknownTask)).toThrow(/Task 99.*unknown task id/i);
   });
 
   it('refuses a Tasks 1–3 Dependencies reference', async () => {
-    const example = assertSkillSliceExample(await readFile(planSkillPath, 'utf8'));
-    const messages = invalidMessages(example.replace('**Dependencies:** Tasks 1, 2', '**Dependencies:** Tasks 1–3'));
+    const skill = await readFile(planSkillPath, 'utf8');
+    const malformedDependencies = skill.replace('**Dependencies:** Tasks 1, 2', '**Dependencies:** Tasks 1–3');
 
-    expect(messages.join('; ')).toContain('Task 3 has malformed Dependencies "Tasks 1–3"');
+    expect(() => assertSkillSliceExample(malformedDependencies))
+      .toThrow('Task 3 has malformed Dependencies "Tasks 1–3"');
   });
 });
