@@ -63,6 +63,7 @@ import {
   selectFeaturePlan,
   BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
+import { validatePlanSlices } from './plan-slices.js';
 import {
   formatArchitectureDecisionId,
   validateArchitectureObligationCoverage,
@@ -4407,6 +4408,16 @@ export class DefaultStepRunner implements StepRunner {
       }
     } else if (judgeEnabled) {
       return { success: false, output: 'coverage_binding could not resolve the feature plan' };
+    }
+
+    if (planText !== undefined) {
+      const sliceValidation = validatePlanSlices(planText);
+      if (sliceValidation.kind === 'invalid') {
+        await writeEnvelope('refused', []);
+        const detail = sliceValidation.violations.map((violation) => violation.message).join('\n');
+        const reason = `coverage_binding refused: plan slices are invalid.\n\n${detail}`;
+        return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
+      }
     }
 
     let decideSet: CoverageBindingDecideSet | undefined;
