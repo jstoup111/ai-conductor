@@ -164,6 +164,7 @@ export const EVENT_SINKS = {
   rebase_gate_reverified: { render: false, persist: false, audit: false, otel: false },
   rebase_gate_preserved: { render: false, persist: true, audit: false, otel: false },
   rebase_gate_invalidated: { render: false, persist: true, audit: false, otel: false },
+  rebase_merge_audit: { render: false, persist: true, audit: false, otel: false },
   rebase_conflict_halt: { render: true, persist: true, audit: false, otel: false },
   rebase_untracked_quarantined: { render: false, persist: true, audit: false, otel: false },
   repair_boundary_translated: { render: false, persist: true, audit: false, otel: false },

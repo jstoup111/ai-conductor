@@ -14325,7 +14325,10 @@ export class Conductor {
         await this.emitLoopHalt(this.lastRebaseSealError);
         return 'halt';
       }
-      if (this.lastRebaseOutcome?.kind === 'conflict_halt') {
+      if (
+        this.lastRebaseOutcome?.kind === 'conflict_halt' ||
+        this.lastRebaseOutcome?.kind === 'flatten_refused'
+      ) {
         const reason = `rebase conflict — parked for human resolution: ${this.lastRebaseOutcome.reason}`;
         // writeHalt already wrote .pipeline/HALT in runRebaseStep.
         await this.emitLoopHalt(reason);
@@ -15184,6 +15187,9 @@ export class Conductor {
 
     if (outcome.kind === 'conflict_halt' && !sealRejectionReason) {
       await writeRebaseOutcomeHalt(this.projectRoot, outcome, this.events);
+    } else if (outcome.kind === 'flatten_refused' && !sealRejectionReason) {
+      // Task 6 replaces this conflict-halt stub with the refusal recipe.
+      await writeHalt(this.projectRoot, outcome.conflicts, outcome.reason, this.events);
     } else if (outcome.kind === 'setup_stop') {
       // Setup-only resolver exhaustion leaves the rebase paused: park it for the
       // provider recovery action instead of stamping the gate satisfied.

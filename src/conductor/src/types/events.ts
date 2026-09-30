@@ -1457,11 +1457,23 @@ export type ConductorEvent =
       matchedPaths: string[];
     }
   | {
+      /** A merge-bearing rebase replay was flattened into first-parent commits. */
+      type: 'rebase_merge_audit';
+      flattenedMerges: string[];
+      ancestryOnlyMerges: string[];
+      sideLineageCount: number;
+    }
+  | {
       /** A non-trivial/mixed conflict parked the feature (FR-8). */
       type: 'rebase_conflict_halt';
       step?: StepName;
       reason: string;
       conflicts: string[];
+      mergeAudit?: {
+        flattenedMerges: string[];
+        ancestryOnlyMerges: string[];
+        sideLineageCount: number;
+      };
     }
   | {
       /** Untracked files were moved aside before retrying a refused rebase. */

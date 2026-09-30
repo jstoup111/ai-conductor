@@ -971,6 +971,12 @@ export async function resumeRebaseFirst(opts: {
     opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase re-conflicted on advanced base — re-parked`);
     return 'halted';
   }
+  if (outcome.kind === 'flatten_refused') {
+    // Task 6 replaces this conflict-halt stub with the refusal recipe.
+    await writeHalt(opts.worktreePath, outcome.conflicts, outcome.reason, opts.events);
+    opts.log?.(`re-kick ${basename(opts.worktreePath)}: flattened rebase refused — re-parked`);
+    return 'halted';
+  }
   if (outcome.kind === 'setup_stop') {
     // Setup-only resolver exhaustion: the rebase is still paused, so park it
     // for the provider recovery action rather than reporting it rebased.

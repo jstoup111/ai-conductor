@@ -710,6 +710,16 @@ type RebaseOutcomeKind =
       startFailure?: boolean;
     }
   | {
+      /** A flattened merge conflicted during the pre-mutation replay proof. */
+      kind: 'flatten_refused';
+      mergeSha: string;
+      parents: [string, string];
+      flattenedSha: string;
+      conflicts: string[];
+      reason: string;
+      recipe: string;
+    }
+  | {
       /** Provider setup was refused before a rebase resolver invocation. */
       kind: 'setup_stop';
       conflicts: string[];
@@ -1901,13 +1911,19 @@ export async function applyRebaseVerdicts(
   preservedCandidates?: RebasePreservedCandidate[];
   replay?: ReplayEvidence;
 }> {
-  if (outcome.kind === 'conflict_halt' || outcome.kind === 'setup_stop') {
+  if (
+    outcome.kind === 'conflict_halt' ||
+    outcome.kind === 'flatten_refused' ||
+    outcome.kind === 'setup_stop'
+  ) {
     // A setup-only resolver exhaustion leaves the rebase paused exactly like an
     // unresolved conflict: the gate stays unsatisfied and the run parks.
     await writeVerdict(projectRoot, 'rebase', {
       satisfied: false,
       reason: outcome.kind === 'setup_stop'
         ? `rebase resolution paused — provider setup unavailable: ${outcome.reason}`
+        : outcome.kind === 'flatten_refused'
+          ? `rebase flatten refused: ${outcome.reason}`
         : `rebase conflict: ${outcome.reason}`,
       checkedAt: Date.now(),
     });
@@ -2183,7 +2199,7 @@ export async function recordRebaseStepCompletion(
   stateFilePath: string,
   outcome: RebaseOutcome,
 ): Promise<void> {
-  if (outcome.kind === 'conflict_halt') return;
+  if (outcome.kind === 'conflict_halt' || outcome.kind === 'flatten_refused') return;
   if (outcome.kind === 'setup_stop') {
     await saveStepStatus(stateFilePath, 'rebase', 'refused');
     return;
@@ -2408,6 +2424,15 @@ export async function emitRebaseEvent(
         });
         break;
       case 'conflict_halt':
+        await events.emit({
+          type: 'rebase_conflict_halt',
+          step: 'rebase',
+          reason: outcome.reason,
+          conflicts: outcome.conflicts,
+        });
+        break;
+      case 'flatten_refused':
+        // Task 6 replaces this conflict-halt stub with the flatten audit.
         await events.emit({
           type: 'rebase_conflict_halt',
           step: 'rebase',

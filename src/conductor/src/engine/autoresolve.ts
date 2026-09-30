@@ -1205,6 +1205,17 @@ export async function resolveConflictingPr(
           logOutcome(log, prUrl, stage, 'escalated');
           return { kind: 'escalated' };
         }
+        if (tier2Outcome.kind === 'flatten_refused') {
+          // Task 11 reaches this branch from the shared replay primitive.
+          await escalate(prUrl, 'merge-flatten-refused', tier2Outcome.recipe, {
+            runGh: deps.runGh,
+            operations,
+            cwd: repoCwd,
+            log,
+          });
+          logOutcome(log, prUrl, 'merge-flatten-refused', 'escalated');
+          return { kind: 'escalated' };
+        }
         if (tier2Outcome.kind === 'setup_stop') {
           logOutcome(log, prUrl, 'tier2-setup', 'setup-stop');
           return { kind: 'setup-stop' };
