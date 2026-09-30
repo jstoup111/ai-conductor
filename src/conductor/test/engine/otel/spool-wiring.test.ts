@@ -9,8 +9,9 @@ import { BasicTracerProvider, type ReadableSpan } from "@opentelemetry/sdk-trace
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildSpoolExporters, resolveSpoolDir } from "../../../src/engine/otel/spool-wiring.js";
+import { createSpoolRuntime, resolveSpoolDir, warnDisabledSpoolBacklog, warnSpoolUnavailable } from "../../../src/engine/otel/spool-wiring.js";
 import { buildExporters } from "../../../src/engine/otel/transport.js";
+import { resolveOtelConfig } from "../../../src/engine/otel/otel-config.js";
 import type { ConductorEventEmitter } from "../../../src/ui/events.js";
 
 const execFile = promisify(execFileCallback);
@@ -35,6 +36,31 @@ afterEach(async () => {
 });
 
 describe("resolveSpoolDir", () => {
+  it("resolves referenced headers at drain time through the production runtime", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "spool-wiring-headers-"));
+    temporaryDirectories.push(directory);
+    const header = "OTEL_SPOOL_WIRING_HEADER";
+    const previous = process.env[header];
+    process.env[header] = "before";
+    let received = "";
+    const collector = createServer(async (request, response) => {
+      received = String(request.headers.authorization);
+      for await (const _chunk of request) { /* consume */ }
+      response.writeHead(200).end();
+    });
+    const config = resolveOtelConfig({ otel: {
+      exporter: "otlp", endpoint: await endpoint(collector), headers: { Authorization: { env: header } },
+    } }, join(directory, ".pipeline"));
+    expect(config).toMatchObject({ enabled: true, exporter: "otlp" });
+    if (!config.enabled || config.exporter !== "otlp") return;
+    const runtime = createSpoolRuntime(directory, config);
+    await runtime.store.write("traces", Buffer.from("batch"));
+    process.env[header] = "after";
+    await runtime.drainer.drain();
+    expect(received).toBe("after");
+    if (previous === undefined) delete process.env[header]; else process.env[header] = previous;
+  });
+
   it("uses the linked worktree's main checkout for the durable spool", async () => {
     const root = await mkdtemp(join(tmpdir(), "spool-wiring-"));
     temporaryDirectories.push(root);
@@ -67,8 +93,8 @@ describe("resolveSpoolDir", () => {
       spool: { enabled: true, maxBytes: 1024 },
     };
 
-    await buildSpoolExporters(config, directory, events);
-    await buildSpoolExporters(config, directory, events);
+    warnSpoolUnavailable(directory, events);
+    warnSpoolUnavailable(directory, events);
 
     expect(emit).toHaveBeenCalledTimes(1);
   });
@@ -94,8 +120,8 @@ describe("resolveSpoolDir", () => {
       spool: { enabled: false, maxBytes: 1024 },
     };
 
-    await buildSpoolExporters(config, root, events);
-    await buildSpoolExporters(config, root, events);
+    await warnDisabledSpoolBacklog(config, root, events);
+    await warnDisabledSpoolBacklog(config, root, events);
 
     expect(await Promise.all(["one.json", "two.json", "three.json"].map((file) => readFile(join(spoolDir, file))))).toEqual(before);
     expect(emit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
@@ -126,7 +152,7 @@ describe("resolveSpoolDir", () => {
     const span = provider.getTracer("spool-wiring-test").startSpan("direct-disabled-spool");
     span.end();
 
-    const exporters = await buildSpoolExporters(config, root);
+    const exporters = buildExporters(config);
     await exportSpan(exporters.spanExporter, span as unknown as ReadableSpan);
 
     expect(received).toBe(1);
@@ -146,7 +172,7 @@ describe("resolveSpoolDir", () => {
     const wiredConfig = { enabled: true as const, exporter: "file" as const, file: wiredPath };
 
     await exportSpan(buildExporters(directConfig).spanExporter, span as unknown as ReadableSpan);
-    await exportSpan((await buildSpoolExporters(wiredConfig, root)).spanExporter, span as unknown as ReadableSpan);
+    await exportSpan(buildExporters(wiredConfig).spanExporter, span as unknown as ReadableSpan);
 
     expect(await readFile(wiredPath)).toEqual(await readFile(directPath));
     await expect(access(join(root, ".daemon", "otel-spool"))).rejects.toMatchObject({ code: "ENOENT" });

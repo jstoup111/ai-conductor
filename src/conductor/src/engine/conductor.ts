@@ -7249,7 +7249,10 @@ export class Conductor {
     const sigintHandler = () => signalHandlerBase('SIGINT');
     const sighupHandler = () => signalHandlerBase('SIGHUP');
     process.on('SIGINT', sigintHandler);
-    process.on('SIGHUP', sighupHandler);
+    // The daemon owns process SIGHUP so it can flush its shared OTel spool
+    // and release its lease before re-raising. Interactive conductors retain
+    // the normal state-persistence handler.
+    if (!this.daemon) process.on('SIGHUP', sighupHandler);
     // SIGTERM is owned by the interactive-scoped `sigterm` handler below
     // (Task 22: daemon mode delegates SIGTERM to the daemon-level handler);
     // signalHandlerBase keeps its SIGTERM row for the exit-code convention.
@@ -14247,7 +14250,7 @@ export class Conductor {
       this.safetyAttemptCache.clear();
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);
-      process.off('SIGHUP', sighupHandler);
+      if (!this.daemon) process.off('SIGHUP', sighupHandler);
 
       // Terminal-marker guarantee (failure side). A handful of early `return`s
       // in the loop exit WITHOUT writing DONE or HALT — a blocked gate

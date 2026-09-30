@@ -254,6 +254,7 @@ export function registerBuiltins(
         feature: ctx.startContext.feature ?? 'unknown',
         project: ctx.startContext.project ?? 'unknown',
         metrics: ctx.startContext.metrics,
+        spanExporter: ctx.otelSpanExporter,
       },
       ctx.emitter,
     );

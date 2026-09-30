@@ -159,7 +159,9 @@ describe('SpoolDrainer', () => {
   it.each([400, 413])('drops a days-old rejected batch and emits its status for HTTP %i', async (status) => {
     const events = new ConductorEventEmitter();
     const drops: unknown[] = [];
+    const failures: unknown[] = [];
     events.on('otel_spool_drop', (event) => { drops.push(event); });
+    events.on('renderer_error', (event) => { failures.push(event); });
     const server = createServer((request, response) => {
       request.resume();
       response.writeHead(status).end();
@@ -210,7 +212,9 @@ describe('SpoolDrainer', () => {
   ] as const)('keeps HTTP %i batches without emitting a drop event and preserves %s for backlog reporting', async (status, failureClass) => {
     const events = new ConductorEventEmitter();
     const drops: unknown[] = [];
+    const failures: unknown[] = [];
     events.on('otel_spool_drop', (event) => { drops.push(event); });
+    events.on('renderer_error', (event) => { failures.push(event); });
     const server = createServer((request, response) => {
       request.resume();
       response.writeHead(status).end();
@@ -233,7 +237,7 @@ describe('SpoolDrainer', () => {
       }
       expect(await store.list('traces')).toHaveLength(1);
       expect(drops).toEqual([]);
-      expect(drainer.lastFailureClass('traces')).toBe(failureClass);
+      expect(failures).toContainEqual(expect.objectContaining({ error: `OTLP traces delivery failed: ${failureClass}` }));
     } finally {
       releaseSleep?.();
       await drainer.stop();
@@ -465,7 +469,9 @@ describe('SpoolDrainer', () => {
   it('reports each non-empty signal backlog every 30 seconds and remains silent for an empty spool', async () => {
     const events = new ConductorEventEmitter();
     const backlog: unknown[] = [];
+    const failures: unknown[] = [];
     events.on('otel_spool_backlog', (event) => { backlog.push(event); });
+    events.on('renderer_error', (event) => { failures.push(event); });
     const server = createServer((request, response) => {
       request.resume();
       response.writeHead(503).end();
@@ -495,7 +501,7 @@ describe('SpoolDrainer', () => {
     });
 
     const draining = drainer.drain();
-    for (let turns = 0; turns < 50 && (!releaseBacklogInterval || drainer.lastFailureClass('traces') !== 'server' || drainer.lastFailureClass('metrics') !== 'server'); turns += 1) {
+    for (let turns = 0; turns < 50 && (!releaseBacklogInterval || failures.length < 2); turns += 1) {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
     for (let interval = 0; interval < 3; interval += 1) {

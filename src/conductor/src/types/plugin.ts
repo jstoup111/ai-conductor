@@ -61,6 +61,8 @@ export interface VisualizerFactoryContext {
   pipelineDir: string;
   startContext: VisualizerStartContext;
   emitter: import('../ui/events.js').ConductorEventEmitter;
+  /** Optional transport owned by a durable spool runtime. */
+  otelSpanExporter?: import('@opentelemetry/sdk-trace-base').SpanExporter;
 }
 
 /**

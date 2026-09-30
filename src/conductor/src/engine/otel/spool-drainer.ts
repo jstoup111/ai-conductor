@@ -71,13 +71,12 @@ export class SpoolDrainer {
     this.exportTimeoutMs = options.exportTimeoutMs ?? DEFAULT_EXPORT_TIMEOUT_MS;
   }
 
-  /** Last retained delivery failure for this signal, for backlog telemetry. */
-  lastFailureClass(signal: SpoolSignal): DeliveryFailureClass | undefined {
-    return this.lastFailures.get(signal);
-  }
-
   async drain(): Promise<void> {
     if (this.stopped) return;
+    await this.drainPass();
+  }
+
+  private async drainPass(): Promise<void> {
     const loops = (['traces', 'metrics'] as const).map((signal) => {
       const loop = this.drainSignal(signal);
       this.loops.add(loop);
@@ -181,21 +180,18 @@ export class SpoolDrainer {
   }
 
   private async runUntilStopped(): Promise<void> {
-    const loops = (['traces', 'metrics'] as const).map((signal) => {
-      const loop = (async () => {
-        while (!this.stopped) {
-          await this.drainSignal(signal);
-          if (!this.stopped) await this.delay(IDLE_POLL_INTERVAL_MS);
-        }
-      })();
-      this.loops.add(loop);
-      void loop.finally(() => this.loops.delete(loop));
-      return loop;
-    });
+    const loop = (async () => {
+      while (!this.stopped) {
+        await this.drainPass();
+        if (!this.stopped) await this.delay(IDLE_POLL_INTERVAL_MS);
+      }
+    })();
+    this.loops.add(loop);
+    void loop.finally(() => this.loops.delete(loop));
     const backlogLoop = this.reportBacklog(new Promise<void>(() => {}));
     this.loops.add(backlogLoop);
     void backlogLoop.finally(() => this.loops.delete(backlogLoop));
-    await Promise.all(loops);
+    await loop;
   }
 
   private async deliver(signal: SpoolSignal, body: Buffer) {
@@ -245,7 +241,7 @@ export class SpoolDrainer {
       for (const signal of ['traces', 'metrics'] as const) {
         const batches = await this.store.list(signal);
         const lastFailureClass = this.lastFailures.get(signal);
-        if (batches.length === 0 || lastFailureClass === undefined) continue;
+        if (batches.length === 0) continue;
 
         const oldestCreatedAt = Number(batches[0].name.slice(0, 15));
         await this.events?.emit({
@@ -254,7 +250,7 @@ export class SpoolDrainer {
           files: batches.length,
           bytes: batches.reduce((total, batch) => total + batch.size, 0),
           oldestAgeMs: Math.max(0, this.now() - oldestCreatedAt),
-          lastFailureClass,
+          ...(lastFailureClass ? { lastFailureClass } : {}),
         });
       }
     }

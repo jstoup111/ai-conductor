@@ -324,6 +324,22 @@ steps:
       });
     });
 
+    it('preserves an invalid spool max_bytes through loading so OTel disables with its named error', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'otel:\n  exporter: otlp\n  endpoint: http://localhost:4318\n  spool:\n    max_bytes: big\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) return;
+      expect(resolveOtelConfig(result.config, join(tmpDir, '.pipeline'))).toMatchObject({
+        enabled: false,
+        error: expect.stringContaining('otel.spool.max_bytes'),
+      });
+    });
+
     it('rejects config when version too low', async () => {
       const configYaml = `harness_version: ">=2.0.0"\n`;
       await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), configYaml);

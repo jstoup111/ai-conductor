@@ -7,7 +7,6 @@ import type { ResolvedOtelConfig } from './otel-config.js';
 import { SpoolDrainer } from './spool-drainer.js';
 import { SpoolLease } from './spool-lease.js';
 import { SpoolStore } from './spool-store.js';
-import { buildExporters, type Exporters } from './transport.js';
 
 export interface SpoolRuntime {
   store: SpoolStore;
@@ -63,16 +62,15 @@ export function createSpoolRuntime(
   return {
     store,
     lease: new SpoolLease(directory),
-    drainer: new SpoolDrainer(store, { endpoint: config.endpoint, headers: () => config.headers ?? {}, events }),
+    drainer: new SpoolDrainer(store, {
+      endpoint: config.endpoint,
+      // Resolve references per POST. Credentials never enter the spool.
+      headers: () => config.headerReferences
+        ? Object.fromEntries(Object.entries(config.headerReferences).map(([name, reference]) => [name, process.env[reference.env] ?? '']))
+        : config.headers ?? {},
+      events,
+    }),
   };
-}
-
-function runtimeFor(directory: string, config: Extract<ResolvedOtelConfig, { enabled: true; exporter: 'otlp' }>, events?: ConductorEventEmitter): SpoolRuntime {
-  const existing = runtimes.get(directory);
-  if (existing) return existing;
-  const runtime = createSpoolRuntime(directory, config, events);
-  runtimes.set(directory, runtime);
-  return runtime;
 }
 
 /** Builds direct exporters unless this OTLP process can anchor its spool in Git's main checkout. */
@@ -106,23 +104,6 @@ export function warnSpoolUnavailable(startDir: string, events?: ConductorEventEm
   if (warnedStarts.has(startDir)) return;
   warnedStarts.add(startDir);
   void events?.emit({ type: 'renderer_error', rendererName: 'otel', error: '[otel] spool disabled: main git checkout could not be resolved; exporting directly' });
-}
-
-export async function buildSpoolExporters(
-  config: Extract<ResolvedOtelConfig, { enabled: true }>,
-  startDir: string,
-  events?: ConductorEventEmitter,
-): Promise<Exporters> {
-  if (config.exporter !== 'otlp') return buildExporters(config);
-  if (config.spool?.enabled === false) {
-    await warnDisabledSpoolBacklog(config, startDir, events);
-    return buildExporters(config);
-  }
-  if (!config.spool?.enabled) return buildExporters(config);
-  const directory = await resolveSpoolDir(startDir);
-  if (directory !== null) return buildExporters(config, { spoolStore: runtimeFor(directory, config, events).store, events });
-  warnSpoolUnavailable(startDir, events);
-  return buildExporters(config);
 }
 
 export function __resetSpoolRuntimeForTests(): void {

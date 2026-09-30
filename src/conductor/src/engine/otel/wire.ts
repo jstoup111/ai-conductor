@@ -22,7 +22,6 @@ import { buildExporters } from './transport.js';
 import { MetricsRecorder } from './metrics.js';
 import { MetricsListener } from './metrics-listener.js';
 import { createSpoolRuntime, resolveSpoolDirSync, type SpoolRuntime, warnDisabledSpoolBacklog, warnSpoolUnavailable } from './spool-wiring.js';
-import { OtelVisualizer } from './otel-visualizer.js';
 
 const METRIC_LIFECYCLE_TIMEOUT_MS = 250;
 
@@ -35,6 +34,19 @@ interface InteractiveSpoolLifecycle {
 }
 
 const interactiveSpoolLifecycles = new Map<string, InteractiveSpoolLifecycle>();
+const emittedSpoolWarnings = new Set<string>();
+
+function emitResolvedWarnings(resolved: Extract<ReturnType<typeof resolveOtelConfig>, { enabled: true }>, events: ConductorEventEmitter): void {
+  const warnings = [
+    ...(resolved.attributeWarnings ?? []),
+    ...('spoolWarnings' in resolved ? resolved.spoolWarnings ?? [] : []),
+  ];
+  for (const warning of warnings) {
+    if (emittedSpoolWarnings.has(warning)) continue;
+    emittedSpoolWarnings.add(warning);
+    void events.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] ${warning}` }).catch(() => {});
+  }
+}
 
 /** Keeps metric lifecycle I/O from turning a collector failure into a run failure. */
 function guardMetricLifecycle(events: ConductorEventEmitter): (operation: () => Promise<void>) => Promise<void> {
@@ -123,6 +135,7 @@ export function wireOtelVisualizer(
 ): VisualizerPlugin | null {
   const resolved = resolveOtelConfig(config, context.pipelineDir);
   if (!resolved.enabled) return null;
+  emitResolvedWarnings(resolved, events);
   void warnDisabledSpoolBacklog(resolved, context.project ?? dirname(context.pipelineDir), events);
 
   const interactiveLifecycle = !spoolRuntime && resolved.exporter === 'otlp'
@@ -133,25 +146,6 @@ export function wireOtelVisualizer(
   }
   if (interactiveLifecycle) interactiveLifecycle.visualizerOpen = true;
   const activeSpoolRuntime = spoolRuntime ?? interactiveLifecycle?.runtime;
-  if (activeSpoolRuntime && resolved.exporter === 'otlp' && resolved.spool?.enabled) {
-    const exporters = buildExporters(resolved, { spoolStore: activeSpoolRuntime.store, events });
-    const visualizer = new OtelVisualizer(resolved, { spanExporter: exporters.spanExporter, onWarning: (error) => {
-      void events.emit({ type: 'renderer_error', rendererName: 'otel', error });
-    } });
-    visualizer.start(events, context);
-    if (!interactiveLifecycle) return visualizer;
-    const directory = resolveSpoolDirSync(dirname(context.pipelineDir))!;
-    return {
-      name: visualizer.name,
-      start: visualizer.start.bind(visualizer),
-      stop: async () => {
-        await visualizer.stop();
-        interactiveLifecycle.visualizerOpen = false;
-        await stopInteractiveSpoolIfUnused(directory, interactiveLifecycle);
-      },
-    };
-  }
-
   const registry = createOtelVisualizerRegistry(events);
   const factory = registry.get<VisualizerFactory>('visualizer', 'otel');
   const visualizer = factory({
@@ -159,6 +153,9 @@ export function wireOtelVisualizer(
     pipelineDir: context.pipelineDir,
     startContext: context,
     emitter: events,
+    ...(activeSpoolRuntime && resolved.exporter === 'otlp' && resolved.spool?.enabled
+      ? { otelSpanExporter: buildExporters(resolved, { spoolStore: activeSpoolRuntime.store, events }).spanExporter }
+      : {}),
   });
 
   if (!visualizer) return null;
@@ -173,6 +170,7 @@ export function wireDaemonOtel(
 ): { flush: () => Promise<void>; stop: () => Promise<void>; spoolRuntime?: SpoolRuntime } | null {
   const resolved = resolveOtelConfig(config, join(context.mainRoot, '.pipeline'));
   if (!resolved.enabled) return null;
+  emitResolvedWarnings(resolved, context.rootEvents);
   void warnDisabledSpoolBacklog(resolved, context.mainRoot, context.rootEvents);
   const spoolRuntime = resolved.exporter === 'otlp' && resolved.spool?.enabled
     ? createSpoolRuntime(join(context.mainRoot, '.daemon', 'otel-spool'), resolved, context.rootEvents)
@@ -194,13 +192,6 @@ export function wireDaemonOtel(
   const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('conductor', '1.0.0'), {
     project: resolved.projectName ?? context.projectName ?? 'unknown', worker: workerName,
   }, resolved.attributes));
-  if (resolved.attributeWarnings?.length) {
-    void context.rootEvents.emit({
-      type: 'renderer_error',
-      rendererName: 'otel',
-      error: `[otel] ${resolved.attributeWarnings.join(' ')}`,
-    }).catch(() => {});
-  }
   listener.start(context.rootEvents);
   const activeSpoolRuntime = spoolRuntime;
   const leaseStart = activeSpoolRuntime?.lease.acquire();
@@ -239,6 +230,7 @@ export function wireInteractiveOtelMetrics(
 ): { name: string; start: () => void; stop: () => Promise<void> } | null {
   const resolved = resolveOtelConfig(config, context.pipelineDir);
   if (!resolved.enabled) return null;
+  emitResolvedWarnings(resolved, events);
   void warnDisabledSpoolBacklog(resolved, context.project ?? dirname(context.pipelineDir), events);
   const spoolLifecycle = resolved.exporter === 'otlp'
     ? interactiveSpoolLifecycle(resolved, context, events)

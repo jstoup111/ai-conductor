@@ -334,7 +334,7 @@ export type ConductorEvent =
       files: number;
       bytes: number;
       oldestAgeMs: number;
-      lastFailureClass: 'network' | 'auth' | 'endpoint' | 'throttled' | 'server';
+      lastFailureClass?: 'network' | 'auth' | 'endpoint' | 'throttled' | 'server';
     }
   | {
       type: 'daemon_backlog_snapshot';

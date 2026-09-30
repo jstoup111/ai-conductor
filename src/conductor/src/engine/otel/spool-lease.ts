@@ -208,7 +208,16 @@ export class SpoolLease {
         this.stopHeartbeat();
         return;
       }
-      await this.filesystem.writeFile(this.path(), JSON.stringify(this.record()), 'utf8');
+      const successor = this.successorPath();
+      await this.create(successor, this.record());
+      // A successor may have won while this holder prepared its atomic update.
+      if (await this.filesystem.readFile(this.path(), 'utf8') !== serialized) {
+        await this.filesystem.rm(successor, { force: true });
+        this.owned = false;
+        this.stopHeartbeat();
+        return;
+      }
+      await this.filesystem.rename(successor, this.path());
     } catch {
       // The next contender may recover a lease whose owner can no longer refresh it.
     }

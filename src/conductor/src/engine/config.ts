@@ -1500,7 +1500,9 @@ export function validateConfig(
         otel.spool,
         CONFIG_CONSUMER_KEY_SETS['otel.spool'].map((key) => ({
           key,
-          isValid: (value: unknown) => key === 'enabled' ? typeof value === 'boolean' : typeof value === 'number',
+          // Preserve any supplied max_bytes value for resolveOtelConfig(), which
+          // owns the range/type error and disables telemetry safely.
+          isValid: (value: unknown) => key === 'enabled' ? typeof value === 'boolean' : value !== undefined,
         })),
         warnings,
       );

@@ -1,10 +1,15 @@
 // Covers: task:18
+import { access, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS,
   installDaemonOtelSighupHandler,
   type DaemonProcessAdapter,
 } from '../src/daemon-cli.js';
+import { wireDaemonOtel } from '../src/engine/otel/wire.js';
+import { ConductorEventEmitter } from '../src/ui/events.js';
 
 function processProbe(): {
   adapter: DaemonProcessAdapter;
@@ -40,12 +45,16 @@ function processProbe(): {
 describe('Task 18: daemon OTel SIGHUP wiring', () => {
   it('stops OTel before removing its listener and re-raising SIGHUP through the injected process adapter', async () => {
     const probe = processProbe();
-    const stop = vi.fn(async () => {
-      probe.calls.push('stop');
+    const root = await mkdtemp(join(tmpdir(), 'daemon-sighup-otel-'));
+    const daemonOtel = wireDaemonOtel({ otel: {
+      exporter: 'otlp', endpoint: 'http://127.0.0.1:1', spool: { enabled: true },
+    } }, {
+      mainRoot: root, project: root, projectName: 'test', rootEvents: new ConductorEventEmitter(),
     });
+    expect(daemonOtel).not.toBeNull();
 
     installDaemonOtelSighupHandler({
-      daemonOtel: { stop },
+      daemonOtel,
       processAdapter: probe.adapter,
       awaitStop: async (operation) => operation,
     });
@@ -55,9 +64,10 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
     expect(probe.adapter.on).toHaveBeenCalledWith('SIGHUP', expect.any(Function));
     await probe.listeners.get('SIGHUP')!();
 
-    expect(stop).toHaveBeenCalledOnce();
-    expect(probe.calls).toEqual(['on:SIGHUP', 'stop', 'off:SIGHUP', 'kill:481:SIGHUP']);
+    await expect(access(join(root, '.daemon', 'otel-spool', 'lease.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(probe.calls).toEqual(['on:SIGHUP', 'off:SIGHUP', 'kill:481:SIGHUP']);
     expect(probe.kill).toHaveBeenCalledWith(481, 'SIGHUP');
+    await rm(root, { recursive: true, force: true });
   });
 
   it('abandons a hanging OTel stop at the bounded export timeout and still re-raises SIGHUP', async () => {

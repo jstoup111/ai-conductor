@@ -125,6 +125,8 @@ export type ResolvedOtelConfig =
       spool?: { enabled: boolean; maxBytes: number };
       spoolWarnings?: string[];
       headers?: Record<string, string>;
+      /** Validated references retained so the drainer resolves credentials at send time. */
+      headerReferences?: Record<string, { env: string }>;
       projectName?: string;
       workerName?: string;
       attributes?: Record<string, string>;
@@ -225,6 +227,7 @@ export function resolveOtelConfig(
     }
 
     const resolvedHeaders: Record<string, string> = Object.create(null);
+    const headerReferences: Record<string, { env: string }> = Object.create(null);
     if (headers && hasHeaderEntries(headers)) {
       for (const [header, reference] of Object.entries(headers)) {
         const headerName = renderedHeaderName(header);
@@ -265,6 +268,7 @@ export function resolveOtelConfig(
           };
         }
         resolvedHeaders[header] = value;
+        headerReferences[header] = { env: environmentVariable };
       }
     }
 
@@ -276,6 +280,7 @@ export function resolveOtelConfig(
       ...(spoolIsInactiveForGrpc ? { spoolWarnings: ['otel spool is inactive for grpc protocol; use protocol: http/protobuf to enable it.'] } : {}),
       ...(protocol ? { protocol } : {}),
       ...(hasHeaderEntries(headers) ? { headers: resolvedHeaders } : {}),
+      ...(hasHeaderEntries(headers) ? { headerReferences } : {}),
       ...(projectName ? { projectName } : {}),
       ...(workerName ? { workerName } : {}),
       ...(resolvedAttributes ? { attributes: resolvedAttributes.attributes, attributeWarnings: resolvedAttributes.warnings } : {}),
