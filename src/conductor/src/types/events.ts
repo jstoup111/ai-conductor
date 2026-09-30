@@ -1493,6 +1493,31 @@ export type ConductorEvent =
     }
   // ── Rebase auto-resolution lifecycle (Phase 9 / rebase-resolution) ──
   | {
+      /** Produced by the rebase auto-resolution resolver as a guarded-stage progress occurrence. */
+      type: 'rebase_resolution_stage';
+      stage: 'acceptance-guards';
+      status: 'passed';
+      prUrl: string;
+      worktreePath: string;
+    }
+  | {
+      /** Produced by the rebase auto-resolution resolver as a guarded-stage progress occurrence. */
+      type: 'rebase_resolution_stage';
+      stage: 'suite-gate';
+      status: 'started';
+      prUrl: string;
+      worktreePath: string;
+    }
+  | {
+      /** Produced by the rebase auto-resolution resolver as a guarded-stage progress occurrence. */
+      type: 'rebase_resolution_stage';
+      stage: 'suite-gate';
+      status: 'passed';
+      prUrl: string;
+      worktreePath: string;
+      durationMs: number;
+    }
+  | {
       /** One attempt at auto-resolving a conflict; index is 1-based, cap is the total budget. */
       type: 'rebase_resolution_attempt';
       index: number;

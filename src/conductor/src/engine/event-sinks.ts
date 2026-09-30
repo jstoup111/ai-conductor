@@ -168,6 +168,7 @@ export const EVENT_SINKS = {
   repair_boundary_translated: { render: false, persist: true, audit: false, otel: false },
   rebase_citation_residue: { render: false, persist: true, audit: false, otel: false },
   rebase_supersession_verdict: { render: false, persist: true, audit: false, otel: false },
+  rebase_resolution_stage: { render: false, persist: true, audit: false, otel: false },
   rebase_resolution_attempt: { render: false, persist: false, audit: false, otel: false },
   rebase_resolution_succeeded: { render: false, persist: false, audit: false, otel: false },
   rebase_resolution_failed: { render: false, persist: false, audit: false, otel: false },
