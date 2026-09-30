@@ -11,6 +11,8 @@ export interface SpoolDrainerOptions {
   now?: () => number;
   /** Injectable delay boundary for retry tests. */
   sleep?: (ms: number) => Promise<void>;
+  /** Injectable delay boundary for periodic backlog reporting. */
+  backlogSleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Injectable jitter source for retry tests. */
   random?: () => number;
   /** Maximum time a single OTLP/HTTP request may remain in flight. */
@@ -22,6 +24,7 @@ export interface SpoolDrainerOptions {
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 60_000;
 const DEFAULT_EXPORT_TIMEOUT_MS = 5_000;
+const BACKLOG_REPORT_INTERVAL_MS = 30_000;
 type DeliveryFailureClass = Extract<DeliveryClassification, { action: 'keep' }>['failureClass'];
 
 /**
@@ -33,6 +36,7 @@ export class SpoolDrainer {
   private readonly send: typeof globalThis.fetch;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly backlogSleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   private readonly random: () => number;
   private readonly exportTimeoutMs: number;
   private readonly inFlight = new Set<AbortController>();
@@ -49,6 +53,17 @@ export class SpoolDrainer {
     this.send = options.fetch ?? globalThis.fetch;
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.backlogSleep = options.backlogSleep ?? ((ms, signal) => new Promise((resolve) => {
+      if (signal?.aborted) {
+        resolve();
+        return;
+      }
+      const timeout = setTimeout(resolve, ms);
+      signal?.addEventListener('abort', () => {
+        clearTimeout(timeout);
+        resolve();
+      }, { once: true });
+    }));
     this.random = options.random ?? Math.random;
     this.exportTimeoutMs = options.exportTimeoutMs ?? DEFAULT_EXPORT_TIMEOUT_MS;
   }
@@ -69,6 +84,13 @@ export class SpoolDrainer {
       );
       return loop;
     });
+    const deliveriesDone = Promise.allSettled(loops).then(() => undefined);
+    const backlogLoop = this.reportBacklog(deliveriesDone);
+    this.loops.add(backlogLoop);
+    void backlogLoop.then(
+      () => this.loops.delete(backlogLoop),
+      () => this.loops.delete(backlogLoop),
+    );
     await Promise.all(loops);
   }
 
@@ -155,6 +177,37 @@ export class SpoolDrainer {
     return Math.min(MAX_BACKOFF_MS, Math.floor(backoffMs * (1 + this.random())));
   }
 
+  private async reportBacklog(deliveriesDone: Promise<void>): Promise<void> {
+    while (!this.stopped) {
+      let deliveriesFinished = false;
+      const controller = new AbortController();
+      await Promise.race([
+        this.backlogDelay(BACKLOG_REPORT_INTERVAL_MS, controller.signal),
+        deliveriesDone.then(() => {
+          deliveriesFinished = true;
+          controller.abort();
+        }),
+      ]);
+      if (this.stopped || deliveriesFinished) return;
+
+      for (const signal of ['traces', 'metrics'] as const) {
+        const batches = await this.store.list(signal);
+        const lastFailureClass = this.lastFailures.get(signal);
+        if (batches.length === 0 || lastFailureClass === undefined) continue;
+
+        const oldestCreatedAt = Number(batches[0].name.slice(0, 15));
+        await this.events?.emit({
+          type: 'otel_spool_backlog',
+          signal,
+          files: batches.length,
+          bytes: batches.reduce((total, batch) => total + batch.size, 0),
+          oldestAgeMs: Math.max(0, this.now() - oldestCreatedAt),
+          lastFailureClass,
+        });
+      }
+    }
+  }
+
   private async delay(ms: number): Promise<void> {
     if (this.stopped) return;
     const due = this.now() + ms;
@@ -168,6 +221,24 @@ export class SpoolDrainer {
       ]);
     } finally {
       this.pendingDelays.delete(release);
+    }
+  }
+
+  private async backlogDelay(ms: number, signal: AbortSignal): Promise<void> {
+    if (this.stopped) return;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal.addEventListener('abort', abort, { once: true });
+    const interrupted = new Promise<void>((resolve) => {
+      controller.signal.addEventListener('abort', resolve, { once: true });
+    });
+    const release = abort;
+    this.pendingDelays.add(release);
+    try {
+      await Promise.race([this.backlogSleep(ms, controller.signal), interrupted]);
+    } finally {
+      this.pendingDelays.delete(release);
+      signal.removeEventListener('abort', abort);
     }
   }
 }

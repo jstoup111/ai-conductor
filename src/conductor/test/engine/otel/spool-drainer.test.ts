@@ -1,4 +1,4 @@
-// Covers: task:10, task:11, task:12
+// Covers: task:10, task:11, task:12, task:13
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -439,5 +439,73 @@ describe('SpoolDrainer', () => {
       hangingResponse?.destroy();
       await draining.catch(() => undefined);
     }
+  });
+
+  it('reports each non-empty signal backlog every 30 seconds and remains silent for an empty spool', async () => {
+    const events = new ConductorEventEmitter();
+    const backlog: unknown[] = [];
+    events.on('otel_spool_backlog', (event) => { backlog.push(event); });
+    const server = createServer((request, response) => {
+      request.resume();
+      response.writeHead(503).end();
+    });
+    const endpoint = await listen(server);
+    let now = 1_727_000_000_000;
+    const store = new SpoolStore(await temporaryDirectory(), { now: () => now });
+    await store.write('traces', Buffer.from('first'));
+    now += 1_000;
+    await store.write('traces', Buffer.from('second-batch'));
+    await store.write('metrics', Buffer.from('metric'));
+
+    let releaseBacklogInterval: (() => void) | undefined;
+    const drainer = new SpoolDrainer(store, {
+      endpoint,
+      headers: () => ({}),
+      events,
+      now: () => now,
+      random: () => 0,
+      sleep: async () => new Promise<void>(() => undefined),
+      backlogSleep: async () => new Promise<void>((resolve) => {
+        releaseBacklogInterval = () => {
+          now += 30_000;
+          resolve();
+        };
+      }),
+    });
+
+    const draining = drainer.drain();
+    for (let turns = 0; turns < 50 && (!releaseBacklogInterval || drainer.lastFailureClass('traces') !== 'server' || drainer.lastFailureClass('metrics') !== 'server'); turns += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    for (let interval = 0; interval < 3; interval += 1) {
+      const releaseInterval = releaseBacklogInterval;
+      releaseBacklogInterval = undefined;
+      releaseInterval?.();
+      for (let turns = 0; turns < 50 && (!releaseBacklogInterval || backlog.length < (interval + 1) * 2); turns += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    }
+    await drainer.stop();
+    await draining;
+
+    expect(backlog).toEqual([
+      { type: 'otel_spool_backlog', signal: 'traces', files: 2, bytes: 17, oldestAgeMs: 31_000, lastFailureClass: 'server' },
+      { type: 'otel_spool_backlog', signal: 'metrics', files: 1, bytes: 6, oldestAgeMs: 30_000, lastFailureClass: 'server' },
+      { type: 'otel_spool_backlog', signal: 'traces', files: 2, bytes: 17, oldestAgeMs: 61_000, lastFailureClass: 'server' },
+      { type: 'otel_spool_backlog', signal: 'metrics', files: 1, bytes: 6, oldestAgeMs: 60_000, lastFailureClass: 'server' },
+      { type: 'otel_spool_backlog', signal: 'traces', files: 2, bytes: 17, oldestAgeMs: 91_000, lastFailureClass: 'server' },
+      { type: 'otel_spool_backlog', signal: 'metrics', files: 1, bytes: 6, oldestAgeMs: 90_000, lastFailureClass: 'server' },
+    ]);
+
+    const emptyEvents = new ConductorEventEmitter();
+    const emptyBacklog: unknown[] = [];
+    emptyEvents.on('otel_spool_backlog', (event) => { emptyBacklog.push(event); });
+    const emptyStore = new SpoolStore(await temporaryDirectory(), { now: () => now });
+    const emptyDrainer = new SpoolDrainer(emptyStore, { endpoint, headers: () => ({}), events: emptyEvents, now: () => now });
+    for (let interval = 0; interval < 3; interval += 1) {
+      now += 30_000;
+      await emptyDrainer.drain();
+    }
+    expect(emptyBacklog).toEqual([]);
   });
 });
