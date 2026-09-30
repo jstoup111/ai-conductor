@@ -207,6 +207,50 @@ describe('build-review test scope association evidence', () => {
     });
   });
 
+  it('reports an added unmarked test with Covers-shaped string literals as unbound without a candidate or target', () => {
+    const result = analyzeBuildReviewTestScope({
+      base: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("// Covers: task:1, task:8\nimport { it } from 'vitest';\n") },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 8: Eighth\n',
+      },
+      head: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("// Covers: task:1, task:8\nimport { it } from 'vitest';\nconst literalBody = () => {\n  const quoted = \"// Covers: task:8\";\n  const substituted = `literal ${quoted}// Covers: task:8`;\n  expect(substituted).toContain(quoted);\n};\nit('keeps literal Covers text unbound', literalBody);\n") },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 8: Eighth\n',
+      },
+    });
+
+    expect(result).toMatchObject({
+      changedDeclarations: [{ titleChain: ['keeps literal Covers text unbound'] }],
+      targets: [],
+      candidates: [],
+      notes: [{ kind: 'unbound', declaration: { titleChain: ['keeps literal Covers text unbound'] } }],
+    });
+  });
+
+  it('does not let an unchanged file-level marker bind an added unmarked test', () => {
+    const result = analyzeBuildReviewTestScope({
+      base: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("// Covers: task:1, task:8\nimport { it } from 'vitest';\n") },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 8: Eighth\n',
+      },
+      head: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("// Covers: task:1, task:8\nimport { it } from 'vitest';\nit('stays unbound', () => { expect(true).toBe(true); });\n") },
+        storiesText,
+        planText: '### Task 1: First\n\n### Task 8: Eighth\n',
+      },
+    });
+
+    expect(result).toMatchObject({
+      changedDeclarations: [{ titleChain: ['stays unbound'] }],
+      targets: [],
+      candidates: [],
+      notes: [{ kind: 'unbound', declaration: { titleChain: ['stays unbound'] } }],
+    });
+  });
+
   it('does not let a newly added matching task marker bless an inherited sibling association', () => {
     const result = analyzeBuildReviewTestScope({
       base: {
