@@ -18,7 +18,8 @@ const invokeOptions: InvokeOptions = {
   sessionId: 'caller-session',
   resume: false,
   cwd: '/workspace/project',
-  model: 'ignored-by-pi',
+  model: 'anthropic/claude-opus-4-5',
+  effort: 'xhigh',
 };
 
 const readFixture = (name: string) => readFile(new URL(`../fixtures/pi/${name}`, import.meta.url), 'utf8');
@@ -40,12 +41,17 @@ describe('PiProvider', () => {
     provider = new PiProvider('/resolved/pi', spawn);
   });
 
-  it('spawns a resolved Pi executable headlessly with the prompt on stdin and no model flag', async () => {
+  it('spawns a resolved Pi executable headlessly with its configured provider, model, and thinking effort', async () => {
     await provider.invoke(invokeOptions);
 
     expect(spawn).toHaveBeenCalledWith(
       '/resolved/pi',
-      ['-p', '--no-session', '--mode', 'json'],
+      [
+        '-p', '--no-session', '--mode', 'json',
+        '--provider', 'anthropic',
+        '--model', 'claude-opus-4-5',
+        '--thinking', 'xhigh',
+      ],
       expect.objectContaining({
         input: invokeOptions.prompt,
         stdin: 'pipe',
@@ -55,7 +61,7 @@ describe('PiProvider', () => {
         reject: false,
       }),
     );
-    expect(spawn.mock.calls[0]?.[1]).not.toContain('--model');
+    expect(spawn.mock.calls[0]?.[1]).not.toContain('claude-opus-4-5:xhigh');
   });
 
   it('keeps retries in fresh no-session invocations and exposes only invoke dispatch', async () => {
@@ -63,13 +69,52 @@ describe('PiProvider', () => {
     await provider.invoke({ ...invokeOptions, resume: true, sessionId: 'retry-session' });
 
     expect(spawn.mock.calls.map(([, args]) => args)).toEqual([
-      ['-p', '--no-session', '--mode', 'json'],
-      ['-p', '--no-session', '--mode', 'json'],
+      [
+        '-p', '--no-session', '--mode', 'json',
+        '--provider', 'anthropic',
+        '--model', 'claude-opus-4-5',
+        '--thinking', 'xhigh',
+      ],
+      [
+        '-p', '--no-session', '--mode', 'json',
+        '--provider', 'anthropic',
+        '--model', 'claude-opus-4-5',
+        '--thinking', 'xhigh',
+      ],
     ]);
     expect(provider.supportsSessionResume).toBe(false);
     expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
     expect(Object.getOwnPropertyNames(PiProvider.prototype)).toEqual(['constructor', 'invoke']);
   });
+
+  it('preserves a nested Pi model suffix and supplies exactly one separate thinking flag', async () => {
+    await provider.invoke({
+      ...invokeOptions,
+      model: 'cline/google/gemma-4-31b-it:free',
+      effort: 'high',
+    });
+
+    const args = spawn.mock.calls[0]?.[1] ?? [];
+    expect(args).toEqual(expect.arrayContaining([
+      '--provider', 'cline',
+      '--model', 'google/gemma-4-31b-it:free',
+      '--thinking', 'high',
+    ]));
+    expect(args.filter((arg) => arg === '--thinking')).toHaveLength(1);
+    expect(args).not.toContain('google/gemma-4-31b-it:free:high');
+  });
+
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'] as const)(
+    'passes Pi thinking effort %s unchanged',
+    async (effort) => {
+      await provider.invoke({ ...invokeOptions, effort });
+
+      const args = spawn.mock.calls[0]?.[1] ?? [];
+      expect(args[args.indexOf('--thinking') + 1]).toBe(effort);
+      expect(args).not.toContain('--thinking off');
+      expect(args).not.toContain('--thinking minimal');
+    },
+  );
 
   it('declares Pi without deferred capabilities and requires configured models', async () => {
     const pi = providerDescriptor('pi');

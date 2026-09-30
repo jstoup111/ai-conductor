@@ -172,7 +172,16 @@ export class PiProvider implements LLMProvider {
       throw new Error(`${piDisplayName()} process spawn denied: ${permit.reason}`);
     }
 
-    const subprocess = this.subprocessFactory(this.executable, ['-p', '--no-session', '--mode', 'json'], {
+    const args = ['-p', '--no-session', '--mode', 'json'];
+    if (options.model) {
+      const parsedModel = parsePiModelId(options.model);
+      if ('provider' in parsedModel) {
+        args.push('--provider', parsedModel.provider, '--model', parsedModel.model);
+      }
+    }
+    if (options.effort) args.push('--thinking', options.effort);
+
+    const subprocess = this.subprocessFactory(this.executable, args, {
       reject: false,
       input: options.prompt,
       stdin: 'pipe',
