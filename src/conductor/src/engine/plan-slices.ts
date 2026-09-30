@@ -28,6 +28,8 @@ const SLICES_HEADING = /^##\s+Slices\s*$/i;
 const REQUIRED_HEADER = ['Slice', 'Title', 'Tasks'];
 const DEPENDENCIES_LINE = /^\s*\*\*Dependencies:\*\*\s*(.*?)\s*$/;
 
+export const MAX_PLAN_SLICES = 5;
+
 function fencedLineStates(lines: string[]): boolean[] {
   const states: boolean[] = [];
   let openMarker: string | null = null;
@@ -172,6 +174,13 @@ export function validatePlanSlices(planText: string): PlanSlicesValidation {
       taskIds: [...new Set(resolvedIds)],
     });
     sliceHasTaskReferences.push(cells[2] !== '');
+  }
+
+  if (slices.length > MAX_PLAN_SLICES) {
+    violations.push({
+      code: 'max-slices',
+      message: `plan declares ${slices.length} slices and the bound is ${MAX_PLAN_SLICES}`,
+    });
   }
 
   const slicesByTaskId = new Map<string, number[]>();
