@@ -509,7 +509,7 @@ describe('#902 generated provider documentation', () => {
   it('labels both autonomous policies and the supported-host interactive path', () => {
     const table = renderModelTable();
     expect(table).toContain(
-      '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |',
+      '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Pi model | Pi effort | Why |',
     );
     expect(table).toMatch(
       /\| memory \| autonomous engine \| haiku \| low \| gpt-5\.6-luna \| low \|/,
@@ -518,7 +518,7 @@ describe('#902 generated provider documentation', () => {
       /\| plan \| autonomous engine \| opus \| medium \(S\), high \(M\), xhigh \(L\) \| gpt-5\.6-sol \| medium \(S\), high \(M\), xhigh \(L\) \|/,
     );
     expect(table).toMatch(
-      /\| code-review \| supported-host interactive \| opus \|  \| inherits model from the Codex session or spawned-agent configuration \| inherits effort from the Codex session or spawned-agent configuration \|/,
+      /\| code-review \| supported-host interactive \| opus \| n\/a \| inherits model from the Codex session or spawned-agent configuration \| inherits effort from the Codex session or spawned-agent configuration \| n\/a \| n\/a \|/,
     );
     expect(table.match(/\| autonomous engine \|/g)).toHaveLength(
       Object.keys(CLAUDE_MODELS).length - MODEL_FREE_ENGINE_STEPS.length,
