@@ -58,22 +58,26 @@ Variants:
 ```bash
 ai-conductor compose --idea "<your idea>"
 ai-conductor compose <free text idea>
+ai-conductor compose --provider codex
+ai-conductor compose --provider codex --idea "<your idea>"
 ```
 
 Both drive the first session with that idea and skip the intake pre-poll. The idea is one-shot: it
 applies only to the first session, and later iterations fall back to intake or chat.
 
+`--provider` selects the interactive host for the session and overrides the configured provider.
+It can be used with or without `--idea`.
+
 When the session exits, the launcher asks `Process another idea in a fresh session? [Y/n]` on a TTY.
 Answering yes starts a clean session — one idea per session, by design. On a non-TTY stdin the
 launcher never loops.
 
-**If you are already inside a Claude Code session**, `ai-conductor compose` refuses to nest a second
-one. It prints `You're already inside a Claude Code session — run /composer directly…` and exits 0.
-Run `/composer` in that session instead.
+**If you are already inside a supported host session**, `ai-conductor compose` refuses to nest a
+second one. It prints guidance and exits 0: run `/composer` in Claude Code or `$composer` in Codex.
 
-The permission mode of the launched session comes from `CONDUCT_ENGINEER_PERMISSION_MODE` and
-defaults to `default`. The value `plan` is rejected and coerced back to `default`, because a
-read-only session cannot run the git and `gh` primitives. See
+For Claude launches, the permission mode comes from `CONDUCT_ENGINEER_PERMISSION_MODE` and defaults
+to `default`. The value `plan` is rejected and coerced back to `default`, because a read-only session
+cannot run the git and `gh` primitives. Codex ignores this setting. See
 [environment reference](../reference/environment.md).
 
 ## Step 1 — Capture the idea
