@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BasicTracerProvider, type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { ExportResultCode } from '@opentelemetry/core';
-import { InstrumentType, type PushMetricExporter, type ResourceMetrics } from '@opentelemetry/sdk-metrics';
-import { ProtobufMetricsSerializer } from '@opentelemetry/otlp-transformer';
+import { AggregationTemporality, DataPointType, InstrumentType, type PushMetricExporter, type ResourceMetrics } from '@opentelemetry/sdk-metrics';
+import { ValueType } from '@opentelemetry/api';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { SpoolStore } from '../../../src/engine/otel/spool-store.js';
 import { buildExporters } from '../../../src/engine/otel/transport.js';
@@ -45,6 +45,48 @@ function rejectedStore(error: Error): SpoolStore {
   } as unknown as SpoolStore;
 }
 
+interface ProtoField { wireType: number; value: number | Uint8Array; }
+
+/** Decode just the OTLP fields asserted below, without reusing the serializer under test. */
+function decodeFields(body: Uint8Array): Map<number, ProtoField[]> {
+  const fields = new Map<number, ProtoField[]>();
+  let offset = 0;
+  const readVarint = (): number => {
+    let value = 0;
+    let shift = 0;
+    while (true) {
+      const byte = body[offset++];
+      value += (byte & 0x7f) * 2 ** shift;
+      if ((byte & 0x80) === 0) return value;
+      shift += 7;
+    }
+  };
+  while (offset < body.length) {
+    const tag = readVarint();
+    const wireType = tag & 7;
+    let value: number | Uint8Array;
+    if (wireType === 0) value = readVarint();
+    else if (wireType === 1) {
+      value = body.slice(offset, offset + 8);
+      offset += 8;
+    } else if (wireType === 2) {
+      const length = readVarint();
+      value = body.slice(offset, offset + length);
+      offset += length;
+    } else throw new Error(`unsupported OTLP wire type ${wireType}`);
+    const field = tag >>> 3;
+    fields.set(field, [...(fields.get(field) ?? []), { wireType, value }]);
+  }
+  return fields;
+}
+
+function embedded(fields: Map<number, ProtoField[]>, number: number): Uint8Array[] {
+  return (fields.get(number) ?? []).map((field) => {
+    if (!(field.value instanceof Uint8Array)) throw new Error(`OTLP field ${number} is not length-delimited`);
+    return field.value;
+  });
+}
+
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
   if (originalHeaderValue === undefined) delete process.env[headerEnvironment];
@@ -69,21 +111,49 @@ describe('spooling exporters', () => {
     expect(result.code).toBe(ExportResultCode.SUCCESS);
   });
 
-  it('publishes the exact OTLP protobuf metrics request body before reporting SDK success', async () => {
+  it('publishes a decodable OTLP protobuf metrics request with counter and histogram points before SDK success', async () => {
     const store = new SpoolStore(await temporaryDirectory());
     const metrics = {
-      resource: { attributes: {} } as ResourceMetrics['resource'],
-      scopeMetrics: [],
+      resource: { attributes: {}, schemaUrl: undefined } as ResourceMetrics['resource'],
+      scopeMetrics: [{
+        scope: { name: 'spooling-exporter-test' },
+        metrics: [
+          {
+            descriptor: { name: 'spooled.counter', description: '', unit: '1', valueType: ValueType.INT },
+            aggregationTemporality: AggregationTemporality.CUMULATIVE,
+            dataPointType: DataPointType.SUM,
+            isMonotonic: true,
+            dataPoints: [{ startTime: [1, 0], endTime: [2, 0], attributes: {}, value: 7 }],
+          },
+          {
+            descriptor: { name: 'spooled.histogram', description: '', unit: 'ms', valueType: ValueType.DOUBLE },
+            aggregationTemporality: AggregationTemporality.CUMULATIVE,
+            dataPointType: DataPointType.HISTOGRAM,
+            dataPoints: [{
+              startTime: [1, 0], endTime: [2, 0], attributes: {},
+              value: { min: 2, max: 8, sum: 10, count: 2, buckets: { boundaries: [5], counts: [1, 1] } },
+            }],
+          },
+        ],
+      }],
     } satisfies ResourceMetrics;
-    const expectedBody = ProtobufMetricsSerializer.serializeRequest(metrics);
-    if (!expectedBody) throw new Error('expected metrics serializer to produce an OTLP request body');
     const exporter = new SpoolingMetricExporter(store, directMetricExporter());
 
     const result = await new Promise<{ code: number }>((resolve) => {
       exporter.export(metrics, async (exportResult) => {
         const [batch] = await store.list('metrics');
         expect(batch).toBeDefined();
-        expect(await readFile(batch.path)).toEqual(Buffer.from(expectedBody));
+        const request = decodeFields(await readFile(batch.path));
+        const resourceMetrics = decodeFields(embedded(request, 1)[0]);
+        const scopeMetrics = decodeFields(embedded(resourceMetrics, 2)[0]);
+        const decodedMetrics = embedded(scopeMetrics, 2).map((metric) => decodeFields(metric));
+        expect(decodedMetrics.map((metric) => new TextDecoder().decode(embedded(metric, 1)[0]))).toEqual([
+          'spooled.counter', 'spooled.histogram',
+        ]);
+        expect(embedded(decodedMetrics[0], 7)).toHaveLength(1);
+        expect(embedded(decodedMetrics[1], 9)).toHaveLength(1);
+        expect(embedded(decodeFields(embedded(decodedMetrics[0], 7)[0]), 1)).toHaveLength(1);
+        expect(embedded(decodeFields(embedded(decodedMetrics[1], 9)[0]), 1)).toHaveLength(1);
         resolve(exportResult);
       });
     });

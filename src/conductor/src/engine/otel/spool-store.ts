@@ -128,19 +128,26 @@ export class SpoolStore {
       throw error;
     }
 
-    const batches = await Promise.all(names
+    const entries = await Promise.all(names
       .filter((name) => name.endsWith('.pb'))
       .sort()
       .map(async (name) => {
         const path = join(directory, name);
-        return {
-          name,
-          path,
-          size: (await this.filesystem.stat(path)).size,
-          items: this.itemsFromName(name),
-        };
+        try {
+          return {
+            name,
+            path,
+            size: (await this.filesystem.stat(path)).size,
+            items: this.itemsFromName(name),
+          };
+        } catch (error) {
+          // A drainer may delete a batch after readdir but before stat. It was
+          // already delivered, so it must not make a concurrent listing fail.
+          if (isMissing(error)) return undefined;
+          throw error;
+        }
       }));
-    return batches;
+    return entries.filter((batch): batch is SpoolBatch => batch !== undefined);
   }
 
   read(batch: SpoolBatch): Promise<Buffer> {

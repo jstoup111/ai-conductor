@@ -89,13 +89,6 @@ describe("resolveSpoolDir", () => {
     temporaryDirectories.push(directory);
     const emit = vi.fn().mockResolvedValue(undefined);
     const events = { emit } as unknown as ConductorEventEmitter;
-    const config = {
-      enabled: true as const,
-      exporter: "otlp" as const,
-      endpoint: "http://localhost:4318",
-      spool: { enabled: true, maxBytes: 1024 },
-    };
-
     warnSpoolUnavailable(directory, events);
     warnSpoolUnavailable(directory, events);
 

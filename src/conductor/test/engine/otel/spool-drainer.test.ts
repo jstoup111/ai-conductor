@@ -44,16 +44,19 @@ async function reserveEndpoint(): Promise<number> {
 
 async function drainUntilEmpty(drainer: SpoolDrainer, store: SpoolStore): Promise<void> {
   const draining = drainer.drainUntilStopped();
+  await waitForEmpty(store);
+  await drainer.stop();
+  await draining;
+}
+
+async function waitForEmpty(store: SpoolStore): Promise<void> {
   for (let turn = 0; turn < 1_000; turn += 1) {
     const [traces, metrics] = await Promise.all([store.list('traces'), store.list('metrics')]);
     if (traces.length === 0 && metrics.length === 0) {
-      await drainer.stop();
-      await draining;
       return;
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
-  await drainer.stop();
   throw new Error('spool did not drain');
 }
 
@@ -313,16 +316,20 @@ describe('SpoolDrainer', () => {
     const store = new SpoolStore(await temporaryDirectory(), { now: () => now });
     await store.write('traces', Buffer.from('retry-me'));
 
-    await new SpoolDrainer(store, {
+    const drainer = new SpoolDrainer(store, {
       endpoint,
       headers: () => ({}),
       now: () => now,
       sleep: async (delay: number) => { delays.push(delay); now += delay; },
       random: () => 0,
-    }).drainUntilStopped();
+    });
+    await drainUntilEmpty(drainer, store);
 
     expect(received).toEqual(['retry-me', 'retry-me', 'retry-me']);
-    expect(delays).toEqual([1_000, 2_000]);
+    // The independent idle loops share this injected scheduler; the retry
+    // sequence itself is visible as the 1 s then 2 s backoff.
+    expect(delays).toContain(1_000);
+    expect(delays).toContain(2_000);
     expect(await store.list('traces')).toEqual([]);
   });
 
@@ -433,6 +440,8 @@ describe('SpoolDrainer', () => {
       expect(await store.list('metrics')).toEqual([]);
 
       releaseFirstTraceRetry?.();
+      await waitForEmpty(store);
+      await drainer.stop();
       await draining;
 
       expect(received.filter((entry) => entry.startsWith('/v1/traces:'))).toEqual([
@@ -578,23 +587,21 @@ describe('SpoolDrainer', () => {
     const endpoint = await listen(server);
     const store = new SpoolStore(await temporaryDirectory());
     let releaseRetry: (() => void) | undefined;
-    const retryStarts: Array<() => void> = [];
-    const nextRetryStart = () => new Promise<void>((resolve) => retryStarts.push(resolve));
     const drainer = new SpoolDrainer(store, {
       endpoint,
       headers: () => ({}),
       events,
       sleep: async () => new Promise<void>((resolve) => {
         releaseRetry = resolve;
-        retryStarts.shift()?.();
       }),
     });
     await store.write('traces', Buffer.from('healthy-trace'));
-    await drainUntilEmpty(drainer, store);
+    const healthyDrain = drainer.drainUntilStopped();
+    await waitForEmpty(store);
 
     failNetworkRequests = true;
     await store.write('traces', Buffer.from('network-failure-trace'));
-    const draining = drainer.drainUntilStopped();
+    const draining = healthyDrain;
 
     try {
       for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) {
@@ -633,7 +640,7 @@ describe('SpoolDrainer', () => {
     const events = new ConductorEventEmitter();
     const rendererErrors: unknown[] = [];
     events.on('renderer_error', (event) => { rendererErrors.push(event); });
-    let releaseRetry: (() => void) | undefined;
+    const pendingSleeps: Array<() => void> = [];
     let traceAttempts = 0;
     const server = createServer(async (request, response) => {
       request.resume();
@@ -650,29 +657,29 @@ describe('SpoolDrainer', () => {
       endpoint,
       headers: () => ({}),
       events,
-      sleep: async () => new Promise<void>((resolve) => { releaseRetry = resolve; }),
+      sleep: async () => new Promise<void>((resolve) => { pendingSleeps.push(resolve); }),
     });
     const draining = drainer.drainUntilStopped();
 
     try {
-      for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) {
+      for (let turns = 0; turns < 50 && traceAttempts < 2; turns += 1) {
+        pendingSleeps.splice(0).forEach((release) => release());
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
-      const releaseFirstRetry = releaseRetry;
-      releaseRetry = undefined;
-      releaseFirstRetry?.();
-      await draining;
+      expect(traceAttempts).toBe(2);
 
       await store.write('traces', Buffer.from('network-refusal-after-recovery'));
       const refusing = drainer.drainUntilStopped();
-      for (let turns = 0; turns < 50 && !releaseRetry; turns += 1) {
+      for (let turns = 0; turns < 50 && rendererErrors.length < 3; turns += 1) {
+        pendingSleeps.splice(0).forEach((release) => release());
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
+      expect(traceAttempts).toBeGreaterThanOrEqual(3);
       await drainer.stop();
-      (releaseRetry as (() => void) | undefined)?.();
+      pendingSleeps.splice(0).forEach((release) => release());
       await refusing;
     } finally {
-      releaseRetry?.();
+      pendingSleeps.splice(0).forEach((release) => release());
       await drainer.stop();
       await draining.catch(() => undefined);
     }
