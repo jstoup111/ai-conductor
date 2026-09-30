@@ -1039,6 +1039,16 @@ export async function resolveConflictingPr(
   const { log } = deps;
 
   return withResolveWorktree(slug, branch, repoCwd, async (worktreePath) => {
+    const emitResolutionStage = async (
+      event: Extract<import('../types/events.js').ConductorEvent, { type: 'rebase_resolution_stage' }>,
+    ): Promise<void> => {
+      try {
+        await deps.events?.emit(event);
+      } catch (error) {
+        log(`${prUrl}: failed to emit rebase resolution stage: ${String(error)}`);
+      }
+    };
+
     // Initialize a git runner for the worktree
     const git = makeGitRunner(worktreePath);
     const remoteMutation = await resolveFeatureRemoteMutation({
@@ -1236,6 +1246,22 @@ export async function resolveConflictingPr(
 
     // Suite gate: full test suite must pass
     // Use the injected runSuite function which may be a real suite runner or test stub
+    log(`${prUrl}: acceptance guards passed; worktree=${worktreePath}`);
+    await emitResolutionStage({
+      type: 'rebase_resolution_stage',
+      stage: 'acceptance-guards',
+      status: 'passed',
+      prUrl,
+      worktreePath,
+    });
+    log(`${prUrl}: suite gate started; worktree=${worktreePath}`);
+    await emitResolutionStage({
+      type: 'rebase_resolution_stage',
+      stage: 'suite-gate',
+      status: 'started',
+      prUrl,
+      worktreePath,
+    });
     const suiteRunResult = await deps.runSuite(worktreePath);
     const suiteOk = suiteRunResult.exitCode === 0 && suiteRunResult.configured !== false;
     if (!suiteOk) {
@@ -1254,6 +1280,15 @@ export async function resolveConflictingPr(
     }
 
     // All stages pass — publish the resolution with lease protection
+    log(`${prUrl}: suite gate passed; durationMs=${suiteRunResult.durationMs}`);
+    await emitResolutionStage({
+      type: 'rebase_resolution_stage',
+      stage: 'suite-gate',
+      status: 'passed',
+      prUrl,
+      worktreePath,
+      durationMs: suiteRunResult.durationMs,
+    });
     const publishResult = await publishResolution({
       git,
       branch,
