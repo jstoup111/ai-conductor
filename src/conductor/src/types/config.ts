@@ -717,6 +717,11 @@ export interface HarnessConfig {
    */
   mergeable_autoresolve?: MergeableAutoresolveConfig;
   /**
+   * Opt-in stacked pull requests. Absent → disabled; a present empty block
+   * materializes `enabled: false`.
+   */
+  stacked_prs?: StackedPrsConfig;
+  /**
    * Opt-in judgement gate at the build → manual_test seam. Absent → disabled
    * (legacy topology: build → manual_test directly). `enabled: true` inserts
    * the objective non-human reviewer verdict step between them. The step
@@ -744,6 +749,12 @@ export interface MergeableAutoresolveConfig {
   cooldownMinutes?: number;
   /** Optional test suite command to verify resolved conflicts. */
   suiteCommand?: string;
+}
+
+/** Configuration for opt-in stacked pull requests. */
+export interface StackedPrsConfig {
+  /** Enable/disable stacked pull requests. Default: false when configured. */
+  enabled?: boolean;
 }
 
 /** The closed set of independently-executed build-review rubric branches. */

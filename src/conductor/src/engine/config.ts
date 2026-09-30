@@ -113,7 +113,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'rebase_resolution_attempts', 'validation_concurrency', 'daemon_concurrency', 'daemon_heap_limit_mb',
     'daemon_heap_dump_threshold_mb', 'daemon_heap_dump_retention', 'harness_self_host',
     'model_fallback_ladder', 'auto_restart_on_stale_engine', 'engine_refresh_min_interval_seconds',
-    'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'build_review', 'conflict_check',
+    'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'stacked_prs', 'build_review', 'conflict_check',
     'prd_audit', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
     'retry_routing', 'coverage_binding', 'wiring', 'kickback_escalation', 'cumulative_kickback_bound',
     'gate_code_validity', 'daemon_verbose', 'reconcile_parked_auto_cleanup', 'reclaim_merged_worktrees',
@@ -128,6 +128,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   harness_self_host: ['activation', 'version_freeze', 'auth_park_timeout_minutes', 'build_auth', 'sandbox_build_env', 'live_containment', 'version_approval_gate', 'release_artifact_gate'],
   harness_self_host_build_auth: ['mode', 'token_path'],
   mergeable_autoresolve: ['enabled', 'cooldownMinutes', 'suiteCommand'],
+  stacked_prs: ['enabled'],
   'steps.parallel': ['name', 'skill', 'model', 'effort', 'advisory'],
   'steps.by_tier': ['model', 'effort', 'max_retries'],
   'build_review.adjudication': ['enabled'],
@@ -1169,6 +1170,12 @@ export function validateConfig(
     if (err) return { ok: false, error: err };
   }
 
+  // stacked_prs — opt-in stacked pull requests.
+  if (obj.stacked_prs !== undefined) {
+    const err = validateStackedPrsBlock(obj.stacked_prs);
+    if (err) return { ok: false, error: err };
+  }
+
   // acceptance_spec_globs — list of extra globs for the acceptance_specs gate.
   if (obj.acceptance_spec_globs !== undefined) {
     if (!Array.isArray(obj.acceptance_spec_globs)) {
@@ -1460,6 +1467,14 @@ export function validateConfig(
       block.cooldownMinutes = 60;
     }
     // suiteCommand is optional and remains undefined if not provided
+  }
+
+  // stacked_prs — enabled defaults to false only when the block is present.
+  if (obj.stacked_prs !== undefined && isPlainObject(obj.stacked_prs)) {
+    const block = obj.stacked_prs as Record<string, unknown>;
+    if (block.enabled === undefined) {
+      block.enabled = false;
+    }
   }
 
   // build_progress — intra-step build progress event cadence knobs.
@@ -2764,6 +2779,26 @@ function validateMergeableAutoresolveBlock(raw: unknown): ConfigError | null {
     return {
       type: 'validation_error',
       message: 'mergeable_autoresolve.suiteCommand must be a string',
+    };
+  }
+  return null;
+}
+
+function validateStackedPrsBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'stacked_prs must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set<string>(CONFIG_CONSUMER_KEY_SETS.stacked_prs);
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key)) {
+      return { type: 'validation_error', message: `Unknown key in stacked_prs: "${key}"` };
+    }
+  }
+  if (obj.enabled !== undefined && typeof obj.enabled !== 'boolean') {
+    return {
+      type: 'validation_error',
+      message: 'stacked_prs.enabled must be a boolean',
     };
   }
   return null;
