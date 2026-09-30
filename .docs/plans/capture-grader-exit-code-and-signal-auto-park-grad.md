@@ -127,12 +127,33 @@ Diagnostics-only fix for jstoup111/ai-conductor#823 (rescoped; E2BIG root cause 
 
 **Dependencies:** 2
 
+### Task 6: Exit facts on step_retry and step_failed events for group members
+**Story:** 3
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/conductor-step-events.test.ts` driving (a) a built-in validation-group member (for example `prd_audit` in the `prd_audit` group) and (b) a member of a configured parallel group (through `runParallelGroupViaCore`) with a mocked provider whose results carry `exitFacts`: first attempt fails unclassified then succeeds; all attempts fail unclassified with distinct exitFacts per attempt; and one classified-cause fixture with no exitFacts.
+2. Verify tests fail (RED).
+3. Implement: in `src/conductor/src/engine/conductor.ts`, spread `providerExit` from the member's attempt result onto every validation-group and parallel-group member `step_retry` and `step_failed` emission, only when exitFacts are present, exactly as Task 4 does for the serial path. No new event type, file, or log is added.
+4. Verify tests pass (GREEN).
+5. Commit: "feat(events): carry provider exit facts for group-member step events".
+
+**Done when:**
+- For a built-in validation-group member and for a configured parallel-group member, the retry-then-succeed fixture persists a `step_retry` event whose `providerExit` is deep-equal to the first attempt's exitFacts, as asserted in conductor-step-events.test.ts.
+- For a built-in validation-group member and for a configured parallel-group member, the all-attempts-fail fixture persists a `step_failed` event whose `providerExit` is deep-equal to the final attempt's exitFacts.
+- For a group member failing with a classified cause, neither its `step_retry` nor its `step_failed` event has a `providerExit` property.
+
+**Files:** src/conductor/src/engine/conductor.ts, src/conductor/test/engine/conductor-step-events.test.ts
+
+**Dependencies:** 4
+
 ## Task Dependency Graph
 
 ```
 Task 1 ──▶ Task 2 ──┬──▶ Task 3
                     ├──▶ Task 4
                     └──▶ Task 5
+Task 4 ──▶ Task 6
 (Task 3 also depends on Task 1)
 ```
 
@@ -140,6 +161,7 @@ Task 1 ──▶ Task 2 ──┬──▶ Task 3
 
 - After Task 2: a claude empty-output crash is diagnosable from daemon.log.
 - After Task 4: exit facts are queryable from `.pipeline/events.jsonl`.
+- After Task 6: exit facts also reach step events for validation-group and parallel-group members.
 - After Task 5: a build_review grader-dispatch HALT file names the exit code or signal.
 
 ## Coverage Check
