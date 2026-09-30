@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-30T17:31:09.468Z
 Slug: pi-per-step-model-selection-via-wrapped-providers
 Class: plan-gap
 Halting step: build
