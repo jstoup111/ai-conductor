@@ -637,14 +637,13 @@ describe('runTaskDone', () => {
       expect(exitCode).toBe(0);
       const status = JSON.parse(
         await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
-      ) as { tasks: Array<Record<string, unknown>> };
-      expect(status.tasks[0]).toMatchObject({
-        status: 'completed',
-        doneWhen: [
-          { check: 'the sweep observes reservation before dispatch', evidence: 'sweep test observed reservation' },
-          { check: 'the sweep keeps the reservation until completion', evidence: 'completion test retained reservation' },
-        ],
-      });
+      ) as { tasks: Array<{ status: string; doneWhen?: Array<{ check: string; evidence: string; source: string }> }> };
+      expect(status.tasks[0].status).toBe('completed');
+      expect(status.tasks[0].doneWhen).toHaveLength(2);
+      expect(status.tasks[0].doneWhen).toEqual([
+        { check: 'the sweep observes reservation before dispatch', evidence: 'sweep test observed reservation', source: 'reported' },
+        { check: 'the sweep keeps the reservation until completion', evidence: 'completion test retained reservation', source: 'reported' },
+      ]);
     });
 
     it('refuses missing evidence, names its check, and leaves status byte-identical', async () => {
@@ -662,15 +661,19 @@ describe('runTaskDone', () => {
         JSON.stringify({ feature_desc: 'my-feature' }),
       );
       await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({}));
+      const statusPath = join(dir, '.pipeline', 'task-status.json');
       const originalStatus = JSON.stringify({ tasks: [{ id: '7', status: 'in_progress' }] }, null, 2);
       await fsPromises.writeFile(
-        join(dir, '.pipeline', 'task-status.json'),
+        statusPath,
         originalStatus,
       );
+      const statusBefore = await fsPromises.readFile(statusPath, 'utf-8');
 
-      expect(await runTaskDone(dir, '7', [{ index: 1, evidence: 'sweep test observed reservation' }])).toBe(1);
+      const exitCode = await runTaskDone(dir, '7', [{ index: 1, evidence: 'sweep test observed reservation' }]);
+
+      expect(exitCode).toBe(1);
       expect(stdErr.join('\n')).toContain('missing Done when evidence for check 2');
-      await expect(fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8')).resolves.toBe(originalStatus);
+      await expect(fsPromises.readFile(statusPath, 'utf-8')).resolves.toBe(statusBefore);
     });
 
     it('halts a plan gap without completing the row', async () => {
