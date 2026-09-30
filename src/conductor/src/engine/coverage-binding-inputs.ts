@@ -36,7 +36,16 @@ export interface CoverageBindingAmendmentClaim {
 export interface AssembleAmendmentClaimsInput {
   readonly planText: string;
   /** Resolved DECIDE artifacts other than the plan itself. */
-  readonly decideArtifacts: readonly { readonly path: string; readonly text: string }[];
+  readonly decideArtifacts: readonly {
+    readonly path: string;
+    readonly text: string;
+    /**
+     * The artifact at the feature's merge-base. Amendment blocks already
+     * present there were landed by earlier features and are not this plan's
+     * obligation. Undefined (new file or unresolvable base) keeps every block.
+     */
+    readonly baseText?: string;
+  }[];
 }
 
 const AMENDMENT_HEADER = /^> \*\*Amended \d{4}-\d{2}-\d{2} by #\d+:\*\*/;
@@ -75,13 +84,16 @@ export function assembleAmendmentClaims(
   const taskIds = [...parsePlanTaskBodies(planText).keys()];
   const doneWhen = taskIds.map((id) => taskDoneWhen.get(id) ?? []);
 
-  return decideArtifacts.filter(({ path }) => isAmendmentSource(path)).flatMap(({ path, text }) => amendmentBlocks(text).map((amendment) => ({
+  return decideArtifacts.filter(({ path }) => isAmendmentSource(path)).flatMap(({ path, text, baseText }) => {
+    const inherited = new Set(baseText === undefined ? [] : amendmentBlocks(baseText));
+    return amendmentBlocks(text).filter((amendment) => !inherited.has(amendment)).map((amendment) => ({
     kind: 'amendment' as const,
     artifactPath: path,
     amendment,
     taskIds,
     doneWhen,
-  })));
+  }));
+  });
 }
 
 function carrierRows({ tier, coherenceText, planText }: AssembleCoverageBindingClaimsInput): CriterionCoherenceRow[] {

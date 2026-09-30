@@ -20,6 +20,23 @@ const PLAN_WITH_TASKS = `# Plan
 `;
 
 describe('assembleCoverageBindingClaims', () => {
+  it('excludes amendment blocks already present at the merge-base and keeps blocks this branch added', () => {
+    const inherited = '> **Amended 2026-09-07 by #2429:** An earlier feature shipped this.';
+    const added = '> **Amended 2026-09-29 by #2900:** This feature adds this obligation.';
+    const claims = assembleAmendmentClaims({
+      planText: PLAN_WITH_TASKS,
+      decideArtifacts: [
+        { path: '.docs/decisions/adr-shared.md', text: `# ADR\n\n${inherited}\n\n${added}\n`, baseText: `# ADR\n\n${inherited}\n` },
+        { path: '.docs/decisions/adr-new.md', text: `${inherited}\n` },
+      ],
+    });
+
+    expect(claims.map(({ artifactPath, amendment }) => [artifactPath, amendment])).toEqual([
+      ['.docs/decisions/adr-shared.md', added],
+      ['.docs/decisions/adr-new.md', inherited],
+    ]);
+  });
+
   it('assembles one amendment claim per amendment block from non-plan DECIDE artifacts', () => {
     const planText = `${PLAN_WITH_TASKS}
 > **Amended 2026-09-24 by #99:** This plan amendment is excluded.

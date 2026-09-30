@@ -38,7 +38,7 @@ import type {
   StepRunResult,
   StepRunOptions,
 } from './conductor.js';
-import { listCommitsWithTrailers } from './autoheal.js';
+import { listCommitsWithTrailers, resolveOriginRef } from './autoheal.js';
 import { readOperatorReseals } from './protected-artifact-seal.js';
 import { parseScopeTrailers } from './scope-trailer.js';
 import { ALL_STEPS, buildStepRegistry, getStepDefinition, tryGetStepIndex } from './steps.js';
@@ -4480,10 +4480,22 @@ export class DefaultStepRunner implements StepRunner {
         if (!resolvedDecideSet) {
           amendmentClaims = [];
         } else {
+          // Amendments inherited from the default branch belong to the features
+          // that landed them; only blocks this branch added are obligations.
+          const originRef = await resolveOriginRef(this.projectDir).catch(() => null);
+          const amendmentBase = originRef === null ? undefined : await this.gitRunner(['merge-base', originRef, 'HEAD'])
+            .then((result) => (result.exitCode === 0 && result.stdout.trim() ? result.stdout.trim() : undefined))
+            .catch(() => undefined);
           const decideArtifacts = await Promise.all([...resolvedDecideSet.paths]
             .filter((path) => path.startsWith('.docs/specs/') || /^\.docs\/decisions\/architecture-review-/.test(path) ||
               (state.complexity_tier !== 'S' && /^\.docs\/decisions\/adr-/.test(path)))
-            .map(async (path) => ({ path, text: await readFile(join(this.projectDir, path), 'utf8') })));
+            .map(async (path) => ({
+              path,
+              text: await readFile(join(this.projectDir, path), 'utf8'),
+              baseText: amendmentBase === undefined ? undefined : await this.gitRunner(['show', `${amendmentBase}:${path}`])
+                .then((result) => (result.exitCode === 0 ? result.stdout : undefined))
+                .catch(() => undefined),
+            })));
           amendmentClaims = assembleAmendmentClaims({ planText, decideArtifacts });
         }
       } catch (error) {
