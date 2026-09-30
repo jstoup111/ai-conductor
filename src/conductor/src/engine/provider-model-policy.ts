@@ -50,15 +50,18 @@ export const COST_SELF_REPORTING_PROVIDERS: ReadonlySet<string> = new Set(
 
 export function rateCardModelIds(): string[] {
   const ids = new Set<string>();
+  const addModelId = (model: string | undefined): void => {
+    if (model) ids.add(model);
+  };
   for (const [provider, policy] of Object.entries(BUILT_IN_PROVIDER_MODEL_POLICIES)) {
     if (COST_SELF_REPORTING_PROVIDERS.has(provider)) continue;
-    for (const model of BUILT_IN_PROVIDER_OPT_IN_MODEL_IDS[provider] ?? []) ids.add(model);
-    for (const model of Object.values(policy.stepModels)) ids.add(model);
-    for (const model of policy.modelEscalationOrder) ids.add(model);
-    for (const model of policy.modelFallbackLadder) ids.add(model);
+    for (const model of BUILT_IN_PROVIDER_OPT_IN_MODEL_IDS[provider] ?? []) addModelId(model);
+    for (const model of Object.values(policy.stepModels)) addModelId(model);
+    for (const model of policy.modelEscalationOrder) addModelId(model);
+    for (const model of policy.modelFallbackLadder) addModelId(model);
     for (const tiers of Object.values(policy.stepTierOverrides)) {
       for (const override of Object.values(tiers ?? {})) {
-        if (override?.model) ids.add(override.model);
+        addModelId(override?.model);
       }
     }
   }

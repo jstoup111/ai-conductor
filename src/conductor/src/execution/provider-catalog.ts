@@ -71,18 +71,17 @@ export interface BuiltInProviderDescriptor {
   readonly reviewPolicyCatalog?: ReviewPolicyCatalogDiscovery;
 }
 
-const PI_NO_MODEL = '';
-
 /** Pi owns its configured default model, so no harness model id is selected. */
 const PI_MODEL_POLICY: ProviderModelPolicy = {
+  requiresConfiguredModels: true,
   stepModels: Object.fromEntries(
-    Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) => [step, PI_NO_MODEL]),
+    Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) => [step, '']),
   ) as Readonly<Record<StepName, string>>,
   stepEfforts: CLAUDE_MODEL_POLICY.stepEfforts,
   stepTierOverrides: {},
   effortOrder: CLAUDE_MODEL_POLICY.effortOrder,
-  modelEscalationOrder: [PI_NO_MODEL],
-  modelFallbackLadder: [PI_NO_MODEL],
+  modelEscalationOrder: [],
+  modelFallbackLadder: [],
 };
 
 /**
