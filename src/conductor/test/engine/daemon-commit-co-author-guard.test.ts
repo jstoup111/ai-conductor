@@ -25,7 +25,9 @@ function scanCommitMessages(source: string, file: string): Violation[] {
     // Specs are committed by the operator-facing engineer flow. This is the
     // single explicit exception; another land-spec commit shape is not exempt.
     if (file === LAND_SPEC && args.includes('composeSpecCommitMessage(')) continue;
-    if (args.includes('withDaemonCoAuthorTrailer(')) continue;
+    const callEnd = source.indexOf(');', (match.index ?? 0) + args.length);
+    const call = source.slice(match.index, callEnd === -1 ? undefined : callEnd + 2);
+    if (call.includes('withDaemonCoAuthorTrailer(')) continue;
     const offset = match.index ?? 0;
     violations.push({ file, line: source.slice(0, offset).split('\n').length });
   }
@@ -56,5 +58,12 @@ describe('daemon commit co-author guard', () => {
       .toEqual([{ file: 'fixture.ts', line: 1 }]);
     expect(scanCommitMessages("await git(['commit-tree', 'tree']);\n", 'fixture.ts'))
       .toEqual([{ file: 'fixture.ts', line: 1 }]);
+  });
+
+  it('allows a commit-tree message wrapped through its stdin option', () => {
+    expect(scanCommitMessages(
+      "await git(['commit-tree', 'tree'], { input: withDaemonCoAuthorTrailer('message') });\n",
+      'fixture.ts',
+    )).toEqual([]);
   });
 });

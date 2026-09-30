@@ -13,6 +13,7 @@ import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
+import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
 import { classifyGitPushAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 import { saveStepStatus } from './state.js';
@@ -777,7 +778,10 @@ async function replayFlattenedEntries(
       return { kind: 'refused', reason: `merge-tree failed while proving replay at entry ${index} (${entry.sha}): ${merged.stderr}` };
     }
     finalTree = merged.stdout.trim();
-    const committed = await git(['commit-tree', finalTree, '-p', accumulator], { input: 'ai-conductor flattened replay proof\n' });
+    const committed = await git(
+      ['commit-tree', finalTree, '-p', accumulator],
+      { input: withDaemonCoAuthorTrailer('ai-conductor flattened replay proof\n') },
+    );
     if (committed.exitCode !== 0) {
       return { kind: 'refused', reason: `commit-tree failed while proving replay at entry ${index} (${entry.sha}): ${committed.stderr}` };
     }
