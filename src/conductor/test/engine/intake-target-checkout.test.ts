@@ -23,7 +23,7 @@ async function registry(records: unknown[]): Promise<void> {
 
 async function checkout(origin: string): Promise<string> {
   const path = await tempDir();
-  await execa('git', ['init', '--quiet', path]);
+  await execa('git', ['init', '--quiet', '-b', 'main', path]);
   await execa('git', ['-C', path, 'remote', 'add', 'origin', origin]);
   return path;
 }
