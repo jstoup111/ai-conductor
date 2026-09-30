@@ -220,7 +220,7 @@ queue top-down is the right thing to do.
 - Given the ordering reuses the existing priority resolver, when several halts share one linked reference, then that reference's priority is fetched once for the pass rather than once per item.
 
 #### Negative Paths
-- Given a halted feature whose linked issue does not exist, when the queue is ordered, then that item is still queued and its band is reported as unresolved rather than the pass failing.
+- Given a halted feature whose linked issue does not exist, when the queue is ordered, then that item is still queued and its band is reported as unlabeled rather than the pass failing.
 - Given a halted feature with no linked issue reference at all, when the queue is ordered, then it is placed according to the existing band ranking for unlinked work and is still offered.
 - Given the priority lookup fails for one reference while succeeding for others, when the queue is ordered, then every halt is still queued and the failure is reported once rather than per item.
 
@@ -228,7 +228,7 @@ queue top-down is the right thing to do.
 - [ ] A fixture of mixed-priority unseen halts orders highest band first.
 - [ ] A fixture pairing a deferred critical halt with an unseen low-priority halt offers the unseen one first, proving deferral partitions ahead of priority.
 - [ ] Priority is resolved through the existing resolver, and a repeated reference within one pass causes one lookup, verified against a counting stub.
-- [ ] A halt whose linked issue is missing is still queued with its band reported as unresolved.
+- [ ] A halt whose linked issue is missing is still queued with its band reported as unlabeled.
 
 ## Story 10: Ties break stably and the applied ordering is visible
 

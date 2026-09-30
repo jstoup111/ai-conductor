@@ -187,7 +187,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 - A fixture pairing a deferred critical halt with an unseen low-priority halt offers the unseen one first, proving deferral partitions ahead of priority.
 - Deferred halts of differing bands order by descending band among themselves once unseen work is exhausted. Skipped items are offered after all unseen work regardless of their band, and among themselves are ordered by descending band.
 - Ordering identical queue contents twice yields byte-identical sequences for both equal-band and no-priority fixtures, and removing one item from an equal-band group leaves the remaining items' relative order unchanged. Recomputing after an unrelated feature halts keeps the previously-ordered equal-band items in their prior relative order and places the new item by its own band.
-- Priority is resolved through the existing resolver, and a reference repeated within one pass causes exactly one lookup, as asserted against a counting stub. A lookup failure for one reference while others succeed leaves every halt queued and reports the failure once rather than per item; a halt whose linked issue does not exist stays queued with its band reported as unresolved and the pass does not fail; a halt with no linked reference is placed by the existing band ranking for unlinked work and still offered; and the ordered queue reports each item's attributed band and the ordering basis applied, reporting the basis as the fallback when every item's priority is unresolved.
+- Priority is resolved through the existing resolver, and a reference repeated within one pass causes exactly one lookup, as asserted against a counting stub. A lookup failure for one reference while others succeed leaves every halt queued and reports the failure once rather than per item; a halt whose linked issue does not exist stays queued with its band reported as unlabeled (the existing resolver attribution for a not-found issue) and the pass does not fail; a halt with no linked reference is placed by the existing band ranking for unlinked work and still offered; and the ordered queue reports each item's attributed band and the ordering basis applied, reporting the basis as the fallback when every item's priority is unresolved.
 
 **Files likely touched:**
 - `src/conductor/src/engine/monitor/ordering.ts`
@@ -200,7 +200,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 **Type:** negative-path
 
 **Steps:**
-1. Write failing tests: a forced outage yields a full queue in stable fallback order; the degradation notice appears once per outage rather than per item or per pass; recovery restores band ordering with no restart; a halt whose linked issue is missing is still queued with its band unresolved.
+1. Write failing tests: a forced outage yields a full queue in stable fallback order; the degradation notice appears once per outage rather than per item or per pass; recovery restores band ordering with no restart; a halt whose linked issue is missing is still queued with its band unlabeled.
 2. Verify RED.
 3. Implement degradation by consuming the existing resolver's fallback mode, which returns input order unchanged (adr-2026-07-03-priority-fetch-fail-soft). Never block a pass on the lookup and never drop an item whose band is unresolved.
 4. Verify GREEN. Commit: "monitor: degrade ordering on priority outage without dropping work"
@@ -209,7 +209,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 - A forced priority outage yields a queue containing every halted feature, ordered by the stable fallback, never an empty queue. A priority lookup that never answers does not block the pass, which completes with the queue built from the fallback.
 - The degradation notice is emitted once per outage, not once per item and not once per pass.
 - Recovery from the outage restores band ordering on a subsequent pass with no restart.
-- A halt whose linked issue does not exist is still queued with its band reported as unresolved.
+- A halt whose linked issue does not exist is still queued with its band reported as unlabeled.
 - A halt with no linked reference at all is still queued, placed by the existing band ranking for unlinked work.
 
 **Files likely touched:**
