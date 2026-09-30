@@ -15,7 +15,7 @@ import type {
   ProviderStreamObservation,
 } from '../execution/llm-provider.js';
 import { formatProviderExitFacts } from '../execution/provider-diagnostics.js';
-import { ModelAvailability } from './model-availability.js';
+import { ModelAvailability, selectFallbackLadder } from './model-availability.js';
 import {
   DEFAULT_PROVIDER,
   CLAUDE_DISPLAY_NAME,
@@ -972,8 +972,9 @@ export class DefaultStepRunner implements StepRunner {
       options?.effortOverride ?? options?.providerExecution?.effortOverride;
     this.mode = options?.mode ?? 'default';
     this.log = options?.log ?? ((message) => console.warn(message));
+    this.providerKey = options?.providerKey ?? DEFAULT_PROVIDER;
     this.modelAvailability = new ModelAvailability(
-      this.config?.model_fallback_ladder ?? this.modelPolicy.modelFallbackLadder,
+      selectFallbackLadder(this.modelPolicy, this.providerKey, this.config ?? {}),
       this.log,
     );
     this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
@@ -992,7 +993,6 @@ export class DefaultStepRunner implements StepRunner {
     this.coverageBindingFilesystem = options?.coverageBindingFilesystem;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
-    this.providerKey = options?.providerKey ?? DEFAULT_PROVIDER;
     this.providerRuntimes =
       options?.providerRuntimes ?? options?.providerExecution?.runtimes;
     this.configuredProviders =
@@ -2467,6 +2467,7 @@ export class DefaultStepRunner implements StepRunner {
         featureWorktreePath: opts.projectRoot,
         config: this.config,
         modelPolicy: this.modelPolicy,
+        providerKey: this.providerKey,
         ...(this.providerRuntimes && this.sessionStore
           ? {
               providerDispatch: async (options) => {

@@ -1782,6 +1782,9 @@ export function validateConfig(
     }
   }
 
+  const modelIdSyntaxErr = validateProviderModelIdSyntax(obj as HarnessConfig);
+  if (modelIdSyntaxErr) return { ok: false, error: modelIdSyntaxErr };
+
   const configuredModelErrors = validateRequiredProviderModelConfigs(obj as HarnessConfig);
   if (configuredModelErrors.length > 0) return errVal(configuredModelErrors.join('; '));
 
@@ -3016,6 +3019,29 @@ function validateRequiredProviderModelConfigs(config: HarnessConfig): string[] {
     }
   }
   return errors;
+}
+
+function validateProviderModelIdSyntax(config: HarnessConfig): ConfigError | null {
+  const reasonMessages = {
+    'missing-separator': 'must use the provider/model form',
+    'empty-provider': 'has an empty provider segment',
+    'empty-model': 'has an empty model segment',
+    whitespace: 'must not contain whitespace',
+  } as const;
+
+  const selections = collectProviderModelSelections(config);
+  for (const provider of BUILT_IN_PROVIDERS) {
+    if (!provider.parseModelId) continue;
+    for (const value of selections[provider.id].models) {
+      const parsed = provider.parseModelId(value.model);
+      if ('provider' in parsed) continue;
+      return {
+        type: 'validation_error',
+        message: `${value.configPath} model ${JSON.stringify(value.model)} ${reasonMessages[parsed.reason]}`,
+      };
+    }
+  }
+  return null;
 }
 
 function validateByTier(raw: unknown, path: string): ConfigError | null {

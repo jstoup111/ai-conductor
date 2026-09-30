@@ -1,6 +1,7 @@
 import type { LLMProvider, InvokeOptions, InvokeResult } from "../execution/llm-provider.js";
 import { v4 as uuidv4 } from "uuid";
 import { CLAUDE_MODEL_POLICY } from "./provider-model-policy.js";
+import type { ProviderModelPolicy } from "./provider-model-policy-defaults.js";
 
 /** @deprecated Use CLAUDE_MODEL_POLICY.modelFallbackLadder instead. */
 export const DEFAULT_MODEL_FALLBACK_LADDER: readonly string[] = CLAUDE_MODEL_POLICY.modelFallbackLadder;
@@ -21,6 +22,29 @@ export type PrepareModelFallbackOptions = (
 
 /** An optional caller-owned boundary around each actual ladder rung. */
 export type InvokeModelRung = (options: InvokeOptions) => Promise<InvokeResult>;
+
+type FallbackLadderConfig = {
+  readonly model_fallback_ladder?: readonly string[];
+  readonly llm_providers?: Readonly<Record<string, {
+    readonly model_fallback_ladder?: readonly string[];
+  }>>;
+};
+
+/** Resolves a provider's ladder, preserving explicitly configured empty ladders. */
+export function selectFallbackLadder(
+  policy: ProviderModelPolicy,
+  providerKey: string,
+  config: FallbackLadderConfig,
+): readonly string[] {
+  const providerLadder = config.llm_providers?.[providerKey]?.model_fallback_ladder;
+  if (providerLadder !== undefined) return providerLadder;
+
+  if (!policy.requiresConfiguredModels && config.model_fallback_ladder !== undefined) {
+    return config.model_fallback_ladder;
+  }
+
+  return policy.modelFallbackLadder;
+}
 
 const prepareFreshFallbackOptions: PrepareModelFallbackOptions = async () => ({
   sessionId: uuidv4(),

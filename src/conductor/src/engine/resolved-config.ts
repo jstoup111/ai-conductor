@@ -18,6 +18,7 @@ import {
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
 import { DEFAULT_PROVIDER, providerDescriptor } from '../execution/provider-catalog.js';
+import { selectFallbackLadder } from './model-availability.js';
 import { escalateAttempt } from './escalation.js';
 import { normalizeProviderSelection } from './provider-selection.js';
 import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
@@ -188,6 +189,8 @@ export interface ResolveFallbackProviderNativeInput {
   step: StepName;
   tier?: ComplexityTier;
   policy: ProviderModelPolicy;
+  providerKey?: string;
+  config?: HarnessConfig;
   attempt: number;
   escalate: boolean;
 }
@@ -346,6 +349,8 @@ export function resolveFallbackProviderNativeStepConfig({
   step,
   tier,
   policy,
+  providerKey = DEFAULT_PROVIDER,
+  config,
   attempt,
   escalate,
 }: ResolveFallbackProviderNativeInput): ResolvedFallbackProviderNativeConfig {
@@ -366,7 +371,7 @@ export function resolveFallbackProviderNativeStepConfig({
 
   return {
     ...native,
-    modelFallbackLadder: policy.modelFallbackLadder,
+    modelFallbackLadder: selectFallbackLadder(policy, providerKey, config ?? {}),
   };
 }
 

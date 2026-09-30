@@ -1,4 +1,4 @@
-// Covers: task:19
+// Covers: task:10, task:19
 import { describe, expect, it, vi } from 'vitest';
 import type { InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import { PiProvider } from '../../src/execution/pi-provider.js';
@@ -151,5 +151,47 @@ describe.each([
     expect(result.success).toBe(true);
     expect(pi.invoke).toHaveBeenCalledOnce();
     expect(claude.invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('DefaultStepRunner Pi model policy dispatch', () => {
+  it('uses Pi’s configured fallback model and reports the configured, actual, and unavailable models', async () => {
+    const configuredModel = 'anthropic/claude-opus-4-5';
+    const actualModel = 'openai/gpt-5.6-sol';
+    const pi: LLMProvider = {
+      supportsSessionResume: false,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn(async ({ model }) => model === configuredModel
+        ? { success: false, output: `${configuredModel} is unavailable`, exitCode: 1, modelUnavailable: true }
+        : { success: true, output: 'Pi fallback completed', exitCode: 0 }),
+    };
+    const warnings: string[] = [];
+    const config: HarnessConfig = {
+      llm_provider: 'claude',
+      model_fallback_ladder: ['opus', 'sonnet'],
+      llm_providers: {
+        pi: {
+          model: configuredModel,
+          model_escalation_order: [configuredModel],
+          model_fallback_ladder: [configuredModel, actualModel],
+        },
+      },
+      steps: { build: { llm_provider: 'pi' } },
+    };
+    const runner = new DefaultStepRunner(pi, 'pi-model-fallback', '/workspace', {
+      config,
+      providerKey: 'pi',
+      modelPolicy: resolveProviderModelPolicy('pi', { config }),
+      log: (message) => warnings.push(message),
+    });
+
+    const result = await runner.run('build', { complexity_tier: 'S' });
+
+    expect(result.success).toBe(true);
+    expect(pi.invoke).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: configuredModel }));
+    expect(pi.invoke).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: actualModel }));
+    expect(warnings).toEqual([
+      `Downgraded from ${configuredModel} to ${actualModel}: ${configuredModel} is not available (unavailable)`,
+    ]);
   });
 });

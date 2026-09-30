@@ -37,7 +37,7 @@ import type {
   AuthenticationReadiness,
 } from '../execution/llm-provider.js';
 import type { HarnessConfig } from '../types/config.js';
-import { ModelAvailability } from './model-availability.js';
+import { ModelAvailability, selectFallbackLadder } from './model-availability.js';
 import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
@@ -75,6 +75,8 @@ export interface VerifierDispatchOptions {
   config?: HarnessConfig;
   /** Selected provider policy for model/effort resolution. */
   modelPolicy?: ProviderModelPolicy;
+  /** Provider key used to resolve provider-native fallback models. */
+  providerKey?: string;
   /** Git commit range for candidate collection (defaults to origin/main..HEAD). */
   commitRange?: string;
   /** Optional GitRunner injection for testing. */
@@ -265,6 +267,7 @@ export async function dispatchAttributionVerifier(
     featureWorktreePath,
     config,
     modelPolicy = CLAUDE_MODEL_POLICY,
+    providerKey = 'claude',
     commitRange = 'origin/main..HEAD',
     gitRunner: injectedGit,
     bookkeepingCommits,
@@ -361,7 +364,7 @@ export async function dispatchAttributionVerifier(
           },
         };
         const modelAvailability = new ModelAvailability(
-          config?.model_fallback_ladder ?? modelPolicy.modelFallbackLadder,
+          selectFallbackLadder(modelPolicy, providerKey, config ?? {}),
           (line) => console.warn(line),
         );
         return modelAvailability.invokeWithLadder(trackingProvider, {

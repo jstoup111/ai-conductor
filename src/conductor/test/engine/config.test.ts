@@ -4015,6 +4015,52 @@ steps:
       });
     });
 
+    it.each([
+      ['claude-opus-4-5', /steps\.build\.model.*provider\/model/i],
+      ['anthropic/', /steps\.build\.model.*empty model segment/i],
+      ['/claude-opus-4-5', /steps\.build\.model.*empty provider segment/i],
+      ['anthropic/claude opus-4-5', /steps\.build\.model.*whitespace/i],
+    ])('rejects malformed Pi step model id %j', (model, expectedMessage) => {
+      const result = validateConfig({
+        steps: { build: { llm_provider: 'pi', model } },
+      });
+
+      expect(result).toMatchObject({ ok: false, error: { type: 'validation_error' } });
+      if (result.ok) return;
+      expect(result.error.message).toMatch(expectedMessage);
+    });
+
+    it('rejects a malformed Pi fallback-ladder model with its indexed path', () => {
+      const result = validateConfig({
+        llm_providers: { pi: { model_fallback_ladder: ['claude-opus-4-5'] } },
+      });
+
+      expect(result).toMatchObject({ ok: false, error: { type: 'validation_error' } });
+      if (result.ok) return;
+      expect(result.error.message).toMatch(
+        /llm_providers\.pi\.model_fallback_ladder\[0\].*claude-opus-4-5.*provider\/model/i,
+      );
+    });
+
+    it('does not apply Pi model-id parsing to Claude models', () => {
+      const result = validateConfig({
+        steps: {
+          plan: { llm_provider: 'claude', model: 'opus' },
+          build: { llm_provider: 'claude', model: 'anthropic/claude-opus-4-5' },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: {
+          steps: {
+            plan: { model: 'opus' },
+            build: { model: 'anthropic/claude-opus-4-5' },
+          },
+        },
+      });
+    });
+
     it('rejects an empty fallback ladder entry with its indexed path', () => {
       const result = validateConfig({
         llm_providers: { pi: { model_fallback_ladder: [''] } },
