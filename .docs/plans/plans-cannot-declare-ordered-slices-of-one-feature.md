@@ -454,3 +454,27 @@ Task 1, Task 4, Task 12 ─▶ Task 14
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-adr-001: src/conductor/src/engine/plan-slices.ts:112 (Task 5) — require the row after the Slices header to be a markdown delimiter row (exactly three cells, each matching /^:?-{3,}:?$/) and push a 'missing-table'/'malformed-delimiter' violation otherwise; at plan-slices.ts:125-129 stop the data-row loop only on a non-table line (blank or non-pipe), and push a 'malformed-row' invalid violation naming the row's line text when a pipe row has a cell count other than 3, so a complete valid row followed by a four-cell row returns kind 'invalid'. Keep every existing Task 3/5/6/7/8 assertion unchanged.
+**Gate:** as-built
+**Rationale:** plan-slices.ts:112 accepts any pipe-shaped line as the header delimiter and plan-slices.ts:125-129 breaks silently on a non-three-cell data row, so a malformed row after a complete manifest still yields kind 'sliced', contrary to adr-2026-09-29-plan-slice-manifest D3; the approved architecture stands and the fix is determinable, and it is admitted by Task 5 (Refuse malformed manifest grammar), which owns grammar violations in plan-slices.ts, plan-slices-grammar.test.ts and land-spec-plan-slices-grammar.test.ts. Existing Task 5 grammar violations and Tasks 3/6-8 valid-plan assertions (three-slice, position-gap, annotation) must keep passing, so no delivered coverage is removed. Sibling sweep: the table-row loop is the only site that ends the table; the tableCells helper is shared by header parsing, which already refuses wrong column counts.
+**Governing clause:** adr-2026-09-29-plan-slice-manifest decision 3
+**Done when:**
+- adr-2026-09-29-plan-slice-manifest decision 3 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-001 is complete.
+
+### Task rem-as-built-rem-adr-002: src/conductor/test/engine/plan-slices-grammar.test.ts and src/conductor/test/engine/engineer/land-spec-plan-slices-grammar.test.ts (Task 5) — add validator tests that (a) a manifest whose second table line is '| a | b | c |' instead of a delimiter returns invalid naming the delimiter, and (b) a manifest whose rows assign every task followed by the row '| 3 | Extra | 4 | x |' returns invalid naming the malformed row; add the matching land tests asserting LandGateError gate 'plan-slices' carrying the validator message and no spec commit.
+**Gate:** as-built
+**Rationale:** plan-slices.ts:112 accepts any pipe-shaped line as the header delimiter and plan-slices.ts:125-129 breaks silently on a non-three-cell data row, so a malformed row after a complete manifest still yields kind 'sliced', contrary to adr-2026-09-29-plan-slice-manifest D3; the approved architecture stands and the fix is determinable, and it is admitted by Task 5 (Refuse malformed manifest grammar), which owns grammar violations in plan-slices.ts, plan-slices-grammar.test.ts and land-spec-plan-slices-grammar.test.ts. Existing Task 5 grammar violations and Tasks 3/6-8 valid-plan assertions (three-slice, position-gap, annotation) must keep passing, so no delivered coverage is removed. Sibling sweep: the table-row loop is the only site that ends the table; the tableCells helper is shared by header parsing, which already refuses wrong column counts.
+**Governing clause:** adr-2026-09-29-plan-slice-manifest decision 3
+**Done when:**
+- adr-2026-09-29-plan-slice-manifest decision 3 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-002 is complete.
+
+### Task rem-as-built-rem-adr-003: docs/reference/configuration.md (Tasks 1-2, D8) — add a `stacked_prs` row to the Key index table (type object, default disabled, link #stacked_prs) and a `## stacked_prs` section after `## mergeable_autoresolve` with a key table for `stacked_prs.enabled` (boolean, boolean else hard error, default false), stating unknown sub-keys and non-object values are hard errors, that the key is reserved with no runtime consumer yet (#2724), and that the plan-slices land gate and coverage_binding slice layer run regardless of the flag; match the commented entry in templates/project-config.yml.template.
+**Gate:** as-built
+**Rationale:** adr-2026-09-29-plan-slice-manifest D8 requires stacked_prs in the configuration reference, but docs/reference/configuration.md has no Key index row (index table ends ~line 207 with mergeable_autoresolve) and no section, while templates/project-config.yml.template:364 already carries the commented entry; this is documentation drift that preserves the approved architecture, completing the D8 obligation that Tasks 1-2 (stacked_prs config block and reserved consumer/template entry) implement, so it routes build rather than plan. Matched pair: the Key index row and the new section must agree with CONFIG_CONSUMER_KEY_SETS.stacked_prs ['enabled'] in config.ts and the template entry; no other docs file lists top-level keys exhaustively.
+**Governing clause:** adr-2026-09-29-plan-slice-manifest decision 8
+**Done when:**
+- adr-2026-09-29-plan-slice-manifest decision 8 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-003 is complete.

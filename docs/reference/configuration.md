@@ -164,7 +164,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
-55 top-level keys are allow-listed (plus the retired compatibility key `wiring`, which emits a
+56 top-level keys are allow-listed (plus the retired compatibility key `wiring`, which emits a
 deprecation warning and event; see [build_review](#build_review)). Everything else fails the load.
 
 | Key | Type | Default | Section |
@@ -205,6 +205,7 @@ deprecation warning and event; see [build_review](#build_review)). Everything el
 | `engine_refresh_min_interval_seconds` | number | `300` | [engine_refresh_min_interval_seconds](#engine_refresh_min_interval_seconds) |
 | `codex_doctor_timeout_seconds` | number | `10` | [codex_doctor_timeout_seconds](#codex_doctor_timeout_seconds) |
 | `mergeable_autoresolve` | object | disabled | [mergeable_autoresolve](#mergeable_autoresolve) |
+| `stacked_prs` | object | disabled | [stacked_prs](#stacked_prs) |
 | `conflict_check` | object | `{ adr_corpus: change_set }` | [conflict_check](#conflict_check) |
 | `build_review` | object | `{ enabled: true }` | [build_review](#build_review) |
 | `prd_audit` | object | see section | [prd_audit](#prd_audit) |
@@ -1214,6 +1215,19 @@ Finish-time and re-kick rebases never enable this exception.
 When a `needs-remediation` label was recorded specifically for a prior merge conflict, a later
 MERGEABLE sweep removes it only if the PR has no halt-body marker. The sweep makes at most three
 removal attempts; other `needs-remediation` causes remain sticky.
+
+## stacked_prs
+
+Reserved for #2724 build-loop slice checkpoints; it has no runtime consumer yet. The commented
+`stacked_prs` entry in `templates/project-config.yml.template` is inert, and the plan-slices land
+gate and `coverage_binding` slice layer run regardless of this flag.
+
+| Key | Type | Validation | Default |
+| --- | --- | --- | --- |
+| `stacked_prs.enabled` | boolean | Boolean, else hard error | `false` |
+
+`stacked_prs` must be an object. Unknown sub-keys and non-object values are hard errors. When the
+block is present but `enabled` is omitted, it resolves to `false`.
 
 
 ## conflict_check

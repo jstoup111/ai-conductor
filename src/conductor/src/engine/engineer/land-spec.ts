@@ -71,6 +71,7 @@ import { resolvePlanStoriesPath } from '../plan-stories-reference.js';
 import { scanPlanProtectedTargets } from '../plan-protected-targets.js';
 import { validatePlanDoneWhen } from '../plan-done-when.js';
 import { PLAN_TASK_HARD_STOP_BOUNDARY, validatePlanTaskCount } from '../plan-task-count.js';
+import { validatePlanSlices } from '../plan-slices.js';
 import { assessAcceptedStoryReadability } from '../story-criteria.js';
 import { composeSpecCommitMessage } from './spec-commit-message.js';
 import { isEngineAppendedRemediationTaskId } from '../remediation-append.js';
@@ -118,6 +119,7 @@ export type LandGateIdentifier =
   | 'plan-protected-targets'
   | 'plan-done-when'
   | 'plan-task-count'
+  | 'plan-slices'
   | 'plan-stories-reference'
   | 'stories-not-approved'
   | 'stories-unreadable'
@@ -369,6 +371,14 @@ export async function landSpec(
     throw landGateError('plan-task-count',
       `landSpec: plan has ${taskCountValidation.taskCount} addressable tasks, reaching hard-stop ` +
         `boundary ${PLAN_TASK_HARD_STOP_BOUNDARY}; ${declarationProblem}.`,
+    );
+  }
+
+  const planSlicesValidation = validatePlanSlices(planContent);
+  if (planSlicesValidation.kind === 'invalid') {
+    throw landGateError(
+      'plan-slices',
+      `landSpec: ${planSlicesValidation.violations.map(({ message }) => message).join('; ')}`,
     );
   }
 

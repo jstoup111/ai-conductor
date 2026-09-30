@@ -307,6 +307,38 @@ caller that will drift under refactoring.
 
 ### 5. Plan Format
 
+## Slice manifest
+
+When a plan must make its delivery slices explicit, declare one optional `## Slices` section
+before the first task heading. Its table header is exactly `Slice`, `Title`, `Tasks`. A slice
+lists its member task ids in the `Tasks` cell; every plan task belongs to exactly one slice, and a
+slice cannot be empty. Use at most five slices.
+
+Dependencies remain task-local. Every cited task heading must carry exactly one
+`**Dependencies:**` line: write `none` when it has no prerequisite, or a comma-separated list of
+`Task N`/`Tasks N, M` references when it does. A task may depend on a task in its own or an earlier
+slice, never a later slice.
+
+```markdown
+# Implementation Plan: sliced example
+
+## Slices
+
+| Slice | Title | Tasks |
+| --- | --- | --- |
+| 1 | Foundation | 1, 2 |
+| 2 | Follow-up | 3 |
+
+### Task 1: Establish the foundation
+**Dependencies:** none
+
+### Task 2: Add the companion behavior
+**Dependencies:** none
+
+### Task 3: Connect the follow-up
+**Dependencies:** Tasks 1, 2
+```
+
 ### `**Stories:**` Reference Forms
 
 The `**Stories:**` line identifies the one stories artifact the plan covers. Use one of

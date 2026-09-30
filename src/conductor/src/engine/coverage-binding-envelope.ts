@@ -28,6 +28,12 @@ export interface CoverageBindingAdrLayerDisposition {
   readonly adrIds: readonly string[];
 }
 
+/** Engine-computed membership of plan tasks in their declared slices. */
+export interface CoverageBindingSliceMembership {
+  readonly taskSlices: Readonly<Record<string, number>>;
+  readonly titles: readonly string[];
+}
+
 /**
  * Provenance retained when a completed envelope is invalidated. It makes the
  * old judgement's eligibility explicit without changing the v1 envelope shape
@@ -82,6 +88,8 @@ export interface CoverageBindingEnvelope {
   readonly predecessor?: CoverageBindingInvalidationPredecessor;
   /** Present when the ADR-obligation layer was deliberately bypassed. */
   readonly adrLayer?: CoverageBindingAdrLayerDisposition;
+  /** Present when the plan declared a slice manifest. */
+  readonly sliceMembership?: CoverageBindingSliceMembership;
 }
 
 /** Injected so unit tests do not touch the host filesystem. */
@@ -121,6 +129,19 @@ function parseAdrLayer(value: unknown): CoverageBindingAdrLayerDisposition | nul
   const candidate = value as Record<string, unknown>;
   return exactKeys(candidate, ['disposition', 'adrIds']) && candidate.disposition === 'not-applicable' && stringList(candidate.adrIds)
     ? { disposition: 'not-applicable', adrIds: candidate.adrIds }
+    : null;
+}
+
+function slicePositions(value: unknown): value is Readonly<Record<string, number>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) &&
+    Object.entries(value).every(([taskId, position]) => text(taskId) && Number.isSafeInteger(position) && position > 0);
+}
+
+function parseSliceMembership(value: unknown): CoverageBindingSliceMembership | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  return exactKeys(candidate, ['taskSlices', 'titles']) && slicePositions(candidate.taskSlices) && stringList(candidate.titles)
+    ? { taskSlices: candidate.taskSlices, titles: candidate.titles }
     : null;
 }
 
@@ -377,7 +398,8 @@ export function parseCoverageBindingEnvelope(value: unknown): CoverageBindingEnv
   const candidate = value as Record<string, unknown>;
   const hasAdrLayer = candidate.adrLayer !== undefined;
   const hasPredecessor = candidate.predecessor !== undefined;
-  if (!exactKeys(candidate, ['version', 'slug', 'runId', 'status', 'entries', ...(hasAdrLayer ? ['adrLayer'] : []), ...(hasPredecessor ? ['predecessor'] : [])]) || candidate.version !== ENVELOPE_VERSION ||
+  const hasSliceMembership = candidate.sliceMembership !== undefined;
+  if (!exactKeys(candidate, ['version', 'slug', 'runId', 'status', 'entries', ...(hasAdrLayer ? ['adrLayer'] : []), ...(hasPredecessor ? ['predecessor'] : []), ...(hasSliceMembership ? ['sliceMembership'] : [])]) || candidate.version !== ENVELOPE_VERSION ||
     !text(candidate.slug) || !text(candidate.runId) || !Array.isArray(candidate.entries) ||
     !(COVERAGE_BINDING_ENVELOPE_STATUSES as readonly unknown[]).includes(candidate.status)) {
     return null;
@@ -385,7 +407,8 @@ export function parseCoverageBindingEnvelope(value: unknown): CoverageBindingEnv
   const entries = candidate.entries.map(parseEntry);
   const adrLayer = hasAdrLayer ? parseAdrLayer(candidate.adrLayer) : undefined;
   const predecessor = hasPredecessor ? parsePredecessor(candidate.predecessor) : undefined;
-  return entries.some((entry) => entry === null) || adrLayer === null || predecessor === null
+  const sliceMembership = hasSliceMembership ? parseSliceMembership(candidate.sliceMembership) : undefined;
+  return entries.some((entry) => entry === null) || adrLayer === null || predecessor === null || sliceMembership === null
     ? null
     : {
       version: ENVELOPE_VERSION,
@@ -395,6 +418,7 @@ export function parseCoverageBindingEnvelope(value: unknown): CoverageBindingEnv
       entries: entries as CoverageBindingEnvelopeEntry[],
       ...(adrLayer === undefined ? {} : { adrLayer }),
       ...(predecessor === undefined ? {} : { predecessor }),
+      ...(sliceMembership === undefined ? {} : { sliceMembership }),
     };
 }
 

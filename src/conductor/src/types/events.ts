@@ -442,6 +442,15 @@ export type ConductorEvent =
       digest: string;
     }
   | {
+      /** Recorded slice membership changed after a coverage-binding re-validation. */
+      type: 'plan_slices_changed';
+      step: 'coverage_binding';
+      moved: Array<{ taskId: string; from: number; to: number }>;
+      added: string[];
+      removed: string[];
+      manifest: 'unchanged' | 'dropped';
+    }
+  | {
       /** A retired configuration key was accepted as a compatibility no-op. */
       type: 'config_deprecated_key';
       key: string;

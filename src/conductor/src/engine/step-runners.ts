@@ -63,6 +63,8 @@ import {
   selectFeaturePlan,
   BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
+import { validatePlanSlices } from './plan-slices.js';
+import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 import {
   formatArchitectureDecisionId,
   validateArchitectureObligationCoverage,
@@ -81,6 +83,7 @@ import {
   type CoverageBindingAdrLayerDisposition,
   type CoverageBindingEnvelopeEntry,
   type CoverageBindingEnvelopeFilesystem,
+  type CoverageBindingSliceMembership,
 } from './coverage-binding-envelope.js';
 import {
   assembleAmendmentClaims,
@@ -4374,6 +4377,7 @@ export class DefaultStepRunner implements StepRunner {
       rename,
     };
     let adrLayer: CoverageBindingAdrLayerDisposition | undefined;
+    let sliceMembership: CoverageBindingSliceMembership | undefined;
     const writeEnvelope = async (
       status: 'disabled' | 'done' | 'failed' | 'partial' | 'refused',
       entries: readonly CoverageBindingEnvelopeEntry[],
@@ -4385,6 +4389,7 @@ export class DefaultStepRunner implements StepRunner {
         status,
         entries,
         ...(adrLayer === undefined ? {} : { adrLayer }),
+        ...(sliceMembership === undefined ? {} : { sliceMembership }),
       }, filesystem);
       // Rebase preservation needs to know which HEAD this run judged. Without
       // a resolvable HEAD there is no stamp, and preservation stays refused.
@@ -4407,6 +4412,26 @@ export class DefaultStepRunner implements StepRunner {
       }
     } else if (judgeEnabled) {
       return { success: false, output: 'coverage_binding could not resolve the feature plan' };
+    }
+
+    if (planText !== undefined) {
+      const sliceValidation = validatePlanSlices(planText);
+      if (sliceValidation.kind === 'invalid') {
+        await writeEnvelope('refused', []);
+        const detail = sliceValidation.violations.map((violation) => violation.message).join('\n');
+        const reason = `coverage_binding refused: plan slices are invalid.\n\n${detail}`;
+        return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
+      }
+      if (sliceValidation.kind === 'sliced') {
+        sliceMembership = {
+          taskSlices: Object.fromEntries(sliceValidation.slices.flatMap((slice) =>
+            slice.taskIds
+              .filter((taskId) => !isEngineAppendedRemediationTaskId(taskId))
+              .map((taskId) => [taskId, slice.position]),
+          )),
+          titles: sliceValidation.slices.map((slice) => slice.title),
+        };
+      }
     }
 
     let decideSet: CoverageBindingDecideSet | undefined;
@@ -4515,6 +4540,32 @@ export class DefaultStepRunner implements StepRunner {
     });
     const claims = [...criterionClaims, ...amendmentClaims];
     const previous = await readCoverageBindingEnvelope(this.projectDir, filesystem);
+    if (previous?.sliceMembership !== undefined) {
+      if (sliceMembership === undefined) {
+        await this.events?.emit({
+          type: 'plan_slices_changed', step: 'coverage_binding', moved: [], added: [], removed: [], manifest: 'dropped',
+        });
+      } else {
+        const currentMembership = sliceMembership;
+        const previousTaskSlices = previous.sliceMembership.taskSlices;
+        const currentTaskSlices = currentMembership.taskSlices;
+        const taskIds = [...new Set([...Object.keys(previousTaskSlices), ...Object.keys(currentTaskSlices)])].sort();
+        const moved = taskIds.flatMap((taskId) => {
+          const from = previousTaskSlices[taskId];
+          const to = currentTaskSlices[taskId];
+          return from !== undefined && to !== undefined && from !== to ? [{ taskId, from, to }] : [];
+        });
+        const added = taskIds.filter((taskId) => previousTaskSlices[taskId] === undefined && currentTaskSlices[taskId] !== undefined);
+        const removed = taskIds.filter((taskId) => previousTaskSlices[taskId] !== undefined && currentTaskSlices[taskId] === undefined);
+        const titlesChanged = previous.sliceMembership.titles.length !== currentMembership.titles.length ||
+          previous.sliceMembership.titles.some((title, index) => title !== currentMembership.titles[index]);
+        if (moved.length > 0 || added.length > 0 || removed.length > 0 || titlesChanged) {
+          await this.events?.emit({
+            type: 'plan_slices_changed', step: 'coverage_binding', moved, added, removed, manifest: 'unchanged',
+          });
+        }
+      }
+    }
     const previousDigests = new Set(previous?.entries.map((entry) => entry.digest) ?? []);
     const previousReopenEligible = previous?.status === 'invalidated' && previous.entries.length > 0;
     // Legacy invalidated envelopes have no predecessor and retain their
