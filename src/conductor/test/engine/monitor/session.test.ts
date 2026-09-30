@@ -1,4 +1,4 @@
-// Covers: task:11, task:12
+// Covers: task:11, task:12, task:13
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -9,6 +9,10 @@ import {
   openGuidedSession,
   type GuidedSessionLauncher,
 } from '../../../src/engine/monitor/session.js';
+import {
+  DAEMON_SESSION_MARKER,
+  guardDaemonSessionInvocation,
+} from '../../../src/execution/daemon-session.js';
 import type { HaltDisposition } from '../../../src/engine/halt-marker.js';
 
 const recoveryByDisposition = {
@@ -36,7 +40,6 @@ describe('guided halt sessions', () => {
 
     await openGuidedSession({
       provider: 'codex',
-      cwd: '/workspace/project/.worktrees/repair-index',
       halt: {
         project: '/workspace/project',
         slug: 'repair-index',
@@ -62,6 +65,32 @@ describe('guided halt sessions', () => {
     ]]);
   });
 
+  it('keeps recovery authority unmarked and launches in the halted feature worktree', async () => {
+    const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
+
+    await openGuidedSession({
+      provider: 'codex',
+      halt: {
+        project: '/workspace/project',
+        slug: 'repair-index',
+        reason: 'needs recovery',
+        haltClass: 'needs-human',
+      },
+    }, { launch });
+
+    expect(launch).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/workspace/project/.worktrees/repair-index',
+    }));
+    expect(guardDaemonSessionInvocation(
+      ['node', 'ai-conductor', 'daemon', 'park', 'repair-index'],
+      {},
+    )).toEqual({ allowed: true });
+    expect(guardDaemonSessionInvocation(
+      ['node', 'ai-conductor', 'daemon', 'park', 'repair-index'],
+      { [DAEMON_SESSION_MARKER]: '1' },
+    ).allowed).toBe(false);
+  });
+
   it.each(Object.entries(recoveryByDisposition))(
     'presents the %s recovery procedure',
     async (haltClass, recoveryProcedure) => {
@@ -69,7 +98,6 @@ describe('guided halt sessions', () => {
 
       await openGuidedSession({
         provider: 'codex',
-        cwd: '/workspace/project/.worktrees/repair-index',
         halt: {
           project: '/workspace/project',
           slug: 'repair-index',
@@ -92,7 +120,6 @@ describe('guided halt sessions', () => {
 
     await openGuidedSession({
       provider: 'codex',
-      cwd: '/workspace/project/.worktrees/repair-index',
       halt: {
         project: '/workspace/project',
         slug: 'repair-index',
@@ -107,9 +134,10 @@ describe('guided halt sessions', () => {
   });
 
   it('presents halt evidence without writing the halted worktree or marker', async () => {
-    const worktree = await mkdtemp(join(tmpdir(), 'monitor-session-'));
+    const project = await mkdtemp(join(tmpdir(), 'monitor-session-'));
+    const worktree = join(project, '.worktrees', 'repair-index');
     const haltPath = join(worktree, '.pipeline', 'HALT');
-    await mkdir(join(worktree, '.pipeline'));
+    await mkdir(join(worktree, '.pipeline'), { recursive: true });
     await Promise.all([
       writeFile(haltPath, 'needs operator recovery\n'),
       writeFile(join(worktree, 'evidence.txt'), 'frozen evidence\n'),
@@ -120,9 +148,8 @@ describe('guided halt sessions', () => {
     try {
       await openGuidedSession({
         provider: 'codex',
-        cwd: worktree,
         halt: {
-          project: '/workspace/project',
+          project,
           slug: 'repair-index',
           reason: 'needs operator recovery',
           haltClass: 'needs-human',
@@ -132,7 +159,7 @@ describe('guided halt sessions', () => {
       expect(await fixtureChecksum(worktree)).toBe(before);
       expect(await readFile(haltPath, 'utf8')).toBe('needs operator recovery\n');
     } finally {
-      await rm(worktree, { recursive: true, force: true });
+      await rm(project, { recursive: true, force: true });
     }
   });
 });

@@ -3,6 +3,7 @@ import {
   type InteractiveLaunchOutcome,
   type InteractiveLaunchRequest,
 } from '../../execution/interactive-launch.js';
+import { join } from 'node:path';
 import type { HaltDisposition } from '../halt-marker.js';
 import type { ProjectHalt } from './halt-inventory.js';
 
@@ -13,7 +14,6 @@ export type GuidedSessionHalt = Omit<ProjectHalt, 'haltClass'> & {
 
 export interface GuidedSessionRequest {
   readonly provider: string;
-  readonly cwd: string;
   readonly halt: GuidedSessionHalt;
 }
 
@@ -81,6 +81,10 @@ function openingPrompt(request: GuidedSessionRequest): string {
   ].join('\n');
 }
 
+function haltedWorktree(halt: GuidedSessionHalt): string {
+  return join(halt.project, '.worktrees', halt.slug);
+}
+
 /** Opens a fresh operator-owned session with the halted feature's evidence. */
 export async function openGuidedSession(
   request: GuidedSessionRequest,
@@ -89,7 +93,7 @@ export async function openGuidedSession(
   const launch = options.launch ?? launchInteractiveSession;
   return launch({
     provider: request.provider,
-    cwd: request.cwd,
+    cwd: haltedWorktree(request.halt),
     openingPrompt: openingPrompt(request),
   });
 }
