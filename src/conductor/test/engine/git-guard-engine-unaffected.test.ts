@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { Options as ExecaOptions } from 'execa';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
@@ -24,7 +25,7 @@ describe('engine git guard boundary', () => {
     await prepareWorktree(worktree);
     const before = await resolveRealGit();
     const spawns: Array<{ env?: NodeJS.ProcessEnv }> = [];
-    const provider = new ClaudeProvider(undefined, ((_file, _args, options) => {
+    const provider = new ClaudeProvider(undefined, ((_file: string, _args: string[], options: ExecaOptions) => {
       spawns.push({ env: options.env });
       return Promise.resolve({ stdout: 'ok', stderr: '', exitCode: 0, failed: false }) as any;
     }) as any);

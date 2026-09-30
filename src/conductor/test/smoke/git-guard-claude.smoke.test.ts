@@ -6,11 +6,22 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
+import { LIVE_E2E_PROVIDERS } from '../../src/engine/live-e2e-providers.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
 const smokeCapability = 'credentialed:claude';
-const available = (() => { try { execFileSync('which', ['claude'], { stdio: 'pipe' }); return Boolean(process.env.ANTHROPIC_API_KEY); } catch { return false; } })();
+void smokeCapability;
+const provider = LIVE_E2E_PROVIDERS.find(({ id }) => id === 'claude');
+if (!provider) throw new Error('Claude live smoke provider is not registered');
+const available = (() => {
+  try {
+    execFileSync('which', [provider.binaryName], { stdio: 'pipe' });
+    return Boolean(process.env[provider.credentialEnvVar]);
+  } catch {
+    return false;
+  }
+})();
 
 describe.skipIf(!available)('Claude git guard live smoke', () => {
   const roots: string[] = [];

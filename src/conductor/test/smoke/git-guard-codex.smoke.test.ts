@@ -6,11 +6,22 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { CodexProvider } from '../../src/execution/codex-provider.js';
+import { LIVE_E2E_PROVIDERS } from '../../src/engine/live-e2e-providers.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
 const smokeCapability = 'credentialed:codex';
-const available = (() => { try { execFileSync('which', ['codex'], { stdio: 'pipe' }); return Boolean(process.env.CODEX_API_KEY); } catch { return false; } })();
+void smokeCapability;
+const provider = LIVE_E2E_PROVIDERS.find(({ id }) => id === 'codex');
+if (!provider) throw new Error('Codex live smoke provider is not registered');
+const available = (() => {
+  try {
+    execFileSync('which', [provider.binaryName], { stdio: 'pipe' });
+    return Boolean(process.env[provider.credentialEnvVar]);
+  } catch {
+    return false;
+  }
+})();
 
 describe.skipIf(!available)('Codex git guard live smoke', () => {
   const roots: string[] = [];
