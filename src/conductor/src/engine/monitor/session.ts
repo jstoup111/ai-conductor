@@ -3,6 +3,7 @@ import {
   type InteractiveLaunchOutcome,
   type InteractiveLaunchRequest,
 } from '../../execution/interactive-launch.js';
+import { findBuiltInProviderDescriptor } from '../../execution/provider-catalog.js';
 import { join } from 'node:path';
 import type { HaltDisposition } from '../halt-marker.js';
 import type { ProjectHalt } from './halt-inventory.js';
@@ -26,7 +27,7 @@ export interface GuidedSessionOptions {
 }
 
 function triageInvocation(provider: string): string {
-  return provider === 'claude' ? '/daemon-triage' : '$daemon-triage';
+  return `${findBuiltInProviderDescriptor(provider)?.invocationPrefix ?? '$'}daemon-triage`;
 }
 
 function recognizedHaltDisposition(value: unknown): HaltDisposition | undefined {

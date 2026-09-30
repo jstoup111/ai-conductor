@@ -1,5 +1,11 @@
 import { spawn } from 'node:child_process';
 
+import {
+  CLAUDE_PROVIDER,
+  CODEX_PROVIDER,
+  resolveProviderExecutable,
+} from './provider-catalog.js';
+
 export interface InteractiveLaunchRequest {
   readonly provider: string;
   readonly openingPrompt: string;
@@ -40,13 +46,13 @@ export interface LaunchInteractiveSessionOptions {
 }
 
 const interactiveInvocations: Record<string, (prompt: string) => InteractiveInvocation> = {
-  claude: (prompt: string) => ({
-    executable: 'claude',
+  [CLAUDE_PROVIDER]: (prompt: string) => ({
+    executable: resolveProviderExecutable(CLAUDE_PROVIDER),
     args: ['--permission-mode', 'default', prompt],
     stdio: 'inherit',
   }),
-  codex: (prompt: string) => ({
-    executable: 'codex',
+  [CODEX_PROVIDER]: (prompt: string) => ({
+    executable: resolveProviderExecutable(CODEX_PROVIDER),
     args: ['exec'],
     stdio: ['pipe', 'inherit', 'inherit'],
     stdin: prompt,
