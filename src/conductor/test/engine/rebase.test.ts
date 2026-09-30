@@ -309,7 +309,8 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         return { exitCode: 0, stdout: 'true\n', stderr: '' };
       }
       if (args[0] === 'remote') return { exitCode: 0, stdout: '', stderr: '' };
-      if (args[0] === 'rev-list') return { exitCode: 0, stdout: '1\n', stderr: '' };
+      // A valid merge id must not mask a later malformed line.
+      if (args[0] === 'rev-list') return { exitCode: 0, stdout: `${'a'.repeat(40)}\nmalformed\n`, stderr: '' };
       if (args[0] === 'rebase') return { exitCode: 2, stdout: '', stderr: rebaseStderr };
       return { exitCode: 0, stdout: '', stderr: '' };
     };
@@ -326,6 +327,7 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         startFailure: true,
       });
       expect(calls.some((args) => args[0] === 'rebase')).toBe(false);
+      expect(calls.some((args) => args.includes('commit-tree') || args.includes('--merge-base'))).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
