@@ -1,4 +1,4 @@
-// Covers: task:10
+// Covers: task:10, task:11
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -167,5 +167,191 @@ describe('SpoolDrainer', () => {
       remaining: [],
       acceptedButUndeleted: expect.any(String),
     });
+  });
+
+  it('retries a 503 batch with strictly increasing injected delays, then deletes it after a 200', async () => {
+    const received: string[] = [];
+    const replies = [503, 503, 200];
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      received.push(Buffer.concat(chunks).toString());
+      response.writeHead(replies.shift() ?? 200).end();
+    });
+    const endpoint = await listen(server);
+    let now = 1_727_000_000_000;
+    const delays: number[] = [];
+    const store = new SpoolStore(await temporaryDirectory(), { now: () => now });
+    await store.write('traces', Buffer.from('retry-me'));
+
+    await new SpoolDrainer(store, {
+      endpoint,
+      headers: () => ({}),
+      now: () => now,
+      sleep: async (delay: number) => { delays.push(delay); now += delay; },
+      random: () => 0,
+    }).drain();
+
+    expect(received).toEqual(['retry-me', 'retry-me', 'retry-me']);
+    expect(delays).toEqual([1_000, 2_000]);
+    expect(await store.list('traces')).toEqual([]);
+  });
+
+  it('honours Retry-After before retrying traces and keeps the rejected batch', async () => {
+    const received: string[] = [];
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      received.push(Buffer.concat(chunks).toString());
+      response.writeHead(429, { 'retry-after': '30' }).end();
+    });
+    const endpoint = await listen(server);
+    let now = 1_727_000_000_000;
+    const delays: number[] = [];
+    let releaseSleep: (() => void) | undefined;
+    const store = new SpoolStore(await temporaryDirectory(), { now: () => now });
+    await store.write('traces', Buffer.from('respect-retry-after'));
+
+    const drainer = new SpoolDrainer(store, {
+      endpoint,
+      headers: () => ({}),
+      now: () => now,
+      sleep: async (delay: number) => new Promise<void>((resolve) => {
+        delays.push(delay);
+        releaseSleep = resolve;
+      }),
+      random: () => 0,
+    });
+    const draining = drainer.drain();
+
+    try {
+      for (let turns = 0; turns < 50 && !releaseSleep; turns += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(delays).toEqual([30_000]);
+      expect(received).toEqual(['respect-retry-after']);
+      now += 29_999;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(received).toEqual(['respect-retry-after']);
+
+      now += 1;
+      releaseSleep?.();
+      for (let turns = 0; turns < 50 && received.length < 2; turns += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(received).toEqual(['respect-retry-after', 'respect-retry-after']);
+      await expect(drainer.stop()).resolves.toBeUndefined();
+      expect(await store.list('traces')).toHaveLength(1);
+    } finally {
+      releaseSleep?.();
+      await draining.catch(() => undefined);
+    }
+  });
+
+  it('keeps and retries a dropped oldest traces batch before newer traces while metrics drain independently', async () => {
+    const received: string[] = [];
+    let traceAttempts = 0;
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = Buffer.concat(chunks).toString();
+      received.push(`${request.url}:${body}`);
+      if (request.url === '/v1/traces') {
+        traceAttempts += 1;
+        if (traceAttempts === 1) {
+          request.socket.destroy();
+          return;
+        }
+        response.writeHead(traceAttempts === 2 ? 503 : 200).end();
+        return;
+      }
+      response.writeHead(200).end();
+    });
+    const endpoint = await listen(server);
+    let now = 1_727_000_000_000;
+    const delays: number[] = [];
+    let sleepCount = 0;
+    let releaseFirstTraceRetry: (() => void) | undefined;
+    const store = new SpoolStore(await temporaryDirectory(), { now: () => now });
+    await store.write('traces', Buffer.from('oldest-trace'));
+    now += 1;
+    await store.write('traces', Buffer.from('newer-trace'));
+    await store.write('metrics', Buffer.from('independent-metric'));
+
+    const drainer = new SpoolDrainer(store, {
+      endpoint,
+      headers: () => ({}),
+      now: () => now,
+      sleep: async (delay: number) => {
+        delays.push(delay);
+        sleepCount += 1;
+        if (sleepCount === 1) {
+          await new Promise<void>((resolve) => { releaseFirstTraceRetry = resolve; });
+        }
+        now += delay;
+      },
+      random: () => 0,
+    });
+    const draining = drainer.drain();
+
+    try {
+      for (let turns = 0; turns < 50 && (!releaseFirstTraceRetry || !received.includes('/v1/metrics:independent-metric')); turns += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(received.filter((entry) => entry.startsWith('/v1/traces:'))).toEqual(['/v1/traces:oldest-trace']);
+      expect(await store.list('traces')).toHaveLength(2);
+      expect(await store.list('metrics')).toEqual([]);
+
+      releaseFirstTraceRetry?.();
+      await draining;
+
+      expect(received.filter((entry) => entry.startsWith('/v1/traces:'))).toEqual([
+        '/v1/traces:oldest-trace',
+        '/v1/traces:oldest-trace',
+        '/v1/traces:oldest-trace',
+        '/v1/traces:newer-trace',
+      ]);
+      expect(await store.list('traces')).toEqual([]);
+    } finally {
+      releaseFirstTraceRetry?.();
+      await draining.catch(() => undefined);
+    }
+  });
+
+  it('stops an in-flight request within the injected export timeout and keeps its spool file', async () => {
+    let received = false;
+    let hangingResponse: import('node:http').ServerResponse | undefined;
+    const server = createServer((request, response) => {
+      received = true;
+      hangingResponse = response;
+      request.resume();
+    });
+    const endpoint = await listen(server);
+    let now = 1_727_000_000_000;
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('traces', Buffer.from('in-flight-batch'));
+    const drainer = new SpoolDrainer(store, {
+      endpoint,
+      headers: () => ({}),
+      exportTimeoutMs: 10,
+      now: () => now,
+      sleep: async (delay: number) => { now += delay; },
+    });
+    const draining = drainer.drain();
+
+    try {
+      for (let turns = 0; turns < 50 && !received; turns += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(received).toBe(true);
+      const stopStartedAt = now;
+      await expect(drainer.stop()).resolves.toBeUndefined();
+      expect(now - stopStartedAt).toBeLessThanOrEqual(10);
+      await expect(draining).resolves.toBeUndefined();
+      expect(await store.list('traces')).toHaveLength(1);
+    } finally {
+      hangingResponse?.destroy();
+      await draining.catch(() => undefined);
+    }
   });
 });
