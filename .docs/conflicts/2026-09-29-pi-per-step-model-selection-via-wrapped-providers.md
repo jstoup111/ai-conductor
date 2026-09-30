@@ -2,10 +2,14 @@
 
 **Date:** 2026-09-29
 **Scope:** repo_wide (`conflict_check.adr_corpus`).
-- Stories: every file in `.docs/stories/` was keyword-scanned. Twenty-five provider, model,
+- Stories: every file in `.docs/stories/` was keyword-scanned. A second pass, after main was merged
+  in, covered the stories and ADR changes main had added since this branch was cut: the #1007
+  compose-launcher stories and catalog amendment D9–D11. The other new stories do not touch
+  providers, models or configuration. Twenty-five provider, model,
   ladder and table story files were compared pairwise in both directions.
 - ADRs examined (APPROVED):
-  - adr-2026-09-24-built-in-provider-catalog-and-boot-discovery (D1–D14)
+  - adr-2026-09-24-built-in-provider-catalog-and-boot-discovery (D1–D8, the #1007 amendment D9–D11,
+    and this spec's D12–D14)
   - adr-2026-07-03-reactive-model-fallback-ladder (items 1–8)
   - adr-2026-07-05-retry-as-escalation-ladder
   - adr-2026-07-03-generated-model-table-single-source
@@ -24,7 +28,7 @@
 
 **Result:**
 - 1 blocking conflict, resolved by operator decision.
-- 6 degrading conflicts, each resolved.
+- 7 degrading conflicts, each resolved.
 - 0 remain after the re-check.
 
 ## Conflict: Pi as a fallback candidate has no native default model
@@ -139,10 +143,40 @@ about every catalog provider's policy.
 **Resolution:** Story 5's Done-When now requires declaring `llm_providers` in the consumer
 registry.
 
+## Conflict: Compose Pi refusal fixture vs required Pi config keys
+
+**Stories involved:** Story 2 (pi-per-step-model-selection-via-wrapped-providers) vs Story 2 of compose-launcher-honors-llm-provider-for-codex (#1007)
+**Files:** .docs/stories/pi-per-step-model-selection-via-wrapped-providers.md vs .docs/stories/compose-launcher-honors-llm-provider-for-codex.md
+**Type:** overlap
+**Severity:** degrading
+
+**Description:** The #1007 story expects the launcher's Pi capability refusal from configuration
+that names only the provider: "Given `llm_provider: pi` is configured and pi does not declare
+`interactiveLaunch`, when the operator runs bare `ai-conductor compose`, then it exits non-zero with
+a message naming pi, `interactiveLaunch`, and #1007, and spawns nothing." Under this spec's Story 2,
+that same configuration fails validation because `llm_providers.pi` is absent. #1007 Story 1 then
+requires the launcher to exit with the configuration error instead. Both stories still hold once
+the #1007 configuration carries a valid `llm_providers.pi` block, so this is not an oscillation.
+#1007's Pi refusal test injects an already-loaded configuration, which
+bypasses validation, so that test is unaffected. Only the operator-visible behavior changes: the
+configuration error arrives before the capability refusal.
+
+**Resolution Options:**
+1. Narrow the #1007 criterion to configuration that also carries all three `llm_providers.pi` keys.
+   The story is replaced in place in a companion main-based PR, because the land stem gate rejects
+   edits to a foreign-stem story.
+2. Leave the #1007 story unchanged, accepting that its criterion no longer holds for a
+   configuration that names only the provider.
+
+**Recommendation and selection:** Option 1. It keeps both stories literally true and requires no
+code or test change in either feature.
+
 ## Re-check
 
 After the resolutions, the pairs were re-examined in both directions:
 - Stories 2, 4 and 5 against #927, #902 and TS-5.
 - Stories 6 and 7 against the table and Pi stories.
+- Stories 2 and 3 against #1007 Stories 1 to 4 and catalog D9–D11. #1007 Story 3 and catalog
+  D11 keep `compose` non-probing, which matches this spec's Story 3 probe scope.
 
 No blocking or oscillating conflicts remain.
