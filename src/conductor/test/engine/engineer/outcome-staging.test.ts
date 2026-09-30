@@ -296,8 +296,8 @@ describe('readCommittedIntakeOutcomes', () => {
       sourceRef: 'owner/repo#50',
     });
     expect(checkOutcomeCoverage([
-      { rowClass: 'outcome', id: 'outcome-1', citedIds: ['story-1'], verdict: 'covered', quote: '"A formerly truncated outcome"', evidence: '' },
-      { rowClass: 'outcome', id: 'outcome-2', citedIds: ['story-1'], verdict: 'covered', quote: '"Another truncated outcome"', evidence: '' },
+      { rowClass: 'outcome', id: 'outcome-1', citedIds: ['story-1'], verdict: 'covered', quote: '"A formerly truncated outcome"' },
+      { rowClass: 'outcome', id: 'outcome-2', citedIds: ['story-1'], verdict: 'covered', quote: '"Another truncated outcome"' },
     ], staged.bullets, new Set(['story-1']))).toEqual({ ok: true });
   });
 
