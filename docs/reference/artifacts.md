@@ -748,6 +748,14 @@ is emitted by a finish-time or re-kick rebase, where supersession judgement is u
 of four reasons: `not-found`, `not-executable`, `version-failed`, or `timeout`. It is emitted once when a
 provider-dispatching command boots; non-dispatching commands do not run discovery.
 
+`step_retry` and `step_failed` carry an optional `providerExit` object when the failed provider
+attempt exited without a classifiable result (not a missing binary, auth, rate-limit,
+model-unavailable, or unresolved-command failure). This includes parallel group members. Its
+fields, all optional, are `processErrorCode` (`EACCES`, `EAGAIN`, `ENOENT`, `EPERM`, or `UNKNOWN`),
+`exitCode` (non-negative integer; omitted for a signal termination), `signal` (`SIGABRT`,
+`SIGALRM`, `SIGHUP`, `SIGINT`, `SIGKILL`, `SIGPIPE`, `SIGQUIT`, `SIGTERM`, or `UNKNOWN`),
+`stdoutBytes`, and `stderrBytes`. No raw output is retained.
+
 `rate_limit` records the bounded wait and, for usage exhaustion, the provider and retry deadline.
 The daemon also writes `provider_suppressed` to its own event ledger. On restart it restores only a
 still-valid bounded suppression, so later feature dispatches do not re-invoke the exhausted provider.

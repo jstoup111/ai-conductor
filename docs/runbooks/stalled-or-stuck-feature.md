@@ -1381,6 +1381,20 @@ infrastructure blip or unresolved scope cannot be laundered into a hollow PASS o
 loop. The allowance resets only on demonstrated progress (a rebase or base-branch advance), not on a
 bare retry.
 
+When the grader subprocess exited without any classifiable result, the cause is
+`invalid-provider-result` and `<detail>` names the bounded exit facts:
+
+```text
+build_review grader invocation ended without a result. <provider> subprocess exited without a classifiable result: exitCode=<n> signal=<SIG> stdoutBytes=<n> stderrBytes=<n>
+```
+
+Only present fields are printed. A signal outside the known set prints as `UNKNOWN`; a signal
+termination with no exit code omits `exitCode=`. The same line is written to `daemon.log`, and the
+failed attempt's `step_retry` / `step_failed` events carry it as `providerExit`
+([event reference](../reference/artifacts.md#pipelineeventsjsonl)). Use it to tell an external kill
+(for example `signal=SIGKILL`) from a provider crash (`exitCode=1` with empty output) before
+recording reduced coverage.
+
 **Recovery:** the halt body names both required steps.
 
 1. Record the decision — this requires an interactive terminal and a resolvable local operator
