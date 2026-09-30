@@ -326,6 +326,7 @@ import {
   readSuiteInfrastructureRetries,
   recordPendingRepair,
   discardPendingRepair,
+  settlePendingRepair,
   updateKickbackLedger,
   recordKickbackCapEvidence,
   type KickbackGateEntry,
@@ -333,7 +334,7 @@ import {
   type PendingAsBuiltRemediationFinding,
   type PlanGrowth,
 } from './kickback-ledger.js';
-import { renderKickbackBudgetView } from './kickback-budget-view.js';
+import { renderKickbackBudgetView, renderKickbackRecoveryHint } from './kickback-budget-view.js';
 import {
   consumeOperatorGrant,
   decideEntryDisposition,
@@ -9601,6 +9602,110 @@ export class Conductor {
         const preDispatchPark = await stopAtOperatorParkBoundary();
         if (preDispatchPark) {
           return preDispatchPark;
+        }
+
+        // A remediation append records its authorization, but deliberately
+        // does not spend it.  BUILD is the only point at which the pending
+        // work may become chargeable: it is late enough that a cap halt leaves
+        // the newly appended tasks pending, and early enough that no provider
+        // attempt can run on work the operator has not authorized.
+        if (step.name === 'build') {
+          let settlement:
+            | Awaited<ReturnType<typeof settlePendingRepair>>
+            | undefined;
+          let settlementFailure: string | undefined;
+          let settlementLedger: Awaited<ReturnType<typeof readKickbackLedger>> | undefined;
+          let settlementGrowth: PlanGrowth | undefined;
+          let growthCap: number | undefined;
+          try {
+            settlementLedger = await readKickbackLedger(this.projectRoot);
+            // Read the durable growth denominator before calculating the
+            // configured 25% cap. `readGrowth` also preserves the pending
+            // task exclusion, so an unsettled append cannot enlarge its own
+            // allowance.
+            const unboundedGrowth = await readGrowth(this.projectRoot, Number.MAX_SAFE_INTEGER);
+            growthCap = settlementLedger.effectiveGrowthCap ??
+              prdAuditAppendCap(this.config, unboundedGrowth.authored);
+            settlementGrowth = await readGrowth(this.projectRoot, growthCap);
+            settlement = await settlePendingRepair(
+              this.projectRoot,
+              (['prd_audit', 'architecture_review_as_built'] as const).map((gate) => ({
+                gate,
+                lapCap: settlementLedger!.gates[gate]?.effectiveLapCap ??
+                  remediationLapCapForGate(gate, this.config),
+                growthCap: growthCap!,
+                growth: settlementGrowth!,
+              })),
+              { events: { emit: (event) => this.events.emit(event) } },
+            );
+          } catch (error) {
+            // A malformed pending record is intentionally indistinguishable
+            // from exhausted remediation allowance at this boundary. It must
+            // not be bypassed merely because it cannot safely be charged.
+            settlementFailure = error instanceof Error ? error.message : String(error);
+          }
+
+          if (settlement?.kind === 'exhausted' || settlementFailure !== undefined) {
+            const gate = settlement?.kind === 'exhausted' ? settlement.gate : 'prd_audit';
+            const allowance = settlement?.kind === 'exhausted' ? settlement.allowance : 'growth';
+            const pendingTasks = settlementLedger?.pendingRepair?.taskIds ?? [];
+            const findings = pendingTasks.length > 0
+              ? `Pending remediation tasks: ${pendingTasks.join(', ')}`
+              : 'Pending remediation findings are unavailable because the repair record is malformed.';
+            const fallbackLapCap = remediationLapCapForGate(gate, this.config);
+            const growthView = settlementGrowth === undefined || growthCap === undefined
+              ? undefined
+              : {
+                  ...settlementGrowth,
+                  cap: growthCap,
+                  capSource: settlementLedger?.effectiveGrowthCap === undefined
+                    ? 'config-derived' as const
+                    : 'raised' as const,
+                };
+            const detail = settlementFailure === undefined
+              ? renderKickbackBudgetView(
+                  settlementLedger?.gates[gate],
+                  gate,
+                  fallbackLapCap,
+                  growthView,
+                )
+              : `Kickback budget (${gate}): ${allowance} allowance unavailable (${settlementFailure})`;
+
+            let generation: string | undefined;
+            try {
+              const capEntry = await recordKickbackCapEvidence(this.projectRoot, gate, {
+                consumed: allowance === 'laps'
+                  ? settlementLedger?.gates[gate]?.laps ?? fallbackLapCap
+                  : settlementGrowth?.added ?? growthCap ?? 0,
+                limit: allowance === 'laps' ? fallbackLapCap : growthCap ?? 0,
+                latestReason: findings,
+                allowance,
+              });
+              generation = capEntry.capEvidence?.haltGeneration;
+            } catch {
+              // An unreadable ledger cannot receive new evidence, but must
+              // still halt before BUILD. The marker remains actionable and a
+              // subsequent valid cap halt receives its durable generation.
+            }
+            const reason =
+              `BUILD dispatch halted: ${gate} ${allowance} allowance exhausted.\n` +
+              `${detail}\n${findings}\n` +
+              renderKickbackRecoveryHint({
+                slug: state.feature_desc,
+                gate,
+                allowance,
+              });
+            await this.writeHaltMarker(
+              `${reason}\n${generation === undefined ? '' : `Kickback halt generation: ${generation}\n`}`,
+              KICKBACK_CAP_HALT_CLASS,
+            );
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
+            const prUrl = await this.surfaceRemediationPr(reason);
+            await this.emitLoopHalt(reason, prUrl);
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
+          }
         }
 
         // Mark in_progress before running
