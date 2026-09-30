@@ -5599,6 +5599,28 @@ export class Conductor {
           await reportRefusal(detail);
           return { kind: 'halt', haltClass: 'needs-human', detail };
         }
+        const pendingGate = hintSource.source === 'prd_audit' ||
+          hintSource.source === 'architecture_review_as_built'
+          ? hintSource.source
+          : undefined;
+        // An appending repair in this same round already holds the one
+        // per-gate lap charge. Existing-task bindings add no growth and must
+        // not overwrite that authorization with a second receipt.
+        if (pendingGate !== undefined && appendedTaskIds.length === 0) {
+          try {
+            await recordPendingRepair(this.projectRoot, {
+              receiptId: admission.obligation.id,
+              charges: { [pendingGate]: { laps: 1, growth: 0 } },
+              taskIds: boundTaskIds,
+            });
+          } catch (error) {
+            const detail =
+              `existing-task remediation ${refusalContext} could not record its pending repair ` +
+              `for ${admission.obligation.id}: ${error instanceof Error ? error.message : String(error)}`;
+            await reportRefusal(detail);
+            return { kind: 'halt', haltClass: 'needs-human', detail };
+          }
+        }
         // A replay must use the boundary captured before the original
         // re-stage, never the post-re-stage snapshot from this invocation.
         const admittedBaseline = admission.obligation.baseline;

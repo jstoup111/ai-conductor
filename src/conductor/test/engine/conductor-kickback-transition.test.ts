@@ -76,6 +76,70 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     });
   });
 
+  it('settles an obligation-keyed lap-only existing-task charge without growth', async () => {
+    const { build } = await runBuild({
+      receiptId: 'repair-existing-task-obligation', taskIds: ['1'],
+      charges: { prd_audit: { laps: 1, growth: 0 } },
+    }, {
+      version: 1,
+      gates: { prd_audit: entry() },
+      growth: { authored: 4, added: 0, byGate: {} },
+    });
+
+    expect(build).toHaveBeenCalledOnce();
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { prd_audit: { laps: 1 } },
+      growth: { added: 0, byGate: {} },
+    });
+  });
+
+  it('records a prd-audit existing-task repair as an obligation-keyed lap-only pending charge', async () => {
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'plans', 'existing-task.md'), '### Task 1: Existing repair\n');
+    await writeFile(join(dir, '.docs', 'stories', 'existing-task.md'), '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n');
+    await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{ id: '1', status: 'completed' }],
+    }));
+    await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
+      '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
+      '| Criterion | Grade | Plan task | PRD: | Evidence |',
+      '|---|---|---|---|---|', '| S1.1 | FIXABLE | 1 | FR-1 | x |',
+    ].join('\n'));
+    await writeKickbackLedger(dir, { version: 1, gates: {}, growth: { authored: 1, added: 0, byGate: {} } });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      projectRoot: dir,
+      events: new ConductorEventEmitter(),
+      config: { prd_audit: { max_remediation_laps: 1 } } as never,
+      stepRunner: { run: async (step) => {
+        if (step === 'remediate') {
+          await writeFile(join(dir, '.pipeline', 'remediation.json'), JSON.stringify({ dispositions: [{
+            id: 'S1.1', disposition: 'existing-task', category: null, rationale: 'Already owned.',
+            tasks: [{ id: '1', title: 'Existing repair' }],
+          }] }));
+        }
+        return { success: true };
+      } },
+    });
+
+    await expect((conductor as any).planRemediation(
+      { feature_desc: 'existing-task', session_started_at: Date.now() - 1_000 },
+      ALL_STEPS,
+      'restage existing work',
+      { source: 'prd_audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    )).resolves.toMatchObject({ kind: 'route', target: 'build' });
+
+    const ledger = await readKickbackLedger(dir);
+    expect(ledger.gates.prd_audit?.laps ?? 0).toBe(0);
+    expect(ledger.pendingRepair).toMatchObject({
+      receiptId: expect.stringMatching(/^repair-/),
+      charges: { prd_audit: { laps: 1, growth: 0 } },
+      taskIds: ['1'],
+    });
+    await expect(readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).resolves.toMatch(/"status": "pending"/);
+  });
+
   it.each([
     ['prd_audit lap', { prd_audit: entry(1) }, { prd_audit: { laps: 1, growth: 0 } }, 'laps'],
     ['as-built lap', { architecture_review_as_built: entry(1) }, { architecture_review_as_built: { laps: 1, growth: 0 } }, 'laps'],
