@@ -11,6 +11,7 @@ import {
   type CoverageBindingEnvelopeFilesystem,
 } from '../../src/engine/coverage-binding-envelope.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const slicedPlan = (task4Slice = 1, remediation = false) => [
   '# Plan',
@@ -69,13 +70,15 @@ async function run(plan: string, files: Record<string, string> = {}) {
   await writeFile(planPath, plan);
   const envelope = memoryEnvelopeFilesystem(files);
   const events: unknown[] = [];
+  const eventEmitter = new ConductorEventEmitter();
+  eventEmitter.on('plan_slices_changed', (event) => { events.push(event); });
   const provider: LLMProvider = { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: vi.fn() };
   const runner = new DefaultStepRunner(provider, 'coverage-binding-slice-membership', projectDir, {
     featureDesc: 'coverage-binding-slice-membership',
     planPath,
     config: { coverage_binding: { judge: { enabled: false } } },
     coverageBindingFilesystem: envelope.filesystem,
-    events: { emit: async (event) => { events.push(event); } } as never,
+    events: eventEmitter,
   });
   return { projectDir, envelope, events, runner };
 }
