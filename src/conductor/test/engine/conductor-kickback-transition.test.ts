@@ -1,3 +1,4 @@
+// Covers: task:6, task:12
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -74,6 +75,65 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({
       gates: { prd_audit: { laps: 1 }, architecture_review_as_built: { laps: 1 } },
       growth: { added: 2, byGate: { prd_audit: 1, architecture_review_as_built: 1 } },
+    });
+  });
+
+  it('charges a pending repair only once when BUILD retries and after a restart', async () => {
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      build: 'pending',
+      session_started_at: Date.now() - 1_000,
+      run_started_at: Date.now() - 1_000,
+      feature_desc: 'retry-transition',
+    });
+    await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{ id: 'rem-1', status: 'pending' }],
+    }));
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: { prd_audit: entry() },
+      growth: { authored: 4, added: 0, byGate: {} },
+      pendingRepair: {
+        receiptId: 'retry-repair', taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 1 } },
+      },
+    });
+
+    let attempts = 0;
+    const retryingRunner: StepRunner = { run: async (step) => {
+      if (step !== 'build' || ++attempts > 1) return { success: true };
+      return { success: false, error: 'retry once' };
+    } };
+    await new Conductor({
+      stateFilePath: statePath, projectRoot: dir, stepRunner: retryingRunner,
+      events: new ConductorEventEmitter(), mode: 'auto', daemon: true,
+      resume: true, fromStep: 'build', verifyArtifacts: false,
+      config: { prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 } },
+    } as never).run();
+
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      build: 'pending',
+      session_started_at: Date.now() - 1_000,
+      run_started_at: Date.now() - 1_000,
+      feature_desc: 'retry-transition',
+    });
+    await new Conductor({
+      stateFilePath: statePath, projectRoot: dir,
+      stepRunner: { run: async () => ({ success: true }) },
+      events: new ConductorEventEmitter(), mode: 'auto', daemon: true,
+      resume: true, fromStep: 'build', verifyArtifacts: false,
+      config: { prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 } },
+    } as never).run();
+
+    const ledger = await readKickbackLedger(dir);
+    expect({ attempts, ledger: { ...ledger, pendingRepair: ledger.pendingRepair } }).toMatchObject({
+      attempts: 2,
+      ledger: {
+        gates: { prd_audit: { laps: 1 } },
+        growth: { added: 1, byGate: { prd_audit: 1 } },
+        pendingRepair: undefined,
+      },
     });
   });
 
