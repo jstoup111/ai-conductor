@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-30T23:48:42.548Z
 Slug: report-a-failing-integrity-check-instead-of-aborti
 Class: needs-human
 Halting step: unknown
