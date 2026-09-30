@@ -263,12 +263,11 @@ steps:
   # claude rather than letting the run-level codex entry resolve first.
   remediate:
     llm_provider: claude
-  # Routed to codex 2026-08-24. The claude pin carried no recorded rationale;
-  # this is a bounded docs-conformance pass with a completion artifact, and a
-  # wrong answer costs a stale docs page rather than a bad gate verdict.
+  # Routed to codex 2026-08-24 (bounded docs-conformance pass); back on claude
+  # 2026-09-29 by operator order.
   maintain-documentation:
-    llm_provider: codex
-    model: gpt-5.6-terra
+    llm_provider: claude
+    model: opus
     after: rebase
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating

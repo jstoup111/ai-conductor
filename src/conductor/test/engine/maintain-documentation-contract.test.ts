@@ -86,8 +86,8 @@ describe('repository-local maintain-documentation contract', () => {
         byteIdentical: true,
         repoConfigValid: true,
         configuredStep: {
-          llm_provider: 'codex',
-          model: 'gpt-5.6-terra',
+          llm_provider: 'claude',
+          model: 'opus',
           after: 'rebase',
           skill: '.agents/skills/maintain-documentation/SKILL.md',
           enforcement: 'gating',
