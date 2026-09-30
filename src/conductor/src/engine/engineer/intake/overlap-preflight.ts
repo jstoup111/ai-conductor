@@ -1,4 +1,5 @@
 import type { OverlapSuggestions, OverlapSuggestion, BranchOverlap } from './overlap-suggestions.js';
+import type { ConductorEvent } from '../../../types/events.js';
 
 export interface OverlapSkipNote {
   part: string;
@@ -40,6 +41,29 @@ export interface OverlapPreflightInput {
 /** The injected, read-only source of overlap suggestions for one filing. */
 export interface OverlapPreflightDeps {
   suggestions: (input: OverlapPreflightInput) => Promise<OverlapSuggestions>;
+  /** The CLI's existing canonical event spine; no overlap-specific log is opened. */
+  events?: { emit(event: Extract<ConductorEvent, { type: 'intake_overlap_checked' }>): Promise<void> };
+  /** The filing target recorded with the overlap decision when telemetry is enabled. */
+  repository?: string;
+}
+
+/** Build the single, secret-safe overlap occurrence carried by the event spine. */
+export function intakeOverlapCheckedEvent(
+  repository: string,
+  suggestions: OverlapSuggestions,
+  decision: OverlapDecision,
+): Extract<ConductorEvent, { type: 'intake_overlap_checked' }> {
+  return {
+    type: 'intake_overlap_checked',
+    repository,
+    outcome: decision.kind === 'proceed' ? 'proceeded' : decision.kind,
+    suggested: [...suggestions.preAccepted, ...suggestions.shown].map(({ issue }) => issue),
+    accepted: decision.kind === 'proceed' ? [...decision.accepted] : [],
+    declined: decision.kind === 'proceed' ? [...decision.declined] : [],
+    undecided: decision.kind === 'refused' ? decision.undecided.map(({ issue }) => issue) : [],
+    advisoryCount: suggestions.advisory.length,
+    skipped: decision.skipNotes.map(({ part, reason }) => ({ part, reason })),
+  };
 }
 
 /**
@@ -52,7 +76,7 @@ export async function runOverlapPreflight(
   deps: OverlapPreflightDeps,
 ): Promise<OverlapDecision> {
   const suggestions = await deps.suggestions(input);
-  return {
+  const decision: OverlapDecision = {
     kind: 'proceed',
     accepted: [],
     declined: [],
@@ -60,4 +84,8 @@ export async function runOverlapPreflight(
     skipNotes: [],
     omittedCount: suggestions.omittedCount ?? 0,
   };
+  if (deps.events && deps.repository) {
+    await deps.events.emit(intakeOverlapCheckedEvent(deps.repository, suggestions, decision));
+  }
+  return decision;
 }

@@ -368,6 +368,17 @@ export type ConductorEvent =
     }
   | { type: 'intake_inbound_sanitized'; sourceRef: string; neutralizations: import('../engine/engineer/intake/sanitize-inbound.js').InboundNeutralization[]; digest: string }
   | {
+      type: 'intake_overlap_checked';
+      repository: string;
+      outcome: 'proceeded' | 'refused' | 'invalid-decline';
+      suggested: string[];
+      accepted: string[];
+      declined: string[];
+      undecided: string[];
+      advisoryCount: number;
+      skipped: Array<{ part: string; reason: string }>;
+    }
+  | {
       type: 'land_gate_rejected';
       gate: LandGateRejectionIdentifier;
       reason: string;
