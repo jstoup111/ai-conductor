@@ -6,6 +6,7 @@ import type {
   AuthenticationSource,
   CodexProbeFailureKind,
   CodexProbeParserRejection,
+  ProviderExitFacts,
   ProviderStreamObservation,
   TokenUsage,
 } from '../execution/llm-provider.js';
@@ -756,6 +757,8 @@ export type ConductorEvent =
       step: StepName;
       error: string;
       retryCount: number;
+      /** Bounded facts from the final failed provider attempt, when available. */
+      providerExit?: ProviderExitFacts;
       effort?: EffortLevel;
       tier?: ComplexityTier;
       observedIntervals?: readonly ObservedInterval[];
@@ -896,6 +899,8 @@ export type ConductorEvent =
       attempt: number; // 1-based: "attempt 2 of 3"
       maxAttempts: number;
       reason: string;
+      /** Bounded facts from the failed provider attempt that triggered this retry. */
+      providerExit?: ProviderExitFacts;
       /** Dimensions of the failed attempt, distinct from upcoming escalation fields below. */
       model?: string;
       effort?: EffortLevel;

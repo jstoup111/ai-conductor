@@ -1,4 +1,5 @@
 // Covers: task:2
+// Covers: task:4
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -239,6 +240,106 @@ describe('Conductor step close events', () => {
     expect(retry).toBeDefined();
     for (const dimension of ['model', 'effort', 'provider', 'tier']) {
       expect(retry).not.toHaveProperty(dimension);
+    }
+  });
+
+  it('carries the failed provider exit facts on a retry before a later success', async () => {
+    const projectRoot = await mkdtemp(join(process.env.TMPDIR!, 'conductor-step-events-'));
+    directories.push(projectRoot);
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    const events = new ConductorEventEmitter();
+    const retries: ConductorEvent[] = [];
+    events.on('step_retry', (event) => { retries.push(event); });
+    let attempts = 0;
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath,
+      events,
+      fromStep: 'explore',
+      maxRetries: 2,
+      stepRunner: {
+        run: async (step) => {
+          if (step !== 'explore' || ++attempts > 1) return { success: true };
+          return {
+            success: false,
+            output: 'provider failed',
+            exitFacts: { processErrorCode: 'EACCES', exitCode: 126, signal: 'SIGTERM' },
+          };
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(retries.find((event) => event.type === 'step_retry' && event.step === 'explore')).toMatchObject({
+      providerExit: { processErrorCode: 'EACCES', exitCode: 126, signal: 'SIGTERM' },
+    });
+  });
+
+  it('carries only the final failed provider exit facts on terminal failure', async () => {
+    const projectRoot = await mkdtemp(join(process.env.TMPDIR!, 'conductor-step-events-'));
+    directories.push(projectRoot);
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    const events = new ConductorEventEmitter();
+    const retries: ConductorEvent[] = [];
+    const failures: ConductorEvent[] = [];
+    events.on('step_retry', (event) => { retries.push(event); });
+    events.on('step_failed', (event) => { failures.push(event); });
+    let attempts = 0;
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath,
+      events,
+      fromStep: 'explore',
+      mode: 'auto',
+      maxRetries: 2,
+      stepRunner: {
+        run: async () => {
+          attempts++;
+          return attempts === 1
+            ? { success: false, output: 'first failure', exitFacts: { exitCode: 1 } }
+            : { success: false, output: 'final failure', exitFacts: { processErrorCode: 'ENOENT', signal: 'SIGKILL' } };
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(retries.find((event) => event.type === 'step_retry' && event.step === 'explore')).toMatchObject({
+      providerExit: { exitCode: 1 },
+    });
+    expect(failures.find((event) => event.type === 'step_failed' && event.step === 'explore')).toMatchObject({
+      providerExit: { processErrorCode: 'ENOENT', signal: 'SIGKILL' },
+    });
+  });
+
+  it('keeps ordinary failures and legacy event JSON compatible', async () => {
+    const projectRoot = await mkdtemp(join(process.env.TMPDIR!, 'conductor-step-events-'));
+    directories.push(projectRoot);
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    const events = new ConductorEventEmitter();
+    const failures: ConductorEvent[] = [];
+    events.on('step_failed', (event) => { failures.push(event); });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath,
+      events,
+      fromStep: 'explore',
+      mode: 'auto',
+      maxRetries: 1,
+      stepRunner: { run: async () => ({ success: false, output: 'ordinary failure' }) },
+    });
+
+    await conductor.run();
+
+    const failure = failures.find((event) => event.type === 'step_failed' && event.step === 'explore');
+    expect(failure).toMatchObject({ error: 'ordinary failure', retryCount: 1 });
+    expect(failure).not.toHaveProperty('providerExit');
+    for (const line of [
+      JSON.stringify({ type: 'step_retry', step: 'explore', attempt: 2, maxAttempts: 2, reason: 'legacy failure' }),
+      JSON.stringify({ type: 'step_failed', step: 'explore', error: 'legacy failure', retryCount: 2 }),
+    ]) {
+      expect(JSON.parse(line)).not.toHaveProperty('providerExit');
     }
   });
 });
