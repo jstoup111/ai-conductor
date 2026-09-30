@@ -54,6 +54,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon restarts preserve the operator’s selected run flags. ([implementation PR #2837](https://github.com/jstoup111/ai-conductor/pull/2837)).
 - Harness users now receive clear validation for version constraints, viewer settings, telemetry protocols, and custom parallel steps. ([implementation PR #2829](https://github.com/jstoup111/ai-conductor/pull/2829)).
 - Intake filers now receive typed dependency links and explicit notices for links GitHub cannot record. ([implementation PR #2831](https://github.com/jstoup111/ai-conductor/pull/2831)).
+- coverage_binding no longer holds a plan responsible for ADR and spec amendments that earlier features already shipped. ([implementation PR #2859](https://github.com/jstoup111/ai-conductor/pull/2859)).
 
 ## [1.5.0] - 2026-09-27
 
