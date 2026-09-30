@@ -590,6 +590,90 @@ Relevant existing facts (evidence):
 >     metric Resource or any metric data-point label, whose `feature` label Decisions 10 and 14 keep
 >     for bounded series. Events persisted to the spine are unaffected by every toggle: the toggles
 >     govern export only.
+> **Amended 2026-09-30 by #1935:** The operator approved Decisions D27–D30 in composer chat after reviewing the concrete configuration, shared ownership, replay consent, and resource limits. This extends D4/D5/D7/D9 and D15–D17 to separately enabled log delivery; earlier trace/metric behavior remains authoritative. The complete durable transport implementation is a prerequisite tracked by [#2870](https://github.com/jstoup111/ai-conductor/issues/2870), a GitHub blocker of #1935.
+
+**Amendment status:** APPROVED
+
+Evidence, feasibility, exact local API observations and vendor sources are recorded in the [architecture review](architecture-review-2026-09-30-configurable-harness-log-export.md#verified-claims-and-remaining-assumptions). This approval chooses behavior and limits; it does not assert that the pending spool implementation or live backend validation is complete.
+
+### D27 — Independent project-level log consent and configuration
+
+Add `otel.logs` with the following supported fields:
+
+| Setting | Contract |
+| --- | --- |
+| `enabled` | Strict boolean, default false. Only explicit true consents. |
+| `endpoint` | Optional HTTP(S) OTLP base URL; append `/v1/logs` exactly once. Inherit `otel.endpoint` only for an otherwise valid HTTP OTLP parent destination. With a file/gRPC/no parent exporter, an explicit HTTP logs endpoint is required. |
+| `headers` | Optional map using the existing environment-reference credential syntax. When present, replaces inherited headers; an empty map intentionally supplies none. Otherwise inherit the applicable HTTP parent headers. Never store resolved values. |
+| `spool.enabled` | Strict boolean, default true for enabled logs; independent of other signals' spool control. |
+| `spool.max_bytes` | Positive integer, default 67,108,864 bytes (64 MiB); applies only to log backlog. |
+
+Logs always use OTLP/HTTP protobuf. No log-specific vendor selector, gRPC mode, local file exporter, or environment-only implicit enablement is added. Existing trace/metric transport and controls retain their meanings. Logs may be enabled alone with an explicit HTTP endpoint.
+
+Both execution modes resolve the log block from the same read-only merge of user configuration and the canonical main-root project's configuration; project values override user values. A worktree-local log block cannot override that shared project's policy. Report an ignored differing worktree log policy once, naming the canonical configuration path. Existing trace/metric configuration resolution is unchanged.
+
+At startup, unknown keys and malformed values under `otel.logs` yield a named, local, logs-only configuration error. Invalid log settings disable only logs. Never pass raw log-only validation errors into a fatal whole-run or whole-OTel validator. Missing `enabled` remains off even when other log fields are valid. Reject endpoint userinfo, query strings, and fragments; use credential headers for authentication. Diagnostics identify the setting and sanitized host, not raw configuration or URLs containing sensitive paths.
+
+Resolve the canonical root once with the strict main-repository resolver. Failure to establish it disables logs with one warning rather than writing to a guessed root. Before each direct or retained batch send, asynchronously reread the canonical log policy through the read-only reader and resolve credentials in the sending process. Off, invalid, unreadable, or missing configuration forbids sending. Do not call migratory loaders or introduce a filesystem watcher. The read is part of the bounded delivery operation, never an event callback.
+
+A policy change applies to the next send; an already issued request cannot be retracted. Restart is required to begin capturing after enabling a previously disabled owner. No disabled-time events or historical local files are replayed.
+
+Example using an existing HTTP destination:
+
+```yaml
+otel:
+  exporter: otlp
+  endpoint: http://localhost:4318
+  logs:
+    enabled: true
+```
+
+### D28 — Shared event projection and diagnostic capture
+
+One log owner is attached to the daemon root bus; one owner is attached to an interactive run's bus. Per-feature daemon buses forward existing occurrences with full feature identity and do not own exporters. Recovery/provider execution buses use the same forwarding mechanism.
+
+Add a required `logs` field to the total event sink registry and an exhaustive projection table for selected event types. Export harness lifecycle and operational diagnostic occurrences. Provider transcript chunks, dashboard snapshots, raw application output, and export-health events are explicitly excluded. Do not serialize an arbitrary event object as a log body.
+
+For operational messages lacking an equivalent typed event, emit a typed `operational_log` occurrence with severity, raw message, timestamp, and project/feature ownership. It persists through the existing spine and is not re-rendered when the original local logger already rendered it. Capture before ANSI/prefix/slug formatting; the local sink still receives its original arguments. Severity comes from the source API (info/warn/error); enrich warning/error callsites where a generic string logger currently loses that information.
+
+Rendered events must not be recaptured as diagnostics. A shared async-scoped rendering/capture guard surrounds the terminal and daemon event-rendering paths and health rendering. For feature-pool lifecycle output that duplicates an existing event, select the existing typed occurrence as the exported owner and suppress recapture of its accompanying rendered line. Do not attempt deduplication by matching message strings.
+
+Use immutable logger ownership and async execution context for deferred diagnostics. Never infer feature identity from a rendered prefix. Existing forwarding metadata must preserve a timestamp captured at first bus emission, alongside feature attribution; authoritative occurrence timestamps already present on known events take precedence. No per-subscriber restamping or sidecar timestamp file.
+
+Export standard OTel timestamp, observed timestamp, severity and body, plus record attributes `project`, `worker`, `conductor.scope`, `conductor.event.name`, and `feature` for feature-owned occurrences. Include step/attempt only when supplied by that event. Use a worker-stable log Resource, inheriting validated static attributes, project name, worker name and release identity. No log resource construction creates or rewrites run/session identity files. Conductor-owned keys override custom attributes.
+
+### D29 — Bounded shared delivery and replay authorization
+
+Use the log SDK provider with one explicit bounded batch processor implementing its public processor interface. The processor owns the sole in-memory admission queue, counts rejected records, and schedules asynchronous serialization/export. Avoid stacking an additional SDK queue or inspecting private SDK fields. Both modes use this same implementation.
+
+Chosen limits are design constants, not new configuration knobs:
+
+| Bound | Value / disposition |
+| --- | --- |
+| Resident admitted payload | At most 1,024 records and 8 MiB of normalized payload, including in-flight records; object overhead remains additionally bounded by record/attribute limits. Drop newest on overflow and count it. |
+| Record | At most 64 KiB encoded normalized payload and 64 bounded attributes; remote body at most 32 KiB UTF-8, with truncation marked. Required identity is never truncated; a record whose required fields cannot fit is dropped and counted. Local output is unchanged. |
+| Batch | At most 128 records and 1 MiB serialized request body, flushed every 1 second or at the limit. Split by actual serialized size away from the event callback. |
+| Delivery operation | 2 seconds total, including asynchronous policy/credential resolution and request; use abort/cancellation and unreferenced timers. |
+| Shutdown | One 2-second total log flush/stop budget, not a new budget per queued batch. Stop admitting after final lifecycle output, then preserve/flush what fits. |
+| Local warning rate | First failure promptly, then at most one failure/drop summary per 60 seconds per owner, aggregating counts across classes; at most one recovery notice per 60 seconds. |
+
+All event callbacks perform bounded projection/admission only; no awaited disk/network work. Apply input bounds before expensive serialization. Queue overflow, oversize records, write failures, timeouts, and rejection have counted dispositions. No uncaught callback or exporter error may change the build result.
+
+Extend the existing D15–D17 spool store, serializer, classifier, lease and runtime with the logs signal; do not create another drainer or lock. Log retention has its own 64 MiB default cap so log floods cannot evict spans/metrics. Eviction, partial rejection, retry/backoff, and credential resolution follow D15–D17. Logs with spool disabled use the same bounded sender directly. Disk failure uses the existing bounded direct fallback, still subject to consent.
+
+Retained log batches carry a nonsecret destination identity derived from the normalized endpoint and header-reference names, never resolved header values. Only a batch matching the current enabled policy may be sent. A changed destination leaves old batches retained and counted toward the same log cap; restoring that destination permits delivery. Credential value rotation under the same references is allowed. Disabling logs leaves retained batches unsent, with one bounded local notice; it does not purge them or authorize a different process to drain them. A trace/metric owner with logs disabled cannot send the logs signal.
+
+Direct batches also retain their originating destination identity: a policy change between admission and send must never reroute a queued record to the new destination. If no matching consent remains, retain it only when already safely spooled, otherwise discard/count it without sending. This is bounded retention, not unlimited or exactly-once delivery.
+
+Extend existing typed spool/drop health events to cover logs and admission loss; use the same spine and local health renderer. Mark every log-export health event and its rendering `logs: false` so failures cannot feed themselves. Do not export credentials, request headers, raw backend response bodies, or unsanitized exception text in these warnings.
+
+### D30 — Ownership, startup, shutdown, and interoperability
+
+Install the shared diagnostic capture and log owner before the first configured-run lifecycle diagnostic, then keep them alive through the final completion/shutdown diagnostic. Entry paths before configuration can be resolved remain local-only. Use try/finally teardown on startup failure, ordinary completion and exceptional shutdown. Restore any scoped console warn/error bridge exactly once. Do not intercept arbitrary stdout or raw subprocess streams.
+
+The daemon owns the root listener, console bridge and log provider for its lifetime. Completing a feature may request a bounded flush but cannot detach the root listener, stop other features' delivery, or release the shared transport lease. Interactive teardown releases only that invocation's references. Repeated starts/stops must not accumulate subscriptions. Existing shared spool-runtime ownership, not a new feature-owned lease, governs transport shutdown.
+
+Document direct or collector-mediated recipes for all four destination families. Loki's OTLP base path and structured-metadata requirement, Elasticsearch's OTLP-capable deployment or collector exporter, Sumo's HTTP-source endpoint with header authentication, and Datadog's site-specific OTLP logs endpoint/key must be explicit. Keep complete feature slugs as structured metadata where a backend distinguishes metadata from indexed labels. Show actual required endpoint suffix behavior and secret-reference syntax; never include live credentials. A collector receives OTLP over the network and needs no checkout mounts.
 
 ## Consequences
 
