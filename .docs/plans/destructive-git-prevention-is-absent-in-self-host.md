@@ -198,6 +198,7 @@ Twenty-three tasks deliver an engine-generated `git` argv guard, provisioned fai
 - A Claude dispatch whose `cwd` is an unprepared directory passes a child `PATH` equal to the inherited one, and `process.env.PATH` is identical before and after every guarded Claude dispatch, as asserted by the unprepared and no-bleed tests.
 - A guarded Claude dispatch's child env still omits `CLAUDE_CODE_OAUTH_TOKEN` wherever it is stripped today, and the contained-review env still equals the allowlisted set with only `PATH` changed, as asserted by the existing credential and review-allowlist tests extended with the guarded `PATH`.
 - When `ensureGitGuardForDispatch` throws, `ClaudeProvider.invoke` resolves a failed result whose output names the guard path and the recorded spawn function is never called.
+- A Claude dispatch into a prepared worktree whose guard was deleted, edited, or chmod 0644 finds, at the moment the recorded spawn function is called, `.pipeline/bin/git` already rewritten to `GIT_GUARD_SCRIPT` with mode 0755, and that same spawn receives a child `PATH` beginning with the worktree's `.pipeline/bin`, as asserted by the repair-before-launch tests.
 
 **Files likely touched:**
 - `src/conductor/src/execution/child-environment.ts`
@@ -405,6 +406,7 @@ Twenty-three tasks deliver an engine-generated `git` argv guard, provisioned fai
 **Done when:**
 - `resolveRealGit` given a `PATH` whose first entry is a `.pipeline/bin` directory holding the guard, spelled with a trailing slash, with a `.` segment, or through a symlinked directory, returns the next real `git` on that `PATH`, as asserted by the guard-directory spelling tests.
 - `ensureGitGuardForDispatch` on a prepared worktree whose `.pipeline/git-guard/real-git` sidecar names that worktree's own `.pipeline/bin/git` rewrites the sidecar to a real git outside every `.pipeline/bin` directory before returning, as asserted by the self-resolved sidecar repair test.
+- `prepareWorktree` run with a daemon `PATH` whose first entry is a `.pipeline/bin` directory holding a `git`, spelled once without and once with a trailing slash, writes a `.pipeline/git-guard/real-git` sidecar naming a real git whose realpath is not under any `.pipeline/bin` directory, as asserted by the provisioning PATH-spelling tests.
 
 **Files likely touched:**
 - `src/conductor/src/engine/git-guard.ts`
