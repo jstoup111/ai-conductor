@@ -8272,6 +8272,7 @@ export class Conductor {
                 ...(result?.effort !== undefined ? { effort: result.effort } : {}),
                 ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
                 ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+                ...(result?.exitFacts !== undefined ? { providerExit: result.exitFacts } : {}),
                 executionContext,
               });
             };
@@ -8413,6 +8414,7 @@ export class Conductor {
                             ...(failedAttempt?.actualProvider !== undefined ? { actualProvider: failedAttempt.actualProvider, provider: failedAttempt.actualProvider } : {}),
                             ...(failedAttempt?.preferredProvider !== undefined ? { preferredProvider: failedAttempt.preferredProvider } : {}),
                             ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+                            ...(failedAttempt?.exitFacts !== undefined ? { providerExit: failedAttempt.exitFacts } : {}),
                             executionContext,
                           });
                         },
@@ -14734,6 +14736,7 @@ export class Conductor {
                 ...(failedAttempt?.actualProvider !== undefined ? { actualProvider: failedAttempt.actualProvider, provider: failedAttempt.actualProvider } : {}),
                 ...(failedAttempt?.preferredProvider !== undefined ? { preferredProvider: failedAttempt.preferredProvider } : {}),
                 ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+                ...(failedAttempt?.exitFacts !== undefined ? { providerExit: failedAttempt.exitFacts } : {}),
                 executionContext,
               });
             },
@@ -14845,6 +14848,7 @@ export class Conductor {
         ...(result?.effort !== undefined ? { effort: result.effort } : {}),
         ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
         ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+        ...(result?.exitFacts !== undefined ? { providerExit: result.exitFacts } : {}),
         executionContext,
       });
     }
