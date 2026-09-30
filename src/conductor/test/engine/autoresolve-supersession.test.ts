@@ -185,7 +185,14 @@ describe('engine/autoresolve — sweep supersession preservation mode', () => {
       expect(guardCalls[0]).toHaveLength(guardArgumentCount);
       if (mode === 'strict') {
         expect(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'comment')).toBe(false);
-        expect(emitted).toEqual([]);
+        // Strict resolution does not publish a supersession verdict, but it
+        // still traverses the successful guard and suite stages. Those stages
+        // now report their progress on the event spine.
+        expect(emitted).toMatchObject([
+          { type: 'rebase_resolution_stage', stage: 'acceptance-guards', status: 'passed', prUrl },
+          { type: 'rebase_resolution_stage', stage: 'suite-gate', status: 'started', prUrl },
+          { type: 'rebase_resolution_stage', stage: 'suite-gate', status: 'passed', prUrl, durationMs: 0 },
+        ]);
         expect(logs.filter((message) => message.includes(prUrl) && message.includes('ignored'))).toHaveLength(1);
       } else {
         // Task 18: every test-only sweep resolution enters judgement mode,
