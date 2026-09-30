@@ -1,19 +1,36 @@
-// Covers: task:15
+// Covers: task:15, task:19
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { BasicTracerProvider, type ReadableSpan } from "@opentelemetry/sdk-trace-base";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildSpoolExporters, resolveSpoolDir } from "../../../src/engine/otel/spool-wiring.js";
+import { buildExporters } from "../../../src/engine/otel/transport.js";
 import type { ConductorEventEmitter } from "../../../src/ui/events.js";
 
 const execFile = promisify(execFileCallback);
 const temporaryDirectories: string[] = [];
+const servers: Server[] = [];
+
+async function endpoint(server: Server): Promise<string> {
+  servers.push(server);
+  await new Promise<void>((resolve, reject) => server.listen(0, "127.0.0.1", (error?: Error) => error ? reject(error) : resolve()));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("expected a TCP test-server address");
+  return `http://127.0.0.1:${address.port}`;
+}
+
+function exportSpan(exporter: { export(spans: ReadableSpan[], callback: () => void): void }, span: ReadableSpan): Promise<void> {
+  return new Promise((resolve) => exporter.export([span], resolve));
+}
 
 afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))));
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })));
 });
 
@@ -54,5 +71,84 @@ describe("resolveSpoolDir", () => {
     await buildSpoolExporters(config, directory, events);
 
     expect(emit).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a disabled spool untouched and warns once with its path and size", async () => {
+    const root = await mkdtemp(join(tmpdir(), "spool-wiring-disabled-"));
+    temporaryDirectories.push(root);
+    await execFile("git", ["init", "--initial-branch=main", root]);
+    const spoolDir = join(root, ".daemon", "otel-spool");
+    await mkdir(spoolDir, { recursive: true });
+    await Promise.all([
+      writeFile(join(spoolDir, "one.json"), "a"),
+      writeFile(join(spoolDir, "two.json"), "bb"),
+      writeFile(join(spoolDir, "three.json"), "ccc"),
+    ]);
+    const before = await Promise.all(["one.json", "two.json", "three.json"].map((file) => readFile(join(spoolDir, file))));
+    const emit = vi.fn().mockResolvedValue(undefined);
+    const events = { emit } as unknown as ConductorEventEmitter;
+    const config = {
+      enabled: true as const,
+      exporter: "otlp" as const,
+      endpoint: "http://localhost:4318",
+      spool: { enabled: false, maxBytes: 1024 },
+    };
+
+    await buildSpoolExporters(config, root, events);
+    await buildSpoolExporters(config, root, events);
+
+    expect(await Promise.all(["one.json", "two.json", "three.json"].map((file) => readFile(join(spoolDir, file))))).toEqual(before);
+    expect(emit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      type: "renderer_error",
+      rendererName: "otel",
+      error: expect.stringContaining(spoolDir),
+    }));
+    expect(emit.mock.calls[0]![0].error).toContain("6");
+  });
+
+  it("exports directly without creating a spool when disabled", async () => {
+    const root = await mkdtemp(join(tmpdir(), "spool-wiring-direct-"));
+    temporaryDirectories.push(root);
+    await execFile("git", ["init", "--initial-branch=main", root]);
+    let received = 0;
+    const collector = createServer(async (request, response) => {
+      for await (const _chunk of request) { /* consume request */ }
+      received += 1;
+      response.writeHead(200).end();
+    });
+    const config = {
+      enabled: true as const,
+      exporter: "otlp" as const,
+      endpoint: await endpoint(collector),
+      spool: { enabled: false, maxBytes: 1024 },
+    };
+    const provider = new BasicTracerProvider();
+    const span = provider.getTracer("spool-wiring-test").startSpan("direct-disabled-spool");
+    span.end();
+
+    const exporters = await buildSpoolExporters(config, root);
+    await exportSpan(exporters.spanExporter, span as unknown as ReadableSpan);
+
+    expect(received).toBe(1);
+    await expect(access(join(root, ".daemon", "otel-spool"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps file exporter output byte-identical without creating a spool", async () => {
+    const root = await mkdtemp(join(tmpdir(), "spool-wiring-file-"));
+    temporaryDirectories.push(root);
+    await execFile("git", ["init", "--initial-branch=main", root]);
+    const directPath = join(root, "direct.jsonl");
+    const wiredPath = join(root, "wired.jsonl");
+    const provider = new BasicTracerProvider();
+    const span = provider.getTracer("spool-wiring-test").startSpan("file-is-unspooled");
+    span.end();
+    const directConfig = { enabled: true as const, exporter: "file" as const, file: directPath };
+    const wiredConfig = { enabled: true as const, exporter: "file" as const, file: wiredPath };
+
+    await exportSpan(buildExporters(directConfig).spanExporter, span as unknown as ReadableSpan);
+    await exportSpan((await buildSpoolExporters(wiredConfig, root)).spanExporter, span as unknown as ReadableSpan);
+
+    expect(await readFile(wiredPath)).toEqual(await readFile(directPath));
+    await expect(access(join(root, ".daemon", "otel-spool"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

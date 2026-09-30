@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { readdir, stat } from 'node:fs/promises';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import { resolveMainRepoRootStrict } from '../park-marker.js';
 import type { ResolvedOtelConfig } from './otel-config.js';
@@ -15,6 +16,21 @@ export interface SpoolRuntime {
 
 const runtimes = new Map<string, SpoolRuntime>();
 const warnedStarts = new Set<string>();
+
+async function spoolSize(directory: string): Promise<number> {
+  try {
+    const entries = await readdir(directory);
+    const sizes = await Promise.all(entries.map(async (entry) => {
+      const path = join(directory, entry);
+      const metadata = await stat(path);
+      return metadata.isDirectory() ? spoolSize(path) : metadata.size;
+    }));
+    return sizes.reduce((total, size) => total + size, 0);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    return 0;
+  }
+}
 
 /** Returns the durable spool under the main checkout, never a linked worktree. */
 export async function resolveSpoolDir(startDir: string): Promise<string | null> {
@@ -41,7 +57,19 @@ export async function buildSpoolExporters(
   startDir: string,
   events?: ConductorEventEmitter,
 ): Promise<Exporters> {
-  if (config.exporter !== 'otlp' || !config.spool?.enabled) return buildExporters(config);
+  if (config.exporter !== 'otlp') return buildExporters(config);
+  if (config.spool?.enabled === false) {
+    const directory = await resolveSpoolDir(startDir);
+    if (directory !== null) {
+      const size = await spoolSize(directory);
+      if (size > 0 && !warnedStarts.has(startDir)) {
+        warnedStarts.add(startDir);
+        void events?.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] spool disabled: existing spool at ${directory} (${size} bytes) left untouched` });
+      }
+    }
+    return buildExporters(config);
+  }
+  if (!config.spool?.enabled) return buildExporters(config);
   const directory = await resolveSpoolDir(startDir);
   if (directory !== null) return buildExporters(config, { spoolStore: runtimeFor(directory, config, events).store, events });
   if (!warnedStarts.has(startDir)) {
