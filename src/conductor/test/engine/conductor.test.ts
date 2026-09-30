@@ -870,8 +870,14 @@ describe('engine/conductor', () => {
           { id: '8', name: 'Existing work 8', status: 'pending' },
         ]);
       const ledger = await readKickbackLedger(dir);
-      expect(ledger.gates.architecture_review_as_built?.laps).toBe(1);
+      // Existing-task repairs now reserve their lap for the BUILD boundary,
+      // rather than charging while the task row is re-staged.
+      expect(ledger.gates.architecture_review_as_built?.laps).toBeUndefined();
       expect(ledger.growth).toEqual({ authored: 8, added: 0, byGate: {} });
+      expect(ledger.pendingRepair).toMatchObject({
+        charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+        taskIds: ['1', '2'],
+      });
       // A non-appending binding is still a successful as-built remediation
       // authorization. It must leave the same durable finding record that
       // the next successful as-built projection consumes.

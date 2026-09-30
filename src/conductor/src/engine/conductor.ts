@@ -9777,7 +9777,11 @@ export class Conductor {
               });
             await this.writeHaltMarker(
               `${reason}\n${generation === undefined ? '' : `Kickback halt generation: ${generation}\n`}`,
-              KICKBACK_CAP_HALT_CLASS,
+              // A corrupt ledger cannot establish that an allowance was
+              // exhausted.  Preserve the cap class only for a verified cap
+              // exhaustion; damaged durable accounting requires operator
+              // recovery and must retain its needs-human classification.
+              settlementFailure === undefined ? KICKBACK_CAP_HALT_CLASS : 'needs-human',
             );
             await this.persistPendingStateChanges(state, 'persist conductor transition');
             const prUrl = await this.surfaceRemediationPr(reason);
