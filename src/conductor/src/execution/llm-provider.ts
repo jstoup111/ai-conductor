@@ -215,6 +215,8 @@ export interface InvokeResult {
   success: boolean;
   output: string;
   exitCode: number;
+  /** Bounded subprocess facts retained only for an unclassified failed exit. */
+  exitFacts?: ProviderExitFacts;
   /**
    * The parsed value from the provider's terminal structured-result envelope.
    * It remains distinct from human-readable `output`; only an engine-owned

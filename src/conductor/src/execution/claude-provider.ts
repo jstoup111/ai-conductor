@@ -13,7 +13,11 @@ import {
   type IntervalClock,
   type ObservedInterval,
 } from './observed-interval.js';
-import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
+import {
+  deriveProviderExitFacts,
+  formatProviderExitFacts,
+  summarizeProviderDiagnostic,
+} from './provider-diagnostics.js';
 import {
   accumulateProviderStreamTokens,
   ProviderStreamChildTracker,
@@ -684,6 +688,7 @@ export class ClaudeProvider implements LLMProvider {
       options.prompt,
       hasMachineEnvelope,
       options.nativeSchema !== undefined,
+      options.diagnosticLog,
     );
   }
 
@@ -693,13 +698,16 @@ export class ClaudeProvider implements LLMProvider {
       stderr?: unknown;
       exitCode?: number | null;
       code?: string;
+      signal?: string | null;
     },
     jsonOutput: boolean,
     observedInterval: ObservedInterval,
     prompt?: string,
     strictMachineEnvelope = false,
     requiresNativeSchema = false,
+    diagnosticLog?: InvokeOptions['diagnosticLog'],
   ): InvokeResult {
+    const exitFacts = deriveProviderExitFacts(result);
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
     const exitCode = (result.exitCode ?? 1) as number;
@@ -784,11 +792,22 @@ export class ClaudeProvider implements LLMProvider {
         observedIntervals: [observedInterval],
       };
     }
+    const success = exitCode === 0 && !outOfCredits && !sessionLimit && !commandUnresolvedName;
+    const genericUnclassifiedFailure =
+      !success &&
+      !authFailure &&
+      !rateLimited &&
+      !modelUnavailable &&
+      commandUnresolvedName === undefined;
+    if (genericUnclassifiedFailure) {
+      diagnosticLog?.(formatProviderExitFacts('claude', exitFacts));
+    }
+
     return {
       // Session-limit and out-of-credits notices ride exit 0 but are not real
       // successes — no work was done and no artifact written. Never report them
       // as success, or the step's completion check reads a confusing "no artifact" halt.
-      success: exitCode === 0 && !outOfCredits && !sessionLimit && !commandUnresolvedName,
+      success,
       output,
       exitCode,
       authFailure: authFailure || undefined,
@@ -800,6 +819,7 @@ export class ClaudeProvider implements LLMProvider {
       waitSeconds,
       deadline,
       observedIntervals: [observedInterval],
+      ...(genericUnclassifiedFailure ? { exitFacts } : {}),
       ...(structuredResult.kind === 'value' ? { finalStructuredResult: structuredResult.value } : {}),
     };
   }
