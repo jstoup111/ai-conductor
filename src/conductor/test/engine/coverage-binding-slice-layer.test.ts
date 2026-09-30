@@ -46,7 +46,7 @@ function disabledProvider(): LLMProvider {
   };
 }
 
-async function runWithPlan(planText: string, tier: 'S' | 'M' | 'L') {
+async function runWithPlan(planText: string) {
   const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-slice-layer-'));
   const planPath = join(projectDir, 'plan.md');
   await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
@@ -62,7 +62,7 @@ async function runWithPlan(planText: string, tier: 'S' | 'M' | 'L') {
 
 describe('coverage-binding slice layer', () => {
   it.each(['S', 'M', 'L'] as const)('refuses an amended unassigned Task 9 before the disabled judge exit for tier %s', async (tier) => {
-    const { projectDir, planPath, provider, runner } = await runWithPlan(amendedPlanWithUnassignedTask, tier);
+    const { projectDir, planPath, provider, runner } = await runWithPlan(amendedPlanWithUnassignedTask);
     try {
       await expect(runner.run('coverage_binding', { complexity_tier: tier })).resolves.toMatchObject({
         success: false,
@@ -81,7 +81,7 @@ describe('coverage-binding slice layer', () => {
   });
 
   it('does not refuse an engine-appended remediation task outside slices', async () => {
-    const { projectDir, provider, runner } = await runWithPlan(planWithRemediationOutsideSlices, 'M');
+    const { projectDir, provider, runner } = await runWithPlan(planWithRemediationOutsideSlices);
     try {
       await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
       expect(provider.invoke).not.toHaveBeenCalled();
