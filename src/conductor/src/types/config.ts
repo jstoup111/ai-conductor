@@ -27,6 +27,16 @@ export type ProviderSelection = string | string[];
 /** Whether a step may fall back beyond its explicit provider selection. */
 export type ProviderSubstitutionPolicy = 'allow' | 'disallow';
 
+/** Provider-native model policy overrides keyed by a built-in provider id. */
+export interface ProviderModelConfig {
+  /** Default provider-native model when a step does not name one. */
+  model?: string;
+  /** Ordered provider-native models used by retry escalation. */
+  model_escalation_order?: string[];
+  /** Ordered provider-native models used after model-unavailable failures. */
+  model_fallback_ladder?: string[];
+}
+
 /**
  * Overrides that kick in when the feature's current complexity tier matches.
  * Every field is optional — unset falls back to the step/phase/default value.
@@ -524,6 +534,8 @@ export interface HarnessConfig {
   llm_provider?: ProviderSelection;
   /** Default fallback policy for provider selections in this run. */
   provider_substitution?: ProviderSubstitutionPolicy;
+  /** Provider-native model defaults, retry escalation, and availability ladders. */
+  llm_providers?: Record<string, ProviderModelConfig>;
   /** Plugin selection: which UI renderer to use (defaults to 'terminal'). */
   ui_renderer?: string;
   /** Names of visualizer plugins to start for this run. */

@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, pi-per-step-model-selection-via-wrapped-providers:task:5
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -58,6 +58,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   test_suite: consumer('src/conductor/src/engine/full-suite-verifier.ts'),
   llm_provider: consumer('src/conductor/src/engine/provider-selection.ts'),
   provider_substitution: consumer('src/conductor/src/engine/provider-selection.ts'),
+  llm_providers: consumer('src/conductor/src/engine/provider-model-policy.ts'),
   ui_renderer: consumer('src/conductor/src/engine/plugin-loader.ts'),
   visualizers: consumer('src/conductor/src/index.ts'),
   memory_provider: consumer('src/conductor/src/engine/local-memory-provider.ts'),
@@ -155,6 +156,12 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     'typed and validated but unread: GroupMember carries name/skill/outcome only, so a branch effort override cannot reach dispatch (#1025)',
   ),
   'steps.parallel.advisory': consumer(CONDUCTOR),
+
+  // ── llm_providers.<id> ───────────────────────────────────────────────────
+  // Provider model policy resolution reads every provider-native model setting.
+  'llm_providers.model': consumer('src/conductor/src/engine/provider-model-policy.ts'),
+  'llm_providers.model_escalation_order': consumer('src/conductor/src/engine/provider-model-policy.ts'),
+  'llm_providers.model_fallback_ladder': consumer('src/conductor/src/engine/provider-model-policy.ts'),
 
   // ── tracker ───────────────────────────────────────────────────────────────
   'tracker.backend': consumer('src/conductor/src/engine/tracker-selection.ts'),

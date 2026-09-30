@@ -33,6 +33,7 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
 import { parsePrTemplateRegions } from './pr-body-regions.js';
 import { buildStepRegistry } from './steps.js';
+import { BUILT_IN_PROVIDERS } from '../execution/provider-catalog.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -108,7 +109,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   top: [
     'harness_version', 'defaults', 'phases', 'steps', 'complexity', 'conductor',
     'markdown_viewer', 'mermaid_renderer', 'assess', 'acceptance_spec_globs', 'test_suite',
-    'llm_provider', 'provider_substitution', 'ui_renderer', 'visualizers', 'memory_provider', 'tracker', 'otel', 'build_progress',
+    'llm_provider', 'provider_substitution', 'llm_providers', 'ui_renderer', 'visualizers', 'memory_provider', 'tracker', 'otel', 'build_progress',
     'provider_stream', 'spec_owner', 'github_bot', 'owner_gate_cutover', 'attribution_audit_sample_pct',
     'rebase_resolution_attempts', 'validation_concurrency', 'daemon_concurrency', 'daemon_heap_limit_mb',
     'daemon_heap_dump_threshold_mb', 'daemon_heap_dump_retention', 'harness_self_host',
@@ -122,6 +123,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'dispatch_start_timeout_seconds',
   ],
   defaults: ['model', 'effort', 'max_retries', 'escalate'],
+  llm_providers: ['model', 'model_escalation_order', 'model_fallback_ladder'],
   phases: ['model', 'effort', 'max_retries', 'escalate', 'by_tier'],
   steps: ['llm_provider', 'provider_substitution', 'model', 'effort', 'max_retries', 'disable', 'escalate', 'skill', 'hooks', 'by_tier', 'after', 'enforcement', 'completion_artifact', 'gate', 'kickback_target', 'when', 'parallel'],
   conductor: ['update_channel', 'auto_check', 'current_version', 'last_checked_at'],
@@ -746,6 +748,8 @@ export function validateConfig(
   if (providerSelectionErr) return { ok: false, error: providerSelectionErr };
   const providerSubstitutionErr = validateProviderSubstitution(obj.provider_substitution, 'provider_substitution');
   if (providerSubstitutionErr) return { ok: false, error: providerSubstitutionErr };
+  const providerModelConfigsErr = validateProviderModelConfigs(obj.llm_providers);
+  if (providerModelConfigsErr) return { ok: false, error: providerModelConfigsErr };
 
   if (Object.hasOwn(obj, 'harness_version')) {
     if (typeof obj.harness_version !== 'string') {
@@ -2940,6 +2944,53 @@ function validateEffortAndModelBag(raw: unknown, path: string, allowByTier: bool
   }
   if (allowByTier && obj.by_tier !== undefined) {
     return validateByTier(obj.by_tier, `${path}.by_tier`);
+  }
+  return null;
+}
+
+function validateProviderModelConfigs(raw: unknown): ConfigError | null {
+  if (raw === undefined) return null;
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'llm_providers must be an object' };
+  }
+
+  const catalogIds = BUILT_IN_PROVIDERS.map((provider) => provider.id);
+  const catalogIdSet = new Set(catalogIds);
+  const allowedKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS.llm_providers);
+  for (const [providerId, policy] of Object.entries(raw)) {
+    if (!catalogIdSet.has(providerId)) {
+      return {
+        type: 'validation_error',
+        message: `llm_providers names unknown provider "${providerId}". Available catalog providers: ${catalogIds.join(', ')}`,
+      };
+    }
+    const path = `llm_providers.${providerId}`;
+    if (!isPlainObject(policy)) {
+      return { type: 'validation_error', message: `${path} must be an object` };
+    }
+    for (const key of Object.keys(policy)) {
+      if (!allowedKeys.has(key)) {
+        return { type: 'validation_error', message: `Unknown key in ${path}: "${key}"` };
+      }
+    }
+    if (policy.model !== undefined && (typeof policy.model !== 'string' || policy.model.trim() === '')) {
+      return { type: 'validation_error', message: `${path}.model must be a non-empty string` };
+    }
+    for (const key of ['model_escalation_order', 'model_fallback_ladder'] as const) {
+      const models = policy[key];
+      if (models === undefined) continue;
+      if (!Array.isArray(models)) {
+        return { type: 'validation_error', message: `${path}.${key} must be an array of non-empty strings` };
+      }
+      for (let index = 0; index < models.length; index++) {
+        if (typeof models[index] !== 'string' || models[index].trim() === '') {
+          return {
+            type: 'validation_error',
+            message: `${path}.${key}[${index}] must be a non-empty string`,
+          };
+        }
+      }
+    }
   }
   return null;
 }

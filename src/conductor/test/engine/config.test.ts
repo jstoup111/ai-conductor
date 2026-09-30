@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:2.1, task:4, task:5, task:9, task:3
+// Covers: task:1, task:2, task:2.1, task:4, task:5, task:9, task:3, pi-per-step-model-selection-via-wrapped-providers:task:5
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -3879,6 +3879,83 @@ steps:
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.message).toContain('Unknown key in coverage_binding.judge');
+    });
+  });
+
+  describe('llm_providers config block (Pi model selection Task 5)', () => {
+    it('accepts catalog provider model policy settings', () => {
+      const result = validateConfig({
+        llm_providers: {
+          pi: {
+            model: 'anthropic/claude-opus-4-5',
+            model_escalation_order: [
+              'anthropic/claude-sonnet-4-5',
+              'anthropic/claude-opus-4-5',
+            ],
+            model_fallback_ladder: [
+              'anthropic/claude-opus-4-5',
+              'openai/gpt-5.6-sol',
+            ],
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: {
+          llm_providers: {
+            pi: {
+              model: 'anthropic/claude-opus-4-5',
+              model_escalation_order: [
+                'anthropic/claude-sonnet-4-5',
+                'anthropic/claude-opus-4-5',
+              ],
+              model_fallback_ladder: [
+                'anthropic/claude-opus-4-5',
+                'openai/gpt-5.6-sol',
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    it('rejects a provider outside the catalog and lists catalog ids', () => {
+      const result = validateConfig({ llm_providers: { unknown: {} } });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/llm_providers.*unknown provider.*claude.*codex.*pi/i),
+        },
+      });
+    });
+
+    it('rejects an empty fallback ladder entry with its indexed path', () => {
+      const result = validateConfig({
+        llm_providers: { pi: { model_fallback_ladder: [''] } },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringContaining('llm_providers.pi.model_fallback_ladder[0]'),
+        },
+      });
+    });
+
+    it('rejects unknown model-policy keys', () => {
+      const result = validateConfig({ llm_providers: { pi: { unsupported: true } } });
+
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'Unknown key in llm_providers.pi: "unsupported"',
+        },
+      });
     });
   });
 });
