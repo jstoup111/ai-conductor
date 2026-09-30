@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
-import { landSpec } from '../../src/engine/engineer/land-spec.js';
+import { LandGateError, landSpec } from '../../src/engine/engineer/land-spec.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { createEngineerWorktree } from '../../src/engine/engineer/worktree-authoring.js';
 import type { OwnerConfig } from '../../src/engine/owner-gate/identity.js';
@@ -112,8 +112,34 @@ describe('plan-slices consumer boundary', () => {
       success: true,
       output: 'coverage_binding judge disabled',
     });
+    const envelope = JSON.parse(await readFile(join(worktreePath, '.pipeline', 'coverage-binding.json'), 'utf8'));
+    expect(envelope).toMatchObject({
+      status: 'disabled',
+      sliceMembership: {
+        taskSlices: { '1': 1, '2': 1, '3': 1, '4': 1, '5': 2, '6': 2, '7': 2, '8': 2 },
+        titles: ['Foundation', 'Consumer boundary'],
+      },
+    });
     expect(await git(['rev-parse', 'HEAD'], worktreePath)).not.toBe(await git(['rev-parse', 'main'], worktreePath));
     expect(provider.invoke).not.toHaveBeenCalled();
+  });
+
+  it('refuses an incomplete slice manifest even when stacked PRs are disabled', async () => {
+    const worktreePath = await seed();
+    await writeFile(
+      join(worktreePath, '.docs', 'plans', 'plan-slices-consumer-boundary.md'),
+      PLAN.replace('| 2 | Consumer boundary | 5, 6, 7, 8 |', '| 2 | Consumer boundary | 5, 6, 7 |'),
+    );
+    const headBeforeLanding = await git(['rev-parse', 'HEAD'], worktreePath);
+    const ownerConfig = { spec_owner: 'test-owner', stacked_prs: { enabled: false } } as OwnerConfig;
+
+    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, { ownerConfig })
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(LandGateError);
+    expect((error as LandGateError).gate).toBe('plan-slices');
+    expect((error as Error).message).toContain('Task 8');
+    expect(await git(['rev-parse', 'HEAD'], worktreePath)).toBe(headBeforeLanding);
   });
 
   it('keeps slice parsing and the stacked-PR flag at their intended consumers', async () => {
