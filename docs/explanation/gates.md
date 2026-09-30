@@ -348,10 +348,12 @@ rejected IDs and the available admission keys rather than appending unbounded wo
 A sixth disposition, `existing-task`, covers a current `prd_audit` `FIXABLE` or as-built `REMEDIABLE`
 finding whose remedy an existing active-plan task's **Done when** already admits. The planner binds the
 gap to the real plan task id(s); the engine re-stages those rows to `pending` in
-`.pipeline/task-status.json` and kicks back to `build` without appending anything to the plan. It charges
-one lap under the owning gate's key (`gates.prd_audit` or `gates.architecture_review_as_built`) and never
-draws from the shared plan-growth allowance, so a lap-cap halt names `lap cap reached (n/n)` rather than
-the growth figures. A bound id absent from the active plan halts `needs-human` naming that id. The no-op
+`.pipeline/task-status.json` and kicks back to `build` without appending anything to the plan. It records
+a lap-only pending charge under the owning gate's key (`gates.prd_audit` or
+`gates.architecture_review_as_built`), keyed by the repair obligation id, and charges that lap when `build`
+dispatches (see [remediation caps settle at the build transition](#remediation-caps-settle-at-the-build-transition)).
+It never draws from the shared plan-growth allowance, so a lap-cap halt names `lap cap reached (n/n)` rather
+than the growth figures. A bound id absent from the active plan halts `needs-human` naming that id. The no-op
 escalation stays armed for every gate on the lap: each participating gate banks the pre-re-stage resolved
 count, so a BUILD that only re-completes the re-staged rows on a byte-identical tree is classified
 `no-work` and halts instead of admitting another lap. When the same validation-group round also carries a
@@ -449,7 +451,7 @@ requirements as context for intent when a PRD exists (FR-7). Each finding carrie
 | Grade | Meaning | What happens |
 | --- | --- | --- |
 | `PASS` | The shipped behavior satisfies the criterion. | Nothing — no finding is recorded. |
-| `FIXABLE` | The criterion is unmet and an existing plan task owns the repair; the finding names that task and the criterion (FR-11) or is rejected as malformed. | Appends at most one remediation lap's worth of tasks, capped at both a fixed count (default 5) and a fraction of the authored task count (default 25%), whichever is lower — both operator-configurable (FR-12). Exceeding the cap, or needing a second lap, halts for the operator listing every finding instead of appending tasks (FR-13). |
+| `FIXABLE` | The criterion is unmet and an existing plan task owns the repair; the finding names that task and the criterion (FR-11) or is rejected as malformed. | Appends at most one remediation lap's worth of tasks, capped at both a fixed count (default 5) and a fraction of the authored task count (default 25%), whichever is lower — both operator-configurable (FR-12). Exceeding the cap, or needing a second lap, halts for the operator listing every finding (FR-13); the tasks are appended and left pending first, and the halt fires at the `build` transition (see [remediation caps settle at the build transition](#remediation-caps-settle-at-the-build-transition)). |
 | `PLAN_GAP` | The criterion is unmet and no plan task owns the repair. | Halts for the operator when the unmet criterion is a happy-path scenario; for a negative-path or edge scenario it is recorded in the verdict and the shipped record and the feature may ship, unless operator configuration requires a halt (FR-14). |
 | `OVER_SCOPE` | Shipped behavior goes beyond the planned implementation, judged against intent — the PRD's Goals/Non-Goals and In/Out Scope when a PRD exists, otherwise the stories plus the plan's stated outcome (FR-9). | A widening within intent is self-accepted and recorded. A widening outside intent with no user-visible effect is recorded in the verdict and the shipped record and the feature ships. Every outside-visible finding is presented in one decision block. An explicit accept applies only through its immutable original source/case reference and a fresh relationship. A refusal remains blocking and re-halts as “refused — rework required”; its decision block offers an explicit revision linked to that refusal, never an implicit acceptance. Legacy attributed evidence remains available for reconciliation, while malformed or unsupported legacy history stays visible and halts with recovery rather than being treated as absent. |
 
@@ -485,7 +487,8 @@ resolves exactly as `adr-x decision 4` does. A clause naming more than one refer
 When every valid finding is `REMEDIABLE`, daemon runs with as-built remediation enabled can dispatch the
 bounded remediation route, append the authorized repair work, and re-stage BUILD. The route is bounded by
 `architecture_review_as_built.max_remediation_laps` and the shared plan-growth allowance; exhausting
-either produces a `kickback-cap` halt before another append. A `DESIGN` finding (including a mixed
+either produces a `kickback-cap` halt at the `build` transition, after the round's tasks are appended and
+pending (see [remediation caps settle at the build transition](#remediation-caps-settle-at-the-build-transition)). A `DESIGN` finding (including a mixed
 report) halts for a human decision and names each DESIGN finding with its governing clause. An all-
 `REMEDIABLE` report that cannot route halts `needs-human`, names whether remediation was disabled,
 the run was not a daemon, or the planner produced no usable plan, and lists every blocking finding.
@@ -506,6 +509,28 @@ capped remediation additions from `prd_audit` and enabled as-built review remedi
 gate has its own remediation-lap cap, but both draw from the same plan-growth allowance. `ai-conductor daemon
 status` prints a `PLAN GROWTH [<slug>]:` line per in-progress feature — authored count, added count
 broken down by gate, and tasks remaining under the cap (FR-19; see [`daemon status`](../reference/cli.md#daemon-status)).
+
+### Remediation caps settle at the build transition
+
+A `prd_audit` or as-built remediation round never halts on its lap or plan-growth cap before the repair
+reaches the plan. `/remediate` runs, its admitted tasks are appended, committed, and seeded `pending`, and
+the round records one `pendingRepair` on the kickback ledger: a receipt id, the per-gate lap and growth
+charges, and the appended task ids. Laps and growth are unchanged at that point, and the appended tasks
+are excluded from the authored count so they neither refund allowance nor inflate the 25% denominator.
+
+When `build` next dispatches, the conductor settles the pending repair all or nothing under one ledger
+lease. Within every allowance, each named gate is charged its lap and growth, `plan_growth` is emitted,
+and the record is removed, so a retried or restarted `build` charges nothing again. When any named
+allowance is exhausted, nothing is charged, `build` stays not done, and the feature halts `kickback-cap`
+naming the gate, the allowance, and every finding with a fresh halt generation. A consumed
+[`kickback-budget raise`](../reference/cli.md#ai-conductor-kickback-budget) therefore resumes straight
+into `build` on the already-appended tasks instead of re-auditing unchanged code; a raise that is too
+small or names the other gate halts again at the same boundary.
+
+A malformed `pendingRepair` reads the `prd_audit`, as-built, and growth allowances as exhausted, so
+`build` does not dispatch. When the route-into-no-op guard halts `needs-human` after an append, the
+pending repair is discarded without charging. `build_review`, `test_suite`, and `manual_test` kickbacks
+settle no pending repair, and a `coverage_binding` existing-task reopen still charges its lap at re-stage.
 
 The `build` rework hint for a `testQuality` FAIL carries best-effort `plan contract:` and
 `prior attempts:` pointer lines derived from the raw rubric aggregate — a `plan contract:` pointer names the

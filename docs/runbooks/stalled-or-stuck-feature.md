@@ -565,6 +565,11 @@ ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<
 When the budget view identifies exhausted **plan growth**, recover it with `raise`: it extends the
 growth allowance. `reset` is for lap evidence only and cannot recover a plan-growth halt.
 
+A `prd_audit` or as-built `kickback-cap` halt fires at the `build` transition, after the repair's tasks
+are already appended and `pending`. Once the authorization is consumed, the feature resumes into `build`
+on those tasks without re-running the audit. If it halts `kickback-cap` again with a new generation, the
+raise was too small or named the other gate: re-inspect and raise the exhausted allowance.
+
 The daemon clears only a live halt whose gate and generation match that one-use authorization. It
 does so on its next loop iteration, without waiting for a base-branch advance. If the feature was
 already operator-parked, unpark it after the command; otherwise it remains intentionally halted.
