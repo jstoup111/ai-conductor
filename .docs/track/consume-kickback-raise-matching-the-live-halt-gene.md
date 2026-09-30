@@ -1,0 +1,13 @@
+# Track: Consume the kickback raise that matches the live halt
+
+Track: technical
+
+Scope boundary: Small fix for #2595, approved by the operator on 2026-09-28 (delegated). The daemon's resume-authorization sweep must select the gate whose unconsumed authorization is bound to the live cap halt's generation instead of the first candidate gate in ledger order, must name any stale authorization it passes over in the daemon log, and `kickback-budget inspect` must show each gate's resume-authorization state (awaiting sweep, stale, or consumed) so an unconsumable raise is visible without the daemon log. Out of scope: expiring or deleting stale authorizations from the ledger (they are left in place and reported; halt generations are unique, so a stale one can never match again), the missing halt-record path of #2752, and any new raise path for plan growth.
+
+This is an internal engine correction; acceptance criteria live in technical stories rather than a PRD.
+
+Scope check: A — harness-repo-only (daemon resume-authorization machinery that exists only in this repository's engine); B — n/a (no new skill); C — provider-agnostic (no provider, model, or host behavior is involved). No catalog registration is required.
+
+Event spine: no new channel. The stale-authorization notice reuses the sweep's existing injected `log` dependency that already writes the daemon log's retained lines, and inspect renders durable ledger state (exception C). No `ConductorEvent` variant is added.
+
+Verified foundation: `consumeResumeAuthorizations` in src/conductor/src/engine/daemon-rekick.ts selects one gate with `Object.entries(ledger.gates).find(...)` over unconsumed authorizations whose generation equals their own gate's cap-evidence generation, then compares the live halt class and generation and `continue`s on mismatch without considering a later gate. `RECOVERABLE_CAP_HALT_CLASS_BY_GATE` in src/conductor/src/engine/halt-classification.ts maps both prd_audit and architecture_review_as_built to `kickback-cap`, so the class check cannot distinguish those two gates; only the generation can. `readKickbackHaltGeneration` in daemon-rekick.ts parses the generation from the live HALT body. `applyKickbackBudgetAdjustment` in src/conductor/src/engine/kickback-ledger.ts writes `resumeAuthorization` per gate and never touches other gates' authorizations. The inspect branch of `dispatchKickbackBudgetCommand` in src/conductor/src/engine/kickback-budget-cli.ts renders gates through `kickbackBudgetView` and `renderKickbackBudgetView` in src/conductor/src/engine/kickback-budget-view.ts, neither of which reports the resume authorization today.
