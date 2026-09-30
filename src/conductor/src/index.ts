@@ -51,6 +51,10 @@ import {
   discoverInstalledProviders,
   type ProviderVersionProbeRunner,
 } from './engine/provider-discovery.js';
+import {
+  validateConfiguredProviderModels,
+  type ProviderModelProbeRunner,
+} from './engine/provider-model-probe.js';
 import { resolveBuildReviewConfig } from './engine/resolved-config.js';
 import {
   probeReadOnlyReviewCapability,
@@ -512,6 +516,7 @@ export async function bootDispatchingCliProviders(options: {
   readonly config: HarnessConfig | undefined;
   readonly rendererOpts: TerminalRendererOptions;
   readonly providerDiscoveryRunner?: ProviderVersionProbeRunner;
+  readonly providerModelProbeRunner?: ProviderModelProbeRunner;
   readonly discover?: typeof discoverInstalledProviders;
 }): Promise<ReturnType<typeof registerCliBuiltins> | undefined> {
   if (!CLI_PROVIDER_DISPATCHING_COMMANDS.has(options.command)) return undefined;
@@ -529,6 +534,11 @@ export async function bootDispatchingCliProviders(options: {
   );
   options.registry.markInitialized();
   validateProviderInstallation({ config: options.config ?? {}, discovery });
+  await validateConfiguredProviderModels({
+    config: options.config ?? {},
+    discovery,
+    ...(options.providerModelProbeRunner ? { runner: options.providerModelProbeRunner } : {}),
+  });
   validateRegisteredProviderSelections({
     config: options.config ?? {},
     registeredProviders: options.registry.list('llm_provider'),

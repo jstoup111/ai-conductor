@@ -64,6 +64,10 @@ import {
   discoverInstalledProviders,
   type ProviderVersionProbeRunner,
 } from './engine/provider-discovery.js';
+import {
+  validateConfiguredProviderModels,
+  type ProviderModelProbeRunner,
+} from './engine/provider-model-probe.js';
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import {
   Conductor,
@@ -492,6 +496,8 @@ export interface DaemonModeOptions {
   probeReadOnlyReviewCapability?: typeof probeReadOnlyReviewCapability;
   /** Injectable process boundary for the provider installation probes at boot. */
   providerDiscoveryRunner?: ProviderVersionProbeRunner;
+  /** Injectable process boundary for provider-native model catalog probes at boot. */
+  providerModelProbeRunner?: ProviderModelProbeRunner;
   /**
    * Startup migration boundary (tests inject an ordering probe). Production
    * uses runOwnedHaltClassMigration.
@@ -1200,6 +1206,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   validateProviderInstallation({
     config: config ?? {},
     discovery: providerDiscovery,
+  });
+  await validateConfiguredProviderModels({
+    config: config ?? {},
+    discovery: providerDiscovery,
+    ...(opts.providerModelProbeRunner ? { runner: opts.providerModelProbeRunner } : {}),
   });
   validateRegisteredProviderSelections({
     config: config ?? {},
