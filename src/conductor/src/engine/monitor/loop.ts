@@ -8,6 +8,10 @@ export interface GuidedMonitorLoopDeps {
   readonly deriveMembership: () => Promise<readonly ProjectHalt[]>;
   readonly launch: (halt: ProjectHalt) => Promise<unknown>;
   readonly offer: (halt: ProjectHalt) => void;
+  /** Resolves when the foreground monitor should stop; injectable for tests. */
+  readonly untilStop?: Promise<void>;
+  /** Waits between idle passes; injectable so tests do not use a real timer. */
+  readonly waitForNextPass?: () => Promise<void>;
   readonly operatorSkipped?: (outcome: unknown, halt: ProjectHalt) => boolean | Promise<boolean>;
   readonly snapshotHaltMarker?: (halt: ProjectHalt) => Promise<DeferralKey['haltIdentity']>;
   readonly writeHaltMarker?: (halt: ProjectHalt, contents: Uint8Array) => Promise<void>;
@@ -17,7 +21,14 @@ export interface GuidedMonitorLoopDeps {
 
 /** The monitor is still available when it has no item to offer. */
 export interface GuidedMonitorLoopResult {
-  readonly active: true;
+  readonly active: boolean;
+}
+
+function waitForMonitorPass(untilStop: Promise<void>): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, 1_000);
+    void untilStop.then(() => clearTimeout(timer));
+  });
 }
 
 function sameHalt(left: ProjectHalt, right: ProjectHalt): boolean {
@@ -80,12 +91,35 @@ export async function runGuidedMonitorQueue(
   deps: GuidedMonitorLoopDeps,
 ): Promise<GuidedMonitorLoopResult> {
   const offered = new Set<string>();
+  const untilStop = deps.untilStop;
+  let stopped = false;
+  void untilStop?.then(() => {
+    stopped = true;
+  });
+
+  const stop = (): GuidedMonitorLoopResult => {
+    deps.report?.('Monitor stopped.');
+    return { active: false };
+  };
+
+  // A pre-resolved injected stop condition must prevent even an initial scan.
+  await Promise.resolve();
 
   for (;;) {
+    if (stopped) return stop();
+
     const membership = await deps.deriveMembership();
+    if (stopped) return stop();
     if (membership.length === 0) {
       deps.report?.('Monitor queue is empty; staying active.');
-      return { active: true };
+      if (untilStop === undefined) return { active: true };
+
+      const passed = await Promise.race([
+        (deps.waitForNextPass?.() ?? waitForMonitorPass(untilStop)).then(() => false),
+        untilStop.then(() => true),
+      ]);
+      if (passed) return stop();
+      continue;
     }
 
     const next = membership.find((halt) => !offered.has(`${halt.project}\u0000${halt.slug}`));
@@ -96,6 +130,15 @@ export async function runGuidedMonitorQueue(
 
     offered.add(`${next.project}\u0000${next.slug}`);
     deps.offer(next);
+    if (untilStop !== undefined) {
+      const outcome = await Promise.race([
+        deps.launch(next).then((value) => ({ stopped: false as const, value })),
+        untilStop.then(() => ({ stopped: true as const })),
+      ]);
+      if (outcome.stopped) return stop();
+      await recordSkipIfNeeded(deps, next, outcome.value);
+      continue;
+    }
     const outcome = await deps.launch(next);
     await recordSkipIfNeeded(deps, next, outcome);
   }

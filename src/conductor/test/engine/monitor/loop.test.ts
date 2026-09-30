@@ -1,4 +1,4 @@
-// Covers: task:14, task:16
+// Covers: task:14, task:16, task:17
 import { readFile } from 'node:fs/promises';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -10,6 +10,8 @@ type GuidedMonitorLoopDeps = {
   deriveMembership: () => Promise<readonly ProjectHalt[]>;
   launch: (halt: ProjectHalt) => Promise<unknown>;
   offer: (halt: ProjectHalt) => void;
+  untilStop?: Promise<void>;
+  waitForNextPass?: () => Promise<void>;
   snapshotHaltMarker?: (halt: ProjectHalt) => Promise<DeferralKey['haltIdentity']>;
   writeHaltMarker?: (halt: ProjectHalt, contents: Uint8Array) => Promise<void>;
   recordDeferral?: (key: DeferralKey) => Promise<void>;
@@ -23,9 +25,9 @@ async function advanceAfterGuidedSession(deps: GuidedMonitorLoopDeps): Promise<v
   await loop.advanceAfterGuidedSession(deps);
 }
 
-async function runGuidedMonitorQueue(deps: GuidedMonitorLoopDeps): Promise<{ active: true }> {
+async function runGuidedMonitorQueue(deps: GuidedMonitorLoopDeps): Promise<{ active: boolean }> {
   const loop = await import('../../../src/engine/monitor/loop.js') as {
-    runGuidedMonitorQueue(deps: GuidedMonitorLoopDeps): Promise<{ active: true }>;
+    runGuidedMonitorQueue(deps: GuidedMonitorLoopDeps): Promise<{ active: boolean }>;
   };
   return loop.runGuidedMonitorQueue(deps);
 }
@@ -38,6 +40,14 @@ function halt(slug: string): ProjectHalt {
     reason: `${slug} needs recovery`,
     haltClass: 'needs-human',
   };
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((finish) => {
+    resolve = finish;
+  });
+  return { promise, resolve };
 }
 
 describe('Task 14 — returning to the monitor queue', () => {
@@ -256,5 +266,216 @@ describe('Task 16 — deriving resolution only from halt membership', () => {
       parsesSessionOutputOrReports: false,
       writesHaltMarkerOrResolutionVerdict: false,
     });
+  });
+});
+
+describe('Task 17 — staying ready and stopping cleanly', () => {
+  it('keeps reporting an empty queue across passes without starting a session, then reports a clean stop', async () => {
+    const firstPass = deferred<void>();
+    const secondPass = deferred<void>();
+    const thirdPass = deferred<void>();
+    const stop = deferred<void>();
+    const waits = [firstPass.promise, secondPass.promise, thirdPass.promise];
+    const deriveMembership = vi.fn(async () => []);
+    const launch = vi.fn();
+    const report = vi.fn();
+    const running = runGuidedMonitorQueue({
+      deriveMembership,
+      launch,
+      offer: vi.fn(),
+      report,
+      untilStop: stop.promise,
+      waitForNextPass: vi.fn(async () => waits.shift() ?? new Promise<void>(() => {})),
+    });
+
+    await vi.waitFor(() => expect(report).toHaveBeenCalledTimes(1));
+    firstPass.resolve();
+    await vi.waitFor(() => expect(report).toHaveBeenCalledTimes(2));
+    secondPass.resolve();
+    await vi.waitFor(() => expect(report).toHaveBeenCalledTimes(3));
+    stop.resolve();
+    await running;
+
+    expect({
+      passes: deriveMembership.mock.calls.length,
+      launches: launch.mock.calls,
+      reports: report.mock.calls,
+    }).toEqual({
+      passes: 3,
+      launches: [],
+      reports: [
+        ['Monitor queue is empty; staying active.'],
+        ['Monitor queue is empty; staying active.'],
+        ['Monitor queue is empty; staying active.'],
+        ['Monitor stopped.'],
+      ],
+    });
+  });
+
+  it('offers a halt discovered after an empty pass without a restart', async () => {
+    const later = halt('halted-after-idle');
+    const nextPass = deferred<void>();
+    const stop = deferred<void>();
+    const session = deferred<unknown>();
+    let passes = 0;
+    const offer = vi.fn();
+    const launch = vi.fn((_item: ProjectHalt) => session.promise);
+
+    const running = runGuidedMonitorQueue({
+      deriveMembership: async () => {
+        passes += 1;
+        return passes === 2 ? [later] : [];
+      },
+      launch,
+      offer,
+      untilStop: stop.promise,
+      waitForNextPass: () => nextPass.promise,
+    });
+    let stopped = false;
+    const completed = running.then(() => {
+      stopped = true;
+    });
+
+    await vi.waitFor(() => expect(passes).toBe(1));
+    nextPass.resolve();
+    await vi.waitFor(() => expect(offer).toHaveBeenCalledWith(later));
+    stop.resolve();
+    try {
+      await vi.waitFor(() => expect(stopped).toBe(true));
+    } finally {
+      session.resolve({ kind: 'exited', exitCode: 0 });
+      await completed;
+    }
+
+    expect({
+      offered: offer.mock.calls.map(([item]) => item.slug),
+      launched: launch.mock.calls.map(([item]) => item.slug),
+    }).toEqual({
+      offered: ['halted-after-idle'],
+      launched: ['halted-after-idle'],
+    });
+  });
+
+  it('stops an open session without deferring or resolving it, then offers its retained halt after restart', async () => {
+    const retained = halt('retained-after-interrupt');
+    const stop = deferred<void>();
+    const session = deferred<unknown>();
+    const recordDeferral = vi.fn(async (_key: DeferralKey) => {});
+    const writeHaltMarker = vi.fn(async (_item: ProjectHalt, _contents: Uint8Array) => {});
+    const report = vi.fn();
+    const offer = vi.fn();
+    const launch = vi.fn(() => session.promise);
+
+    const running = runGuidedMonitorQueue({
+      deriveMembership: async () => [retained],
+      launch,
+      offer,
+      recordDeferral,
+      writeHaltMarker,
+      report,
+      untilStop: stop.promise,
+    });
+    let stopped = false;
+    const completed = running.then(() => {
+      stopped = true;
+    });
+
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledWith(retained));
+    stop.resolve();
+    try {
+      await vi.waitFor(() => expect(stopped).toBe(true));
+    } finally {
+      session.resolve({ kind: 'operator-skip' });
+      await completed;
+    }
+
+    const restartStop = deferred<void>();
+    const restartSession = deferred<unknown>();
+    const restartOffer = vi.fn();
+    const restarted = runGuidedMonitorQueue({
+      deriveMembership: async () => [retained],
+      launch: () => restartSession.promise,
+      offer: restartOffer,
+      untilStop: restartStop.promise,
+    });
+    let restartStopped = false;
+    const restartCompleted = restarted.then(() => {
+      restartStopped = true;
+    });
+    await vi.waitFor(() => expect(restartOffer).toHaveBeenCalledWith(retained));
+    restartStop.resolve();
+    try {
+      await vi.waitFor(() => expect(restartStopped).toBe(true));
+    } finally {
+      restartSession.resolve({ kind: 'exited', exitCode: 0 });
+      await restartCompleted;
+    }
+
+    expect({
+      deferrals: recordDeferral.mock.calls,
+      markerWrites: writeHaltMarker.mock.calls,
+      reports: report.mock.calls,
+      offeredAfterRestart: restartOffer.mock.calls.map(([item]) => item.slug),
+    }).toEqual({
+      deferrals: [],
+      markerWrites: [],
+      reports: [['Monitor stopped.']],
+      offeredAfterRestart: ['retained-after-interrupt'],
+    });
+  });
+
+  it('stops cleanly from an idle queue before it opens a session', async () => {
+    const stop = deferred<void>();
+    const report = vi.fn();
+    const deriveMembership = vi.fn(async () => []);
+    const launch = vi.fn();
+    const offer = vi.fn();
+    stop.resolve();
+
+    await runGuidedMonitorQueue({
+      deriveMembership,
+      launch,
+      offer,
+      report,
+      untilStop: stop.promise,
+    });
+
+    expect({
+      membershipCalls: deriveMembership.mock.calls,
+      launches: launch.mock.calls,
+      offers: offer.mock.calls,
+      reports: report.mock.calls,
+    }).toEqual({
+      membershipCalls: [],
+      launches: [],
+      offers: [],
+      reports: [['Monitor stopped.']],
+    });
+  });
+
+  it('offers initial work and remains active until interrupted', async () => {
+    const initial = halt('initial-work');
+    const stop = deferred<void>();
+    const session = deferred<unknown>();
+    const offer = vi.fn();
+    let settled = false;
+    const running = runGuidedMonitorQueue({
+      deriveMembership: async () => [initial],
+      launch: () => session.promise,
+      offer,
+      untilStop: stop.promise,
+    }).then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(offer).toHaveBeenCalledWith(initial));
+    expect(settled).toBe(false);
+    stop.resolve();
+    try {
+      await vi.waitFor(() => expect(settled).toBe(true));
+    } finally {
+      session.resolve({ kind: 'exited', exitCode: 0 });
+      await running;
+    }
   });
 });
