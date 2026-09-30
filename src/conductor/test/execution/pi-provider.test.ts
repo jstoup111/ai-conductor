@@ -1,4 +1,4 @@
-// Covers: task:15, task:16, task:17, task:18
+// Covers: task:3, task:15, task:16, task:17, task:18
 import { readFile } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
@@ -183,6 +183,25 @@ describe('PiProvider', () => {
     expect(result).not.toHaveProperty('rateLimited');
   });
 
+  it('records a SIGTERM without inventing an exit code for an unclassified Pi failure', async () => {
+    const diagnosticLog = vi.fn();
+    spawn.mockResolvedValue({ stdout: '', stderr: '', exitCode: null, signal: 'SIGTERM' } as unknown as ExecaResult);
+
+    const result = await provider.invoke({ ...invokeOptions, diagnosticLog });
+
+    expect(result).toMatchObject({
+      success: false,
+      output: '',
+      exitCode: 1,
+      exitFacts: { signal: 'SIGTERM', stdoutBytes: 0, stderrBytes: 0 },
+    });
+    expect(diagnosticLog.mock.calls.filter(([message]) =>
+      String(message).startsWith('pi subprocess exited without a classifiable result:'),
+    )).toEqual([[
+      'pi subprocess exited without a classifiable result: signal=SIGTERM stdoutBytes=0 stderrBytes=0',
+    ]]);
+  });
+
   it.each([
     [
       'a structural ENOENT',
@@ -227,5 +246,6 @@ describe('PiProvider', () => {
       expect(result).not.toHaveProperty('providerUnavailableScope');
     }
     if (!('modelUnavailable' in expected)) expect(result).not.toHaveProperty('modelUnavailable');
+    if (Object.keys(expected).length > 0) expect(result).not.toHaveProperty('exitFacts');
   });
 });
