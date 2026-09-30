@@ -23,6 +23,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Intake skill users can file issues through a bundled helper that works from installed skill directories. ([implementation PR #2823](https://github.com/jstoup111/ai-conductor/pull/2823)).
 - Daemon commits now credit the configured GitHub bot as a co-author when its identity is available. ([implementation PR #2839](https://github.com/jstoup111/ai-conductor/pull/2839)).
 - Project configuration now selects a work-tracker backend, preserving GitHub behavior and safely excluding unsupported Jira projects. ([implementation PR #2825](https://github.com/jstoup111/ai-conductor/pull/2825)).
+- Operators see acceptance-guard and suite-gate progress for auto-resolved rebases. ([implementation PR #2862](https://github.com/jstoup111/ai-conductor/pull/2862)).
 
 ### Changed
 
