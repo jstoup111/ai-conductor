@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-30T00:59:24.518Z
 Slug: show-autoresolve-guard-and-suite-gate-progress
 Class: needs-human
 Halting step: unknown
