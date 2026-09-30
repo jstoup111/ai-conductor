@@ -10,7 +10,7 @@
 ## ST-901-1 — Select the required built-in provider set
 
 **As an** operator installing or validating AI Conductor,  
-**I want** to select Claude, Codex, or both as required providers,  
+**I want** to select any combination of the built-in providers Claude, Codex, and Pi as required providers,  
 **so that** readiness reflects the provider set I intend to use.
 
 **Traceability:** FR-1, FR-2, FR-12, FR-13
@@ -19,8 +19,8 @@
 
 #### Happy path — explicit provider selection
 
-**Given** the supported built-in providers are Claude and Codex  
-**When** the operator selects Claude only, Codex only, or both providers  
+**Given** the supported built-in providers are Claude, Codex, and Pi  
+**When** the operator selects any non-empty combination of those providers  
 **Then** the selected provider set is used as the required set for readiness evaluation.
 
 #### Happy path — backward-compatible default
@@ -32,16 +32,16 @@
 
 #### Negative path — unsupported provider
 
-**Given** the operator supplies a provider outside the built-in Claude and Codex choices  
+**Given** the operator supplies a provider outside the built-in Claude, Codex, and Pi choices  
 **When** the selection is evaluated  
 **Then** the request is rejected before provider readiness is evaluated  
-**And** the error identifies Claude and Codex as the supported choices.
+**And** the error identifies Claude, Codex, and Pi as the supported choices.
 
 ### Done when
 
-- [ ] Automated coverage proves Claude-only, Codex-only, combined, and omitted-selection behavior.
+- [ ] Automated coverage proves Claude-only, Codex-only, Pi-only, combined, and omitted-selection behavior.
 - [ ] Omitted selection is demonstrably equivalent to requiring Claude only.
-- [ ] Unsupported selections are rejected before readiness checks and the error lists both supported choices.
+- [ ] Unsupported selections are rejected before readiness checks and the error lists all three supported choices.
 
 ## ST-901-2 — Install both built-in provider surfaces
 
