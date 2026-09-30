@@ -7,6 +7,7 @@ import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { readKickbackLedger, type KickbackLedger, type PendingRepair } from '../../src/engine/kickback-ledger.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
+import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
 
@@ -178,5 +179,85 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
 
     expect(build).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/kickback|allowance/i);
+  });
+});
+
+describe('kickback-cap resume into BUILD (Task 9)', () => {
+  let dir: string;
+  let statePath: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-kickback-resume-'));
+    statePath = join(dir, '.pipeline', 'conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('dispatches BUILD first after a consumed prd-audit cap raise', async () => {
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      build: 'pending',
+      session_started_at: Date.now() - 1_000,
+      run_started_at: Date.now() - 1_000,
+      feature_desc: 'raised-transition',
+    });
+    await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{ id: 'rem-1', status: 'pending' }],
+    }));
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        prd_audit: {
+          count: 0, cumulative: 0, laps: 1, treeHash: null,
+          lastReason: 'cap', priorVerdict: true, resolvedBefore: 0,
+          effectiveLapCap: 2,
+          capEvidence: { gate: 'prd_audit', consumed: 1, limit: 1, latestReason: 'cap', haltGeneration: 'g1' },
+          resumeAuthorization: { adjustmentId: 'raise-1', haltGeneration: 'g1', consumed: true },
+        },
+      },
+      growth: { authored: 4, added: 0, byGate: {} },
+      pendingRepair: {
+        receiptId: 'raised-repair', taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 0 } },
+      },
+    });
+    await writeVerdict(dir, 'prd_audit', {
+      satisfied: false,
+      checkedAt: Date.now(),
+      reason: 'remediation finding remains pending BUILD',
+    });
+
+    const dispatched: string[] = [];
+    let releaseBuild: (() => void) | undefined;
+    let signalBuildStarted: (() => void) | undefined;
+    const buildStarted = new Promise<void>((resolve) => { signalBuildStarted = resolve; });
+    const waitForBuildRelease = new Promise<void>((resolve) => { releaseBuild = resolve; });
+    const run = new Conductor({
+      stateFilePath: statePath,
+      projectRoot: dir,
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, resume: true, verifyArtifacts: false,
+      config: { prd_audit: { max_remediation_laps: 1 } } as never,
+      stepRunner: { run: async (step) => {
+        dispatched.push(step);
+        if (step === 'build') {
+          signalBuildStarted?.();
+          await waitForBuildRelease;
+        }
+        return { success: true };
+      } },
+    }).run();
+
+    await buildStarted;
+    expect(dispatched).toEqual(['build']);
+    expect(releaseBuild).toBeDefined();
+    releaseBuild?.();
+    await run;
+    const settled = await readKickbackLedger(dir);
+    expect(settled.gates.prd_audit?.laps).toBe(2);
+    expect(settled.pendingRepair).toBeUndefined();
   });
 });

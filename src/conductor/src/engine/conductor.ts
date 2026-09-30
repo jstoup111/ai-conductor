@@ -6924,6 +6924,29 @@ export class Conductor {
         return;
       }
       startIndex = this.findResumeIndex(state, steps);
+      // A cap halt at the BUILD boundary leaves its admitted repair durable
+      // but unbuilt.  Later validation members can still be marked done, so
+      // state-only resume may otherwise start after BUILD and the verdict
+      // clamp would replay the halted audit before its repair gets a chance to
+      // run.  A pending receipt is the durable authority for this one
+      // exception: re-enter BUILD until settlement either dispatches it or
+      // writes the next cap halt.  The boundary itself still fail-closes a
+      // malformed record before any provider dispatch.
+      try {
+        const ledger = await readKickbackLedger(this.projectRoot);
+        const buildIndex = indexOf('build');
+        if (
+          !isUnreadableKickbackLedger(ledger) &&
+          ledger.pendingRepair !== undefined &&
+          getStepStatus(state, 'build') !== 'done' &&
+          buildIndex >= 0
+        ) {
+          startIndex = buildIndex;
+        }
+      } catch {
+        // The ordinary resume route retains ownership when the ledger cannot
+        // be read at all; BUILD's boundary owns the fail-closed settlement.
+      }
       const stateDerivedIndex = startIndex;
 
       // Clamp startIndex backward to honor on-disk gate verdicts.
