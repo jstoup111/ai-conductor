@@ -762,7 +762,13 @@ export type FlattenedReplayProof =
 
 export type FeatureReplayStart =
   | { kind: 'started'; result: GitResult; rebaseArgs: string[]; expectedSubjects?: string[]; flatten?: FlattenedReplayPlan; proof?: FlattenedReplayProof }
-  | { kind: 'refused'; plan: FlattenedReplayPlan; proof: Extract<FlattenedReplayProof, { kind: 'refused' | 'target_conflict' }> };
+  | {
+    kind: 'refused';
+    plan: FlattenedReplayPlan;
+    proof: Extract<FlattenedReplayProof, { kind: 'refused' | 'target_conflict' }>;
+    /** True only after a merge-bearing range selected flattened replay handling. */
+    flattened: boolean;
+  };
 
 async function replayFlattenedEntries(
   git: GitRunner,
@@ -944,33 +950,33 @@ export async function startFeatureReplay(
   const merges = await git(['rev-list', '--merges', `${baseRef}..HEAD`]);
   const emptyPlan = (): FlattenedReplayPlan => ({ entries: [], audit: { flattenedMerges: [], ancestryOnlyMerges: [], sideLineageCount: 0 }, pairs: [] });
   if (merges.exitCode !== 0) {
-    return { kind: 'refused', plan: emptyPlan(), proof: { kind: 'refused', reason: `rev-list --merges failed: ${merges.stderr}` } };
+    return { kind: 'refused', plan: emptyPlan(), proof: { kind: 'refused', reason: `rev-list --merges failed: ${merges.stderr}` }, flattened: false };
   }
   if (merges.stdout.trim() === '') {
     const rebaseArgs = ['rebase', '--autostash', baseRef];
     return { kind: 'started', result: await git(rebaseArgs), rebaseArgs };
   }
   if (!/^[0-9a-f]{40}(?:\s|$)/i.test(merges.stdout.trim())) {
-    return { kind: 'refused', plan: emptyPlan(), proof: { kind: 'refused', reason: 'rev-list --merges returned malformed output' } };
+    return { kind: 'refused', plan: emptyPlan(), proof: { kind: 'refused', reason: 'rev-list --merges returned malformed output' }, flattened: true };
   }
   let plan: FlattenedReplayPlan;
   try {
     plan = await planFlattenedReplay(git, mergeBase);
   } catch (error) {
-    return { kind: 'refused', plan: emptyPlan(), proof: { kind: 'refused', reason: `flattened replay planning failed: ${(error as Error).message}` } };
+    return { kind: 'refused', plan: emptyPlan(), proof: { kind: 'refused', reason: `flattened replay planning failed: ${(error as Error).message}` }, flattened: true };
   }
   const targetResult = await git(['rev-parse', baseRef]);
   if (targetResult.exitCode !== 0 || targetResult.stdout.trim() === '') {
-    return { kind: 'refused', plan, proof: { kind: 'refused', reason: `rev-parse ${baseRef} failed: ${targetResult.stderr}` } };
+    return { kind: 'refused', plan, proof: { kind: 'refused', reason: `rev-parse ${baseRef} failed: ${targetResult.stderr}` }, flattened: true };
   }
   const target = targetResult.stdout.trim();
   const proof = await proveFlattenedReplay(git, plan, mergeBase, target);
   if (proof.kind === 'refused' || proof.kind === 'target_conflict' && plan.entries[proof.index]?.kind === 'flattened') {
-    return { kind: 'refused', plan, proof };
+    return { kind: 'refused', plan, proof, flattened: true };
   }
   const todoPathResult = await git(['rev-parse', '--git-path', 'ai-conductor-flatten-todo']);
   if (todoPathResult.exitCode !== 0 || todoPathResult.stdout.trim() === '') {
-    return { kind: 'refused', plan, proof: { kind: 'refused', reason: 'could not determine flattened replay todo path' } };
+    return { kind: 'refused', plan, proof: { kind: 'refused', reason: 'could not determine flattened replay todo path' }, flattened: true };
   }
   const todoPath = todoPathResult.stdout.trim();
   await writeFile(projectRoot && !isAbsolute(todoPath) ? join(projectRoot, todoPath) : todoPath, `${plan.entries.map((entry) => `pick ${entry.sha}`).join('\n')}\n`);
@@ -1311,6 +1317,16 @@ export async function performRebase(
   // genuine overlap makes the autostash pop conflict, still caught below.)
   const replayStart = await startFeatureReplay(git, base.ref, mergeBase, projectRoot);
   if (replayStart.kind === 'refused') {
+    if (!replayStart.flattened) {
+      return attachReplaySeed({
+        kind: 'conflict_halt',
+        conflicts: [],
+        reason: replayStart.proof.kind === 'refused'
+          ? replayStart.proof.reason
+          : `replay conflicts at ${replayStart.proof.sha}`,
+        startFailure: true,
+      });
+    }
     const conflicted = replayStart.proof.kind === 'target_conflict'
       ? replayStart.plan.entries[replayStart.proof.index]
       : undefined;
