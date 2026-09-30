@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:5, task:6
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,7 @@ import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { SpoolStore } from '../../../src/engine/otel/spool-store.js';
 import { buildExporters } from '../../../src/engine/otel/transport.js';
 import { SpoolingMetricExporter, SpoolingSpanExporter } from '../../../src/engine/otel/spooling-exporter.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const directories: string[] = [];
 const headerEnvironment = 'OTEL_SPOOLING_EXPORTER_TEST_HEADER';
@@ -36,6 +37,12 @@ function directMetricExporter(): PushMetricExporter {
     async forceFlush(): Promise<void> {},
     async shutdown(): Promise<void> {},
   };
+}
+
+function rejectedStore(error: Error): SpoolStore {
+  return {
+    write: async () => Promise.reject(error),
+  } as unknown as SpoolStore;
 }
 
 afterEach(async () => {
@@ -124,5 +131,39 @@ describe('spooling exporters', () => {
     const bodies = await Promise.all((await store.list('traces')).map((batch) => readFile(batch.path, 'utf8')));
 
     expect(bodies.join('')).not.toContain(secret);
+  });
+
+  it.each(['ENOSPC', 'EACCES'])('falls back to direct export after a %s spool write failure without throwing', async (code) => {
+    const error = Object.assign(new Error(`spool write failed: ${code}`), { code });
+    const events = new ConductorEventEmitter();
+    const warnings: string[] = [];
+    const directBatches: ReadableSpan[][] = [];
+    events.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') warnings.push(event.error);
+    });
+    const exporter = new SpoolingSpanExporter(rejectedStore(error), {
+      export(spans, callback): void {
+        directBatches.push(spans);
+        callback({ code: ExportResultCode.SUCCESS });
+      },
+      async shutdown(): Promise<void> {},
+      async forceFlush(): Promise<void> {},
+    }, events);
+    const provider = new BasicTracerProvider();
+    const span = provider.getTracer('spooling-exporter-test').startSpan('direct-send-fallback');
+    span.end();
+    const spans = [span as unknown as ReadableSpan];
+
+    const results = await Promise.all(Array.from({ length: 3 }, () => new Promise<{ code: number }>((resolve) => {
+      expect(() => exporter.export(spans, resolve)).not.toThrow();
+    })));
+
+    expect(directBatches).toEqual([spans, spans, spans]);
+    expect(results).toEqual([
+      { code: ExportResultCode.SUCCESS },
+      { code: ExportResultCode.SUCCESS },
+      { code: ExportResultCode.SUCCESS },
+    ]);
+    expect(warnings).toEqual([`[otel] spool write failed; sending directly: spool write failed: ${code}`]);
   });
 });
