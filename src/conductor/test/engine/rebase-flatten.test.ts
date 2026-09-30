@@ -141,9 +141,11 @@ describe('planFlattenedReplay (Task 2)', () => {
       { from: CONTENT_MERGE_TWO, to: FLATTENED_CONTENT_TWO },
     ]);
     expect(plan.absorptionPoints).toEqual([
-      { from: CONTENT_SIDE_ONE, to: FLATTENED_CONTENT },
-      { from: CONTENT_SIDE_TWO, to: FLATTENED_CONTENT },
+      { from: CONTENT_SIDE_ONE, to: CONTENT_MERGE_AUTHOR_DIFFERS },
+      { from: CONTENT_SIDE_TWO, to: CONTENT_MERGE_AUTHOR_DIFFERS },
       { from: ANCESTRY_ONLY_MERGE, to: ORDINARY_TWO },
+      { from: ANCESTRY_ONLY_MERGE, to: CONTENT_MERGE_AUTHOR_DIFFERS },
+      { from: ANCESTRY_ONLY_MERGE, to: CONTENT_MERGE_TWO },
     ]);
 
     for (const merge of [ANCESTRY_ONLY_MERGE, CONTENT_MERGE_AUTHOR_DIFFERS, CONTENT_MERGE_TWO]) {

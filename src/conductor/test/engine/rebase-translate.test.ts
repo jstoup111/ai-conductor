@@ -186,6 +186,48 @@ describe('selectRepairBoundaryTranslation (Task 2)', () => {
 });
 
 describe('buildRewriteMap (RED — module does not exist yet)', () => {
+  it('absorbs a no-twin side citation through the pre-image merge after pair matching', async () => {
+    const side = '1111111111111111111111111111111111111111';
+    const merge = '2222222222222222222222222222222222222222';
+    const synthetic = '3333333333333333333333333333333333333333';
+    const flattenedPost = '4444444444444444444444444444444444444444';
+    const flatten: FlattenedReplayPlan = {
+      entries: [], audit: { flattenedMerges: [merge], ancestryOnlyMerges: [], sideLineageCount: 1 },
+      pairs: [{ from: merge, to: synthetic }],
+      absorptionPoints: [{ from: side, to: merge }],
+    };
+    const git = makeFakeGit({
+      revList: { [`${ONTO}..orig`]: [side, merge], [`${ONTO}..head`]: [flattenedPost] },
+      show: { [side]: 'side only', [merge]: 'merge patch', [synthetic]: 'merge patch', [flattenedPost]: 'merge patch' },
+      patchId: { 'side only': 'side', 'merge patch': 'merge' },
+    });
+
+    const { map, residue } = await buildRewriteMap(git, ONTO, 'orig', 'head', flatten);
+
+    expect(map[merge]).toBe(flattenedPost);
+    expect(map[side]).toBe(flattenedPost);
+    expect(residue).toEqual([]);
+  });
+
+  it('uses the first surviving ordered ancestry-only successor and leaves none as residue', async () => {
+    const ancestry = '5555555555555555555555555555555555555555';
+    const dropped = '6666666666666666666666666666666666666666';
+    const survivor = '7777777777777777777777777777777777777777';
+    const survivorPost = '8888888888888888888888888888888888888888';
+    const flatten: FlattenedReplayPlan = {
+      entries: [], audit: { flattenedMerges: [], ancestryOnlyMerges: [ancestry], sideLineageCount: 0 }, pairs: [],
+      absorptionPoints: [{ from: ancestry, to: dropped }, { from: ancestry, to: survivor }],
+    };
+    const git = makeFakeGit({
+      revList: { [`${ONTO}..orig`]: [ancestry, dropped, survivor], [`${ONTO}..head`]: [survivorPost] },
+      show: { [ancestry]: 'ancestry', [dropped]: 'dropped', [survivor]: 'survivor', [survivorPost]: 'survivor' },
+      patchId: { ancestry: 'a', dropped: 'd', survivor: 's' },
+    });
+    const { map, residue } = await buildRewriteMap(git, ONTO, 'orig', 'head', flatten);
+    expect(map[ancestry]).toBe(survivorPost);
+    expect(residue).toEqual(expect.not.arrayContaining([ancestry]));
+  });
+
   it('keeps a patch-id mapping when a recorded absorption point names the same side commit', async () => {
     const side = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     const merge = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -196,7 +238,7 @@ describe('buildRewriteMap (RED — module does not exist yet)', () => {
       entries: [],
       audit: { flattenedMerges: [merge], ancestryOnlyMerges: [], sideLineageCount: 1 },
       pairs: [{ from: merge, to: flattened }],
-      absorptionPoints: [{ from: side, to: flattened }],
+      absorptionPoints: [{ from: side, to: merge }],
     };
     const git = makeFakeGit({
       revList: {

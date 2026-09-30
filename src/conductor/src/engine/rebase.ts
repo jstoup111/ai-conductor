@@ -940,19 +940,31 @@ export async function planFlattenedReplay(
       throw new Error(`could not list side lineage for merge ${sha}`);
     }
     for (const sideSha of side.stdout.split('\n').map((value) => value.trim()).filter(Boolean)) {
-      absorptionPoints.push({ from: sideSha, to: flattenedSha });
+      // `to` is deliberately the pre-image merge sha.  The translation pass
+      // first maps that merge to the post-image flattened commit, then follows
+      // this absorption edge.  A planning-only commit-tree sha is not a key in
+      // the rewrite map.
+      absorptionPoints.push({ from: sideSha, to: sha });
     }
   }
 
-  // An ancestry-only merge is absorbed by its first following replay entry.
+  // An ancestry-only merge is absorbed by the first following replay entry
+  // that survives.  Record every candidate in first-parent order; translation
+  // adds without overwriting, so dropped/empty candidates naturally fall
+  // through to the first mapped successor.
   // Store that relationship while the immutable first-parent plan is known;
   // translation must not reconstruct it from post-replay history.
   for (const merge of ancestryOnlyMerges) {
     const mergeIndex = firstParent.indexOf(merge);
-    const successor = firstParent.slice(mergeIndex + 1)
+    const successors = firstParent.slice(mergeIndex + 1)
       .map((sha) => entries.find((entry) => entry.kind === 'ordinary' ? entry.sha === sha : entry.mergeSha === sha))
-      .find((entry): entry is FlattenedReplayEntry => entry !== undefined);
-    if (successor) absorptionPoints.push({ from: merge, to: successor.sha });
+      .filter((entry): entry is FlattenedReplayEntry => entry !== undefined);
+    for (const successor of successors) {
+      absorptionPoints.push({
+        from: merge,
+        to: successor.kind === 'flattened' ? successor.mergeSha : successor.sha,
+      });
+    }
   }
 
   return {
@@ -1000,14 +1012,21 @@ export async function startFeatureReplay(
     const reason = proof.kind === 'refused'
       ? proof.reason
       : `flattened merge conflicts at ${proof.sha}`;
+    // A merge-specific recovery recipe is useful only when it identifies a
+    // real merge, both parents, and its synthetic flattened commit.  Earlier
+    // failures are ordinary start failures, never placeholder-filled refusals.
+    if (!mergeSha || parents.length !== 2 || !merge?.sha) {
+      return { kind: 'refused', plan, proof, flattened: false };
+    }
+    const [firstParent, secondParent] = parents as [string, string];
     const refusalOutcome: Extract<RebaseOutcome, { kind: 'flatten_refused' }> = {
       kind: 'flatten_refused',
       mergeSha,
-      parents: [parents[0] ?? '', parents[1] ?? ''],
-      flattenedSha: merge?.sha ?? '',
+      parents: [firstParent, secondParent],
+      flattenedSha: merge.sha,
       conflicts: proof.kind === 'target_conflict' ? proof.conflicts : [],
       reason,
-      recipe: flattenRefusalRecipe(projectRoot ?? '<worktree>', baseRef, parents[0] ?? '<first-parent>', mergeSha || '<merge>'),
+      recipe: flattenRefusalRecipe(projectRoot ?? '<worktree>', baseRef, firstParent, mergeSha),
     };
     return { kind: 'refused', plan, proof, flattened, refusal: refusalOutcome };
   };
@@ -1036,6 +1055,20 @@ export async function startFeatureReplay(
   if (proof.kind === 'refused' || proof.kind === 'target_conflict' && plan.entries[proof.index]?.kind === 'flattened') {
     return refusal(plan, proof, true);
   }
+  // Read every subject before writing the todo or starting the real rebase.
+  // A missing ordinary subject would otherwise silently shrink FR-9's guard.
+  const expectedSubjects: string[] = [];
+  for (const entry of plan.entries) {
+    if (entry.kind === 'flattened') {
+      expectedSubjects.push(entry.subject);
+      continue;
+    }
+    const subject = await git(['show', '-s', '--format=%s', entry.sha]);
+    if (subject.exitCode !== 0) {
+      return refusal(plan, { kind: 'refused', reason: `could not read replay subject for ${entry.sha}: ${subject.stderr}` }, true);
+    }
+    expectedSubjects.push(subject.stdout.trim());
+  }
   const todoPathResult = await git(['rev-parse', '--git-path', 'ai-conductor-flatten-todo']);
   if (todoPathResult.exitCode !== 0 || todoPathResult.stdout.trim() === '') {
     return refusal(plan, { kind: 'refused', reason: 'could not determine flattened replay todo path' }, true);
@@ -1043,18 +1076,9 @@ export async function startFeatureReplay(
   const todoPath = todoPathResult.stdout.trim();
   await writeFile(projectRoot && !isAbsolute(todoPath) ? join(projectRoot, todoPath) : todoPath, `${plan.entries.map((entry) => `pick ${entry.sha}`).join('\n')}\n`);
   const rebaseArgs = ['-c', `sequence.editor=cp ${todoPath}`, 'rebase', '-i', '--autostash', baseRef];
-  // FR-9 judges what the generated todo actually replays.  In particular it
-  // must not require dropped ancestry-only merges or side-lineage commits.
-  // Flattened entries retain their subject in the plan; look up ordinary
-  // first-parent entries here rather than widening the immutable plan shape.
-  const expectedSubjects = await Promise.all(plan.entries.map(async (entry) => {
-    if (entry.kind === 'flattened') return entry.subject;
-    const subject = await git(['show', '-s', '--format=%s', entry.sha]);
-    return subject.exitCode === 0 ? subject.stdout.trim() : '';
-  }));
   return {
     kind: 'started', result: await git(rebaseArgs), rebaseArgs,
-    expectedSubjects: expectedSubjects.filter(Boolean),
+    expectedSubjects,
     flatten: plan, proof,
   };
 }
