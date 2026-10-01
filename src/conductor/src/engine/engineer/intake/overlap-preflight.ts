@@ -219,13 +219,13 @@ export async function runOverlapPreflight(
 ): Promise<OverlapDecision> {
   const suggestions = await deps.suggestions(input);
   const skipNotes = suggestions.skipNotes ?? [];
-  const sameIssue = (left: string, right: string) => left === right
-    || left.replace(/^.*#/, '#') === right.replace(/^.*#/, '#');
+  const sameIssue = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
   const declined: string[] = [];
   const invalid = (input.declineOverlap ?? []).filter((value) => {
     const parsed = parseSourceRef(value);
     const canonical = parsed ? `${parsed.repo}#${parsed.number}` : undefined;
-    const suggestion = canonical && [...suggestions.shown, ...suggestions.preAccepted].find(({ issue }) => sameIssue(issue, canonical));
+    const suggestion = canonical && [...suggestions.shown, ...(suggestions.omitted ?? []), ...suggestions.preAccepted]
+      .find(({ issue }) => sameIssue(issue, canonical));
     if (suggestion) {
       declined.push(suggestion.issue);
       return false;

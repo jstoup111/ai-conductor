@@ -38,6 +38,35 @@ describe('degraded overlap collection', () => {
     expect(diffs).toBe(100);
   });
 
+  it('limits an over-returning open-issue lister to 500 comparisons and still files', async () => {
+    const issues = Array.from({ length: 501 }, (_, index) => ({
+      number: index + 1,
+      body: index === 500 ? 'src/a.ts' : 'unrelated.md',
+    }));
+    const open = await collectOpenIssueOverlaps({
+      gh: async () => ({ exitCode: 0, stdout: JSON.stringify(issues), stderr: '' }),
+      cwd: '.', repository: 'acme/app', citedPaths: ['src/a.ts'], knownPaths: new Set(['src/a.ts']),
+    });
+    expect(open.skipNotes).toEqual(['partial comparison: reached 500-issue bound']);
+    expect(open.overlaps).not.toContainEqual(expect.objectContaining({ issue: '#501' }));
+
+    const operations: GithubOperationRequest[] = [];
+    const result = await fileIntakeIssue({ title: 't', body: 'src/a.ts', size: 'S', priority: 'low', interactive: false }, {
+      overlap: { suggestions: async () => ({ shown: open.overlaps.map(({ issue, sharedPaths }) => ({ issue, sharedPaths: [...sharedPaths] })), preAccepted: [], advisory: [], skipNotes: open.skipNotes.map((reason) => ({ part: 'open-issues', reason })) }) },
+      creation: {
+        authority: { resolveActor: async () => ({ resolved: true as const, id: 'alice' }), intent: { kind: 'explicit-intake', repository: 'acme/app' } },
+        operations: { run: async (request) => {
+          operations.push(request);
+          return request.operation === 'issue.create'
+            ? { created: { repository: 'acme/app', kind: 'issue' as const, number: 1 } }
+            : {};
+        } },
+      },
+    });
+    expect(result.overlap).toMatchObject({ kind: 'proceed', skipNotes: [{ part: 'open-issues', reason: 'partial comparison: reached 500-issue bound' }] });
+    expect(operations.filter(({ operation }) => operation === 'issue.create')).toHaveLength(1);
+  });
+
   it('files normally when the production collectors both fail', async () => {
     const operations: GithubOperationRequest[] = [];
     const overlap = buildOverlapSources({

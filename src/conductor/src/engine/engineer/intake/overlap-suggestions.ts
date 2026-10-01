@@ -16,6 +16,8 @@ export interface OverlapSuggestion {
 
 export interface OverlapSuggestions {
   shown: OverlapSuggestion[];
+  /** Linkable suggestions beyond the prompt cap, retained for re-run declines. */
+  omitted?: OverlapSuggestion[];
   preAccepted: OverlapSuggestion[];
   advisory: BranchOverlap[];
   omittedCount?: number;
@@ -77,12 +79,12 @@ export function buildSuggestions({
     return left.issue < right.issue ? -1 : left.issue > right.issue ? 1 : 0;
   });
   const cappedShown = rankedShown.slice(0, cap);
-  const omittedCount = rankedShown.length - cappedShown.length;
+  const omitted = rankedShown.slice(cap);
 
   return {
     shown: cappedShown,
     preAccepted,
     advisory,
-    ...(omittedCount > 0 ? { omittedCount } : {}),
+    ...(omitted.length > 0 ? { omitted, omittedCount: omitted.length } : {}),
   };
 }

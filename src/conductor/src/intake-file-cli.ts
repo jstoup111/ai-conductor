@@ -13,7 +13,8 @@
 //               [--priority critical|high|medium|low]
 //               [--depends-on owner/repo#N ...] [--repo owner/repo]
 
-import { createInterface } from 'node:readline/promises';
+import { createInterface, type Interface } from 'node:readline/promises';
+import { fileURLToPath } from 'node:url';
 import { makeProductionGh } from './engine/pr-labels.js';
 import { createIntakeFilingOperations, fileIntakeIssue, type FileIntakeIssueOpts } from './engine/engineer/intake/file-issue.js';
 import { renderIntakeFileOutput } from './engine/engineer/intake/filing-output.js';
@@ -22,7 +23,28 @@ import { runTrackerRead, type GhRunner } from './engine/tracker-client.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { EventPersister } from './engine/event-persister.js';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+
+/** Turn readline's otherwise-unsettled closed input into a rejected prompt. */
+export function promptReadlineQuestion(rl: Interface, question: string): Promise<string> {
+  return new Promise((resolveAnswer, rejectAnswer) => {
+    const onClose = () => {
+      rl.removeListener('close', onClose);
+      rejectAnswer(new Error('interactive input closed'));
+    };
+    rl.once('close', onClose);
+    void rl.question(`${question} `).then(
+      (answer) => {
+        rl.removeListener('close', onClose);
+        resolveAnswer(answer);
+      },
+      (error: unknown) => {
+        rl.removeListener('close', onClose);
+        rejectAnswer(error);
+      },
+    );
+  });
+}
 
 function parseArgs(argv: string[]): FileIntakeIssueOpts | null {
   const opts: Partial<FileIntakeIssueOpts> & { dependsOn: string[]; declineOverlap: string[] } = { dependsOn: [], declineOverlap: [] };
@@ -122,7 +144,7 @@ async function main(): Promise<void> {
     persister = new EventPersister(join(cwd, '.pipeline', 'events.jsonl'), events);
     persister.start();
     const result = await fileIntakeIssue({ ...opts, repo: repository }, {
-      prompt: rl ? (question: string) => rl.question(`${question} `) : undefined,
+      prompt: rl ? (question: string) => promptReadlineQuestion(rl, question) : undefined,
       overlap: {
         repository,
         events,
@@ -147,9 +169,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  // Only a hard failure (issue create itself failing, or an argument error)
-  // reaches here — per-dep and label failures are warnings inside fileIntakeIssue.
-  console.error(`[intake-file] error: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  void main().catch((error) => {
+    // Only a hard failure (issue create itself failing, or an argument error)
+    // reaches here — per-dep and label failures are warnings inside fileIntakeIssue.
+    console.error(`[intake-file] error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}

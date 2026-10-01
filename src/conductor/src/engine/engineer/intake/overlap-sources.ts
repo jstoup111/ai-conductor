@@ -92,7 +92,7 @@ export async function collectOpenIssueOverlaps({
   const effectiveLimit = Math.min(limit, DEFAULT_OPEN_ISSUES_LIMIT);
   const openIssues = await makeOpenIssueLister(gh, cwd, repository)(effectiveLimit);
 
-  for (const issue of openIssues) {
+  for (const issue of openIssues.slice(0, effectiveLimit)) {
     const sanitized = sanitizeInboundText([issue.body], {
       kind: 'github', repo: repository, number: String(issue.number),
     });

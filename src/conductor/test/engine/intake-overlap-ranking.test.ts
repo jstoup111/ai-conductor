@@ -29,6 +29,11 @@ describe('intake overlap suggestions ranking', () => {
           { issue: '#1', sharedPaths: ['l.ts'] },
           { issue: '#2', sharedPaths: ['k.ts'] },
         ],
+        omitted: [
+          { issue: '#5', sharedPaths: ['j.ts'] },
+          { issue: '#9', sharedPaths: ['i.ts'] },
+          { issue: '#11', sharedPaths: ['h.ts'] },
+        ],
         preAccepted: [],
         advisory: [],
         omittedCount: 3,
@@ -40,6 +45,11 @@ describe('intake overlap suggestions ranking', () => {
           { issue: '#13', sharedPaths: ['d.ts', 'e.ts'] },
           { issue: '#1', sharedPaths: ['l.ts'] },
           { issue: '#2', sharedPaths: ['k.ts'] },
+        ],
+        omitted: [
+          { issue: '#5', sharedPaths: ['j.ts'] },
+          { issue: '#9', sharedPaths: ['i.ts'] },
+          { issue: '#11', sharedPaths: ['h.ts'] },
         ],
         preAccepted: [],
         advisory: [],
