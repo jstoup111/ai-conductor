@@ -539,3 +539,12 @@ Task 17 <- 16
 **Done when:**
 - Task 10 is satisfied by this task.
 - Re-run as-built and confirm task rem-as-built-rem-ab8-1 is complete.
+
+### Task rem-prd-audit-rem-s44-1: src/conductor/src/engine/resolved-config.ts:359 resolveFallbackProviderNativeStepConfig — when policy.requiresConfiguredModels, seed the base effort from the step's authored effort (steps.<step>.by_tier.<tier>.effort, then steps.<step>.effort) before escalateAttempt, keeping model resolution on config undefined so no Claude alias crosses; leave claude/codex fallback candidates unchanged; strengthen src/conductor/test/engine/provider-execution-pi-fallback.test.ts:292 to author steps.plan.effort max (differing from the plan policy effort) and assert the Pi fallback invocation carries llm_providers.pi.model with effort max and never opus, keeping the existing Task 9 assertions
+**Gate:** prd-audit
+**Rationale:** resolved-config.ts:368-374 resolveFallbackProviderNativeStepConfig passes config undefined, so a claude->pi fallback gets PI_MODEL_POLICY.stepEfforts instead of the authored steps.<step>.effort, and provider-execution-pi-fallback.test.ts:292 uses effort high (equal to the policy default) so it cannot tell the sources apart; plan Task 9 Done-when bullet 5 ('pi is invoked with llm_providers.pi.model and the step effort') admits the repair. Model isolation (adr-2026-07-24 section 3) is preserved because only the provider-neutral effort crosses. Sibling excluded: claude->codex fallback effort also ignores the step effort, but no plan task admits changing codex fallback behavior and Task 12 requires codex argv byte-identical, so the fix is scoped to requiresConfiguredModels policies.
+**Criterion:** S4.4
+**Parent task:** 9
+**Done when:**
+- S4.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s44-1 is complete.
