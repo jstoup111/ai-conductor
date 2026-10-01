@@ -26,6 +26,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators see acceptance-guard and suite-gate progress for auto-resolved rebases. ([implementation PR #2862](https://github.com/jstoup111/ai-conductor/pull/2862)).
 - Interactive composer launches honor the configured Codex provider. ([implementation PR #2844](https://github.com/jstoup111/ai-conductor/pull/2844)).
 - Plan authors can declare bounded work slices, and the conductor rejects ordered slice dependencies. ([implementation PR #2864](https://github.com/jstoup111/ai-conductor/pull/2864)).
+- Unclassified provider dispatch failures now include recorded exit codes, signals, and output sizes. ([implementation PR #2853](https://github.com/jstoup111/ai-conductor/pull/2853)).
 
 ### Changed
 
