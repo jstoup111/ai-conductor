@@ -452,8 +452,10 @@ export class AcceptedWideningDecisionStore {
           prior.supersedes.revision === parsedInput.supersedes.revision &&
           prior.offerEntryId === parsedInput.offerEntryId &&
           prior.authority === parsedInput.authority) return { ok: true, decision: prior };
-        if (!prior || parsedInput.supersedes.id !== prior.id || parsedInput.supersedes.revision !== prior.revision ||
-          parsedInput.authority === prior.authority) return { ok: false, reason: 'invalid-decision' };
+        if (!prior || parsedInput.supersedes.id !== prior.id || parsedInput.supersedes.revision !== prior.revision) {
+          return { ok: false, reason: 'invalid-decision' };
+        }
+        if (parsedInput.authority === prior.authority) return { ok: true, decision: prior };
       } else if (prior !== undefined) {
         return { ok: false, reason: 'invalid-decision' };
       }
@@ -737,7 +739,7 @@ export function renderOverScopeDecisionBlock(undecided: readonly (OverScopeRende
     parts.push(`Refused — rework required: ${[...revisions, ...refused].map((f) => f.criterion).join(', ')}.`);
   }
   if (revisions.length) {
-    parts.push('To revise a refusal, edit each `decision` to `accept` or `refuse` with a `rationale`, then clear this halt.');
+    parts.push('To revise a refusal, edit each `decision` to `accept` or `refuse` with a `rationale`; leaving `decision` as `pending` keeps the prior decision unchanged. Then clear this halt.');
     parts.push(`\`\`\`json over-scope-decisions\n${JSON.stringify(revisions.map(renderOffer), null, 2)}\n\`\`\``);
   }
   if (defects.length) parts.push(`Unreadable scope decisions: ${defects.map((d) => d.message ? `${d.kind} (${d.message})` : d.criterion ? `${d.kind} (${d.criterion})` : d.kind).join(', ')}.`);

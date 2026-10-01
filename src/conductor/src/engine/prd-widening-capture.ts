@@ -357,7 +357,10 @@ export async function capturePrdWideningDecisions(
     };
     const appended = await options.decisionStore.append(input);
     if (!appended.ok) {
-      defects.push({ kind: 'write-failed', offerEntryId: entry.offerEntryId });
+      defects.push({
+        kind: appended.reason === 'invalid-decision' ? 'invalid-decision' : 'write-failed',
+        offerEntryId: entry.offerEntryId,
+      });
       continue;
     }
     captured.push(appended.decision);

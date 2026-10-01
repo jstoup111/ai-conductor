@@ -1,3 +1,4 @@
+// Covers: task:2
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -276,5 +277,23 @@ describe('capturePrdWideningDecisions', () => {
     expect(first).toMatchObject({ captured: [], defects: [{ kind: 'write-failed', offerEntryId: 'case-1' }] });
     expect(replay).toMatchObject({ captured: [expect.objectContaining({ offerEntryId: 'case-1' })], defects: [] });
     expect(recorded).toHaveLength(1);
+  });
+
+  it.each([
+    ['invalid-decision', 'invalid-decision'],
+    ['lock-timeout', 'write-failed'],
+    ['lease-operation-failed', 'write-failed'],
+    ['atomic-replace-failed', 'write-failed'],
+  ] as const)('classifies an append %s without conflating invalid authority and persistence', async (failure, defect) => {
+    const failingStore: PrdWideningCaptureDecisionStore = {
+      append: async () => ({ ok: false, reason: failure }),
+    };
+
+    await expect(capturePrdWideningDecisions(cleared([decision()]), {
+      operator: 'operator@example.test', offerStore: offerStore(), decisionStore: failingStore,
+    })).resolves.toMatchObject({
+      captured: [],
+      defects: [{ kind: defect, offerEntryId: 'case-1' }],
+    });
   });
 });

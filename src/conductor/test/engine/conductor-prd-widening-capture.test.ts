@@ -1,3 +1,5 @@
+// Covers: task:4
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -23,8 +25,14 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { ACCEPTED_WIDENINGS_PATH, AcceptedWideningDecisionStore } from '../../src/engine/accepted-widenings.js';
+import {
+  ACCEPTED_WIDENINGS_PATH,
+  AcceptedWideningDecisionStore,
+  type AcceptedWideningDecision,
+  type OverScopePersistedOffer,
+} from '../../src/engine/accepted-widenings.js';
 import { persistPrdWideningOffers } from '../../src/engine/prd-widening-offers.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 
 const feature = { version: 'v1' as const, repository: '/fixture/repository', feature: 'capture-before-audit' };
 const caseFeature = { version: 'v1' as const, repository: feature.repository, feature: feature.feature };
@@ -32,6 +40,7 @@ const caseFeature = { version: 'v1' as const, repository: feature.repository, fe
 describe('Conductor PRD widening capture entry', () => {
   let projectRoot: string;
   let statePath: string;
+  let offer: OverScopePersistedOffer;
 
   beforeEach(async () => {
     projectRoot = await mkdtemp(join(tmpdir(), 'prd-widening-entry-'));
@@ -42,7 +51,7 @@ describe('Conductor PRD widening capture entry', () => {
       reportSnapshot: 'original audit report', relation: 'outside-visible',
     }]);
     if (!offers.ok) throw new Error('fixture offer did not persist');
-    const offer = offers.offers[0]!;
+    offer = offers.offers[0]!;
     await writeFile(join(projectRoot, '.pipeline', 'HALT.cleared'), [
       '```json over-scope-decisions',
       JSON.stringify([{
@@ -63,6 +72,50 @@ describe('Conductor PRD widening capture entry', () => {
   async function decisionInventory(): Promise<Array<{ criterion: string; authority: string }>> {
     const stored = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'accepted-widenings.json'), 'utf8')) as { decisions: Array<{ criterion: string; authority: string }> };
     return stored.decisions.map(({ criterion, authority }) => ({ criterion, authority }));
+  }
+
+  async function seedRefusal(): Promise<AcceptedWideningDecision> {
+    const result = await new AcceptedWideningDecisionStore(projectRoot, {
+      version: 1, repository: feature.repository, feature: feature.feature,
+    }).append({
+      criterion: offer.criterion,
+      authority: 'refuse',
+      rationale: 'The operator declined this original widening.',
+      operator: 'fixture-operator',
+      offerEntryId: offer.offerEntryId,
+      originalCaseId: offer.originalCaseId,
+      originalSource: offer.originalSource,
+    });
+    if (!result.ok) throw new Error(`fixture refusal did not persist: ${result.reason}`);
+    return result.decision;
+  }
+
+  async function writeRevision(
+    decision: 'accept' | 'refuse',
+    priorDecision: Pick<AcceptedWideningDecision, 'id' | 'revision'>,
+  ): Promise<void> {
+    await writeFile(join(projectRoot, '.pipeline', 'HALT.cleared'), [
+      '```json over-scope-decisions',
+      JSON.stringify([{
+        criterion: offer.criterion, summary: offer.summary, relation: offer.relation,
+        offerEntryId: offer.offerEntryId, originalCaseId: offer.originalCaseId,
+        originalSource: offer.originalSource, decision,
+        rationale: 'The operator re-affirmed the recorded authority.',
+        priorDecision: { id: priorDecision.id, revision: priorDecision.revision },
+      }]),
+      '```',
+    ].join('\n'));
+  }
+
+  function prdEntry(events = new ConductorEventEmitter()): {
+    preparePrdWideningBeforeAudit(): Promise<string | undefined>;
+  } {
+    return new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events,
+    }) as unknown as { preparePrdWideningBeforeAudit(): Promise<string | undefined> };
   }
 
   it('captures the cleared decision before the serial audit and replays it unchanged through the concurrent join', async () => {
@@ -108,6 +161,49 @@ describe('Conductor PRD widening capture entry', () => {
     await expect(entry.preparePrdWideningBeforeAudit()).resolves.toContain('unsupported-history');
     expect(await readFile(clearPath, 'utf8')).toBe(raw);
     expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it('keeps a cleared same-authority revision of the latest refusal inert at the PRD entry boundary', async () => {
+    const refusal = await seedRefusal();
+    await writeRevision('refuse', refusal);
+    const before = await decisionInventory();
+
+    await expect(prdEntry().preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
+
+    expect(await decisionInventory()).toEqual(before);
+  });
+
+  it('reports a stale same-authority revision as invalid-decision through the PRD entry event spine', async () => {
+    const refusal = await seedRefusal();
+    const store = new AcceptedWideningDecisionStore(projectRoot, {
+      version: 1, repository: feature.repository, feature: feature.feature,
+    });
+    const reversal = await store.append({
+      criterion: offer.criterion,
+      authority: 'accept',
+      rationale: 'The operator reversed the original refusal.',
+      operator: 'fixture-operator',
+      offerEntryId: offer.offerEntryId,
+      originalCaseId: offer.originalCaseId,
+      originalSource: offer.originalSource,
+      supersedes: { id: refusal.id, revision: refusal.revision },
+    });
+    if (!reversal.ok) throw new Error(`fixture reversal did not persist: ${reversal.reason}`);
+    await writeRevision('refuse', refusal);
+    const events = new ConductorEventEmitter();
+    const emitted: ConductorEvent[] = [];
+    events.on('prd_widening_reconciled', (event) => { emitted.push(event); });
+
+    const recovery = await prdEntry(events).preparePrdWideningBeforeAudit();
+
+    expect(recovery).toContain('invalid-decision');
+    expect(recovery).toContain(offer.offerEntryId);
+    expect(recovery).not.toContain('persistence-failed');
+    expect(emitted).toContainEqual(expect.objectContaining({
+      type: 'prd_widening_reconciled', sourceId: offer.offerEntryId,
+      outcome: 'rejected', reason: 'invalid-decision',
+    }));
+    expect(emitted).not.toContainEqual(expect.objectContaining({ outcome: 'rejected', reason: 'write-failed' }));
   });
 
   it('retains a newer fenced refusal beside a migrated v1 acceptance before audit dispatch', async () => {

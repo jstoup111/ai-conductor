@@ -1236,6 +1236,10 @@ the halt active as “refused — rework required.”
 Keep the offered criterion and summary unchanged, including when a revision refers to an older
 report number or wording. Only the decision and rationale are editable.
 
+A revision entry left `pending` keeps the prior decision unchanged. A revision that re-affirms the
+prior decision (for example, `refuse` on an existing refusal) is inert: it records nothing new and
+does not fail the recovery. Only a changed decision creates a new revision.
+
 For a durable PRD-widening recovery, keep every unaffected decision and refusal in place. The
 halt body names the affected source, case, decision, or artifact and one of these actions:
 
@@ -1243,6 +1247,7 @@ halt body names the affected source, case, decision, or artifact and one of thes
 - `unsupported-history`: preserve the history and upgrade to a conductor version that supports it.
 - `missing-operator`: configure the machine owner and resubmit the explicit decision.
 - `persistence-failed`: resolve the store or lease failure and verify the durable records.
+- `invalid-decision`: correct the named entry against the latest halt, or leave its decision `pending` to keep the prior decision, then clear the halt.
 - `invalid-provider-result`: retry only once the selected provider supports the required native schema.
 - `stale-relation`: retain the decision and rerun reconciliation against the current report.
 - `context-overflow`: the halt and event name the dimension, actual size, and limit; reduce the cited source input without pruning history.

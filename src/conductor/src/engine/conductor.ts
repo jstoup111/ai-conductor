@@ -4412,9 +4412,11 @@ export class Conductor {
         ? 'missing-operator'
         : prepared.capture.defects.some((defect) => defect.kind === 'write-failed' || defect.kind === 'offer-read-failed')
           ? 'persistence-failed'
-          : prepared.capture.defects.some((defect) => defect.kind === 'unsupported-legacy-clear')
-            ? 'unsupported-history'
-            : 'malformed-history';
+          : prepared.capture.defects.some((defect) => defect.kind === 'invalid-decision')
+            ? 'invalid-decision'
+            : prepared.capture.defects.some((defect) => defect.kind === 'unsupported-legacy-clear')
+              ? 'unsupported-history'
+              : 'malformed-history';
       return renderPrdWideningRecovery(reason, prepared.capture.defects.flatMap((defect) => defect.offerEntryId ? [defect.offerEntryId] : []));
     }
     const decisions = await decisionStore.read();
