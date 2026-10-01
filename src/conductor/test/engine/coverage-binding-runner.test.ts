@@ -14,6 +14,11 @@ import {
 } from '../../src/engine/coverage-binding-envelope.js';
 import { CoverageBindingPayloadError, DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { currentPreservedJudgeIdentity } from '../../src/engine/gate-code-validity.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFile } from 'node:fs/promises';
@@ -110,6 +115,61 @@ async function runBatches(count: number, batchSize: number, options: {
 }
 
 describe('coverage-binding runner batches', () => {
+  it('uses the selected Pi judge native model and ladder in a Claude run', async () => {
+    const piModel = 'anthropic/claude-opus-4-5';
+    const piFallback = 'openai/gpt-5.6-sol';
+    const provider: LLMProvider = {
+      supportsSessionResume: false,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => options.model === piModel
+        ? { success: false, output: `${piModel} unavailable`, exitCode: 1, modelUnavailable: true }
+        : {
+            success: true,
+            output: JSON.stringify({ verdicts: promptClaims(options).map(({ id }) => ({ id, verdict: 'asserts' })) }),
+            exitCode: 0,
+          }),
+    };
+    const { projectDir } = await runBatches(1, 8, { provider });
+    try {
+      const config: HarnessConfig = {
+        llm_provider: 'claude',
+        defaults: { model: 'opus' },
+        coverage_binding: { judge: { enabled: true, batch_size: 8 } },
+        llm_providers: {
+          pi: {
+            model: piModel,
+            model_escalation_order: [piModel],
+            model_fallback_ladder: [piModel, piFallback],
+          },
+        },
+        steps: { coverage_binding: { llm_provider: 'pi' } },
+      };
+      const policy = resolveProviderModelPolicy('pi', { config });
+      const runner = new DefaultStepRunner(provider, 'coverage-pi-native', projectDir, {
+        featureDesc: 'coverage-binding-runner',
+        planPath: join(projectDir, 'plan.md'),
+        config,
+        providerExecution: {
+          configuredProviders: ['claude'],
+          runtimes: new ProviderRuntimeSet([{
+            key: 'pi', provider, policy, builtIn: true,
+            availability: new ModelAvailability(policy.modelFallbackLadder),
+          }]),
+          sessions: new ProviderSessionStore(),
+        },
+      });
+
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+      const call = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as InvokeOptions;
+      expect(call).toMatchObject({ model: piModel });
+      expect(call.model).not.toBe('opus');
+      expect((provider.invoke as ReturnType<typeof vi.fn>).mock.calls.map(([options]) => (options as InvokeOptions).model))
+        .toEqual([piModel, piFallback]);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('stamps the judged HEAD so the production envelope yields a preserved judge identity', async () => {
     const { projectDir, runner } = await runBatches(2, 8);
     try {

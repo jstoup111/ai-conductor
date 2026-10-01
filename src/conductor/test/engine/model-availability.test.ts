@@ -254,6 +254,21 @@ describe("ModelAvailability", () => {
       expect(avail.dead.has("fable")).toBe(true);
     });
 
+    it("skips a rung marked dead by an earlier dispatch before invoking the provider again", async () => {
+      const warnings: string[] = [];
+      const avail = new ModelAvailability(claudeLadder, (line) => warnings.push(line));
+      const { provider, invokeCalls } = fakeProvider({
+        fable: modelUnavailable(),
+        opus: { success: true, output: "done", exitCode: 0 },
+      });
+
+      await avail.invokeWithLadder(provider, { prompt: "first", sessionId: "s1", resume: false, model: "fable" });
+      await avail.invokeWithLadder(provider, { prompt: "second", sessionId: "s2", resume: false, model: "fable" });
+
+      expect(invokeCalls.map((call) => call.model)).toEqual(["fable", "opus", "opus"]);
+      expect(warnings).toContain("Downgraded from fable to opus: fable is not available (unavailable)");
+    });
+
     it("retains every model attempt interval when two unavailable models precede success", async () => {
       const avail = new ModelAvailability(claudeLadder);
       const intervals = [

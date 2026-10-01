@@ -367,6 +367,7 @@ import {
   resolveDaemonConcurrency,
   resolveBuildReviewConfig,
   phaseForStep,
+  resolvePreferredProviderNativeStepConfig,
 } from './resolved-config.js';
 import {
   defaultSelfHostGuardrails,
@@ -7864,17 +7865,32 @@ export class Conductor {
         // threaded in so `by_tier` overrides apply when the feature's complexity
         // is known (post-complexity step).
         const stepModelPolicy = this.modelPolicyForStep(step.name);
-        const resolved = resolveStepConfig(
+        const resolveOptions = {
+          tier: state.complexity_tier,
+          modelCliOverride: this.providerExecution?.modelOverride,
+          effortCliOverride: this.providerExecution?.effortOverride,
+        };
+        const neutral = resolveStepConfig(
           step.name,
           step.phase,
           stepModelPolicy,
           this.config,
-          {
-            tier: state.complexity_tier,
-            modelCliOverride: this.providerExecution?.modelOverride,
-            effortCliOverride: this.providerExecution?.effortOverride,
-          },
+          resolveOptions,
         );
+        const preferredProvider = normalizeProviderSelection(
+          this.config?.steps?.[step.name]?.llm_provider ?? this.config?.llm_provider,
+        )[0]!;
+        const inheritedProvider = normalizeProviderSelection(this.config?.llm_provider)[0]!;
+        const native = resolvePreferredProviderNativeStepConfig({
+          step: step.name,
+          phase: step.phase,
+          preferredProvider,
+          inheritedProvider,
+          policy: stepModelPolicy,
+          config: this.config,
+          options: resolveOptions,
+        });
+        const resolved = { ...neutral, ...native };
 
         // Check if step is disabled via config
         if (resolved.disabled) {

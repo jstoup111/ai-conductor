@@ -61,12 +61,17 @@ const prepareFreshFallbackOptions: PrepareModelFallbackOptions = async () => ({
  */
 export class ModelAvailability {
   private readonly ladder: readonly string[];
-  private readonly warn?: (line: string) => void;
-  readonly dead: Set<string> = new Set();
+  readonly warn?: (line: string) => void;
+  readonly dead: Set<string>;
 
-  constructor(ladder?: readonly string[], warn?: (line: string) => void) {
+  constructor(
+    ladder?: readonly string[],
+    warn?: (line: string) => void,
+    dead?: Set<string>,
+  ) {
     this.ladder = ladder === undefined ? DEFAULT_MODEL_FALLBACK_LADDER : ladder;
     this.warn = warn;
+    this.dead = dead ?? new Set();
   }
 
   markDead(model: string): void {
@@ -125,17 +130,29 @@ export class ModelAvailability {
     invokeModel: InvokeModelRung = (candidateOptions) => provider.invoke(candidateOptions),
   ): Promise<ResolvedModelInvocation> {
     const requested = options.model ?? "";
-    const requestedOptions = { ...options, model: requested };
+    const effective = this.effectiveModel(requested);
+    if (effective.model === requested && effective.downgraded) {
+      return {
+        result: {
+          success: false,
+          output: `Model fallback ladder exhausted: no live model remains after ${requested}.`,
+          exitCode: 1,
+          modelUnavailable: true,
+        },
+        model: requested,
+      };
+    }
+    const requestedOptions = { ...options, model: effective.model };
     const result = await invokeModel(requestedOptions);
 
     // Existing recovery owns these failures, even if a provider reports
     // conflicting availability metadata.
     if (result.authFailure || result.rateLimited) {
-      return { result, model: requested };
+      return { result, model: effective.model };
     }
 
     if (!result.modelUnavailable) {
-      return { result, model: requested };
+      return { result, model: effective.model };
     }
 
     if (this.ladder.length === 0) {
@@ -143,12 +160,12 @@ export class ModelAvailability {
       return { result, model: requested };
     }
 
-    this.markDead(requested);
-    const { model: nextModel } = this.effectiveModel(requested);
+    this.markDead(effective.model);
+    const { model: nextModel } = this.effectiveModel(effective.model);
 
-    if (nextModel === requested) {
+    if (nextModel === effective.model) {
       // No live ladder entry remains; nothing further to try.
-      return { result, model: requested };
+      return { result, model: effective.model };
     }
 
     const fallbackOptions = await prepareFallbackOptions(nextModel);

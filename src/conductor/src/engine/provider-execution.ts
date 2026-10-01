@@ -509,6 +509,11 @@ export interface ResolveProviderCandidateNativeConfigInput {
   effortOverride?: EffortLevel;
 }
 
+export interface ResolvedProviderCandidateNativeConfig
+  extends ResolvedProviderNativeStepConfig {
+  modelFallbackLadder?: readonly string[];
+}
+
 /** Resolve provider-native settings for exactly one selected candidate. */
 export function resolveProviderCandidateNativeConfig({
   step,
@@ -522,7 +527,7 @@ export function resolveProviderCandidateNativeConfig({
   escalate,
   modelOverride,
   effortOverride,
-}: ResolveProviderCandidateNativeConfigInput): ResolvedProviderNativeStepConfig {
+}: ResolveProviderCandidateNativeConfigInput): ResolvedProviderCandidateNativeConfig {
   return candidateIndex === 0
     ? resolvePreferredProviderNativeStepConfig({
         step,
@@ -536,6 +541,8 @@ export function resolveProviderCandidateNativeConfig({
           modelCliOverride: modelOverride,
           effortCliOverride: effortOverride,
         },
+        attempt,
+        escalate,
       })
     : resolveFallbackProviderNativeStepConfig({
         step,
@@ -612,7 +619,11 @@ export async function invokeProviderCandidate({
   const invokeModel = async (rungOptions: InvokeOptions): Promise<InvokeResult> =>
     runtime.provider.invoke(prepareInvocationOptions ? await prepareInvocationOptions(rungOptions) : rungOptions);
   const invocation = modelFallbackLadder
-    ? await new ModelAvailability(modelFallbackLadder).invokeWithLadderResolved(
+    ? await new ModelAvailability(
+        modelFallbackLadder,
+        runtime.availability.warn,
+        runtime.availability.dead,
+      ).invokeWithLadderResolved(
         runtime.provider,
         invocationOptions,
         prepareFallback,
@@ -912,7 +923,9 @@ export async function executeProviderCandidates({
             }
             return rungOptions;
           },
-          modelFallbackLadder,
+          modelFallbackLadder: index === 0
+            ? modelFallbackLadder
+            : resolved.modelFallbackLadder,
           onModelRung,
         });
         return invocation.result;

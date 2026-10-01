@@ -183,6 +183,8 @@ export interface ResolvePreferredProviderNativeInput {
   policy: ProviderModelPolicy;
   config?: HarnessConfig;
   options?: ResolveOptions;
+  attempt?: number;
+  escalate?: boolean;
 }
 
 export interface ResolveFallbackProviderNativeInput {
@@ -320,24 +322,33 @@ export function resolvePreferredProviderNativeStepConfig({
   policy,
   config,
   options,
+  attempt = 1,
+  escalate = false,
 }: ResolvePreferredProviderNativeInput): ResolvedProviderNativeStepConfig {
-  if (preferredProvider === inheritedProvider) {
-    return resolveProviderNativeStepConfig(step, phase, policy, config, options);
-  }
+  const base = preferredProvider === inheritedProvider
+    ? resolveProviderNativeStepConfig(step, phase, policy, config, options)
+    : (() => {
+        const stepConfig = config?.steps?.[step];
+        const specializedConfig: HarnessConfig | undefined =
+          stepConfig === undefined
+            ? undefined
+            : { steps: { [step]: stepConfig } };
+        return resolveProviderNativeStepConfig(
+          step,
+          phase,
+          policy,
+          specializedConfig,
+          options,
+        );
+      })();
 
-  const stepConfig = config?.steps?.[step];
-  const specializedConfig: HarnessConfig | undefined =
-    stepConfig === undefined
-      ? undefined
-      : { steps: { [step]: stepConfig } };
-
-  return resolveProviderNativeStepConfig(
-    step,
-    phase,
-    policy,
-    specializedConfig,
-    options,
-  );
+  // Serial callers pass their already-escalated values as overrides. Only
+  // candidate dispatches with no override climb here, preventing a retry from
+  // being escalated twice while allowing validation-group preferred members to
+  // use the same provider-native ladder as fallback members.
+  return options?.modelCliOverride === undefined && options?.effortCliOverride === undefined
+    ? escalateAttempt(base.model, base.effort, attempt, escalate, policy)
+    : base;
 }
 
 /**
