@@ -367,6 +367,7 @@ Twenty-three tasks deliver an engine-generated `git` argv guard, provisioned fai
 - `git-guard-codex.smoke.test.ts` declares `credentialed:codex` and makes the same two assertions against a real Codex session.
 - In advisory mode a guard smoke file lacking its credential or binary reports skipped naming the missing prerequisite, and in gate mode it reports a non-gating skip naming the missing credential, as asserted by the smoke-runner tests.
 - The smoke-entry-point test lists both files with their capabilities and confirms the default `vitest` configuration excludes them.
+- The smoke-entry-point test asserts that every test file which starts a live provider session is a `*.smoke.test.ts` file excluded by the default `vitest` configuration, so a default (non-smoke) suite run starts no live provider session.
 
 **Files likely touched:**
 - `src/conductor/test/smoke/git-guard-claude.smoke.test.ts`
