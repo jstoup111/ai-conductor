@@ -15053,7 +15053,10 @@ export class Conductor {
     // from pre-resolution behavior (FR-7). The same helper backs the daemon
     // re-kick play-forward path (`resumeRebaseFirst`) so both routes resolve
     // identically (#300).
-    if (!sealRejectionReason) {
+    // A flattened replay refusal was established by the tree-only proof, before
+    // git created rebase state.  It is a human recovery boundary, not a paused
+    // conflict for the resolver to advance.
+    if (!sealRejectionReason && outcome.kind !== 'flatten_refused') {
       outcome = await runGatedRebaseResolution({
         git,
         projectRoot: this.projectRoot,

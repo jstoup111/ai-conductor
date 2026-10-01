@@ -1,4 +1,6 @@
 /**
+ * Covers: task:6
+ *
  * Wiring tests for the gated rebase-conflict resolution sub-loop in the
  * conductor's engine-native `rebase` step (Tasks 3, 10–13 of the
  * rebase-resolution-skill plan).
@@ -115,6 +117,23 @@ it('daemon rebase resolver carries the selected provider model policy', async ()
   const constructorEnd = source.indexOf('});', marker);
 
   expect(source.slice(constructorStart, constructorEnd)).toContain('modelPolicy');
+});
+
+it('both rebase callers keep a stateless flattened refusal out of the resolver loop', async () => {
+  const [conductor, rekick] = await Promise.all([
+    readFile(new URL('../../src/engine/conductor.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../../src/engine/daemon-rekick.ts', import.meta.url), 'utf8'),
+  ]);
+  const conductorLoop = conductor;
+  const rekickLoop = rekick.slice(
+    rekick.indexOf('// #300: route a conflict'),
+    rekick.indexOf('// FR-5 + adr-2026-07-08'),
+  );
+
+  expect({ conductorLoop, rekickLoop }).toEqual({
+    conductorLoop: expect.stringContaining("outcome.kind !== 'flatten_refused'"),
+    rekickLoop: expect.stringContaining("outcome.kind !== 'flatten_refused'"),
+  });
 });
 
 describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real git)', () => {

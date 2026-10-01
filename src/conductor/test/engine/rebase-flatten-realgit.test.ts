@@ -1,4 +1,4 @@
-// Covers: task:3, task:5
+// Covers: task:3, task:5, task:6
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -56,6 +56,52 @@ describe('proveFlattenedReplay real local Git (Task 3)', () => {
 });
 
 describe('performRebase real local Git (Task 5)', () => {
+  it('refuses a conflicting flattened merge before starting rebase or mutating checkout state', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'rebase-flatten-refusal-'));
+    try {
+      const git = (args: string[]) => execFile('git', args, { cwd: repo });
+      await git(['init', '-q', '-b', 'main']);
+      await git(['config', 'user.email', 'test@example.invalid']);
+      await git(['config', 'user.name', 'Flatten test']);
+      await writeFile(join(repo, 'conflict.txt'), 'base\n');
+      await git(['add', '.']); await git(['commit', '-qm', 'base']);
+      await git(['checkout', '-qb', 'feature']);
+      await writeFile(join(repo, 'feature.txt'), 'feature\n');
+      await git(['add', '.']); await git(['commit', '-qm', 'feature work']);
+      await git(['checkout', '-qb', 'side']);
+      await writeFile(join(repo, 'conflict.txt'), 'side\n');
+      await git(['commit', '-qam', 'side changes conflict']);
+      await git(['checkout', '-q', 'feature']);
+      await git(['merge', '--no-ff', '-m', 'merge side conflict', 'side']);
+      const mergeSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+      const parents = (await git(['rev-parse', 'HEAD^1', 'HEAD^2'])).stdout.trim().split('\n');
+      await git(['checkout', '-q', 'main']);
+      await writeFile(join(repo, 'conflict.txt'), 'main\n');
+      await git(['commit', '-qam', 'main changes conflict']);
+      await git(['checkout', '-q', 'feature']);
+      const before = await snapshot(repo);
+      const rebaseStateExists = async (dir: string) => {
+        const { stdout } = await git(['rev-parse', '--git-dir']);
+        return execFile('test', ['-e', join(repo, stdout.trim(), dir)]).then(() => true, () => false);
+      };
+      const beforeRebaseDirs = await Promise.all(['rebase-merge', 'rebase-apply'].map(rebaseStateExists));
+      const commands: string[][] = [];
+      const real = makeGitRunner(repo);
+      const outcome = await performRebase(async (args, opts) => {
+        commands.push(args);
+        return real(args, opts);
+      }, repo, 'main');
+
+      expect(outcome).toMatchObject({
+        kind: 'flatten_refused', mergeSha, parents, conflicts: ['conflict.txt'],
+      });
+      if (outcome.kind === 'flatten_refused') expect(outcome.flattenedSha).toMatch(/^[0-9a-f]{40}$/);
+      expect(commands.some((args) => args.includes('rebase'))).toBe(false);
+      expect(await snapshot(repo)).toEqual(before);
+      await expect(Promise.all(['rebase-merge', 'rebase-apply'].map(rebaseStateExists))).resolves.toEqual(beforeRebaseDirs);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
   it('returns expected subjects for a clean flattened replay', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'rebase-flatten-merge-diff-'));
     try {

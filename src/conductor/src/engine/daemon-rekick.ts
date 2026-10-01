@@ -831,22 +831,26 @@ export async function resumeRebaseFirst(opts: {
   // finish-time step (`conductor.ts:runRebaseStep`) uses, before parking for a
   // human. With no cap/resolver wired this is a no-op and the original
   // bare-rebase-then-HALT behavior is preserved exactly.
-  outcome = await runGatedRebaseResolution({
-    git,
-    projectRoot: opts.worktreePath,
-    outcome,
-    cap: opts.resolveAttempts ?? 0,
-    resolve: opts.resolveConflict,
-    translateAfterRebase,
-    onAttempt: (index, cap) =>
-      opts.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
-    onSettled: (kind) =>
-      opts.events.emit(
-        kind === 'exhausted'
-          ? { type: 'rebase_resolution_exhausted' }
-          : { type: 'rebase_resolution_succeeded' },
-      ),
-  });
+  // The flatten proof refused before a real rebase was started.  Do not hand
+  // that stateless outcome to the paused-rebase resolver.
+  if (outcome.kind !== 'flatten_refused') {
+    outcome = await runGatedRebaseResolution({
+      git,
+      projectRoot: opts.worktreePath,
+      outcome,
+      cap: opts.resolveAttempts ?? 0,
+      resolve: opts.resolveConflict,
+      translateAfterRebase,
+      onAttempt: (index, cap) =>
+        opts.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
+      onSettled: (kind) =>
+        opts.events.emit(
+          kind === 'exhausted'
+            ? { type: 'rebase_resolution_exhausted' }
+            : { type: 'rebase_resolution_succeeded' },
+        ),
+    });
+  }
 
   // FR-5 + adr-2026-07-08-post-rebase-gate-first-mechanical-reverify: when a
   // play-forward rebase touches code paths the downstream judged gates
