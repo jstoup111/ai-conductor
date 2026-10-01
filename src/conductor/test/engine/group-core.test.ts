@@ -745,7 +745,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
             interactive: true,
             dangerouslySkipPermissions: false,
             model: "gpt-5.6-terra",
-            effort: "medium",
+            effort: "high",
           },
           {
             prompt: "$architecture-review --as-built",

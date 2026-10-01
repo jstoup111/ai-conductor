@@ -57,6 +57,27 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
   let dir: string;
   let projectRoot: string;
 
+  function providerAwareVerifierOptions(
+    provider: LLMProvider,
+    providerKey = 'claude',
+    policy = CLAUDE_MODEL_POLICY,
+  ) {
+    return {
+      config: { llm_provider: providerKey } as HarnessConfig,
+      providerKey,
+      sessionStore: new ProviderSessionStore(),
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: providerKey,
+        provider,
+        policy,
+        builtIn: true,
+        lifecycleCapability: { synchronousSpawnPermit: true },
+        availability: new ModelAvailability(policy.modelFallbackLadder),
+      }]),
+      configuredProviders: [providerKey],
+    };
+  }
+
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'attribution-wiring-'));
     projectRoot = dir;
@@ -129,7 +150,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     // Create a DefaultStepRunner with the tracked provider
     const sessionId = '00000000-0000-0000-0000-000000000001';
     const runner = new DefaultStepRunner(trackedProvider, sessionId, projectRoot, {
-      config: {} as HarnessConfig,
+      ...providerAwareVerifierOptions(trackedProvider),
       pipelineDir: join(projectRoot, '.pipeline'),
       mode: 'default',
     });
@@ -427,10 +448,9 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       '00000000-0000-0000-0000-000000000006',
       projectRoot,
       {
-        config: {} as HarnessConfig,
+        ...providerAwareVerifierOptions(provider, 'codex', CODEX_MODEL_POLICY),
         pipelineDir: join(projectRoot, '.pipeline'),
         mode: 'default',
-        modelPolicy: CODEX_MODEL_POLICY,
       },
     );
     const planDir = join(projectRoot, '.docs/plans');
@@ -480,7 +500,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
 
     const sessionId = '00000000-0000-0000-0000-000000000002';
     const runner = new DefaultStepRunner(trackedProvider, sessionId, projectRoot, {
-      config: {} as HarnessConfig,
+      ...providerAwareVerifierOptions(trackedProvider),
       pipelineDir: join(projectRoot, '.pipeline'),
       mode: 'default',
     });
@@ -544,7 +564,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
 
     const sessionId = '00000000-0000-0000-0000-000000000003';
     const runner = new DefaultStepRunner(fixtureProvider, sessionId, projectRoot, {
-      config: {} as HarnessConfig,
+      ...providerAwareVerifierOptions(fixtureProvider),
       pipelineDir: join(projectRoot, '.pipeline'),
       mode: 'default',
     });
@@ -627,7 +647,7 @@ Add comprehensive tests.
 
     const sessionId = '00000000-0000-0000-0000-000000000004';
     const runner = new DefaultStepRunner(capturingProvider, sessionId, projectRoot, {
-      config: {} as HarnessConfig,
+      ...providerAwareVerifierOptions(capturingProvider),
       pipelineDir: join(projectRoot, '.pipeline'),
       mode: 'default',
     });
@@ -712,7 +732,7 @@ Add comprehensive tests.
 
     const sessionId = '00000000-0000-0000-0000-000000000005';
     const runner = new DefaultStepRunner(testProvider, sessionId, projectRoot, {
-      config: {} as HarnessConfig,
+      ...providerAwareVerifierOptions(testProvider),
       pipelineDir: join(projectRoot, '.pipeline'),
       mode: 'default',
     });
