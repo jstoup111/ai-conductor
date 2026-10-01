@@ -1,4 +1,4 @@
-// Covers: task:14, task:16, task:17, task:19
+// Covers: task:14, task:15, task:16, task:17, task:19
 import { readFile } from 'node:fs/promises';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -12,6 +12,7 @@ type GuidedMonitorLoopDeps = {
   offer: (halt: ProjectHalt) => void;
   untilStop?: Promise<void>;
   waitForNextPass?: () => Promise<void>;
+  readOperatorInput?: (prompt: string) => Promise<string | undefined>;
   snapshotHaltMarker?: (halt: ProjectHalt) => Promise<DeferralKey['haltIdentity']>;
   writeHaltMarker?: (halt: ProjectHalt, contents: Uint8Array) => Promise<void>;
   recordDeferral?: (key: DeferralKey) => Promise<void>;
@@ -162,8 +163,9 @@ describe('Task 15 — deferring a skipped guided session', () => {
 
     await advanceAfterGuidedSession({
       deriveMembership,
-      launch: async () => ({ kind: 'operator-skip' }),
+      launch: async () => ({ kind: 'exited', exitCode: 0 }),
       offer: firstOffer,
+      readOperatorInput: vi.fn(async () => 'skip'),
       snapshotHaltMarker,
       writeHaltMarker,
       recordDeferral,
@@ -217,6 +219,69 @@ describe('Task 15 — deferring a skipped guided session', () => {
       markerAfterRestart: markerBeforeSkip,
       markerWrites: [],
     });
+  });
+
+  it('asks after zero, non-zero, unavailable, and failed launches; closed input continues without a deferral', async () => {
+    const recordDeferral = vi.fn(async (_key: DeferralKey) => {});
+    const readOperatorInput = vi.fn(async () => undefined);
+    const offers: string[] = [];
+    const outcomes: readonly [string, () => Promise<unknown>][] = [
+      ['zero-exit', async () => ({ kind: 'exited', exitCode: 0 })],
+      ['non-zero-exit', async () => ({ kind: 'exited', exitCode: 1 })],
+      ['unavailable-provider', async () => ({ kind: 'unavailable' })],
+      ['launch-failed', async () => { throw new Error('provider could not launch'); }],
+    ];
+
+    for (const [slug, launch] of outcomes) {
+      const current = halt(slug);
+      const next = halt(`${slug}-next`);
+      await advanceAfterGuidedSession({
+        deriveMembership: async () => [current, next],
+        launch,
+        offer: (item) => offers.push(item.slug),
+        readOperatorInput,
+        recordDeferral,
+      });
+    }
+
+    expect({
+      prompted: readOperatorInput.mock.calls.length,
+      deferrals: recordDeferral.mock.calls,
+      offered: offers,
+    }).toEqual({
+      prompted: 4,
+      deferrals: [],
+      offered: [
+        'zero-exit', 'zero-exit-next',
+        'non-zero-exit', 'non-zero-exit-next',
+        'unavailable-provider', 'unavailable-provider-next',
+        'launch-failed', 'launch-failed-next',
+      ],
+    });
+  });
+
+  it('stops while a post-session choice is pending without recording a late skip', async () => {
+    const current = halt('stop-during-choice');
+    const stop = deferred<void>();
+    const choice = deferred<string | undefined>();
+    const readOperatorInput = vi.fn(() => choice.promise);
+    const recordDeferral = vi.fn(async (_key: DeferralKey) => {});
+    const running = runGuidedMonitorQueue({
+      deriveMembership: async () => [current],
+      launch: async () => ({ kind: 'exited', exitCode: 0 }),
+      offer: vi.fn(),
+      readOperatorInput,
+      recordDeferral,
+      untilStop: stop.promise,
+    });
+
+    await vi.waitFor(() => expect(readOperatorInput).toHaveBeenCalledTimes(1));
+    stop.resolve();
+    await running;
+    choice.resolve('skip');
+    await Promise.resolve();
+
+    expect(recordDeferral).not.toHaveBeenCalled();
   });
 });
 

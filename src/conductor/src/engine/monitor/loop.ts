@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 import { recordDeferralSafely, type DeferralKey } from './deferrals.js';
 import type { ProjectHalt } from './halt-inventory.js';
 import { snapshotHaltMarker } from '../halt-marker.js';
@@ -24,7 +25,8 @@ export interface GuidedMonitorLoopDeps {
   readonly untilStop?: Promise<void>;
   /** Waits between idle passes; injectable so tests do not use a real timer. */
   readonly waitForNextPass?: () => Promise<void>;
-  readonly operatorSkipped?: (outcome: unknown, halt: ProjectHalt) => boolean | Promise<boolean>;
+  /** Reads the operator's post-session choice; absent input continues the queue. */
+  readonly readOperatorInput?: (prompt: string, signal?: AbortSignal) => Promise<string | undefined>;
   readonly snapshotHaltMarker?: (halt: ProjectHalt) => Promise<DeferralKey['haltIdentity']>;
   readonly writeHaltMarker?: (halt: ProjectHalt, contents: Uint8Array) => Promise<void>;
   readonly recordDeferral?: (key: DeferralKey) => Promise<void>;
@@ -98,22 +100,58 @@ function startHaltIssueReconciliation(
   }
 }
 
-function wasSkipped(outcome: unknown): boolean {
-  return typeof outcome === 'object' && outcome !== null &&
-    (outcome as { kind?: unknown }).kind === 'operator-skip';
+const POST_SESSION_PROMPT = 'Guided session ended. Choose skip to defer this item, or continue to keep it in the queue [skip/continue]: ';
+
+async function readTerminalInput(prompt: string, signal?: AbortSignal): Promise<string | undefined> {
+  if (process.stdin.isTTY !== true || signal?.aborted === true) return undefined;
+
+  const terminal = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    return await new Promise<string | undefined>((resolve) => {
+      let settled = false;
+      const settle = (answer: string | undefined): void => {
+        if (settled) return;
+        settled = true;
+        resolve(answer);
+      };
+      const abort = (): void => {
+        terminal.close();
+        settle(undefined);
+      };
+      terminal.once('close', () => settle(undefined));
+      signal?.addEventListener('abort', abort, { once: true });
+      terminal.question(prompt, (answer) => settle(answer));
+    });
+  } catch {
+    return undefined;
+  } finally {
+    terminal.close();
+  }
+}
+
+async function operatorChoseSkip(deps: GuidedMonitorLoopDeps, signal?: AbortSignal): Promise<boolean> {
+  try {
+    const answer = await (deps.readOperatorInput ?? readTerminalInput)(POST_SESSION_PROMPT, signal);
+    return answer?.trim().toLowerCase() === 'skip';
+  } catch {
+    return false;
+  }
 }
 
 function worktreePath(halt: ProjectHalt): string {
   return join(halt.project, '.worktrees', halt.slug);
 }
 
+function inputWasAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
 async function recordSkipIfNeeded(
   deps: GuidedMonitorLoopDeps,
   halt: ProjectHalt,
-  outcome: unknown,
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  const skipped = await (deps.operatorSkipped?.(outcome, halt) ?? wasSkipped(outcome));
-  if (!skipped) return false;
+  if (inputWasAborted(signal) || !await operatorChoseSkip(deps, signal) || inputWasAborted(signal)) return false;
 
   const key: DeferralKey = {
     project: halt.project,
@@ -125,6 +163,39 @@ async function recordSkipIfNeeded(
     return true;
   }
   return recordDeferralSafely(worktreePath(halt), key);
+}
+
+async function finishGuidedSession(
+  deps: GuidedMonitorLoopDeps,
+  halt: ProjectHalt,
+  untilStop?: Promise<void>,
+): Promise<boolean> {
+  const aborted = new AbortController();
+  const skip = recordSkipIfNeeded(deps, halt, aborted.signal);
+  if (untilStop !== undefined) {
+    const settled = await Promise.race([
+      skip.then((selected) => ({ stopped: false as const, selected })),
+      untilStop.then(() => ({ stopped: true as const })),
+    ]);
+    if (settled.stopped) {
+      aborted.abort();
+      return false;
+    }
+    if (settled.selected) await emitMonitorTransition(deps, 'monitor_item_deferred', halt);
+  } else if (await skip) {
+    await emitMonitorTransition(deps, 'monitor_item_deferred', halt);
+  }
+  await emitMonitorTransition(deps, 'monitor_session_ended', halt);
+  return true;
+}
+
+async function launchGuidedSession(deps: GuidedMonitorLoopDeps, halt: ProjectHalt): Promise<void> {
+  try {
+    await deps.launch(halt);
+  } catch {
+    // A failed launch still returns control to the operator for a queue decision.
+  }
+  await finishGuidedSession(deps, halt);
 }
 
 async function emitMonitorTransition(
@@ -152,11 +223,7 @@ export async function advanceAfterGuidedSession(deps: GuidedMonitorLoopDeps): Pr
 
   await offerHalt(deps, head);
   await emitMonitorTransition(deps, 'monitor_session_opened', head);
-  const outcome = await deps.launch(head);
-  if (await recordSkipIfNeeded(deps, head, outcome)) {
-    await emitMonitorTransition(deps, 'monitor_item_deferred', head);
-  }
-  await emitMonitorTransition(deps, 'monitor_session_ended', head);
+  await launchGuidedSession(deps, head);
 
   const next = (await deps.deriveMembership()).find((halt) => !sameHalt(halt, head));
   if (next !== undefined) await offerHalt(deps, next);
@@ -215,20 +282,16 @@ export async function runGuidedMonitorQueue(
     await emitMonitorTransition(deps, 'monitor_session_opened', next);
     if (untilStop !== undefined) {
       const outcome = await Promise.race([
-        deps.launch(next).then((value) => ({ stopped: false as const, value })),
+        deps.launch(next).then(
+          () => ({ stopped: false as const }),
+          () => ({ stopped: false as const }),
+        ),
         untilStop.then(() => ({ stopped: true as const })),
       ]);
       if (outcome.stopped) return stop();
-      if (await recordSkipIfNeeded(deps, next, outcome.value)) {
-        await emitMonitorTransition(deps, 'monitor_item_deferred', next);
-      }
-      await emitMonitorTransition(deps, 'monitor_session_ended', next);
+      if (!await finishGuidedSession(deps, next, untilStop)) return stop();
       continue;
     }
-    const outcome = await deps.launch(next);
-    if (await recordSkipIfNeeded(deps, next, outcome)) {
-      await emitMonitorTransition(deps, 'monitor_item_deferred', next);
-    }
-    await emitMonitorTransition(deps, 'monitor_session_ended', next);
+    await launchGuidedSession(deps, next);
   }
 }
