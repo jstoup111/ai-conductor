@@ -20,8 +20,8 @@
 //   ai-conductor compose handoff        → {kind:'handoff'}  — open spec PR + ensureRunning
 //   (malformed subcommand / missing flags → {kind:'guide'} — print usage)
 
-import { spawn } from 'node:child_process';
 import { join } from 'node:path';
+import { launchInteractiveSession } from '../execution/interactive-launch.js';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRegistryReader } from './registry.js';
 import { ConductorEventEmitter } from '../ui/events.js';
@@ -552,17 +552,6 @@ export interface DispatchEngineerOpts {
   confirmAnother?: () => boolean | Promise<boolean>;
 }
 
-/**
- * Spawn an interactive host with the operator's terminal attached.
- */
-function spawnInteractiveHost(executable: string, argv: string[], cwd: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(executable, argv, { stdio: 'inherit', cwd });
-    child.on('error', reject);
-    child.on('exit', (code) => resolve(code ?? 0));
-  });
-}
-
 async function loadLaunchConfig(launchingDirectory: string): Promise<ConfigResult> {
   const result = await loadMergedConfig(launchingDirectory);
   if (result.ok || result.error.type !== 'missing') return result;
@@ -986,11 +975,12 @@ export async function dispatchEngineer(
       const executable = host ? resolveProviderExecutable(host.id) : undefined;
       const launchOne = opts.launchInteractive ?? ((idea?: string) => {
         const prompt = `${host!.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
-        return (opts.spawnHost ?? spawnInteractiveHost)(
-          executable!,
-          host!.interactiveLaunch.argv(prompt, launchEnv),
-          launchingDirectory,
-        );
+        return launchInteractiveSession({ provider: host!.id, openingPrompt: prompt, cwd: launchingDirectory }, {
+          isInteractiveTerminal: () => true,
+          spawn: opts.spawnHost === undefined ? undefined : async (binary, argv, launchOptions) => ({
+            exitCode: await opts.spawnHost!(binary, argv, launchOptions.cwd),
+          }),
+        }).then((outcome) => outcome.kind === 'exited' ? outcome.exitCode : 1);
       });
 
       // Intake pre-poll: prime the durable inbox before launching so the spawned

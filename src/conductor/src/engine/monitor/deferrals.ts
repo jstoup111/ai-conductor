@@ -204,14 +204,3 @@ export async function readDeferrals(
     return [];
   }
 }
-
-/** Remove the main repository's deferred-halt record. */
-export async function clearDeferrals(
-  startCwd: string,
-  deps: DeferralDeps = {},
-): Promise<void> {
-  const resolvedDeps = resolveDeps(deps);
-  const { file } = await deferralsPath(startCwd, resolvedDeps);
-
-  await resolvedDeps.rm(file, { force: true });
-}

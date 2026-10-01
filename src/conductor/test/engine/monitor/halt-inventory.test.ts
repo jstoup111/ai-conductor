@@ -61,6 +61,19 @@ describe('Task 1 — per-project halt inventory', () => {
     }]);
   });
 
+  it.each(['kickback-cap', 'over-scope'] as const)(
+    'preserves the conductor-written %s class from the sidecar',
+    async (haltClass) => {
+      projectRoot = await mkdtemp(join(tmpdir(), 'halt-inventory-'));
+      await writeHalt(projectRoot, haltClass, 'Needs the class-specific procedure.\n', `${haltClass}\n`);
+
+      await expect(enumerateProjectHalts(projectRoot)).resolves.toEqual([expect.objectContaining({
+        slug: haltClass,
+        haltClass,
+      })]);
+    },
+  );
+
   it('keeps an empty halt with an unstated reason', async () => {
     projectRoot = await mkdtemp(join(tmpdir(), 'halt-inventory-'));
     await writeHalt(projectRoot, 'empty-halt', '', 'needs-human\n');
@@ -343,7 +356,7 @@ describe('Task 3 — registered-project halt inventory', () => {
     });
 
     expect({ result, out }).toEqual({
-      result: { code: 1, halts: [] },
+      result: { code: 1, halts: [], terminal: true },
       out: ['unknown project: missing'],
     });
   });
@@ -375,7 +388,7 @@ describe('Task 3 — registered-project halt inventory', () => {
     });
 
     expect({ result, out }).toEqual({
-      result: { code: 1, halts: [] },
+      result: { code: 1, halts: [], terminal: true },
       out: [expect.stringMatching(/^registry unreadable: /)],
     });
   });

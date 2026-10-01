@@ -171,6 +171,24 @@ describe('Task 7 — monitor queue ordering', () => {
   });
 });
 
+describe('Task 8 — bounded monitor priority lookup', () => {
+  it('falls back without waiting for a stuck reader and refreshes on later passes', async () => {
+    const resolver = {
+      resolve: vi.fn(async (_items: unknown, _options: unknown) => new Promise<never>(() => {})),
+    };
+
+    const ordered = await orderMonitorQueue([halt('blocked', 'owner/repo#blocked')], resolver, { timeoutMs: 0 });
+
+    expect({
+      ordered: ordered.map(({ slug, band, orderingBasis }) => ({ slug, band, orderingBasis })),
+      refreshes: resolver.resolve.mock.calls.map(([, options]) => options),
+    }).toEqual({
+      ordered: [{ slug: 'blocked', band: 'unresolved', orderingBasis: 'fallback' }],
+      refreshes: [{ refresh: true }],
+    });
+  });
+});
+
 describe('Task 8 — monitor priority outage fallback', () => {
   it('keeps every halt in stable deferral-partition fallback order throughout an outage', async () => {
     const warnings: string[] = [];

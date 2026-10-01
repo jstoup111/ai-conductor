@@ -1,7 +1,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { scanInheritedState } from '../daemon-dashboard.js';
-import { HALT_MARKER, readHaltClass, type HaltDisposition } from '../halt-marker.js';
+import { HALT_MARKER, readHaltSidecarClassification, type HaltDisposition } from '../halt-marker.js';
 import { isOperatorParked } from '../park-marker.js';
 import { createRegistryReader, type RegistryReader } from '../registry.js';
 
@@ -11,6 +11,25 @@ export interface ProjectHalt {
   slug: string;
   reason: string;
   haltClass: HaltDisposition;
+  /** The linked intake issue, when this feature was created from one. */
+  sourceRef?: string;
+}
+
+async function readSourceRef(worktreePath: string, slug: string): Promise<string | undefined> {
+  try {
+    const contents = await readFile(join(worktreePath, '.docs', 'intake', `${slug}.md`), 'utf-8');
+    return /^\s*Source-Ref:\s*(\S+)/im.exec(contents)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+async function haltDetails(worktreePath: string, slug: string): Promise<Pick<ProjectHalt, 'haltClass' | 'sourceRef'>> {
+  const [haltClass, sourceRef] = await Promise.all([
+    readHaltSidecarClassification(worktreePath),
+    readSourceRef(worktreePath, slug),
+  ]);
+  return sourceRef === undefined ? { haltClass } : { haltClass, sourceRef };
 }
 
 export interface HaltInventoryDeps {
@@ -24,6 +43,8 @@ export interface RegisteredHaltInventorySelection {
 export interface RegisteredHaltInventoryResult {
   code: number;
   halts: ProjectHalt[];
+  /** Registry selection is invalid; continuing to poll cannot change it. */
+  terminal?: boolean;
 }
 
 export interface RegisteredHaltInventoryDeps {
@@ -112,14 +133,14 @@ export async function enumerateProjectHalts(
         project: projectRoot,
         slug,
         reason: firstHaltLine(await readFile(join(worktreePath, HALT_MARKER), 'utf-8')),
-        haltClass: await readHaltClass(worktreePath),
+        ...await haltDetails(worktreePath, slug),
       };
     } catch (error) {
       return {
         project: projectRoot,
         slug,
         reason: readFailureReason(error),
-        haltClass: await readHaltClass(worktreePath),
+        ...await haltDetails(worktreePath, slug),
       };
     }
   }))).filter((halt): halt is ProjectHalt => halt !== null);
@@ -138,7 +159,7 @@ export async function enumerateProjectHalts(
       project: projectRoot,
       slug,
       reason,
-      haltClass: await readHaltClass(worktreePath),
+      ...await haltDetails(worktreePath, slug),
     };
   }))).filter((halt): halt is ProjectHalt => halt !== null);
 
@@ -158,7 +179,7 @@ export async function enumerateRegisteredProjectHalts(
     projects = await registryReader.listProjects();
   } catch (error) {
     out(`registry unreadable: ${error instanceof Error ? error.message : String(error)}`);
-    return { code: 1, halts: [] };
+    return { code: 1, halts: [], terminal: true };
   }
 
   const selected = selection.projectName === undefined
@@ -166,7 +187,7 @@ export async function enumerateRegisteredProjectHalts(
     : projects.filter((project) => project.name === selection.projectName);
   if (selection.projectName !== undefined && selected.length === 0) {
     out(`unknown project: ${selection.projectName}`);
-    return { code: 1, halts: [] };
+    return { code: 1, halts: [], terminal: true };
   }
   if (selected.length === 0) {
     out('no registered projects');

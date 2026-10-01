@@ -146,7 +146,7 @@ export function createPriorityResolver(
       const sourceRefs = items.filter((item) => item.sourceRef).map((item) => item.sourceRef as string);
 
       const unattemptedRefs = [...new Set(sourceRefs)].filter((ref) => !attemptedRefs.has(ref));
-      const refsToRead = options.refresh ? sourceRefs : unattemptedRefs;
+      const refsToRead = options.refresh ? [...new Set(sourceRefs)] : unattemptedRefs;
 
       if ((options.refresh || !inOutage) && refsToRead.length > 0) {
         // Refreshes retain their full-read behavior. Local scans prime only

@@ -30,20 +30,26 @@ function triageInvocation(provider: string): string {
   return `${findBuiltInProviderDescriptor(provider)?.invocationPrefix ?? '$'}daemon-triage`;
 }
 
+const HALT_DISPOSITIONS: Readonly<Record<HaltDisposition, true>> = {
+  'needs-human': true,
+  mechanical: true,
+  'protected-artifact': true,
+  'plan-gap': true,
+  'kickback-cap': true,
+  'over-scope': true,
+  legacy: true,
+  unclassified: true,
+};
+
 function recognizedHaltDisposition(value: unknown): HaltDisposition | undefined {
   if (typeof value !== 'string') return undefined;
-  switch (value) {
-    case 'needs-human':
-    case 'mechanical':
-    case 'protected-artifact':
-    case 'plan-gap':
-    case 'kickback-cap':
-    case 'over-scope':
-    case 'legacy':
-    case 'unclassified':
-      return value;
-  }
-  return undefined;
+  return Object.hasOwn(HALT_DISPOSITIONS, value) ? value as HaltDisposition : undefined;
+}
+
+/** The queue and session use one presentation for a missing or invalid sidecar. */
+export function displayHaltClassification(haltClass: unknown): string {
+  const recognized = recognizedHaltDisposition(haltClass);
+  return recognized === undefined || recognized === 'unclassified' ? 'undetermined' : recognized;
 }
 
 /** Maps every canonical halt disposition to the one recovery presentation it owns. */
@@ -77,7 +83,7 @@ function openingPrompt(request: GuidedSessionRequest): string {
     `Project: ${halt.project}`,
     `Feature: ${halt.slug}`,
     `Reason: ${halt.reason}`,
-    `Classification: ${haltClass === undefined || haltClass === 'unclassified' ? 'undetermined' : haltClass}`,
+    `Classification: ${displayHaltClassification(haltClass)}`,
     `Recovery procedure: ${recoveryProcedure(haltClass ?? 'unclassified')}`,
   ].join('\n');
 }

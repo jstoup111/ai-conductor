@@ -277,28 +277,6 @@ describe('Task 4 — recorded deferrals', () => {
     expect(deferral?.haltIdentity).toEqual({ present: true, mtimeMs: 1_726_754_400_000, size: 86 });
   });
 
-  it('clears a worktree deferral record through the resolved project root', async () => {
-    const resolveMainRoot = vi.fn(async () => '/projects/payments');
-    const rm = vi.fn(async () => undefined);
-    const deps: DeferralDeps = {
-      resolveMainRoot,
-      mkdir: vi.fn(async () => undefined),
-      writeFile: vi.fn(async () => undefined),
-      rename: vi.fn(async () => undefined),
-      readFile: vi.fn(async () => '[]'),
-      rm,
-    };
-    const { clearDeferrals } = await import('../../../src/engine/monitor/deferrals.js') as {
-      clearDeferrals(startCwd: string, deps: DeferralDeps): Promise<void>;
-    };
-    const startCwd = '/projects/payments/.worktrees/release-gate';
-
-    await clearDeferrals(startCwd, deps);
-
-    expect(resolveMainRoot).toHaveBeenCalledWith(startCwd);
-    expect(rm).toHaveBeenCalledWith('/projects/payments/.daemon/deferrals.json', { force: true });
-  });
-
   it('does not expose a final deferral record when the atomic rename crashes', async () => {
     const files = new Map<string, string>();
     const deps: DeferralDeps = {

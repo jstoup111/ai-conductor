@@ -71,7 +71,7 @@ describe('Task 20 — monitor pre-boot command', () => {
     }).toEqual({
       code: 0,
       selection: [[{ projectName: 'alpha' }]],
-      rendered: [['alpha: blocked-feature — needs recovery (needs-human)']],
+      rendered: [['alpha: blocked-feature — needs recovery (needs-human) [no-issue; priority-band]']],
     });
   });
 
@@ -91,6 +91,90 @@ describe('Task 20 — monitor pre-boot command', () => {
       allowed: false,
       enumerationCalls: 0,
     });
+  });
+
+  it('ends the real loop on a terminal inventory result instead of polling an empty queue', async () => {
+    const output: string[] = [];
+    const membership = vi.fn(async () => ({ code: 1, terminal: true, halts: [] }));
+
+    const code = await dispatchMonitorCommand({ kind: 'run' }, '/projects/operator', {
+      resolveProvider: async () => ({ provider: 'codex' }),
+      deriveQueueMembership: membership as never,
+      reconcileHaltIssues: async () => 0,
+      createInterrupt: () => ({ untilStop: new Promise<void>(() => {}), dispose: vi.fn() }),
+      print: (line) => output.push(line),
+    });
+
+    expect({ code, passes: membership.mock.calls.length, output }).toEqual({
+      code: 1,
+      passes: 1,
+      output: [],
+    });
+  });
+
+  it('reports an unknown configured provider before scanning an empty queue', async () => {
+    const membership = vi.fn();
+    const errors: string[] = [];
+
+    const code = await dispatchMonitorCommand({ kind: 'run' }, '/projects/operator', {
+      resolveProvider: async () => ({ provider: 'unknown-provider' }),
+      deriveQueueMembership: membership,
+      printError: (line) => errors.push(line),
+    });
+
+    expect({ code, calls: membership.mock.calls.length, errors }).toEqual({
+      code: 1,
+      calls: 0,
+      errors: ['monitor: unregistered provider unknown-provider.'],
+    });
+  });
+
+  it('injects the operator event spine into the composed monitor loop', async () => {
+    const emit = vi.fn(async () => {});
+    const startEventSpine = vi.fn(() => ({ events: { emit }, stop: vi.fn() }));
+    const run = vi.fn(async (deps: { events: unknown }) => {
+      expect(deps.events).toEqual({ emit });
+      return { active: false };
+    });
+
+    await dispatchMonitorCommand({ kind: 'run' }, '/projects/operator', {
+      resolveProvider: async () => ({ provider: 'codex' }),
+      runGuidedMonitorQueue: run as never,
+      startEventSpine: startEventSpine as never,
+      reconcileHaltIssues: async () => 0,
+      createInterrupt: () => ({ untilStop: new Promise<void>(() => {}), dispose: vi.fn() }),
+    });
+
+    expect(startEventSpine).toHaveBeenCalledWith('/projects/operator');
+  });
+
+  it('reads durable deferrals on the composed pass and keeps them behind unseen work', async () => {
+    const deferred = { ...halt(), slug: 'deferred' };
+    const unseen = { ...halt(), slug: 'unseen' };
+    const identity = { present: true, mtimeMs: 10, size: 20 } as const;
+    const readDeferrals = vi.fn(async () => [{
+      project: deferred.project,
+      feature: deferred.slug,
+      haltIdentity: identity,
+    }]);
+    const priorityResolver = { resolve: vi.fn(async () => ({ mode: 'banded' as const, bands: new Map() })) };
+    const run = vi.fn(async (deps: { deriveMembership: () => Promise<readonly ProjectHalt[]> }) => {
+      await expect(deps.deriveMembership()).resolves.toMatchObject([{ slug: 'unseen' }, { slug: 'deferred' }]);
+      return { active: false };
+    });
+
+    await dispatchMonitorCommand({ kind: 'run' }, '/projects/operator', {
+      resolveProvider: async () => ({ provider: 'codex' }),
+      deriveQueueMembership: async () => ({ code: 0, halts: [deferred, unseen] }),
+      readDeferrals,
+      snapshotHaltMarker: async () => identity,
+      priorityResolver,
+      runGuidedMonitorQueue: run as never,
+      reconcileHaltIssues: async () => 0,
+      createInterrupt: () => ({ untilStop: new Promise<void>(() => {}), dispose: vi.fn() }),
+    });
+
+    expect(readDeferrals).toHaveBeenCalledWith('/projects/alpha', expect.any(Object));
   });
 
   it('loads the monitor lazily before daemon dispatch', () => {

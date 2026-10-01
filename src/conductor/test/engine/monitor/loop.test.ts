@@ -21,10 +21,17 @@ type GuidedMonitorLoopDeps = {
 };
 
 async function advanceAfterGuidedSession(deps: GuidedMonitorLoopDeps): Promise<void> {
-  const loop = await import('../../../src/engine/monitor/loop.js') as {
-    advanceAfterGuidedSession(deps: GuidedMonitorLoopDeps): Promise<void>;
-  };
-  await loop.advanceAfterGuidedSession(deps);
+  let stop!: () => void;
+  const untilStop = new Promise<void>((resolve) => { stop = resolve; });
+  let offerCount = 0;
+  await runGuidedMonitorQueue({
+    ...deps,
+    untilStop,
+    offer: (item) => {
+      deps.offer(item);
+      if (++offerCount === 2) stop();
+    },
+  });
 }
 
 async function runGuidedMonitorQueue(deps: GuidedMonitorLoopDeps): Promise<{ active: boolean }> {

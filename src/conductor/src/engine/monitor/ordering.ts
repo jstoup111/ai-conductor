@@ -13,6 +13,11 @@ export interface MonitorPriorityResolver {
   resolve(items: BacklogItem[], options: { refresh: boolean }): Promise<PriorityResolution>;
 }
 
+export interface MonitorOrderingOptions {
+  /** A priority reader must never keep the foreground monitor from its queue. */
+  timeoutMs?: number;
+}
+
 /** A monitor halt annotated with the priority attribution used to order it. */
 export type OrderedMonitorHalt = OrderableMonitorHalt & (
   | { band: PriorityBand; orderingBasis: 'priority-band' }
@@ -37,12 +42,25 @@ function priorityBandFor(
 export async function orderMonitorQueue(
   halts: readonly OrderableMonitorHalt[],
   priorityResolver: MonitorPriorityResolver,
+  options: MonitorOrderingOptions = {},
 ): Promise<OrderedMonitorHalt[]> {
   const backlog: BacklogItem[] = halts.map((halt) => ({
     slug: halt.slug,
     ...(halt.sourceRef === undefined ? {} : { sourceRef: halt.sourceRef }),
   }));
-  const resolution = await priorityResolver.resolve(backlog, { refresh: false });
+  const timeoutMs = options.timeoutMs ?? 2_000;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<PriorityResolution>((resolve) => {
+    timer = setTimeout(() => resolve({ mode: 'fallback' }), timeoutMs);
+  });
+  // A refresh on every pass lets the stateful shared resolver leave an outage
+  // without restarting the monitor. The race leaves a slow lookup detached;
+  // its result can refresh that resolver's cache for a later pass.
+  const resolution = await Promise.race([
+    priorityResolver.resolve(backlog, { refresh: true }),
+    timedOut,
+  ]);
+  if (timer !== undefined) clearTimeout(timer);
   const annotated: Array<{
     halt: OrderableMonitorHalt;
     originalIndex: number;

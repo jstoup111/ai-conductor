@@ -35,6 +35,8 @@ export interface GuidedMonitorLoopDeps {
   readonly reconcileHaltIssues?: () => Promise<number>;
   /** Existing event spine for durable queue-transition telemetry. */
   readonly events?: MonitorEventEmitter;
+  /** A composition root can end the loop after a terminal inventory result. */
+  readonly shouldStopAfterMembership?: () => boolean;
 }
 
 /** The monitor is still available when it has no item to offer. */
@@ -47,10 +49,6 @@ function waitForMonitorPass(untilStop: Promise<void>): Promise<void> {
     const timer = setTimeout(resolve, 1_000);
     void untilStop.then(() => clearTimeout(timer));
   });
-}
-
-function sameHalt(left: ProjectHalt, right: ProjectHalt): boolean {
-  return left.project === right.project && left.slug === right.slug;
 }
 
 interface HaltIssueReconciliationState {
@@ -216,19 +214,6 @@ async function offerHalt(deps: GuidedMonitorLoopDeps, halt: ProjectHalt): Promis
  * next remaining item. The launch result is deliberately not interpreted:
  * halt markers, not a session outcome, establish current membership.
  */
-export async function advanceAfterGuidedSession(deps: GuidedMonitorLoopDeps): Promise<void> {
-  const current = await deps.deriveMembership();
-  const head = current[0];
-  if (head === undefined) return;
-
-  await offerHalt(deps, head);
-  await emitMonitorTransition(deps, 'monitor_session_opened', head);
-  await launchGuidedSession(deps, head);
-
-  const next = (await deps.deriveMembership()).find((halt) => !sameHalt(halt, head));
-  if (next !== undefined) await offerHalt(deps, next);
-}
-
 /**
  * Work a fresh queue until it becomes empty. An unchanged halt is retained in
  * the next membership result, but is held behind every item not yet offered in
@@ -258,6 +243,7 @@ export async function runGuidedMonitorQueue(
 
     startHaltIssueReconciliation(deps, reconciliationState);
     const membership = await deps.deriveMembership();
+    if (deps.shouldStopAfterMembership?.()) return { active: false };
     if (stopped) return stop();
     if (membership.length === 0) {
       deps.report?.('Monitor queue is empty; staying active.');
@@ -279,6 +265,9 @@ export async function runGuidedMonitorQueue(
 
     offered.add(`${next.project}\u0000${next.slug}`);
     await offerHalt(deps, next);
+    // An interrupt can arrive while rendering an offer. Do not open a fresh
+    // provider session after that terminal boundary.
+    if (stopped) return stop();
     await emitMonitorTransition(deps, 'monitor_session_opened', next);
     if (untilStop !== undefined) {
       const outcome = await Promise.race([
