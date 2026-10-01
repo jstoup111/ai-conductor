@@ -79,22 +79,35 @@ export async function admitAndRestageRepair(
   });
   if (!admission.ok) return { kind: 'failed', detail: `could not persist admission: ${admission.message}` };
 
-  try {
-    const settlement = await settleRemediationRound(input.projectRoot, admission.obligation.id, input.gates, input.lapCap);
-    if (settlement.capExceeded !== undefined) {
+  // prd_audit and as-built repairs use the obligation as their pending-repair
+  // receipt and charge only when BUILD dispatches. coverage_binding retains
+  // its independent restage-time lap (ADR 2026-09-06 D10).
+  // The route label is presentation-facing (`architecture-review-as-built`,
+  // or a validation-group label), while `gates` carries the canonical ledger
+  // owners.  Classifying by the label charged an as-built repair here and
+  // then recorded the same deferred charge below, so BUILD saw an already
+  // exhausted lap and never dispatched the reopened task.
+  const chargesAtBuild = input.gates.some(
+    (gate) => gate === 'prd_audit' || gate === 'architecture_review_as_built',
+  );
+  if (!chargesAtBuild) {
+    try {
+      const settlement = await settleRemediationRound(input.projectRoot, admission.obligation.id, input.gates, input.lapCap);
+      if (settlement.capExceeded !== undefined) {
+        return {
+          kind: 'failed',
+          capExceeded: settlement.capExceeded,
+          detail: `gates.${settlement.capExceeded} has exhausted the remediation lap cap (${input.lapCap})`,
+        };
+      }
+    } catch (error) {
       return {
         kind: 'failed',
-        capExceeded: settlement.capExceeded,
-        detail: `gates.${settlement.capExceeded} has exhausted the remediation lap cap (${input.lapCap})`,
+        detail:
+          `could not settle its admitted round ${admission.obligation.id}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
       };
     }
-  } catch (error) {
-    return {
-      kind: 'failed',
-      detail:
-        `could not settle its admitted round ${admission.obligation.id}: ` +
-        `${error instanceof Error ? error.message : String(error)}`,
-    };
   }
   const settled = await repairs.markSettled({ planPath: input.planPath, obligationId: admission.obligation.id });
   if (!settled.ok) {

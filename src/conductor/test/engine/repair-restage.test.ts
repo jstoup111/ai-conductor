@@ -71,6 +71,38 @@ describe('admitAndRestageRepair', () => {
     });
   });
 
+  it.each(['prd_audit', 'architecture_review_as_built'])(
+    'restages %s work without charging its lap at restage',
+    async (sourceAuthority) => {
+      const input = {
+        projectRoot: dir,
+        planPath,
+        taskIds: ['1'],
+        findingIds: [`${sourceAuthority}-finding`],
+        sourceAuthority,
+        instruction: 'Repair the existing task.',
+        gates: [sourceAuthority],
+      };
+
+      const admitted = await admitAndRestageRepair(input);
+
+      expect(admitted).toMatchObject({ kind: 'restaged', replayed: false });
+      expect(admitted.kind === 'restaged' && admitted.obligation.id).toEqual(expect.any(String));
+      await expect(readTaskStatuses(dir)).resolves.toEqual({ '1': 'pending', '2': 'completed' });
+      const ledger = await readKickbackLedger(dir);
+      expect(ledger.gates[sourceAuthority]?.laps ?? 0).toBe(0);
+      expect(ledger.pendingRepair).toBeUndefined();
+
+      await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+        tasks: [{ id: '1', status: 'completed' }, { id: '2', status: 'completed' }],
+      }));
+      await admitAndRestageRepair(input);
+
+      const replayLedger = await readKickbackLedger(dir);
+      expect(replayLedger.gates[sourceAuthority]?.laps ?? 0).toBe(0);
+    },
+  );
+
   it('does not replay a different coverage-binding claim that binds the same task on the same HEAD', async () => {
     const shared = {
       projectRoot: dir,

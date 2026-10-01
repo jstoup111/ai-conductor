@@ -322,16 +322,17 @@ import {
   isUnreadableKickbackLedger,
   refundBuildReviewKickback,
   isUnreadableKickbackGate,
+  isUnreadableKickbackGrowth,
   readSuiteInfrastructureRetries,
-  recordGrowth,
-  recordRemediationGateLap,
+  recordPendingRepair,
+  discardPendingRepair,
+  settlePendingRepair,
   updateKickbackLedger,
   recordKickbackCapEvidence,
   type KickbackGateEntry,
   type chargeBuildReviewEffectInLedger,
   type PendingAsBuiltRemediationFinding,
   type PlanGrowth,
-  type PlanGrowthEventSink,
 } from './kickback-ledger.js';
 import { renderKickbackBudgetView, renderKickbackRecoveryHint } from './kickback-budget-view.js';
 import {
@@ -344,8 +345,11 @@ import { scanPlanProtectedTargets } from './plan-protected-targets.js';
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import {
   classifyBuildSettle,
+  composeBuildOutcomeHaltReason,
+  latestBuildOutcome,
   readBuildOutcome,
   resolveBuildOutcomeCategory,
+  sameNoOpCycle,
   writeBuildOutcome,
 } from './build-outcome.js';
 import type { BuildOutcomeStore } from './build-outcome.js';
@@ -864,9 +868,9 @@ export function prdAuditAppendCap(config: HarnessConfig, authoredTaskCount: numb
   return Math.min(maximum, Math.floor(authoredTaskCount * ratio));
 }
 
-type RemediationLedgerGate = 'prd_audit' | 'architecture_review_as_built';
+export type RemediationLedgerGate = 'prd_audit' | 'architecture_review_as_built';
 
-interface RemediationGateAppendBudget {
+export interface RemediationGateAppendBudget {
   gate: RemediationLedgerGate;
   priorLaps: number;
   lapCap: number;
@@ -879,7 +883,7 @@ interface RemediationGateAppendBudget {
 }
 
 /** Read the shared append allowance for a remediation gate without choosing its halt wording. */
-async function readRemediationGateAppendBudget(
+export async function readRemediationGateAppendBudget(
   projectRoot: string,
   config: HarnessConfig,
   gate: RemediationLedgerGate,
@@ -890,66 +894,36 @@ async function readRemediationGateAppendBudget(
 ): Promise<RemediationGateAppendBudget> {
   const ledger = await readKickbackLedger(projectRoot);
   const growthCap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(config, authoredTaskCount);
-  const growth = await readGrowth(projectRoot, growthCap);
   // A corrupt ledger must not be mistaken for fresh remediation allowance:
   // budget recovery is an explicit operator decision, not a best-effort
   // fallback. Scoped to THIS gate (adr-2026-08-31 decision 3) so a sibling
   // gate's malformed entry does not halt a healthy one.
+  if (isUnreadableKickbackLedger(ledger)) {
+    throw new Error('kickback ledger is unreadable');
+  }
   if (isUnreadableKickbackGate(ledger, gate)) {
+    // A malformed pending repair is deliberately scoped to its remediation
+    // gates and growth accounting. Preserve its exhausted-budget projection;
+    // only an unreadable ledger envelope blocks append before mutation.
+    if (isUnreadableKickbackGrowth(ledger)) {
+      return {
+        gate,
+        priorLaps: lapCap,
+        lapCap,
+        taskCount,
+        growthTaskCount,
+        growthCap,
+        growth: { authored: 0, added: growthCap, byGate: {}, remaining: 0 },
+      };
+    }
     throw new Error(`kickback ledger gate '${gate}' is unreadable`);
   }
+  const growth = await readGrowth(projectRoot, growthCap);
   const priorLaps = (
     ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined
   )?.laps ?? 0;
   const effectiveLapCap = ledger.gates[gate]?.effectiveLapCap ?? lapCap;
   return { gate, priorLaps, lapCap: effectiveLapCap, taskCount, growthTaskCount, growthCap, growth };
-}
-
-function remediationGateAppendBudgetExhausted(
-  budget: RemediationGateAppendBudget,
-): 'laps' | 'growth' | undefined {
-  if (budget.priorLaps >= budget.lapCap) return 'laps';
-  // A gate can spend a remediation lap by restaging work already in the
-  // sealed plan. That route has no plan-growth authority, so its terminal
-  // outcome must never be rendered as a growth-cap exhaustion.
-  if (budget.growthTaskCount === 0) return undefined;
-  return budget.growthTaskCount > budget.growth.remaining ? 'growth' : undefined;
-}
-
-/** Persist one successful remediation append while keeping each gate's ledger and growth isolated. */
-async function recordRemediationGateAppend(
-  projectRoot: string,
-  budget: RemediationGateAppendBudget,
-  events: PlanGrowthEventSink,
-  options: { recordLap?: boolean } = {},
-): Promise<void> {
-  // adr-2026-08-29 D4: the lap read and its write are ONE lease transaction.
-  // Deriving the successor from a pre-lease read could silently overwrite a
-  // concurrent operator adjustment that landed in between.
-  const recorded = await recordRemediationGateLap(
-    projectRoot,
-    budget.gate,
-    options.recordLap !== false && budget.taskCount > 0,
-  );
-  if (budget.growthTaskCount === 0) return;
-  // Earlier gate updates in a consolidated validation group are now durable;
-  // merge them before recording this gate rather than replacing their growth
-  // snapshot captured before the shared append. The growth record comes from
-  // the same leased read as the lap above, never from a stale snapshot.
-  const growth = recorded.growth ?? budget.growth;
-  const priorGateGrowth = growth.byGate[budget.gate] ?? 0;
-  await recordGrowth(
-    projectRoot,
-    {
-      authored: growth.authored,
-      added: growth.added + budget.growthTaskCount,
-      byGate: {
-        ...growth.byGate,
-        [budget.gate]: priorGateGrowth + budget.growthTaskCount,
-      },
-    },
-    { cap: budget.growthCap, events },
-  );
 }
 
 export interface RecordedPrdAuditFinding {
@@ -1406,6 +1380,8 @@ export function getNavigableSteps(
 
 export interface StepRunResult {
   success: boolean;
+  /** Pending-repair settlement halted BUILD at its final admission boundary. */
+  pendingRepairSettlementHalt?: true;
   /** A queued self-host dispatch was parked before admission; no provider ran. */
   operatorParkedBeforeDispatch?: true;
   output?: string;
@@ -1536,6 +1512,22 @@ export interface StepRunResult {
    * step outcome.
    */
   repairProvenance?: BuildReviewRepairProvenance;
+}
+
+/**
+ * Keep the persisted BUILD outcome rung identical to the rung used by the
+ * no-movement admission guard.  A runner can resolve a different actual
+ * model/effort than the base configuration, so `resolved` is deliberately not
+ * an input here.
+ */
+export function buildOutcomeRung(
+  result: Pick<StepRunResult, 'model' | 'effort'> | undefined,
+  escalation: { model: string; effort: EffortLevel },
+): { model: string; effort: EffortLevel } {
+  return {
+    model: result?.model ?? escalation.model,
+    effort: result?.effort ?? escalation.effort,
+  };
 }
 
 export interface SpotAuditDispatchResult {
@@ -4751,73 +4743,6 @@ export class Conductor {
    * next gate pass and halt then). A missing/stale/unusable plan is `none` —
    * the caller falls through to its deterministic fallback or the generic HALT.
    */
-  /**
-   * Pre-dispatch prd_audit lap-cap check (#2753). Returns the kickback-cap
-   * halt planRemediation would otherwise produce after /remediate, or
-   * undefined when the lap is available or the inputs are not conclusive
-   * (the post-dispatch path then decides exactly as before).
-   */
-  private async prdAuditLapCapHaltBeforeRemediate(
-    state: ConductState,
-    hintSource: RemediationHintSource,
-  ): Promise<{ kind: 'halt'; detail: string; haltClass: KickbackCapHaltClass } | undefined> {
-    const evidence = hintSource.evidence ?? [];
-    const prdAuditEvidenceFile = evidence.find((p) => p.gate === 'prd_audit')?.evidenceFile;
-    if (prdAuditEvidenceFile === undefined) return undefined;
-    try {
-      const activePlanPath = await this.getActivePlanPath();
-      const planPath = activePlanPath === null
-        ? await resolveFeaturePlanPath(this.projectRoot, state.feature_desc)
-        : isAbsolute(activePlanPath) ? activePlanPath : join(this.projectRoot, activePlanPath);
-      if (!planPath) return undefined;
-      const planText = await readFile(planPath, 'utf8');
-      const report = await readFile(join(this.projectRoot, prdAuditEvidenceFile), 'utf8');
-      const parsed = parsePrdAuditReport(report, planText);
-      if (!parsed.ok || parsed.value.rejectedRows.length > 0) return undefined;
-      const fixable = parsed.value.findings.filter(
-        (finding) => finding.grade === 'FIXABLE' && finding.planTask !== undefined,
-      );
-      if (fixable.length === 0) return undefined;
-      const lapCap = remediationLapCapForGate('prd_audit', this.config);
-      const authoredTaskCount = planText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0;
-      const budget = await readRemediationGateAppendBudget(
-        this.projectRoot, this.config, 'prd_audit', lapCap, 0, 0, authoredTaskCount,
-      );
-      if (remediationGateAppendBudgetExhausted(budget) !== 'laps') return undefined;
-      const asBuiltEnabled = (this.config as HarnessConfig & {
-        architecture_review_as_built?: { remediation?: { enabled?: boolean } };
-      }).architecture_review_as_built?.remediation?.enabled ?? true;
-      const asBuiltEvidenceFile = evidence.find(
-        (p) => p.gate === 'architecture_review_as_built',
-      )?.evidenceFile;
-      const asBuiltFindings = asBuiltEnabled && asBuiltEvidenceFile !== undefined
-        ? (await readAsBuiltRoutingOutcome(this.projectRoot).catch(() => undefined))?.findings
-        : undefined;
-      const findingList = [...new Set(fixable.map((finding) => finding.criterion))].join(', ');
-      const capReason = `lap cap reached (${budget.priorLaps}/${budget.lapCap})`;
-      const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'prd_audit', {
-        allowance: 'laps',
-        consumed: budget.priorLaps,
-        limit: budget.lapCap,
-        latestReason: capReason,
-      });
-      return {
-        kind: 'halt',
-        haltClass: KICKBACK_CAP_HALT_CLASS,
-        detail: `prd_audit remediation ${capReason} before appending fix tasks. `
-          + `Findings: ${findingList}.\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}`
-          + `\n${renderKickbackRecoveryHint({
-            slug: this.featureSlug,
-            gate: 'prd_audit',
-            allowance: 'laps',
-          })}`
-          + renderAsBuiltBlockedFindingDetail(asBuiltFindings),
-      };
-    } catch {
-      return undefined;
-    }
-  }
-
   private async planRemediation(
     state: ConductState,
     steps: StepDefinition[],
@@ -4879,14 +4804,6 @@ export class Conductor {
         };
       }
     }
-    // #2753: the prd_audit lap cap depends only on the ledger and the audit
-    // report, both known before /remediate runs. Decide it here so a lap that
-    // cannot append never pays for remediate nor strands a remediation.json
-    // the resumed (raised) lap cannot reuse. Same halt text, class and
-    // kickback-cap evidence as the post-dispatch exit below, which remains
-    // the authority for growth caps (they need remediate's task count).
-    const preDispatchCapHalt = await this.prdAuditLapCapHaltBeforeRemediate(state, hintSource);
-    if (preDispatchCapHalt) return preDispatchCapHalt;
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
     const planResult = await readRemediationPlanResult(
       this.projectRoot,
@@ -4948,6 +4865,23 @@ export class Conductor {
       : isAbsolute(activePlanPath)
         ? activePlanPath
         : join(this.projectRoot, activePlanPath);
+    // Engineer-specced daemon features can reach remediation without the plan
+    // step having recorded this path. The fallback above is sufficient for
+    // this round's append, but build-boundary settlement derives its growth
+    // denominator from the durable engine state. Persist the same resolved
+    // authority before admitting work so the boundary does not see zero
+    // authored tasks and falsely exhaust the growth allowance.
+    if (activePlanPath === null && planPath) {
+      try {
+        await recordActivePlanPath(this.projectRoot, planPath);
+      } catch (error) {
+        const detail =
+          `remediation cannot persist the active plan path for build-boundary settlement: ` +
+          `${error instanceof Error ? error.message : String(error)}`;
+        await reportRefusal(detail);
+        return { kind: 'halt', haltClass: 'mechanical', detail };
+      }
+    }
     const sealedArtifactsByGapId = new Map<string, {
       artifact: string;
       directingClause: string;
@@ -5018,6 +4952,14 @@ export class Conductor {
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
     const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config);
     const prdAuditFindings = new Map<string, { criterion: string; parentTask: string }>();
+    // Both appended and existing-task repairs retain the criteria that
+    // authorized them. The pending receipt is the only durable context at a
+    // later BUILD-boundary cap halt, so keep this derivation shared.
+    const prdAuditCriteriaForGapIds = (gapIds: Iterable<string>): string[] =>
+      [...new Set([...gapIds].flatMap((gapId) => {
+        const finding = prdAuditFindings.get(gapId.toUpperCase());
+        return finding === undefined ? [] : [finding.criterion];
+      }))];
     const asBuiltFindings = new Map<string, AsBuiltGoverningClauseResolution>();
     const asBuiltRecordedFindings = new Map<string, RecordedAsBuiltRemediationFinding>();
     const asBuiltUnresolvableClauses: Array<{ id: string; clause: string }> = [];
@@ -5396,131 +5338,40 @@ export class Conductor {
     // guard must fail open (route) rather than risk permanently blocking a
     // legitimate self-heal on an unrelated append plumbing gap.
     let appendAttempted = allTasks.length === 0;
+    let appendedTaskIds: string[] = [];
 
     let prdAuditBudget: RemediationGateAppendBudget | undefined;
     let asBuiltBudget: RemediationGateAppendBudget | undefined;
     if (allTasks.length > 0 || prdAuditTasks.length > 0 || asBuiltTasks.length > 0) {
       const authoredTaskCount = activePlanText.match(/^#{1,6}\s+Task\s+/gim)?.length ?? 0;
-      prdAuditBudget = prdAuditCapEnforced
-        ? await readRemediationGateAppendBudget(
-          this.projectRoot,
-          this.config,
-          'prd_audit',
-          prdAuditLapCap,
-          prdAuditTasks.length,
-          prdAuditGrowthTasks.length,
-          authoredTaskCount,
-        )
-        : undefined;
-      asBuiltBudget = asBuiltCapEnforced
-        ? await readRemediationGateAppendBudget(
-          this.projectRoot,
-          this.config,
-          'architecture_review_as_built',
-          asBuiltLapCap,
-          asBuiltTasks.length,
-          asBuiltGrowthTasks.length,
-          authoredTaskCount,
-        )
-        : undefined;
-      if (prdAuditBudget) {
-        const findings = [...new Set([...prdAuditFindings.values()].map((finding) => finding.criterion))];
-        const findingList = findings.length > 0 ? findings.join(', ') : 'unattributed FIXABLE findings';
-        const exhausted = remediationGateAppendBudgetExhausted(prdAuditBudget);
-        if (exhausted) {
-          const capReason = exhausted === 'laps'
-            ? `lap cap reached (${prdAuditBudget.priorLaps}/${prdAuditBudget.lapCap})`
-            :
-              `growth cap reached (${prdAuditBudget.growth.added}/${prdAuditBudget.growthCap} appended; ` +
-              `${prdAuditBudget.growthTaskCount} requested, ${prdAuditBudget.growth.remaining} remaining)`;
-          const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'prd_audit', {
-            allowance: exhausted,
-            consumed: exhausted === 'growth' ? prdAuditBudget.growth.added : prdAuditBudget.priorLaps,
-            limit: exhausted === 'growth' ? prdAuditBudget.growthCap : prdAuditBudget.lapCap,
-            latestReason: capReason,
-          });
-          return {
-            kind: 'halt',
-            haltClass: KICKBACK_CAP_HALT_CLASS,
-            // adr-2026-08-25 D4: a cap terminal names the allowance AND every
-            // finding. In a mixed validation-group round remediate has already
-            // dispositioned the as-built findings, and this exit returns before
-            // the as-built budget is consulted — so without this they are
-            // routed and discarded with no trace in the halt body. Renders the
-            // same way the as-built and shared-growth exits do; the helper
-            // yields '' unless an as-built BLOCKED report actually participates.
-            detail: `prd_audit remediation ${capReason} before appending fix tasks. `
-              + `Findings: ${findingList}.\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}`
-              + `\n${renderKickbackRecoveryHint({
-                slug: this.featureSlug,
-                gate: 'prd_audit',
-                allowance: exhausted,
-              })}`
-              + renderAsBuiltBlockedFindingDetail(asBuiltTypedFindings),
-          };
-        }
-      }
-      if (asBuiltBudget) {
-        const exhausted = remediationGateAppendBudgetExhausted(asBuiltBudget);
-        if (exhausted) {
-          const capReason = exhausted === 'laps'
-            ? `lap cap reached (${asBuiltBudget.priorLaps}/${asBuiltBudget.lapCap})`
-            :
-              `shared plan-growth allowance exhausted (${asBuiltBudget.growth.added}/${asBuiltBudget.growthCap} appended; ` +
-              `${asBuiltBudget.growthTaskCount} requested, ${asBuiltBudget.growth.remaining} remaining)`;
-          const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'architecture_review_as_built', {
-            allowance: exhausted,
-            consumed: exhausted === 'growth' ? asBuiltBudget.growth.added : asBuiltBudget.priorLaps,
-            limit: exhausted === 'growth' ? asBuiltBudget.growthCap : asBuiltBudget.lapCap,
-            latestReason: capReason,
-          });
-          return {
-            kind: 'halt',
-            haltClass: KICKBACK_CAP_HALT_CLASS,
-            detail:
-              `architecture_review_as_built remediation ${capReason} before appending fix tasks. Findings:\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}` +
-              `\n${renderKickbackRecoveryHint({
-                slug: this.featureSlug,
-                gate: 'architecture_review_as_built',
-                allowance: exhausted,
-              })}` +
-              renderAsBuiltBlockedFindingDetail(asBuiltTypedFindings),
-          };
-        }
-      }
-      // Each gate has its own lap allowance, but both draw from the same
-      // bounded plan-growth record. Check the consolidated append before
-      // either ledger update so two individually valid gap sets cannot spend
-      // more than the shared remaining allowance together.
-      const sharedGrowthBudget = prdAuditBudget ?? asBuiltBudget;
-      if (sharedGrowthBudget && allTasks.length > sharedGrowthBudget.growth.remaining) {
-        const evidenceGate = prdAuditBudget ? 'prd_audit' : 'architecture_review_as_built';
-        const capReason =
-          `shared plan-growth allowance exhausted (${sharedGrowthBudget.growth.added}/` +
-          `${sharedGrowthBudget.growthCap} appended; ${allTasks.length} requested, ` +
-          `${sharedGrowthBudget.growth.remaining} remaining)`;
-        const capEntry = await recordKickbackCapEvidence(this.projectRoot, evidenceGate, {
-          allowance: 'growth',
-          consumed: sharedGrowthBudget.growth.added,
-          limit: sharedGrowthBudget.growthCap,
-          latestReason: capReason,
-        });
+      try {
+        prdAuditBudget = prdAuditCapEnforced
+          ? await readRemediationGateAppendBudget(
+            this.projectRoot,
+            this.config,
+            'prd_audit',
+            prdAuditLapCap,
+            prdAuditTasks.length,
+            prdAuditGrowthTasks.length,
+            authoredTaskCount,
+          )
+          : undefined;
+        asBuiltBudget = asBuiltCapEnforced
+          ? await readRemediationGateAppendBudget(
+            this.projectRoot,
+            this.config,
+            'architecture_review_as_built',
+            asBuiltLapCap,
+            asBuiltTasks.length,
+            asBuiltGrowthTasks.length,
+            authoredTaskCount,
+          )
+          : undefined;
+      } catch (error) {
         return {
           kind: 'halt',
-          haltClass: KICKBACK_CAP_HALT_CLASS,
-          detail:
-            `remediation ${capReason} before appending fix tasks.\n` +
-            `Kickback halt generation: ${capEntry.capEvidence!.haltGeneration}` +
-            `\n${renderKickbackRecoveryHint({
-              slug: this.featureSlug,
-              gate: evidenceGate,
-              allowance: 'growth',
-            })}` +
-            // AB-R8 / APPROVED decision 4 + Story 4: a cap terminal names the
-            // allowance AND every finding. This exit is shared with prd_audit,
-            // so it renders unconditionally — the helper yields '' unless an
-            // as-built BLOCKED report actually participates.
-            renderAsBuiltBlockedFindingDetail(asBuiltTypedFindings),
+          haltClass: 'needs-human',
+          detail: error instanceof Error ? error.message : 'kickback ledger is unreadable',
         };
       }
       // Existing-task remediation deliberately reaches the budget block above
@@ -5536,6 +5387,7 @@ export class Conductor {
         });
         if (appendResult.success) {
           appendAttempted = true;
+          appendedTaskIds = appendResult.appendedIds;
           const unreadable = await this.reloadPendingAsBuiltRemediationFindings();
           if (unreadable) {
             return { kind: 'halt', haltClass: 'needs-human', detail: unreadable };
@@ -5613,23 +5465,30 @@ export class Conductor {
       }
     }
 
-    // Both appends and existing-task rounds spend a gate lap only after the
-    // route has successfully admitted its work. The latter has no append
-    // attempt, but still needs this durable ledger update.
-    if (appendAttempted) {
-      const existingTaskRound = resolvedExistingTaskIdsByGapId.size > 0;
-      if (prdAuditBudget) await recordRemediationGateAppend(
-        this.projectRoot,
-        prdAuditBudget,
-        this.events,
-        { recordLap: !existingTaskRound },
-      );
-      if (asBuiltBudget) await recordRemediationGateAppend(
-        this.projectRoot,
-        asBuiltBudget,
-        this.events,
-        { recordLap: !existingTaskRound },
-      );
+    // Appending admits the repair but defers its allowance charge to the
+    // build-dispatch boundary. A fresh receipt makes that later settlement
+    // idempotent while preserving the appended task identities.
+    if (appendAttempted && appendedTaskIds.length > 0) {
+      const charges = {
+        ...(prdAuditBudget === undefined ? {} : {
+          prd_audit: { laps: 1, growth: prdAuditBudget.growthTaskCount },
+        }),
+        ...(asBuiltBudget === undefined ? {} : {
+          architecture_review_as_built: { laps: 1, growth: asBuiltBudget.growthTaskCount },
+        }),
+      };
+      if (Object.keys(charges).length > 0) {
+        const prdAuditCriteria = prdAuditCriteriaForGapIds([
+          ...admittedGaps.map((gap) => gap.id),
+          ...resolvedExistingTaskIdsByGapId.keys(),
+        ]);
+        await recordPendingRepair(this.projectRoot, {
+          receiptId: randomUUID(),
+          charges,
+          taskIds: appendedTaskIds,
+          ...(prdAuditCriteria.length > 0 ? { prdAuditCriteria } : {}),
+        });
+      }
     }
     if (boundExistingAsBuiltFindings.size > 0) {
       const unreadable = await this.reloadPendingAsBuiltRemediationFindings();
@@ -5805,6 +5664,35 @@ export class Conductor {
           await reportRefusal(detail);
           return { kind: 'halt', haltClass: 'needs-human', detail };
         }
+        // Routing-source names are not ledger gate names (and a validation
+        // group has no single source gate). Charge the validated owners of
+        // the bound tasks, exactly as the append path does for a mixed round.
+        const pendingCharges = {
+          ...(prdAuditTasks.length > 0 ? { prd_audit: { laps: 1, growth: 0 } } : {}),
+          ...(asBuiltTasks.length > 0
+            ? { architecture_review_as_built: { laps: 1, growth: 0 } }
+            : {}),
+        };
+        // An appending repair in this same round already holds the one
+        // per-gate lap charge. Existing-task bindings add no growth and must
+        // not overwrite that authorization with a second receipt.
+        if (Object.keys(pendingCharges).length > 0 && appendedTaskIds.length === 0) {
+          try {
+            const prdAuditCriteria = prdAuditCriteriaForGapIds(resolvedExistingTaskIdsByGapId.keys());
+            await recordPendingRepair(this.projectRoot, {
+              receiptId: admission.obligation.id,
+              charges: pendingCharges,
+              taskIds: boundTaskIds,
+              ...(prdAuditCriteria.length > 0 ? { prdAuditCriteria } : {}),
+            });
+          } catch (error) {
+            const detail =
+              `existing-task remediation ${refusalContext} could not record its pending repair ` +
+              `for ${admission.obligation.id}: ${error instanceof Error ? error.message : String(error)}`;
+            await reportRefusal(detail);
+            return { kind: 'halt', haltClass: 'needs-human', detail };
+          }
+        }
         // A replay must use the boundary captured before the original
         // re-stage, never the post-re-stage snapshot from this invocation.
         const admittedBaseline = admission.obligation.baseline;
@@ -5839,9 +5727,15 @@ export class Conductor {
             routedFixes.map((g) => `${g.id} (${g.disposition}: ${g.rationale})`).join('; ') +
             ' — remediation produced no dispatchable build work; the implicated task(s) ' +
             `are already evidence-complete — human needed${droppedSuffix}`;
+          // The append authorization is intentionally uncharged until BUILD
+          // dispatches. This guard prevents that dispatch, so remove the
+          // authorization before halting rather than leaving a later build
+          // entry to settle a repair that never ran.
+          await discardPendingRepair(this.projectRoot);
           await reportRefusal(detail);
           return {
             kind: 'halt',
+            haltClass: 'needs-human',
             detail,
             // #647 D3: this HALT is specifically the D1 no-op guard (target
             // was already evidence-complete before build ever ran) — the
@@ -6358,9 +6252,11 @@ export class Conductor {
     verdictRunId?: string,
     /** The serial lifecycle scope that owns this provider invocation. */
     executionContext?: ExecutionContext,
+    /** Charges an admitted BUILD repair immediately before provider invocation. */
+    settlePendingRepair?: () => Promise<boolean>,
   ): Promise<StepRunResult> {
     if (!this.liveBoundaryCoordinator) {
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext);
+      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext, settlePendingRepair);
     }
     await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'queued' });
     return this.liveBoundaryCoordinator.runDispatch(async (openWindow) => {
@@ -6370,7 +6266,7 @@ export class Conductor {
         return { success: false, operatorParkedBeforeDispatch: true };
       }
       await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'admitted' });
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext);
+      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext, settlePendingRepair);
     });
   }
 
@@ -6387,6 +6283,8 @@ export class Conductor {
     openWindow?: OpenAdmittedWindow,
     /** The serial lifecycle scope that owns this provider invocation. */
     executionContext?: ExecutionContext,
+    /** Charges an admitted BUILD repair immediately before provider invocation. */
+    settlePendingRepair?: () => Promise<boolean>,
   ): Promise<StepRunResult> {
     const identityOption = verdictRunId ? { runId: verdictRunId } : {};
     const executionContextOption = executionContext ? { executionContext } : {};
@@ -6451,6 +6349,13 @@ export class Conductor {
         // Either HALT (timeout <= 0) or parking timeout reached (Task 14)
         return preflight;
       }
+    }
+
+    // Deferred remediation allowances are spent only once all self-host
+    // admission preflights have accepted this BUILD attempt.  A park, safety,
+    // auth, or credentials refusal above therefore leaves its receipt intact.
+    if (name === 'build' && await settlePendingRepair?.()) {
+      return { success: false, pendingRepairSettlementHalt: true };
     }
 
     // Task 9 (TR-2): Read the daemon build token in daemon-token mode. The token
@@ -7090,6 +6995,7 @@ export class Conductor {
 
     // Determine starting index
     let startIndex = 0;
+    let pendingRepairBuildResume = false;
     if (this.fromStep) {
       startIndex = indexOf(this.fromStep);
     } else if (this.resume) {
@@ -7102,6 +7008,30 @@ export class Conductor {
         return;
       }
       startIndex = this.findResumeIndex(state, steps);
+      // A cap halt at the BUILD boundary leaves its admitted repair durable
+      // but unbuilt.  Later validation members can still be marked done, so
+      // state-only resume may otherwise start after BUILD and the verdict
+      // clamp would replay the halted audit before its repair gets a chance to
+      // run.  A pending receipt is the durable authority for this one
+      // exception: re-enter BUILD until settlement either dispatches it or
+      // writes the next cap halt.  The boundary itself still fail-closes a
+      // malformed record before any provider dispatch.
+      try {
+        const ledger = await readKickbackLedger(this.projectRoot);
+        const buildIndex = indexOf('build');
+        if (
+          !isUnreadableKickbackLedger(ledger) &&
+          ledger.pendingRepair !== undefined &&
+          getStepStatus(state, 'build') !== 'done' &&
+          buildIndex >= 0
+        ) {
+          startIndex = buildIndex;
+          pendingRepairBuildResume = true;
+        }
+      } catch {
+        // The ordinary resume route retains ownership when the ledger cannot
+        // be read at all; BUILD's boundary owns the fail-closed settlement.
+      }
       const stateDerivedIndex = startIndex;
 
       // Clamp startIndex backward to honor on-disk gate verdicts.
@@ -7161,6 +7091,7 @@ export class Conductor {
       // missing or unreadable verdict directory must not leave a refused
       // state-derived entry to return markerlessly from the loop.
       const candidate =
+        !pendingRepairBuildResume &&
         resumeClamp &&
         resumeClamp.earliestGateIdx >= 0 &&
         resumeClamp.earliestGateIdx < startIndex
@@ -9804,6 +9735,128 @@ export class Conductor {
           return preDispatchPark;
         }
 
+        // A remediation append records its authorization, but deliberately
+        // does not spend it.  This closure is invoked at the final BUILD
+        // admission point below, after every refusal that can decline the
+        // dispatch (including the protected-artifact seal).
+        const settleBuildPendingRepair = async (): Promise<boolean> => {
+          if (step.name !== 'build') return false;
+          let settlement:
+            | Awaited<ReturnType<typeof settlePendingRepair>>
+            | undefined;
+          let settlementFailure: string | undefined;
+          let settlementLedger: Awaited<ReturnType<typeof readKickbackLedger>> | undefined;
+          let settlementGrowth: PlanGrowth | undefined;
+          let growthCap: number | undefined;
+          try {
+            settlementLedger = await readKickbackLedger(this.projectRoot);
+            // Read the durable growth denominator before calculating the
+            // configured 25% cap. `readGrowth` also preserves the pending
+            // task exclusion, so an unsettled append cannot enlarge its own
+            // allowance.
+            const unboundedGrowth = await readGrowth(this.projectRoot, Number.MAX_SAFE_INTEGER);
+            growthCap = settlementLedger.effectiveGrowthCap ??
+              prdAuditAppendCap(this.config, unboundedGrowth.authored);
+            settlementGrowth = await readGrowth(this.projectRoot, growthCap);
+            settlement = await settlePendingRepair(
+              this.projectRoot,
+              (['prd_audit', 'architecture_review_as_built'] as const).map((gate) => ({
+                gate,
+                lapCap: settlementLedger!.gates[gate]?.effectiveLapCap ??
+                  remediationLapCapForGate(gate, this.config),
+                growthCap: growthCap!,
+                growth: settlementGrowth!,
+              })),
+              { events: { emit: (event) => this.events.emit(event) } },
+            );
+          } catch (error) {
+            // A malformed pending record is intentionally indistinguishable
+            // from exhausted remediation allowance at this boundary. It must
+            // not be bypassed merely because it cannot safely be charged.
+            settlementFailure = error instanceof Error ? error.message : String(error);
+          }
+
+          if (settlement?.kind === 'exhausted' || settlementFailure !== undefined) {
+            const gate = settlement?.kind === 'exhausted' ? settlement.gate : 'prd_audit';
+            const allowance = settlement?.kind === 'exhausted' ? settlement.allowance : 'growth';
+            const pendingTasks = settlementLedger?.pendingRepair?.taskIds ?? [];
+            const prdAuditCriteria = settlementLedger?.pendingRepair?.prdAuditCriteria ?? [];
+            const pendingAsBuiltFindings = settlementLedger?.pendingAsBuiltRemediationFindings ?? [];
+            const findings = prdAuditCriteria.length > 0
+              ? `Findings: ${prdAuditCriteria.join(', ')}`
+              : pendingTasks.length > 0
+              ? `Pending remediation tasks: ${pendingTasks.join(', ')}`
+              : 'Pending remediation findings are unavailable because the repair record is malformed.';
+            const asBuiltFindingDetail = pendingAsBuiltFindings.length > 0
+              ? `\n\nBlocking findings:\n${pendingAsBuiltFindings.map((finding) =>
+                  `${finding.finding} (${finding.class}; ${finding.reference === undefined
+                    ? finding.governingClause
+                    : finding.reference.kind === 'plan-task'
+                      ? `plan task ${finding.reference.taskId}`
+                      : `${finding.reference.stem} decision ${finding.reference.decision}`}): ${finding.summary}`,
+                ).join('; ')}`
+              : '';
+            const fallbackLapCap = remediationLapCapForGate(gate, this.config);
+            const growthView = settlementGrowth === undefined || growthCap === undefined
+              ? undefined
+              : {
+                  ...settlementGrowth,
+                  cap: growthCap,
+                  capSource: settlementLedger?.effectiveGrowthCap === undefined
+                    ? 'config-derived' as const
+                    : 'raised' as const,
+                };
+            const detail = settlementFailure === undefined
+              ? renderKickbackBudgetView(
+                  settlementLedger?.gates[gate],
+                  gate,
+                  fallbackLapCap,
+                  growthView,
+                )
+              : `Kickback budget (${gate}): ${allowance} allowance unavailable (${settlementFailure})`;
+
+            let generation: string | undefined;
+            try {
+              const capEntry = await recordKickbackCapEvidence(this.projectRoot, gate, {
+                consumed: allowance === 'laps'
+                  ? settlementLedger?.gates[gate]?.laps ?? fallbackLapCap
+                  : settlementGrowth?.added ?? growthCap ?? 0,
+                limit: allowance === 'laps' ? fallbackLapCap : growthCap ?? 0,
+                latestReason: findings,
+                allowance,
+              });
+              generation = capEntry.capEvidence?.haltGeneration;
+            } catch {
+              // An unreadable ledger cannot receive new evidence, but must
+              // still halt before BUILD. The marker remains actionable and a
+              // subsequent valid cap halt receives its durable generation.
+            }
+            const reason =
+              `BUILD dispatch halted: ${gate} ${allowance} allowance exhausted.\n` +
+              `${detail}\n${findings}${asBuiltFindingDetail}\n` +
+              renderKickbackRecoveryHint({
+                slug: state.feature_desc,
+                gate,
+                allowance,
+              });
+            await this.writeHaltMarker(
+              `${reason}\n${generation === undefined ? '' : `Kickback halt generation: ${generation}\n`}`,
+              // A corrupt ledger cannot establish that an allowance was
+              // exhausted.  Preserve the cap class only for a verified cap
+              // exhaustion; damaged durable accounting requires operator
+              // recovery and must retain its needs-human classification.
+              settlementFailure === undefined ? KICKBACK_CAP_HALT_CLASS : 'needs-human',
+            );
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
+            const prUrl = await this.surfaceRemediationPr(reason);
+            await this.emitLoopHalt(reason, prUrl);
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return true;
+          }
+          return false;
+        };
+
         // Mark in_progress before running
         await this.saveConductorStepStatus(state, step.name, 'in_progress');
 
@@ -9872,6 +9925,12 @@ export class Conductor {
         let attempt = 0;
         let lastError: string = '';
         let succeeded = false;
+        // Terminal BUILD stamps run after the retry loop, so retain the exact
+        // escalation rung selected for its most recent attempted dispatch.
+        let lastBuildEscalation: { model: string; effort: EffortLevel } = {
+          model: resolved.model,
+          effort: resolved.effort,
+        };
         // Seed from any kickback hint queued for this step (e.g. the prd_audit
         // impl-gap → BUILD handoff), then clear it so it only affects attempt 1.
         let retryHint: string | undefined = pendingRetryHints.get(step.name);
@@ -10212,6 +10271,7 @@ export class Conductor {
             resolved.escalate,
             stepModelPolicy,
           );
+          if (step.name === 'build') lastBuildEscalation = esc;
 
           if (step.name === 'build') {
             await seedBuildTaskTelemetry(
@@ -10405,8 +10465,42 @@ export class Conductor {
             // the provider is dispatched.  This keeps the region boundary
             // mechanical rather than relying on the provider to recreate it.
             await this.ensureOwnedStepRegion(state, step.name);
+            // Settlement is the last durable admission before BUILD invokes a
+            // provider. Any earlier refusal leaves the pending receipt and its
+            // allowances untouched for the next eligible dispatch.
+            const missingWorktree = await this.missingWorktreeResult(step.name);
+            if (missingWorktree === undefined && step.name === 'build') {
+              const gate = await pendingBuildKickbackGate();
+              if (gate !== null) {
+                const [outcomes, treeHash] = await Promise.all([
+                  readBuildOutcome(this.projectRoot),
+                  currentTreeHash(this.projectRoot),
+                ]);
+                const prior = latestBuildOutcome(outcomes);
+                if (prior !== null && sameNoOpCycle(prior, {
+                  gate,
+                  treeHash,
+                  verdict: false,
+                  rung: buildOutcomeRung(undefined, esc),
+                })) {
+                  const reason = composeBuildOutcomeHaltReason(prior, gate);
+                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.emitLoopHalt(reason, prUrl);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+              }
+            }
+            // Non-self-host dispatches have no additional admission layer, so
+            // settlement remains at this final generic boundary. Self-host
+            // dispatches settle inside runAdmittedSelfBuildDispatch, after its
+            // safety and auth preflights have accepted the attempt.
+            if (missingWorktree === undefined && !usesSelfBuildDispatch && await settleBuildPendingRepair()) return;
             result =
-              (await this.missingWorktreeResult(step.name)) ??
+              missingWorktree ??
               (step.name === 'complexity'
                 ? await this.runComplexityStep(state)
                 : step.name === 'worktree'
@@ -10438,6 +10532,7 @@ export class Conductor {
                                 ? this.currentRunId
                                 : undefined,
                               serialExecutionContext,
+                              settleBuildPendingRepair,
                             )
                           : await (async (): Promise<StepRunResult> => {
                             // PRD widening preparation stays outside the
@@ -10497,6 +10592,10 @@ export class Conductor {
             });
             if (parked) return parked;
           }
+
+          // Settlement owns its HALT marker and loop-halt event. Preserve the
+          // pre-existing terminal routing without retry or failure accounting.
+          if (result.pendingRepairSettlementHalt) return;
 
           // Rebase setup exhaustion is a pre-invocation environmental refusal.
           // Its native handler has already written the HALT and recorded the
@@ -10676,7 +10775,7 @@ export class Conductor {
                     terminalOutcome: 'no-verdict',
                     gate,
                     verdict: gate === null ? null : false,
-                    rung: { model: result.model ?? resolved.model, effort: resolved.effort },
+                    rung: buildOutcomeRung(result, esc),
                     treeBefore: treeHashBeforeBuild,
                     treeAfter,
                     headBefore: headShaBeforeBuild,
@@ -12294,7 +12393,7 @@ export class Conductor {
                   terminalOutcome: 'failed',
                   gate,
                   verdict: gate === null ? null : false,
-                  rung: { model: failedStepResult?.model ?? resolved.model, effort: resolved.effort },
+                  rung: buildOutcomeRung(failedStepResult, lastBuildEscalation),
                   treeBefore: treeHashBeforeBuild,
                   treeAfter,
                   headBefore: headShaBeforeBuild,
@@ -13842,7 +13941,7 @@ export class Conductor {
                   terminalOutcome: 'done',
                   gate,
                   verdict: gate === null ? null : false,
-                  rung: { model: stepResult?.model ?? resolved.model, effort: resolved.effort },
+                  rung: buildOutcomeRung(stepResult, lastBuildEscalation),
                   treeBefore: treeHashBeforeBuild,
                   treeAfter,
                   headBefore: headShaBeforeBuild,

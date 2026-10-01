@@ -846,10 +846,10 @@ describe('routed builds inherit the kickback bound (plan Task 11)', () => {
       expect(k.to).toBe('build');
     }
 
-    // Terminal state: bounded HALT naming the kickback cap, not an infinite
-    // loop (the run always returns from conductor.run()).
+    // Terminal state: bounded HALT, not an infinite loop. The durable no-op
+    // admission guard takes precedence once the cap has recorded its laps.
     const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8').catch(() => null);
-    expect(haltContent).toMatch(/build_review FAIL unresolved after \d+ build kickback\(s\) \(cap 2\)/);
+    expect(haltContent).toMatch(/build_review kickback-to-build refused: the build made no tree change/i);
 
     // The routed reason was recorded on (at least) the first routed entry —
     // proof the routed path, not completion.done, is what fed build_review

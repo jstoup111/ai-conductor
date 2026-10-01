@@ -569,7 +569,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
 
   it(
     'Story 3 negative (REGRESSION LOCK — expected to pass today): with kickback_escalation ' +
-      'disabled, D2 stays silent and the D1 cap still terminates the loop',
+    'disabled, D2 stays silent and the durable no-op admission guard terminates the loop',
     async () => {
       await writeState(statePath, { ...frontDone(), track: 'technical' });
       const runner: StepRunner = {
@@ -591,8 +591,9 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
         MAX_KICKBACKS_PER_GATE,
       );
       expect(halts).toHaveLength(1);
-      // Terminated by the cap, not by D2.
-      expect(halts[0]).toMatch(/cap 2|kickback\(s\)/i);
+      // D2 is disabled; the durable no-op admission guard terminates after
+      // the D1 laps have been recorded.
+      expect(halts[0]).toMatch(/kickback-to-build refused: the build made no tree change/i);
     },
     60_000,
   );
@@ -716,8 +717,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
   // ───────────────────────────── Story 5 ─────────────────────────────
 
   it(
-    'Story 5 happy: the build_review cap HALT names the gate, the laps consumed and the ' +
-      'recorded reason, and writes .pipeline/HALT.class as needs-human',
+    'Story 5 regression: the durable no-op build_review HALT is classified needs-human',
     async () => {
       await writeState(statePath, { ...frontDone(), track: 'technical' });
       const runner: StepRunner = {
@@ -736,10 +736,9 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       expect(await exists(dir, HALT_MARKER)).toBe(true);
       const body = await readFile(join(dir, HALT_MARKER), 'utf-8');
       expect(body).toContain('build_review');
-      expect(body).toContain(String(MAX_KICKBACKS_PER_GATE));
-      expect(body).toContain('foo unreachable from any entry point');
-      // Today this path hand-rolls writeFile and writes no class sidecar, so
-      // the re-kick sweep recycles the livelock as 'unclassified'.
+      expect(body).toMatch(/kickback-to-build refused: the build made no tree change/i);
+      // The admission halt uses the shared marker writer, so re-kick does not
+      // recycle it as an unclassified livelock.
       expect(await readHaltClass(dir)).toBe('needs-human');
     },
     60_000,

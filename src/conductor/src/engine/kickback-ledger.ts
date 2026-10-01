@@ -108,6 +108,34 @@ export interface PendingAsBuiltRemediationFinding {
   outcome: 'remediated';
 }
 
+/** One gate's uncharged authorization in the durable pending repair. */
+export interface PendingRepairGateCharge {
+  laps: number;
+  growth: number;
+}
+
+/** Durable repair authorization that is charged only when BUILD dispatches. */
+export interface PendingRepair {
+  receiptId: string;
+  charges: Partial<Record<'prd_audit' | 'architecture_review_as_built', PendingRepairGateCharge>>;
+  taskIds: string[];
+  /** Authoritative prd_audit criteria that admitted this repair. */
+  prdAuditCriteria?: string[];
+}
+
+/** Current allowance snapshot for one gate named by a pending repair. */
+export interface PendingRepairSettlementBudget {
+  gate: 'prd_audit' | 'architecture_review_as_built';
+  lapCap: number;
+  growthCap: number;
+  growth: PlanGrowth;
+}
+
+export type PendingRepairSettlementResult =
+  | { kind: 'none' }
+  | { kind: 'settled' }
+  | { kind: 'exhausted'; gate: PendingRepairSettlementBudget['gate']; allowance: 'laps' | 'growth' };
+
 export interface PlanGrowthEventSink {
   emit(event: Extract<ConductorEvent, { type: 'plan_growth' }>): void | Promise<void>;
 }
@@ -120,10 +148,13 @@ export interface KickbackLedger {
   unreadable?: true;
   /** Invalid entries do not erase healthy sibling accounting, but still fail closed. */
   unreadableGates?: string[];
+  /** A malformed pending repair leaves plan-growth accounting unavailable. */
+  unreadableGrowth?: true;
   growth?: PlanGrowthRecord;
   /** Feature-specific plan-growth cap authorized by an operator. */
   effectiveGrowthCap?: number;
   pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
+  pendingRepair?: PendingRepair;
   settlementReceipts?: Record<string, { gates: string[] }>;
   /** Applied-rebase operation ids whose build-review convergence laps were refunded. */
   convergenceCreditReceipts?: Record<string, { gate: 'build_review' }>;
@@ -144,6 +175,7 @@ interface PersistedKickbackLedger {
   growth?: PlanGrowthRecord;
   effectiveGrowthCap?: number;
   pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
+  pendingRepair?: PendingRepair;
   settlementReceipts?: Record<string, { gates: string[] }>;
   convergenceCreditReceipts?: Record<string, { gate: 'build_review' }>;
 }
@@ -289,13 +321,18 @@ function emptyLedger(): KickbackLedger {
   return { version: 1, gates: {} };
 }
 
-function unreadableLedger(gates: Record<string, KickbackGateEntry> = {}, unreadableGates?: string[]): KickbackLedger {
+function unreadableLedger(
+  gates: Record<string, KickbackGateEntry> = {},
+  unreadableGates?: string[],
+  unreadableGrowth = false,
+): KickbackLedger {
   const ledger: KickbackLedger = { version: 1, gates };
   // Keep the durable-state result structurally compatible with legacy readers;
   // the typed sentinel is intentionally non-enumerable so it can never be
   // persisted accidentally by a spread/write path.
   Object.defineProperty(ledger, 'unreadable', { value: true, enumerable: false });
   if (unreadableGates?.length) Object.defineProperty(ledger, 'unreadableGates', { value: unreadableGates, enumerable: false });
+  if (unreadableGrowth) Object.defineProperty(ledger, 'unreadableGrowth', { value: true, enumerable: false });
   return ledger;
 }
 
@@ -436,6 +473,35 @@ function isPendingAsBuiltRemediationFindings(
     new Set(value.map((finding) => finding.finding)).size === value.length;
 }
 
+function isPendingRepairGateCharge(value: unknown): value is PendingRepairGateCharge {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const charge = value as Record<string, unknown>;
+  return isPositiveSafeInteger(charge.laps) && isNonNegativeInteger(charge.growth);
+}
+
+function isPendingRepair(value: unknown): value is PendingRepair {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const repair = value as Record<string, unknown>;
+  if (
+    typeof repair.receiptId !== 'string' || repair.receiptId.trim().length === 0 ||
+    !Array.isArray(repair.taskIds) || repair.taskIds.length === 0 ||
+    !repair.taskIds.every((taskId) => typeof taskId === 'string' && taskId.trim().length > 0) ||
+    new Set(repair.taskIds).size !== repair.taskIds.length ||
+    typeof repair.charges !== 'object' || repair.charges === null || Array.isArray(repair.charges)
+  ) return false;
+  if (repair.prdAuditCriteria !== undefined && (
+    !Array.isArray(repair.prdAuditCriteria) ||
+    !repair.prdAuditCriteria.every((criterion) => typeof criterion === 'string' && criterion.trim().length > 0) ||
+    new Set(repair.prdAuditCriteria).size !== repair.prdAuditCriteria.length
+  )) return false;
+  const charges = repair.charges as Record<string, unknown>;
+  const permittedGates = new Set(['prd_audit', 'architecture_review_as_built']);
+  const entries = Object.entries(charges);
+  return entries.length > 0 && entries.every(([gate, charge]) =>
+    permittedGates.has(gate) && isPendingRepairGateCharge(charge),
+  );
+}
+
 function isSettlementReceipts(value: unknown): value is Record<string, { gates: string[] }> {
   return typeof value === 'object' && value !== null && !Array.isArray(value) &&
     Object.entries(value).every(([key, receipt]) =>
@@ -547,6 +613,13 @@ function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
     ledger.pendingAsBuiltRemediationFindings !== undefined &&
     !isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
   ) return unreadableLedger(normalizeKickbackLedger({ version: 1, gates }).gates);
+  if (ledger.pendingRepair !== undefined && !isPendingRepair(ledger.pendingRepair)) {
+    return unreadableLedger(
+      normalizeKickbackLedger({ version: 1, gates }).gates,
+      ['prd_audit', 'architecture_review_as_built'],
+      true,
+    );
+  }
   const receipts = ledger.convergenceCreditReceipts;
   if (receipts !== undefined && (
     typeof receipts !== 'object' || receipts === null || Array.isArray(receipts) ||
@@ -563,6 +636,9 @@ function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
       : {}),
     ...(ledger.pendingAsBuiltRemediationFindings !== undefined && isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
       ? { pendingAsBuiltRemediationFindings: ledger.pendingAsBuiltRemediationFindings }
+      : {}),
+    ...(ledger.pendingRepair !== undefined && isPendingRepair(ledger.pendingRepair)
+      ? { pendingRepair: ledger.pendingRepair }
       : {}),
     ...(ledger.settlementReceipts === undefined || isSettlementReceipts(ledger.settlementReceipts)
       ? { settlementReceipts: ledger.settlementReceipts }
@@ -589,6 +665,11 @@ export function isUnreadableKickbackGate(ledger: KickbackLedger, gate: string): 
   return isUnreadableKickbackLedger(ledger) || (ledger.unreadableGates?.includes(gate) ?? false);
 }
 
+/** True when durable plan-growth accounting must not authorize new work. */
+export function isUnreadableKickbackGrowth(ledger: KickbackLedger): boolean {
+  return isUnreadableKickbackLedger(ledger) || ledger.unreadableGrowth === true;
+}
+
 /** Every gate whose own entry failed validation, for reporting it as unavailable. */
 export function unreadableKickbackGates(ledger: KickbackLedger): readonly string[] {
   return ledger.unreadableGates ?? [];
@@ -597,6 +678,12 @@ export function unreadableKickbackGates(ledger: KickbackLedger): readonly string
 function requireReadableLedger(ledger: KickbackLedger): void {
   if (isUnreadableKickbackLedger(ledger)) {
     throw new Error('kickback ledger is unreadable');
+  }
+}
+
+function requireReadableGrowth(ledger: KickbackLedger): void {
+  if (isUnreadableKickbackGrowth(ledger)) {
+    throw new Error('plan growth is unreadable');
   }
 }
 
@@ -703,16 +790,24 @@ async function withPreservedUnreadableGates(
   } catch {
     return ledger;
   }
-  const gates = (stored as { gates?: unknown } | null)?.gates;
+  const storedLedger = stored as { gates?: unknown; pendingRepair?: unknown } | null;
+  const gates = storedLedger?.gates;
   if (typeof gates !== 'object' || gates === null || Array.isArray(gates)) return ledger;
   const preserved: Record<string, unknown> = {};
   for (const [gate, entry] of Object.entries(gates as Record<string, unknown>)) {
     if (gate in ledger.gates) continue;
     if (normalizeKickbackGateEntry(entry) === undefined) preserved[gate] = entry;
   }
-  return Object.keys(preserved).length === 0
+  const withPreservedGates = Object.keys(preserved).length === 0
     ? ledger
     : ({ ...ledger, gates: { ...ledger.gates, ...preserved } } as KickbackLedger);
+  // A malformed pending repair must remain durable across a healthy sibling
+  // write. Otherwise that write would silently turn a fail-closed repair
+  // allowance into a fresh one on the next read.
+  if (storedLedger?.pendingRepair !== undefined && !isPendingRepair(storedLedger.pendingRepair)) {
+    return { ...withPreservedGates, pendingRepair: storedLedger.pendingRepair } as unknown as KickbackLedger;
+  }
+  return withPreservedGates;
 }
 
 /** Write the ledger atomically, so readers never observe a partially written file. */
@@ -758,6 +853,7 @@ function growthTotalsAgree(growth: PlanGrowthRecord): boolean {
 
 async function deriveGrowthFromActivePlan(
   projectRoot: string,
+  pendingTaskIds: ReadonlySet<string> = new Set(),
 ): Promise<{ growth: PlanGrowthRecord; resolved: boolean }> {
   let activePlanPath: string | undefined;
   try {
@@ -780,7 +876,8 @@ async function deriveGrowthFromActivePlan(
       isAbsolute(activePlanPath) ? activePlanPath : join(projectRoot, activePlanPath),
       'utf-8',
     );
-    const authored = [...plan.matchAll(/^#{1,6}\s+Task\s+[A-Za-z0-9._-]+(?::|\s[—–]|\s*$)/gim)].length;
+    const authored = [...plan.matchAll(/^#{1,6}\s+Task\s+([A-Za-z0-9._-]+)(?::|\s[—–]|\s*$)/gim)]
+      .filter((match) => !pendingTaskIds.has(match[1]!)).length;
     return { growth: { authored, added: 0, byGate: {} }, resolved: true };
   } catch (error) {
     console.warn(
@@ -800,12 +897,26 @@ export async function readGrowth(projectRoot: string, cap: number): Promise<Plan
   return withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
     requireReadableLedger(ledger);
-    const derived = await deriveGrowthFromActivePlan(projectRoot);
+    requireReadableGrowth(ledger);
+    const pendingGrowth = Object.values(ledger.pendingRepair?.charges ?? {})
+      .some((charge) => charge.growth > 0);
+    const derived = await deriveGrowthFromActivePlan(
+      projectRoot,
+      pendingGrowth ? new Set(ledger.pendingRepair?.taskIds ?? []) : new Set(),
+    );
     const stored = ledger.growth;
 
     if (!stored) return withRemaining(derived.growth, cap);
 
-    const matchesPlan = !derived.resolved || stored.authored + stored.added === derived.growth.authored;
+    // A pending append is already present in the plan but deliberately has
+    // not consumed `growth.added` until BUILD dispatch. Its task ids are
+    // excluded from the derived authored count above, so compare that count
+    // with the stored authored baseline rather than adding settled growth a
+    // second time. Lap-only existing-task repairs do not change plan growth
+    // and must not be excluded from the denominator at all.
+    const matchesPlan = !derived.resolved || (pendingGrowth
+      ? stored.authored === derived.growth.authored
+      : stored.authored + stored.added === derived.growth.authored);
     if (growthTotalsAgree(stored) && matchesPlan) return withRemaining(stored, cap);
 
     // A plan can contain an old unrecorded foreign append from before append
@@ -832,16 +943,21 @@ export async function readGrowth(projectRoot: string, cap: number): Promise<Plan
 export async function recordGrowth(
   projectRoot: string,
   growth: PlanGrowthRecord,
-  options: { cap?: number; events?: PlanGrowthEventSink } = {},
+  options: { cap?: number; events?: PlanGrowthEventSink; prepareOnly?: true } = {},
 ): Promise<PlanGrowth> {
   if (!isPlanGrowthRecord(growth) || !growthTotalsAgree(growth)) {
     throw new Error('plan growth must have non-negative counts whose gate total equals added');
   }
 
+  const cap = options.cap ?? growth.added;
+  // Settlement already owns the ledger lease and must remain all-or-nothing
+  // with its lap writes. Reuse this growth transition there without taking a
+  // nested lease; the caller persists the returned record in its one write.
+  if (options.prepareOnly) return withRemaining(growth, cap);
   const recorded = await withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
     requireReadableLedger(ledger);
-    const cap = options.cap ?? growth.added;
+    requireReadableGrowth(ledger);
     const next = withRemaining(growth, cap);
     await writeKickbackLedgerUnsafe(projectRoot, {
       ...ledger,
@@ -1133,6 +1249,116 @@ export async function updateKickbackLedger<T>(
     if (ledger !== undefined) await writeKickbackLedgerUnsafe(projectRoot, ledger);
     return result;
   });
+}
+
+/**
+ * Persist an admitted repair's authorization without spending its eventual
+ * lap or plan-growth charges. The receipt makes admission replay-safe.
+ */
+export async function recordPendingRepair(
+  projectRoot: string,
+  pendingRepair: PendingRepair,
+): Promise<void> {
+  if (!isPendingRepair(pendingRepair)) throw new Error('pending repair must be well-formed');
+  await withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableLedger(ledger);
+    requireReadableGrowth(ledger);
+    for (const gate of Object.keys(pendingRepair.charges)) requireReadableGate(ledger, gate);
+    const existing = ledger.pendingRepair;
+    if (existing !== undefined) {
+      if (existing.receiptId === pendingRepair.receiptId) return;
+      throw new Error(`pending repair '${existing.receiptId}' is already recorded`);
+    }
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, pendingRepair });
+  });
+}
+
+/** Remove an unsettled repair authorization without charging its allowances. */
+export async function discardPendingRepair(projectRoot: string): Promise<void> {
+  await withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableLedger(ledger);
+    if (ledger.pendingRepair === undefined) return;
+    const { pendingRepair: _pendingRepair, ...withoutPendingRepair } = ledger;
+    await writeKickbackLedgerUnsafe(projectRoot, withoutPendingRepair);
+  });
+}
+
+/**
+ * Atomically consume the durable repair authorization at BUILD dispatch.
+ * Budget helpers acquire their own lease, so settlement performs their same
+ * ledger transitions together here rather than exposing a partial charge.
+ */
+export async function settlePendingRepair(
+  projectRoot: string,
+  budgets: readonly PendingRepairSettlementBudget[],
+  options: { events?: PlanGrowthEventSink } = {},
+): Promise<PendingRepairSettlementResult> {
+  const settled: { result: PendingRepairSettlementResult; growth?: PlanGrowth } = await withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableLedger(ledger);
+    requireReadableGrowth(ledger);
+    const pendingRepair = ledger.pendingRepair;
+    if (pendingRepair === undefined) return { result: { kind: 'none' } as const };
+
+    const budgetByGate = new Map(budgets.map((budget) => [budget.gate, budget]));
+    const charges = Object.entries(pendingRepair.charges) as Array<[
+      PendingRepairSettlementBudget['gate'], PendingRepairGateCharge,
+    ]>;
+    const initialGrowth = ledger.growth ?? budgets[0]?.growth;
+    if (initialGrowth === undefined) throw new Error('pending repair settlement requires a growth budget');
+    const nextGrowth: PlanGrowthRecord = {
+      authored: initialGrowth.authored,
+      added: initialGrowth.added,
+      byGate: { ...initialGrowth.byGate },
+    };
+    const nextGates = { ...ledger.gates };
+    let growthCap: number | undefined;
+
+    for (const [gate, charge] of charges) {
+      const budget = budgetByGate.get(gate);
+      if (budget === undefined) throw new Error(`pending repair settlement is missing '${gate}' budget`);
+      requireReadableGate(ledger, gate);
+      const current = nextGates[gate] ?? {
+        count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+      };
+      if ((current.laps ?? 0) + charge.laps > budget.lapCap) {
+        return { result: { kind: 'exhausted', gate, allowance: 'laps' } as const };
+      }
+      const cap = growthCap ?? budget.growthCap;
+      if (nextGrowth.added + charge.growth > cap) {
+        return { result: { kind: 'exhausted', gate, allowance: 'growth' } as const };
+      }
+      growthCap = cap;
+      nextGates[gate] = { ...current, laps: (current.laps ?? 0) + charge.laps };
+      if (charge.growth > 0) {
+        nextGrowth.added += charge.growth;
+        nextGrowth.byGate[gate] = (nextGrowth.byGate[gate] ?? 0) + charge.growth;
+      }
+    }
+
+    const { pendingRepair: _pendingRepair, ...withoutPendingRepair } = ledger;
+    const growthChanged = charges.some(([, charge]) => charge.growth > 0);
+    const recordedGrowth = growthChanged
+      ? await recordGrowth(projectRoot, nextGrowth, {
+          cap: growthCap ?? nextGrowth.added,
+          prepareOnly: true,
+        })
+      : undefined;
+    const nextLedger: KickbackLedger = {
+      ...withoutPendingRepair,
+      gates: nextGates,
+      ...(growthChanged ? { growth: nextGrowth } : {}),
+    };
+    await writeKickbackLedgerUnsafe(projectRoot, nextLedger);
+    return {
+      result: { kind: 'settled' } as const,
+      ...(recordedGrowth === undefined ? {} : { growth: recordedGrowth }),
+    };
+  });
+  if (settled.growth !== undefined) await options.events?.emit({ type: 'plan_growth', ...settled.growth });
+  return settled.result;
 }
 
 /**

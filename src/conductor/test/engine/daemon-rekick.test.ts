@@ -31,7 +31,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { readVerdict } from '../../src/engine/gate-verdicts.js';
-import { readState } from '../../src/engine/state.js';
+import { readState, writeState } from '../../src/engine/state.js';
 import { checkAndAutoPark } from '../../src/engine/daemon-auto-park.js';
 import { isOperatorParked, __resetResolveCacheForTests, reconcileStrandedParkMarkers } from '../../src/engine/park-marker.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
@@ -168,7 +168,31 @@ describe('consumeResumeAuthorizations', () => {
       resumeAuthorization: { adjustmentId: 'a1', haltGeneration: 'g0', consumed: false },
     });
     try {
-      await expect(consumeResumeAuthorizations(base(worktree, {})as never)).resolves.toEqual([]);
+      let cleared = false;
+      await expect(consumeResumeAuthorizations(base(worktree, {
+        clearHalt: async () => { cleared = true; return 'confirmed' as const; },
+      }) as never)).resolves.toEqual([]);
+      expect(cleared).toBe(false);
+      expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('retains a prd-audit cap halt without a raise authorization', async () => {
+    const { root, worktree } = await seed({
+      ...gateEntry,
+      laps: 1,
+      capEvidence: { gate: 'prd_audit', consumed: 1, limit: 1, latestReason: 'lap cap', haltGeneration: 'g1' },
+      resumeAuthorization: undefined,
+    }, 'prd_audit');
+    try {
+      let cleared = false;
+      await expect(consumeResumeAuthorizations(base(worktree, {
+        readLiveHaltClass: async () => 'kickback-cap',
+        clearHalt: async () => { cleared = true; return 'confirmed' as const; },
+      }) as never)).resolves.toEqual([]);
+      expect(cleared).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -332,7 +356,7 @@ describe('consumeResumeAuthorizations', () => {
     }
   });
 
-  it('retains a new growth halt when a one-task raise still leaves two requested fixes over budget', async () => {
+  it('retains a new growth halt at BUILD when a one-task raise still leaves two requested fixes over budget', async () => {
     const root = await mkdtemp(join(tmpdir(), 'growth-raised-rekick-'));
     const worktree = join(root, 'feature');
     try {
@@ -341,15 +365,38 @@ describe('consumeResumeAuthorizations', () => {
       await expect(consumeResumeAuthorizations(authorizationDeps(worktree, events))).resolves.toEqual(['feature']);
 
       const outcome = await runGrowthRemediation(worktree, { requested: 2, added: 10, effectiveGrowthCap: 11 });
-      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
+      expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+      const pending = await readKickbackLedger(worktree);
+      expect(pending.pendingRepair).toMatchObject({
+        charges: { prd_audit: { laps: 1, growth: 2 } },
+        taskIds: ['rem-prd-audit-rem-s2.1', 'rem-prd-audit-rem-s2.2'],
+      });
+
+      const statePath = join(worktree, '.pipeline', 'conduct-state.json');
+      await writeState(statePath, {
+        ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+        build: 'pending',
+        session_started_at: Date.now() - 1_000,
+        run_started_at: Date.now() - 1_000,
+        feature_desc: 'feature',
+      });
+      const build = vi.fn(async () => ({ success: true }));
+      await new Conductor({
+        stateFilePath: statePath,
+        projectRoot: worktree,
+        events: new ConductorEventEmitter(),
+        mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false,
+        config: { prd_audit: { max_remediation_laps: 1, max_appended_tasks: 10, max_appended_ratio: 1 } } as never,
+        stepRunner: { run: async (step) => step === 'build' ? build() : { success: true } },
+      }).run();
+
+      expect(build).not.toHaveBeenCalled();
       const nextEvidence = (await readKickbackLedger(worktree)).gates.prd_audit.capEvidence!;
       expect(nextEvidence).toMatchObject({ allowance: 'growth', consumed: 10, limit: 11 });
       expect(nextEvidence.haltGeneration).not.toBe('g1');
-      await writeFile(
-        join(worktree, HALT_MARKER),
-        `growth cap\nKickback halt generation: ${nextEvidence.haltGeneration}\n`,
+      await expect(readFile(join(worktree, HALT_MARKER), 'utf8')).resolves.toContain(
+        `Kickback halt generation: ${nextEvidence.haltGeneration}`,
       );
-      await writeFile(join(worktree, '.pipeline', 'HALT.class'), 'kickback-cap\n');
 
       await expect(consumeResumeAuthorizations(authorizationDeps(worktree, events))).resolves.toEqual([]);
       expect(await access(join(worktree, HALT_MARKER)).then(() => true, () => false)).toBe(true);
@@ -2818,6 +2865,87 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
       'completed BUILD evidence is unavailable after rebase: unreadable completed evidence',
     );
+  });
+
+  it.each([
+    ['a changed rebase', true],
+    ['a no-op rebase', false],
+  ])('dispatches pending BUILD before re-opened gates after %s', async (_caseName, changeBase) => {
+    await initFeatureRepo(['1'], ['1']);
+    if (changeBase) await advanceBaseWithCode();
+
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      build: 'pending',
+      feature_desc: 'foo',
+      session_started_at: Date.now() - 1_000,
+      run_started_at: Date.now() - 1_000,
+    });
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        prd_audit: {
+          count: 0, cumulative: 0, laps: 1, treeHash: null,
+          lastReason: 'cap', priorVerdict: true, resolvedBefore: 0,
+          effectiveLapCap: 2,
+        },
+      },
+      growth: { authored: 1, added: 0, byGate: {} },
+      pendingRepair: {
+        receiptId: 'raised-repair',
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 0 } },
+      },
+    } as never);
+
+    const logs: string[] = [];
+    await expect(resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: true,
+      preVerify: async () => { throw new Error('BUILD must not be re-verified'); },
+      log: (message) => { logs.push(message); },
+    })).resolves.toBe('rebased');
+    if (changeBase) {
+      await Promise.all(([
+        'coverage_binding',
+        'test_suite',
+        'build_review',
+        'prd_audit',
+        'architecture_review_as_built',
+      ] as const satisfies readonly StepName[]).map(async (gate) => {
+        expect((await readVerdict(dir, gate))?.satisfied).toBe(false);
+      }));
+    }
+
+    const dispatched: string[] = [];
+    let releaseBuild: (() => void) | undefined;
+    let signalBuildStarted: (() => void) | undefined;
+    const buildStarted = new Promise<void>((resolve) => { signalBuildStarted = resolve; });
+    const waitForBuildRelease = new Promise<void>((resolve) => { releaseBuild = resolve; });
+    const run = new Conductor({
+      stateFilePath: statePath,
+      projectRoot: dir,
+      events,
+      mode: 'auto', daemon: true, resume: true, verifyArtifacts: false,
+      config: { prd_audit: { max_remediation_laps: 1 } } as never,
+      stepRunner: { run: async (step) => {
+        dispatched.push(step);
+        if (step === 'build') {
+          signalBuildStarted?.();
+          await waitForBuildRelease;
+        }
+        return { success: true };
+      } },
+    }).run();
+
+    await buildStarted;
+    expect(dispatched).toEqual(['build']);
+    expect(logs).not.toContain(expect.stringMatching(/build gate re-verified mechanically/i));
+    releaseBuild?.();
+    await run;
   });
 });
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Conductor, type StepRunResult, type StepRunner } from '../../src/engine/conductor.js';
+import { preflightBuildAuthCheck } from '../../src/engine/self-host/build-auth-preflight.js';
 import { LiveBoundaryCoordinator } from '../../src/engine/self-host/live-boundary-coordinator.js';
 import { createProviderLifecycleSupervisor, systemProviderLifecycleTimer } from '../../src/engine/provider-lifecycle.js';
 import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
@@ -66,9 +67,10 @@ describe('self-host dispatch admission', () => {
       config: { llm_provider: 'claude', harness_self_host: { live_containment: false, build_auth: { mode: 'api-key' } } },
     });
     // Exercise the dispatch entry directly; no unrelated SDLC steps or external providers run.
+    const settlePendingRepair = vi.fn(async () => false);
     const dispatch = (conductor as unknown as {
-      runSelfBuildDispatch(step: 'build', state: ConductState, hint?: string): Promise<StepRunResult>;
-    }).runSelfBuildDispatch('build', { feature_desc: 'admission-test' } as ConductState);
+      runSelfBuildDispatch(step: 'build', state: ConductState, hint?: string, verdict?: string, context?: unknown, settle?: () => Promise<boolean>): Promise<StepRunResult>;
+    }).runSelfBuildDispatch('build', { feature_desc: 'admission-test' } as ConductState, undefined, undefined, undefined, settlePendingRepair);
     void dispatch.catch(() => undefined); // Observe failure even while the queue is held.
     try {
       await vi.advanceTimersByTimeAsync(11 * 60_000);
@@ -83,6 +85,7 @@ describe('self-host dispatch admission', () => {
         await expect(dispatch).resolves.toEqual({ success: false, operatorParkedBeforeDispatch: true });
         expect(admissions).toEqual(['queued', 'cancelled']);
         expect(runner.run).not.toHaveBeenCalled();
+        expect(settlePendingRepair).not.toHaveBeenCalled();
         await expect(coordinator.runMutation(async () => 'released')).resolves.toBe('released');
         return;
       }
@@ -90,11 +93,31 @@ describe('self-host dispatch admission', () => {
       expect(admissions).toEqual(['queued', 'admitted']);
       expect(order).toEqual(['root refreshed', 'preparing', 'spawned']);
       expect(runner.run).toHaveBeenCalledOnce();
+      expect(settlePendingRepair).toHaveBeenCalledOnce();
       expect(teardown).toHaveBeenCalledOnce();
       await expect(coordinator.runMutation(async () => 'released')).resolves.toBe('released');
     } finally {
       active.close();
       await Promise.allSettled([mutation, dispatch]);
     }
+  });
+
+  it('does not settle a pending repair when the self-host build-auth preflight refuses admission', async () => {
+    vi.mocked(preflightBuildAuthCheck).mockResolvedValueOnce({ success: false, output: 'build auth unavailable' });
+    const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+    const conductor = new Conductor({
+      stateFilePath: '/test/worktree/conduct-state.json', projectRoot: '/test/worktree',
+      events: new ConductorEventEmitter(), stepRunner: runner, daemon: true, selfHost: true,
+      featureSlug: 'auth-refusal',
+      config: { llm_provider: 'claude', harness_self_host: { build_auth: { mode: 'daemon-token' } } },
+    });
+    const settlePendingRepair = vi.fn(async () => false);
+    const dispatch = (conductor as unknown as {
+      runSelfBuildDispatch(step: 'build', state: ConductState, hint?: string, verdict?: string, context?: unknown, settle?: () => Promise<boolean>): Promise<StepRunResult>;
+    }).runSelfBuildDispatch('build', { feature_desc: 'auth-refusal' } as ConductState, undefined, undefined, undefined, settlePendingRepair);
+
+    await expect(dispatch).resolves.toMatchObject({ success: false, output: 'build auth unavailable' });
+    expect(settlePendingRepair).not.toHaveBeenCalled();
+    expect(runner.run).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:5, task:7, task:8, task:rem-as-built-rem-ab4-1
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:rem-as-built-rem-ab4-1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { applyRebaseTransition } from '../../src/engine/rebase-transition.js';
+import { prdAuditAppendCap, readRemediationGateAppendBudget } from '../../src/engine/conductor.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -31,6 +33,9 @@ import {
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   MAX_SUITE_INFRASTRUCTURE_RETRIES,
   recordGrowth,
+  recordPendingRepair,
+  discardPendingRepair,
+  settlePendingRepair,
   recordKickbackCapEvidence,
   settleRemediationRound,
   readGrowth,
@@ -42,6 +47,7 @@ import {
   applyKickbackBudgetAdjustment,
   type KickbackGateEntry,
   type KickbackLedger,
+  type PendingRepair,
 } from '../../src/engine/kickback-ledger.js';
 
 describe('kickback-ledger', () => {
@@ -73,6 +79,268 @@ describe('kickback-ledger', () => {
 
   it('returns an empty ledger when the ledger file is absent', async () => {
     await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+  });
+
+  it('round-trips an optional pending repair with its per-gate charges and task ids', async () => {
+    const pendingRepair = {
+      receiptId: 'repair-round-1',
+      charges: {
+        prd_audit: { laps: 1, growth: 2 },
+        architecture_review_as_built: { laps: 1, growth: 1 },
+      },
+      taskIds: ['rem-prd-1', 'rem-as-built-1', 'rem-as-built-2'],
+    };
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {},
+      pendingRepair,
+    } as unknown as KickbackLedger);
+
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({ pendingRepair });
+  });
+
+  it('records one pending repair idempotently without charging laps or growth', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'repair-round-1',
+      charges: { prd_audit: { laps: 1, growth: 2 } },
+      taskIds: ['rem-prd-1', 'rem-prd-2'],
+    };
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        prd_audit: { count: 0, cumulative: 0, laps: 2, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+      },
+      growth: { authored: 4, added: 1, byGate: { prd_audit: 1 } },
+    });
+
+    await recordPendingRepair(dir, pendingRepair);
+    await recordPendingRepair(dir, pendingRepair);
+
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      pendingRepair,
+      gates: { prd_audit: { laps: 2 } },
+      growth: { added: 1, byGate: { prd_audit: 1 } },
+    });
+  });
+
+  it('refuses to overwrite a pending repair with a different receipt', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'repair-round-1', charges: { prd_audit: { laps: 1, growth: 1 } }, taskIds: ['rem-prd-1'],
+    };
+    await recordPendingRepair(dir, pendingRepair);
+
+    await expect(Promise.all([
+      recordPendingRepair(dir, { ...pendingRepair, receiptId: 'repair-round-2' })
+        .then(() => 'accepted', (error: unknown) => error instanceof Error ? error.message : String(error)),
+      readKickbackLedger(dir),
+    ])).resolves.toEqual([
+      expect.stringContaining('pending repair'),
+      expect.objectContaining({ pendingRepair }),
+    ]);
+  });
+
+  it('discards a pending repair without charging its gate laps or growth', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'repair-round-1', charges: { architecture_review_as_built: { laps: 1, growth: 2 } }, taskIds: ['rem-as-built-1', 'rem-as-built-2'],
+    };
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        architecture_review_as_built: { count: 0, cumulative: 0, laps: 3, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+      },
+      growth: { authored: 4, added: 1, byGate: { prd_audit: 1 } },
+      pendingRepair,
+    });
+
+    await discardPendingRepair(dir);
+
+    const ledger = await readKickbackLedger(dir);
+    expect({
+      pendingRepair: ledger.pendingRepair,
+      laps: ledger.gates.architecture_review_as_built?.laps,
+      growth: ledger.growth,
+    }).toEqual({
+      pendingRepair: undefined,
+      laps: 3,
+      growth: { authored: 4, added: 1, byGate: { prd_audit: 1 } },
+    });
+  });
+
+  it('settles every pending gate and growth charge once, then emits plan growth', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'repair-round-1',
+      charges: {
+        prd_audit: { laps: 1, growth: 2 },
+        architecture_review_as_built: { laps: 1, growth: 1 },
+      },
+      taskIds: ['rem-prd-1', 'rem-prd-2', 'rem-as-built-1'],
+    };
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        prd_audit: { count: 0, cumulative: 0, laps: 1, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+        architecture_review_as_built: { count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+      },
+      growth: { authored: 8, added: 1, byGate: { prd_audit: 1 } },
+      pendingRepair,
+    });
+    const emitted: unknown[] = [];
+    const budgets = [
+      { gate: 'prd_audit' as const, lapCap: 3, growthCap: 5, growth: { authored: 8, added: 1, byGate: { prd_audit: 1 }, remaining: 4 } },
+      { gate: 'architecture_review_as_built' as const, lapCap: 3, growthCap: 5, growth: { authored: 8, added: 1, byGate: { prd_audit: 1 }, remaining: 4 } },
+    ];
+
+    const settled = await settlePendingRepair(dir, budgets, { events: { emit: async (event) => { emitted.push(event); } } });
+    const replay = await settlePendingRepair(dir, budgets, { events: { emit: async (event) => { emitted.push(event); } } });
+    const ledger = await readKickbackLedger(dir);
+
+    expect({
+      pendingRepair: ledger.pendingRepair,
+      laps: { prdAudit: ledger.gates.prd_audit?.laps, asBuilt: ledger.gates.architecture_review_as_built?.laps },
+      growth: ledger.growth,
+    }).toEqual({
+      pendingRepair: undefined,
+      laps: { prdAudit: 2, asBuilt: 1 },
+      growth: { authored: 8, added: 4, byGate: { prd_audit: 3, architecture_review_as_built: 1 } },
+    });
+    expect({ settled, replay, emitted }).toEqual({
+      settled: { kind: 'settled' },
+      replay: { kind: 'none' },
+      emitted: [{ type: 'plan_growth', authored: 8, added: 4, byGate: { prd_audit: 3, architecture_review_as_built: 1 }, remaining: 1 }],
+    });
+  });
+
+  it.each([
+    ['laps', {
+      gates: { prd_audit: { laps: 0 }, architecture_review_as_built: { laps: 2 } },
+      growth: { authored: 8, added: 1, byGate: { prd_audit: 1 } },
+      budgets: [
+        { gate: 'prd_audit' as const, lapCap: 2, growthCap: 5, growth: { authored: 8, added: 1, byGate: { prd_audit: 1 }, remaining: 4 } },
+        { gate: 'architecture_review_as_built' as const, lapCap: 2, growthCap: 5, growth: { authored: 8, added: 1, byGate: { prd_audit: 1 }, remaining: 4 } },
+      ],
+      expected: { gate: 'architecture_review_as_built', allowance: 'laps' },
+    }],
+    ['growth', {
+      gates: { prd_audit: { laps: 0 }, architecture_review_as_built: { laps: 0 } },
+      growth: { authored: 8, added: 4, byGate: { prd_audit: 4 } },
+      budgets: [
+        { gate: 'prd_audit' as const, lapCap: 2, growthCap: 5, growth: { authored: 8, added: 4, byGate: { prd_audit: 4 }, remaining: 1 } },
+        { gate: 'architecture_review_as_built' as const, lapCap: 2, growthCap: 5, growth: { authored: 8, added: 4, byGate: { prd_audit: 4 }, remaining: 1 } },
+      ],
+      expected: { gate: 'architecture_review_as_built', allowance: 'growth' },
+    }],
+  ])('retains every charge when pending repair %s allowance is exhausted', async (_allowance, scenario) => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'repair-round-1',
+      charges: {
+        prd_audit: { laps: 1, growth: 1 },
+        architecture_review_as_built: { laps: 1, growth: 1 },
+      },
+      taskIds: ['rem-prd-1', 'rem-as-built-1'],
+    };
+    const gate = (laps: number) => ({ count: 0, cumulative: 0, laps, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 });
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: { prd_audit: gate(scenario.gates.prd_audit.laps), architecture_review_as_built: gate(scenario.gates.architecture_review_as_built.laps) },
+      growth: scenario.growth,
+      pendingRepair,
+    });
+
+    const result = await settlePendingRepair(dir, scenario.budgets);
+
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { prd_audit: { laps: scenario.gates.prd_audit.laps }, architecture_review_as_built: { laps: scenario.gates.architecture_review_as_built.laps } },
+      growth: scenario.growth,
+      pendingRepair,
+    });
+    expect(result).toEqual({ kind: 'exhausted', ...scenario.expected });
+  });
+
+  it('settles a lap-only pending repair without changing growth', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'existing-task-round-1',
+      charges: { prd_audit: { laps: 1, growth: 0 } },
+      taskIds: ['task-1'],
+    };
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: { prd_audit: { count: 0, cumulative: 0, laps: 1, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 } },
+      growth: { authored: 8, added: 2, byGate: { prd_audit: 2 } },
+      pendingRepair,
+    });
+
+    await settlePendingRepair(dir, [{
+      gate: 'prd_audit', lapCap: 3, growthCap: 5, growth: { authored: 8, added: 2, byGate: { prd_audit: 2 }, remaining: 3 },
+    }]);
+    const ledger = await readKickbackLedger(dir);
+
+    expect({
+      pendingRepair: ledger.pendingRepair,
+      laps: ledger.gates.prd_audit?.laps,
+      growth: ledger.growth,
+    }).toEqual({
+      pendingRepair: undefined,
+      laps: 2,
+      growth: { authored: 8, added: 2, byGate: { prd_audit: 2 } },
+    });
+  });
+
+  it('scopes a malformed pending repair to remediation gates and plan growth', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2, cumulative: 3, treeHash: null, lastReason: 'healthy', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+      pendingRepair: { receiptId: '', charges: {}, taskIds: [] },
+    }));
+
+    const config = {} as HarnessConfig;
+    const [prdAudit, asBuilt] = await Promise.all([
+      readRemediationGateAppendBudget(dir, config, 'prd_audit', 2, 1, 1, 4),
+      readRemediationGateAppendBudget(dir, config, 'architecture_review_as_built', 2, 1, 1, 4),
+    ]);
+
+    expect({
+      buildReview: (await readKickbackLedger(dir)).gates.build_review,
+      prdAudit: { priorLaps: prdAudit.priorLaps, growthRemaining: prdAudit.growth.remaining },
+      asBuilt: { priorLaps: asBuilt.priorLaps, growthRemaining: asBuilt.growth.remaining },
+    }).toEqual({
+      buildReview: expect.objectContaining({ count: 2, cumulative: 3 }),
+      prdAudit: { priorLaps: 2, growthRemaining: 0 },
+      asBuilt: { priorLaps: 2, growthRemaining: 0 },
+    });
+  });
+
+  it('refuses direct growth reads when a pending repair is malformed', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {},
+      pendingRepair: { receiptId: '', charges: {}, taskIds: [] },
+    }));
+
+    await expect(readGrowth(dir, 1)).rejects.toThrow('plan growth is unreadable');
+  });
+
+  it('retains a malformed pending repair across a healthy build-review write', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+      pendingRepair: { receiptId: '', charges: {}, taskIds: [] },
+    }));
+    await bumpKickbackGateInLedger(dir, 'build_review', {
+      treeHash: '0123456789abcdef0123456789abcdef01234567', resolvedCount: 0, reason: 'healthy write',
+    });
+
+    await expect(readGrowth(dir, 1)).rejects.toThrow('plan growth is unreadable');
   });
 
   it('reads absent and present pending as-built remediation findings', async () => {
@@ -320,6 +588,46 @@ describe('kickback-ledger', () => {
         added: 0,
         byGate: {},
         remaining: 4,
+      });
+    });
+
+    it.each([
+      ['without a stored growth record', undefined],
+      ['with a stored growth record', { authored: 6, added: 0, byGate: {} }],
+    ])('excludes only pending task ids from authored growth %s', async (_case, growth) => {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/active.md',
+      }));
+      await writeFile(join(dir, '.docs/plans/active.md'), [
+        '### Task 1: Original work',
+        '### Task 2: More original work',
+        '### Task 3: More original work',
+        '### Task 4: More original work',
+        '### Task rem-legacy: Earlier remediation still authored',
+        '### Task 5: Final original work',
+        '### Task rem-pending-1: Uncharged repair',
+        '### Task rem-pending-2: Uncharged repair',
+      ].join('\n'));
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {},
+        ...(growth === undefined ? {} : { growth }),
+        pendingRepair: {
+          receiptId: 'repair-round-1',
+          charges: { prd_audit: { laps: 1, growth: 2 } },
+          taskIds: ['rem-pending-1', 'rem-pending-2'],
+        },
+      });
+
+      const cap = prdAuditAppendCap({} as HarnessConfig, 6);
+
+      await expect(readGrowth(dir, cap)).resolves.toEqual({
+        authored: 6,
+        added: 0,
+        byGate: {},
+        remaining: 1,
       });
     });
 
