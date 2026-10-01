@@ -41,7 +41,7 @@ unchanged inputs" signal, routing through the EXISTING remediation path.
   **fresh** artifact recording an **adverse** verdict whose resolution is a known remediation/kickback
   target (as-built: a fresh typed as-built verdict that is non-APPROVED; prd_audit
   `classifyPrdAuditGaps` non-clean; build_review FAIL). The reason already names the route. Route on **try 1**.
-- **absent (rerun):** the artifact is missing / stale / unparseable — for as-built, the structured
+- **absent (rerun):** the artifact is missing / stale / unparseable — for PRD audit and as-built, the structured
   result is missing, rejected by validation, or stale by run identity — the judging session has not
   produced a verdict; a re-run CAN help. Rerun.
 - **identical-repeat (signal b):** `attempt >= 2` AND the current `completion.reason` is byte-identical
@@ -128,7 +128,7 @@ As an operator triaging a halt, the halt reason tells me WHAT never changed.
 As the daemon engine, the existing prd_audit fresh-blocking short-circuit continues to route on try 1,
 whether via the generalized classifier (flag on) or the original short-circuit (flag off).
 
-- **Given** daemon mode and a fresh blocking `.pipeline/prd-audit.md`
+- **Given** daemon mode and a complete validated current-attempt `.pipeline/prd-audit.json` with blocking findings
 - **When** the completion check fails on attempt 1
 - **Then** the retry loop breaks on try 1 and routes exactly as today (single, not double, evaluation
   of `classifyPrdAuditGaps`), with no behavioural change to the prd_audit routing at `step_failed`.

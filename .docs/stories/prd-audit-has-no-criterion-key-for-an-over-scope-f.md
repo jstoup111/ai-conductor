@@ -2,72 +2,56 @@
 
 # Stories: PRD-audit no-owner OVER_SCOPE findings
 
-Technical track — derived from issue jstoup111/ai-conductor#1848, the 2026-08-25
-architecture review, and the amended ADRs
-`adr-2026-08-24-over-scope-decision-block-and-durable-refusals` (D4) and
-`adr-2026-08-22-prd-audit-stories-authority-and-bounded-kickback` (D3).
+Technical track. Source: jstoup111/ai-conductor#1848. Existing grading and durable decision semantics apply to validated typed evidence.
 
-## Story 1: The no-owner findings section parses
+## Story 1: Typed no-owner findings retain their distinct meaning
 
-As the conductor, I want `parsePrdAuditReport` to read the report's
-`## Findings without an owning criterion` section so that an audit reporting an unplanned
-change with no owning story criterion is parseable on the first attempt.
+As the conductor, I want no-owner observations distinct from criterion judgments.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a report with a valid Verdict Table and a no-owner section whose `Finding`-headed table has one row keyed NC.1 graded OVER_SCOPE with relation outside-visible and evidence text, when the report is parsed, then the parse succeeds and the result contains the NC.1 finding with its grade, intent relation, and evidence alongside the Verdict Table findings
-- Given a report whose no-owner section contains two rows keyed NC.1 and NC.2, when the report is parsed, then both findings are returned and each is distinguishable by its key
+- Given a supported typed result containing one no-owner OVER_SCOPE observation with outside-visible relation and evidence, when validated and rendered, then that finding appears alongside criterion findings with an engine-assigned NC.1 presentation ordinal.
+- Given two valid no-owner observations, when rendered, then they receive distinct presentation ordinals without those ordinals becoming semantic decision identity.
 
 #### Negative Paths
-- Given a no-owner section row graded PASS instead of OVER_SCOPE, when the report is parsed, then that row is rejected with a named diagnostic stating the section admits only OVER_SCOPE and sibling rows are still returned
-- Given a Verdict Table row keyed NC.1 (an NC key outside the no-owner section), when the report is parsed, then that row is rejected with a named diagnostic and sibling rows are still returned
-- Given a well-formed report (every row keyed by a valid, unique story criterion) with no `## Findings without an owning criterion` section, when the report is parsed, then parsing behaves exactly as before this change and returns only Verdict Table findings
+- Given a no-owner entry graded PASS or lacking a valid intent relation, when validated, then that entry is rejected with its index and field named while valid siblings remain available.
+- Given a criterion entry naming an invented NC criterion, when validated, then it is rejected with the reference defect named.
+- Given a supported result with no no-owner observations, when validated, then its criterion judgments retain their existing meanings.
 
 ### Done When
-- [ ] A fixture report containing the exact section shape taught by `skills/prd-audit/SKILL.md` parses with the NC finding present in the result
-- [ ] A fixture without the section produces a parse result identical in shape and content to today's parser output for the same input
-- [ ] The parse result type exposes NC findings distinguishably from criterion findings
+- [ ] Typed fixtures distinguish criterion judgments and no-owner OVER_SCOPE findings, with deterministic unique presentation ordinals.
+- [ ] Invalid no-owner grade/relation and invented criterion fixtures retain valid siblings and named rejection diagnostics.
 
-## Story 2: Duplicate keys reject per-row
-
-As the conductor, I want rows carrying a duplicated key rejected individually so that no two
-findings in a parseable report share an identity and recording a decision about one can never
-match another.
+## Story 2: Duplicate normalized criterion references reject every carrier
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a report where every Verdict Table criterion and every NC ordinal appears exactly once, when the report is parsed, then no duplicate-key diagnostics are produced
+- Given unique normalized active criterion references, when validated, then no duplicate-reference diagnostic is produced.
 
 #### Negative Paths
-- Given a Verdict Table with two rows keyed S1.3 (one PASS, one OVER_SCOPE), when the report is parsed, then both S1.3 rows are rejected with a diagnostic naming S1.3 as duplicated and all other rows are still returned
-- Given a no-owner section with two rows keyed NC.1, when the report is parsed, then both NC.1 rows are rejected with a diagnostic naming NC.1 as duplicated and all other rows are still returned
+- Given two entries naming the same normalized criterion, when validated, then both are rejected with the criterion named and valid siblings retained.
+- Given a reviewer-supplied no-owner presentation identity or decision claim, when validated, then that unsupported field produces a named diagnostic and grants no authority.
 
 ### Done When
-- [ ] A fixture reproducing issue #1848 case (2) — S1.3 and S4.1 each graded both PASS and OVER_SCOPE — parses with those four rows rejected, the duplicates named, and the remaining rows consumed
-- [ ] No parse result ever contains two findings with the same key
+- [ ] Duplicate S1.3 and S4.1 fixtures reject all four carriers and preserve unrelated findings.
+- [ ] Engine-assigned NC ordinals are unique and unsupported reviewer authority fields cannot create identity or acceptance.
 
-## Story 3: Rejected rows are salvaged as diagnostics and still block
-
-As the operator, I want a report whose only defect is some unrecognized or duplicated rows to
-keep its correctly-parsed findings, while the rejected rows visibly block, so that one bad row
-no longer costs the whole audit but can never be silently dropped.
+## Story 3: Independent entry defects remain visible and blocking
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a 57-row report where two rows carry invented keys (OS.1, OS.2) as in issue #1848 case (1), when the report is parsed, then the 55 valid rows are returned as findings and the two rejected rows are returned as diagnostics carrying the row's key text and the rejection reason
+- Given a supported readable envelope with 55 valid entries and two invented criterion references, when validated, then all 55 valid findings survive alongside diagnostics naming the two rejected references.
 
 #### Negative Paths
-- Given a parse result containing one or more rejected-row diagnostics, when the prd_audit gate evaluates the report, then the gate does not pass and the resulting halt body names each rejected row and its reason
-- Given a parse result with rejected rows and all parsed findings graded PASS, when the prd_audit gate evaluates the report, then the gate still does not pass — salvage never converts a rejected row into a passing report
-- Given a report missing its `**PRD:**` marker or missing the Verdict Table entirely, when the report is parsed, then the whole report is still a mechanical fault exactly as today, not a per-row rejection
+- Given one or more rejected entries and otherwise PASS findings, when completion evaluates the typed result, then it remains incomplete and blocks naming each entry defect.
+- Given missing, malformed or unsupported root output, when settlement runs, then there is no new usable judgment and neither Markdown nor chat is scraped to replace it.
 
 ### Done When
-- [ ] A fixture with mixed valid and invalid rows produces both the salvaged findings and the named diagnostics from one parse call
-- [ ] A gate-level test proves a report with any rejected row cannot satisfy the prd_audit gate, and the halt/blocking reason text contains each rejected row's key text and reason
-- [ ] Report-level fault fixtures (no PRD marker, no table) still return the whole-report mechanical-fault result
+- [ ] Mixed-entry fixtures preserve valid findings and named diagnostics without permitting a gate pass or inferred acceptance.
+- [ ] Missing/malformed/unsupported root fixtures produce no new usable judgment.
 
 ## Story 4: NC decisions retain authority across equivalent findings
 
@@ -102,34 +86,31 @@ without blocking.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a parsed NC.1 finding with intent relation outside-visible and no recorded decision, when the prd_audit gate evaluates the report, then the halt's over-scope-decisions block contains an entry for NC.1 with its summary and relation, pending decision
-- Given a parsed NC.1 finding with relation within or outside-harmless, when the prd_audit gate evaluates the report, then NC.1 is recorded and does not block
+- Given a validated NC.1 finding with intent relation outside-visible and no recorded decision, when the prd_audit gate evaluates the report, then the halt's over-scope-decisions block contains an entry for NC.1 with its summary and relation, pending decision
+- Given a validated NC.1 finding with relation within or outside-harmless, when the prd_audit gate evaluates the report, then NC.1 is recorded and does not block
 
 #### Negative Paths
 - Given a refused decision for NC.1, when the next lap re-reports NC.1 with matching summary, then the halt names NC.1 as refused — rework required, and does not re-offer a pending entry for it
-- Given a parsed NC finding of any relation, when routing computes follow-up work, then no plan task is appended and no kickback names the NC finding as work — it routes only to the operator decision block
+- Given a validated NC finding of any relation, when routing computes follow-up work, then no plan task is appended and no kickback names the NC finding as work — it routes only to the operator decision block
 
 ### Done When
 - [ ] `overScopeRelations` and `classifyOverScopeCriterion` accept NC keys with unchanged semantics for criterion keys
-- [ ] An end-to-end fixture drives report → parse → gate → halt block → cleared decision → recorded → next-lap non-blocking for an NC finding
+- [ ] An end-to-end fixture drives typed result → validate → gate → halt block → cleared decision → recorded → next-lap non-blocking for an NC finding
 - [ ] No code path appends plan tasks or emits kickback work for an NC finding
 
-## Story 6: The skill-taught shape and the parser-accepted shape are the same shape
+## Story 6: The engine contract and reviewer responsibilities agree
 
-As a spec author, I want the prd-audit skill's documented section format and the parser's
-accepted grammar proven identical by fixture so that an audit written by following the skill
-parses on the first attempt.
+As a maintainer, I want machine-output shape owned by the engine while the skill supplies judgment guidance.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the section format exactly as documented in `skills/prd-audit/SKILL.md` (including its NC key contract added in this change), when a report following it verbatim is parsed, then it parses with zero rejected rows
-- Given the skill text after this change, when it is read, then it teaches the NC.«n» key form and no longer claims the engine cannot route no-owner findings
+- Given managed PRD audit, when its role is assembled, then the engine supplies the typed schema and the skill explains no-owner judgment without teaching a machine table grammar.
+- Given standalone human review, when the skill presents its judgment, then human presentation remains available without creating managed gate authority.
 
 #### Negative Paths
-- Given a report following the OLD skill guidance (the section present but rows without NC keys), when the report is parsed, then those rows are rejected with diagnostics naming the missing/invalid key — not a whole-report mechanical fault
+- Given machine-output table grammar or reviewer-owned NC identity reintroduced into the migrated skill contract, when the contract audit runs, then it rejects that conflict.
 
 ### Done When
-- [ ] A fixture is generated from (or byte-verified against) the SKILL.md example and parses clean
-- [ ] `skills/prd-audit/SKILL.md` documents the NC key contract, and its "engine cannot route those findings today (#1848)" caveat is removed in the same diff as the parser change
-- [ ] Harness validation (`test/test_harness_integrity.sh`) passes with the skill edit
+- [ ] Managed-role fixtures show an engine-owned output schema and compatible no-owner judgment guidance.
+- [ ] Contract-audit fixtures reject machine grammar while allowing standalone human presentation.

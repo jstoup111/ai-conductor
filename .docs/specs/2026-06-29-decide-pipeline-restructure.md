@@ -106,6 +106,8 @@ correctness risk — so the track decision is an explicit, operator-confirmable 
   plan are required on both. The track marker is committed with the other DECIDE artifacts.
 - **FR-14 (track-aware SHIP).** `prd-audit` runs only on the product track; on the technical track it
   auto-skips (no FRs to audit), logging the reason.
+> **Amended 2026-09-30 by #2521:** FR-14 follows the already-approved #1805 run rule: PRD audit runs on every track and tier against the stories, with PRD intent where applicable. The typed migration retains this rule and represents no-PRD explicitly. Track still controls PRD authoring, not audit participation.
+
 - **FR-15 (migration).** Existing `conduct-state.json` with `brainstorm: done` maps to
   `explore: done` + (`prd: done` if a `.docs/specs/` doc exists, else `prd: skipped`). The daemon's
   `PRESEEDED_DONE` and `discoverBacklog` treat a missing track marker as `product` (back-compat:

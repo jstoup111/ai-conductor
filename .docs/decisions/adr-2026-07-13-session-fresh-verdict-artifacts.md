@@ -103,6 +103,8 @@ stale reuse can false-GREEN a ship): `architecture_review_as_built`, `prd_audit`
 > take precedence over the mtime floor where a stamp exists. The mtime floor survives as
 > the fallback for unstamped artifacts; the manual_test deferral is lifted (run identity
 > composes with the #367 whitewash guard, which is unchanged).
+> **Amended 2026-09-30 by #2521:** The inherited unstamped-artifact mtime fallback excludes managed PRD audit and as-built review. Under adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity and its typed-review amendments, these gates require validated typed evidence. A new dispatch requires its own result; a missing result cannot be replaced by refreshed timestamps or sidecars. Existing pre-dispatch code-validity preservation and the applicable fallback rules of other gates remain intact.
+
 - **No change to completion derivation** (`autoheal.ts` `deriveCompletion`, the `build` predicate) —
   which keeps this orthogonal to the unmerged #642.
 - **No retry-budget change** — #280 owns progress-aware budgets.

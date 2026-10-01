@@ -1,158 +1,62 @@
 **Status:** Accepted
 
-# Stories: prd_audit FR-coverage gate
+# Stories: PRD-audit coverage completeness
 
 Track: technical. Source: jstoup111/ai-conductor#1398.
-Tier: S (happy and negative paths per story).
 
-## Background
+## Story 1: Every authoritative criterion must carry a validated judgment
 
-`prd_audit` scores its report by scanning for verdict rows that are *present and blocking*
-(`findUnalignedFrRows`). It never asks whether every functional requirement has a row at all, so a
-report that is missing rows entirely — because the per-FR auditors that would have written them
-never returned — reads as clean and the gate returns `done: true`. The same coverage-blind
-predicate is applied at three sites, so a pass recorded from an incomplete run is also preserved
-and reused:
-
-- `src/conductor/src/engine/artifacts.ts:2303` — the completion predicate itself.
-- `src/conductor/src/engine/artifacts.ts:2257` — the `gate-code-validity` preserve path.
-- `src/conductor/src/engine/artifacts.ts:681` — the sweep-spare path.
-
-The denominator is available deterministically. `extractPrdFrIds`
-(`src/conductor/src/engine/engineer/coherence-validator.ts:184`) already parses the `FR-N` ids
-declared under a PRD's `## Functional Requirements` heading, and land-time coherence already gates
-FR coverage with it. `prd_audit` runs on every track (the former `skippableForTracks: ['technical']` was removed by #1805)
-(`src/conductor/src/engine/steps.ts:223`), so whenever it runs the feature is product-track and a
-PRD exists — which is what makes failing closed on an unresolvable PRD safe rather than
-regression-prone.
-
----
-
-## Story 1: Every functional requirement must carry a verdict row
-
-**Requirement:** TI-1 — the completion predicate compares the report's verdict rows against the
-approved PRD's enumerated FR ids, and blocks when any id has no row.
-
-As the SHIP gate, I want an FR with no verdict at all to block exactly as an un-ALIGNED FR does,
-so that a report which never audited a requirement cannot be recorded as a pass.
+As the SHIP gate, I want omitted evidence to block rather than appear clean.
 
 ### Acceptance Criteria
 
 #### Happy Path
-
-- Given an approved PRD enumerating FR-1..FR-5 and a fresh report carrying an ALIGNED verdict row
-  for each of FR-1..FR-5, when the `prd_audit` completion predicate runs, then it returns
-  `done: true` exactly as it does today, with no added prompt and no added wall-clock.
-- Given an approved PRD enumerating FR-1..FR-5 and a fresh report carrying rows for FR-1..FR-5
-  where FR-3 is `DIVERGED` and marked `ACCEPTED`, when the predicate runs, then it returns
-  `done: true` — human-accepted divergence is unaffected by the coverage check.
+- Given all active sealed story criteria have validated PASS judgments and applicable PRD traceability is complete, when completion evaluates the typed result, then the gate passes without another reviewer invocation.
+- Given complete criterion evidence with a recorded widening acceptance valid under current decision authority and no other blockers, when completion evaluates it, then acceptance remains effective.
 
 #### Negative Paths
-
-- Given an approved PRD enumerating FR-1..FR-5 and a fresh report carrying rows for only FR-1,
-  FR-2 and FR-4 — every one of them ALIGNED — when the predicate runs, then it returns
-  `done: false` and the reason names FR-3 and FR-5 as the requirements with no verdict.
-- Given the same missing-row report, when the predicate returns `done: false`, then
-  `writePrdAuditCodeStamp` is NOT called, so no pass is persisted for an incomplete run.
-- Given an approved PRD enumerating FR-1..FR-5 and a fresh report carrying no verdict rows at all,
-  when the predicate runs, then it returns `done: false` naming all five requirements — the
-  empty-report case must never read as clean.
-- Given a report that both omits FR-3 and carries a blocking `MISSING` row for FR-2, when the
-  predicate runs, then it returns `done: false` and the reason surfaces both the blocking row and
-  the absent verdict, so neither failure masks the other.
+- Given complete-looking PASS findings that omit two active criteria, when completion evaluates them, then it blocks naming both missing criteria and does not persist a passing code-validity result.
+- Given no criterion judgments for a feature with required criteria, when completion evaluates the result, then it blocks naming the omitted criteria.
+- Given both an omitted criterion and a valid blocking finding, when completion evaluates them, then neither defect hides the other.
+- Given a resolved PRD requirement without story coverage, when traceability is evaluated, then the gap blocks unless valid existing criterion PLAN_GAP evidence accounts for it under the current policy; no fabricated criterion or new repair authority is created.
 
 ### Done When
-
-- [ ] A shared helper returns the FR ids present in the approved PRD but absent from the report's
-      verdict rows, reusing the existing per-cell row parser (`parseFrVerdictRow`) for row ids.
-- [ ] The `prd_audit` predicate at `artifacts.ts:2303` consults that helper before its pass path
-      and before `writePrdAuditCodeStamp`.
-- [ ] A test asserts the clean full-coverage report still passes (no regression).
-- [ ] A test asserts the code stamp is not written when coverage is incomplete.
-
----
+- [ ] Typed coverage validation names missing criteria and applicable requirement traceability gaps; complete clean evidence passes.
+- [ ] Incomplete evidence cannot write a passing gate stamp, even alongside accepted or otherwise recordable findings.
 
 ## Story 2: A pass from an incomplete run is never preserved or reused
 
-**Requirement:** TI-2 — the `gate-code-validity` preserve path and the sweep-spare path apply the
-same coverage requirement as the predicate, so an already-recorded false pass is corrected rather
-than carried forward.
-
-As an operator re-running a build, I want a previously recorded `prd_audit` pass to be re-validated
-for coverage, so that a false pass stamped before this fix — or by an incomplete run — cannot be
-reused to skip the gate.
+As an operator, I want completion, preservation and sweep to agree about coverage.
 
 ### Acceptance Criteria
 
 #### Happy Path
-
-- Given a `prd_audit` code-stamp sidecar whose recorded verdict is still code-valid (`preserve`)
-  and a present report that carries a row for every FR in the approved PRD with none blocking,
-  when the preserve path runs, then the pass is preserved exactly as it is today.
+- Given complete typed evidence with no current blocker and valid code-stamp preservation, when completion or sweep evaluates it before a new dispatch, then the verdict is preserved.
 
 #### Negative Paths
-
-- Given a code-stamp sidecar that would otherwise `preserve`, and a present report that omits a
-  verdict row for FR-4, when the preserve path at `artifacts.ts:2257` runs, then it does not
-  preserve and falls through to the normal freshness/report path, which blocks naming FR-4.
-- Given the same sidecar and coverage-incomplete report, when the sweep-spare path at
-  `artifacts.ts:681` decides whether to spare the report, then it returns `false` — a report that
-  does not currently read as fully covered is never spared.
-- Given a sidecar recorded before this change from a run that audited only 3 of 5 FRs, when the
-  gate next evaluates, then the stale false pass is rejected rather than honored.
+- Given an otherwise preserving code stamp but an omitted criterion, when completion, preservation or sweep evaluates it, then none yields a reusable pass and the missing criterion is named.
+- Given only a legacy Markdown audit report, when completion considers reuse, then it requires a new audit without deleting original widening-decision or legacy-clear import data.
 
 ### Done When
+- [ ] The same incomplete typed fixture is rejected at completion, preservation and sweep through the shared validation reader.
+- [ ] A complete code-valid fixture is preserved; a legacy report alone cannot satisfy the gate.
 
-- [ ] Both the preserve path and the sweep-spare path call the same coverage helper as the
-      predicate — one implementation, three call sites, no duplicated predicate logic.
-- [ ] A test drives each of the three sites with an identical coverage-incomplete report and
-      asserts none of them yields a pass.
+## Story 3: Coverage inputs are feature-scoped and required sources cannot disappear
 
----
-
-## Story 3: The FR denominator is feature-scoped, derived once, and fails closed
-
-**Requirement:** TI-3 — the approved PRD supplying the denominator is resolved by the existing
-feature-identity ladder, never by scanning the whole `.docs/specs/` corpus, and an unresolvable PRD
-blocks rather than silently disabling the coverage check.
-
-As the gate, I want the denominator to come from this feature's own approved PRD, so that the
-coverage check is neither diluted by 47 unrelated historical specs nor quietly switched off when
-the PRD cannot be found.
+As the gate, I want this feature's own stories and applicable PRD intent to supply its obligations.
 
 ### Acceptance Criteria
 
 #### Happy Path
-
-- Given a repository whose `.docs/specs/` holds many specs from prior features, when the
-  denominator is resolved for a feature whose plan stem is `foo`, then only that feature's own
-  approved PRD contributes FR ids — unrelated specs contribute none.
-- Given a feature whose PRD file is prefixed `SUPERSEDED-`, when the denominator is resolved, then
-  that file is excluded, matching the skill's documented input rule.
-- Given an approved PRD that declares no `## Functional Requirements` section, or one that
-  enumerates no `FR-N` ids, when the denominator is resolved, then it is empty and the gate's
-  behavior is unchanged from today — mirroring the existing coherence FR-10 precedent that an
-  underivable denominator is not a failure.
+- Given many unrelated specs and stories, when the active feature is resolved, then only its active plan-linked sealed stories and applicable requirements contribute obligations.
+- Given technical work with no applicable PRD, when preparation runs, then no-PRD is explicit and the full story-criterion denominator remains required.
+- Given multiple applicable approved PRDs, when requirements are resolved, then their path-qualified requirement sets are all checked for traceability.
+- Given a superseded PRD excluded by existing feature resolution, when inputs are prepared, then it does not contribute current obligations.
 
 #### Negative Paths
-
-- Given `prd_audit` is running (on any track, per #1805) and no
-  approved PRD can be resolved for this feature, when the predicate runs, then it returns
-  `done: false` with a reason naming the unresolvable PRD — it never falls back to scanning every
-  spec in the corpus, and never treats "cannot find the PRD" as "nothing to cover".
-- Given the resolved PRD file exists but cannot be read, when the denominator is derived, then the
-  error blocks the gate rather than degrading to an empty denominator.
-- Given more than one approved PRD resolves to this feature, when the denominator is derived, then
-  it is the union of their FR ids, and a row is required for every id in that union.
+- Given unreadable or unresolved required stories, plan or applicable PRD, when preparation runs, then the named source blocks invocation; another feature's input cannot substitute for it.
+- Given a present required input that cannot be parsed, when obligations are extracted, then it cannot silently become an empty denominator.
 
 ### Done When
-
-- [ ] `extractPrdFrIds` is lifted out of `engineer/coherence-validator.ts` into a shared module and
-      imported by both the coherence validator and the `prd_audit` gate — one parser, no second
-      copy of the FR grammar.
-- [ ] PRD resolution reuses the existing feature-identity machinery
-      (`buildArtifactResolutionContext` / the `resolveFeatureStoriesPath` ladder) rather than a new
-      resolution scheme, and carries that helper's documented refusal to validate the whole corpus.
-- [ ] A test asserts an unrelated feature's spec never contributes FR ids to this feature's
-      denominator.
-- [ ] A test asserts an unresolvable PRD blocks rather than passing.
+- [ ] Existing feature-resolution and shared requirement parsing supply the active input set; unrelated feature fixtures contribute no obligations.
+- [ ] No-PRD technical fixtures retain every criterion; unreadable, unresolved and unparseable required-source fixtures name the source and record zero reviewer invocations.

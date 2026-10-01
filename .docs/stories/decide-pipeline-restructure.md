@@ -38,7 +38,7 @@
 - **Negative (product without PRD blocks):** Given `Track: product`, when no `.docs/specs/` doc
   exists, then DECIDE blocks at `prd` (cannot proceed to architecture without the product spec).
 - **Negative (SHIP gate tracks):** Given `Track: technical`, when SHIP runs, then `prd-audit`
-  auto-skips with a logged reason; given `Track: product`, `prd-audit` runs.
+  runs against the stories with explicit no-PRD context; given `Track: product`, it also receives applicable PRD intent.
 
 ## S4 — PRD is product-only with the external-constraint carve-out (FR-4)
 
@@ -123,7 +123,7 @@
   `discoverBacklog` runs, then the feature is eligible exactly as before (stories still required —
   Model X).
 - **Happy (track read):** Given a committed track marker, when the daemon builds, then it knows the
-  track and applies the track-aware SHIP gates (e.g. skips `prd-audit` for technical).
+  track and applies the applicable SHIP gates (`prd-audit` runs on both tracks).
 - **Negative (missing marker = product):** Given a pre-existing spec with no track marker, when the
   daemon reads it, then it defaults to `product` so no previously-buildable spec regresses.
 - **Negative (state migration):** Given `conduct-state.json` with `brainstorm: done` and no

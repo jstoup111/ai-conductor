@@ -9,7 +9,7 @@ As the daemon operator, I want a kickback that leaves a judged gate's code stamp
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `prd_audit` is `stale` after a kickback to `build`, its code-stamp sidecar exists, no path in its gate surface changed since the stamp, and `.pipeline/prd-audit.md` still reads clean, when the step loop reaches `prd_audit`, then its status is persisted as `done` and no provider session is dispatched for it.
+- Given `prd_audit` is `stale` after a kickback to `build`, its code-stamp sidecar exists, no path in its gate surface changed since the stamp, and the validated `.pipeline/prd-audit.json` evidence is complete and clean under current decision authority, when the step loop reaches `prd_audit`, then its status is persisted as `done` and no provider session is dispatched for it.
 - Given `architecture_review_as_built` is `stale` with a valid sidecar, an unchanged surface, and a report whose verdict still reads `APPROVED`, when the step loop reaches it, then its status is persisted as `done` and no provider session is dispatched for it.
 - Given `build_review` is `stale` with a `codeStamp` in its aggregate, an unchanged surface, and a clean aggregate, when the step loop reaches it, then its status is persisted as `done` and no provider session is dispatched for it.
 - Given `manual_test` is `stale` with a clean-pass fail-evidence marker carrying a `codeStamp` and an unchanged surface, when the step loop reaches it, then its status is persisted as `done` and no provider session is dispatched for it.
@@ -18,7 +18,7 @@ As the daemon operator, I want a kickback that leaves a judged gate's code stamp
 #### Negative Paths
 - Given `prd_audit` is `stale` and the kickback repair committed a change to a path inside `prd_audit`'s gate surface, when the step loop reaches `prd_audit`, then a provider session is dispatched exactly as before this change.
 - Given a stale gate's sidecar is missing, when the step loop reaches the gate, then a provider session is dispatched.
-- Given a stale gate's sidecar exists and its surface is unchanged but the report on disk no longer reads clean, when the step loop reaches the gate, then a provider session is dispatched.
+- Given a stale gate's sidecar exists and its surface is unchanged but the authoritative verdict no longer reads clean (typed evidence for PRD/as-built, with current decision checks), when the step loop reaches the gate, then a provider session is dispatched.
 - Given `gate_code_validity.enabled: false`, when the step loop reaches any stale judged gate, then a provider session is dispatched regardless of stamp state.
 - Given the pre-dispatch completion check throws (unreadable sidecar, git failure), when the step loop reaches the stale gate, then the error is swallowed and a provider session is dispatched (fail closed, matching the existing `done` branch).
 

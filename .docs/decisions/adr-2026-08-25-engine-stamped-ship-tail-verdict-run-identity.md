@@ -39,12 +39,29 @@ fields are ignored, never validated — validating an echo is the defect
 adr-2026-08-19-engine-stamped-rubric-judged-result-envelope removed, and it is not
 reintroduced here.
 
+> **Amended 2026-09-30 by #2521:** D2.2 extends the engine-writer ownership already approved
+> for as-built review to `prd_audit`. The reviewer returns its terminal structured judgment.
+> The engine validates it, stamps the existing attempt identity and reviewed code stamp,
+> persists the typed PRD verdict as the sole verdict authority, and derives the human report.
+> Provider output cannot author identity, operator decisions, or engine-recorded dispositions.
+> Manual-test and operator-decision stores are unchanged.
+
 **D3 — Post-dispatch write handshake.** Immediately after a verdict dispatch settles and
 before the completion check, the engine verifies the gate's declared outputs exist and were
 produced by THIS dispatch (write observed at/after dispatch start; the stamp then binds
 identity durably). The handshake writes its observation on every terminal outcome, not only
 success (precedent: adr-2026-08-05-build-settle-outcome-stamp D1/D4). It never throws;
 reads degrade (adr-2026-07-11-pipeline-state-durability D1).
+
+> **Amended 2026-09-30 by #2521:** D3.2 makes the PRD-audit post-dispatch handshake observe
+> a validated terminal result persisted by THIS dispatch, as D3.1 does for as-built review.
+> Complete and incomplete typed results are distinguished; entry rejection/coverage defects
+> never satisfy the gate. No output, malformed envelope, persistence failure, or report-render
+> failure remains a named mechanical failure, never a synthetic substantive finding. Missing
+> output diagnostics for both migrated validators explicitly say the current dispatch produced
+> no verdict, naming the expected attempt and output, rather than merely calling an old file
+> stale. Existing absent-result retry and no-verdict group handling remain binding; provider
+> authentication/rate-limit/availability classifications retain precedence.
 
 **D4 — All readers go through one identity check.** The completion predicates,
 `classifyPrdAuditGaps`, and every halt/routing reader of these artifacts consult the same
@@ -83,6 +100,15 @@ artifacts as absent input, never as verdicts; the operator deletes nothing by ha
 today's mtime behavior — the change never makes an unstamped verdict more trusted than
 today (#817 D3 verbatim). The existing gate-code-validity kill-switch reverts identity
 checking to pure mtime (#817 D6); no new flag.
+
+> **Amended 2026-09-30 by #2521:** D7.2 removes the unstamped Markdown/mtime fallback for
+> `prd_audit`, following D7.1's as-built transition. A legacy Markdown-only PRD report
+> requires a new audit, never conversion into typed authority. The code-validity opt-out can
+> disable preservation but cannot enable a prose or timestamp fallback. Code-stamp-first
+> preservation before a NEW dispatch, rebase translation, current blocking-evidence checks,
+> and the separate durable widening decisions remain intact. Once a new review is dispatched,
+> D3.2 requires its own result. Rewind/sweep handle the typed verdict and derived report
+> together and do not remove operator-decision history.
 
 **D8 — manual_test composes.** The append-only `## Attempt N` sections and the
 HEAD-movement whitewash guard (adr-2026-07-06-manual-test-fail-routing items 3–4) are

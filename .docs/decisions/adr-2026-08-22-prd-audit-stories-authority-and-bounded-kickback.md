@@ -54,6 +54,18 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    > and the halt names each rejected row and why; report-level faults (missing PRD marker or
    > Verdict Table) remain whole-report mechanical faults. Findings with no owning criterion
    > still never become work — they route only to the operator decision block.
+   > **Amended 2026-09-30 by #2521:** Decision 3's machine carrier is now the engine-validated
+   > typed PRD verdict, with structured criterion/task/requirement references and explicit
+   > intent relations. The Markdown tables become a human view, never a parser contract.
+   > Preserve all four grades, one FIXABLE parent, shared reference resolution, complete
+   > criterion coverage, and independent-entry rejection with valid siblings retained.
+   > Every carrier of a duplicated normalized criterion is rejected. Incomplete evidence
+   > blocks satisfaction and cannot become a repair task or gain an approval through an
+   > override. No-owner observations still admit only OVER_SCOPE; the engine assigns their
+   > presentation ordinals, which grant no identity or authority. PRD/story traceability
+   > gaps remain explicit and blocking; no fabricated criterion or new repair authority
+   > is introduced. A malformed/absent result envelope is a mechanical no-verdict fault.
+
 4. **Scope-as-intent.** `OVER_SCOPE` judges shipped behavior against the plan and intent (PRD
    Goals/Non-Goals and In/Out Scope, else stories + plan outcome). Within intent → self-accepted and
    recorded as a widening; outside intent, not user-visible → recorded, ships; outside intent,
@@ -112,6 +124,14 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    requires a halt. Never a kickback; the daemon DECIDE-halt rule is unchanged.
 8. **Recorded findings** are persisted in the verdict artifact and copied into the shipped record
    in a shape #1810 can consume without re-review. Every halt carries a class and a clearable lever.
+
+   > **Amended 2026-09-30 by #2521:** Decision 8's verdict artifact is engine-owned typed
+   > state. Recorded dispositions remain distinct from the original judgment and retain
+   > their existing provenance, grade, decision and rationale. The engine projects them into
+   > the human report and shipped record through the shared typed reader; report wording,
+   > formatting and mtime have no routing, satisfaction, approval or replay authority.
+   > Operator decisions stay in their separate durable store and cannot be supplied by
+   > the reviewer. Existing PLAN_GAP delivery and OVER_SCOPE decision semantics are unchanged.
 
 ## Consequences
 

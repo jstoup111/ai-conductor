@@ -26,26 +26,26 @@ independently narrow the id grammar.
 - [ ] A resolver function is exported from the module that owns `TASK_ID_PATTERN` (or a sibling module beside it), taking a raw reference plus a plan id set and returning a resolved id or a diagnostic value
 - [ ] Unit tests cover integer id, `rem-` id, annotated id, absent id, malformed id, and trailing-garbage cases with exact expected outputs
 
-## Story 2: prd_audit Verdict Table accepts any id present in the active plan
+## Story 2: Typed prd_audit judgments accept any id present in the active plan
 
-As an operator, I want a Verdict Table row citing an engine-appended remediation task to parse so
+As an operator, I want a typed finding citing an engine-appended remediation task to parse so
 that the feature does not deadlock in a regenerating mechanical halt.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an active plan containing tasks `1`-`21` and `rem-prd-audit-rem-s1-6-1`, when a prd_audit report row cites Plan task `rem-prd-audit-rem-s1-6-1 (landed)` on a PASS criterion, then the row is accepted and the report parses
+- Given an active plan containing tasks `1`-`21` and `rem-prd-audit-rem-s1-6-1`, when a prd_audit typed finding cites Plan task `rem-prd-audit-rem-s1-6-1 (landed)` on a PASS criterion, then the row is accepted and the finding validates
 - Given an active plan containing task `rem-as-built-rem-ab1-3`, when a FIXABLE row cites Plan task `rem-as-built-rem-ab1-3`, then the row is accepted with that task recorded as the criterion's owner
 
 #### Negative Paths
 - Given an active plan without task id `rem-prd-audit-zz-1`, when a FIXABLE row cites Plan task `rem-prd-audit-zz-1`, then the row is rejected with a diagnostic naming the criterion and the unresolvable id
 - Given any active plan, when a FIXABLE row has Plan task `—`, then the row is rejected as FIXABLE without a Plan task (existing behavior preserved)
-- Given a plan to which the engine appends a remediation task, when the previously-parseable report is re-parsed unchanged, then it still parses (appending never invalidates existing rows)
+- Given a plan to which the engine appends a remediation task, when the previously valid typed result is revalidated unchanged, then it still validates (appending never invalidates existing rows)
 
 ### Done When
-- [ ] The `Number()` pre-parse at the Verdict Table Plan-task cell is replaced by a call to the Story 1 resolver
+- [ ] The typed task-reference validator calls the Story 1 resolver for every citation; FIXABLE admits exactly one existing owner
 - [ ] The parsed row carries the plan task as a string id, and every downstream reader of that field compiles and behaves against string ids
-- [ ] A regression test reproduces the #2064 shape (plan with `rem-` tasks, PASS row citing one with an annotation) and asserts the report parses
+- [ ] A regression test reproduces the #2064 shape (plan with `rem-` tasks, PASS row citing one with an annotation) and asserts the finding validates
 
 ## Story 3: Rejection diagnostics name the criterion and the unresolvable reference
 
@@ -55,28 +55,28 @@ unresolvable id so that diagnosis needs no code archaeology.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a report whose row S2.3 cites an id absent from the plan, when the report is parsed, then the rejected-row reason contains both `S2.3` and the cited id verbatim
+- Given a report whose row S2.3 cites an id absent from the plan, when the typed result is validated, then the rejected-row reason contains both `S2.3` and the cited id verbatim
 
 #### Negative Paths
-- Given a report whose row S2.3 cites a malformed reference, when the report is parsed, then the reason identifies the malformed text rather than the generic `has an invalid Plan task.` wording with no id
+- Given a report whose row S2.3 cites a malformed reference, when the typed result is validated, then the reason identifies the malformed text rather than the generic `has an invalid Plan task.` wording with no id
 
 ### Done When
 - [ ] Rejected-row reasons for unresolvable and malformed Plan-task cells include the criterion key and the offending reference text
 - [ ] A test asserts the exact reason strings for both cases
 
-## Story 4: One citation rule, stated once
+## Story 4: One citation rule, enforced by the engine
 
-As a harness maintainer, I want the skill contract and the parser to state the same citation rule
-so that a future consumer cannot narrow it again independently.
+As a maintainer, I want the engine-owned schema and shared resolver to keep citation semantics consistent.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the resolved rule that any Verdict Table row may cite a task present in the active plan while FIXABLE rows must, when the prd-audit skill text is read, then its Plan-task cell instructions state that rule and instruct emitting the bare id without annotation
+- Given any typed finding citing active plan tasks, when validation resolves its task references, then non-numeric remediation ids and supported annotation tolerance follow the shared resolver; FIXABLE resolves exactly one owner.
 
 #### Negative Paths
-- Given the updated skill text, when a FIXABLE row omits a Plan task, then the documented and enforced outcome is still rejection (the widened citation rule does not weaken the FIXABLE requirement)
+- Given a FIXABLE entry with no owner or multiple owners, when validated, then the entry is rejected with its criterion and ownership defect named.
+- Given machine Plan-task cell grammar reintroduced into the migrated skill, when the contract audit runs, then it rejects the duplicated machine contract.
 
 ### Done When
-- [ ] `skills/prd-audit/SKILL.md` Plan-task cell text matches the enforced rule (any row may cite an existing plan task; FIXABLE must; emit the bare id)
-- [ ] `test/test_harness_integrity.sh` passes after the skill edit
+- [ ] Typed citation fixtures cover existing string ids, annotations and exactly-one FIXABLE ownership through the shared resolver.
+- [ ] Contract-audit fixtures reject machine cell grammar in the skill while retaining its judgment responsibilities.

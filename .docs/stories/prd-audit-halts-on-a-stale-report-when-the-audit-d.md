@@ -12,7 +12,7 @@ As the conductor, I want each SHIP-tail verdict dispatch's run identity recorded
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a prd_audit dispatch settles after writing its report, when the engine records the settle, then the gate-code-validity sidecar carries the dispatch's attempt id as the run identity beside `codeStamp`
+- Given a prd_audit dispatch returns a valid structured judgment, when the engine persists it and records settle, then the typed verdict and gate-code-validity sidecar carry the engine-owned attempt identity and reviewed code stamp
 - Given the three verdict gates run concurrently in a validation group, when each branch settles, then its stamp is written on that branch's own settle path before the join reads any verdict
 
 #### Negative Paths
@@ -32,18 +32,18 @@ As the conductor, I want to verify immediately after a verdict dispatch settles 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a prd_audit dispatch writes `.pipeline/prd-audit.md` during its run, when the handshake runs after settle, then the attempt is eligible for completion checking with no handshake finding
+- Given a prd_audit dispatch returns a validated structured judgment which the engine persists with its attempt identity and renders, when the handshake runs after settle, then the attempt is eligible for completion checking with no handshake finding
 - Given an architecture_review_as_built dispatch settles, when the handshake runs, then its evidence is that this dispatch's structured result was validated and persisted as the typed verdict stamped with this dispatch's attempt id, and no file written by the provider counts as evidence
 - Given any terminal dispatch outcome (success, error, halt), when the step concludes, then the handshake observation is recorded — not only on the success path
 
 #### Negative Paths
-- Given a dispatch settles ✓ but wrote neither report nor marker, when the handshake runs, then the attempt is scored failed with a reason naming each missing artifact, the expected run identity, and the found identity/mtime of whatever is on disk
-- Given a dispatch settles ✓ but only the report (not the marker) was rewritten, when the handshake runs, then the reason names specifically the artifact that was not produced
+- Given a manual_test dispatch settles ✓ but wrote neither report nor marker, when the handshake runs, then the attempt is scored failed with a reason naming each missing artifact, the expected run identity, and the found identity/mtime of whatever is on disk
+- Given a manual_test dispatch settles ✓ but only the report (not the marker) was rewritten, when the handshake runs, then the reason names specifically the artifact that was not produced
 - Given the handshake's own read throws (unreadable file, corrupt sidecar), when it evaluates, then the attempt is treated as not-verified (fail-closed for the verdict) while the engine itself does not crash
-- Given an architecture_review_as_built dispatch whose structured result is missing or rejected, when the handshake runs, then it records the rejection outcome, no typed verdict is persisted for that attempt, and the attempt is scored absent
+- Given a prd_audit or architecture_review_as_built dispatch whose terminal structured result is missing or unusable, when the handshake runs, then it names the step, expected attempt and output, explicitly states this dispatch produced no verdict, and scores the attempt absent without using older findings
 
 ### Done When
-- [ ] Replaying the 2026-08-23 shape (settle ✓, artifacts untouched from a prior lap) yields a failed attempt whose reason names `.pipeline/prd-audit.md`, the expected attempt id, and the stale identity/mtime — and never quotes the stale report's findings
+- [ ] Replaying the 2026-08-23 shape (settle ✓, artifacts untouched from a prior lap) yields a failed attempt whose reason names `prd_audit`, `.pipeline/prd-audit.json`, the expected attempt id, and this dispatch's missing output — and never quotes the stale report's findings
 - [ ] The handshake path is exercised for all three gates in tests, serial and validation-group
 - [ ] Handshake evaluation never throws out of the step loop (corrupt-input test)
 
@@ -54,8 +54,8 @@ As the routing/halt machinery, I want every reader of a SHIP-tail verdict artifa
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a report stamped with the current dispatch's identity and blocking rows, when `classifyPrdAuditGaps` runs, then those rows drive routing as today
-- Given a report stamped with the current identity and no blocking rows, when the completion predicate runs, then the gate passes as today
+- Given a validated typed PRD judgment stamped with the current dispatch's identity and blocking findings, when `classifyPrdAuditGaps` runs, then those findings drive routing as today
+- Given a complete validated typed PRD judgment stamped with the current identity and no blocking findings, when the completion predicate runs, then the gate passes as today
 
 #### Negative Paths
 - Given a report whose stamp identifies an earlier lap of the same session, when `classifyPrdAuditGaps` runs, then it returns no blocking rows from that report and the caller treats the state as "no fresh verdict" — the stale rows never reach a kickback hint or halt reason
@@ -65,7 +65,7 @@ As the routing/halt machinery, I want every reader of a SHIP-tail verdict artifa
 ### Done When
 - [ ] `classifyPrdAuditGaps` (and the halt writers it feeds) take the shared identity input; a regression test with a same-session earlier-lap report produces zero blocking classifications
 - [ ] The stale-artifact sweep remains gated on the same shared helper (#817 D4) — a test proves the sweep and the readers agree on the same artifact
-- [ ] grep of the diff shows no reader retains a private session-only mtime freshness check for the three gates
+- [ ] Reader, routing and sweep fixtures agree on typed attempt identity for PRD/as-built and the established manual-test identity/fallback contract
 
 ## Story 4: Identity mismatch reruns within budget, then halts self-describingly
 
@@ -104,25 +104,26 @@ As an operator, I want clearing the halt to be sufficient so that recovery does 
 - [ ] An integration test reproduces #1838's recovery: stale artifacts present, halt cleared, re-dispatch succeeds without any manual `.pipeline/` deletion
 - [ ] A companion test proves a fresh stamped blocking verdict after recovery is still honored (no whitewash)
 
-## Story 6: Unstamped artifacts fall back to mtime; kill-switch reverts cleanly
+## Story 6: Typed gates retain identity checks while manual-test keeps its fallback
 
-As the engine, I want legacy prd_audit and manual_test artifacts and disabled deployments to behave exactly as today, and the as-built gate to accept only its identity-stamped typed verdict, so that the contract rolls out and reverts safely.
+As the engine, I want PRD/as-built verdict identity independent of code-validity opt-out so that a missing new judgment cannot be replaced by old evidence.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a prd_audit or manual_test verdict artifact with no run-identity stamp (written pre-upgrade), when readers evaluate it, then today's mtime-floor behavior applies unchanged
-- Given the existing gate-code-validity kill-switch is off, when the prd_audit and manual_test gates run, then identity checking is bypassed and pure mtime behavior applies end-to-end
-- Given the existing gate-code-validity kill-switch is off, when the architecture_review_as_built gate runs, then identity checking stays in force: freshness is the typed verdict's attempt id and no mtime comparison decides it
+- Given a manual_test artifact with no run-identity stamp, when readers evaluate it, then its existing mtime-floor behavior applies unchanged.
+- Given code-validity preservation is disabled, when PRD or as-built dispatch settles, then only that attempt's validated persisted typed evidence satisfies its handshake.
+- Given a complete typed PRD result with valid code-stamp preservation and current decision authority before a new dispatch, when completion is evaluated, then it can be reused without another reviewer call.
 
 #### Negative Paths
-- Given an unstamped stale artifact, when readers evaluate it, then it is not treated as MORE trusted than today (fallback never widens acceptance)
-- Given a corrupt/unparseable prd_audit or manual_test sidecar, when the identity helper reads it, then it degrades to the unstamped path without throwing
-- Given an unstamped or Markdown-only as-built artifact, even one whose mtime is newer than the dispatch start, when readers evaluate it, then it is scored absent and the step reruns — the as-built gate has no mtime fallback
+- Given fresh-mtime legacy Markdown PRD/as-built evidence or a prior-attempt typed judgment after a new dispatch produced no result, when the gate evaluates, then it scores absent and cannot pass from file timestamps or a refreshed sidecar.
+- Given a corrupt manual_test sidecar, when its identity helper reads it, then it retains its existing unstamped fallback without throwing.
+- Given corrupt or unsupported typed PRD/as-built evidence, when a consumer reads it, then it reports the typed-evidence fault without falling back to Markdown.
 
 ### Done When
-- [ ] Fallback tests: for prd_audit and manual_test, unstamped-fresh passes and unstamped-stale fails, identical to pre-change behavior; an unstamped or Markdown-only as-built artifact scores absent
-- [ ] Kill-switch test: with the flag off, no identity comparison occurs for prd_audit and manual_test and existing suites pass unchanged, while the as-built gate still judges its typed verdict by run identity
+- [ ] Typed-gate fixtures reject old-attempt and Markdown-only evidence with code-validity on and off; pre-dispatch valid preservation still avoids a reviewer invocation.
+- [ ] Manual-test fixtures preserve unstamped-fresh, unstamped-stale, corrupt-sidecar and kill-switch behavior.
+
 
 ## Story 7: manual_test composes with its whitewash machinery
 
