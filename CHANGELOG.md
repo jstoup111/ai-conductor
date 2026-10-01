@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.6.0] - 2026-09-30
+## [1.6.0] - 2026-10-01
 
 ### Added
 
@@ -59,6 +59,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Intake filers now receive typed dependency links and explicit notices for links GitHub cannot record. ([implementation PR #2831](https://github.com/jstoup111/ai-conductor/pull/2831)).
 - coverage_binding no longer holds a plan responsible for ADR and spec amendments that earlier features already shipped. ([implementation PR #2859](https://github.com/jstoup111/ai-conductor/pull/2859)).
 - Resuming a feature whose halt PR still carries only the needs-remediation title prefix or halt banner now repairs the PR instead of halting FINISH as needs-human. ([implementation PR #2865](https://github.com/jstoup111/ai-conductor/pull/2865)).
+- Prevents halted repair cycles from spending the remediation cap again when they resume. ([implementation PR #2869](https://github.com/jstoup111/ai-conductor/pull/2869)).
 
 ## [1.5.0] - 2026-09-27
 
