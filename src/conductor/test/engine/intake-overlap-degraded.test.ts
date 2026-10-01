@@ -5,6 +5,7 @@ import { collectInFlightOverlaps, collectOpenIssueOverlaps } from '../../src/eng
 import { buildOverlapSources } from '../../src/engine/engineer/intake/overlap-preflight.js';
 import { fileIntakeIssue } from '../../src/engine/engineer/intake/file-issue.js';
 import { renderIntakeFileOutput } from '../../src/engine/engineer/intake/filing-output.js';
+import { runOverlapPreflight } from '../../src/engine/engineer/intake/overlap-preflight.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { GithubOperationRequest } from '../../src/engine/github-operations.js';
 
@@ -12,6 +13,43 @@ describe('degraded overlap collection', () => {
   it('turns failed independent reads into skip notes', async () => {
     const result = await collectOverlaps({ title: 't', body: 'src/a.ts', openIssues: async () => { throw new Error('timed out'); }, inFlight: async () => { throw new Error('no base'); } });
     expect(result.skipNotes).toEqual([{ part: 'open-issues', reason: 'timed out' }, { part: 'in-flight', reason: 'no base' }]);
+
+    const operations: GithubOperationRequest[] = [];
+    const filing = await fileIntakeIssue({ title: 't', body: 'src/a.ts', size: 'S', priority: 'low', interactive: false }, {
+      overlap: { suggestions: async () => ({ shown: [], preAccepted: [], advisory: [], skipNotes: result.skipNotes }) },
+      creation: {
+        authority: { resolveActor: async () => ({ resolved: true as const, id: 'alice' }), intent: { kind: 'explicit-intake', repository: 'acme/app' } },
+        operations: { run: async (request) => {
+          operations.push(request);
+          return request.operation === 'issue.create'
+            ? { created: { repository: 'acme/app', kind: 'issue' as const, number: 1 } }
+            : {};
+        } },
+      },
+    });
+    expect(operations.filter(({ operation }) => operation === 'issue.create')).toHaveLength(1);
+    expect(filing.overlap).toMatchObject({
+      kind: 'proceed',
+      skipNotes: [{ part: 'open-issues', reason: 'timed out' }, { part: 'in-flight', reason: 'no base' }],
+    });
+    expect(renderIntakeFileOutput(filing).stdout).toContain('[intake-file] overlap: skipped open-issues — timed out');
+  });
+
+  it('keeps an independently found in-flight suggestion blocking while the open-issue read fails', async () => {
+    const collected = await collectOverlaps({
+      title: 't', body: 'src/a.ts',
+      openIssues: async () => { throw new Error('timed out'); },
+      inFlight: async () => ({ overlaps: [{ branch: 'feat/daemon-fix', issue: 'acme/app#1477', sharedPaths: ['src/a.ts'] }] }),
+    });
+    const decision = await runOverlapPreflight({ title: 't', body: 'src/a.ts', dependsOn: [], interactive: false }, { suggestions: async () => ({
+      shown: collected.branchOverlaps.map(({ issue, sharedPaths }) => ({ issue: issue!, sharedPaths: [...sharedPaths] })),
+      preAccepted: [], advisory: [], skipNotes: collected.skipNotes,
+    }) });
+    expect(decision).toMatchObject({
+      kind: 'refused',
+      undecided: [{ issue: 'acme/app#1477', sharedPaths: ['src/a.ts'] }],
+      skipNotes: [{ part: 'open-issues', reason: 'timed out' }],
+    });
   });
 
   it('reports bounded source comparisons as partial', async () => {
