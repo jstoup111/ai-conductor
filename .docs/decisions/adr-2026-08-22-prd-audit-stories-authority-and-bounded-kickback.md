@@ -65,6 +65,7 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    > presentation ordinals, which grant no identity or authority. PRD/story traceability
    > gaps remain explicit and blocking; no fabricated criterion or new repair authority
    > is introduced. A malformed/absent result envelope is a mechanical no-verdict fault.
+   > **Amended 2026-09-30 by #2440:** These routing and satisfaction rules consume the current effective classification defined by adr-2026-09-30-gate-local-review-finding-continuity D6/D9. Raw reviewer evidence remains separately validated and attributable. A repeated assertion may clear only through validated current evidence of its exact criterion/clause or delivered outcome; unrelated failures, malformed evidence, refusal authority, and unapproved architectural choices remain blocking. Required history that is pending, missing, corrupt, stale, or uncertain prevents completion. Existing routing owners, dispositions, and budgets are unchanged. The effective grades, rather than an independently re-read raw grade, are the inputs to D5 and D7; raw parser/completeness defects remain independently blocking.
 
 4. **Scope-as-intent.** `OVER_SCOPE` judges shipped behavior against the plan and intent (PRD
    Goals/Non-Goals and In/Out Scope, else stories + plan outcome). Within intent → self-accepted and

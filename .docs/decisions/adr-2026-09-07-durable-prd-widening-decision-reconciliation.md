@@ -46,6 +46,8 @@ This is the first real second-domain implementation. Shared storage and projecti
 > **D2.1** Source uniqueness for `build_review` records is lifecycle-scoped per that D6; nothing else in
 > this decision changes.
 
+> **Amended 2026-09-30 by #2440:** D2 now permits the version-3 shared envelope and gate-local PRD-audit/as-built histories defined by approved adr-2026-09-30-gate-local-review-finding-continuity D1-D2. Migrate v1/v2 without losing build-review cases, suppressions, widening records, offers, or original decision provenance; all domain writers preserve the expanded envelope. The original feature identity and separate operator-authority rules remain in force. The two added histories do not acquire build-review effects or widen NC/criterion decision authority. Cross-gate equivalence remains #2441.
+
 ### D3 — Capture original decisions before current-report reconciliation
 
 When presenting a new over-scope halt, persist an engine-stamped decision offer with the feature, original finding evidence, report snapshot, and offered case reference before rendering the editable block. Capture runs at PRD-audit entry before dispatch and remains idempotently callable from both existing over-scope routing paths. Explicit accept/refuse plus rationale and resolved operator identity is required; pending or a machine clear grants nothing.

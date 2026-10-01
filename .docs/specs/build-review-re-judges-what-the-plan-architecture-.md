@@ -102,6 +102,8 @@ A second problem compounds this: most features are classified technical, so SHIP
   scenario; for negative-path or edge scenarios it is recorded in the verdict and the shipped
   record and the feature may ship, unless operator configuration requires a halt.
 
+> **Amended 2026-09-30 by #2440:** FR-9 through FR-14 retain their grades, scope authority, ownership, and routing/budget policy, but final satisfaction and routing use current effective findings under adr-2026-09-30-gate-local-review-finding-continuity D6/D9. Validated current evidence may resolve a repeated exact assertion; raw review remains attributable, unrelated failures and parser defects stay blocking, and missing/corrupt/stale/uncertain required history prevents completion.
+
 ### As-built architecture review
 
 - **FR-15:** The as-built architecture review runs on every feature. Its individual checks are
@@ -112,6 +114,8 @@ A second problem compounds this: most features are classified technical, so SHIP
   the code faithfully implements the approved design and the design is the limit; it is recorded
   in the verdict and the shipped record and ships when acceptance criteria still pass, and halts
   when a stated outcome is not delivered.
+  > **Amended 2026-09-30 by #2440:** FR-16's delivery/satisfaction decision consumes current effective evidence under adr-2026-09-30-gate-local-review-finding-continuity D9. A repeated PLAN_GAP clears only with explicit current evidence that its affected outcome is delivered, while raw reviewer evidence is retained. Missing required history or any unrelated unsatisfied criterion still prevents publication.
+
 - **FR-17:** No SHIP-phase gate (prd_audit, as-built review, manual_test) can send work back to BUILD
   that the approved plan does not authorize; every off-plan need is a halt or a recorded,
   non-blocking finding.

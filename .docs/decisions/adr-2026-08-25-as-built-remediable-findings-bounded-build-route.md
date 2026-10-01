@@ -77,6 +77,8 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    escalation pair (adr-2026-07-13) is re-armed for this gate so a zero-progress lap escalates
    instead of looping.
 
+> **Amended 2026-09-30 by #2440:** These routing and satisfaction rules consume the current effective classification defined by adr-2026-09-30-gate-local-review-finding-continuity D6/D9. Raw reviewer evidence remains separately validated and attributable. A repeated assertion may clear only through validated current evidence of its exact criterion/clause or delivered outcome; unrelated failures, malformed evidence, refusal authority, and unapproved architectural choices remain blocking. Required history that is pending, missing, corrupt, stale, or uncertain prevents completion. Existing routing owners, dispositions, and budgets are unchanged.
+
 4. **Termination.** The gate gets its own remediation lap cap, default **1**
    (operator-configurable, config key under `architecture_review_as_built`), and its appended
    tasks draw on the **shared** plan-growth allowance
@@ -116,6 +118,8 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    (`architecture_review_as_built.remediation.enabled`, default on) reverts exactly to
    halt-always-on-BLOCKED.
 
+   > **Amended 2026-09-30 by #2440:** D6's current-verdict and shipped projections remain derived views. Approved adr-2026-09-30-gate-local-review-finding-continuity D3/D6/D8/D9 requires retaining source/case trace, known repair attempts, and validated current resolution evidence in durable gate-local history before a later verdict overwrites the projection. An admitted or completed task alone does not prove resolution, and a prior autonomous outcome alone cannot pass the current gate.
+
 7. **Cross-restart durability of pending remediation findings (added 2026-08-26 by operator
    amendment; corrects the "no new ledger schema" consequence recorded below).** A finding
    admitted to a remediation lap is not yet remediated: the per-finding record decision 6
@@ -138,6 +142,8 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    > itself is authorized at BUILD dispatch. A pending finding whose repair halts at the cap
    > stays pending until projection or a fresh session. It cannot project early, because as-built
    > cannot pass before that repair's BUILD runs.
+
+   > **Amended 2026-09-30 by #2440:** D7's pending set remains the compatibility surface, with its existing admission and budget semantics. Before clearing it or replacing its verdict projection, retain attributable finding, repair, and outcome evidence through the durable history contract in approved adr-2026-09-30-gate-local-review-finding-continuity D2/D7/D8. Missing required history or an unproven repair binding is an explicit recoverable failure; do not clear the pending evidence early or invent a successful repair. The new histories and required-history checkpoints are additional state; they do not move the existing repair appender or budget owner.
 
 8. **The bounded route is a fallback, never a preemption (added 2026-08-26 by operator
    amendment).** `adr-2026-07-10-validation-group-join` decision 3 is unchanged and keeps
@@ -226,6 +232,8 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
 > and never reads that file back. The shipped record reads the same typed fields; no Markdown or
 > fenced-JSON scrape remains.
 >
+> **Amended 2026-09-30 by #2440:** D6.1 identifies the authoritative raw reviewer record and forbids Markdown scraping. Final completion, routing, reuse, and shipped history also consume the current validated reconciliation under adr-2026-09-30-gate-local-review-finding-continuity D9. Preserve raw fields and expose source/case resolution separately; do not overwrite the raw judgment to conceal the reconciliation.
+
 > **D7.1 — The input projection reads pending findings through the seam.** The as-built input
 > projection may carry `pendingAsBuiltRemediationFindings` as context for the next review. It
 > reads them through a read-only accessor exported by the remediation seam, which uses the

@@ -17,7 +17,7 @@ not become a needs-human halt on work the approved ADR already requires.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an APPROVED ADR `adr-x` whose `## Decision` section declares decision 5 with a sub-decision written `D5.2`, when a REMEDIABLE finding governed by that sub-decision carries the reference `{kind: "adr-decision", stem: "adr-x", decision: 5}`, then validation resolves it to decision 5 and the finding enters the bounded remediation route against decision 5
+- Given an APPROVED ADR `adr-x` whose `## Decision` section declares decision 5 with a sub-decision written `D5.2`, when a REMEDIABLE finding governed by that sub-decision carries the reference `{kind: "adr-decision", stem: "adr-x", decision: 5}`, then validation resolves it to decision 5 and, if it remains unresolved in the current effective result, the finding enters the bounded remediation route against decision 5
 - Given the same ADR, when the as-built projection lists its decisions, then decision 5 appears as the whole-number decision id that a reference cites for any of its sub-decisions
 - Given the same ADR, when a REMEDIABLE finding references decision 5 directly, then it resolves to decision 5 exactly as a sub-decision cite does
 
@@ -28,7 +28,7 @@ not become a needs-human halt on work the approved ADR already requires.
 - Given an active plan containing task `5.2`, when a REMEDIABLE finding carries the reference `{kind: "plan-task", taskId: "5.2"}`, then it resolves as the plan task `5.2` and never as an ADR decision
 
 ### Done When
-- [ ] A contract test asserts an ADR reference to decision 5 resolves against an APPROVED ADR declaring decision 5 with a `D5.2` sub-decision, and the finding enters the remediation route against decision 5
+- [ ] A contract test asserts an ADR reference to decision 5 resolves against an APPROVED ADR declaring decision 5 with a `D5.2` sub-decision, and an effectively unresolved finding enters the remediation route against decision 5
 - [ ] A contract test asserts that decision 9 against an ADR without decision 9, a non-number decision, and a DRAFT ADR are each rejected with a field-named diagnostic, and that plan-task `5.2` still resolves as a plan task
 - [ ] A test through the dispatch path asserts a rejected reference scores `absent`, reruns, and halts needs-human naming the field on exhaustion
 

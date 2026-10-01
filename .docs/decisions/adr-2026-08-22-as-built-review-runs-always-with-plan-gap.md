@@ -31,6 +31,8 @@ the design does not close the defect — an architecture judgement.
    matches the approved design and the design is the limit. With acceptance criteria passing it is
    recorded (verdict + shipped record) and the feature ships; when a stated outcome is undelivered it
    halts (class `plan-gap`). The gate parser is fail-closed as today; `PLAN_GAP` is recognized.
+> **Amended 2026-09-30 by #2440:** These routing and satisfaction rules consume the current effective classification defined by adr-2026-09-30-gate-local-review-finding-continuity D6/D9. Raw reviewer evidence remains separately validated and attributable. A repeated assertion may clear only through validated current evidence of its exact criterion/clause or delivered outcome; unrelated failures, malformed evidence, refusal authority, and unapproved architectural choices remain blocking. Required history that is pending, missing, corrupt, stale, or uncertain prevents completion. Existing routing owners, dispositions, and budgets are unchanged.
+
 3. The as-built review **never kicks back to BUILD**. The as-built→build route and its capture/check
    pair in adr-2026-07-13-kickback-build-no-op-escalation are retired; prd_audit's route remains
    under that ADR's no-op escalation.
