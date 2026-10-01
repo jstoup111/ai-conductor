@@ -6,7 +6,7 @@ import type {
   SelfHostAuthContext,
   SelfHostAuthPreparation,
 } from '../execution/llm-provider.js';
-import { ModelAvailability } from './model-availability.js';
+import { ModelAvailability, selectFallbackLadder } from './model-availability.js';
 import {
   resolveProviderModelPolicy,
   type ProviderModelPolicy,
@@ -114,7 +114,7 @@ export function createProviderRuntimeSet(
         nativeSchemaCapability: provider.nativeSchemaCapability,
         policy,
         builtIn: findBuiltInProviderDescriptor(key) !== undefined,
-        availability: new ModelAvailability(policy.modelFallbackLadder, warn),
+        availability: new ModelAvailability(selectFallbackLadder(policy, key, config ?? {}), warn),
       };
     }),
   );

@@ -1478,3 +1478,29 @@ describe('engine/resolved-config', () => {
     });
   });
 });
+
+describe('build-review rubric ladder for an inherited Pi provider', () => {
+  const piLadder = ['anthropic/claude-opus-4-5', 'openai/gpt-5.6-sol'];
+  const pi = { model: piLadder[0]!, model_escalation_order: piLadder, model_fallback_ladder: piLadder };
+
+  it('uses llm_providers.pi ladder, never the top-level Claude ladder, for a run-level Pi rubric', () => {
+    const resolved = resolveBuildReviewConfig({
+      llm_provider: 'pi', model_fallback_ladder: ['opus', 'sonnet'], llm_providers: { pi },
+    });
+    expect(resolved.rubrics.testQuality.model_fallback_ladder).toEqual(piLadder);
+    expect(resolved.rubrics.security.model_fallback_ladder).toEqual(piLadder);
+  });
+
+  it('uses llm_providers.pi ladder for a rubric inheriting a Pi build_review step', () => {
+    const resolved = resolveBuildReviewConfig({
+      llm_provider: 'claude', model_fallback_ladder: ['opus', 'sonnet'], llm_providers: { pi },
+      steps: { build_review: { llm_provider: 'pi' } },
+    });
+    expect(resolved.rubrics.testQuality.model_fallback_ladder).toEqual(piLadder);
+  });
+
+  it('keeps the top-level ladder for an inherited Claude rubric', () => {
+    const resolved = resolveBuildReviewConfig({ llm_provider: 'claude', model_fallback_ladder: ['opus', 'sonnet'] });
+    expect(resolved.rubrics.testQuality.model_fallback_ladder).toEqual(['opus', 'sonnet']);
+  });
+});

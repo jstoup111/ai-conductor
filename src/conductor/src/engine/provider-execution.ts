@@ -541,6 +541,8 @@ export function resolveProviderCandidateNativeConfig({
         step,
         tier,
         policy: runtime.policy,
+        providerKey: runtime.key,
+        config,
         attempt,
         escalate,
       });

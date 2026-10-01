@@ -909,7 +909,7 @@ export function resolveBuildReviewConfig(
       effort: resolvedNative.effort,
       model_fallback_ladder: rubric?.model_fallback_ladder
         ?? (rubricPrimaryProvider === inheritedPrimaryProvider
-          ? config?.model_fallback_ladder ?? inheritedPolicy.modelFallbackLadder
+          ? selectFallbackLadder(inheritedPolicy, inheritedPrimaryProvider, config ?? {})
           : rubricPolicy.modelFallbackLadder),
       max_retries: resolvedNeutral.max_retries,
       escalate: resolvedNeutral.escalate,

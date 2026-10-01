@@ -370,3 +370,85 @@ describe('Pi provider event metadata', () => {
     expect(result.attempts[0]?.model).toBe(model);
   });
 });
+
+describe('configured ladder in normal provider-aware dispatch', () => {
+  const first = 'anthropic/claude-opus-4-5';
+  const second = 'openai/gpt-5.6-sol';
+  const piConfig: HarnessConfig = {
+    llm_provider: 'claude',
+    model_fallback_ladder: ['opus', 'sonnet'],
+    llm_providers: {
+      pi: { model: first, model_escalation_order: [first, second], model_fallback_ladder: [first, second] },
+    },
+    steps: { plan: { llm_provider: 'pi' } },
+  };
+
+  it('walks the configured Pi ladder and never a top-level Claude alias', async () => {
+    const pi: LLMProvider = {
+      supportsSessionResume: false,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn(async ({ model }) => model === first
+        ? { success: false, output: `${first} unavailable`, exitCode: 1, modelUnavailable: true }
+        : { success: true, output: 'Pi completed', exitCode: 0 }),
+    };
+
+    const result = await executeProviderCandidates({
+      step: 'plan', configuredProviders: ['claude'], preferredProvider: 'pi',
+      runtimes: runtimeSet(piConfig, { pi }), sessions: new ProviderSessionScope(vi.fn()), config: piConfig,
+      options: { prompt: 'Plan.', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({ success: true, actualProvider: 'pi', resolvedModel: second });
+    expect(vi.mocked(pi.invoke).mock.calls.map(([options]) => options.model)).toEqual([first, second]);
+  });
+
+  it('returns the last Pi rung failure from one dispatch when every rung is unavailable', async () => {
+    const pi: LLMProvider = {
+      supportsSessionResume: false,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn(async ({ model }) => ({
+        success: false, output: `${model} unavailable`, exitCode: 1, modelUnavailable: true,
+      })),
+    };
+    const attempts: Array<{ model?: string }> = [];
+
+    const result = await executeProviderCandidates({
+      step: 'plan', configuredProviders: ['pi'], preferredProvider: 'pi',
+      runtimes: runtimeSet(piConfig, { pi }), sessions: new ProviderSessionScope(vi.fn()), config: piConfig,
+      attempt: 1,
+      onAttempt: async (_step, attempt) => { attempts.push(attempt); },
+      options: { prompt: 'Plan.', cwd: '/workspace' },
+    });
+
+    expect(vi.mocked(pi.invoke).mock.calls.map(([options]) => options.model)).toEqual([first, second]);
+    expect(result.success).toBe(false);
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain(`${second} unavailable`);
+    expect(attempts).toHaveLength(1);
+    expect(vi.mocked(pi.invoke).mock.calls.some(([options]) => options.model === 'opus' || options.model === 'sonnet')).toBe(false);
+  });
+
+  it('walks the top-level ladder for a codex step as before', async () => {
+    const config: HarnessConfig = {
+      llm_provider: 'claude',
+      model_fallback_ladder: ['gpt-a', 'gpt-b'],
+      steps: { build: { llm_provider: 'codex', model: 'gpt-a' } },
+    };
+    const codex: LLMProvider = {
+      supportsSessionResume: false,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn(async ({ model }) => model === 'gpt-a'
+        ? { success: false, output: 'gpt-a unavailable', exitCode: 1, modelUnavailable: true }
+        : { success: true, output: 'Codex completed', exitCode: 0 }),
+    };
+
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['claude'], preferredProvider: 'codex',
+      runtimes: runtimeSet(config, { codex }), sessions: new ProviderSessionScope(vi.fn()), config,
+      options: { prompt: 'Build.', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({ success: true, actualProvider: 'codex' });
+    expect(vi.mocked(codex.invoke).mock.calls.map(([options]) => options.model)).toEqual(['gpt-a', 'gpt-b']);
+  });
+});
