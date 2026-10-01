@@ -40,7 +40,9 @@ describe('Task 18 — monitor queue event spine', () => {
       offer: vi.fn(),
       launch: async () => {
         membership = [];
-        return { kind: 'operator-skip' };
+      },
+      readOperatorInput: async () => {
+        return 'skip';
       },
       snapshotHaltMarker: async () => ({ present: true, mtimeMs: 12, size: 34 }),
       recordDeferral: async () => {},
