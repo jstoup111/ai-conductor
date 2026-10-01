@@ -241,13 +241,13 @@ As the harness operator, I want proof from real provider sessions that agent she
 ### Negative Paths
 
 - **Given** an advisory-mode smoke run without a provider's credentials or binary, **When** that provider's guard smoke file runs, **Then** its case is reported as skipped with the missing prerequisite named, never as passed.
-- **Given** a gate-mode smoke run that selects a provider's credentialed leg without that provider's credentials, **When** the guard smoke file runs, **Then** the run fails naming the missing credential and does not skip.
+- **Given** a gate-mode smoke run that selects a provider's credentialed leg without that provider's credentials, **When** the guard smoke file runs, **Then** its case is reported as a non-gating skip naming the missing credential, never as passed.
 - **Given** the default (non-smoke) test suite, **When** it runs, **Then** no live provider session is started.
 
 ### Done When
 
 - [ ] Two smoke files exist, one declaring `credentialed:claude` and one declaring `credentialed:codex`, each asserting guard resolution and a refused `git clean -f`
-- [ ] The smoke-runner discovery test accepts both files; advisory mode skips with a named prerequisite, gate mode fails, and the default suite excludes both
+- [ ] The smoke-runner discovery test accepts both files; advisory and gate mode both report a named non-gating skip, and the default suite excludes both
 
 ## Story 12: A truthful report of a guard refusal is not refuted as a fabricated blocker
 
