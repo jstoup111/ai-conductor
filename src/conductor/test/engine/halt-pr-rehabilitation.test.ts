@@ -277,6 +277,34 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
     });
   });
 
+  it('creates one resolution comment when a marked comment has a malformed URL', async () => {
+    const halted = {
+      title: 'feat: widget import flow',
+      isDraft: true,
+      labels: [{ name: 'needs-remediation' }],
+      body: '## Summary\n\nWidget import flow.\n\n<!-- conductor:needs-remediation -->',
+    };
+    const cleared = {
+      ...halted,
+      labels: [],
+      body: '## Summary\n\nWidget import flow.',
+    };
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify(halted) },
+      { stdout: JSON.stringify(cleared) },
+      { stdout: JSON.stringify({ comments: [{ url: 'not-a-url#issuecomment-42', body: NEEDS_REMEDIATION_MARKER }] }) },
+    ]);
+    const { operations, writes } = fakeOperations();
+
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
+
+    expect({
+      outcome,
+      creates: writes.filter((write) => write.operation === 'pull-request.comment.create').length,
+      updates: writes.filter((write) => write.operation === 'pull-request.comment.update').length,
+    }).toEqual({ outcome: 'cleared', creates: 1, updates: 0 });
+  });
+
   it('creates one resolution comment when the confirmed PR has no marked comment', async () => {
     const halted = {
       title: 'feat: widget import flow', isDraft: true, labels: [{ name: 'needs-remediation' }], body: '<!-- conductor:needs-remediation -->',

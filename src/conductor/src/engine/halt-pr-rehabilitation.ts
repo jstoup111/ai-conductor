@@ -118,8 +118,10 @@ function findNeedsRemediationCommentId(stdout: string): string | null {
     && (entry as { body: string }).body.includes(NEEDS_REMEDIATION_MARKER),
   ) as { url?: unknown } | undefined;
   if (!comment || typeof comment.url !== 'string') return null;
-  const match = comment.url.match(/(?:#issuecomment-|\/issues\/comments\/)(\d+)(?:\/?$)?/);
-  return match?.[1] ?? null;
+  const match = comment.url.match(
+    /github\.com\/([^/]+)\/([^/]+)\/(?:pull|issues)\/\d+#issuecomment-(\d+)/,
+  );
+  return match?.[3] ?? null;
 }
 
 function prTarget(prUrl: string): { repository: string; kind: 'pull-request'; number: number } | null {
