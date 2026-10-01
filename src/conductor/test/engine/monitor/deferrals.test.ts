@@ -43,16 +43,43 @@ function collectTsFiles(dir: string): string[] {
 
 describe('Task 4 — recorded deferrals', () => {
   it('does not apply a deferral when the current halt identity changed', async () => {
-    const { isDeferred } = await import('../../../src/engine/monitor/deferrals.js') as {
+    const files = new Map<string, string>();
+    const deps: DeferralDeps = {
+      resolveMainRoot: vi.fn(async () => '/projects/payments'),
+      mkdir: vi.fn(async () => undefined),
+      writeFile: vi.fn(async (path: string, contents: string) => {
+        files.set(path, contents);
+      }),
+      rename: vi.fn(async (from: string, to: string) => {
+        files.set(to, files.get(from) ?? '');
+      }),
+      readFile: vi.fn(async path => {
+        const contents = files.get(path);
+        if (contents === undefined) {
+          throw Object.assign(new Error(`missing ${path}`), { code: 'ENOENT' });
+        }
+        return contents;
+      }),
+      rm: vi.fn(async () => undefined),
+    };
+    const { isDeferred, readDeferrals, recordDeferral } = await import('../../../src/engine/monitor/deferrals.js') as {
       isDeferred(deferrals: DeferralKey[], current: DeferralKey): boolean;
+      readDeferrals(startCwd: string, deps: DeferralDeps): Promise<DeferralKey[]>;
+      recordDeferral(startCwd: string, key: DeferralKey, deps: DeferralDeps): Promise<void>;
     };
     const deferred: DeferralKey = {
       project: '/projects/payments',
       feature: 'release-gate',
       haltIdentity: { present: true, mtimeMs: 1_726_754_400_000, size: 86 },
     };
+    const startCwd = '/projects/payments/.worktrees/release-gate';
 
-    expect(isDeferred([deferred], {
+    await recordDeferral(startCwd, deferred, deps);
+    const storedDeferrals = await readDeferrals(startCwd, deps);
+
+    expect(isDeferred(storedDeferrals, deferred)).toBe(true);
+
+    expect(isDeferred(storedDeferrals, {
       ...deferred,
       haltIdentity: { present: true, mtimeMs: 1_726_754_500_000, size: 92 },
     })).toBe(false);
