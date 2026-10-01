@@ -129,4 +129,41 @@ describe('degraded overlap collection', () => {
     expect(renderIntakeFileOutput(result).stdout).toContain('[intake-file] overlap: skipped open-issues');
     expect(renderIntakeFileOutput(result).stdout).toContain('[intake-file] overlap: skipped in-flight');
   });
+
+  it('records an in-flight skip note when ref enumeration returns a nonzero exit', async () => {
+    let openIssueCalls = 0;
+    const operations: GithubOperationRequest[] = [];
+    const overlap = buildOverlapSources({
+      cwd: '/target', repository: 'acme/app',
+      gh: async (args) => {
+        if (args[0] === 'issue' && args[1] === 'list') openIssueCalls++;
+        return { exitCode: 0, stdout: '[]', stderr: '' };
+      },
+      resolveCheckout: async () => ({ kind: 'checkout', path: '/target' }),
+      makeGit: () => async (args) => {
+        if (args[0] === 'for-each-ref') return { exitCode: 1, stdout: '', stderr: 'refs unavailable' };
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    });
+    const result = await fileIntakeIssue({ title: 't', body: 'src/a.ts', size: 'S', priority: 'low', interactive: false }, {
+      overlap: { suggestions: overlap },
+      creation: {
+        authority: { resolveActor: async () => ({ resolved: true as const, id: 'alice' }), intent: { kind: 'explicit-intake', repository: 'acme/app' } },
+        operations: { run: async (request) => {
+          operations.push(request);
+          return request.operation === 'issue.create'
+            ? { created: { repository: 'acme/app', kind: 'issue' as const, number: 1 } }
+            : {};
+        } },
+      },
+    });
+
+    expect(openIssueCalls).toBe(1);
+    expect(operations.filter(({ operation }) => operation === 'issue.create')).toHaveLength(1);
+    expect(result.overlap).toMatchObject({
+      kind: 'proceed',
+      skipNotes: [{ part: 'in-flight', reason: 'skipped in-flight branch enumeration: refs unavailable' }],
+    });
+    expect(renderIntakeFileOutput(result).stdout).toContain('[intake-file] overlap: skipped in-flight — skipped in-flight branch enumeration: refs unavailable');
+  });
 });

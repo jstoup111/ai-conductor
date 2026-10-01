@@ -69,6 +69,7 @@ export async function collectOverlaps({
   repository,
   registryReader,
   makeGit = makeGitRunner,
+  resolveCheckout = resolveTargetCheckout,
 }: {
   title: string;
   body: string;
@@ -79,6 +80,7 @@ export async function collectOverlaps({
   repository?: string;
   registryReader?: ResolveTargetCheckoutOptions['registryReader'];
   makeGit?: (cwd: string) => GitRunner;
+  resolveCheckout?: typeof resolveTargetCheckout;
 }): Promise<OverlapCollection> {
   const skipNotes: OverlapSkipNote[] = [];
   let git: GitRunner | undefined;
@@ -90,7 +92,7 @@ export async function collectOverlaps({
   // prevent the open-issue comparison or the eventual filing.
   if (gh && cwd && repository) {
     try {
-      const checkout = await resolveTargetCheckout({ cwd, repository, registryReader });
+      const checkout = await resolveCheckout({ cwd, repository, registryReader });
       if (checkout.kind === 'none') {
         skipNotes.push({ part: 'in-flight', reason: checkout.reason });
       } else {
@@ -156,16 +158,18 @@ export function buildOverlapSources({
   gh,
   registryReader,
   makeGit = makeGitRunner,
+  resolveCheckout = resolveTargetCheckout,
 }: {
   cwd: string;
   repository: string;
   gh: GhRunner;
   registryReader?: ResolveTargetCheckoutOptions['registryReader'];
   makeGit?: (cwd: string) => GitRunner;
+  resolveCheckout?: typeof resolveTargetCheckout;
 }): OverlapPreflightDeps['suggestions'] {
   return async (input) => {
     const collected = await collectOverlaps({
-      title: input.title, body: input.body, gh, cwd, repository, registryReader, makeGit,
+      title: input.title, body: input.body, gh, cwd, repository, registryReader, makeGit, resolveCheckout,
     });
     const canonicalIssue = (issue: string) => issue.startsWith('#') ? `${repository}${issue}` : issue;
     const suggestions = buildSuggestions({
