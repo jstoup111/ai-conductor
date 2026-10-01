@@ -627,35 +627,32 @@ describe('SpoolDrainer', () => {
     events.on('renderer_error', (event) => { rendererErrors.push(event); });
     const pendingSleeps: Array<() => void> = [];
     let traceAttempts = 0;
-    const server = createServer(async (request, response) => {
-      request.resume();
-      if (request.url === '/v1/traces' && ++traceAttempts === 2) {
-        response.writeHead(200).end();
-        return;
-      }
-      request.socket.destroy();
-    });
-    const endpoint = await listen(server);
     const store = new SpoolStore(await temporaryDirectory());
     await store.write('traces', Buffer.from('network-failure-trace'));
     const drainer = new SpoolDrainer(store, {
-      endpoint,
+      endpoint: 'http://collector.test',
       headers: () => ({}),
       events,
+      fetch: async (url) => {
+        if (new URL(String(url)).pathname !== '/v1/traces') return new Response(undefined, { status: 200 });
+        if (++traceAttempts === 2) return new Response(undefined, { status: 200 });
+        throw new TypeError('network refusal');
+      },
       sleep: async () => new Promise<void>((resolve) => { pendingSleeps.push(resolve); }),
     });
     const draining = drainer.drainUntilStopped();
 
     try {
-      for (let turns = 0; turns < 50 && traceAttempts < 2; turns += 1) {
+      for (let turns = 0; turns < 1_000 && rendererErrors.length < 2; turns += 1) {
         pendingSleeps.splice(0).forEach((release) => release());
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
       expect(traceAttempts).toBe(2);
+      expect(rendererErrors).toHaveLength(2);
 
       await store.write('traces', Buffer.from('network-refusal-after-recovery'));
       const refusing = drainer.drainUntilStopped();
-      for (let turns = 0; turns < 50 && rendererErrors.length < 3; turns += 1) {
+      for (let turns = 0; turns < 1_000 && rendererErrors.length < 3; turns += 1) {
         pendingSleeps.splice(0).forEach((release) => release());
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
