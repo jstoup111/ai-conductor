@@ -104,6 +104,33 @@ describe('validateConfiguredProviderModels', () => {
     expect(fake).not.toHaveBeenCalled();
   });
 
+  it('fails installation before probing when only a build-review rubric selects missing Pi', async () => {
+    const fake = runner({ exitCode: 0, stdout: PI_LISTING });
+
+    await expect(bootDispatchingCliProviders({
+      command: 'inline',
+      registry: new PluginRegistry(),
+      events: new ConductorEventEmitter(),
+      config: {
+        llm_provider: 'claude',
+        build_review: { rubrics: { testQuality: { llm_provider: 'pi' } } },
+      },
+      rendererOpts: {
+        stateFilePath: '/tmp/provider-model-probe-rubric-missing-state.json',
+        steps: [],
+        readStateFn: async () => ({ ok: true, value: {} }),
+        projectRoot: '/tmp',
+      },
+      discover: async () => ({
+        installed: ['claude'],
+        missing: [{ id: 'pi', reason: 'not-found' }],
+      }),
+      providerModelProbeRunner: fake,
+    })).rejects.toThrow(/build_review\.rubrics\.testQuality\.llm_provider.*pi.*not installed/i);
+
+    expect(fake).not.toHaveBeenCalled();
+  });
+
   it('accepts every configured Pi id from steps, tier overrides, default, escalation, and fallback listing with one injected invocation', async () => {
     const fake = runner({ exitCode: 0, stdout: PI_LISTING });
 

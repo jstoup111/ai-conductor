@@ -807,6 +807,11 @@ export async function executeProviderCandidates({
     attribution && 'diagnostic' in attribution ? attribution.diagnostic.code : undefined;
   const setupUnavailableCandidates: ProviderSetupUnavailable[] = [];
   let anyCandidateInvoked = false;
+  let lastInvokedCandidate: {
+    provider: string;
+    model: string | undefined;
+    effort: EffortLevel | undefined;
+  } | undefined;
   let lastUnavailableResult: InvokeResult | undefined;
 
   // A fallback may become the actual candidate only after another provider has
@@ -1182,7 +1187,14 @@ export async function executeProviderCandidates({
         ...(setupUnavailable.capability ? { capability: redactSafetyText(setupUnavailable.capability) } : {}),
       });
     }
-    if (attemptMetadata.invoked) anyCandidateInvoked = true;
+    if (attemptMetadata.invoked) {
+      anyCandidateInvoked = true;
+      lastInvokedCandidate = {
+        provider: providerKey,
+        model: invokedModel ?? resolved.model,
+        effort: resolved.effort,
+      };
+    }
 
     // Setup has not created a process. Preserve the enclosing lifecycle
     // authority before considering another candidate.
@@ -1214,6 +1226,13 @@ export async function executeProviderCandidates({
           : {}),
         preferredProvider,
         attempts,
+        ...(lastInvokedCandidate
+          ? {
+              actualProvider: lastInvokedCandidate.provider,
+              resolvedModel: lastInvokedCandidate.model,
+              resolvedEffort: lastInvokedCandidate.effort,
+            }
+          : {}),
         ...(!anyCandidateInvoked && setupUnavailableCandidates.length === candidates.length
           ? {
               providerSetupExhaustion: {

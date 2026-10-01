@@ -1,5 +1,7 @@
 // Covers: task:10, task:19
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import { PiProvider } from '../../src/execution/pi-provider.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
@@ -13,7 +15,16 @@ import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { ProviderSessionScope, ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { Conductor } from '../test-conductor.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+
+const directories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
 
 function runtime(key: string, provider: LLMProvider): ProviderRuntime {
   const policy = resolveProviderModelPolicy(key);
@@ -363,11 +374,8 @@ describe('Pi provider event metadata', () => {
       expect.objectContaining({ provider: 'pi', model, effort: 'max', outcome: 'unavailable' }),
     ]);
     expect(result).toMatchObject({
-      success: false,
+      success: false, actualProvider: 'pi', resolvedModel: model, resolvedEffort: 'max',
     });
-    expect(result.actualProvider).toBeUndefined();
-    expect(result.resolvedModel).toBeUndefined();
-    expect(result.resolvedEffort).toBeUndefined();
     expect(result.attempts[0]?.model).toBe(model);
   });
 });
@@ -448,6 +456,65 @@ describe('configured ladder in normal provider-aware dispatch', () => {
     expect(result.output).toContain(`${second} unavailable`);
     expect(attempts).toHaveLength(1);
     expect(vi.mocked(pi.invoke).mock.calls.some(([options]) => options.model === 'opus' || options.model === 'sonnet')).toBe(false);
+  });
+
+  it('preserves the exhausted Pi rung identity on the returned result and step_retry event', async () => {
+    const projectRoot = await mkdtemp(join(process.env.TMPDIR ?? '/tmp', 'pi-exhausted-retry-'));
+    directories.push(projectRoot);
+    const config: HarnessConfig = {
+      llm_provider: 'pi',
+      llm_providers: { pi: { model: first, model_fallback_ladder: [first, second] } },
+      steps: { plan: { llm_provider: 'pi', effort: 'high' } },
+    };
+    const pi: LLMProvider = {
+      supportsSessionResume: false,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn(async ({ model }) => ({
+        success: false, output: `${model} unavailable`, exitCode: 1, modelUnavailable: true,
+      })),
+    };
+    const events = new ConductorEventEmitter();
+    const retries: ConductorEvent[] = [];
+    events.on('step_retry', (event) => { retries.push(event); });
+    const providerRunner = new DefaultStepRunner(pi, 'pi-exhausted-retry', projectRoot, {
+      config,
+      providerExecution: {
+        configuredProviders: ['pi'],
+        runtimes: runtimeSet(config, { pi }),
+        sessions: new ProviderSessionStore(),
+      },
+    });
+    let firstResult: Awaited<ReturnType<DefaultStepRunner['run']>> | undefined;
+    let calls = 0;
+    await writeFile(join(projectRoot, 'conduct-state.json'), JSON.stringify({ complexity_tier: 'M', conflict_check: 'done', plan: 'pending' }));
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, 'conduct-state.json'),
+      events,
+      fromStep: 'plan',
+      maxRetries: 2,
+      stepRunner: {
+        run: async (step, state, options) => {
+          if (++calls > 1) return { success: true };
+          firstResult = await providerRunner.run(step, state, options);
+          return firstResult;
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(firstResult).toMatchObject({
+      success: false,
+      actualProvider: 'pi',
+      model: second,
+      effort: 'high',
+    });
+    expect(retries.find((event) => event.type === 'step_retry' && event.step === 'plan')).toMatchObject({
+      provider: 'pi',
+      model: second,
+      effort: 'high',
+    });
   });
 
   it('walks the top-level ladder for a codex step as before', async () => {

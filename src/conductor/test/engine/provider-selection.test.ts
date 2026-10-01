@@ -284,6 +284,28 @@ describe('validateRegisteredProviderSelections', () => {
       }),
     ).toThrow(/steps\.build_review\.llm_provider.*unknown.*available.*claude.*codex/i);
   });
+
+  it.each([
+    {
+      name: 'a build-review rubric',
+      config: { llm_provider: 'claude', build_review: { rubrics: { testQuality: { llm_provider: 'pi' } } } },
+      path: 'build_review.rubrics.testQuality.llm_provider',
+    },
+    {
+      name: 'a custom build-review rubric',
+      config: {
+        llm_provider: 'claude',
+        build_review: { custom_rubrics: { policy: { skill: 'review', question: 'Review.', llm_provider: 'pi' } } },
+      },
+      path: 'build_review.custom_rubrics.policy.llm_provider',
+    },
+  ] satisfies Array<{ name: string; config: HarnessConfig; path: string }>)('rejects an unregistered Pi selected only by $name', async ({ config, path }) => {
+    const validateRegistered = await loadRegisteredSelectionValidator();
+
+    expect(() => validateRegistered?.({ config, registeredProviders: frozenProviderNames() })).toThrow(
+      new RegExp(`${path.replace(/[.[\]]/g, '\\$&')}.*unknown provider "pi"`, 'i'),
+    );
+  });
 });
 
 describe('validateProviderInstallation', () => {
@@ -311,6 +333,25 @@ describe('validateProviderInstallation', () => {
       path: 'llm_provider[1]',
       provider: 'pi',
       reason: 'not-executable',
+    },
+    {
+      name: 'a build-review rubric provider',
+      config: { llm_provider: 'claude', build_review: { rubrics: { testQuality: { llm_provider: 'pi' } } } },
+      discovery: discovery(['claude', 'codex'], [{ id: 'pi', reason: 'not-found' }]),
+      path: 'build_review.rubrics.testQuality.llm_provider',
+      provider: 'pi',
+      reason: 'not-found',
+    },
+    {
+      name: 'a custom build-review rubric provider',
+      config: {
+        llm_provider: 'claude',
+        build_review: { custom_rubrics: { policy: { skill: 'review', question: 'Review.', llm_provider: 'pi' } } },
+      },
+      discovery: discovery(['claude', 'codex'], [{ id: 'pi', reason: 'not-found' }]),
+      path: 'build_review.custom_rubrics.policy.llm_provider',
+      provider: 'pi',
+      reason: 'not-found',
     },
   ] satisfies Array<{
     name: string;

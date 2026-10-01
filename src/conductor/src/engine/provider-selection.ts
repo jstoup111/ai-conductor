@@ -37,6 +37,36 @@ function stableUniqueProviders(providers: readonly string[]): string[] {
   return [...new Set(providers)];
 }
 
+function configuredProviderSelections(config: HarnessConfig): Array<{
+  selection: readonly string[];
+  configPath: string;
+}> {
+  const selections = [{
+    selection: normalizeProviderSelection(config.llm_provider),
+    configPath: 'llm_provider',
+  }];
+  for (const [stepName, stepConfig] of Object.entries(config.steps ?? {})) {
+    if (stepConfig.llm_provider === undefined) continue;
+    selections.push({
+      selection: normalizeProviderSelection(stepConfig.llm_provider),
+      configPath: `steps.${stepName}.llm_provider`,
+    });
+  }
+  for (const [group, rubrics] of [
+    ['rubrics', config.build_review?.rubrics],
+    ['custom_rubrics', config.build_review?.custom_rubrics],
+  ] as const) {
+    for (const [rubricId, rubric] of Object.entries(rubrics ?? {})) {
+      if (rubric?.llm_provider === undefined) continue;
+      selections.push({
+        selection: normalizeProviderSelection(rubric.llm_provider),
+        configPath: `build_review.${group}.${rubricId}.llm_provider`,
+      });
+    }
+  }
+  return selections;
+}
+
 /** A configured catalog provider was discovered but cannot run on this machine. */
 export class ProviderNotInstalledError extends Error {
   constructor(
@@ -67,21 +97,8 @@ export function validateProviderInstallation({
   const installed = new Set(discovery.installed);
   const missing = new Map(discovery.missing.map(({ id, reason }) => [id, reason]));
 
-  assertInstalledSelection(
-    normalizeProviderSelection(config.llm_provider),
-    'llm_provider',
-    installed,
-    missing,
-  );
-
-  for (const [stepName, stepConfig] of Object.entries(config.steps ?? {})) {
-    if (stepConfig.llm_provider === undefined) continue;
-    assertInstalledSelection(
-      normalizeProviderSelection(stepConfig.llm_provider),
-      `steps.${stepName}.llm_provider`,
-      installed,
-      missing,
-    );
+  for (const { selection, configPath } of configuredProviderSelections(config)) {
+    assertInstalledSelection(selection, configPath, installed, missing);
   }
 }
 
@@ -111,21 +128,8 @@ export function validateRegisteredProviderSelections({
 }): void {
   const registered = new Set(registeredProviders);
 
-  assertRegistered(
-    normalizeProviderSelection(config.llm_provider),
-    'llm_provider',
-    registered,
-    registeredProviders,
-  );
-
-  for (const [stepName, stepConfig] of Object.entries(config.steps ?? {})) {
-    if (stepConfig.llm_provider === undefined) continue;
-    assertRegistered(
-      normalizeProviderSelection(stepConfig.llm_provider),
-      `steps.${stepName}.llm_provider`,
-      registered,
-      registeredProviders,
-    );
+  for (const { selection, configPath } of configuredProviderSelections(config)) {
+    assertRegistered(selection, configPath, registered, registeredProviders);
   }
 }
 
