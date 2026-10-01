@@ -1645,7 +1645,7 @@ async function main(): Promise<void> {
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
   const providerExecution: ProviderExecutionContext = {
     configuredProviders: configuredProviders,
-    runtimes: createProviderRuntimeSet(registry, console.warn),
+    runtimes: createProviderRuntimeSet(registry, console.warn, config),
     sessions: new ProviderSessionStore(),
     config: config,
     modelOverride: opts.model,

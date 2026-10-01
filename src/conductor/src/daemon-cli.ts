@@ -1252,7 +1252,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     runtimeLog = log,
   ): ProviderExecutionContext => ({
     configuredProviders,
-    runtimes: createProviderRuntimeSet(registry, runtimeLog),
+    runtimes: createProviderRuntimeSet(registry, runtimeLog, config),
     sessions: new ProviderSessionStore(),
     config,
     providerAvailability,

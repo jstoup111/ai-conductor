@@ -183,7 +183,7 @@ it('composes one ordered provider context across the interactive run after regis
     contextIsConst: true,
     contextProperties: {
       configuredProviders: 'configuredProviders',
-      runtimes: 'createProviderRuntimeSet(registry, console.warn)',
+      runtimes: 'createProviderRuntimeSet(registry, console.warn, config)',
       sessions: 'new ProviderSessionStore()',
       config: 'config',
       modelOverride: 'opts.model',
