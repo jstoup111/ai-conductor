@@ -309,7 +309,7 @@ export class CodexProvider implements LLMProvider {
     // entry so no future arg-building change can resurrect reuse.
     options = enforceFreshSessionOptions(options, 'codex');
     let guardDir: string | null;
-    try { guardDir = options.readOnlyReview ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
+    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
       return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
     }
     const repl = options.interactive === true;

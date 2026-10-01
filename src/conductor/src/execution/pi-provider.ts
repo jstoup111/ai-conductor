@@ -273,7 +273,7 @@ export class PiProvider implements LLMProvider {
       throw new Error(`${piDisplayName()} process spawn denied: ${permit.reason}`);
     }
     let guardDir: string | null;
-    try { guardDir = options.readOnlyReview ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
+    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
       return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
     }
     if (abortSignal?.aborted) return abortedInvocationResult();

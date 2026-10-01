@@ -304,6 +304,8 @@ export interface InvokeOptions {
   dangerouslySkipPermissions?: boolean;
   /** Engine-owned provider read-only profile for build-review members. */
   readOnlyReview?: boolean;
+  /** Engine-owned marker for build-review dispatches, which run outside the git guard. */
+  reviewDispatch?: boolean;
   stepCooldown?: number;
   sessionName?: string;
   /**

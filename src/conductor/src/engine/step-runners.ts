@@ -3468,6 +3468,7 @@ export class DefaultStepRunner implements StepRunner {
             })}\n\n${renderAuxiliarySkillInvocation(entry.skill, context.candidate.providerKey)}`,
             cwd: source?.headPath ?? this.projectDir,
             readOnlyReview: true,
+            reviewDispatch: true,
           },
           invoke: (options) => context.invoke(options, async (rung, invoke) => {
           const semanticIdentity = semanticIdentityFor(rung.model);
@@ -4152,9 +4153,8 @@ export class DefaultStepRunner implements StepRunner {
                   contentDigest: inputs.sourceSnapshot.contentDigest, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha,
                   changes: inputs.sourceSnapshot.sourceChanges ?? [], view: materialized,
                 })}`}`,
-                // Every build-review reviewer is a read-only inspection,
-                // including built-in rubrics that share a custom-policy lap.
-                readOnlyReview: true,
+                ...(customPolicyLap ? { readOnlyReview: true } : {}),
+                reviewDispatch: true,
                 interactive: false,
                 },
                 invoke: (options) => context.invoke(options, async (rung, invoke) => {

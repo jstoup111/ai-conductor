@@ -89,7 +89,7 @@ async function runBuiltinLap(providerKey: 'claude' | 'codex', disabledCustom = f
 }
 
 describe('built-in-only build-review invocation invariance', () => {
-  it.each(['claude', 'codex'] as const)('keeps the %s built-in invocation on its literal read-only profile', async (providerKey) => {
+  it.each(['claude', 'codex'] as const)('keeps the %s built-in invocation on its literal ordinary profile', async (providerKey) => {
     const { root, launches, result, capabilityProbe, catalogCalls } = await runBuiltinLap(providerKey);
 
     expect(result.success).toBe(true);
@@ -99,7 +99,7 @@ describe('built-in-only build-review invocation invariance', () => {
       interactive: false,
       model: providerKey === 'claude' ? 'opus' : 'gpt-5.6-sol',
       effort: 'high',
-      readOnlyReview: true,
+      readOnlyReview: undefined,
       nativeSchema: expect.any(Object),
     });
     expect(capabilityProbe).not.toHaveBeenCalled();
