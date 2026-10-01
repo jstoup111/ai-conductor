@@ -1,23 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-01T07:14:14.969Z
+Status: halted
 Slug: monitor-daemon-halts-through-a-guided-resolution-q
 Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-monitor-daemon-halts-through-a-guided-resolution-q
-Head SHA: ed814dc16bf091dc03f2fc3f12ae3f6882469bf5
-Halted at: 2026-09-30T23:42:31.780Z
+Head SHA: 904d8dd714b42c33de86ae6c12dfe037f7133113
+Halted at: 2026-10-01T07:19:33.224Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — Blocking findings: AB-1 (DESIGN; plan task 15): 99% verified: the sealed skip/deferral outcome is undelivered because Task 15 defines no operator-to-monitor skip protocol. Production sessions return only exited|unavailable, while deferral recording requires a synthetic operator-skip outcome that no production path produces; this also leaves queue ADR D3 unmet.; AB-2 (DESIGN; plan task 13): 98% verified: setting only cwd cannot deliver the sealed requirement that provider configuration and permission writes stay inside the feature worktree. Claude and Codex homes are independently selected by CLAUDE_CONFIG_DIR and CODEX_HOME, and the launch inherits the ambient environment.; AB-3 (REMEDIABLE; adr-2026-09-20-halt-resolution-queue-derived-from-markers decision 4): 99% verified: readDeferrals and isDeferred have no production callers, so stored halt identities are never applied to a live queue; clearDeferrals is also an exported test-only rung.; AB-4 (REMEDIABLE; adr-2026-09-20-halt-resolution-queue-derived-from-markers decision 5): 99% verified: orderMonitorQueue has no production caller. The monitor forwards raw membership directly to the loop and displays neither attributed priority band nor ordering basis.; AB-5 (REMEDIABLE; adr-2026-09-20-halt-resolution-queue-derived-from-markers decision 6): 99% verified: all four transition variants and sink declarations exist, but production supplies no event emitter; optional deps.events?.emit calls are therefore no-ops and never reach the canonical spine.; AB-6 (REMEDIABLE; plan task 19): 99% verified: the production monitor supplies no reconcileHaltIssues dependency, so monitoring cycles never invoke the existing halt-issue reconciliation.; AB-7 (REMEDIABLE; adr-2026-09-20-operator-launched-sessions-retain-conductor-authority decision 3): 99% verified: the new provider-agnostic seam is not the sole unmarked session spawn point; the production compose/engineer path still directly spawns Claude through launchClaudeEngineer.; AB-8 (REMEDIABLE; plan task 14): 98% verified: advanceAfterGuidedSession is exported but test-only, and the real loop does not catch ordinary launch failures. A non-ENOENT spawn error terminates the monitor instead of returning the operator to the queue as the approved diagram and Task 14 require.
-
-Blocking findings:
-AB-1 (DESIGN; plan task 15): 99% verified: the sealed skip/deferral outcome is undelivered because Task 15 defines no operator-to-monitor skip protocol. Production sessions return only exited|unavailable, while deferral recording requires a synthetic operator-skip outcome that no production path produces; this also leaves queue ADR D3 unmet.; AB-2 (DESIGN; plan task 13): 98% verified: setting only cwd cannot deliver the sealed requirement that provider configuration and permission writes stay inside the feature worktree. Claude and Codex homes are independently selected by CLAUDE_CONFIG_DIR and CODEX_HOME, and the launch inherits the ambient environment.; AB-3 (REMEDIABLE; adr-2026-09-20-halt-resolution-queue-derived-from-markers decision 4): 99% verified: readDeferrals and isDeferred have no production callers, so stored halt identities are never applied to a live queue; clearDeferrals is also an exported test-only rung.; AB-4 (REMEDIABLE; adr-2026-09-20-halt-resolution-queue-derived-from-markers decision 5): 99% verified: orderMonitorQueue has no production caller. The monitor forwards raw membership directly to the loop and displays neither attributed priority band nor ordering basis.; AB-5 (REMEDIABLE; adr-2026-09-20-halt-resolution-queue-derived-from-markers decision 6): 99% verified: all four transition variants and sink declarations exist, but production supplies no event emitter; optional deps.events?.emit calls are therefore no-ops and never reach the canonical spine.; AB-6 (REMEDIABLE; plan task 19): 99% verified: the production monitor supplies no reconcileHaltIssues dependency, so monitoring cycles never invoke the existing halt-issue reconciliation.; AB-7 (REMEDIABLE; adr-2026-09-20-operator-launched-sessions-retain-conductor-authority decision 3): 99% verified: the new provider-agnostic seam is not the sole unmarked session spawn point; the production compose/engineer path still directly spawns Claude through launchClaudeEngineer.; AB-8 (REMEDIABLE; plan task 14): 98% verified: advanceAfterGuidedSession is exported but test-only, and the real loop does not catch ordinary launch failures. A non-ENOENT spawn error terminates the monitor instead of returning the operator to the queue as the approved diagram and Task 14 require.
+coverage_binding could not reopen contradicted work: gates.coverage_binding has exhausted the remediation lap cap (2)
 ```
