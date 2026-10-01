@@ -224,7 +224,9 @@ export async function runOverlapPreflight(
   const invalid = (input.declineOverlap ?? []).filter((value) => {
     const parsed = parseSourceRef(value);
     const canonical = parsed ? `${parsed.repo}#${parsed.number}` : undefined;
-    const suggestion = canonical && [...suggestions.shown, ...(suggestions.omitted ?? []), ...suggestions.preAccepted]
+    // A ref already named with --depends-on is linked, so declining it too is
+    // contradictory input and is rejected rather than reported both ways.
+    const suggestion = canonical && [...suggestions.shown, ...(suggestions.omitted ?? [])]
       .find(({ issue }) => sameIssue(issue, canonical));
     if (suggestion) {
       declined.push(suggestion.issue);

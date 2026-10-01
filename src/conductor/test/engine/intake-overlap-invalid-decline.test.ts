@@ -28,6 +28,13 @@ describe('invalid overlap declines', () => {
     expect(result).toEqual({ kind: 'invalid-decline', invalid: ['not-a-ref'], advisory: [], skipNotes: [], omittedCount: 0 });
   });
 
+  it('rejects a decline of a ref already named with --depends-on', async () => {
+    const result = await runOverlapPreflight({ title: 't', body: 'b', dependsOn: ['acme/app#1579'], declineOverlap: ['acme/app#1579'], interactive: false }, { suggestions: async () => ({
+      shown: [], preAccepted: [{ issue: 'acme/app#1579', sharedPaths: ['a.ts'] }], advisory: [],
+    }) });
+    expect(result).toEqual({ kind: 'invalid-decline', invalid: ['acme/app#1579'], advisory: [], skipNotes: [], omittedCount: 0 });
+  });
+
   it('accepts a decline of a linkable suggestion omitted by the prompt cap', async () => {
     const result = await runOverlapPreflight({ title: 't', body: 'b', dependsOn: [], declineOverlap: ['acme/app#1', 'acme/app#2', 'acme/app#3', 'acme/app#4', 'acme/app#5', 'acme/app#6'], interactive: false }, { suggestions: async () => ({
       shown: Array.from({ length: 5 }, (_, index) => ({ issue: `acme/app#${index + 1}`, sharedPaths: ['a.ts'] })),
