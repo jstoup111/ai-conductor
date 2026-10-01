@@ -365,11 +365,21 @@ export function resolveFallbackProviderNativeStepConfig({
   attempt,
   escalate,
 }: ResolveFallbackProviderNativeInput): ResolvedFallbackProviderNativeConfig {
+  // A configured-model provider owns model selection, but an authored step
+  // still owns its effort. Preserve only that step-local effort precedence so
+  // fallback cannot inherit the primary provider's model, phase, or defaults.
+  const authoredStep = config?.steps?.[step];
+  const authoredEffort = policy.requiresConfiguredModels
+    ? (tier ? authoredStep?.by_tier?.[tier]?.effort : undefined) ?? authoredStep?.effort
+    : undefined;
+  const fallbackConfig = authoredEffort === undefined
+    ? undefined
+    : { steps: { [step]: { effort: authoredEffort } } };
   const base = resolveProviderNativeStepConfig(
     step,
     phaseForStep(step),
     policy,
-    undefined,
+    fallbackConfig,
     { tier },
   );
   const native = escalateAttempt(

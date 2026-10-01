@@ -290,6 +290,7 @@ describe('effective provider policy dispatch', () => {
   });
 
   it('uses the Pi effective policy after a run-scope Claude fallback', async () => {
+    const piModel = 'openai/gpt-5.6-sol';
     const claude = fakeProvider({
       success: false, output: 'Claude unavailable', exitCode: 127,
       providerUnavailable: true, providerUnavailableScope: 'run', providerUnavailableReason: 'Claude unavailable',
@@ -297,8 +298,8 @@ describe('effective provider policy dispatch', () => {
     const pi = fakeProvider({ success: true, output: 'Pi completed', exitCode: 0 });
     const config: HarnessConfig = {
       llm_provider: 'claude',
-      llm_providers: { pi: { model: 'anthropic/claude-opus-4-5', model_escalation_order: ['anthropic/claude-opus-4-5'], model_fallback_ladder: ['anthropic/claude-opus-4-5'] } },
-      steps: { plan: { llm_provider: ['claude', 'pi'], model: 'opus', effort: 'high' } },
+      llm_providers: { pi: { model: piModel, model_escalation_order: [piModel], model_fallback_ladder: [piModel] } },
+      steps: { plan: { llm_provider: ['claude', 'pi'], model: 'opus', effort: 'max' } },
     };
     const result = await executeProviderCandidates({
       step: 'plan', configuredProviders: ['claude'], preferredProvider: ['claude', 'pi'],
@@ -307,7 +308,7 @@ describe('effective provider policy dispatch', () => {
     });
 
     expect(result).toMatchObject({ success: true, actualProvider: 'pi' });
-    expect(pi.invoke).toHaveBeenCalledWith(expect.objectContaining({ model: 'anthropic/claude-opus-4-5', effort: 'high' }));
+    expect(pi.invoke).toHaveBeenCalledWith(expect.objectContaining({ model: piModel, effort: 'max' }));
     expect(pi.invoke).not.toHaveBeenCalledWith(expect.objectContaining({ model: 'opus' }));
   });
 });
