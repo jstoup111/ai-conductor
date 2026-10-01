@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-01T00:31:21.437Z
 Slug: record-task-done-completion-without-a-current-task
 Class: needs-human
 Halting step: unknown
