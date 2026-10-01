@@ -350,7 +350,7 @@ approval, so that I am not retyping every command in another terminal.
 - Given a guided session, when the operator declines a proposed recovery action, then the action is not performed and the halt remains.
 - Given the launch seam, when it is invoked from the daemon, a step runner, or any non-foreground path, then the launch is refused and no unmarked session is created.
 - Given a session dispatched by the engine rather than launched by the monitor, when it attempts a conductor state-changing operation, then it is refused exactly as it is today, the sanctioned-subcommand set being unchanged.
-- Given a guided session runs, when it writes provider configuration or acquires permissions, then those writes land inside the feature worktree and not in the main checkout.
+- Given a guided session runs, when it writes project-scoped provider configuration or acquires project-scoped permissions, then those writes land inside the feature worktree and not in the main checkout, while user-level provider homes are inherited unchanged so the session keeps the operator's credentials.
 
 ### Done When
 - [ ] A session opened through the launch seam is not stamped with the daemon-session marker and can invoke conductor operations.

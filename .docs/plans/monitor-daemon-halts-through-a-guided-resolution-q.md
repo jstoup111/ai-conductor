@@ -319,7 +319,7 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 **Done when:**
 - A session launched through the seam is not stamped with the daemon-session marker, as asserted on the child environment handed to the mocked boundary. A conductor recovery subcommand invoked from that child environment passes the entry guard and is permitted rather than refused.
 - A test asserts the session-sanctioned subcommand set is unchanged and an engine-dispatched session is still refused for state-changing verbs.
-- The guided session's resolved working directory is the halted feature's worktree, as asserted against the mocked boundary. Provider configuration and permission writes made by the session therefore land inside the feature worktree, and a fingerprint of the main checkout is unchanged after the session.
+- The guided session's resolved working directory is the halted feature's worktree, as asserted against the mocked boundary. Project-scoped provider configuration and permission writes made by the session (for example `.claude/settings.local.json`) therefore land inside the feature worktree, and a fingerprint of the main checkout is unchanged after the session. User-level provider homes (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) are deliberately inherited from the operator environment unchanged so the session keeps the operator's credentials; the launch neither overrides nor relocates them, as asserted on the child environment handed to the mocked boundary.
 - No configuration key is introduced that relaxes the daemon-session entry guard.
 - The per-action approval contract is intact, as asserted against the opening input's invocation of the existing triage procedure: each state-changing recovery action is presented with its blast radius and waits for approval before acting, a further state-changing action requests approval again, read-only evidence gathering requests no approval, and a declined action is not performed and the halt marker remains byte-identical.
 
@@ -361,11 +361,13 @@ Adds one foreground operator verb and one provider-agnostic interactive launch s
 **Steps:**
 1. Write failing tests: skipping ends the session and advances; the skipped item's halt marker is untouched; the skipped item is not offered ahead of unseen work; once unseen work is exhausted the deferred items are offered again.
 2. Verify RED.
-3. Implement skip as: end the session, record a deferral keyed by halt identity, recompute, advance. Never remove or rewrite the halt marker on skip.
+3. Implement the operator-to-monitor skip protocol as a post-session prompt owned by the monitor loop: when a guided session ends for any reason (exit, crash, or launch failure), the monitor asks the operator to choose `skip` (defer this item) or `continue` (recompute and advance without deferring). Choosing `skip` records a deferral keyed by halt identity, recomputes, and advances. The session's exit status never selects an answer (Task 16), no conductor verb is added to the session-sanctioned set (Task 13), and the prompt is identical for every provider. A closed or non-interactive input settles the prompt as `continue`. Never remove or rewrite the halt marker on skip.
 4. Verify GREEN. Commit: "monitor: skip defers an item without resolving it"
 
 **Done when:**
 - Skipping ends the current session and advances to the next item.
+- After every guided session ends, the production monitor loop presents a post-session prompt offering `skip` and `continue`, as asserted by driving the real loop with a mocked launch boundary and mocked operator input; answering `skip` writes a deferral through the production deferral store and answering `continue` writes none.
+- The post-session prompt's answer is never derived from the session's exit status: an exit code of 0, a nonzero exit code and an unavailable provider each still present the prompt, and a closed input settles as `continue` with no deferral written.
 - A skipped item's halt marker is byte-identical before and after the skip, and the item is never marked resolved.
 - A skipped item is not re-offered ahead of unseen work, and is offered again once unseen work is exhausted. A skipped item stays behind unseen work regardless of the skipped item's priority band, and when every item has been skipped a later pass offers them again ordered among themselves by descending priority band.
 - A skip survives a monitor restart and the item is still not re-offered ahead of unseen work.
