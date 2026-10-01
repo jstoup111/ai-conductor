@@ -427,6 +427,7 @@ import {
   writeHalt,
   writeRebaseOutcomeHalt,
   writeSealHalt,
+  assertNeverRebaseOutcome,
   ProtectedArtifactSealRejection,
   originDefaultBranch,
   type RebaseOutcome,
@@ -1737,6 +1738,7 @@ export interface StepRunner {
     onto: string,
     origHead: string,
     head: string,
+    flatten?: import('./rebase.js').FlattenedReplayPlan,
   ): Promise<void>;
   /**
    * Dispatch a semantic attribution verifier session for spot-audit sampling.
@@ -1836,6 +1838,8 @@ export interface ConductorOptions {
   /** Injectable native aggregate-suite verifier; production uses FullSuiteVerifier. */
   fullSuiteVerifier?: Pick<FullSuiteVerifier, 'ensure' | 'inspect'> &
     Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
+  /** Test seam for the engine-owned rebase adapter. */
+  performRebase?: typeof performRebase;
   /** Test seam for the disposition-aware build_review completion join. */
   buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   /** Test seam for an adjudicated action-effect charge failure. */
@@ -2497,6 +2501,7 @@ export class Conductor {
   private fromStep?: StepName;
   private mode: RunMode;
   private readonly finishPublication?: FinishPublicationCoordinator;
+  private readonly performRebase: typeof performRebase;
   private config: HarnessConfig;
   private readonly legacyModelPolicy?: ProviderModelPolicy;
   private readonly providerExecution?: ProviderExecutionContext;
@@ -3735,6 +3740,7 @@ export class Conductor {
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
     this.finishPublication = opts.finishPublication;
+    this.performRebase = opts.performRebase ?? performRebase;
     this.config = opts.config ?? {};
     this.legacyModelPolicy = opts.modelPolicy;
     this.providerExecution = opts.providerExecution;
@@ -14431,7 +14437,10 @@ export class Conductor {
         await this.emitLoopHalt(this.lastRebaseSealError);
         return 'halt';
       }
-      if (this.lastRebaseOutcome?.kind === 'conflict_halt') {
+      if (
+        this.lastRebaseOutcome?.kind === 'conflict_halt' ||
+        this.lastRebaseOutcome?.kind === 'flatten_refused'
+      ) {
         const reason = `rebase conflict — parked for human resolution: ${this.lastRebaseOutcome.reason}`;
         // writeHalt already wrote .pipeline/HALT in runRebaseStep.
         await this.emitLoopHalt(reason);
@@ -15111,9 +15120,10 @@ export class Conductor {
       onto: string,
       origHead: string,
       head: string,
+      flatten?: import('./rebase.js').FlattenedReplayPlan,
     ): Promise<void> =>
       this.stepRunner.translateAfterRebase
-        ? this.stepRunner.translateAfterRebase(g, projectRoot, onto, origHead, head)
+        ? this.stepRunner.translateAfterRebase(g, projectRoot, onto, origHead, head, flatten)
         : defaultTranslateAfterRebase(
             g,
             projectRoot,
@@ -15122,12 +15132,13 @@ export class Conductor {
             head,
             this.events,
             (event) => this.surfaceProtectedArtifactRebaseline(event),
+            flatten,
           );
 
     let outcome: RebaseOutcome;
     let sealRejectionReason: string | null = null;
     try {
-      outcome = await performRebase(git, this.projectRoot, localBase, {
+      outcome = await this.performRebase(git, this.projectRoot, localBase, {
         finishMergeabilityCheck: true,
         translateAfterRebase,
       });
@@ -15154,7 +15165,10 @@ export class Conductor {
     // from pre-resolution behavior (FR-7). The same helper backs the daemon
     // re-kick play-forward path (`resumeRebaseFirst`) so both routes resolve
     // identically (#300).
-    if (!sealRejectionReason) {
+    // A flattened replay refusal was established by the tree-only proof, before
+    // git created rebase state.  It is a human recovery boundary, not a paused
+    // conflict for the resolver to advance.
+    if (!sealRejectionReason && outcome.kind !== 'flatten_refused') {
       outcome = await runGatedRebaseResolution({
         git,
         projectRoot: this.projectRoot,
@@ -15290,17 +15304,27 @@ export class Conductor {
       await emitRebaseEvent(this.events, outcome);
     }
 
-    if (outcome.kind === 'conflict_halt' && !sealRejectionReason) {
-      await writeRebaseOutcomeHalt(this.projectRoot, outcome, this.events);
-    } else if (outcome.kind === 'setup_stop') {
-      // Setup-only resolver exhaustion leaves the rebase paused: park it for the
-      // provider recovery action instead of stamping the gate satisfied.
-      await writeHalt(
-        this.projectRoot,
-        outcome.conflicts,
-        `provider setup unavailable: ${outcome.reason}`,
-        this.events,
-      );
+    switch (outcome.kind) {
+      case 'conflict_halt':
+      case 'flatten_refused':
+        if (!sealRejectionReason) await writeRebaseOutcomeHalt(this.projectRoot, outcome, this.events);
+        break;
+      case 'setup_stop':
+        // Setup-only resolver exhaustion leaves the rebase paused: park it for the
+        // provider recovery action instead of stamping the gate satisfied.
+        await writeHalt(
+          this.projectRoot,
+          outcome.conflicts,
+          `provider setup unavailable: ${outcome.reason}`,
+          this.events,
+        );
+        break;
+      case 'changed':
+      case 'noop':
+      case 'mergeable_skip':
+        break;
+      default:
+        assertNeverRebaseOutcome(outcome);
     }
 
     await recordRebaseStepCompletion(this.stateFilePath, outcome);

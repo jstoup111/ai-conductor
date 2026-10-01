@@ -18,14 +18,16 @@ async function sourceFiles(dir: string): Promise<string[]> {
 
 function scanCommitMessages(source: string, file: string): Violation[] {
   const violations: Violation[] = [];
-  const commit = /\[\s*['"](?:commit|commit-tree)['"][\s\S]{0,500}?\]/g;
+  const commit = /\[\s*(?:(?:['"]-c['"]|`-c`)\s*,\s*(?:['"][^'"]+['"]|`[^`]+`)\s*,\s*)*(?:['"](?:commit|commit-tree)['"]|`(?:commit|commit-tree)`)[\s\S]{0,500}?\]/g;
   for (const match of source.matchAll(commit)) {
     const args = match[0];
     if (!/['"](?:-m|-F)['"]|['"]commit-tree['"]/.test(args)) continue;
     // Specs are committed by the operator-facing engineer flow. This is the
     // single explicit exception; another land-spec commit shape is not exempt.
     if (file === LAND_SPEC && args.includes('composeSpecCommitMessage(')) continue;
-    if (args.includes('withDaemonCoAuthorTrailer(')) continue;
+    const callEnd = source.indexOf(');', (match.index ?? 0) + args.length);
+    const call = source.slice(match.index, callEnd === -1 ? undefined : callEnd + 2);
+    if (call.includes('withDaemonCoAuthorTrailer(')) continue;
     const offset = match.index ?? 0;
     violations.push({ file, line: source.slice(0, offset).split('\n').length });
   }
@@ -56,5 +58,23 @@ describe('daemon commit co-author guard', () => {
       .toEqual([{ file: 'fixture.ts', line: 1 }]);
     expect(scanCommitMessages("await git(['commit-tree', 'tree']);\n", 'fixture.ts'))
       .toEqual([{ file: 'fixture.ts', line: 1 }]);
+  });
+
+  it('allows a commit-tree message wrapped through its stdin option', () => {
+    expect(scanCommitMessages(
+      "await git(['commit-tree', 'tree'], { input: withDaemonCoAuthorTrailer('message') });\n",
+      'fixture.ts',
+    )).toEqual([]);
+  });
+
+  it('scans commit-tree calls preceded by git global options', () => {
+    expect(scanCommitMessages(
+      "await git(['-c', 'user.name=x', 'commit-tree', 'tree'], { input: 'raw' });\n",
+      'fixture.ts',
+    )).toEqual([{ file: 'fixture.ts', line: 1 }]);
+    expect(scanCommitMessages(
+      "await git(['-c', `user.name=x`, 'commit-tree', 'tree'], { input: withDaemonCoAuthorTrailer('m') });\n",
+      'fixture.ts',
+    )).toEqual([]);
   });
 });

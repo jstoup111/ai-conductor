@@ -23,6 +23,7 @@ import {
   writeHalt,
   writeRebaseOutcomeHalt,
   writeSealHalt,
+  assertNeverRebaseOutcome,
   ProtectedArtifactSealRejection,
   type RebaseOutcome,
   type RebaseResolver,
@@ -745,6 +746,7 @@ export async function resumeRebaseFirst(opts: {
     onto: string,
     origHead: string,
     head: string,
+    flatten?: import('./rebase.js').FlattenedReplayPlan,
   ) => Promise<void>;
   /** Optional: gh runner for merged-PR guard (ADR-2026-07-09). Absent → no guard. */
   runGh?: GhRunner;
@@ -754,6 +756,8 @@ export async function resumeRebaseFirst(opts: {
   slug?: string;
   /** Test seam; production uses the strict merged-history verifier. */
   verifyMergedShipment?: () => Promise<VerifiedMergedPrResult>;
+  /** Test seam for the engine-owned rebase adapter. */
+  performRebase?: typeof performRebase;
   /**
    * Post-rebase mechanical pre-verify capability for the `build` gate
    * (adr-2026-07-08-post-rebase-gate-first-mechanical-reverify). Optional
@@ -805,10 +809,15 @@ export async function resumeRebaseFirst(opts: {
       onto: string,
       origHead: string,
       head: string,
-    ): Promise<void> => defaultTranslateAfterRebase(g, projectRoot, onto, origHead, head, opts.events));
+      flatten?: import('./rebase.js').FlattenedReplayPlan,
+    ): Promise<void> => defaultTranslateAfterRebase(
+      g, projectRoot, onto, origHead, head, opts.events, undefined, flatten,
+    ));
   let outcome: RebaseOutcome;
   try {
-    outcome = await performRebase(git, opts.worktreePath, opts.localBase, { translateAfterRebase });
+    outcome = await (opts.performRebase ?? performRebase)(
+      git, opts.worktreePath, opts.localBase, { translateAfterRebase },
+    );
   } catch (err) {
     if (err instanceof ProtectedArtifactSealRejection) {
       await writeSealHalt(opts.worktreePath, err.message, opts.events);
@@ -826,22 +835,26 @@ export async function resumeRebaseFirst(opts: {
   // finish-time step (`conductor.ts:runRebaseStep`) uses, before parking for a
   // human. With no cap/resolver wired this is a no-op and the original
   // bare-rebase-then-HALT behavior is preserved exactly.
-  outcome = await runGatedRebaseResolution({
-    git,
-    projectRoot: opts.worktreePath,
-    outcome,
-    cap: opts.resolveAttempts ?? 0,
-    resolve: opts.resolveConflict,
-    translateAfterRebase,
-    onAttempt: (index, cap) =>
-      opts.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
-    onSettled: (kind) =>
-      opts.events.emit(
-        kind === 'exhausted'
-          ? { type: 'rebase_resolution_exhausted' }
-          : { type: 'rebase_resolution_succeeded' },
-      ),
-  });
+  // The flatten proof refused before a real rebase was started.  Do not hand
+  // that stateless outcome to the paused-rebase resolver.
+  if (outcome.kind !== 'flatten_refused') {
+    outcome = await runGatedRebaseResolution({
+      git,
+      projectRoot: opts.worktreePath,
+      outcome,
+      cap: opts.resolveAttempts ?? 0,
+      resolve: opts.resolveConflict,
+      translateAfterRebase,
+      onAttempt: (index, cap) =>
+        opts.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
+      onSettled: (kind) =>
+        opts.events.emit(
+          kind === 'exhausted'
+            ? { type: 'rebase_resolution_exhausted' }
+            : { type: 'rebase_resolution_succeeded' },
+        ),
+    });
+  }
 
   // FR-5 + adr-2026-07-08-post-rebase-gate-first-mechanical-reverify: when a
   // play-forward rebase touches code paths the downstream judged gates
@@ -965,29 +978,39 @@ export async function resumeRebaseFirst(opts: {
   await recordRebaseStepCompletion(stateFilePath, outcome);
   await emitRebaseEvent(opts.events, outcome);
 
-  if (outcome.kind === 'conflict_halt') {
-    // Re-conflict on the new base → re-park via 9.0's existing HALT path.
-    await writeRebaseOutcomeHalt(opts.worktreePath, outcome, opts.events);
-    opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase re-conflicted on advanced base — re-parked`);
-    return 'halted';
-  }
-  if (outcome.kind === 'setup_stop') {
-    // Setup-only resolver exhaustion: the rebase is still paused, so park it
-    // for the provider recovery action rather than reporting it rebased.
-    await writeHalt(
-      opts.worktreePath,
-      outcome.conflicts,
-      `provider setup unavailable: ${outcome.reason}`,
-      opts.events,
-    );
-    await opts.events.emit({
-      type: 'step_refused',
-      step: 'rebase',
-      kind: 'needs-human',
-      reason: `rebase resolution paused — provider setup unavailable: ${outcome.reason}`,
-    });
-    opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase resolution paused — provider setup unavailable — re-parked`);
-    return 'halted';
+  switch (outcome.kind) {
+    case 'conflict_halt':
+      // Re-conflict on the new base → re-park via 9.0's existing HALT path.
+      await writeRebaseOutcomeHalt(opts.worktreePath, outcome, opts.events);
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase re-conflicted on advanced base — re-parked`);
+      return 'halted';
+    case 'flatten_refused':
+      await writeRebaseOutcomeHalt(opts.worktreePath, outcome, opts.events);
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: flattened rebase refused — re-parked`);
+      return 'halted';
+    case 'setup_stop':
+      // Setup-only resolver exhaustion: the rebase is still paused, so park it
+      // for the provider recovery action rather than reporting it rebased.
+      await writeHalt(
+        opts.worktreePath,
+        outcome.conflicts,
+        `provider setup unavailable: ${outcome.reason}`,
+        opts.events,
+      );
+      await opts.events.emit({
+        type: 'step_refused',
+        step: 'rebase',
+        kind: 'needs-human',
+        reason: `rebase resolution paused — provider setup unavailable: ${outcome.reason}`,
+      });
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase resolution paused — provider setup unavailable — re-parked`);
+      return 'halted';
+    case 'changed':
+    case 'noop':
+    case 'mergeable_skip':
+      break;
+    default:
+      assertNeverRebaseOutcome(outcome);
   }
 
   opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebased onto latest before resuming gate`);

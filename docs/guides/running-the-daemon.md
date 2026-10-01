@@ -931,6 +931,35 @@ recovery path: the engine attempts the real rebase, uses the bounded resolver wh
 parks the feature if it cannot finish safely. A refused skip is not a conflict path — a textually
 clean branch rebases cleanly; it just re-verifies afterwards instead of shipping stale verdicts.
 
+### Merge-bearing feature branches
+
+Every engine-started feature rebase — the finish-time `rebase` step, the re-kick rebase, and open-PR
+autoresolve — uses one replay rule:
+
+- **No merge in `<base>..HEAD`:** the engine runs `git rebase --autostash <base>` unchanged.
+- **Any merge in that range:** the engine flattens the branch along its first parent. Ordinary
+  commits replay as-is. A merge whose tree equals its first parent's tree is ancestry-only and is
+  dropped. Every other merge becomes one flattened merge commit with the merge's tree, subject, and
+  author, a single parent, and a `Flattened-merge: <merge sha>` trailer. Side-lineage commits are not
+  replayed individually, so merge resolutions are kept and duplicated commits never resurface as
+  add/add conflicts.
+
+Before anything moves, the engine proves that the flattened list rebuilds HEAD's exact tree on the
+merge base, then dry-runs it against the target. A successful flatten records one
+[`rebase_merge_audit`](../reference/artifacts.md#pipelineeventsjsonl) event; ordinary-commit
+conflicts then take the normal resolver path. The rebased history no longer shows the merges or
+side-lineage commits; evidence that cited them is translated to the commit that absorbed them.
+
+The engine refuses, without mutating the branch, when:
+
+- the dry run's first conflict falls on a flattened merge commit. The feature parks with a HALT
+  beginning `flattened rebase refused`; autoresolve escalates with `merge-flatten-refused`.
+- the proof fails before a content-bearing merge can be named. The feature parks with a HALT
+  beginning `rebase did not start`; autoresolve escalates with `rebase-error`.
+
+Both refusals block `finish` and issue no push. For recovery, see
+[a flattened rebase was refused](../runbooks/stalled-or-stuck-feature.md#a-flattened-rebase-was-refused).
+
 ## How a halted feature resumes
 
 When a feature halts, the daemon leaves `.pipeline/HALT` in its worktree and stops dispatching it.

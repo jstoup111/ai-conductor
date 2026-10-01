@@ -32,8 +32,10 @@ import {
   rebaseStateActive,
   conflictedFiles,
   resolveBase,
+  startFeatureReplay,
   runTier1,
   makeGitRunner,
+  assertNeverRebaseOutcome,
 } from './rebase.js';
 import { execa } from 'execa';
 import type { WorktreeLifecycleQueue } from './worktree.js';
@@ -432,6 +434,7 @@ export async function runTier2(
   cap: number,
   resolver: RebaseResolver,
   scope: 'test-only' | 'mixed' = 'mixed',
+  replay?: Pick<RebaseOutcome, 'flatten' | 'expectedSubjects'>,
 ): Promise<RebaseOutcome> {
   // FR-7: cap=0 disables resolution entirely — return the conflict unchanged
   if (cap <= 0) {
@@ -439,6 +442,7 @@ export async function runTier2(
       kind: 'conflict_halt',
       conflicts: remaining,
       reason: 'tier 2 resolution disabled (cap=0)',
+      ...(replay?.flatten ? { flatten: replay.flatten, expectedSubjects: replay.expectedSubjects } : {}),
     };
   }
 
@@ -447,6 +451,7 @@ export async function runTier2(
     kind: 'conflict_halt',
     conflicts: remaining,
     reason: 'remaining conflicts after tier 1',
+    ...(replay?.flatten ? { flatten: replay.flatten, expectedSubjects: replay.expectedSubjects } : {}),
   };
 
   // Delegate to resolveRebaseConflicts with the bounded cap
@@ -1131,8 +1136,38 @@ export async function resolveConflictingPr(
       return result;
     };
 
-    // Start the rebase; this will fail with conflicts if base and feature diverged
-    const rebaseAttempt = await git(['rebase', '--autostash', baseRef]);
+    // Start through the same primitive as the feature gate.  It either keeps
+    // the exact legacy merge-free invocation or proves and starts a flattened
+    // todo without letting this open-PR path invent a second replay shape.
+    const mergeBaseResult = await git(['merge-base', 'HEAD', baseRef]);
+    const mergeBase = mergeBaseResult.exitCode === 0 ? mergeBaseResult.stdout.trim() : '';
+    if (!mergeBase) {
+      await escalate(prUrl, 'rebase-error', 'could not determine merge base for replay', {
+        runGh: deps.runGh, operations, cwd: repoCwd, log,
+      });
+      logOutcome(log, prUrl, 'rebase-error', 'escalated');
+      return { kind: 'escalated' };
+    }
+    const replayStart = await startFeatureReplay(git, baseRef, mergeBase, worktreePath);
+    if (replayStart.kind === 'refused') {
+      const escalationReason = replayStart.flattened ? 'merge-flatten-refused' : 'rebase-error';
+      await escalate(prUrl, escalationReason,
+        replayStart.flattened
+          ? `merge ${replayStart.refusal.mergeSha}: ${replayStart.refusal.reason}; recovery: ${replayStart.refusal.recipe}`
+          : replayStart.proof.kind === 'refused'
+            ? replayStart.proof.reason
+            : `replay conflicts at ${replayStart.proof.sha}`,
+        {
+          runGh: deps.runGh, operations, cwd: repoCwd, log,
+        });
+      logOutcome(log, prUrl, escalationReason, 'escalated');
+      return { kind: 'escalated' };
+    }
+    if (replayStart.flatten) {
+      await deps.events?.emit({ type: 'rebase_merge_audit', ...replayStart.flatten.audit });
+    }
+    const rebaseAttempt = replayStart.result;
+    const replaySubjects = replayStart.expectedSubjects ?? subjectsBefore;
     if (rebaseAttempt.exitCode === 0) {
       log(`${prUrl}: rebase completed without conflicts; verifying before publication`);
     } else {
@@ -1169,6 +1204,7 @@ export async function resolveConflictingPr(
           config.attemptCap,
           capturingResolver,
           conflictScope,
+          replayStart.flatten ? { flatten: replayStart.flatten, expectedSubjects: replayStart.expectedSubjects } : undefined,
         );
         log(`${prUrl}: tier2 outcome: ${tier2Outcome.kind}`);
 
@@ -1185,29 +1221,35 @@ export async function resolveConflictingPr(
           return { kind: 'escalated' };
         }
 
-        // If tier2 failed (unresolved conflicts), escalate immediately
-        if (tier2Outcome.kind === 'conflict_halt') {
-          const reason = tier2Outcome.reason || 'could not resolve remaining conflicts';
-          // Only the judgement (test-only) path names the acceptance-guards
-          // stage, for a completed rebase the post-completion guards rejected
-          // (S3.3: an undeclared drop). A strict-path completed-rebase halt
-          // keeps tier2-resolve — relabelling it was refused as out of scope
-          // (NC.1).
-          const stage = conflictScope === 'test-only' && tier2Outcome.resumeShape === 'completed-rebase'
-            ? 'acceptance-guards'
-            : 'tier2-resolve';
-          await escalate(prUrl, stage, reason, {
-            runGh: deps.runGh,
-            operations,
-            cwd: repoCwd,
-            log,
-          });
-          logOutcome(log, prUrl, stage, 'escalated');
-          return { kind: 'escalated' };
-        }
-        if (tier2Outcome.kind === 'setup_stop') {
-          logOutcome(log, prUrl, 'tier2-setup', 'setup-stop');
-          return { kind: 'setup-stop' };
+        // If tier2 failed (unresolved conflicts), escalate immediately.
+        switch (tier2Outcome.kind) {
+          case 'conflict_halt': {
+            const reason = tier2Outcome.reason || 'could not resolve remaining conflicts';
+            // Only the judgement (test-only) path names the acceptance-guards
+            // stage, for a completed rebase the post-completion guards rejected.
+            const stage = conflictScope === 'test-only' && tier2Outcome.resumeShape === 'completed-rebase'
+              ? 'acceptance-guards'
+              : 'tier2-resolve';
+            await escalate(prUrl, stage, reason, { runGh: deps.runGh, operations, cwd: repoCwd, log });
+            logOutcome(log, prUrl, stage, 'escalated');
+            return { kind: 'escalated' };
+          }
+          case 'flatten_refused':
+            await escalate(prUrl, 'merge-flatten-refused',
+              `merge ${tier2Outcome.mergeSha}: ${tier2Outcome.reason}; recovery: ${tier2Outcome.recipe}`, {
+              runGh: deps.runGh, operations, cwd: repoCwd, log,
+            });
+            logOutcome(log, prUrl, 'merge-flatten-refused', 'escalated');
+            return { kind: 'escalated' };
+          case 'setup_stop':
+            logOutcome(log, prUrl, 'tier2-setup', 'setup-stop');
+            return { kind: 'setup-stop' };
+          case 'changed':
+          case 'noop':
+          case 'mergeable_skip':
+            break;
+          default:
+            assertNeverRebaseOutcome(tier2Outcome);
         }
       }
 
@@ -1227,8 +1269,8 @@ export async function resolveConflictingPr(
     // Work-preservation guards: verify the rebase succeeded correctly.
     const acceptanceGuards = deps.runAcceptanceGuards ?? runAcceptanceGuards;
     const guardsResult = acceptedVerdicts.length === 0
-      ? await acceptanceGuards(git, baseRef, subjectsBefore)
-      : await acceptanceGuards(git, baseRef, subjectsBefore, [...declaredSuperseded]);
+      ? await acceptanceGuards(git, baseRef, replaySubjects)
+      : await acceptanceGuards(git, baseRef, replaySubjects, [...declaredSuperseded]);
     if (!guardsResult.ok) {
       const reason = `${guardsResult.guard}: ${guardsResult.reason}`;
       log(`${prUrl}: acceptance guard failed: ${reason}`);

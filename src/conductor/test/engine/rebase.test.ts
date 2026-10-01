@@ -309,24 +309,25 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         return { exitCode: 0, stdout: 'true\n', stderr: '' };
       }
       if (args[0] === 'remote') return { exitCode: 0, stdout: '', stderr: '' };
-      if (args[0] === 'rev-list') return { exitCode: 0, stdout: '1\n', stderr: '' };
+      // A valid merge id must not mask a later malformed line.
+      if (args[0] === 'rev-list') return { exitCode: 0, stdout: `${'a'.repeat(40)}\nmalformed\n`, stderr: '' };
       if (args[0] === 'rebase') return { exitCode: 2, stdout: '', stderr: rebaseStderr };
       return { exitCode: 0, stdout: '', stderr: '' };
     };
 
     try {
-      // A thrown assessment is just as indeterminate as an unexpected exit:
-      // it must reach the old rebase failure conversion instead of escaping.
+      // A malformed merge listing is a pre-mutation start failure: it must
+      // never silently fall back to a plain rebase.
       await expect(
         performRebase(git, root, 'main', { finishMergeabilityCheck: true }),
-      ).resolves.toEqual({
+      ).resolves.toMatchObject({
         kind: 'conflict_halt',
         conflicts: [],
-        reason: rebaseStderr,
+        reason: 'rev-list --merges returned malformed output',
         startFailure: true,
-        replaySeed: { preRebaseHead: '', mergeBase: '', target: '' },
       });
-      expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
+      expect(calls.some((args) => args[0] === 'rebase')).toBe(false);
+      expect(calls.some((args) => args.includes('commit-tree') || args.includes('--merge-base'))).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -1942,7 +1943,8 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     });
 
     await performRebase(makeGitRunner(repo), repo, 'main', {
-      translateAfterRebase,
+      translateAfterRebase: (runner, root, onto, origHead, head, flatten) =>
+        translateAfterRebase(runner, root, onto, origHead, head, undefined, undefined, flatten),
     });
     const newHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
     const finalSeal = JSON.parse(await readFile(sealPath, 'utf8')) as {

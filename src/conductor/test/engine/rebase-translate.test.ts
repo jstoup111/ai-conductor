@@ -38,7 +38,7 @@ import {
   translateAfterRebase,
 } from '../../src/engine/rebase-translate.js';
 import { applyMapToStores } from '../../src/engine/rebase-translate.js';
-import type { GitRunner } from '../../src/engine/rebase.js';
+import type { FlattenedReplayPlan, GitRunner } from '../../src/engine/rebase.js';
 import {
   createProtectedArtifactSeal,
   PROTECTED_ARTIFACT_DIRECTORIES,
@@ -186,6 +186,104 @@ describe('selectRepairBoundaryTranslation (Task 2)', () => {
 });
 
 describe('buildRewriteMap (RED — module does not exist yet)', () => {
+  it('absorbs a no-twin side citation through the pre-image merge after pair matching', async () => {
+    const side = '1111111111111111111111111111111111111111';
+    const merge = '2222222222222222222222222222222222222222';
+    const synthetic = '3333333333333333333333333333333333333333';
+    const flattenedPost = '4444444444444444444444444444444444444444';
+    const flatten: FlattenedReplayPlan = {
+      entries: [], audit: { flattenedMerges: [merge], ancestryOnlyMerges: [], sideLineageCount: 1 },
+      pairs: [{ from: merge, to: synthetic }],
+      absorptionPoints: [{ from: side, to: merge }],
+    };
+    const git = makeFakeGit({
+      revList: { [`${ONTO}..orig`]: [side, merge], [`${ONTO}..head`]: [flattenedPost] },
+      show: { [side]: 'side only', [merge]: 'merge patch', [synthetic]: 'merge patch', [flattenedPost]: 'merge patch' },
+      patchId: { 'side only': 'side', 'merge patch': 'merge' },
+    });
+
+    const { map, residue } = await buildRewriteMap(git, ONTO, 'orig', 'head', flatten);
+
+    expect(map[merge]).toBe(flattenedPost);
+    expect(map[side]).toBe(flattenedPost);
+    expect(residue).toEqual([]);
+  });
+
+  it('uses the first surviving ordered ancestry-only successor and leaves none as residue', async () => {
+    const ancestry = '5555555555555555555555555555555555555555';
+    const dropped = '6666666666666666666666666666666666666666';
+    const survivor = '7777777777777777777777777777777777777777';
+    const survivorPost = '8888888888888888888888888888888888888888';
+    const flatten: FlattenedReplayPlan = {
+      entries: [], audit: { flattenedMerges: [], ancestryOnlyMerges: [ancestry], sideLineageCount: 0 }, pairs: [],
+      absorptionPoints: [{ from: ancestry, to: dropped }, { from: ancestry, to: survivor }],
+    };
+    const git = makeFakeGit({
+      revList: { [`${ONTO}..orig`]: [ancestry, dropped, survivor], [`${ONTO}..head`]: [survivorPost] },
+      show: { [ancestry]: 'ancestry', [dropped]: 'dropped', [survivor]: 'survivor', [survivorPost]: 'survivor' },
+      patchId: { ancestry: 'a', dropped: 'd', survivor: 's' },
+    });
+    const { map, residue } = await buildRewriteMap(git, ONTO, 'orig', 'head', flatten);
+    expect(map[ancestry]).toBe(survivorPost);
+    expect(residue).toEqual(expect.not.arrayContaining([ancestry]));
+  });
+
+  it('leaves an ancestry-only merge with no surviving absorption point as citation residue', async () => {
+    const ancestry = '1212121212121212121212121212121212121212';
+    const dropped = '3434343434343434343434343434343434343434';
+    const flatten: FlattenedReplayPlan = {
+      entries: [], audit: { flattenedMerges: [], ancestryOnlyMerges: [ancestry], sideLineageCount: 0 }, pairs: [],
+      absorptionPoints: [{ from: ancestry, to: dropped }],
+    };
+    const git = makeFakeGit({
+      revList: { [`${ONTO}..orig-no-survivor`]: [ancestry, dropped], [`${ONTO}..head-no-survivor`]: [] },
+      show: { [ancestry]: 'ancestry-only', [dropped]: 'dropped' },
+      patchId: { 'ancestry-only': 'ancestry', dropped: 'dropped' },
+    });
+
+    const { map, residue } = await buildRewriteMap(git, ONTO, 'orig-no-survivor', 'head-no-survivor', flatten);
+    expect(map[ancestry]).toBeUndefined();
+    expect(residue).toContain(ancestry);
+  });
+
+  it('does not launder a forged sha absent from both the pre-image and flatten pairs', () => {
+    const forged = 'f'.repeat(40);
+    expect(resolveThroughMap(forged, { ["a".repeat(40)]: 'b'.repeat(40) })).toBe(forged);
+  });
+
+  it('keeps a patch-id mapping when a recorded absorption point names the same side commit', async () => {
+    const side = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const merge = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const flattened = 'cccccccccccccccccccccccccccccccccccccccc';
+    const directPost = 'dddddddddddddddddddddddddddddddddddddddd';
+    const flattenedPost = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+    const flatten: FlattenedReplayPlan = {
+      entries: [],
+      audit: { flattenedMerges: [merge], ancestryOnlyMerges: [], sideLineageCount: 1 },
+      pairs: [{ from: merge, to: flattened }],
+      absorptionPoints: [{ from: side, to: merge }],
+    };
+    const git = makeFakeGit({
+      revList: {
+        [`${ONTO}..orig-head`]: [side, merge],
+        [`${ONTO}..new-head`]: [directPost, flattenedPost],
+      },
+      show: {
+        [side]: 'side patch', [merge]: 'merge patch', [flattened]: 'flattened patch',
+        [directPost]: 'side patch', [flattenedPost]: 'flattened patch',
+      },
+      patchId: {
+        'side patch': 'side-id', 'merge patch': 'merge-id', 'flattened patch': 'flattened-id',
+      },
+    });
+
+    const { map, residue } = await buildRewriteMap(git, ONTO, 'orig-head', 'new-head', flatten);
+
+    expect(map[side]).toBe(directPost);
+    expect(map[merge]).toBe(flattenedPost);
+    expect(residue).toEqual([]);
+  });
+
   it('maps each pre-image sha to its post-image sha by matching patch-id (1:1 unconflicted)', async () => {
     const origHead = 'orig-head';
     const head = 'new-head';

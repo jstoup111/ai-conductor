@@ -201,6 +201,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   rebase_gate_preserved: 'not-audited-by-design',
   rebase_gate_invalidated: 'not-audited-by-design',
   rebase_conflict_halt: 'not-audited-by-design',
+  rebase_merge_audit: 'not-audited-by-design',
   rebase_untracked_quarantined: 'not-audited-by-design',
   repair_boundary_translated: 'not-audited-by-design',
   rebase_citation_residue: 'not-audited-by-design',
@@ -723,6 +724,9 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     matchedPaths: ['src/a.ts'],
   },
   rebase_conflict_halt: { type: 'rebase_conflict_halt', reason: 'conflict', conflicts: ['a.ts'] },
+  rebase_merge_audit: {
+    type: 'rebase_merge_audit', flattenedMerges: ['a'.repeat(40)], ancestryOnlyMerges: [], sideLineageCount: 0,
+  },
   rebase_untracked_quarantined: {
     type: 'rebase_untracked_quarantined',
     paths: ['generated.txt'],

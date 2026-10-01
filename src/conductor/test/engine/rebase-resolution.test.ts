@@ -146,7 +146,10 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
       await g(['add', 'a.ts']);
       await gc(['rebase', '--continue']);
       return { resolved: true };
-    }, 3, { translateAfterRebase });
+    }, 3, {
+      translateAfterRebase: (runner, root, onto, origHead, head, flatten) =>
+        translateAfterRebase(runner, root, onto, origHead, head, undefined, undefined, flatten),
+    });
 
     expect(outcome.kind).toBe('changed');
     const rewrites = JSON.parse(await readFile(join(repo, '.pipeline', 'rebase-rewrites.json'), 'utf-8')) as Record<string, string>;
@@ -271,6 +274,40 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
     expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
     expect((await g(['log', '--format=%s', 'main..HEAD'])).stdout).not.toContain('feat: change a');
     expect(translated).toBe(false);
+  });
+
+  it('FR-9 on a flattened pause uses expectedSubjects rather than mutable ORIG_HEAD topology', async () => {
+    const { git, pre } = await intoConflict();
+    if (pre.kind !== 'conflict_halt') throw new Error('expected paused rebase');
+    const flattenedPause: RebaseOutcome = {
+      ...pre,
+      expectedSubjects: ['feat: change a'],
+      flatten: { entries: [], audit: { flattenedMerges: ['merge-preimage'], ancestryOnlyMerges: ['ancestry-only'], sideLineageCount: 1 }, pairs: [], absorptionPoints: [] },
+    };
+    const outcome = await resolveRebaseConflicts(git, repo, flattenedPause, async () => {
+      await writeFile(join(repo, 'a.ts'), 'merged\n');
+      await g(['add', 'a.ts']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true };
+    }, 1);
+    expect(outcome.kind).toBe('changed');
+  });
+
+  it('FR-9 rejects a missing flattened merge subject even when the rebase is current', async () => {
+    const { git, pre } = await intoConflict();
+    if (pre.kind !== 'conflict_halt') throw new Error('expected paused rebase');
+    const outcome = await resolveRebaseConflicts(git, repo, {
+      ...pre,
+      expectedSubjects: ['feat: change a', 'feat: flattened merge subject'],
+      flatten: { entries: [], audit: { flattenedMerges: ['merge-preimage'], ancestryOnlyMerges: [], sideLineageCount: 0 }, pairs: [], absorptionPoints: [] },
+    }, async () => {
+      await writeFile(join(repo, 'a.ts'), 'merged\n');
+      await g(['add', 'a.ts']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true };
+    }, 1);
+    expect(outcome).toMatchObject({ kind: 'conflict_halt', resumeShape: 'completed-rebase' });
+    if (outcome.kind === 'conflict_halt') expect(outcome.reason).toContain('feat: flattened merge subject');
   });
 
   it('FR-7: cap of 0 disables resolution — resolver is never called, HALT passes through', async () => {
@@ -710,6 +747,41 @@ describe('engine/rebase — featureCommitsPreserved (real git)', () => {
   it('does not false-positive on a legitimately-empty feature (no prior commits to lose)', async () => {
     const ok = await featureCommitsPreserved(makeGitRunner(repo), 'main', []);
     expect(ok).toMatchObject({ kind: 'preserved' });
+  });
+
+  it('uses the flattened replay subject list, excluding ancestry-only and side-lineage subjects', async () => {
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'picked.ts'), 'picked\n');
+    await g(['add', 'picked.ts']);
+    await g(['commit', '-q', '-m', 'feat: picked first parent']);
+    await writeFile(join(repo, 'merge.ts'), 'flattened merge content\n');
+    await g(['add', 'merge.ts']);
+    await g(['commit', '-q', '-m', 'feat: flattened merge subject']);
+
+    const preserved = await featureCommitsPreserved(makeGitRunner(repo), 'main', [
+      'feat: picked first parent',
+      'feat: flattened merge subject',
+    ]);
+    expect(preserved).toMatchObject({ kind: 'preserved' });
+    // These are deliberately absent: FR-9 receives the generated replay list,
+    // not all subjects from ORIG_HEAD's merge topology.
+    expect((await featureCommitsPreserved(makeGitRunner(repo), 'main', ['side-only subject'])).kind).toBe('rejected');
+    expect((await featureCommitsPreserved(makeGitRunner(repo), 'main', ['ancestry-only subject'])).kind).toBe('rejected');
+  });
+
+  it('rejects a missing flattened merge subject without accepting a superseded-by-base excuse', async () => {
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'picked.ts'), 'picked\n');
+    await g(['add', 'picked.ts']);
+    await g(['commit', '-q', '-m', 'feat: picked first parent']);
+    const verdict = await featureCommitsPreserved(makeGitRunner(repo), 'main', [
+      'feat: picked first parent',
+      'feat: missing flattened merge subject',
+    ]);
+    expect(verdict).toMatchObject({ kind: 'rejected' });
+    if (verdict.kind === 'rejected') {
+      expect(formatFeatureCommitPreservationRejection(verdict)).toContain('feat: missing flattened merge subject');
+    }
   });
 
   // Regression (observed on `interrupted-self-host-runs-leak-provider-homes-unt`,

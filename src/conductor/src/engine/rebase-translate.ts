@@ -1,6 +1,6 @@
 import { access, readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { GitRunner } from './rebase.js';
+import type { GitRunner, FlattenedReplayPlan } from './rebase.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import type { ConductorEvent } from '../types/events.js';
 import { rekeyMemoAfterRebase } from './attribution-lane.js';
@@ -69,6 +69,7 @@ export async function buildRewriteMap(
   onto: string,
   origHead: string,
   head: string,
+  flatten?: FlattenedReplayPlan,
 ): Promise<RewriteMapResult> {
   const gitAny = git as unknown as GitRunnerWithInput;
 
@@ -101,6 +102,35 @@ export async function buildRewriteMap(
       map[preSha.slice(0, SHORT_SHA_LEN)] = postSha;
     } else {
       residue.push(preSha);
+    }
+  }
+
+  // A flattened merge is represented by an object created during planning,
+  // not by a pre-image commit. Match that object's patch to its real post-image
+  // and absorb both the merge citation and its second-parent-only lineage.
+  if (flatten) {
+    const add = (from: string, to: string) => {
+      // Patch-id is the authoritative correspondence. Absorption only repairs
+      // shas that survived that pass unmapped; it must never overwrite a
+      // patch-identical side-lineage commit's direct post-image.
+      if (map[from] !== undefined || map[from.slice(0, SHORT_SHA_LEN)] !== undefined) return;
+      map[from] = to;
+      map[from.slice(0, SHORT_SHA_LEN)] = to;
+      const i = residue.indexOf(from);
+      if (i >= 0) residue.splice(i, 1);
+    };
+    for (const pair of flatten.pairs) {
+      const id = await patchIdFor(gitAny, pair.to);
+      const post = id ? postByPatchId.get(id) : undefined;
+      if (!post) continue;
+      add(pair.from, post);
+    }
+    // Planning records every non-patch absorption point while the pre-image
+    // first-parent topology is still available. Consume only those recorded
+    // relationships after patch-id, never by reconstructing history here.
+    for (const point of flatten.absorptionPoints) {
+      const post = map[point.to] ?? map[point.to.slice(0, SHORT_SHA_LEN)];
+      if (post) add(point.from, post);
     }
   }
 
@@ -473,8 +503,9 @@ export async function translateAfterRebase(
   head: string,
   events?: ConductorEventEmitter,
   onRebaseline?: ProtectedArtifactSealRebaselineObserver,
+  flatten?: FlattenedReplayPlan,
 ): Promise<void> {
-  const { map, residue } = await buildRewriteMap(git, onto, origHead, head);
+  const { map, residue } = await buildRewriteMap(git, onto, origHead, head, flatten);
 
   await persistRewriteMap(projectRoot, map);
   await applyMapToStores(projectRoot, map);

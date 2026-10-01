@@ -13,6 +13,7 @@ import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
+import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
 import { classifyGitPushAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 import { saveStepStatus } from './state.js';
@@ -710,6 +711,16 @@ type RebaseOutcomeKind =
       startFailure?: boolean;
     }
   | {
+      /** A flattened merge conflicted during the pre-mutation replay proof. */
+      kind: 'flatten_refused';
+      mergeSha: string;
+      parents: [string, string];
+      flattenedSha: string;
+      conflicts: string[];
+      reason: string;
+      recipe: string;
+    }
+  | {
       /** Provider setup was refused before a rebase resolver invocation. */
       kind: 'setup_stop';
       conflicts: string[];
@@ -717,7 +728,375 @@ type RebaseOutcomeKind =
     };
 
 /** A quarantine applies to every outcome after an untracked-collision heal. */
-export type RebaseOutcome = RebaseOutcomeKind & { quarantine?: RebaseQuarantine };
+export type RebaseOutcome = RebaseOutcomeKind & {
+  quarantine?: RebaseQuarantine;
+  flatten?: FlattenedReplayPlan;
+  /** The generated flattened todo's subjects, retained for FR-9 after a pause. */
+  expectedSubjects?: string[];
+};
+
+/**
+ * Make outcome consumers fail to typecheck when the discriminated union gains
+ * a member they have not consciously routed.  Rebase outcomes cross daemon,
+ * foreground, and autoresolve boundaries, so a silent fall-through here is a
+ * safety bug rather than merely unreachable code.
+ */
+export function assertNeverRebaseOutcome(outcome: never): never {
+  throw new Error(`unhandled rebase outcome: ${JSON.stringify(outcome)}`);
+}
+
+export type FlattenedReplayEntry =
+  | { kind: 'ordinary'; sha: string }
+  | {
+      kind: 'flattened';
+      sha: string;
+      mergeSha: string;
+      firstParent: string;
+      subject: string;
+    };
+
+export interface FlattenedReplayPlan {
+  entries: FlattenedReplayEntry[];
+  audit: {
+    flattenedMerges: string[];
+    ancestryOnlyMerges: string[];
+    sideLineageCount: number;
+  };
+  pairs: Array<{ from: string; to: string }>;
+  /** Pre-image shas absorbed by a flattened entry or a surviving successor. */
+  absorptionPoints: Array<{ from: string; to: string }>;
+}
+
+export type FlattenedReplayProof =
+  | { kind: 'proven'; inPlaceTree: string; targetTree: string }
+  | { kind: 'refused'; reason: string }
+  | { kind: 'target_conflict'; index: number; sha: string; entryKind: FlattenedReplayEntry['kind']; conflicts: string[] };
+
+export type FeatureReplayStart =
+  | { kind: 'started'; result: GitResult; rebaseArgs: string[]; expectedSubjects?: string[]; flatten?: FlattenedReplayPlan; proof?: FlattenedReplayProof }
+  | {
+    kind: 'refused';
+    plan: FlattenedReplayPlan;
+    proof: Extract<FlattenedReplayProof, { kind: 'refused' | 'target_conflict' }>;
+    /** True only after a merge-bearing range selected flattened replay handling. */
+    flattened: false;
+  }
+  | {
+    kind: 'refused';
+    plan: FlattenedReplayPlan;
+    proof: Extract<FlattenedReplayProof, { kind: 'refused' | 'target_conflict' }>;
+    /** True only after a merge-bearing range selected flattened replay handling. */
+    flattened: true;
+    /** D5 refusal payload, built once here and consumed by both callers. */
+    refusal: Extract<RebaseOutcome, { kind: 'flatten_refused' }>;
+  };
+
+async function replayFlattenedEntries(
+  git: GitRunner,
+  entries: readonly FlattenedReplayEntry[],
+  base: string,
+  targetRun: boolean,
+): Promise<{ kind: 'complete'; tree: string } | { kind: 'refused'; reason: string } | { kind: 'conflict'; index: number; entry: FlattenedReplayEntry; conflicts: string[] }> {
+  let accumulator = base;
+  let finalTree = '';
+  for (const [index, entry] of entries.entries()) {
+    const merged = await git(['merge-tree', '--write-tree', '--merge-base', `${entry.sha}^`, accumulator, entry.sha]);
+    if (merged.exitCode === 1) {
+      return targetRun
+        ? { kind: 'conflict', index, entry, conflicts: conflictedPathsFromMergeTree(merged.stdout, merged.stderr) }
+        : { kind: 'refused', reason: `merge-tree conflict while proving replay at entry ${index} (${entry.sha})` };
+    }
+    if (merged.exitCode !== 0) {
+      return { kind: 'refused', reason: `merge-tree failed while proving replay at entry ${index} (${entry.sha}): ${merged.stderr}` };
+    }
+    finalTree = merged.stdout.trim();
+    const committed = await git(
+      ['commit-tree', finalTree, '-p', accumulator],
+      { input: withDaemonCoAuthorTrailer('ai-conductor flattened replay proof\n') },
+    );
+    if (committed.exitCode !== 0) {
+      return { kind: 'refused', reason: `commit-tree failed while proving replay at entry ${index} (${entry.sha}): ${committed.stderr}` };
+    }
+    accumulator = committed.stdout.trim();
+  }
+  if (entries.length === 0) {
+    const baseTree = await git(['rev-parse', `${base}^{tree}`]);
+    if (baseTree.exitCode !== 0) {
+      return { kind: 'refused', reason: `rev-parse ${base}^{tree} failed: ${baseTree.stderr}` };
+    }
+    finalTree = baseTree.stdout.trim();
+  }
+  return { kind: 'complete', tree: finalTree };
+}
+
+/** `merge-tree --write-tree` reports paths without touching the worktree. */
+function conflictedPathsFromMergeTree(stdout: string, stderr: string): string[] {
+  const paths = new Set<string>();
+  for (const line of `${stdout}\n${stderr}`.split('\n')) {
+    const match = line.match(/CONFLICT .*? in\s+(.+)$/);
+    if (match?.[1]?.trim()) paths.add(match[1].trim());
+  }
+  return [...paths];
+}
+
+/**
+ * Prove a planned replay produces HEAD's tree before dry-running it on target.
+ * All operations create Git objects only; refs, index, and worktree stay intact.
+ */
+export async function proveFlattenedReplay(
+  git: GitRunner,
+  plan: FlattenedReplayPlan,
+  mergeBase: string,
+  target: string,
+): Promise<FlattenedReplayProof> {
+  const inPlace = await replayFlattenedEntries(git, plan.entries, mergeBase, false);
+  if (inPlace.kind === 'refused') return inPlace;
+  if (inPlace.kind === 'conflict') return { kind: 'refused', reason: `unexpected in-place replay conflict at ${inPlace.entry.sha}` };
+
+  const headTreeResult = await git(['rev-parse', 'HEAD^{tree}']);
+  if (headTreeResult.exitCode !== 0) {
+    return { kind: 'refused', reason: `rev-parse HEAD^{tree} failed: ${headTreeResult.stderr}` };
+  }
+  const headTree = headTreeResult.stdout.trim();
+  if (inPlace.tree !== headTree) {
+    return { kind: 'refused', reason: `tree mismatch: replay produced ${inPlace.tree}, HEAD is ${headTree}` };
+  }
+
+  const targetReplay = await replayFlattenedEntries(git, plan.entries, target, true);
+  if (targetReplay.kind === 'refused') return targetReplay;
+  if (targetReplay.kind === 'conflict') {
+    return {
+      kind: 'target_conflict',
+      index: targetReplay.index,
+      sha: targetReplay.entry.sha,
+      entryKind: targetReplay.entry.kind,
+      conflicts: targetReplay.conflicts,
+    };
+  }
+  return { kind: 'proven', inPlaceTree: inPlace.tree, targetTree: targetReplay.tree };
+}
+
+/**
+ * Build the first-parent replay list for a merge-bearing feature branch.
+ *
+ * The only writes are `commit-tree` object writes through the injected runner;
+ * this helper never advances a ref or touches the index/worktree.
+ */
+export async function planFlattenedReplay(
+  git: GitRunner,
+  mergeBase: string,
+): Promise<FlattenedReplayPlan> {
+  const range = `${mergeBase}..HEAD`;
+  const firstParentResult = await git(['rev-list', '--reverse', '--first-parent', range]);
+  if (firstParentResult.exitCode !== 0) {
+    throw new Error(`could not list first-parent replay history: ${firstParentResult.stderr}`);
+  }
+  const firstParent = firstParentResult.stdout.split('\n').map((sha) => sha.trim()).filter(Boolean);
+  const allResult = await git(['rev-list', range]);
+  if (allResult.exitCode !== 0) {
+    throw new Error(`could not list replay history: ${allResult.stderr}`);
+  }
+  const allCommits = allResult.stdout.split('\n').map((sha) => sha.trim()).filter(Boolean);
+
+  const entries: FlattenedReplayEntry[] = [];
+  const flattenedMerges: string[] = [];
+  const ancestryOnlyMerges: string[] = [];
+  const pairs: Array<{ from: string; to: string }> = [];
+  const absorptionPoints: Array<{ from: string; to: string }> = [];
+
+  for (const sha of firstParent) {
+    const parentsResult = await git(['rev-list', '--parents', '-n', '1', sha]);
+    if (parentsResult.exitCode !== 0) {
+      throw new Error(`could not read parents for replay entry ${sha}`);
+    }
+    const parents = parentsResult.stdout.trim().split(/\s+/).slice(1);
+    if (parents.length < 2) {
+      entries.push({ kind: 'ordinary', sha });
+      continue;
+    }
+
+    const [firstParentSha] = parents;
+    const [mergeTreeResult, parentTreeResult] = await Promise.all([
+      git(['rev-parse', `${sha}^{tree}`]),
+      git(['rev-parse', `${sha}^1^{tree}`]),
+    ]);
+    if (mergeTreeResult.exitCode !== 0 || parentTreeResult.exitCode !== 0) {
+      throw new Error(`could not read tree identity for merge ${sha}`);
+    }
+    const mergeTree = mergeTreeResult.stdout.trim();
+    if (mergeTree === parentTreeResult.stdout.trim()) {
+      ancestryOnlyMerges.push(sha);
+      continue;
+    }
+
+    const metadata = await git(['show', '-s', '--format=%an%n%ae%n%cn%n%ce%n%s', sha]);
+    if (metadata.exitCode !== 0) {
+      throw new Error(`could not read author metadata for merge ${sha}`);
+    }
+    const [authorName, authorEmail, _committerName, _committerEmail, subject] = metadata.stdout.trim().split('\n');
+    const commitTree = await git(
+      ['-c', `author.name=${authorName}`, '-c', `author.email=${authorEmail}`, 'commit-tree', mergeTree, '-p', firstParentSha],
+      { input: withDaemonCoAuthorTrailer(`${subject}\n\nFlattened-merge: ${sha}`) },
+    );
+    if (commitTree.exitCode !== 0) {
+      throw new Error(`could not create flattened merge commit for ${sha}: ${commitTree.stderr}`);
+    }
+    const flattenedSha = commitTree.stdout.trim();
+    entries.push({ kind: 'flattened', sha: flattenedSha, mergeSha: sha, firstParent: firstParentSha, subject });
+    flattenedMerges.push(sha);
+    pairs.push({ from: sha, to: flattenedSha });
+    const side = await git(['rev-list', `${firstParentSha}..${parents[1]}`]);
+    if (side.exitCode !== 0) {
+      throw new Error(`could not list side lineage for merge ${sha}`);
+    }
+    for (const sideSha of side.stdout.split('\n').map((value) => value.trim()).filter(Boolean)) {
+      // `to` is deliberately the pre-image merge sha.  The translation pass
+      // first maps that merge to the post-image flattened commit, then follows
+      // this absorption edge.  A planning-only commit-tree sha is not a key in
+      // the rewrite map.
+      absorptionPoints.push({ from: sideSha, to: sha });
+    }
+  }
+
+  // An ancestry-only merge is absorbed by the first following replay entry
+  // that survives.  Record every candidate in first-parent order; translation
+  // adds without overwriting, so dropped/empty candidates naturally fall
+  // through to the first mapped successor.
+  // Store that relationship while the immutable first-parent plan is known;
+  // translation must not reconstruct it from post-replay history.
+  for (const merge of ancestryOnlyMerges) {
+    const mergeIndex = firstParent.indexOf(merge);
+    const successors = firstParent.slice(mergeIndex + 1)
+      .map((sha) => entries.find((entry) => entry.kind === 'ordinary' ? entry.sha === sha : entry.mergeSha === sha))
+      .filter((entry): entry is FlattenedReplayEntry => entry !== undefined);
+    for (const successor of successors) {
+      absorptionPoints.push({
+        from: merge,
+        to: successor.kind === 'flattened' ? successor.mergeSha : successor.sha,
+      });
+    }
+  }
+
+  return {
+    entries,
+    audit: {
+      flattenedMerges,
+      ancestryOnlyMerges,
+      sideLineageCount: Math.max(0, allCommits.length - firstParent.length),
+    },
+    pairs,
+    absorptionPoints,
+  };
+}
+
+/**
+ * Start the one sanctioned replay shape for a feature branch.  Merge-free
+ * ranges deliberately retain the historical command byte-for-byte; a range
+ * carrying merges is proven before its generated todo is handed to git.
+ */
+export async function startFeatureReplay(
+  git: GitRunner,
+  baseRef: string,
+  mergeBase: string,
+  projectRoot?: string,
+): Promise<FeatureReplayStart> {
+  const merges = await git(['rev-list', '--merges', `${baseRef}..HEAD`]);
+  const emptyPlan = (): FlattenedReplayPlan => ({ entries: [], audit: { flattenedMerges: [], ancestryOnlyMerges: [], sideLineageCount: 0 }, pairs: [], absorptionPoints: [] });
+  const refusal = async (
+    plan: FlattenedReplayPlan,
+    proof: Extract<FlattenedReplayProof, { kind: 'refused' | 'target_conflict' }>,
+    flattened: boolean,
+  ): Promise<FeatureReplayStart> => {
+    if (!flattened) return { kind: 'refused', plan, proof, flattened };
+    const conflicted = proof.kind === 'target_conflict' ? plan.entries[proof.index] : undefined;
+    const merge = conflicted?.kind === 'flattened'
+      ? conflicted
+      : plan.entries.find((entry): entry is Extract<FlattenedReplayEntry, { kind: 'flattened' }> => entry.kind === 'flattened');
+    const mergeSha = merge?.mergeSha ?? '';
+    const parentResult = mergeSha
+      ? await git(['rev-list', '--parents', '-n', '1', mergeSha])
+      : { exitCode: 1, stdout: '', stderr: '' };
+    const parents = parentResult.exitCode === 0
+      ? parentResult.stdout.trim().split(/\s+/).slice(1, 3)
+      : [];
+    const reason = proof.kind === 'refused'
+      ? proof.reason
+      : `flattened merge conflicts at ${proof.sha}`;
+    // A merge-specific recovery recipe is useful only when it identifies a
+    // real merge, both parents, and its synthetic flattened commit.  Earlier
+    // failures are ordinary start failures, never placeholder-filled refusals.
+    if (!mergeSha || parents.length !== 2 || !merge?.sha) {
+      return { kind: 'refused', plan, proof, flattened: false };
+    }
+    const [firstParent, secondParent] = parents as [string, string];
+    const refusalOutcome: Extract<RebaseOutcome, { kind: 'flatten_refused' }> = {
+      kind: 'flatten_refused',
+      mergeSha,
+      parents: [firstParent, secondParent],
+      flattenedSha: merge.sha,
+      conflicts: proof.kind === 'target_conflict' ? proof.conflicts : [],
+      reason,
+      recipe: flattenRefusalRecipe(projectRoot ?? '<worktree>', baseRef, firstParent, mergeSha),
+    };
+    return { kind: 'refused', plan, proof, flattened, refusal: refusalOutcome };
+  };
+  if (merges.exitCode !== 0) {
+    return refusal(emptyPlan(), { kind: 'refused', reason: `rev-list --merges failed: ${merges.stderr}` }, false);
+  }
+  if (merges.stdout.trim() === '') {
+    const rebaseArgs = ['rebase', '--autostash', baseRef];
+    return { kind: 'started', result: await git(rebaseArgs), rebaseArgs };
+  }
+  const mergeLines = merges.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (mergeLines.some((line) => !/^[0-9a-f]{40}$/i.test(line))) {
+    return refusal(emptyPlan(), { kind: 'refused', reason: 'rev-list --merges returned malformed output' }, true);
+  }
+  let plan: FlattenedReplayPlan;
+  try {
+    plan = await planFlattenedReplay(git, mergeBase);
+  } catch (error) {
+    return refusal(emptyPlan(), { kind: 'refused', reason: `flattened replay planning failed: ${(error as Error).message}` }, true);
+  }
+  const targetResult = await git(['rev-parse', baseRef]);
+  if (targetResult.exitCode !== 0 || targetResult.stdout.trim() === '') {
+    return refusal(plan, { kind: 'refused', reason: `rev-parse ${baseRef} failed: ${targetResult.stderr}` }, true);
+  }
+  const target = targetResult.stdout.trim();
+  const proof = await proveFlattenedReplay(git, plan, mergeBase, target);
+  if (proof.kind === 'refused' || proof.kind === 'target_conflict' && plan.entries[proof.index]?.kind === 'flattened') {
+    return refusal(plan, proof, true);
+  }
+  // Read every subject before writing the todo or starting the real rebase.
+  // A missing ordinary subject would otherwise silently shrink FR-9's guard.
+  const expectedSubjects: string[] = [];
+  for (const entry of plan.entries) {
+    if (entry.kind === 'flattened') {
+      expectedSubjects.push(entry.subject);
+      continue;
+    }
+    const subject = await git(['show', '-s', '--format=%s', entry.sha]);
+    if (subject.exitCode !== 0) {
+      return refusal(plan, { kind: 'refused', reason: `could not read replay subject for ${entry.sha}: ${subject.stderr}` }, true);
+    }
+    expectedSubjects.push(subject.stdout.trim());
+  }
+  const todoPathResult = await git(['rev-parse', '--git-path', 'ai-conductor-flatten-todo']);
+  if (todoPathResult.exitCode !== 0 || todoPathResult.stdout.trim() === '') {
+    return refusal(plan, { kind: 'refused', reason: 'could not determine flattened replay todo path' }, true);
+  }
+  const todoPath = todoPathResult.stdout.trim();
+  try {
+    await writeFile(projectRoot && !isAbsolute(todoPath) ? join(projectRoot, todoPath) : todoPath, `${plan.entries.map((entry) => `pick ${entry.sha}`).join('\n')}\n`);
+  } catch (error) {
+    return refusal(plan, { kind: 'refused', reason: `could not write flattened replay todo: ${(error as Error).message}` }, true);
+  }
+  const rebaseArgs = ['-c', `sequence.editor=cp ${todoPath}`, 'rebase', '-i', '--autostash', baseRef];
+  return {
+    kind: 'started', result: await git(rebaseArgs), rebaseArgs,
+    expectedSubjects,
+    flatten: plan, proof,
+  };
+}
 
 /**
  * Select the human recovery note from the classified rebase outcome. A refusal
@@ -726,9 +1105,12 @@ export type RebaseOutcome = RebaseOutcomeKind & { quarantine?: RebaseQuarantine 
  */
 export async function writeRebaseOutcomeHalt(
   projectRoot: string,
-  outcome: Extract<RebaseOutcome, { kind: 'conflict_halt' }>,
+  outcome: Extract<RebaseOutcome, { kind: 'conflict_halt' | 'flatten_refused' }>,
   events?: ConductorEventEmitter,
 ): Promise<HaltMarkerWriteResult> {
+  if (outcome.kind === 'flatten_refused') {
+    return writeHaltMarker(projectRoot, `flattened rebase refused\n${outcome.reason}\n\nRecovery procedure:\n  1. Park the feature.\n  2. ${outcome.recipe}\n  3. Clear .pipeline/HALT and .pipeline/HALT.class, then re-queue the feature.\n`, 'needs-human', events);
+  }
   if (!outcome.startFailure) {
     return writeHalt(projectRoot, outcome.conflicts, outcome.reason, events, outcome.resumeShape);
   }
@@ -745,6 +1127,11 @@ export async function writeRebaseOutcomeHalt(
     `  3. Re-queue the feature for the daemon.\n\n` +
     `No git rebase is in progress; do not run git rebase --continue.\n`;
   return writeHaltMarker(projectRoot, note, 'needs-human', events);
+}
+
+/** One human recovery procedure for every pre-mutation flattened-replay refusal. */
+export function flattenRefusalRecipe(worktree = '<worktree>', base = '<base>', firstParent = '<first-parent>', merge = '<merge>'): string {
+  return `park the feature, then run git -C ${worktree} rebase -i --rebase-merges ${base}; at the merge stop, re-apply git diff ${firstParent} ${merge}; run git rebase --continue; then clear .pipeline/HALT and .pipeline/HALT.class before re-queueing`;
 }
 
 /** A protected-artifact refusal raised before git starts a rebase. */
@@ -913,6 +1300,7 @@ export interface PerformRebaseOpts {
     onto: string,
     origHead: string,
     head: string,
+    flatten?: FlattenedReplayPlan,
   ) => Promise<void>;
 }
 
@@ -1013,11 +1401,12 @@ export async function performRebase(
     ...outcome,
     replaySeed,
   });
-  const translateCompletedRebase = async (): Promise<void> => {
+  const translateCompletedRebase = async (flatten?: FlattenedReplayPlan): Promise<void> => {
     if (!opts?.translateAfterRebase) return;
     const ontoSha = (await git(['rev-parse', base.ref])).stdout.trim();
     const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-    await opts.translateAfterRebase(git, projectRoot, ontoSha, preTree, head);
+    if (flatten) await opts.translateAfterRebase(git, projectRoot, ontoSha, preTree, head, flatten);
+    else await opts.translateAfterRebase(git, projectRoot, ontoSha, preTree, head);
   };
 
   // `--autostash`: a daemon build/lint step can leave uncommitted changes in the
@@ -1027,8 +1416,22 @@ export async function performRebase(
   // conflict" the operator can't resolve. Autostash stashes those changes, rebases,
   // and reapplies them — so a clean rebase still succeeds with a dirty tree. (A
   // genuine overlap makes the autostash pop conflict, still caught below.)
-  const rebaseArgs = ['rebase', '--autostash', base.ref];
-  const rebase = await git(rebaseArgs);
+  const replayStart = await startFeatureReplay(git, base.ref, mergeBase, projectRoot);
+  if (replayStart.kind === 'refused') {
+    if (!replayStart.flattened) {
+      return attachReplaySeed({
+        kind: 'conflict_halt',
+        conflicts: [],
+        reason: replayStart.proof.kind === 'refused'
+          ? replayStart.proof.reason
+          : `replay conflicts at ${replayStart.proof.sha}`,
+        startFailure: true,
+      });
+    }
+    return replayStart.refusal;
+  }
+  const rebaseArgs = replayStart.rebaseArgs;
+  const rebase = replayStart.result;
   if (rebase.exitCode === 0) {
     const outcome = await classifyClean(git, preTree, mergeBase, projectRoot);
     // Every clean rebase that reaches here rewrites commit shas (the parent
@@ -1036,8 +1439,10 @@ export async function performRebase(
     // calls it `changed` or `noop` — a docs/config-only rebase still orphans
     // any evidence citation pinned to the pre-rebase shas. Translate
     // unconditionally on any real rebase, not gated on that heuristic.
-    await translateCompletedRebase();
-    return attachReplayIdentity(outcome);
+    await translateCompletedRebase(replayStart.flatten);
+    return attachReplayIdentity(replayStart.flatten
+      ? { ...outcome, flatten: replayStart.flatten, expectedSubjects: replayStart.expectedSubjects }
+      : outcome);
   }
 
   // Non-zero → conflicts (or another error). Inspect unmerged paths.
@@ -1057,8 +1462,14 @@ export async function performRebase(
           const retry = await git(rebaseArgs);
           if (retry.exitCode === 0) {
             const outcome = await classifyClean(git, preTree, mergeBase, projectRoot);
-            await translateCompletedRebase();
-            return attachReplayIdentity({ ...outcome, quarantine });
+            await translateCompletedRebase(replayStart.flatten);
+            return attachReplayIdentity({
+              ...outcome,
+              quarantine,
+              ...(replayStart.flatten
+                ? { flatten: replayStart.flatten, expectedSubjects: replayStart.expectedSubjects }
+                : {}),
+            });
           }
           const retryConflicts = await conflictedFiles(git);
           if (retryConflicts.length > 0) {
@@ -1067,6 +1478,7 @@ export async function performRebase(
               conflicts: retryConflicts,
               reason: 'rebase conflict requires human resolution',
               quarantine,
+              ...(replayStart.flatten ? { flatten: replayStart.flatten, expectedSubjects: replayStart.expectedSubjects } : {}),
             });
           }
           return attachReplaySeed({
@@ -1075,6 +1487,7 @@ export async function performRebase(
             reason: retry.stderr.trim() || 'rebase failed without reported conflicts',
             startFailure: !(await rebaseStateActive(git, projectRoot)),
             quarantine,
+            ...(replayStart.flatten ? { flatten: replayStart.flatten, expectedSubjects: replayStart.expectedSubjects } : {}),
           });
         } catch (error) {
           return attachReplaySeed({
@@ -1083,6 +1496,7 @@ export async function performRebase(
             reason: `${rebase.stderr.trim() || 'rebase failed without reported conflicts'}\n${(error as Error).message}`,
             startFailure: true,
             ...(quarantine === undefined ? {} : { quarantine }),
+            ...(replayStart.flatten ? { flatten: replayStart.flatten, expectedSubjects: replayStart.expectedSubjects } : {}),
           });
         }
       }
@@ -1094,6 +1508,7 @@ export async function performRebase(
       conflicts: [],
       reason: rebase.stderr.trim() || 'rebase failed without reported conflicts',
       startFailure: !(await rebaseStateActive(git, projectRoot)),
+      ...(replayStart.flatten ? { flatten: replayStart.flatten, expectedSubjects: replayStart.expectedSubjects } : {}),
     });
   }
 
@@ -1102,6 +1517,7 @@ export async function performRebase(
     kind: 'conflict_halt',
     conflicts,
     reason: 'rebase conflict requires human resolution',
+    ...(replayStart.flatten ? { flatten: replayStart.flatten, expectedSubjects: replayStart.expectedSubjects } : {}),
   });
 }
 
@@ -1578,13 +1994,15 @@ async function resolveRebaseConflictsInner(
     return replay === undefined ? outcome : { ...outcome, replay };
   };
 
-  // Feature commit subjects that must survive: all commits in <onto>..ORIG_HEAD.
-  // ORIG_HEAD is the pre-rebase feature tip (set by git before it starts replaying).
-  const subjR = await git(['log', '--format=%s', `${onto}..ORIG_HEAD`]);
-  const subjectsBefore =
-    subjR.exitCode === 0
+  // A flattened todo deliberately omits side lineage and ancestry-only merges.
+  // Its captured list, rather than mutable ORIG_HEAD history, is FR-9's authority.
+  // Merge-free replays retain the historical ORIG_HEAD calculation.
+  const subjectsBefore = conflictOutcome.expectedSubjects ?? await (async () => {
+    const subjR = await git(['log', '--format=%s', `${onto}..ORIG_HEAD`]);
+    return subjR.exitCode === 0
       ? subjR.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)
       : [];
+  })();
 
   // Use the conflict list already captured in the outcome (avoids a redundant
   // git call and is consistent with the snapshot at conflict time).
@@ -1688,15 +2106,15 @@ async function resolveRebaseConflictsInner(
     // rejected or unresolved continuation.
     if (replaySeed && opts?.translateAfterRebase) {
       const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-      await opts.translateAfterRebase(
-        git,
-        projectRoot,
-        onto,
-        replaySeed.preRebaseHead,
-        head,
-      );
+      if (conflictOutcome.flatten) {
+        await opts.translateAfterRebase(git, projectRoot, onto, replaySeed.preRebaseHead, head, conflictOutcome.flatten);
+      } else {
+        await opts.translateAfterRebase(git, projectRoot, onto, replaySeed.preRebaseHead, head);
+      }
     }
-    return attachResolvedReplay(resolvedOutcome);
+    return attachResolvedReplay(conflictOutcome.flatten
+      ? { ...resolvedOutcome, flatten: conflictOutcome.flatten }
+      : resolvedOutcome);
   }
 
   // All cap attempts consumed without the rebase completing.
@@ -1901,17 +2319,29 @@ export async function applyRebaseVerdicts(
   preservedCandidates?: RebasePreservedCandidate[];
   replay?: ReplayEvidence;
 }> {
-  if (outcome.kind === 'conflict_halt' || outcome.kind === 'setup_stop') {
+  switch (outcome.kind) {
+    case 'conflict_halt':
+    case 'flatten_refused':
+    case 'setup_stop': {
     // A setup-only resolver exhaustion leaves the rebase paused exactly like an
     // unresolved conflict: the gate stays unsatisfied and the run parks.
     await writeVerdict(projectRoot, 'rebase', {
       satisfied: false,
       reason: outcome.kind === 'setup_stop'
         ? `rebase resolution paused — provider setup unavailable: ${outcome.reason}`
+        : outcome.kind === 'flatten_refused'
+          ? `rebase flatten refused: ${outcome.reason}`
         : `rebase conflict: ${outcome.reason}`,
       checkedAt: Date.now(),
     });
     return { satisfied: false, kickedBack: [], reverified: [] };
+    }
+    case 'noop':
+    case 'mergeable_skip':
+    case 'changed':
+      break;
+    default:
+      return assertNeverRebaseOutcome(outcome);
   }
 
   // A completed file-changing rebase is a cross-file operation.  Publish its
@@ -2183,12 +2613,21 @@ export async function recordRebaseStepCompletion(
   stateFilePath: string,
   outcome: RebaseOutcome,
 ): Promise<void> {
-  if (outcome.kind === 'conflict_halt') return;
-  if (outcome.kind === 'setup_stop') {
-    await saveStepStatus(stateFilePath, 'rebase', 'refused');
-    return;
+  switch (outcome.kind) {
+    case 'conflict_halt':
+    case 'flatten_refused':
+      return;
+    case 'setup_stop':
+      await saveStepStatus(stateFilePath, 'rebase', 'refused');
+      return;
+    case 'noop':
+    case 'mergeable_skip':
+    case 'changed':
+      await saveStepStatus(stateFilePath, 'rebase', 'done');
+      return;
+    default:
+      return assertNeverRebaseOutcome(outcome);
   }
-  await saveStepStatus(stateFilePath, 'rebase', 'done');
 }
 
 /**
@@ -2378,6 +2817,12 @@ export async function emitRebaseEvent(
         directory: outcome.quarantine.directory,
       });
     }
+    // The audit is an observation of a flattened replay, independent of the
+    // later changed/noop classification.  Emit it once and only on the event
+    // spine; it deliberately has no sidecar or daemon-log representation.
+    if (outcome.flatten) {
+      await events.emit({ type: 'rebase_merge_audit', ...outcome.flatten.audit });
+    }
     switch (outcome.kind) {
       case 'noop':
         await events.emit(
@@ -2415,6 +2860,22 @@ export async function emitRebaseEvent(
           conflicts: outcome.conflicts,
         });
         break;
+      case 'flatten_refused':
+        await events.emit({
+          type: 'rebase_conflict_halt',
+          step: 'rebase',
+          reason: outcome.reason,
+          conflicts: outcome.conflicts,
+          mergeAudit: {
+            flattenedMerges: outcome.mergeSha ? [outcome.mergeSha] : [],
+            ancestryOnlyMerges: [],
+            sideLineageCount: 0,
+            parents: outcome.parents,
+            flattenedSha: outcome.flattenedSha,
+            conflicts: outcome.conflicts,
+          },
+        });
+        break;
       case 'setup_stop':
         // Same parked terminal as a conflict halt; the reason names setup so the
         // observation stays distinguishable from resolver exhaustion.
@@ -2425,6 +2886,8 @@ export async function emitRebaseEvent(
           conflicts: outcome.conflicts,
         });
         break;
+      default:
+        assertNeverRebaseOutcome(outcome);
     }
   } catch {
     /* best-effort: event failure must not affect the rebase result */

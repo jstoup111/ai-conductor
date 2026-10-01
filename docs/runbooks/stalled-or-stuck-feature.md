@@ -1118,6 +1118,36 @@ After resolving the stated refusal, return to the main checkout, clear both halt
 using [the resume procedure](#clear-a-halt-and-let-the-feature-resume). The next daemon dispatch
 re-queues the feature; it does not continue a rebase.
 
+### A flattened rebase was refused
+
+**Symptom:** `.pipeline/HALT` is `needs-human` and begins `flattened rebase refused`. Its recovery
+procedure names a merge sha, the merge's first parent, and a `git rebase -i --rebase-merges` command.
+No rebase is active.
+
+**Diagnosis:** The feature branch contains a content-bearing merge, and its flattened commit
+conflicts with the new base. The engine detected this before mutation, so the branch is unchanged;
+see [merge-bearing feature branches](../guides/running-the-daemon.md#merge-bearing-feature-branches).
+The persisted `rebase_conflict_halt` event's `mergeAudit` field lists the merge's parents, its
+flattened sha, and the conflicting paths.
+
+**Recovery:** Run the recipe from the HALT, substituting its values:
+
+```bash
+ai-conductor daemon park <slug>
+git -C .worktrees/<slug> rebase -i --rebase-merges <base>
+# At the merge stop, re-apply the merge's own changes shown by:
+git -C .worktrees/<slug> diff <first-parent> <merge>
+# Resolve and stage them, then:
+git -C .worktrees/<slug> rebase --continue
+```
+
+Do not use `reset --hard` or `checkout -- <path>`. When the rebase completes, clear both halt files
+and unpark using [the resume procedure](#clear-a-halt-and-let-the-feature-resume).
+
+A merge-bearing branch whose proof fails before a merge can be named parks with `rebase did not
+start` instead; recover it as in
+[a rebase never started](#a-rebase-never-started-after-an-untracked-file-collision).
+
 ### The completed rebase halted for missing feature content
 
 **Symptom:** `.pipeline/HALT` is `needs-human` and begins `rebase completed — parked for human

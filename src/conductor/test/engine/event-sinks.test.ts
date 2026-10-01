@@ -129,6 +129,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'finish_publication_disposition',
   'kickback',
   'rebase_changed',
+  'rebase_merge_audit',
   'rebase_gate_invalidated',
   'build_review_repair_context',
   'build_review_rubric_started',
