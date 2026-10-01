@@ -640,3 +640,19 @@ Twenty-three tasks deliver an engine-generated `git` argv guard, provisioned fai
 **Done when:**
 - S11.1 is satisfied by this task.
 - Re-run prd-audit and confirm task rem-prd-audit-rem-s11-1 is complete.
+
+### Task rem-as-built-rem-adr-d5-1: src/conductor/src/engine/git-hook-assets.ts:31-37 — replace the `read -r -a expanded <<< "$alias_value"` split in GIT_GUARD_SCRIPT with git-compatible alias tokenization (single quotes, double quotes, backslash escapes, as git's split_cmdline does), keeping `!` shell aliases unexpanded; add failing-first cases to src/conductor/test/engine/git-guard-script.test.ts in a scratch feature repository for alias values `reset '--hard'`, `reset "--hard"` and `clean '-f'` (each exits non-zero, file/edit survives) plus a quoted non-destructive alias (`log '-1'`) reaching real git with the expanded argv; keep Task 4's unquoted reset --hard alias test and Task 21's fast-path test unchanged
+**Gate:** as-built
+**Rationale:** git-hook-assets.ts:34 tokenizes the alias value with Bash `read -r -a`, which is not git's quote-aware alias parser, so `alias.x=reset '--hard'` evades classification and real git runs reset --hard (approved D5); Task 4's Done-when covers only an unquoted alias, so no existing task admits the quote-aware fix. The fix keeps Task 4's and Task 21's existing alias tests (unquoted reset --hard refused, `!` aliases unexpanded) and only adds quote handling; sibling site swept: the alias lookup at git-hook-assets.ts:32 is the only tokenization point.
+**Governing clause:** adr-2026-09-23-engine-git-guard-on-agent-path decision 5
+**Done when:**
+- adr-2026-09-23-engine-git-guard-on-agent-path decision 5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-d5-1 is complete.
+
+### Task rem-as-built-rem-adr-d2-pi-1: src/conductor/src/execution/pi-provider.ts:120-136 — mirror claude-provider.ts:640-673: call ensureGitGuardForDispatch(options.cwd) before spawning (on throw resolve a failed result naming the guard path without calling subprocessFactory), and pass env: withGitGuardPath(<current child env>, guardDir) to the subprocess, applying the same build_review exemption the Claude/Codex adapters use (Task 20) and reporting guard installation for the gitGuardInstalled audit fact the same way (Task 22); add failing-first tests to src/conductor/test/execution/pi-provider.test.ts with a recording subprocessFactory: a prepared scratch worktree (HOME set to an empty temp dir) yields a child PATH beginning with its .pipeline/bin, an unprepared cwd yields no PATH override, a throwing guard repair spawns nothing, and process.env.PATH is unchanged afterwards
+**Gate:** as-built
+**Rationale:** pi-provider.ts:129-136 spawns `pi` with only cwd and no env, never calling ensureGitGuardForDispatch or withGitGuardPath, while approved D2 makes every provider adapter's child-environment the enforcement point and claude-provider.ts:640,673 shows the pattern; Tasks 8/9/23 cover only Claude and Codex, so no existing task admits Pi. Counterparts: the build_review exemption (Task 20) and the gitGuardInstalled fact (Task 22) must treat Pi the same as Claude/Codex, named in the task.
+**Governing clause:** adr-2026-09-23-engine-git-guard-on-agent-path decision 2
+**Done when:**
+- adr-2026-09-23-engine-git-guard-on-agent-path decision 2 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-d2-pi-1 is complete.
