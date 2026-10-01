@@ -60,6 +60,29 @@ describe('validateConfiguredProviderModels', () => {
     expect(fake).not.toHaveBeenCalled();
   });
 
+  it('lists configured Pi models and rejects an id absent from the listing', async () => {
+    const fake = runner({ exitCode: 0, stdout: PI_LISTING });
+
+    await expect(validateConfiguredProviderModels({
+      config: {
+        llm_provider: 'claude',
+        steps: { plan: { llm_provider: 'pi', model: 'anthropic/missing-model' } },
+        llm_providers: { pi: { model: 'anthropic/missing-model' } },
+      },
+      discovery: installedPi(),
+      runner: fake,
+    })).rejects.toMatchObject({
+      name: 'ProviderModelUnknownError',
+      kind: 'unknown-model',
+      modelId: 'anthropic/missing-model',
+      configPath: 'steps.plan.model',
+      step: 'plan',
+    } satisfies Partial<ProviderModelUnknownError>);
+
+    expect(fake).toHaveBeenCalledOnce();
+    expect(fake).toHaveBeenCalledWith('pi', ['--list-models']);
+  });
+
   it('fails installation before probing when configured Pi is missing', async () => {
     const fake = runner({ exitCode: 0, stdout: PI_LISTING });
 
