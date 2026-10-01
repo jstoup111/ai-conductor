@@ -181,6 +181,7 @@ deprecation warning and event; see [build_review](#build_review)). Everything el
 | `acceptance_spec_globs` | string[] | `[]` | [acceptance_spec_globs](#acceptance_spec_globs) |
 | `test_suite` | object | none | [test_suite](#test_suite) |
 | `llm_provider` | string \| string[] | `['claude']` | [llm_provider](#llm_provider) |
+| `llm_providers` | object | unset; required for `pi` | [llm_providers](#llm_providers) |
 | `provider_substitution` | string | `allow` | [provider_substitution](#provider_substitution) |
 | `ui_renderer` | string | `terminal` | [ui_renderer](#ui_renderer) |
 | `visualizers` | string[] | unset | [visualizers](#visualizers) |
@@ -673,12 +674,63 @@ with a list of available providers (`provider-selection.ts:52-66`).
 
 An array is a fallback ladder, not a set. The **first** entry is inherited by every step that does not
 set its own `steps.<n>.llm_provider` (`provider-selection.ts:10-20`; `src/conductor/src/index.ts:1001`;
-`src/conductor/src/daemon-cli.ts:808`). `claude` and `codex` use harness model policies. `pi` sends no
-harness-selected model id, leaving model selection to Pi's configured default. Other registered
-providers warn and fall back to the Claude policy.
+`src/conductor/src/daemon-cli.ts:808`). `claude` and `codex` use harness model policies, optionally
+overridden by [`llm_providers`](#llm_providers). `pi` ships no model policy, so selecting it requires
+`llm_providers.pi`. Other registered providers warn and fall back to the Claude policy.
 
 Procedure and trade-offs are in [multiprovider](../guides/multiprovider.md); the per-provider model
 tables are in [models](models.md).
+
+## llm_providers
+
+Provider-native model policy overrides, keyed by built-in provider id (`claude`, `codex`, `pi`).
+Optional object; unset means each provider uses its built-in policy
+(`resolveProviderModelPolicy`, `src/conductor/src/engine/provider-model-policy.ts`).
+
+| Key | Type | Effect when set |
+| --- | --- | --- |
+| `llm_providers.<id>.model` | non-empty string | Replaces the provider policy's default model for every step |
+| `llm_providers.<id>.model_escalation_order` | array of non-empty strings | Replaces the retry escalation order |
+| `llm_providers.<id>.model_fallback_ladder` | array of non-empty strings | Replaces the availability fallback ladder; takes precedence over [`model_fallback_ladder`](#model_fallback_ladder) |
+
+**Pi requires all three keys**, non-empty, whenever `pi` appears in any provider selection:
+`llm_provider`, `steps.<step>.llm_provider`, or a `build_review` rubric's `llm_provider`. Any authored
+`model` that reaches a Pi dispatch — for example `steps.build.model` when `build`'s first provider is
+`pi` — must also be a Pi id. Pi model ids use `provider/model` form split at the first `/`:
+`cline/google/gemma-4-31b-it:free` is provider `cline`, model `google/gemma-4-31b-it:free`. The
+adapter passes `--provider <provider> --model <model> --thinking <effort>`, with `effort` unchanged.
+
+```yaml
+llm_provider: [claude, pi]
+llm_providers:
+  pi:
+    model: anthropic/claude-sonnet-4-5
+    model_escalation_order: [anthropic/claude-sonnet-4-5, anthropic/claude-opus-4-5]
+    model_fallback_ladder: [anthropic/claude-opus-4-5, openai/gpt-5]
+```
+
+Validation (`src/conductor/src/engine/config.ts`) fails configuration loading with:
+
+| Condition | Error |
+| --- | --- |
+| Key is not a catalog provider | `llm_providers names unknown provider "<id>". Available catalog providers: claude, codex, pi` |
+| Unknown sub-key | `Unknown key in llm_providers.<id>: "<key>"` |
+| Empty array entry | `llm_providers.<id>.<key>[<index>] must be a non-empty string` |
+| Pi selected, key missing or empty | `llm_providers.pi.<key> is required because pi is configured` |
+| Pi id without `/` | `<config path> model "<id>" must use the provider/model form` |
+| Pi id with empty segment or whitespace | `... has an empty provider segment`, `... has an empty model segment`, `... must not contain whitespace` |
+
+At the boot of a dispatching command, when `pi` is installed and has configured models, the engine
+runs `pi --list-models` (5 s timeout) and rejects any configured id it does not list
+(`src/conductor/src/engine/provider-model-probe.ts`):
+
+```text
+unknown Pi model for configured id "anthropic/claude-nope" at llm_providers.pi.model
+```
+
+A provider segment absent from the listing reports `unknown Pi provider` instead. A non-zero exit or
+unparseable output reports `Pi model listing is unparseable: "<first line>".` Procedure:
+[multiprovider](../guides/multiprovider.md#configure-pi-models).
 
 ## provider_substitution
 
@@ -1136,9 +1188,9 @@ Operating this repo under these guardrails is covered in [self-hosting](../guide
 Ordered list of models to try when the resolved model is unavailable. Optional `string[]`; must be an
 array of non-empty strings, and an **empty array is legal** (`config.ts:737-746`).
 
-Absent means the provider policy's own ladder is used:
-`this.config?.model_fallback_ladder ?? this.modelPolicy.modelFallbackLadder`
-(`src/conductor/src/engine/step-runners.ts:384`; also `attribution-lane.ts:367`). Policy defaults are
+`selectFallbackLadder` (`src/conductor/src/engine/model-availability.ts`) picks the ladder in this
+order: [`llm_providers.<id>.model_fallback_ladder`](#llm_providers), then this key (never for `pi`),
+then the provider policy's own ladder. Policy defaults are
 `['fable','opus','sonnet']` for Claude and `['gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna']` for Codex.
 See [models](models.md).
 
