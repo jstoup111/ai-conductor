@@ -101,6 +101,14 @@ describe('run-vitest startup', () => {
     expect(observation.nodeOptions).toBe(nodeOptions);
   });
 
+  it('raises an inherited heap limit that cannot run the ordinary suite', async () => {
+    const result = await launch({ NODE_OPTIONS: '--trace-warnings --max-old-space-size=4096' });
+    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
+
+    expect(result.exitCode).toBe(0);
+    expect(observation.nodeOptions).toBe('--trace-warnings --max-old-space-size=6144');
+  });
+
   it('prefers the package-local Vitest binary without a Vitest command on PATH', async () => {
     await writeFakeVitest(join(fixtureRoot, 'node_modules', '.bin', 'vitest'), 'package-local');
 

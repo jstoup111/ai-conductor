@@ -11,9 +11,13 @@ const packageVitest = join(packageRoot, 'node_modules', '.bin', 'vitest');
 const vitestCommand = existsSync(packageVitest) ? packageVitest : 'vitest';
 const defaultOldSpaceLimit = '--max-old-space-size=6144';
 const inheritedNodeOptions = process.env.NODE_OPTIONS ?? '';
-const nodeOptions = /(?:^|\s)--max-old-space-size(?:=|\s)/.test(inheritedNodeOptions)
+const inheritedOldSpaceLimit = /(?:^|\s)--max-old-space-size(?:=|\s+)(\d+)(?=\s|$)/.exec(inheritedNodeOptions);
+const nodeOptions = inheritedOldSpaceLimit !== null && Number(inheritedOldSpaceLimit[1]) >= 6144
   ? inheritedNodeOptions
-  : [inheritedNodeOptions, defaultOldSpaceLimit].filter(Boolean).join(' ');
+  : [
+    inheritedNodeOptions.replace(/(?:^|\s)--max-old-space-size(?:=|\s+)\d+(?=\s|$)/, '').trim(),
+    defaultOldSpaceLimit,
+  ].filter(Boolean).join(' ');
 const child = spawn(vitestCommand, process.argv.slice(2), {
   env: {
     ...process.env,
