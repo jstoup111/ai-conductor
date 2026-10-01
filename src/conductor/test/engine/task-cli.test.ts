@@ -1,3 +1,4 @@
+// Covers: task:1, task:2
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   detectTaskCommand,
@@ -594,12 +595,18 @@ describe('runTaskDone', () => {
       // Start task 7
       await runTaskStart(dir, '7');
 
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const before = await fsPromises.readFile(statusPath, 'utf-8');
+
       // Call runTaskDone
-      await runTaskDone(dir, '7');
+      const code = await runTaskDone(dir, '7');
 
       // Verify row 7 is still in_progress (never becomes completed)
-      const statusPath = join(dir, '.pipeline/task-status.json');
       const content = await fsPromises.readFile(statusPath, 'utf-8');
+      const stampRemoved = await fsPromises
+        .access(join(dir, '.pipeline/current-task'))
+        .then(() => false, () => true);
+      expect({ code, content, stampRemoved }).toEqual({ code: 0, content: before, stampRemoved: true });
       const status = JSON.parse(content);
 
       const task7 = status.tasks.find((t: any) => t.id === '7');
@@ -607,22 +614,17 @@ describe('runTaskDone', () => {
     });
   });
 
-  describe('daemon-dispatched feature — no activePlanPath in engine state', () => {
-    it('records Done when evidence and completes the task by resolving the plan from the feature slug', async () => {
-      // A daemon-dispatched feature never runs the plan step that records
-      // activePlanPath, so engine-state.json carries none. The close must
-      // resolve the plan the same way readOpenRepairState does (feature
-      // slug via conduct-state.json) instead of falling back to a silent
-      // legacy no-op that leaves the row pending.
+  describe('stampless completion', () => {
+    it('completes an in-progress row and records one evidence item for every Done when check', async () => {
       await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
       await fsPromises.writeFile(join(dir, '.docs', 'plans', 'my-feature.md'), [
         '### Task 7: Repair the sweep',
         '**Done when:**',
         '- the sweep observes reservation before dispatch',
+        '- the sweep keeps the reservation until completion',
         '',
       ].join('\n'));
-      await fsPromises.writeFile(join(dir, '.docs', 'plans', 'other-feature.md'), '### Task 1: Unrelated\n');
       await fsPromises.writeFile(
         join(dir, '.pipeline', 'conduct-state.json'),
         JSON.stringify({ feature_desc: 'my-feature' }),
@@ -630,23 +632,84 @@ describe('runTaskDone', () => {
       await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({}));
       await fsPromises.writeFile(
         join(dir, '.pipeline', 'task-status.json'),
-        JSON.stringify({ tasks: [{ id: '7', status: 'pending' }] }),
+        JSON.stringify({ tasks: [{ id: '7', status: 'in_progress' }] }),
       );
-      expect(await runTaskStart(dir, '7')).toBe(0);
 
-      const exitCode = await runTaskDone(dir, '7', [{ index: 1, evidence: 'sweep test observed reservation' }]);
+      const exitCode = await runTaskDone(dir, '7', [
+        { index: 1, evidence: 'sweep test observed reservation' },
+        { index: 2, evidence: 'completion test retained reservation' },
+      ]);
 
       expect(exitCode).toBe(0);
       const status = JSON.parse(
         await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
-      ) as { tasks: Array<Record<string, unknown>> };
-      expect(status.tasks[0]).toMatchObject({
-        status: 'completed',
-        doneWhen: [{ check: 'the sweep observes reservation before dispatch', evidence: 'sweep test observed reservation' }],
-      });
+      ) as { tasks: Array<{ status: string; doneWhen?: Array<{ check: string; evidence: string; source: string }> }> };
+      expect(status.tasks[0].status).toBe('completed');
+      expect(status.tasks[0].doneWhen).toHaveLength(2);
+      expect(status.tasks[0].doneWhen).toEqual([
+        { check: 'the sweep observes reservation before dispatch', evidence: 'sweep test observed reservation', source: 'reported' },
+        { check: 'the sweep keeps the reservation until completion', evidence: 'completion test retained reservation', source: 'reported' },
+      ]);
     });
 
-    it('refuses without evidence instead of silently leaving the task pending', async () => {
+    it('refuses missing evidence, names its check, and leaves status byte-identical', async () => {
+      await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.docs', 'plans', 'my-feature.md'), [
+        '### Task 7: Repair the sweep',
+        '**Done when:**',
+        '- the sweep observes reservation before dispatch',
+        '- the sweep keeps the reservation until completion',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(
+        join(dir, '.pipeline', 'conduct-state.json'),
+        JSON.stringify({ feature_desc: 'my-feature' }),
+      );
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({}));
+      const statusPath = join(dir, '.pipeline', 'task-status.json');
+      const originalStatus = JSON.stringify({ tasks: [{ id: '7', status: 'in_progress' }] }, null, 2);
+      await fsPromises.writeFile(
+        statusPath,
+        originalStatus,
+      );
+      const statusBefore = await fsPromises.readFile(statusPath, 'utf-8');
+
+      const exitCode = await runTaskDone(dir, '7', [{ index: 1, evidence: 'sweep test observed reservation' }]);
+
+      expect(exitCode).toBe(1);
+      expect(stdErr.join('\n')).toContain('missing Done when evidence for check 2');
+      await expect(fsPromises.readFile(statusPath, 'utf-8')).resolves.toBe(statusBefore);
+    });
+
+    it('halts a plan gap without completing the row', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, 'plan.md'), [
+        '### Task 7: Repair the sweep',
+        '**Done when:**',
+        '- the sweep observes reservation before dispatch',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: 'plan.md',
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '7', status: 'in_progress' }],
+      }));
+
+      expect(await runTaskDone(
+        dir,
+        '7',
+        [],
+        { index: 1, reason: 'The approved plan cannot satisfy this check.' },
+      )).toBe(1);
+
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('plan-gap');
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'));
+      expect(status.tasks[0].status).not.toBe('completed');
+    });
+
+    it('halts a daemon-dispatched plan gap without completing the row', async () => {
       await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
       await fsPromises.writeFile(join(dir, '.docs', 'plans', 'my-feature.md'), [
@@ -660,14 +723,52 @@ describe('runTaskDone', () => {
         JSON.stringify({ feature_desc: 'my-feature' }),
       );
       await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({}));
-      await fsPromises.writeFile(
-        join(dir, '.pipeline', 'task-status.json'),
-        JSON.stringify({ tasks: [{ id: '7', status: 'pending' }] }),
-      );
-      expect(await runTaskStart(dir, '7')).toBe(0);
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '7', status: 'in_progress' }],
+      }));
 
-      expect(await runTaskDone(dir, '7')).toBe(1);
-      expect(stdErr.join('\n')).toContain('missing Done when evidence for check 1');
+      expect(await runTaskDone(
+        dir,
+        '7',
+        [],
+        { index: 1, reason: 'The approved plan cannot satisfy this check.' },
+      )).toBe(1);
+
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('plan-gap');
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'));
+      expect(status.tasks[0].status).not.toBe('completed');
+    });
+
+    it('leaves a row byte-identical when its plan task has no Done when checks', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, 'plan.md'), '### Task 7: Legacy task\n');
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: 'plan.md',
+      }));
+      const originalStatus = JSON.stringify({ tasks: [{ id: '7', status: 'in_progress' }] }, null, 2);
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), originalStatus);
+
+      expect(await runTaskDone(dir, '7')).toBe(0);
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8')).resolves.toBe(originalStatus);
+    });
+
+    it.each(['completed', 'skipped'])('re-closes a %s row without evidence or rewriting status', async (status) => {
+      await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+        '### Task 7: Repair the sweep',
+        '**Done when:**',
+        '- the sweep observes reservation before dispatch',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      const originalStatus = JSON.stringify({ tasks: [{ id: '7', status }] }, null, 2);
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), originalStatus);
+
+      expect(await runTaskDone(dir, '7')).toBe(0);
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8')).resolves.toBe(originalStatus);
     });
   });
 
@@ -760,41 +861,6 @@ describe('runTaskDone', () => {
       expect(exitCode).toBe(0);
     });
 
-    it('is a no-op when stamp file does not exist', async () => {
-      // Setup: pipeline dir exists, no stamp. The engine state records an
-      // active plan whose task 7 declares Done when checks but carries NO
-      // repair obligation (S2.3): a never-reopened task keeps the documented
-      // idempotent exit 0 and never rewrites task-status.json.
-      await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
-      await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
-        '### Task 7: Legacy task',
-        '**Done when:**',
-        '- Evidence is recorded.',
-        '',
-      ].join('\n'));
-      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
-        activePlanPath: '.docs/plans/feature.md',
-      }));
-      const tasks = Array.from({ length: 12 }, (_, i) => ({
-        id: String(i + 1),
-        name: `Task ${i + 1}`,
-        status: 'pending',
-      }));
-      const statusPath = join(dir, '.pipeline/task-status.json');
-      await fsPromises.writeFile(statusPath, JSON.stringify({ tasks }, null, 2));
-
-      const originalContent = await fsPromises.readFile(statusPath, 'utf-8');
-
-      // Call runTaskDone for task 7 (no stamp, no evidence, no obligation)
-      const exitCode = await runTaskDone(dir, '7');
-      expect(exitCode).toBe(0);
-
-      // Verify task-status.json is unchanged
-      const currentContent = await fsPromises.readFile(statusPath, 'utf-8');
-      expect(currentContent).toBe(originalContent);
-    });
-
     it('still validates an explicitly reopened task whose stamp is missing', async () => {
       // S2.3 negative: an open repair obligation must not be silently skipped
       // by the missing-stamp idempotence path.
@@ -827,6 +893,69 @@ describe('runTaskDone', () => {
     });
   });
 
+  describe('CLI entry — stampless done', () => {
+    it('parses and dispatches Done when evidence to complete a stampless task', async () => {
+      await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+        '### Task 7: Record completion through the CLI',
+        '**Done when:**',
+        '- CLI evidence is recorded.',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '7', status: 'in_progress' }],
+      }));
+
+      const command = detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '7', '--done-when', '1=CLI proof',
+      ]);
+
+      expect(command).toEqual({
+        kind: 'done',
+        id: '7',
+        doneWhen: [{ index: 1, evidence: 'CLI proof' }],
+      });
+      expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+
+      const status = JSON.parse(
+        await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
+      ) as { tasks: Array<Record<string, unknown>> };
+      expect(status.tasks[0]).toMatchObject({
+        status: 'completed',
+        doneWhen: [{ check: 'CLI evidence is recorded.', evidence: 'CLI proof' }],
+      });
+    });
+
+    it('parses and dispatches a stampless re-close without rewriting a completed row', async () => {
+      await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+        '### Task 7: Record completion through the CLI',
+        '**Done when:**',
+        '- CLI evidence is recorded.',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      const originalStatus = JSON.stringify({
+        tasks: [{ id: '7', status: 'completed', doneWhen: [{ check: 'CLI evidence is recorded.', evidence: 'CLI proof' }] }],
+      }, null, 2);
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), originalStatus);
+
+      const command = detectTaskCommand(['node', 'conduct', 'task', 'done', '7']);
+
+      expect(command).toEqual({ kind: 'done', id: '7' });
+      expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'))
+        .resolves.toBe(originalStatus);
+    });
+  });
+
   describe('malformed present engine state refuses the close (AB-1)', () => {
     it('exits 1, names the cause, and leaves the current-task stamp in place', async () => {
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -852,37 +981,6 @@ describe('runTaskDone', () => {
       await expect(runTaskDone(dir, '7')).resolves.toBe(1);
       expect(stdErr.join('\n')).toMatch(/cannot close task 7/);
       expect(stdErr.join('\n')).toMatch(/incompatible/);
-    });
-  });
-
-  describe('no completion stamping — never modifies task-status.json', () => {
-    it('does not modify task-status.json when clearing stamp', async () => {
-      // Setup: seed task-status.json and start task 7
-      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
-      const tasks = Array.from({ length: 12 }, (_, i) => ({
-        id: String(i + 1),
-        name: `Task ${i + 1}`,
-        status: 'pending',
-      }));
-      const statusPath = join(dir, '.pipeline/task-status.json');
-      const initialJson = JSON.stringify({ tasks }, null, 2);
-      await fsPromises.writeFile(statusPath, initialJson);
-
-      // Start task 7 (this modifies status to in_progress)
-      await runTaskStart(dir, '7');
-      const afterStartContent = await fsPromises.readFile(statusPath, 'utf-8');
-
-      // Call runTaskDone
-      await runTaskDone(dir, '7');
-
-      // Verify task-status.json content is identical to after-start state
-      const afterDoneContent = await fsPromises.readFile(statusPath, 'utf-8');
-      expect(afterDoneContent).toBe(afterStartContent);
-
-      // Verify row 7 is still in_progress (not completed)
-      const status = JSON.parse(afterDoneContent);
-      const task7 = status.tasks.find((t: any) => t.id === '7');
-      expect(task7.status).toBe('in_progress');
     });
   });
 

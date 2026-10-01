@@ -724,7 +724,8 @@ file. Use `config read conductor.<key>` or `config read spec_owner` to inspect t
 
 ```bash
 ai-conductor task start <id>
-ai-conductor task done <id>
+ai-conductor task done <id> [--done-when <n>=<evidence>]...
+ai-conductor task done <id> --plan-gap <n> --reason <text>
 ```
 
 Exactly two positionals: the verb and a task id matching `[A-Za-z0-9._-]+` (for example `7` or
@@ -735,10 +736,16 @@ back atomically, then writes the id into `.pipeline/current-task`. It exits 1 wh
 unreadable, corrupt, not an object, or has no `tasks` array; when the id is not found (the error lists
 the valid ids); or when either write fails.
 
-`done` reads `.pipeline/current-task`. An absent stamp exits 0 — the command is idempotent. A stamp
-holding a different id prints `cannot clear task <id>; current stamp is <other>` and exits 1 with the
-stamp untouched. A match removes the stamp. `done` never modifies `task-status.json`; completion is the
-gate authority's decision. See [gates](../explanation/gates.md).
+`done` reads `.pipeline/current-task`, but the stamp is attribution telemetry rather than close
+authority. With or without a stamp, a task whose active plan declares `Done when:` checks records
+the supplied evidence for every check and marks its row `completed`; missing evidence refuses the
+close and names the check. Without a stamp, re-closing an already `completed` or `skipped` row with
+no open repair exits 0 without rewriting `task-status.json`. `--plan-gap <n> --reason <text>` halts
+the task with or without a stamp; when no active plan is recorded, it resolves the plan from the
+feature slug. A legacy task with no `Done when:` checks keeps its prior
+exit-0, no-write behavior. A stamp holding a different id prints `cannot clear task <id>; current
+stamp is <other>` and exits 1 with both the stamp and `task-status.json` untouched. A matching stamp
+is removed after a successful close. See [gates](../explanation/gates.md).
 
 ## `ai-conductor test-suite`
 

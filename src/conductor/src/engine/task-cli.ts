@@ -15,6 +15,7 @@ import {
 import { writeHaltMarker } from './halt-marker.js';
 import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
 import { startOperatorEventSpine } from './event-persister.js';
+import { resolveRepairPlanBinding } from './repair-plan-binding.js';
 
 export interface PlanGapInput {
   index: number;
@@ -108,7 +109,7 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
         '\n' +
         'conduct task done <id> [--done-when <n>=<evidence>]...\n' +
         '  Close task <id>. Tasks with a Done when block require evidence for every check.\n' +
-        '  The engine records that evidence before clearing the current-task stamp.\n' +
+        '  The engine records that evidence and clears the current-task stamp when one is present.\n' +
         '\n' +
         'conduct task done <id> --plan-gap <n> --reason <text>\n' +
         '  Halt when Done when check <n> cannot be satisfied within the approved plan.',
@@ -245,18 +246,20 @@ export async function runTaskDone(
   try {
     stampContent = await readFile(stampPath, 'utf-8');
   } catch (err) {
-    // Legacy closes remain idempotent: a never-reopened task with no stamp is
-    // a no-op exit 0 that never rewrites task-status.json. Only an explicitly
-    // reopened task must still satisfy its current proof boundary rather than
-    // silently retaining an open durable repair because its marker was
-    // interrupted or removed. Malformed present repair state is a refusal,
-    // not legacy absence.
+    // The stamp is non-authoritative telemetry (adr-2026-07-26-concurrent-task-
+    // telemetry-and-symmetric-self-host-isolation). A task with Done when checks
+    // still records its close evidence (adr-2026-08-22-done-when-evidence-at-task-close).
     const repair = await openRepairForTask(projectRoot, id);
     if (repair.kind === 'unavailable') {
       console.error(`[task-cli] cannot close task ${id}: ${repair.reason}`);
       return 1;
     }
-    if (repair.kind === 'none') return 0;
+    if (planGap) {
+      return runTaskPlanGap(projectRoot, id, planGap);
+    }
+    if (repair.kind === 'none' && await hasTerminalTaskStatus(projectRoot, id)) {
+      return 0;
+    }
     const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen);
     if (completion.kind === 'refused') {
       console.error(completion.message);
@@ -292,6 +295,23 @@ export async function runTaskDone(
   return 0;
 }
 
+async function hasTerminalTaskStatus(projectRoot: string, id: string): Promise<boolean> {
+  try {
+    const status = JSON.parse(
+      await readFile(join(projectRoot, '.pipeline', 'task-status.json'), 'utf-8'),
+    ) as { tasks?: unknown };
+    if (!Array.isArray(status.tasks)) return false;
+    return status.tasks.some((task) =>
+      task !== null &&
+      typeof task === 'object' &&
+      (task as Record<string, unknown>).id === id &&
+      ['completed', 'skipped'].includes((task as Record<string, unknown>).status as string),
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Halt an active task when one declared Done when check cannot be achieved
  * without widening the approved plan. This deliberately leaves both the task
@@ -314,6 +334,10 @@ async function runTaskPlanGap(
     }
   } catch {
     // The diagnostic below gives the operator the actionable missing authority.
+  }
+  if (!activePlanPath) {
+    const binding = await resolveRepairPlanBinding(projectRoot);
+    if (binding.kind === 'bound') activePlanPath = binding.identity;
   }
   if (!activePlanPath) {
     console.error(`[task-cli] cannot report a plan gap for task ${id}: no active plan is recorded`);

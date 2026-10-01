@@ -56,7 +56,7 @@ Tests follow the existing runTaskDone fixtures in `src/conductor/test/engine/tas
 2. The stampless missing-evidence runTaskDone test observes exit 1, stderr naming the missing check, and a byte-identical task-status.json.
 3. The stampless plan-gap runTaskDone test observes exit 1, HALT.class reading plan-gap, and the task row not reading completed.
 4. The stampless no-Done-when-block test and the completed-row and skipped-row re-close tests each observe exit 0 with a byte-identical task-status.json.
-5. The existing mismatch-guard tests still observe exit 1 naming both ids with the sibling stamp and task-status.json unchanged.
+5. The existing mismatch-guard tests still observe exit 1 naming both ids with the current-task stamp file and task-status.json both unchanged.
 
 ### Task 2: Prove the stampless close through the CLI entry and sync the contract text
 **Story:** Story 1
@@ -86,7 +86,7 @@ Tests follow the existing runTaskDone fixtures in `src/conductor/test/engine/tas
 | Story 1 negative: Given a stampless pending task whose Done when check cannot be met, when `conduct task done` runs with a plan-gap request, then the classified plan-gap halt is written and the task row is not marked completed. | 1 | "The stampless plan-gap runTaskDone test observes exit 1, HALT.class reading plan-gap, and the task row not reading completed." | diff-local |
 | Story 1 negative: Given a stampless pending task whose plan declares no Done when block, when `conduct task done` runs, then it exits 0 and task-status.json is unchanged under the legacy close rule. | 1 | "The stampless no-Done-when-block test and the completed-row and skipped-row re-close tests each observe exit 0 with a byte-identical task-status.json." | diff-local |
 | Story 2 happy: Given a task row that already reads completed or skipped and no current-task stamp, when `conduct task done` runs without evidence, then it exits 0 and task-status.json is byte-identical. | 1, 2 | "The stampless no-Done-when-block test and the completed-row and skipped-row re-close tests each observe exit 0 with a byte-identical task-status.json." | diff-local |
-| Story 2 negative: Given the current-task stamp names a different task, when `conduct task done` runs for this task, then it exits non-zero naming both ids, the stamp file is unchanged, and task-status.json is unchanged. | 1 | "The existing mismatch-guard tests still observe exit 1 naming both ids with the sibling stamp and task-status.json unchanged." | diff-local |
+| Story 2 negative: Given the current-task stamp names a different task, when `conduct task done` runs for this task, then it exits non-zero naming both ids, the stamp file is unchanged, and task-status.json is unchanged. | 1 | "The existing mismatch-guard tests still observe exit 1 naming both ids with the current-task stamp file and task-status.json both unchanged." | diff-local |
 
 ## Test dispositions and integration ownership
 
