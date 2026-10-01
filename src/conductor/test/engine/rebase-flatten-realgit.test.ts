@@ -1,6 +1,6 @@
-// Covers: task:3, task:5, task:6
+// Covers: task:3, task:5, task:6, task:7
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -76,6 +76,60 @@ describe('performRebase real local Git (Task 5)', () => {
       await git(['-c', 'core.editor=true', 'rebase', '--continue']);
       expect((await git(['log', '--format=%B', 'main..HEAD'])).stdout).toContain('Flattened-merge:');
       expect((await git(['rev-list', '--merges', 'main..HEAD'])).stdout.trim()).toBe('');
+      expect((await git(['show', 'HEAD:conflict.ts'])).stdout).toBe('resolved\n');
+      expect((await git(['show', 'HEAD:side.ts'])).stdout).toBe('unique side\n');
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it('aborts a paused flattened replay back to its merge-bearing pre-rebase HEAD', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'rebase-flatten-abort-'));
+    try {
+      const git = (args: string[]) => execFile('git', args, { cwd: repo });
+      await git(['init', '-q', '-b', 'main']);
+      await git(['config', 'user.email', 'test@example.invalid']); await git(['config', 'user.name', 'Flatten test']);
+      await writeFile(join(repo, 'conflict.ts'), 'base\n'); await git(['add', '.']); await git(['commit', '-qm', 'base']);
+      await git(['checkout', '-qb', 'feature']);
+      await writeFile(join(repo, 'conflict.ts'), 'feature\n'); await git(['commit', '-qam', 'ordinary conflict first']);
+      await git(['branch', 'side']); await git(['checkout', '-q', 'side']);
+      await writeFile(join(repo, 'side.ts'), 'unique side\n'); await git(['add', '.']); await git(['commit', '-qm', 'side lineage']);
+      await git(['checkout', '-q', 'feature']); await git(['merge', '--no-ff', '-m', 'flattened merge after conflict', 'side']);
+      const preRebaseHead = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+      const originalMerges = (await git(['rev-list', '--merges', 'main..HEAD'])).stdout.trim();
+      expect(originalMerges).toBe(preRebaseHead);
+      await git(['checkout', '-q', 'main']); await writeFile(join(repo, 'conflict.ts'), 'main\n'); await git(['commit', '-qam', 'upstream conflict']);
+      await git(['checkout', '-q', 'feature']);
+
+      await expect(performRebase(makeGitRunner(repo), repo, 'main')).resolves.toMatchObject({
+        kind: 'conflict_halt', flatten: expect.any(Object), conflicts: ['conflict.ts'],
+      });
+      await git(['rebase', '--abort']);
+
+      expect((await git(['rev-parse', 'HEAD'])).stdout.trim()).toBe(preRebaseHead);
+      expect((await git(['rev-list', '--merges', 'main..HEAD'])).stdout.trim()).toBe(originalMerges);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it('restores a dirty tracked change byte-for-byte after a flattened replay autostash', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'rebase-flatten-autostash-'));
+    try {
+      const git = (args: string[]) => execFile('git', args, { cwd: repo });
+      await git(['init', '-q', '-b', 'main']);
+      await git(['config', 'user.email', 'test@example.invalid']); await git(['config', 'user.name', 'Flatten test']);
+      await writeFile(join(repo, 'tracked.txt'), 'tracked base\n'); await git(['add', '.']); await git(['commit', '-qm', 'base']);
+      await git(['checkout', '-qb', 'feature']);
+      await writeFile(join(repo, 'feature.txt'), 'feature work\n'); await git(['add', '.']); await git(['commit', '-qm', 'feature work']);
+      await git(['branch', 'side']); await git(['checkout', '-q', 'side']);
+      await writeFile(join(repo, 'side.txt'), 'unique side\n'); await git(['add', '.']); await git(['commit', '-qm', 'side lineage']);
+      await git(['checkout', '-q', 'feature']); await git(['merge', '--no-ff', '-m', 'flattened merge', 'side']);
+      await git(['checkout', '-q', 'main']); await writeFile(join(repo, 'upstream.txt'), 'upstream\n'); await git(['add', '.']); await git(['commit', '-qm', 'upstream advance']);
+      await git(['checkout', '-q', 'feature']);
+      const dirtyContents = 'tracked local change\nwith exact bytes\n';
+      await writeFile(join(repo, 'tracked.txt'), dirtyContents);
+
+      await expect(performRebase(makeGitRunner(repo), repo, 'main')).resolves.toMatchObject({ kind: 'changed', flatten: expect.any(Object) });
+
+      expect(await readFile(join(repo, 'tracked.txt'), 'utf8')).toBe(dirtyContents);
+      expect((await git(['diff', '--', 'tracked.txt'])).stdout).toContain('+tracked local change');
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
