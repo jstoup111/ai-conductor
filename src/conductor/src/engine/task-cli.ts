@@ -15,6 +15,7 @@ import {
 import { writeHaltMarker } from './halt-marker.js';
 import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
 import { startOperatorEventSpine } from './event-persister.js';
+import { resolveRepairPlanBinding } from './repair-plan-binding.js';
 
 export interface PlanGapInput {
   index: number;
@@ -333,6 +334,10 @@ async function runTaskPlanGap(
     }
   } catch {
     // The diagnostic below gives the operator the actionable missing authority.
+  }
+  if (!activePlanPath) {
+    const binding = await resolveRepairPlanBinding(projectRoot);
+    if (binding.kind === 'bound') activePlanPath = binding.identity;
   }
   if (!activePlanPath) {
     console.error(`[task-cli] cannot report a plan gap for task ${id}: no active plan is recorded`);

@@ -709,6 +709,36 @@ describe('runTaskDone', () => {
       expect(status.tasks[0].status).not.toBe('completed');
     });
 
+    it('halts a daemon-dispatched plan gap without completing the row', async () => {
+      await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.docs', 'plans', 'my-feature.md'), [
+        '### Task 7: Repair the sweep',
+        '**Done when:**',
+        '- the sweep observes reservation before dispatch',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(
+        join(dir, '.pipeline', 'conduct-state.json'),
+        JSON.stringify({ feature_desc: 'my-feature' }),
+      );
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({}));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '7', status: 'in_progress' }],
+      }));
+
+      expect(await runTaskDone(
+        dir,
+        '7',
+        [],
+        { index: 1, reason: 'The approved plan cannot satisfy this check.' },
+      )).toBe(1);
+
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('plan-gap');
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'));
+      expect(status.tasks[0].status).not.toBe('completed');
+    });
+
     it('leaves a row byte-identical when its plan task has no Done when checks', async () => {
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
       await fsPromises.writeFile(join(dir, 'plan.md'), '### Task 7: Legacy task\n');
