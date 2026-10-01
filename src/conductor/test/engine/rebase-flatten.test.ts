@@ -223,9 +223,7 @@ describe('startFeatureReplay (Task 4)', () => {
     ]);
   });
 
-  it('writes a proven merge-bearing replay todo through sequence.editor', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'rebase-flatten-todo-'));
-    const todoPath = join(root, 'flatten-todo');
+  function replayRunner(todoPath: string) {
     const { git: fixtureGit, calls } = flattenFixture();
     let proofMergeTreeCalls = 0;
     const git: GitRunner = async (args, opts) => {
@@ -268,12 +266,33 @@ describe('startFeatureReplay (Task 4)', () => {
       }
       return fixtureGit(args, opts);
     };
+    return { git, calls };
+  }
+
+  it('writes a proven merge-bearing replay todo through sequence.editor', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-flatten-todo-'));
+    const todoPath = join(root, 'flatten-todo');
+    const { git, calls } = replayRunner(todoPath);
     try {
       await expect(startFeatureReplay(git, BASE, MERGE_BASE, root)).resolves.toMatchObject({
         kind: 'started', rebaseArgs: ['-c', `sequence.editor=cp ${todoPath}`, 'rebase', '-i', '--autostash', BASE],
       });
       expect(await readFile(todoPath, 'utf8')).toContain(`pick ${FLATTENED_CONTENT}`);
       expect(calls.some(({ args }) => args.join(' ') === `-c sequence.editor=cp ${todoPath} rebase -i --autostash ${BASE}`)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses before rebase when the replay todo cannot be written (AB-11)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-flatten-todo-'));
+    const todoPath = join(root, 'missing-dir', 'flatten-todo');
+    const { git, calls } = replayRunner(todoPath);
+    try {
+      const result = await startFeatureReplay(git, BASE, MERGE_BASE, root);
+      expect(result).toMatchObject({ kind: 'refused', refusal: { kind: 'flatten_refused' } });
+      expect(JSON.stringify(result)).toContain('could not write flattened replay todo');
+      expect(calls.some(({ args }) => args.includes('rebase'))).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

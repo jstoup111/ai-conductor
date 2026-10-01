@@ -1085,7 +1085,11 @@ export async function startFeatureReplay(
     return refusal(plan, { kind: 'refused', reason: 'could not determine flattened replay todo path' }, true);
   }
   const todoPath = todoPathResult.stdout.trim();
-  await writeFile(projectRoot && !isAbsolute(todoPath) ? join(projectRoot, todoPath) : todoPath, `${plan.entries.map((entry) => `pick ${entry.sha}`).join('\n')}\n`);
+  try {
+    await writeFile(projectRoot && !isAbsolute(todoPath) ? join(projectRoot, todoPath) : todoPath, `${plan.entries.map((entry) => `pick ${entry.sha}`).join('\n')}\n`);
+  } catch (error) {
+    return refusal(plan, { kind: 'refused', reason: `could not write flattened replay todo: ${(error as Error).message}` }, true);
+  }
   const rebaseArgs = ['-c', `sequence.editor=cp ${todoPath}`, 'rebase', '-i', '--autostash', baseRef];
   return {
     kind: 'started', result: await git(rebaseArgs), rebaseArgs,
