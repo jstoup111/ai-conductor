@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 /**
  * Tests for the prefix-gated retitle-floor primitive (Task 6,
  * adr-2026-07-03-halt-pr-rehabilitation-at-finish).
@@ -26,7 +26,7 @@ import {
 } from '../../src/engine/halt-pr-rehabilitation.js';
 import { shipDraftPrBody } from '../../src/engine/ship-draft-pr.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
-import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
+import { HALT_PR_BANNER_SENTINEL, NEEDS_REMEDIATION_MARKER } from '../../src/engine/pr-labels.js';
 import type {
   GithubOperationRequest,
   GithubOperationRunner,
@@ -227,8 +227,11 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
     const { operations, writes } = fakeOperations({
       onOperation: (request) => {
         if (request.operation === 'pull-request.label.remove') state.labels = [];
-        if (request.operation === 'pull-request.edit' && 'title' in request.payload) state.title = request.payload.title;
-        if (request.operation === 'pull-request.edit' && 'body' in request.payload) state.body = request.payload.body;
+        if (request.operation === 'pull-request.edit') {
+          const payload = request.payload as { title?: string; body?: string } | undefined;
+          if (typeof payload?.title === 'string') state.title = payload.title;
+          if (typeof payload?.body === 'string') state.body = payload.body;
+        }
       },
     });
 
@@ -238,6 +241,158 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
 
     expect({ outcome, hasHaltSignal: hasHaltSignal(state), commentWrites: writes.filter((write) => write.operation === 'pull-request.comment.create').length })
       .toEqual({ outcome: 'cleared', hasHaltSignal: false, commentWrites: 1 });
+  });
+
+  it('updates an existing marked remediation comment after confirming the clear', async () => {
+    const halted = {
+      title: 'feat: widget import flow',
+      isDraft: true,
+      labels: [{ name: 'needs-remediation' }],
+      body: '## Summary\n\nWidget import flow.\n\n<!-- conductor:needs-remediation -->',
+    };
+    const cleared = {
+      ...halted,
+      labels: [],
+      body: '## Summary\n\nWidget import flow.',
+    };
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify(halted) }, // resume-clear state read
+      { stdout: JSON.stringify(cleared) }, // post-mutation verification read
+      { stdout: JSON.stringify({ comments: [{ url: 'https://github.com/acme/repo/pull/7#issuecomment-42', body: 'Needs work\n\n<!-- conductor:needs-remediation -->' }] }) }, // marked-comment lookup
+    ]);
+    const { operations, writes } = fakeOperations();
+
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
+
+    expect({
+      outcome,
+      updates: writes.filter((write) => write.operation === 'pull-request.comment.update'),
+      creates: writes.filter((write) => write.operation === 'pull-request.comment.create'),
+    }).toEqual({
+      outcome: 'cleared',
+      updates: [expect.objectContaining({
+        payload: expect.objectContaining({ commentId: '42', body: expect.stringContaining('Halt resolved') }),
+      })],
+      creates: [],
+    });
+  });
+
+  it('creates one resolution comment when the confirmed PR has no marked comment', async () => {
+    const halted = {
+      title: 'feat: widget import flow', isDraft: true, labels: [{ name: 'needs-remediation' }], body: '<!-- conductor:needs-remediation -->',
+    };
+    const cleared = { ...halted, labels: [], body: '' };
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify(halted) }, { stdout: JSON.stringify(cleared) }, { stdout: JSON.stringify({ comments: [] }) },
+    ]);
+    const { operations, writes } = fakeOperations();
+
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
+
+    expect({ outcome, creates: writes.filter((write) => write.operation === 'pull-request.comment.create').length, updates: writes.filter((write) => write.operation === 'pull-request.comment.update').length })
+      .toEqual({ outcome: 'cleared', creates: 1, updates: 0 });
+  });
+
+  it('creates one resolution comment when the marked-comment lookup fails', async () => {
+    const halted = {
+      title: 'feat: widget import flow', isDraft: true, labels: [{ name: 'needs-remediation' }], body: '<!-- conductor:needs-remediation -->',
+    };
+    const cleared = { ...halted, labels: [], body: '' };
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify(halted) }, { stdout: JSON.stringify(cleared) }, new Error('gh: network error'),
+    ]);
+    const { operations, writes } = fakeOperations();
+
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
+
+    expect({ outcome, creates: writes.filter((write) => write.operation === 'pull-request.comment.create').length })
+      .toEqual({ outcome: 'cleared', creates: 1 });
+  });
+
+  it('returns partial when the fallback resolution-comment create does not execute', async () => {
+    const halted = {
+      title: 'feat: widget import flow', isDraft: true, labels: [{ name: 'needs-remediation' }], body: '<!-- conductor:needs-remediation -->',
+    };
+    const cleared = { ...halted, labels: [], body: '' };
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify(halted) }, { stdout: JSON.stringify(cleared) }, { stdout: JSON.stringify({ comments: [] }) },
+    ]);
+    const { operations, writes } = fakeOperations({
+      onOperation: (request) => {
+        if (request.operation === 'pull-request.comment.create') throw new Error('guarded transport failed');
+      },
+    });
+
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
+
+    expect({ outcome, creates: writes.filter((write) => write.operation === 'pull-request.comment.create').length })
+      .toEqual({ outcome: 'partial', creates: 1 });
+  });
+
+  it('does not create a second comment when the marked-comment update does not execute', async () => {
+    const halted = {
+      title: 'feat: widget import flow', isDraft: true, labels: [{ name: 'needs-remediation' }], body: '<!-- conductor:needs-remediation -->',
+    };
+    const cleared = { ...halted, labels: [], body: '' };
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify(halted) }, { stdout: JSON.stringify(cleared) },
+      { stdout: JSON.stringify({ comments: [{ url: 'https://github.com/acme/repo/pull/7#issuecomment-42', body: NEEDS_REMEDIATION_MARKER }] }) },
+    ]);
+    const { operations, writes } = fakeOperations({
+      onOperation: (request) => {
+        if (request.operation === 'pull-request.comment.update') throw new Error('guarded transport failed');
+      },
+    });
+
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
+
+    expect({ outcome, updates: writes.filter((write) => write.operation === 'pull-request.comment.update').length, creates: writes.filter((write) => write.operation === 'pull-request.comment.create').length })
+      .toEqual({ outcome: 'partial', updates: 1, creates: 0 });
+  });
+
+  it('returns refused without a fallback create when the marked-comment update is refused', async () => {
+    const halted = {
+      title: 'feat: widget import flow', isDraft: true, labels: [{ name: 'needs-remediation' }], body: '<!-- conductor:needs-remediation -->',
+    };
+    const cleared = { ...halted, labels: [], body: '' };
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify(halted) }, { stdout: JSON.stringify(cleared) },
+      { stdout: JSON.stringify({ comments: [{ url: 'https://github.com/acme/repo/pull/7#issuecomment-42', body: NEEDS_REMEDIATION_MARKER }] }) },
+    ]);
+    const writes: GithubOperationRequest[] = [];
+    const operations: GithubOperationRunner = {
+      run: async (request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> => {
+        writes.push(request);
+        if (request.operation === 'pull-request.comment.update') {
+          return { kind: 'refused', reason: 'other-owner' } satisfies GithubOperationRunnerRefusal;
+        }
+        return {} satisfies GithubOperationRunnerResponse;
+      },
+    };
+
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
+
+    expect({ outcome, updates: writes.filter((write) => write.operation === 'pull-request.comment.update').length, creates: writes.filter((write) => write.operation === 'pull-request.comment.create').length })
+      .toEqual({ outcome: 'refused', updates: 1, creates: 0 });
+  });
+
+  it('does no work when a second resume observes the confirmed-clean PR', async () => {
+    const halted = {
+      title: 'feat: widget import flow', isDraft: true, labels: [{ name: 'needs-remediation' }], body: '<!-- conductor:needs-remediation -->',
+    };
+    const cleared = { ...halted, labels: [], body: '' };
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify(halted) }, { stdout: JSON.stringify(cleared) }, { stdout: JSON.stringify({ comments: [] }) },
+      { stdout: JSON.stringify(cleared) },
+    ]);
+    const { operations, writes } = fakeOperations();
+
+    const first = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
+    const writesAfterFirst = writes.length;
+    const second = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
+
+    expect({ first, second, writesAfterFirst, finalWrites: writes.length })
+      .toEqual({ first: 'cleared', second: 'not-halted', writesAfterFirst: 3, finalWrites: 3 });
   });
 
   it('clears a halt title prefix and banner when no label or body marker remains', async () => {

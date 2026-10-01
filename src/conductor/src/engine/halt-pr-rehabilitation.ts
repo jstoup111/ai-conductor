@@ -105,6 +105,23 @@ function parsePrView(stdout: string): PrViewState {
   };
 }
 
+function findNeedsRemediationCommentId(stdout: string): string | null {
+  let raw: { comments?: unknown };
+  try {
+    raw = JSON.parse(stdout || '{}') as typeof raw;
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(raw.comments)) return null;
+  const comment = raw.comments.find((entry) =>
+    typeof (entry as { body?: unknown } | null)?.body === 'string'
+    && (entry as { body: string }).body.includes(NEEDS_REMEDIATION_MARKER),
+  ) as { url?: unknown } | undefined;
+  if (!comment || typeof comment.url !== 'string') return null;
+  const match = comment.url.match(/(?:#issuecomment-|\/issues\/comments\/)(\d+)(?:\/?$)?/);
+  return match?.[1] ?? null;
+}
+
 function prTarget(prUrl: string): { repository: string; kind: 'pull-request'; number: number } | null {
   const match = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
   if (!match) return null;
@@ -264,11 +281,25 @@ export async function clearHaltStateForResume(
       log(`[halt-pr-rehab] resume clear verification read failed for ${prUrl}: ${err}`);
       return 'partial';
     }
+    const resolutionNote = `${NEEDS_REMEDIATION_MARKER}\nHalt resolved — the feature resumed and its remediation state was cleared automatically.`;
+    let commentId: string | null = null;
+    try {
+      const stdout = await runTrackerUrlRead(
+        gh,
+        cwd,
+        'pull-request',
+        prUrl,
+        ['pr', 'view', prUrl, '--json', 'comments'],
+      );
+      commentId = findNeedsRemediationCommentId(stdout);
+    } catch (err) {
+      log(`[halt-pr-rehab] resume resolution comment lookup failed for ${prUrl}: ${err}`);
+    }
     const note = await rehabilitateMutation(
       operations,
       prUrl,
-      'pull-request.comment.create',
-      { body: `${NEEDS_REMEDIATION_MARKER}\nHalt resolved — the feature resumed and its remediation state was cleared automatically.` },
+      commentId === null ? 'pull-request.comment.create' : 'pull-request.comment.update',
+      commentId === null ? { body: resolutionNote } : { commentId, body: resolutionNote },
     );
     if (isRefusal(note)) return 'refused';
     return note.kind === 'executed' ? 'cleared' : 'partial';
