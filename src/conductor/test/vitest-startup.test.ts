@@ -24,6 +24,7 @@ async function launch(
     'AI_CONDUCTOR_TEST_TMP_SCOPE',
     'AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR',
     'GIT_CEILING_DIRECTORIES',
+    'NODE_OPTIONS',
   ]) {
     if (key in env && env[key] === undefined) delete childEnv[key];
     else if (!(key in env)) delete childEnv[key];
@@ -53,6 +54,7 @@ async function writeFakeVitest(path: string, binary: string) {
     '  scope: process.env.AI_CONDUCTOR_TEST_TMP_SCOPE,',
     '  originalTmpdir: process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR,',
     '  gitCeiling: process.env.GIT_CEILING_DIRECTORIES,',
+    '  nodeOptions: process.env.NODE_OPTIONS,',
     '}), \'utf8\');',
     'process.exitCode = Number(process.env.FAKE_VITEST_EXIT_CODE ?? 0);',
     '',
@@ -82,6 +84,23 @@ afterEach(async () => {
 });
 
 describe('run-vitest startup', () => {
+  it('gives Vitest forks a bounded old-space heap when the operator did not supply one', async () => {
+    const result = await launch({ NODE_OPTIONS: undefined });
+    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
+
+    expect(result.exitCode).toBe(0);
+    expect(observation.nodeOptions).toBe('--max-old-space-size=6144');
+  });
+
+  it('preserves an operator-supplied Vitest heap limit', async () => {
+    const nodeOptions = '--max-old-space-size=7168 --trace-warnings';
+    const result = await launch({ NODE_OPTIONS: nodeOptions });
+    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
+
+    expect(result.exitCode).toBe(0);
+    expect(observation.nodeOptions).toBe(nodeOptions);
+  });
+
   it('prefers the package-local Vitest binary without a Vitest command on PATH', async () => {
     await writeFakeVitest(join(fixtureRoot, 'node_modules', '.bin', 'vitest'), 'package-local');
 

@@ -9,11 +9,17 @@ const runRoot = installation.root;
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageVitest = join(packageRoot, 'node_modules', '.bin', 'vitest');
 const vitestCommand = existsSync(packageVitest) ? packageVitest : 'vitest';
+const defaultOldSpaceLimit = '--max-old-space-size=6144';
+const inheritedNodeOptions = process.env.NODE_OPTIONS ?? '';
+const nodeOptions = /(?:^|\s)--max-old-space-size(?:=|\s)/.test(inheritedNodeOptions)
+  ? inheritedNodeOptions
+  : [inheritedNodeOptions, defaultOldSpaceLimit].filter(Boolean).join(' ');
 const child = spawn(vitestCommand, process.argv.slice(2), {
   env: {
     ...process.env,
     AI_CONDUCTOR_TEST_TMP_ROOT: runRoot,
     TMPDIR: runRoot,
+    NODE_OPTIONS: nodeOptions,
   },
   stdio: 'inherit',
 });
