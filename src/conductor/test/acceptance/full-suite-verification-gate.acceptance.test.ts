@@ -282,13 +282,15 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     const testScript = JSON.parse(packageJson).scripts.test as string;
     // Every invocation goes through the Node 26 temp-dir wrapper
     // (`scripts/run-vitest.mjs`), so no bare `vitest run` survives.
-    // The aggregate run is split into complementary shards. Each starts a
+    // The aggregate run is split into four complementary shards. Each starts a
     // fresh Vitest parent, bounding the module graph retained by its fork
     // workers while still covering the configured include set exactly once.
     // The selector branch remains a single unsharded run below.
-    expect(testScript.match(/run-vitest\.mjs run/g)).toHaveLength(3);
-    expect(testScript).toMatch(/--shard=1\/2/);
-    expect(testScript).toMatch(/--shard=2\/2/);
+    expect(testScript.match(/run-vitest\.mjs run/g)).toHaveLength(5);
+    expect(testScript).toMatch(/--shard=1\/4/);
+    expect(testScript).toMatch(/--shard=2\/4/);
+    expect(testScript).toMatch(/--shard=3\/4/);
+    expect(testScript).toMatch(/--shard=4\/4/);
     expect(testScript).not.toMatch(/(^|[^-])vitest run/);
 
     // The no-argument branch is the aggregate gate's command. Any positional
