@@ -36,6 +36,7 @@ import {
   applyBuildReviewOutcome,
   BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE,
   describeBuildReviewDecisionStops,
+  describeBuildReviewScopeIncompleteFaults,
 } from './build-review-outcome.js';
 import { isBuildEligibleActionCase, isBuildReviewSettlementObligationCase } from './remediation-case-effects.js';
 import {
@@ -12768,7 +12769,12 @@ export class Conductor {
                         describeBuildReviewDecisionStops(outcome.stops),
                         ...(outcome.remainingInfrastructure ? [BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE] : []),
                       ].filter((line) => line !== '').join('\n')
-                      : outcome.reason;
+                      : [
+                        outcome.reason,
+                        describeBuildReviewScopeIncompleteFaults(aggregate.scopeIncomplete.filter(
+                          (fault) => uncoveredScopeIncomplete.includes(fault.rubric),
+                        )),
+                      ].filter((line) => line !== '').join('\n');
                     const trace = outcome.trace;
                     const reason = `build_review adjudication halted: ${detail}` +
                       (trace ? `\n${trace}` : '');
