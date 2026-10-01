@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:5
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -56,6 +56,38 @@ describe('proveFlattenedReplay real local Git (Task 3)', () => {
 });
 
 describe('performRebase real local Git (Task 5)', () => {
+  it('returns expected subjects for a clean flattened replay', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'rebase-flatten-merge-diff-'));
+    try {
+      const git = (args: string[]) => execFile('git', args, { cwd: repo });
+      await git(['init', '-q', '-b', 'main']);
+      await git(['config', 'user.email', 'committer@example.test']);
+      await git(['config', 'user.name', 'Committer']);
+      await writeFile(join(repo, 'base.txt'), 'base\n');
+      await git(['add', '.']); await git(['commit', '-qm', 'base']);
+      await git(['checkout', '-qb', 'feature']);
+      await writeFile(join(repo, 'feature.txt'), 'feature\n');
+      await git(['add', '.']); await git(['commit', '-qm', 'feature work']);
+      await git(['branch', 'content-side']);
+      await git(['checkout', '-q', 'content-side']);
+      await writeFile(join(repo, 'merged.txt'), 'merged content\n');
+      await git(['add', '.']); await git(['commit', '-qm', 'side content']);
+      await git(['checkout', '-q', 'feature']);
+      await git(['merge', '--no-ff', '-m', 'unique content merge', 'content-side']);
+      await git(['checkout', '-q', 'main']);
+      await writeFile(join(repo, 'upstream.txt'), 'upstream\n');
+      await git(['add', '.']); await git(['commit', '-qm', 'upstream advance']);
+      await git(['checkout', '-q', 'feature']);
+
+      const outcome = await performRebase(makeGitRunner(repo), repo, 'main');
+
+      expect(outcome).toMatchObject({
+        kind: 'changed',
+        expectedSubjects: ['feature work', 'unique content merge'],
+      });
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
   it('flattens duplicated merge lineage, preserves the target tree and omits ancestry-only merges', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'rebase-flatten-perform-'));
     try {

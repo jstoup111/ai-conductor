@@ -1440,7 +1440,9 @@ export async function performRebase(
     // any evidence citation pinned to the pre-rebase shas. Translate
     // unconditionally on any real rebase, not gated on that heuristic.
     await translateCompletedRebase(replayStart.flatten);
-    return attachReplayIdentity(replayStart.flatten ? { ...outcome, flatten: replayStart.flatten } : outcome);
+    return attachReplayIdentity(replayStart.flatten
+      ? { ...outcome, flatten: replayStart.flatten, expectedSubjects: replayStart.expectedSubjects }
+      : outcome);
   }
 
   // Non-zero → conflicts (or another error). Inspect unmerged paths.
@@ -1461,7 +1463,13 @@ export async function performRebase(
           if (retry.exitCode === 0) {
             const outcome = await classifyClean(git, preTree, mergeBase, projectRoot);
             await translateCompletedRebase(replayStart.flatten);
-            return attachReplayIdentity({ ...outcome, quarantine, ...(replayStart.flatten ? { flatten: replayStart.flatten } : {}) });
+            return attachReplayIdentity({
+              ...outcome,
+              quarantine,
+              ...(replayStart.flatten
+                ? { flatten: replayStart.flatten, expectedSubjects: replayStart.expectedSubjects }
+                : {}),
+            });
           }
           const retryConflicts = await conflictedFiles(git);
           if (retryConflicts.length > 0) {
