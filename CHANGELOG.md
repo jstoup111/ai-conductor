@@ -64,6 +64,9 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Feature rebases now preserve resolved merge changes without replaying duplicate side-lineage commits. ([implementation PR #2861](https://github.com/jstoup111/ai-conductor/pull/2861)).
 - Operators can re-affirm a refused scope decision without repeated PRD audit halts. ([implementation PR #2871](https://github.com/jstoup111/ai-conductor/pull/2871)).
 - Resumed daemon features now verify cleared halt state and update the existing resolution comment. ([implementation PR #2887](https://github.com/jstoup111/ai-conductor/pull/2887)).
+- Task completion now succeeds when no current task is recorded. ([implementation PR #2885](https://github.com/jstoup111/ai-conductor/pull/2885)).
+- Intake authors retain complete wrapped desired-outcome bullets. ([implementation PR #2882](https://github.com/jstoup111/ai-conductor/pull/2882)).
+- Build reviews now ignore Covers marker text embedded in test string literals. ([implementation PR #2881](https://github.com/jstoup111/ai-conductor/pull/2881)).
 
 ## [1.5.0] - 2026-09-27
 
