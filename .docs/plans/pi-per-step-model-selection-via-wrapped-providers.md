@@ -496,3 +496,46 @@ Task 17 <- 16
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-ab4-1: src/conductor/src/engine/conductor.ts:7928 — resolve the serial step's model/effort with resolvePreferredProviderNativeStepConfig (resolved-config.ts:315) for the step's preferred provider (normalizeProviderSelection of steps.<s>.llm_provider, inheritedProvider = first run-level llm_provider) instead of resolveStepConfig, keeping resolveStepConfig for the provider-neutral knobs (disable, max_retries, escalate, review), so a Pi step that does not inherit the run provider never receives defaults.model and esc/escNext (:10208, :11275, :12106) derive from that one value; add a provider-execution-pi-fallback.test.ts case driving Conductor serial dispatch with defaults.model: opus and steps.plan on pi with no model, asserting the Pi invocation carries llm_providers.pi.model and never opus, and keep Task 9's existing claude-run assertions unchanged
+**Gate:** as-built
+**Rationale:** conductor.ts:7928-7937 resolves the serial step with resolveStepConfig(step, phase, stepModelPolicy, this.config) so defaults.model (opus) leaks into a non-inherited Pi step, and conductor.ts:10208 escalates it and forwards esc.model as modelOverride (:10423/:10460), which resolveProviderCandidateNativeConfig (provider-execution.ts:520) treats as a CLI override; plan Task 9 (Files conductor.ts, Done-when bullet 4) admits the fix, the approved architecture (catalog ADR D13) stays authoritative, so this is conforming implementation drift routed build. Siblings swept: escNext at conductor.ts:11275 and :12106 read the same `resolved`, so one source fixes all three.
+**Parent task:** 9
+**Governing clause:** Task 9
+**Done when:**
+- Task 9 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab4-1 is complete.
+
+### Task rem-as-built-rem-ab5-1: src/conductor/src/engine/step-runners.ts:4655 — compute the coverage_binding auxiliary provider selection first, then derive model/effort from resolvePreferredProviderNativeStepConfig using that provider's runtime policy (this.providerRuntimes.get(provider).policy, else resolveProviderModelPolicy(provider, { config })) and model_fallback_ladder from selectFallbackLadder(policy, provider, config), replacing resolvedConfigFor('coverage_binding').model/effort and this.modelPolicy.modelFallbackLadder; keep max_retries/escalate from the resolved step config; add a step-runner test where steps.coverage_binding.llm_provider is pi in a claude run with defaults.model opus asserting the auxiliary dispatch carries llm_providers.pi.model and llm_providers.pi.model_fallback_ladder, and an unchanged-behaviour case for a claude coverage_binding
+**Gate:** as-built
+**Rationale:** step-runners.ts:4655-4663 builds the coverage_binding auxiliaryPolicy from this.resolvedConfigFor('coverage_binding') (run-level runner policy) and this.modelPolicy.modelFallbackLadder while selecting llm_provider independently, so a Pi judge gets a Claude model and ladder; plan Tasks 9/10 (Files step-runners.ts) admit it and catalog ADR D13 is unchanged, so build. Siblings checked: the build_review rubric aux callers (step-runners.ts:3188, :3940) take their policy from the resolved-config rubric resolver already fixed by rem-rb-1; no other this.modelPolicy.modelFallbackLadder use remains.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 13
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 13 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab5-1 is complete.
+
+### Task rem-as-built-rem-ab6-1: src/conductor/src/engine/model-availability.ts invokeWithLadderResolved — consult this.effectiveModel(requested) before the first invoke so a model already marked dead is substituted with the next live rung (with its downgrade warning), mirroring the step-runners.ts:1400 exhaustion semantics when no live rung remains; and src/conductor/src/engine/provider-execution.ts:614 — stop constructing a cache-less ModelAvailability per invocation: share the runtime's process dead set (e.g. a ModelAvailability constructor parameter accepting runtime.availability.dead) so explicit-ladder and runtime-ladder invocations read and mark one cache; add model-availability.test.ts and provider-execution-pi-fallback.test.ts cases where a Pi rung marked dead by an earlier invocation is never invoked again on the next dispatch, keeping the existing Task 10 walk/exhaustion tests unedited
+**Gate:** as-built
+**Rationale:** ModelAvailability.invokeWithLadderResolved (model-availability.ts:~125) invokes options.model before calling effectiveModel(), and invokeProviderCandidate (provider-execution.ts:614) builds a fresh ModelAvailability per invocation when a ladder is supplied, so the process dead-model cache is never consulted pre-invoke on the provider-aware path, contrary to fallback-ladder ADR D4; the legacy path already consults it (step-runners.ts:1400), so the approved design is clear and plan Task 10 (Files model-availability.ts) admits it — build. Task 10 Done-when (rung-1 downgrade warning, all-rungs-unavailable returns last failure with unchanged retry count, claude/codex ladders unchanged) must survive.
+**Governing clause:** adr-2026-07-03-reactive-model-fallback-ladder decision 4
+**Done when:**
+- adr-2026-07-03-reactive-model-fallback-ladder decision 4 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab6-1 is complete.
+
+### Task rem-as-built-rem-ab7-1: src/conductor/src/engine/resolved-config.ts:315 resolvePreferredProviderNativeStepConfig — accept attempt and escalate and, when options carry no modelCliOverride/effortCliOverride, return escalateAttempt(base.model, base.effort, attempt, escalate, policy) (the same rule resolveFallbackProviderNativeStepConfig applies at :357); src/conductor/src/engine/provider-execution.ts:520 — pass attempt and escalate into the preferred branch of resolveProviderCandidateNativeConfig; serial dispatch keeps passing its already-escalated esc.model/esc.effort overrides so it is not escalated twice; add escalation.test.ts / provider-execution-pi-fallback.test.ts cases where a preferred Pi group member with llm_providers.pi.model_escalation_order small, mid, large dispatches the mid model at attempt 3 and a model absent from the order escalates effort only, and keep the existing claude escalation tests unedited (Task 10 Done-when bullet 4)
+**Gate:** as-built
+**Rationale:** group-core.ts:674/713 passes attempt and escalate to stepRunner.run without a modelOverride, and resolveProviderCandidateNativeConfig (provider-execution.ts:520-529) sends candidate 0 to resolvePreferredProviderNativeStepConfig (resolved-config.ts:315), which takes no attempt/escalate, so a preferred Pi validation-group member never escalates while the fallback resolver (resolved-config.ts:357-370) does; plan Task 11 (Files resolved-config.ts, Done-when mid model at attempt 3) admits it and Task 12 lists provider-execution.ts — build. The serial path already passes escalated overrides, so escalation must apply only when no override is supplied to avoid double escalation.
+**Parent task:** 11
+**Governing clause:** Task 11
+**Done when:**
+- Task 11 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab7-1 is complete.
+
+### Task rem-as-built-rem-ab8-1: src/conductor/src/engine/provider-execution.ts:915 — pass the candidate's own ladder into invokeProviderCandidate: the caller-supplied modelFallbackLadder for the preferred candidate (index 0) and resolved.modelFallbackLadder from resolveFallbackProviderNativeStepConfig for every fallback candidate, so ResolvedFallbackProviderNativeConfig.modelFallbackLadder has a production consumer and a fallback Pi candidate never walks an auxiliary member's Claude ladder; widen resolveProviderCandidateNativeConfig's return so the ladder reaches that call; add a provider-execution-pi-fallback.test.ts case where an auxiliary member with a Claude-alias model_fallback_ladder falls back from claude to pi and every Pi rung invoked comes from llm_providers.pi.model_fallback_ladder
+**Gate:** as-built
+**Rationale:** ResolvedFallbackProviderNativeConfig.modelFallbackLadder (resolved-config.ts:200, set at :372) has no production consumer: invokeProviderCandidate (provider-execution.ts:915) receives only the caller's step-level modelFallbackLadder, so an auxiliary member's explicit ladder (executeAuxiliaryProviderCandidates, provider-execution.ts:1242) is applied to a fallback Pi candidate as well; consuming the field (not removing it) fixes that and is admitted by plan Task 10 (Files resolved-config.ts, Done-when Pi never walks a Claude ladder) — build. Diagram drift notes are non-blocking and their refresh is a DECIDE-owned architecture artifact edit, so they are excluded here.
+**Parent task:** 10
+**Governing clause:** Task 10
+**Done when:**
+- Task 10 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab8-1 is complete.
