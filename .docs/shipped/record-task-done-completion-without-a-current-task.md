@@ -4,6 +4,12 @@ spec_hash: 6e1756b26d62b0175689c68fee277f568f73508ed4dde583cbc8821fd9284155
 pr: https://github.com/jstoup111/ai-conductor/pull/2885
 shipped: 2026-10-01
 engine_version: 20260930T225148Z-18b2a2a206ea
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: S1.3
+    summary: "src/conductor/src/engine/task-cli.ts:338 — runTaskPlanGap gained a resolveRepairPlanBinding fallback that the plan excluded; it is what makes the stampless plan-gap halt work in daemon worktrees"
+    accepted: true
 ---
 
 ## Cost
