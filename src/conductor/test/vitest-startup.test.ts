@@ -89,11 +89,11 @@ describe('run-vitest startup', () => {
     const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
 
     expect(result.exitCode).toBe(0);
-    expect(observation.nodeOptions).toBe('--max-old-space-size=6144');
+    expect(observation.nodeOptions).toBe('--max-old-space-size=8192');
   });
 
   it('preserves an operator-supplied Vitest heap limit', async () => {
-    const nodeOptions = '--max-old-space-size=7168 --trace-warnings';
+    const nodeOptions = '--max-old-space-size=9216 --trace-warnings';
     const result = await launch({ NODE_OPTIONS: nodeOptions });
     const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
 
@@ -106,7 +106,7 @@ describe('run-vitest startup', () => {
     const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
 
     expect(result.exitCode).toBe(0);
-    expect(observation.nodeOptions).toBe('--trace-warnings --max-old-space-size=6144');
+    expect(observation.nodeOptions).toBe('--trace-warnings --max-old-space-size=8192');
   });
 
   it('prefers the package-local Vitest binary without a Vitest command on PATH', async () => {

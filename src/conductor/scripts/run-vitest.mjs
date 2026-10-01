@@ -9,10 +9,13 @@ const runRoot = installation.root;
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageVitest = join(packageRoot, 'node_modules', '.bin', 'vitest');
 const vitestCommand = existsSync(packageVitest) ? packageVitest : 'vitest';
-const defaultOldSpaceLimit = '--max-old-space-size=6144';
+// The ordinary suite's final worker exceeded 6 GiB after completing 1,158 of
+// 1,159 files. Keep two forks (rather than adding a third) so this 8 GiB
+// per-worker minimum remains within the self-host user-slice ceiling.
+const defaultOldSpaceLimit = '--max-old-space-size=8192';
 const inheritedNodeOptions = process.env.NODE_OPTIONS ?? '';
 const inheritedOldSpaceLimit = /(?:^|\s)--max-old-space-size(?:=|\s+)(\d+)(?=\s|$)/.exec(inheritedNodeOptions);
-const nodeOptions = inheritedOldSpaceLimit !== null && Number(inheritedOldSpaceLimit[1]) >= 6144
+const nodeOptions = inheritedOldSpaceLimit !== null && Number(inheritedOldSpaceLimit[1]) >= 8192
   ? inheritedNodeOptions
   : [
     inheritedNodeOptions.replace(/(?:^|\s)--max-old-space-size(?:=|\s+)\d+(?=\s|$)/, '').trim(),
