@@ -8,6 +8,7 @@ import {
   rename as renameFile,
   stat,
 } from 'node:fs/promises';
+import { registerSighupPersistence } from './sighup-persistence.js';
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -7250,8 +7251,15 @@ export class Conductor {
     const sighupHandler = () => signalHandlerBase('SIGHUP');
     process.on('SIGINT', sigintHandler);
     // The daemon owns process SIGHUP so it can flush its shared OTel spool
-    // and release its lease before re-raising. Interactive conductors retain
-    // the normal state-persistence handler.
+    // and release its lease before re-raising. Daemon-mode conductors still
+    // persist their state: the daemon handler awaits this hook first.
+    const releaseSighupPersistence = this.daemon
+      ? registerSighupPersistence(async () => {
+        signalExitRequested = true;
+        await this.closeOpenExecutions();
+        await this.persistSignalCompletionsBestEffort(state, 'SIGHUP', inFlightGroupCompletions);
+      })
+      : undefined;
     if (!this.daemon) process.on('SIGHUP', sighupHandler);
     // SIGTERM is owned by the interactive-scoped `sigterm` handler below
     // (Task 22: daemon mode delegates SIGTERM to the daemon-level handler);
@@ -14251,6 +14259,7 @@ export class Conductor {
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);
       if (!this.daemon) process.off('SIGHUP', sighupHandler);
+      releaseSighupPersistence?.();
 
       // Terminal-marker guarantee (failure side). A handful of early `return`s
       // in the loop exit WITHOUT writing DONE or HALT — a blocked gate

@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { runSighupPersistence } from './engine/sighup-persistence.js';
 import { v4 as uuidv4 } from 'uuid';
 import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -523,6 +524,7 @@ export function installDaemonOtelSighupHandler(options: {
     handling = true;
     try {
       await awaitStop(Promise.resolve().then(async () => {
+        await runSighupPersistence();
         await options.daemonOtel?.stop();
       }), DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS);
     } catch {

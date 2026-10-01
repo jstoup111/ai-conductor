@@ -9,6 +9,7 @@ import {
   type DaemonProcessAdapter,
 } from '../src/daemon-cli.js';
 import { wireDaemonOtel } from '../src/engine/otel/wire.js';
+import { registerSighupPersistence } from '../src/engine/sighup-persistence.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 
 function processProbe(): {
@@ -70,6 +71,26 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it('awaits every registered conductor persistence hook before stopping OTel and re-raising SIGHUP', async () => {
+    const probe = processProbe();
+    const order: string[] = [];
+    const release = registerSighupPersistence(async () => { order.push('persist'); });
+    const failing = registerSighupPersistence(async () => { throw new Error('persist failed'); });
+    const stop = vi.fn(async () => { order.push('stop'); });
+
+    installDaemonOtelSighupHandler({
+      daemonOtel: { stop },
+      processAdapter: probe.adapter,
+      awaitStop: async (operation) => operation,
+    });
+    await probe.listeners.get('SIGHUP')!();
+    release();
+    failing();
+
+    expect(order).toEqual(['persist', 'stop']);
+    expect(probe.calls).toEqual(['on:SIGHUP', 'off:SIGHUP', 'kill:481:SIGHUP']);
+  });
+
   it('abandons a hanging OTel stop at the bounded export timeout and still re-raises SIGHUP', async () => {
     const probe = processProbe();
     const stop = vi.fn(() => new Promise<void>(() => {}));
@@ -85,7 +106,8 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
     });
     await probe.listeners.get('SIGHUP')!();
 
-    expect(stop).toHaveBeenCalledOnce();
+    // stop() starts after the persistence hooks settle, inside the bounded operation.
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
     expect(awaitStop).toHaveBeenCalledOnce();
     expect(probe.calls).toEqual(['on:SIGHUP', 'off:SIGHUP', 'kill:481:SIGHUP']);
   });
