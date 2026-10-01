@@ -3211,7 +3211,7 @@ describe('executeProviderCandidates', () => {
     expect(attemptedThenRefused.result).not.toHaveProperty('executionDisposition');
   });
 
-  it('advances only after complete native model exhaustion and retries that provider on a later step', async () => {
+  it('advances only after complete native model exhaustion and skips dead models on a later step', async () => {
     const unavailableModel = (model: string): InvokeResult => ({
       success: false,
       output: `model unavailable: ${model}`,
@@ -3351,9 +3351,10 @@ describe('executeProviderCandidates', () => {
       ...fullCodex.calls,
       ...fullClaude.calls,
     ]);
-    const [solSessionId, terraSessionId, lunaSessionId, laterSessionId] =
+    const [solSessionId, terraSessionId, lunaSessionId] =
       fullCodex.calls.map(({ sessionId }) => sessionId);
     const claudeSessionId = fullClaude.calls[0]?.sessionId;
+    const laterClaudeSessionId = fullClaude.calls[1]?.sessionId;
     expect({
       partial: {
         codexModels: partialCodex.calls.map(({ model }) => model),
@@ -3372,7 +3373,8 @@ describe('executeProviderCandidates', () => {
         result: full,
       },
       later: {
-        codexCall: fullCodex.calls.at(-1),
+        codexCalls: fullCodex.calls.slice(CODEX_MODEL_POLICY.modelFallbackLadder.length),
+        claudeCall: fullClaude.calls.at(-1),
         result: later,
       },
       availability: {
@@ -3426,6 +3428,14 @@ describe('executeProviderCandidates', () => {
             model: 'sonnet',
             effort: 'high',
           },
+          {
+            prompt: 'Execute the step.',
+            cwd: '/workspace/feature',
+            sessionId: laterClaudeSessionId,
+            resume: false,
+            model: 'opus',
+            effort: 'xhigh',
+          },
         ],
         sessions: {
           codex: undefined,
@@ -3463,28 +3473,39 @@ describe('executeProviderCandidates', () => {
         },
       },
       later: {
-        codexCall: {
+        codexCalls: [],
+        claudeCall: {
           prompt: 'Execute the step.',
           cwd: '/workspace/feature',
-          sessionId: laterSessionId,
+          sessionId: laterClaudeSessionId,
           resume: false,
-          model: 'gpt-5.6-sol',
-          effort: 'high',
+          model: 'opus',
+          effort: 'xhigh',
         },
         result: {
           success: true,
-          output: 'codex eligible on later step',
+          output: 'cross-provider fallback',
           exitCode: 0,
           preferredProvider: 'codex',
-          actualProvider: 'codex',
-          resolvedModel: 'gpt-5.6-sol',
-          resolvedEffort: 'high',
+          actualProvider: 'claude',
+          resolvedModel: 'opus',
+          resolvedEffort: 'xhigh',
           attempts: [
             {
               provider: 'codex',
               preferredProvider: 'codex',
               model: 'gpt-5.6-sol',
               effort: 'high',
+              outcome: 'unavailable',
+              reason: 'Model fallback ladder exhausted: no live model remains after gpt-5.6-sol.',
+              fallbackReason: 'Model fallback ladder exhausted: no live model remains after gpt-5.6-sol.',
+              invoked: true,
+            },
+            {
+              provider: 'claude',
+              preferredProvider: 'codex',
+              model: 'opus',
+              effort: 'xhigh',
               outcome: 'success',
               invoked: true,
             },
@@ -3505,6 +3526,17 @@ describe('executeProviderCandidates', () => {
             step: 'build',
             failedProvider: 'codex',
             reason: 'model unavailable: gpt-5.6-luna',
+            nextProvider: 'claude',
+          },
+        },
+        {
+          message:
+            'Step build_review: provider codex unavailable (Model fallback ladder exhausted: no live model remains after gpt-5.6-sol.); falling back to claude.',
+          transition: {
+            type: 'provider_fallback',
+            step: 'build_review',
+            failedProvider: 'codex',
+            reason: 'Model fallback ladder exhausted: no live model remains after gpt-5.6-sol.',
             nextProvider: 'claude',
           },
         },

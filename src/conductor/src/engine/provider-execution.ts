@@ -597,6 +597,25 @@ export async function invokeProviderCandidate({
   invokedModel?: string;
   sessionPolicySuppression?: SessionPolicySuppression;
 }> {
+  // A candidate can supply its own ladder, but that must not bypass a
+  // run-wide provider failure observed by an earlier candidate. The native
+  // ladder branch below shares only model availability; provider availability
+  // remains a runtime-wide concern.
+  if (runtime.runWideUnavailable && onModelRung === undefined) {
+    const reason = runtime.runWideUnavailable.reason;
+    return {
+      result: {
+        success: false,
+        output: reason,
+        exitCode: 127,
+        providerUnavailable: true,
+        providerUnavailableReason: reason,
+        providerUnavailableScope: 'run',
+        providerInvocationSkipped: true,
+        executionDisposition: 'not-started',
+      },
+    };
+  }
   const descriptor = findBuiltInProviderDescriptor(providerKey);
   const suppressForUnsupportedCapability = descriptor
     ? !supportsProviderCapability(descriptor, 'supportsSessionResume')
