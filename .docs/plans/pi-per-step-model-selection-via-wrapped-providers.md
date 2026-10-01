@@ -548,3 +548,11 @@ Task 17 <- 16
 **Done when:**
 - S4.4 is satisfied by this task.
 - Re-run prd-audit and confirm task rem-prd-audit-rem-s44-1 is complete.
+
+### Task rem-as-built-rem-ar11-1: src/conductor/src/engine/attribution-lane.ts dispatchAttributionVerifier — remove the legacy scalar-provider branch (the ModelAvailability ladder walk used when providerDispatch is absent) and make providerDispatch required, since every production DefaultStepRunner root supplies it (step-runners.ts:2471); drop the now-unused modelPolicy/providerKey/attemptedModels plumbing; migrate attribution-lane.test.ts and the other suites that exercise the scalar path to a recording providerDispatch, keeping their behavioral assertions
+**Gate:** architecture_review_as_built
+**Rationale:** Operator decision 2026-10-01 on AR-ASBUILT-11 (DESIGN): Task 10 changed the scalar attribution ladder at attribution-lane.ts:357, but that branch has no production caller. The operator chose removing the legacy branch and its Task 10 obligation over establishing a sanctioned production root.
+**Parent task:** 10
+**Done when:**
+- dispatchAttributionVerifier has no code path that invokes a provider without providerDispatch, and its options type marks providerDispatch required.
+- Re-run architecture_review_as_built and confirm AR-ASBUILT-11 is resolved.
