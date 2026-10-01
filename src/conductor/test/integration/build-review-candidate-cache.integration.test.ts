@@ -187,13 +187,13 @@ describe('build-review candidate cache runner ordering', () => {
     });
     expect(branchArtifact.descriptor.producer.model).not.toBe('gpt-5.6-sol');
 
-    // The preferred model still proves unavailable, then the fallback rung
-    // independently reuses only its own warm judgment.
+    // The preferred model remains unavailable on replay. Its run-wide
+    // unavailability cache prevents another provider invocation.
     const replay = await runner.run('build_review', { complexity_tier: 'M' } as never);
     expect(replay.success, replay.output).toBe(true);
-    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke.mock.calls.map(([options]) => options.model)).toEqual([
-      'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-sol',
+      'gpt-5.6-sol', 'gpt-5.6-terra',
     ]);
   });
 

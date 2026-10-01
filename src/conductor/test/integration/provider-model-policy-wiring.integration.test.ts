@@ -1186,12 +1186,6 @@ it('binds every production step-resolution call to the policy owned by its execu
   ).toEqual({
     callSites: [
       {
-        file: 'engine/attribution-lane.ts',
-        scope: 'dispatchAttributionVerifier',
-        argumentCount: 5,
-        policyProvenance: 'option:modelPolicy:ProviderModelPolicy',
-      },
-      {
         file: 'engine/conductor.ts',
         scope: 'reconcileCurrentPrdWidening',
         argumentCount: 5,

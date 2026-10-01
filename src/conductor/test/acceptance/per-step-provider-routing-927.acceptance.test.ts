@@ -361,7 +361,7 @@ describe('ST-927-1/ST-927-8 — scalar built-in compatibility', () => {
       expect(scripted.calls).toHaveLength(2);
       expect(scripted.calls.map(({ model, effort }) => ({ model, effort }))).toEqual([
         { model: expectedModel, effort: expectedEffort },
-        { model: expectedModel, effort: expectedEffort },
+        { model: expectedModel, effort: 'high' },
       ]);
       expect(scripted.calls[0].resume).toBe(false);
       expect(scripted.calls[1].resume).toBe(false);
