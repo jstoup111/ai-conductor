@@ -32,6 +32,12 @@ Two result classes:
 The summary line reports `N passed  N failed  N warnings  (N total)`. Only the failure count matters for
 exit status.
 
+A failing check is reported and the run continues to the summary. If an unguarded command fails
+instead, the script stops before the summary and prints
+`ABORT: unguarded command failed at line <N> (exit <status>)` to stderr. That line names a script
+defect, not a check result: capture the command's status and pass it to `assert` or `warn_check`
+(check 29 enforces this).
+
 Install engine dependencies first, or three checks silently degrade:
 
 ```bash
