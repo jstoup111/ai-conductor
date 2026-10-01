@@ -1,4 +1,4 @@
-import { BUILT_IN_PROVIDERS } from '../execution/provider-catalog.js';
+import { BUILT_IN_PROVIDERS, DEFAULT_PROVIDER } from '../execution/provider-catalog.js';
 import type { HarnessConfig, ProviderSelection } from '../types/config.js';
 
 export type ProviderModelValue = {
@@ -46,33 +46,47 @@ export function collectProviderModelSelections(
     addModels(providerIds, model, configPath, step);
   };
 
+  // Runtime semantics: an authored model reaches only the preferred (first)
+  // candidate of its effective selection. Fallback candidates resolve their
+  // own native defaults, and phase/default models belong to the inherited
+  // run-level provider.
+  const inheritedProvider = select(config.llm_provider)[0] ?? DEFAULT_PROVIDER;
+  const preferred = (selection: ProviderSelection | undefined): string[] => {
+    const first = selection === undefined ? inheritedProvider : select(selection)[0];
+    return first === undefined ? [] : [first];
+  };
+
   addSelection(config.llm_provider, undefined, 'llm_provider');
-  for (const [stepName, stepConfig] of Object.entries(config.steps ?? {})) {
-    addSelection(stepConfig.llm_provider, stepConfig.model, `steps.${stepName}.model`, stepName);
-    for (const [tier, tierConfig] of Object.entries(stepConfig.by_tier ?? {})) {
-      addModels(
-        select(stepConfig.llm_provider),
-        tierConfig?.model,
-        `steps.${stepName}.by_tier.${tier}.model`,
-        stepName,
-      );
+  addModels([inheritedProvider], config.defaults?.model, 'defaults.model');
+  for (const [phaseName, phaseConfig] of Object.entries(config.phases ?? {})) {
+    if (!phaseConfig) continue;
+    addModels([inheritedProvider], phaseConfig.model, `phases.${phaseName}.model`);
+    for (const [tier, tierConfig] of Object.entries(phaseConfig.by_tier ?? {})) {
+      addModels([inheritedProvider], tierConfig?.model, `phases.${phaseName}.by_tier.${tier}.model`);
     }
   }
-  for (const [rubricId, rubric] of Object.entries(config.build_review?.rubrics ?? {})) {
-    if (!rubric) continue;
-    addSelection(
-      rubric.llm_provider,
-      rubric.model,
-      `build_review.rubrics.${rubricId}.model`,
-      `build_review:${rubricId}`,
-    );
+  for (const [stepName, stepConfig] of Object.entries(config.steps ?? {})) {
+    addSelection(stepConfig.llm_provider, undefined, `steps.${stepName}.llm_provider`, stepName);
+    const stepProvider = preferred(stepConfig.llm_provider);
+    addModels(stepProvider, stepConfig.model, `steps.${stepName}.model`, stepName);
+    for (const [tier, tierConfig] of Object.entries(stepConfig.by_tier ?? {})) {
+      addModels(stepProvider, tierConfig?.model, `steps.${stepName}.by_tier.${tier}.model`, stepName);
+    }
   }
-  for (const [rubricId, rubric] of Object.entries(config.build_review?.custom_rubrics ?? {})) {
-    addSelection(
-      rubric.llm_provider,
+  const buildReviewSelection = config.steps?.build_review?.llm_provider;
+  const rubricEntries = [
+    ...Object.entries(config.build_review?.rubrics ?? {}).map(([id, rubric]) => ['rubrics', id, rubric] as const),
+    ...Object.entries(config.build_review?.custom_rubrics ?? {}).map(([id, rubric]) => ['custom_rubrics', id, rubric] as const),
+  ];
+  for (const [group, rubricId, rubric] of rubricEntries) {
+    if (!rubric) continue;
+    const step = `build_review:${rubricId}`;
+    addSelection(rubric.llm_provider, undefined, `build_review.${group}.${rubricId}.llm_provider`, step);
+    addModels(
+      preferred(rubric.llm_provider ?? buildReviewSelection),
       rubric.model,
-      `build_review.custom_rubrics.${rubricId}.model`,
-      `build_review:${rubricId}`,
+      `build_review.${group}.${rubricId}.model`,
+      step,
     );
   }
 

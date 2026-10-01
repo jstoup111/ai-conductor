@@ -113,6 +113,30 @@ describe('validateConfiguredProviderModels', () => {
     } satisfies Partial<ProviderModelUnknownError>);
   });
 
+  it('rejects an unknown provider on a step inheriting run-level pi', async () => {
+    await expect(validateConfiguredProviderModels({
+      config: { ...configuredPiModels, steps: { plan: { model: 'missing/model' } } },
+      discovery: installedPi(),
+      runner: runner({ exitCode: 0, stdout: PI_LISTING }),
+      timeoutMs: 20,
+    })).rejects.toMatchObject({
+      kind: 'unknown-provider', modelId: 'missing/model', configPath: 'steps.plan.model', step: 'plan',
+    } satisfies Partial<ProviderModelUnknownError>);
+  });
+
+  it('does not probe a Claude alias against pi when pi is only a fallback candidate', async () => {
+    await expect(validateConfiguredProviderModels({
+      config: {
+        llm_provider: 'claude',
+        llm_providers: configuredPiModels.llm_providers,
+        steps: { build: { llm_provider: ['claude', 'pi'], model: 'sonnet' } },
+      },
+      discovery: installedPi(),
+      runner: runner({ exitCode: 0, stdout: PI_LISTING }),
+      timeoutMs: 20,
+    })).resolves.toBeUndefined();
+  });
+
   it('rejects an unlisted Pi model with wording distinct from an unknown provider', async () => {
     await expect(validateConfiguredProviderModels({
       config: {

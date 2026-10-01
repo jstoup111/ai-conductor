@@ -3897,7 +3897,7 @@ steps:
           },
         },
         steps: {
-          build: { llm_provider: ['claude', 'pi'], model: 'anthropic/claude-haiku-4-5' },
+          build: { llm_provider: ['pi', 'claude'], model: 'anthropic/claude-haiku-4-5' },
         },
         build_review: {
           rubrics: {
@@ -3918,6 +3918,55 @@ steps:
       });
       expect(selections.claude.configured).toBe(true);
       expect(selections.codex.configured).toBe(false);
+    });
+
+    it('attributes inherited step, tier, phase, and default models to a run-level Pi provider', () => {
+      const selections = collectProviderModelSelections({
+        llm_provider: 'pi',
+        defaults: { model: 'google/gemini-2.5-flash' },
+        phases: { BUILD: { model: 'openai/gpt-5.6-sol', by_tier: { L: { model: 'openai/gpt-5.6-pro' } } } },
+        steps: {
+          plan: { model: 'claude-opus-4-5', by_tier: { L: { model: 'anthropic/claude-opus-4-5' } } },
+        },
+        build_review: { rubrics: { testQuality: { model: 'anthropic/claude-sonnet-4-5' } } },
+      });
+
+      expect(selections.pi.models).toEqual(expect.arrayContaining([
+        { model: 'claude-opus-4-5', configPath: 'steps.plan.model', step: 'plan' },
+        { model: 'anthropic/claude-opus-4-5', configPath: 'steps.plan.by_tier.L.model', step: 'plan' },
+        { model: 'google/gemini-2.5-flash', configPath: 'defaults.model' },
+        { model: 'openai/gpt-5.6-sol', configPath: 'phases.BUILD.model' },
+        { model: 'openai/gpt-5.6-pro', configPath: 'phases.BUILD.by_tier.L.model' },
+        { model: 'anthropic/claude-sonnet-4-5', configPath: 'build_review.rubrics.testQuality.model', step: 'build_review:testQuality' },
+      ]));
+      expect(selections.claude.models).toEqual([]);
+    });
+
+    it('does not attribute a preferred provider model to fallback candidates', () => {
+      const selections = collectProviderModelSelections({
+        llm_provider: 'claude',
+        defaults: { model: 'opus' },
+        steps: { build: { llm_provider: ['claude', 'pi'], model: 'sonnet', by_tier: { L: { model: 'opus' } } } },
+      });
+
+      expect(selections.pi.configured).toBe(true);
+      expect(selections.pi.models).toEqual([]);
+      expect(selections.claude.models).toEqual(expect.arrayContaining([
+        { model: 'sonnet', configPath: 'steps.build.model', step: 'build' },
+        { model: 'opus', configPath: 'defaults.model' },
+      ]));
+    });
+
+    it('rejects a malformed model on a step inheriting run-level pi', () => {
+      const result = validateConfig({
+        llm_provider: 'pi',
+        llm_providers: { pi: { model: 'anthropic/claude-sonnet-4-5', model_escalation_order: ['anthropic/claude-sonnet-4-5'], model_fallback_ladder: ['anthropic/claude-sonnet-4-5'] } },
+        steps: { plan: { model: 'claude-opus-4-5' } },
+      });
+
+      expect(result).toMatchObject({ ok: false, error: { type: 'validation_error' } });
+      if (result.ok) return;
+      expect(result.error.message).toContain('steps.plan.model');
     });
 
     it('collects a Pi step tier model selection', () => {
