@@ -736,8 +736,14 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 `build_member_evidence_recomputed`, `kickback`, `loop_halt`, `over_scope_decision`,
 `halt_marker_write_failed`, `halt_record_written`, `halt_record_write_failed`, `halt_record_push_failed`,
 `shipment_evidence_refused`, `step_status_write_refused`, `rebase_changed`, `rebase_gate_preserved`,
-`rebase_gate_invalidated`, `rebase_conflict_halt`, `unattributed_progress`, `attribution_divergence`,
-`acceptance_red`, `rebase_citation_residue`, and `rebase_supersession_verdict`.
+`rebase_gate_invalidated`, `rebase_merge_audit`, `rebase_conflict_halt`, `unattributed_progress`,
+`attribution_divergence`, `acceptance_red`, `rebase_citation_residue`, and `rebase_supersession_verdict`.
+
+`rebase_merge_audit` records a flattened replay of a merge-bearing feature branch: the shas of
+flattened merges, the shas of dropped ancestry-only merges, and the count of side-lineage commits not
+replayed individually. When a flattened merge blocks the replay, `rebase_conflict_halt` carries an
+optional `mergeAudit` field naming that merge, its parents, its flattened sha, and the conflicting
+paths. See [merge-bearing feature branches](../guides/running-the-daemon.md#merge-bearing-feature-branches).
 
 `rebase_supersession_verdict` records a successful mergeable-sweep test-only judgement: its choice,
 rationale, and declared superseded replay SHAs. `rebase_citation_residue` records the corresponding
