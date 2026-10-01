@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
+  deriveProviderExitFacts,
   summarizeProviderDiagnostic,
   formatDiagnosticDuration,
   formatFeatureUsageTotal,
+  formatProviderExitFacts,
 } from '../../src/execution/provider-diagnostics.js';
 
 // The daemon tees a provider subprocess's captured stdout/stderr into
@@ -10,6 +12,52 @@ import {
 // giant machine envelope; dumping it verbatim made the log unreadable for an
 // operator triaging a possibly-wedged build. These tests pin the readable
 // rendering AND the total-fallback guarantee that no diagnostic is ever lost.
+
+// Covers: task:1
+describe('provider exit facts', () => {
+  it('retains allowlisted values and normalizes unknown process and signal values', () => {
+    expect(deriveProviderExitFacts({
+      code: 'EACCES',
+      exitCode: 1,
+      signal: 'SIGTERM',
+      stdout: 'hello',
+      stderr: Buffer.from('no'),
+    })).toEqual({
+      processErrorCode: 'EACCES',
+      exitCode: 1,
+      signal: 'SIGTERM',
+      stdoutBytes: 5,
+      stderrBytes: 2,
+    });
+
+    expect(deriveProviderExitFacts({ code: 'ECONNRESET', signal: 'SIGUSR1' })).toEqual({
+      processErrorCode: 'UNKNOWN',
+      signal: 'UNKNOWN',
+    });
+  });
+
+  it.each([-1, 1.5, '1'])('omits invalid exit code %j', (exitCode) => {
+    expect(deriveProviderExitFacts({ exitCode })).toEqual({});
+  });
+
+  it('keeps a non-negative integer exit code', () => {
+    expect(deriveProviderExitFacts({ exitCode: 1 })).toEqual({ exitCode: 1 });
+  });
+
+  it('renders only present facts in stable order', () => {
+    const rendered = formatProviderExitFacts('codex', {
+      processErrorCode: 'ENOENT',
+      exitCode: 1,
+      stdoutBytes: 0,
+      stderrBytes: 3,
+    });
+
+    expect(rendered).toBe(
+      'codex subprocess exited without a classifiable result: processErrorCode=ENOENT exitCode=1 stdoutBytes=0 stderrBytes=3',
+    );
+    expect(rendered).not.toContain('signal=');
+  });
+});
 
 describe('formatDiagnosticDuration', () => {
   it('renders sub-second durations in milliseconds', () => {

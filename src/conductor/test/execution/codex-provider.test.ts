@@ -1,5 +1,6 @@
 // Covers: task:4
 // Covers: task:5
+// Covers: task:3
 import { toCodexStrictSchema } from '../../src/execution/codex-strict-schema.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
@@ -1624,6 +1625,23 @@ describe('CodexProvider', () => {
     });
   });
 
+  it('records raw exit facts and one diagnostic for an empty unclassified Codex failure', async () => {
+    const diagnosticLog = vi.fn();
+    mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: 1 } as any);
+
+    const result = await provider.invoke({ ...baseOptions, diagnosticLog });
+
+    expect(result).toMatchObject({
+      success: false,
+      output: '',
+      exitCode: 1,
+      exitFacts: { exitCode: 1, stdoutBytes: 0, stderrBytes: 0 },
+    });
+    expect(diagnosticLog.mock.calls).toEqual([[
+      'codex subprocess exited without a classifiable result: exitCode=1 stdoutBytes=0 stderrBytes=0',
+    ]]);
+  });
+
   it.each([
     { name: 'cached login when no API key is supplied', key: undefined, source: 'cached-login' },
     { name: 'an API key when it is supplied', key: 'sk-905-api-key', source: 'api-key' },
@@ -2650,6 +2668,7 @@ describe('CodexProvider', () => {
       source: 'cached-login',
       state: expectedFlag === 'authFailure' ? 'unusable' : 'ready',
     });
+    expect(result).not.toHaveProperty('exitFacts');
     expect(result).not.toHaveProperty('executionDisposition');
     if (expectedFlag === 'rateLimited') expect(result.waitSeconds).toBe(45);
   });

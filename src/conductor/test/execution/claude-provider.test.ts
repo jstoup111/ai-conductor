@@ -762,6 +762,7 @@ describe('ClaudeProvider', () => {
         success: false,
         output: 'interactive session failed',
         exitCode: 1,
+        exitFacts: { exitCode: 1, stdoutBytes: 26, stderrBytes: 0 },
         authFailure: undefined,
         rateLimited: undefined,
         modelUnavailable: undefined,
@@ -839,6 +840,185 @@ describe('ClaudeProvider', () => {
 
       expect(featureLog).toHaveBeenCalledWith('subprocess stdout diagnostic');
       expect(featureLog).toHaveBeenCalledWith('subprocess stderr diagnostic');
+    });
+
+    it('records and logs exit facts for an unclassified nonzero empty subprocess failure', async () => {
+      const diagnosticLog = vi.fn();
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: '',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke({ ...baseOptions, diagnosticLog });
+
+      expect((result as { exitFacts?: unknown }).exitFacts).toEqual({
+        exitCode: 1,
+        stdoutBytes: 0,
+        stderrBytes: 0,
+      });
+      expect(diagnosticLog.mock.calls).toEqual([[
+        'claude subprocess exited without a classifiable result: exitCode=1 stdoutBytes=0 stderrBytes=0',
+      ]]);
+    });
+
+    it('records a SIGKILL without inventing an exit code for an unclassified empty subprocess failure', async () => {
+      const diagnosticLog = vi.fn();
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: '',
+        exitCode: null,
+        signal: 'SIGKILL',
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke({ ...baseOptions, diagnosticLog });
+
+      expect((result as { exitFacts?: unknown }).exitFacts).toEqual({
+        signal: 'SIGKILL',
+        stdoutBytes: 0,
+        stderrBytes: 0,
+      });
+      expect(diagnosticLog).toHaveBeenCalledWith(
+        'claude subprocess exited without a classifiable result: signal=SIGKILL stdoutBytes=0 stderrBytes=0',
+      );
+    });
+
+    it('normalizes an unknown signal without leaking it to the diagnostic log', async () => {
+      const diagnosticLog = vi.fn();
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: '',
+        exitCode: null,
+        signal: 'SIGUSR1',
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke({ ...baseOptions, diagnosticLog });
+
+      expect((result as { exitFacts?: unknown }).exitFacts).toEqual({
+        signal: 'UNKNOWN',
+        stdoutBytes: 0,
+        stderrBytes: 0,
+      });
+      expect(diagnosticLog.mock.calls.flat().join('\n')).not.toContain('SIGUSR1');
+    });
+
+    it.each([
+      {
+        name: 'missing binary',
+        stdout: '',
+        stderr: '',
+        exitCode: 127,
+        expected: {
+          success: false,
+          output: "LLM provider 'claude' not found. Install it or check your PATH.",
+          exitCode: 127,
+          providerUnavailable: true,
+          providerUnavailableScope: 'run',
+          providerUnavailableReason: "LLM provider 'claude' not found. Install it or check your PATH.",
+          observedIntervals: [{ startedAtMs: 1_000, durationMs: 50 }],
+        },
+      },
+      {
+        name: 'authentication failure',
+        stdout: 'Not logged in',
+        stderr: '',
+        exitCode: 1,
+        expected: {
+          success: false,
+          output: 'Not logged in',
+          exitCode: 1,
+          authFailure: true,
+          rateLimited: undefined,
+          modelUnavailable: undefined,
+          commandUnresolved: undefined,
+          commandUnresolvedName: undefined,
+          tokenUsage: undefined,
+          waitSeconds: undefined,
+          deadline: undefined,
+          observedIntervals: [{ startedAtMs: 1_000, durationMs: 50 }],
+        },
+      },
+      {
+        name: 'rate limit',
+        stdout: 'rate limit exceeded',
+        stderr: '',
+        exitCode: 1,
+        expected: {
+          success: false,
+          output: 'rate limit exceeded',
+          exitCode: 1,
+          authFailure: undefined,
+          rateLimited: true,
+          modelUnavailable: undefined,
+          commandUnresolved: undefined,
+          commandUnresolvedName: undefined,
+          tokenUsage: undefined,
+          waitSeconds: 300,
+          deadline: undefined,
+          observedIntervals: [{ startedAtMs: 1_000, durationMs: 50 }],
+        },
+      },
+      {
+        name: 'model unavailable',
+        stdout: 'model not found',
+        stderr: '',
+        exitCode: 1,
+        expected: {
+          success: false,
+          output: 'model not found',
+          exitCode: 1,
+          authFailure: undefined,
+          rateLimited: undefined,
+          modelUnavailable: true,
+          commandUnresolved: undefined,
+          commandUnresolvedName: undefined,
+          tokenUsage: undefined,
+          waitSeconds: undefined,
+          deadline: undefined,
+          observedIntervals: [{ startedAtMs: 1_000, durationMs: 50 }],
+        },
+      },
+    ])('does not add exit facts or an exit diagnostic to a classified $name', async (fixture) => {
+      const diagnosticLog = vi.fn();
+      const readings = [1_000, 1_050];
+      provider = new ClaudeProvider({
+        nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
+      }, mockExeca as never);
+      mockExeca.mockResolvedValue({
+        stdout: fixture.stdout,
+        stderr: fixture.stderr,
+        exitCode: fixture.exitCode,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke({ ...baseOptions, diagnosticLog, interactive: true });
+
+      expect(result).toEqual(fixture.expected);
+      expect(result).not.toHaveProperty('exitFacts');
+      expect(diagnosticLog.mock.calls.flat().join('\n')).not.toContain(
+        'claude subprocess exited without a classifiable result',
+      );
+    });
+
+    it('does not add exit facts or an exit diagnostic to a successful exit-zero dispatch', async () => {
+      const diagnosticLog = vi.fn();
+      mockExeca.mockResolvedValue({
+        stdout: 'Done!',
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke({ ...baseOptions, diagnosticLog, interactive: true });
+
+      expect(result.success).toBe(true);
+      expect(result).not.toHaveProperty('exitFacts');
+      expect(diagnosticLog.mock.calls.flat().join('\n')).not.toContain(
+        'claude subprocess exited without a classifiable result',
+      );
     });
 
     it('logs a readable summary instead of the raw --output-format json envelope', async () => {

@@ -172,7 +172,23 @@ describe('custom build-review compatibility routing', () => {
       buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
     });
     const inputs = { diff: 'diff', planBody: '# Plan', mergeBase: 'base', baseRef: 'origin/main', baseKind: 'remote', trackingRefSha: 'base', remoteHeadSha: 'base', fresh: true, testSuiteProof: {}, sourceSnapshot: { digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', diff: 'diff', planBody: '# Plan', repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [] }, sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} } } as never;
-    await expect((runner as unknown as { runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', executionContext: unknown, capabilities: unknown) => Promise<{ success: boolean; output: string }> }).runRubricBuildReview(inputs, resolveBuildReviewConfig(config), 'M', undefined, { codex: { provider: 'codex', platform: 'linux', status: 'available' } })).rejects.toThrow('build-review aggregate');
+    const result = await (runner as unknown as {
+      runRubricBuildReview: (value: unknown, resolved: unknown, tier: 'M', executionContext: unknown, capabilities: unknown) => Promise<{
+        success: boolean;
+        output: string;
+        refusal?: { kind: string; reason: string };
+        buildReviewReadOnlyReviewUnavailable?: true;
+      }>;
+    }).runRubricBuildReview(inputs, resolveBuildReviewConfig(config), 'M', undefined, {
+      codex: { provider: 'codex', platform: 'linux', status: 'available' },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      buildReviewReadOnlyReviewUnavailable: true,
+      refusal: { kind: 'needs-human', reason: expect.stringContaining('read-only-review-unavailable') },
+      output: expect.stringContaining('Claude help does not list --restricted'),
+    });
 
     expect(provider.invoke).not.toHaveBeenCalledWith(expect.objectContaining({ prompt: expect.stringContaining('Build Review Security rubric.') }));
     expect(failures).toEqual(expect.arrayContaining([expect.objectContaining({

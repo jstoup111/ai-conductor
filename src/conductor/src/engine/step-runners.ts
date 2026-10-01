@@ -10,9 +10,11 @@ import type {
   InvokeOptions,
   InvokeResult,
   LLMProvider,
+  ProviderExitFacts,
   ProviderStreamCandidateObserver,
   ProviderStreamObservation,
 } from '../execution/llm-provider.js';
+import { formatProviderExitFacts } from '../execution/provider-diagnostics.js';
 import { ModelAvailability } from './model-availability.js';
 import {
   DEFAULT_PROVIDER,
@@ -1837,6 +1839,7 @@ export class DefaultStepRunner implements StepRunner {
     return {
       success: result.success,
       ...(result.output ? { output: result.output } : {}),
+      ...(result.exitFacts !== undefined ? { exitFacts: result.exitFacts } : {}),
       ...(result.finalStructuredResult === undefined
         ? {}
         : { finalStructuredResult: result.finalStructuredResult }),
@@ -3883,6 +3886,7 @@ export class DefaultStepRunner implements StepRunner {
       commandUnresolvedName?: string;
       nativeSchemaUnsupported?: true;
       providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'];
+      exitFacts?: ProviderExitFacts;
     }> => {
       const preserveInvocationFailure = (result: {
         success: boolean;
@@ -3893,6 +3897,7 @@ export class DefaultStepRunner implements StepRunner {
         commandUnresolvedName?: string;
         nativeSchemaUnsupported?: true;
         providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'];
+        exitFacts?: ProviderExitFacts;
       }) => ({
         success: result.success,
         ...(typeof result.output === 'string' ? { output: result.output } : {}),
@@ -3906,6 +3911,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.providerSetupExhaustion
           ? { providerSetupExhaustion: result.providerSetupExhaustion }
           : {}),
+        ...(result.exitFacts === undefined ? {} : { exitFacts: result.exitFacts }),
       });
       if (this.providerRuntimes && this.sessionStore) {
         const configuredCandidates = Array.isArray(branch.policy.llm_provider)
@@ -4248,7 +4254,11 @@ export class DefaultStepRunner implements StepRunner {
     if (!initial.success && initial.output?.startsWith(`${CODEX_DISPLAY_NAME} native schema scratch home failed:`)) {
       return makeBuildReviewDispatchFailure(initial.output ?? 'build_review provider invocation failed without a diagnostic');
     }
-    if (!initial.success) return undefined;
+    if (!initial.success) {
+      const detail = 'build_review grader invocation ended without a result.' +
+        (initial.exitFacts === undefined ? '' : ` ${formatProviderExitFacts(this.providerKey, initial.exitFacts)}`);
+      return makeBuildReviewDispatchFailure(detail, undefined, { cause: 'invalid-provider-result' });
+    }
     if (initial.finalStructuredResult === undefined || initial.finalStructuredResult === null || typeof initial.finalStructuredResult !== 'object' || Array.isArray(initial.finalStructuredResult)) {
       const rejection = diagnoseBuildReviewJudgedResultRejection(
         initial.finalStructuredResult,

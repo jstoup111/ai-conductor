@@ -75,6 +75,7 @@ import type {
   AuthenticationReadiness,
   CodexProbeFailure,
   InvokeResult,
+  ProviderExitFacts,
   SelfHostAuthContext,
   SelfHostInvocation,
   TokenUsage,
@@ -1385,6 +1386,8 @@ export interface StepRunResult {
   /** A queued self-host dispatch was parked before admission; no provider ran. */
   operatorParkedBeforeDispatch?: true;
   output?: string;
+  /** Bounded facts from an unclassified provider exit, forwarded to close events. */
+  exitFacts?: ProviderExitFacts;
   /** Native-schema terminal value, retained verbatim for engine validation. */
   finalStructuredResult?: unknown;
   /** A typed refusal is an entry/environment outcome, never provider text. */
@@ -8200,6 +8203,7 @@ export class Conductor {
                 ...(result?.effort !== undefined ? { effort: result.effort } : {}),
                 ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
                 ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+                ...(result?.exitFacts !== undefined ? { providerExit: result.exitFacts } : {}),
                 executionContext,
               });
             };
@@ -8341,6 +8345,7 @@ export class Conductor {
                             ...(failedAttempt?.actualProvider !== undefined ? { actualProvider: failedAttempt.actualProvider, provider: failedAttempt.actualProvider } : {}),
                             ...(failedAttempt?.preferredProvider !== undefined ? { preferredProvider: failedAttempt.preferredProvider } : {}),
                             ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+                            ...(failedAttempt?.exitFacts !== undefined ? { providerExit: failedAttempt.exitFacts } : {}),
                             executionContext,
                           });
                         },
@@ -11384,6 +11389,7 @@ export class Conductor {
                 attempt: attempt + 1,
                 maxAttempts: stepMaxRetries,
                 reason: lastError,
+                ...(result.exitFacts !== undefined && { providerExit: result.exitFacts }),
                 ...(result.model !== undefined && { model: result.model }),
                 ...(result.effort !== undefined && { effort: result.effort }),
                 ...(result.actualProvider !== undefined && { provider: result.actualProvider }),
@@ -12409,6 +12415,7 @@ export class Conductor {
             step: step.name,
             error: lastError,
             retryCount: attempt,
+            ...(failedStepResult?.exitFacts !== undefined && { providerExit: failedStepResult.exitFacts }),
             ...(failedStepResult?.effort !== undefined && { effort: failedStepResult.effort }),
             ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
             ...(failedStepResult?.observedIntervals
@@ -14828,6 +14835,7 @@ export class Conductor {
                 ...(failedAttempt?.actualProvider !== undefined ? { actualProvider: failedAttempt.actualProvider, provider: failedAttempt.actualProvider } : {}),
                 ...(failedAttempt?.preferredProvider !== undefined ? { preferredProvider: failedAttempt.preferredProvider } : {}),
                 ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+                ...(failedAttempt?.exitFacts !== undefined ? { providerExit: failedAttempt.exitFacts } : {}),
                 executionContext,
               });
             },
@@ -14939,6 +14947,7 @@ export class Conductor {
         ...(result?.effort !== undefined ? { effort: result.effort } : {}),
         ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
         ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+        ...(result?.exitFacts !== undefined ? { providerExit: result.exitFacts } : {}),
         executionContext,
       });
     }

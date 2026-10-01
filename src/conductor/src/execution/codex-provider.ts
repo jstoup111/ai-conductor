@@ -20,7 +20,11 @@ import {
   observeInterval,
   type IntervalClock,
 } from './observed-interval.js';
-import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
+import {
+  deriveProviderExitFacts,
+  formatProviderExitFacts,
+  summarizeProviderDiagnostic,
+} from './provider-diagnostics.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
@@ -362,6 +366,7 @@ export class CodexProvider implements LLMProvider {
       { model: options.model, cwd: options.cwd },
       !repl,
       options.nativeSchema !== undefined,
+      options.diagnosticLog,
     );
     const tokenUsage = !repl && completion.success && completion.tokenUsage === undefined && streamedTokenUsage !== undefined
       ? applyRateCard(
@@ -517,7 +522,9 @@ export class CodexProvider implements LLMProvider {
     pricing?: { model?: string; cwd?: string },
     strictMachineEnvelope = false,
     requiresNativeSchema = false,
+    diagnosticLog?: InvokeOptions['diagnosticLog'],
   ): InvokeResult {
+    const exitFacts = deriveProviderExitFacts(result);
     const { source } = authenticationSelection;
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
@@ -599,6 +606,17 @@ export class CodexProvider implements LLMProvider {
     // result, whatever its exit code says. Evaluated last so no established
     // recovery classification above loses its precedence.
     const toolProcessCreationFailures = countToolProcessCreationFailures(rawOutput);
+    const success = exitCode === 0 && toolProcessCreationFailures === 0;
+    const genericUnclassifiedFailure =
+      !success &&
+      !rateLimited &&
+      !modelUnavailable &&
+      !authFailure &&
+      !permissionDenied &&
+      toolProcessCreationFailures === 0;
+    if (genericUnclassifiedFailure) {
+      diagnosticLog?.(formatProviderExitFacts('codex', exitFacts));
+    }
 
     const finalStructuredResult = requiresNativeSchema
       ? this.terminalStructuredResult(parsedRaw.output)
@@ -613,7 +631,7 @@ export class CodexProvider implements LLMProvider {
       };
     }
     return {
-      success: exitCode === 0 && toolProcessCreationFailures === 0,
+      success,
       output: authFailure
         ? `${codexDisplayName()} authentication failed using the selected ${source} source.`
         : permissionDenied
@@ -634,6 +652,7 @@ export class CodexProvider implements LLMProvider {
       permissionDenied: permissionDenied || undefined,
       tokenUsage: parsed.tokenUsage,
       authentication,
+      ...(genericUnclassifiedFailure ? { exitFacts } : {}),
       ...(finalStructuredResult === undefined ? {} : { finalStructuredResult }),
     };
   }
@@ -917,38 +936,7 @@ export class CodexProvider implements LLMProvider {
   }
 
   private executionProbeFacts(error: unknown): CodexProbeFailure['facts'] {
-    const facts: CodexProbeFailure['facts'] = {};
-    if (typeof error !== 'object' || error === null) return facts;
-    const record = error as Record<string, unknown>;
-    const code = record.code;
-    if (code === 'EACCES' || code === 'EAGAIN' || code === 'ENOENT' || code === 'EPERM') {
-      facts.processErrorCode = code;
-    } else if (code !== undefined) {
-      facts.processErrorCode = 'UNKNOWN';
-    }
-    const exitCode = record.exitCode;
-    if (typeof exitCode === 'number' && Number.isInteger(exitCode) && exitCode >= 0) {
-      facts.exitCode = exitCode;
-    }
-    const signal = record.signal;
-    if (
-      signal === 'SIGABRT' || signal === 'SIGALRM' || signal === 'SIGHUP' || signal === 'SIGINT' ||
-      signal === 'SIGKILL' || signal === 'SIGPIPE' || signal === 'SIGQUIT' || signal === 'SIGTERM'
-    ) {
-      facts.signal = signal;
-    } else if (signal !== undefined) {
-      facts.signal = 'UNKNOWN';
-    }
-    const stdoutBytes = this.outputByteLength(record.stdout);
-    if (stdoutBytes !== undefined) facts.stdoutBytes = stdoutBytes;
-    const stderrBytes = this.outputByteLength(record.stderr);
-    if (stderrBytes !== undefined) facts.stderrBytes = stderrBytes;
-    return facts;
-  }
-
-  private outputByteLength(output: unknown): number | undefined {
-    if (typeof output === 'string' || Buffer.isBuffer(output)) return Buffer.byteLength(output);
-    return undefined;
+    return deriveProviderExitFacts(error);
   }
 
   private probeFailedReadiness(

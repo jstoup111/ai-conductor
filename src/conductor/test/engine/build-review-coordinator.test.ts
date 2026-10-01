@@ -1,4 +1,4 @@
-// Covers: task:7, task:15
+// Covers: task:5, task:7, task:15
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -166,6 +166,41 @@ describe("build-review coordinator: registered dispatch", () => {
       reason: 'native-schema-unsupported',
       detail: expect.stringContaining('candidate set [claude]'),
     });
+  });
+
+  it('maps an unavailable grader result to invalid-provider-result without treating it as a structured rejection', async () => {
+    const detail = 'build_review grader invocation ended without a result. codex subprocess exited without a classifiable result: exitCode=1 stdoutBytes=0 stderrBytes=0';
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      dispatchModel: vi.fn(async () => makeBuildReviewDispatchFailure(detail, undefined, {
+        cause: 'invalid-provider-result',
+      })),
+      emit,
+    }));
+
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'invalid-provider-result', detail,
+    });
+    expect(testQualityBranch(result)).not.toHaveProperty('rejection');
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'build_review_rubric_infrastructure_failure',
+      reason: 'invalid-provider-result',
+      cause: 'malformed-artifact',
+      excerpt: detail,
+    }));
+  });
+
+  it('keeps a real grader FAIL as a judged result, not an invalid-provider-result failure', async () => {
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: titledInputs(),
+      dispatchModel: vi.fn(async () => ({ findings: [testQualityFinding()] })),
+    }));
+
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: 'dispatched',
+      result: { verdict: 'FAIL' },
+    });
+    expect(testQualityBranch(result)).not.toHaveProperty('reason');
   });
 
   it('stamps Claude and Codex structured fixtures into byte-identical envelopes and finding identities', () => {

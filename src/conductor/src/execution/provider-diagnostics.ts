@@ -23,6 +23,62 @@ import {
   findBuiltInProviderDescriptor,
   type ProviderDiagnosticEnvelope,
 } from './provider-catalog.js';
+import type { ProviderExitFacts } from './llm-provider.js';
+
+/**
+ * Extract bounded exit facts from an arbitrary provider subprocess result.
+ * Unknown code and signal strings are deliberately normalized so diagnostics
+ * never preserve arbitrary process output.
+ */
+export function deriveProviderExitFacts(value: unknown): ProviderExitFacts {
+  const facts: ProviderExitFacts = {};
+  if (typeof value !== 'object' || value === null) return facts;
+
+  const record = value as Record<string, unknown>;
+  const code = record.code;
+  if (code === 'EACCES' || code === 'EAGAIN' || code === 'ENOENT' || code === 'EPERM') {
+    facts.processErrorCode = code;
+  } else if (code !== undefined) {
+    facts.processErrorCode = 'UNKNOWN';
+  }
+
+  const exitCode = record.exitCode;
+  if (typeof exitCode === 'number' && Number.isInteger(exitCode) && exitCode >= 0) {
+    facts.exitCode = exitCode;
+  }
+
+  const signal = record.signal;
+  if (
+    signal === 'SIGABRT' || signal === 'SIGALRM' || signal === 'SIGHUP' || signal === 'SIGINT' ||
+    signal === 'SIGKILL' || signal === 'SIGPIPE' || signal === 'SIGQUIT' || signal === 'SIGTERM'
+  ) {
+    facts.signal = signal;
+  } else if (signal !== undefined) {
+    facts.signal = 'UNKNOWN';
+  }
+
+  for (const [field, output] of [
+    ['stdoutBytes', record.stdout],
+    ['stderrBytes', record.stderr],
+  ] as const) {
+    if (typeof output === 'string' || Buffer.isBuffer(output)) {
+      facts[field] = Buffer.byteLength(output);
+    }
+  }
+  return facts;
+}
+
+/** Render a stable, bounded one-line diagnostic for unclassified provider exits. */
+export function formatProviderExitFacts(provider: string, facts: ProviderExitFacts): string {
+  const rendered = [
+    facts.processErrorCode !== undefined && `processErrorCode=${facts.processErrorCode}`,
+    facts.exitCode !== undefined && `exitCode=${facts.exitCode}`,
+    facts.signal !== undefined && `signal=${facts.signal}`,
+    facts.stdoutBytes !== undefined && `stdoutBytes=${facts.stdoutBytes}`,
+    facts.stderrBytes !== undefined && `stderrBytes=${facts.stderrBytes}`,
+  ].filter((fact): fact is string => typeof fact === 'string');
+  return `${provider} subprocess exited without a classifiable result:${rendered.length > 0 ? ` ${rendered.join(' ')}` : ''}`;
+}
 
 /** Telemetry extracted from a recognized provider result envelope. */
 interface EnvelopeSummary {

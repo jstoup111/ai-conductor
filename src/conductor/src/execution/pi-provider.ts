@@ -1,6 +1,7 @@
 import { execa, type Options as ExecaOptions } from 'execa';
 import type { InvokeOptions, InvokeResult, LLMProvider, TokenUsage } from './llm-provider.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
+import { deriveProviderExitFacts, formatProviderExitFacts } from './provider-diagnostics.js';
 import { validateSpawnPermit } from './spawn-permit.js';
 import { providerDescriptor } from './provider-catalog.js';
 
@@ -13,6 +14,7 @@ export type PiSubprocessFactory = (
   stdout?: unknown;
   stderr?: unknown;
   exitCode?: number | null;
+  signal?: unknown;
 }>;
 
 /**
@@ -147,6 +149,7 @@ export class PiProvider implements LLMProvider {
       abortSignal?.removeEventListener('abort', abort);
     }
     if (aborted || abortSignal?.aborted) return abortedInvocationResult();
+    const exitFacts = deriveProviderExitFacts(result);
     const exitCode = result.exitCode ?? 1;
     const stdout = typeof result.stdout === 'string' ? result.stdout : '';
     const stderr = typeof result.stderr === 'string' ? result.stderr : '';
@@ -178,6 +181,10 @@ export class PiProvider implements LLMProvider {
     // Pi authentication and rate-limit diagnostics do not have a verified,
     // stable signature yet, so they deliberately remain ordinary step failures.
     const modelUnavailable = exitCode !== 0 && PI_MODEL_UNAVAILABLE_RE.test(stderr);
+    const genericUnclassifiedFailure = exitCode !== 0 && !modelUnavailable;
+    if (genericUnclassifiedFailure) {
+      options.diagnosticLog?.(formatProviderExitFacts('pi', exitFacts));
+    }
 
     return {
       success: exitCode === 0,
@@ -185,6 +192,7 @@ export class PiProvider implements LLMProvider {
       exitCode,
       ...(modelUnavailable ? { modelUnavailable: true } : {}),
       tokenUsage: exitCode === 0 ? parsed.tokenUsage : undefined,
+      ...(genericUnclassifiedFailure ? { exitFacts } : {}),
     };
   }
 }

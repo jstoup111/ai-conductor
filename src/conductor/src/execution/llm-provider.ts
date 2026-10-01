@@ -65,17 +65,25 @@ export type CodexProbeParserRejection =
   | 'ambiguous-credential-evidence';
 
 /**
+ * Bounded, allowlisted facts retained from a provider subprocess that did not
+ * produce a classifiable result. These fields deliberately exclude raw output,
+ * paths, credential material, hashes, and arbitrary error messages.
+ */
+export interface ProviderExitFacts {
+  processErrorCode?: 'EACCES' | 'EAGAIN' | 'ENOENT' | 'EPERM' | 'UNKNOWN';
+  exitCode?: number;
+  signal?: 'SIGABRT' | 'SIGALRM' | 'SIGHUP' | 'SIGINT' | 'SIGKILL' | 'SIGPIPE' | 'SIGQUIT' | 'SIGTERM' | 'UNKNOWN';
+  stdoutBytes?: number;
+  stderrBytes?: number;
+}
+
+/**
  * Bounded, allowlisted facts about a failed Codex doctor probe. These fields
  * deliberately exclude raw output, paths, credential material, hashes, and
  * arbitrary error messages.
  */
-export interface CodexProbeFailureFacts {
-  processErrorCode?: 'EACCES' | 'EAGAIN' | 'ENOENT' | 'EPERM' | 'UNKNOWN';
-  exitCode?: number;
-  signal?: 'SIGABRT' | 'SIGALRM' | 'SIGHUP' | 'SIGINT' | 'SIGKILL' | 'SIGPIPE' | 'SIGQUIT' | 'SIGTERM' | 'UNKNOWN';
+export interface CodexProbeFailureFacts extends ProviderExitFacts {
   timeoutMs?: number;
-  stdoutBytes?: number;
-  stderrBytes?: number;
   schemaVersion?: number;
   envelopeStatus?: 'ok' | 'warning' | 'fail' | 'unknown';
   credentialCheck?: 'absent' | 'ok' | 'fail' | 'unknown';
@@ -207,6 +215,8 @@ export interface InvokeResult {
   success: boolean;
   output: string;
   exitCode: number;
+  /** Bounded subprocess facts retained only for an unclassified failed exit. */
+  exitFacts?: ProviderExitFacts;
   /**
    * The parsed value from the provider's terminal structured-result envelope.
    * It remains distinct from human-readable `output`; only an engine-owned
