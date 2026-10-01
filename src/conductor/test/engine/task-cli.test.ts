@@ -595,12 +595,18 @@ describe('runTaskDone', () => {
       // Start task 7
       await runTaskStart(dir, '7');
 
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const before = await fsPromises.readFile(statusPath, 'utf-8');
+
       // Call runTaskDone
-      await runTaskDone(dir, '7');
+      const code = await runTaskDone(dir, '7');
 
       // Verify row 7 is still in_progress (never becomes completed)
-      const statusPath = join(dir, '.pipeline/task-status.json');
       const content = await fsPromises.readFile(statusPath, 'utf-8');
+      const stampRemoved = await fsPromises
+        .access(join(dir, '.pipeline/current-task'))
+        .then(() => false, () => true);
+      expect({ code, content, stampRemoved }).toEqual({ code: 0, content: before, stampRemoved: true });
       const status = JSON.parse(content);
 
       const task7 = status.tasks.find((t: any) => t.id === '7');
