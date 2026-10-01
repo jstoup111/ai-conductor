@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-01T23:19:33.180Z
 Slug: pi-per-step-model-selection-via-wrapped-providers
 Class: needs-human
 Halting step: unknown
