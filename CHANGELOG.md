@@ -61,6 +61,9 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - coverage_binding no longer holds a plan responsible for ADR and spec amendments that earlier features already shipped. ([implementation PR #2859](https://github.com/jstoup111/ai-conductor/pull/2859)).
 - Resuming a feature whose halt PR still carries only the needs-remediation title prefix or halt banner now repairs the PR instead of halting FINISH as needs-human. ([implementation PR #2865](https://github.com/jstoup111/ai-conductor/pull/2865)).
 - Prevents halted repair cycles from spending the remediation cap again when they resume. ([implementation PR #2869](https://github.com/jstoup111/ai-conductor/pull/2869)).
+- Feature rebases now preserve resolved merge changes without replaying duplicate side-lineage commits. ([implementation PR #2861](https://github.com/jstoup111/ai-conductor/pull/2861)).
+- Operators can re-affirm a refused scope decision without repeated PRD audit halts. ([implementation PR #2871](https://github.com/jstoup111/ai-conductor/pull/2871)).
+- Resumed daemon features now verify cleared halt state and update the existing resolution comment. ([implementation PR #2887](https://github.com/jstoup111/ai-conductor/pull/2887)).
 
 ## [1.5.0] - 2026-09-27
 
