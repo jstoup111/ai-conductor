@@ -467,6 +467,7 @@ describe('structural: smoke test entry point', () => {
         'test/smoke/finish-record.smoke.test.ts',
         'test/smoke/git-guard-claude.smoke.test.ts',
         'test/smoke/git-guard-codex.smoke.test.ts',
+        'test/smoke/git-guard-pi.smoke.test.ts',
         'test/smoke/publish-interrupted.smoke.test.ts',
         'test/smoke/surgical-finish-retry.smoke.test.ts',
       ]);
