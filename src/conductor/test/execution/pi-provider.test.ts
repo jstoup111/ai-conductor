@@ -162,7 +162,7 @@ describe('resolvePiSkill', () => {
 
 describe('PiProvider', () => {
   const spawn = vi.fn<PiSubprocessFactory>();
-  let provider: PiProvider;
+  let provider: InstanceType<typeof PiProvider>;
   let environment: PiEnvironment;
   let stat: ReturnType<typeof vi.fn>;
   const harnessPath = '/home/agent/.agents/skills/HARNESS.md';

@@ -74,7 +74,7 @@ describe('engine git guard boundary', () => {
   });
 
   it('keeps the materialized script’s safe lease pass-through contract', () => {
-    expect(GIT_GUARD_SCRIPT).toContain('exec "$real_git" "$@"');
+    expect(GIT_GUARD_SCRIPT).toContain('exec "$real_git" "${args[@]}"');
     expect(GIT_GUARD_SCRIPT).toContain('git push --force-with-lease');
   });
 });
