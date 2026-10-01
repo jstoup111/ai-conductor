@@ -2463,30 +2463,22 @@ export class DefaultStepRunner implements StepRunner {
 
     try {
       return await dispatchAttributionVerifier({
-        provider: this.provider,
         projectDir: opts.projectRoot,
         planPath: opts.planPath,
         residueIds: opts.residueIds,
         featureWorktreePath: opts.projectRoot,
-        config: this.config,
-        modelPolicy: this.modelPolicy,
-        providerKey: this.providerKey,
-        ...(this.providerRuntimes && this.sessionStore
-          ? {
-              providerDispatch: async (options) => {
-                const result = await this.executeProviderAwareOneShot(
-                  'attribution_verify',
-                  options,
-                );
-                if (!result) {
-                  throw new Error(
-                    'Provider-aware attribution dispatch requires runtimes and a session store',
-                  );
-                }
-                return result;
-              },
-            }
-          : {}),
+        providerDispatch: async (options) => {
+          const result = await this.executeProviderAwareOneShot(
+            'attribution_verify',
+            options,
+          );
+          if (!result) {
+            throw new Error(
+              'Provider-aware attribution dispatch requires runtimes and a session store',
+            );
+          }
+          return result;
+        },
       });
     } catch (err) {
       return {

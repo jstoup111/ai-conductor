@@ -2,10 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile, readFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { LLMProvider, InvokeOptions } from '../../src/execution/llm-provider.js';
-import type { HarnessConfig } from '../../src/types/config.js';
+import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
-import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import {
   dispatchAttributionVerifier,
   computeMemoKey,
@@ -15,6 +13,18 @@ import {
   // whole suite fail to load, which is the expected RED failure mode.
   rekeyMemoAfterRebase,
 } from '../../src/engine/attribution-lane.js';
+import type { VerifierDispatchOptions } from '../../src/engine/attribution-lane.js';
+
+// The attribution verifier is dispatched exclusively through the provider-aware
+// executor. Keeping this negative type assertion makes a scalar-provider
+// fallback impossible to reintroduce unnoticed.
+// @ts-expect-error providerDispatch is a required provider-aware boundary
+const _missingProviderDispatch: VerifierDispatchOptions = {
+  projectDir: '',
+  planPath: '',
+  residueIds: [],
+  featureWorktreePath: '',
+};
 
 // ── Fresh-session verifier dispatch (Task 7) ──────────────────────────────
 //
@@ -26,6 +36,12 @@ import {
 /**
  * Create a mocked git runner for testing without a real git repo.
  */
+function recordingProviderDispatch(
+  invoke: (options: unknown) => unknown,
+): VerifierDispatchOptions['providerDispatch'] {
+  return vi.fn(async (options) => invoke(options)) as unknown as VerifierDispatchOptions['providerDispatch'];
+}
+
 function createMockedGitRunner(
   headSha = 'abc1234567890def1234567890def1234567890',
 ): GitRunner {
@@ -65,18 +81,25 @@ Add tests for sweep.
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('dispatches with a fresh uuid and resume:false, never the conductor session', async () => {
+  it('has no scalar-provider model fallback implementation', async () => {
+    const source = await readFile(
+      new URL('../../src/engine/attribution-lane.ts', import.meta.url),
+      'utf-8',
+    );
+
+    expect(source).not.toContain('ModelAvailability');
+    expect(source).not.toContain('selectFallbackLadder');
+    expect(source).not.toContain('provider.invoke(');
+  });
+
+  it('delegates dispatch through the provider-aware boundary', async () => {
     const invoke = vi.fn().mockResolvedValue({
       success: true,
       output: '{"schema": 1}',
       exitCode: 0,
     });
-    const provider: LLMProvider = {
-      invoke,
-    };
-
     const result = await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1', '2'],
@@ -87,10 +110,8 @@ Add tests for sweep.
     expect(result.success).toBe(true);
     expect(invoke).toHaveBeenCalledOnce();
     const opts = invoke.mock.calls[0][0] as InvokeOptions;
-    expect(opts.resume).toBe(false);
-    expect(opts.sessionId).toBeTruthy();
-    // A real uuid, not empty/undefined.
-    expect(opts.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(opts).not.toHaveProperty('resume');
+    expect(opts).not.toHaveProperty('sessionId');
   });
 
   it('delegates the legacy attribution verifier dispatch through invoke without a stream consumer', async () => {
@@ -102,10 +123,8 @@ Add tests for sweep.
     const invokeInteractive = vi.fn().mockRejectedValue(
       new Error('legacy interactive dispatch must not run'),
     );
-    const provider: LLMProvider = { invoke, };
-
     await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1'],
@@ -130,10 +149,8 @@ Add tests for sweep.
       output: '{"schema": 1}',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, };
-
     await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1'],
@@ -153,11 +170,9 @@ Add tests for sweep.
       output: '{}',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, };
-
     const featureWorktreeDir = join(dir, 'feature-worktree');
     await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1'],
@@ -169,170 +184,14 @@ Add tests for sweep.
     expect(opts.cwd).toBe(featureWorktreeDir);
   });
 
-  it('resolves model and effort from config', async () => {
-    const invoke = vi.fn().mockResolvedValue({
-      success: true,
-      output: '{}',
-      exitCode: 0,
-    });
-    const provider: LLMProvider = { invoke, };
-
-    const config: HarnessConfig = {
-      model_fallback_ladder: ['claude-opus', 'claude-sonnet'],
-      steps: {
-        attribution_verify: {
-          model: 'claude-opus',
-          effort: 'medium',
-        },
-      },
-    };
-
-    await dispatchAttributionVerifier({
-      provider,
-      projectDir: dir,
-      planPath,
-      residueIds: ['1'],
-      featureWorktreePath: dir,
-      gitRunner: createMockedGitRunner(),
-      config,
-    });
-
-    const opts = invoke.mock.calls[0][0] as InvokeOptions;
-    expect(opts.model).toBe('claude-opus');
-    expect(opts.effort).toBe('medium');
-  });
-
-  it('dispatches with the Codex policy model and effort for attribution verification', async () => {
-    const invoke = vi.fn().mockResolvedValue({
-      success: true,
-      output: '{}',
-      exitCode: 0,
-    });
-    const provider: LLMProvider = { invoke, };
-
-    await dispatchAttributionVerifier({
-      provider,
-      projectDir: dir,
-      planPath,
-      residueIds: ['1'],
-      featureWorktreePath: dir,
-      gitRunner: createMockedGitRunner(),
-      modelPolicy: CODEX_MODEL_POLICY,
-    });
-
-    const opts = invoke.mock.calls[0][0] as InvokeOptions;
-    expect(opts).toMatchObject({ model: 'gpt-5.6-sol', effort: 'high' });
-  });
-
-  it('walks the Codex model fallback ladder until attribution verification succeeds', async () => {
-    const invoke = vi
-      .fn()
-      .mockResolvedValueOnce({
-        success: false,
-        output: 'Sol unavailable',
-        modelUnavailable: true,
-      })
-      .mockResolvedValueOnce({
-        success: false,
-        output: 'Terra unavailable',
-        modelUnavailable: true,
-      })
-      .mockResolvedValueOnce({
-        success: true,
-        output: '{}',
-        exitCode: 0,
-      });
-    const provider: LLMProvider = { invoke, };
-
-    await dispatchAttributionVerifier({
-      provider,
-      projectDir: dir,
-      planPath,
-      residueIds: ['1'],
-      featureWorktreePath: dir,
-      gitRunner: createMockedGitRunner(),
-      modelPolicy: CODEX_MODEL_POLICY,
-    });
-
-    expect(
-      invoke.mock.calls.map(([opts]) => (opts as InvokeOptions).model),
-    ).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
-  });
-
-  it('prefers the configured fallback ladder over the Codex policy fallback ladder', async () => {
-    const invoke = vi
-      .fn()
-      .mockResolvedValueOnce({
-        success: false,
-        output: 'Sol unavailable',
-        modelUnavailable: true,
-      })
-      .mockResolvedValueOnce({
-        success: true,
-        output: '{}',
-        exitCode: 0,
-      });
-    const provider: LLMProvider = { invoke, };
-    const config: HarnessConfig = {
-      model_fallback_ladder: [
-        'gpt-5.6-sol',
-        'configured-verifier-model',
-      ],
-    };
-
-    await dispatchAttributionVerifier({
-      provider,
-      projectDir: dir,
-      planPath,
-      residueIds: ['1'],
-      featureWorktreePath: dir,
-      gitRunner: createMockedGitRunner(),
-      config,
-      modelPolicy: CODEX_MODEL_POLICY,
-    });
-
-    expect(
-      invoke.mock.calls.map(([opts]) => (opts as InvokeOptions).model),
-    ).toEqual(['gpt-5.6-sol', 'configured-verifier-model']);
-  });
-
-  it('honors an explicitly empty configured fallback ladder', async () => {
-    const invoke = vi.fn().mockResolvedValue({
-      success: false,
-      output: 'Sol unavailable',
-      modelUnavailable: true,
-    });
-    const provider: LLMProvider = { invoke, };
-
-    const result = await dispatchAttributionVerifier({
-      provider,
-      projectDir: dir,
-      planPath,
-      residueIds: ['1'],
-      featureWorktreePath: dir,
-      gitRunner: createMockedGitRunner(),
-      config: { model_fallback_ladder: [] },
-      modelPolicy: CODEX_MODEL_POLICY,
-    });
-
-    expect({
-      success: result.success,
-      models: invoke.mock.calls.map(
-        ([opts]) => (opts as InvokeOptions).model,
-      ),
-    }).toEqual({ success: false, models: ['gpt-5.6-sol'] });
-  });
-
   it('includes residue tasks and candidate commits in prompt', async () => {
     const invoke = vi.fn().mockResolvedValue({
       success: true,
       output: '{}',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, };
-
     await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1', '2'],
@@ -352,10 +211,8 @@ Add tests for sweep.
       output: '{}',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, };
-
     await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1'],
@@ -373,10 +230,8 @@ Add tests for sweep.
       output: 'attribution complete',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, };
-
     const result = await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1'],
@@ -395,10 +250,8 @@ Add tests for sweep.
       rateLimited: true,
       waitSeconds: 60,
     });
-    const provider: LLMProvider = { invoke, };
-
     const result = await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1'],
@@ -412,15 +265,7 @@ Add tests for sweep.
   });
 
   it('returns failure on auth failure', async () => {
-    const invoke = vi.fn().mockResolvedValue({
-      success: false,
-      output: 'auth failed',
-      authFailure: true,
-    });
-    const provider: LLMProvider = { invoke, };
-
     const result = await dispatchAttributionVerifier({
-      provider,
       projectDir: dir,
       planPath,
       residueIds: ['1'],
@@ -451,38 +296,7 @@ Add tests for sweep.
     });
   });
 
-  it('names attempted models on full ladder exhaustion', async () => {
-    const invoke = vi.fn().mockResolvedValue({
-      success: false,
-      output: 'no models available',
-      modelUnavailable: true,
-    });
-    const provider: LLMProvider = { invoke, };
 
-    const config: HarnessConfig = {
-      model_fallback_ladder: ['claude-opus', 'claude-sonnet', 'claude-haiku'],
-      steps: {
-        attribution_verify: {
-          model: 'claude-opus',
-          effort: 'medium',
-        },
-      },
-    };
-
-    const result = await dispatchAttributionVerifier({
-      provider,
-      projectDir: dir,
-      planPath,
-      residueIds: ['1'],
-      featureWorktreePath: dir,
-      gitRunner: createMockedGitRunner(),
-      config,
-    });
-
-    expect(result.success).toBe(false);
-    // Output should indicate multiple models were tried
-    expect(result.output).toMatch(/model fallback ladder exhausted/i);
-  });
 });
 
 // ── Verdict memoization by (HEAD, residue) (Task 8) ──────────────────────────
@@ -543,10 +357,6 @@ Add tests for sweep.
 
   it('same (HEAD, sorted residue) reuses cached result without dispatch', async () => {
     const invoke = vi.fn();
-    const provider: LLMProvider = {
-      invoke,
-    };
-
     // First call: should dispatch and cache
     invoke.mockResolvedValueOnce({
       success: true,
@@ -557,7 +367,7 @@ Add tests for sweep.
     });
 
     const firstResult = await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['2', '1'], // Order will be sorted
@@ -570,7 +380,7 @@ Add tests for sweep.
 
     // Second call with same (HEAD, sorted residue): should reuse cached result
     const secondResult = await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1', '2'], // Different order, but sorts to same
@@ -587,10 +397,6 @@ Add tests for sweep.
 
   it('HEAD change triggers fresh dispatch', async () => {
     const invoke = vi.fn();
-    const provider: LLMProvider = {
-      invoke,
-    };
-
     invoke.mockResolvedValueOnce({
       success: true,
       output: 'first verdict',
@@ -601,7 +407,7 @@ Add tests for sweep.
 
     // First dispatch with HEAD=abc...
     await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1'],
@@ -621,7 +427,7 @@ Add tests for sweep.
     });
 
     const secondResult = await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1'],
@@ -636,10 +442,6 @@ Add tests for sweep.
 
   it('residue change triggers fresh dispatch', async () => {
     const invoke = vi.fn();
-    const provider: LLMProvider = {
-      invoke,
-    };
-
     invoke.mockResolvedValueOnce({
       success: true,
       output: 'first verdict',
@@ -650,7 +452,7 @@ Add tests for sweep.
 
     // First dispatch with residueIds = ['1']
     await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1'],
@@ -670,7 +472,7 @@ Add tests for sweep.
     });
 
     const result = await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1', '2'], // Different residue
@@ -685,10 +487,6 @@ Add tests for sweep.
 
   it('unreachable memo HEAD triggers fresh dispatch', async () => {
     const invoke = vi.fn();
-    const provider: LLMProvider = {
-      invoke,
-    };
-
     // Manually create a memo with an unreachable HEAD (fake SHA)
     const fakeMemo = {
       key: 'deadbeef1234567890abcdef1234567890abcdef:1,2', // Fake HEAD SHA
@@ -706,7 +504,7 @@ Add tests for sweep.
     });
 
     const result = await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1', '2'],
@@ -726,12 +524,8 @@ Add tests for sweep.
       authFailure: false,
       modelUnavailable: false,
     });
-    const provider: LLMProvider = {
-      invoke,
-    };
-
     await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1', '2'],
@@ -759,12 +553,8 @@ Add tests for sweep.
       authFailure: false,
       modelUnavailable: false,
     });
-    const provider: LLMProvider = {
-      invoke,
-    };
-
     await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['3', '1', '2'],
@@ -833,8 +623,6 @@ Implement task 3.
       output: 'verdict written',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, };
-
     const headSha = 'abc1234567890def1234567890def1234567890';
     const verdict = {
       schema: 1,
@@ -862,7 +650,7 @@ Implement task 3.
     await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
 
     const result = await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1', '2', '3'],
@@ -881,8 +669,6 @@ Implement task 3.
       output: 'verdict written',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, };
-
     const headSha = 'abc1234567890def1234567890def1234567890';
     const verdict = {
       schema: 1,
@@ -904,7 +690,7 @@ Implement task 3.
     await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
 
     const result = await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1', '2'],
@@ -922,8 +708,6 @@ Implement task 3.
       output: 'verdict written',
       exitCode: 0,
     });
-    const provider: LLMProvider = { invoke, };
-
     const currentHeadSha = 'abc1234567890def1234567890def1234567890';
     const verdictHeadSha = 'different1234567890def1234567890def1234567890'; // Mismatch!
 
@@ -947,7 +731,7 @@ Implement task 3.
     await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
 
     const result = await dispatchAttributionVerifier({
-      provider,
+      providerDispatch: recordingProviderDispatch(invoke),
       projectDir: dir,
       planPath,
       residueIds: ['1', '2'],

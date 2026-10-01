@@ -21,7 +21,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
+import type { LLMProvider, InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import { phaseForStep, resolveStepConfig } from '../../src/engine/resolved-config.js';
 import { escalateAttempt } from '../../src/engine/escalation.js';
@@ -381,7 +381,7 @@ describe('#902 real execution paths', () => {
     expect(calls[0]).toMatchObject({ model: 'gpt-5.6-luna', effort: 'low' });
   });
 
-  it('attribution verification walks Sol to Terra to Luna within one dispatch', async () => {
+  it('attribution verification delegates model selection to the provider-aware dispatch', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'provider-policy-attribution-'));
     tempDirs.push(dir);
     const planPath = join(dir, 'plan.md');
@@ -391,21 +391,15 @@ describe('#902 real execution paths', () => {
       'utf8',
     );
 
-    const models: string[] = [];
-    const provider: LLMProvider = {
-      invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
-        models.push(options.model ?? '');
-        if (options.model === 'gpt-5.6-luna') {
-          return { success: true, output: '{"schema":1}', exitCode: 0 };
-        }
-        return {
-          success: false,
-          output: 'model unavailable',
-          exitCode: 1,
-          modelUnavailable: true,
-        };
-      }),
-    };
+    const providerDispatch = vi.fn().mockResolvedValue({
+      success: true,
+      output: '{"schema":1}',
+      exitCode: 0,
+      preferredProvider: 'codex',
+      actualProvider: 'codex',
+      attempts: [],
+      resolvedModel: 'gpt-5.6-luna',
+    });
     const gitRunner: GitRunner = vi.fn(async (args: string[]) => ({
       exitCode: 0,
       stdout: args[0] === 'rev-parse'
@@ -415,17 +409,17 @@ describe('#902 real execution paths', () => {
     })) as unknown as GitRunner;
 
     const result = await dispatchAttributionVerifier({
-      provider,
-      modelPolicy: CODEX_POLICY,
       projectDir: dir,
       planPath,
       residueIds: ['1'],
       featureWorktreePath: dir,
       gitRunner,
-    } as never);
+      providerDispatch,
+    });
 
     expect(result.success).toBe(true);
-    expect(models).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+    expect(providerDispatch).toHaveBeenCalledOnce();
+    expect(result.model).toBe('gpt-5.6-luna');
   });
 
   it('inline and daemon composition roots carry policy to every runner and conductor', async () => {
