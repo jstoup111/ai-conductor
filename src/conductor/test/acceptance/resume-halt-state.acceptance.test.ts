@@ -231,10 +231,10 @@ describe('halt PR rehabilitation across daemon re-dispatch and reconciliation', 
     expect(stateSeenByBuild!.labels).not.toContain('needs-remediation');
     expect(stateSeenByBuild!.body).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
     expect(stateSeenByBuild!.isDraft).toBe(true);
-    // Guarded resume repair preserves the original halt history and adds a
-    // distinct, authorized resolution note.
-    expect(stateSeenByBuild!.comments).toHaveLength(2);
-    expect(stateSeenByBuild!.comments.some((comment) => /resolved/i.test(comment.body))).toBe(true);
+    // Guarded resume repair preserves the original comment identity while
+    // replacing the halt narrative with its authorized resolution note.
+    expect(stateSeenByBuild!.comments).toHaveLength(1);
+    expect(stateSeenByBuild!.comments[0]?.body).toMatch(/resolved/i);
 
     const sweepStart = calls.length;
     await reconcileHaltPrs({ projectRoot, runGh: gh, runGit: git });

@@ -36,7 +36,12 @@ function fakePresentation(options: { refuse?: boolean } = {}): {
     body: `${HALT_PR_BANNER_SENTINEL}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
   };
   const writes: GithubOperationRequest[] = [];
-  const gh: GhRunner = async () => ({ stdout: JSON.stringify(state) });
+  const gh: GhRunner = async () => ({
+    stdout: JSON.stringify({
+      ...state,
+      labels: state.labels.map((name) => ({ name })),
+    }),
+  });
   const operations: GithubOperationRunner = {
     run: vi.fn(async (request) => {
       writes.push(request);
@@ -47,8 +52,8 @@ function fakePresentation(options: { refuse?: boolean } = {}): {
       if (request.operation === 'pull-request.label.remove') state.labels = [];
       if (request.operation === 'pull-request.ready') state.isDraft = false;
       if (request.operation === 'pull-request.edit' && request.payload) {
-        if ('title' in request.payload && request.payload.title) state.title = request.payload.title;
-        if ('body' in request.payload && request.payload.body) state.body = request.payload.body;
+        if (typeof request.payload.title === 'string') state.title = request.payload.title;
+        if (typeof request.payload.body === 'string') state.body = request.payload.body;
       }
       return result;
     }),
