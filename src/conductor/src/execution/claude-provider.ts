@@ -641,7 +641,7 @@ export class ClaudeProvider implements LLMProvider {
     // deterministically prevents.
     options = enforceFreshSessionOptions(options, 'claude');
     let guardDir: string | null;
-    try { guardDir = await ensureGitGuardForDispatch(options.cwd); } catch (error) {
+    try { guardDir = options.readOnlyReview ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
       return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
     }
     // Claude's native JSON-schema mode is a non-interactive print-mode

@@ -28,12 +28,28 @@ while [[ $i -lt \${#args[@]} ]]; do
   break
 done
 command="\${args[$i]:-}"
-if [[ -n "$command" ]] && [[ ! "$command" =~ ^(status|log|diff|commit|rebase|config|rev-parse|for-each-ref|merge-base)$ ]]; then
+if [[ -n "$command" ]] && [[ ! "$command" =~ ^(status|log|diff|commit|rebase|config|rev-parse|for-each-ref|merge-base|show|fetch|add|ls-files)$ ]]; then
   alias_value="$($real_git "\${args[@]:0:$i}" config --get "alias.$command" 2>/dev/null || true)"
   if [[ -n "$alias_value" && "$alias_value" != '!'* ]]; then
-    read -r -a expanded <<< "$alias_value"
+    # Git aliases use quote-aware split_cmdline semantics, not bash's plain
+    # word splitting.  Keep shell bang aliases above out of this path.
+    expanded=(); token=''; quote=''; started=false
+    for ((p=0; p<\${#alias_value}; p++)); do
+      ch="\${alias_value:p:1}"
+      if [[ -n "$quote" ]]; then
+        if [[ "$ch" == "$quote" ]]; then quote=''; started=true
+        elif [[ "$ch" == '\\' && "$quote" != "'" && $((p + 1)) -lt \${#alias_value} ]]; then ((p++)); token+="\${alias_value:p:1}"; started=true
+        else token+="$ch"; started=true; fi
+      elif [[ "$ch" == "'" || "$ch" == '"' ]]; then quote="$ch"; started=true
+      elif [[ "$ch" == '\\' && $((p + 1)) -lt \${#alias_value} ]]; then ((p++)); token+="\${alias_value:p:1}"; started=true
+      elif [[ "$ch" =~ [[:space:]] ]]; then
+        if [[ "$started" == true ]]; then expanded+=("$token"); token=''; started=false; fi
+      else token+="$ch"; started=true; fi
+    done
+    [[ -n "$quote" ]] && expanded=()
+    [[ "$started" == true ]] && expanded+=("$token")
     args=("\${args[@]:0:$i}" "\${expanded[@]}" "\${args[@]:$((i+1))}")
-    command="\${args[$i]}"
+    command="\${args[$i]:-}"
   fi
 fi
 
@@ -79,7 +95,7 @@ if [[ "$destructive" == true ]]; then
   common="$($real_git "\${args[@]:0:$i}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
   [[ "$common" == "$feature_common" ]] && refuse "$command" "$reason" "$alternative"
 fi
-exec "$real_git" "$@"
+exec "$real_git" "\${args[@]}"
 `;
 
 /**

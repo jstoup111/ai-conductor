@@ -1,5 +1,5 @@
 // Covers: task:6, task:7
-import { chmod, lstat, mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Options as ExecaOptions } from 'execa';
@@ -15,7 +15,7 @@ describe('git guard provisioning primitives', () => {
   const roots: string[] = [];
   afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
-  it('skips relative and .pipeline/bin PATH entries and resolves an absolute executable', async () => {
+  it('skips relative and every lexical or linked .pipeline/bin spelling and resolves an absolute executable', async () => {
     const root = await mkdtemp(join(tmpdir(), 'git-guard-resolution-'));
     roots.push(root);
     const guard = join(root, '.pipeline', 'bin');
@@ -25,7 +25,9 @@ describe('git guard provisioning primitives', () => {
     await writeFile(join(real, 'git'), '#!/bin/sh\nexit 0\n');
     await Promise.all([chmod(join(guard, 'git'), 0o755), chmod(join(real, 'git'), 0o755)]);
 
-    await expect(resolveRealGit(['relative-bin', guard, real].join(':'))).resolves.toBe(join(real, 'git'));
+    const link = join(root, 'guard-link');
+    await symlink(guard, link);
+    await expect(resolveRealGit(['relative-bin', `${guard}/`, join(guard, '.'), link, real].join(':'))).resolves.toBe(join(real, 'git'));
   });
 
   it('provisions a regular executable guard with regular runtime data files', async () => {

@@ -38,12 +38,14 @@ describe('GIT_GUARD_SCRIPT refusal messages', () => {
   let fixtureDir: string;
   let guardPath: string;
   let callsPath: string;
+  let aliasPath: string;
 
   beforeEach(async () => {
     fixtureDir = await mkdtemp(join(tmpdir(), 'git-guard-script-'));
     const binDir = join(fixtureDir, '.pipeline', 'bin');
     const guardDataDir = join(fixtureDir, '.pipeline', 'git-guard');
     callsPath = join(fixtureDir, 'calls');
+    aliasPath = join(fixtureDir, 'alias');
     guardPath = join(binDir, 'git');
     const realGitPath = join(fixtureDir, 'real-git');
 
@@ -56,6 +58,7 @@ describe('GIT_GUARD_SCRIPT refusal messages', () => {
 printf '%s\\n' "$1" >> ${JSON.stringify(callsPath)}
 case "$1" in
   rev-parse) printf '%s\\n' ${JSON.stringify(FEATURE_COMMON_DIR)} ;;
+  config) cat ${JSON.stringify(aliasPath)} 2>/dev/null || true ;;
   push) printf '%s\\n' 'non-fast-forward: remote rejected update' >&2; exit 17 ;;
 esac
 `, 'utf8');
@@ -106,5 +109,37 @@ esac
 
     expect(result.status).toBe(0);
     expect(await recordedCommands()).toEqual(['status']);
+  });
+
+  it.each([
+    ['lease force push', ['push', '--force-with-lease', '--force-if-includes', 'origin', 'main']],
+    ['non-hard reset', ['reset', '--keep', 'HEAD']],
+    ['soft reset', ['reset', '--soft', 'HEAD']],
+    ['mixed reset', ['reset', '--mixed', 'HEAD']],
+    ['safe built-in with no alias query', ['show', 'HEAD']],
+    ['safe fetch with no alias query', ['fetch', 'origin']],
+    ['safe add with no alias query', ['add', 'file']],
+    ['safe ls-files with no alias query', ['ls-files']],
+  ])('passes %s byte-identically to real git', async (_name, args) => {
+    const result = invoke(args);
+    expect(result.status).toBe(args[0] === 'push' ? 17 : 0);
+    expect(await recordedCommands()).toEqual(args[0] === 'show' || args[0] === 'fetch' || args[0] === 'add' || args[0] === 'ls-files' ? [args[0]] : ['config', args[0]]);
+  });
+
+  it.each(["reset '--hard'", 'reset "--hard"', "clean '-f'"])('refuses quote-aware destructive alias %s', async (alias) => {
+    await writeFile(aliasPath, alias, 'utf8');
+    const result = invoke(['guarded']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('ai-conductor git guard: refused');
+    expect(await recordedCommands()).toContain('rev-parse');
+    expect(await recordedCommands()).not.toContain('reset');
+    expect(await recordedCommands()).not.toContain('clean');
+  });
+
+  it('expands a quoted non-destructive alias before invoking real git', async () => {
+    await writeFile(aliasPath, "log '-1'", 'utf8');
+    const result = invoke(['guarded']);
+    expect(result.status).toBe(0);
+    expect(await recordedCommands()).toEqual(['config', 'log']);
   });
 });

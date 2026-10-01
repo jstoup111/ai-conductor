@@ -1,6 +1,6 @@
-import { access, chmod, lstat, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { access, chmod, lstat, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { delimiter, isAbsolute, join } from 'node:path';
+import { delimiter, isAbsolute, join, normalize } from 'node:path';
 import { execa } from 'execa';
 import { GIT_GUARD_SCRIPT } from './git-hook-assets.js';
 
@@ -11,7 +11,9 @@ export async function resolveRealGit(pathEnv = process.env.PATH ?? ''): Promise<
   for (const entry of pathEnv.split(delimiter)) {
     // A relative entry is relative to whichever directory the eventual child
     // chooses. The guard data must instead name one stable, absolute binary.
-    if (!entry || !isAbsolute(entry) || entry.endsWith(join('.pipeline', 'bin'))) continue;
+    if (!entry || !isAbsolute(entry)) continue;
+    const resolvedEntry = await realpath(entry).catch(() => normalize(entry));
+    if (resolvedEntry.endsWith(join('.pipeline', 'bin'))) continue;
     const candidate = join(entry, 'git');
     try { await access(candidate, constants.X_OK); return candidate; } catch { /* continue */ }
   }
@@ -57,14 +59,18 @@ async function isRegularFile(path: string): Promise<boolean> {
 export async function ensureGitGuardForDispatch(cwd: string | undefined): Promise<string | null> {
   if (!cwd) return null;
   const expectedHooks = join(pipeline(cwd), 'git-hooks');
-  // Most adapter-only tests and ordinary consumer invocations are not prepared
-  // worktrees. Avoid even spawning git unless the engine-owned marker exists.
-  try { await access(expectedHooks); } catch { return null; }
+  // Adapter-only callers commonly have no engine state at all.  Once a
+  // pipeline exists, however, a missing hooks marker is corruption rather
+  // than an opt-out and must be checked against the worktree configuration.
+  try { await access(pipeline(cwd)); } catch { return null; }
   let configured = '';
   try { configured = (await execa('git', ['-C', cwd, 'config', '--worktree', '--get', 'core.hooksPath'])).stdout.trim(); } catch (error) {
     throw new Error(`unable to verify git guard ${gitGuardPath(cwd)}: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (configured !== expectedHooks) return null;
+  try { await access(expectedHooks); } catch {
+    throw new Error(`unable to verify git guard ${gitGuardPath(cwd)}: expected hooks directory is missing`);
+  }
   const target = gitGuardPath(cwd);
   let valid = false;
   try {
