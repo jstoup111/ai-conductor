@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { DeferralKey } from '../../../src/engine/monitor/deferrals.js';
 import type { ProjectHalt } from '../../../src/engine/monitor/halt-inventory.js';
+import { runGuidedMonitorQueue } from '../../../src/engine/monitor/loop.js';
 
 type GuidedMonitorLoopDeps = {
   deriveMembership: () => Promise<readonly ProjectHalt[]>;
@@ -32,13 +33,6 @@ async function advanceAfterGuidedSession(deps: GuidedMonitorLoopDeps): Promise<v
       if (++offerCount === 2) stop();
     },
   });
-}
-
-async function runGuidedMonitorQueue(deps: GuidedMonitorLoopDeps): Promise<{ active: boolean }> {
-  const loop = await import('../../../src/engine/monitor/loop.js') as {
-    runGuidedMonitorQueue(deps: GuidedMonitorLoopDeps): Promise<{ active: boolean }>;
-  };
-  return loop.runGuidedMonitorQueue(deps);
 }
 
 function halt(slug: string): ProjectHalt {
