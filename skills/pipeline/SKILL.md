@@ -130,8 +130,8 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   For a legacy task with no `Done when:` block, close with `conduct task done <id>`.
                   Then read `.pipeline/task-status.json` and confirm the row reads `completed`.
                   A stampless close records declared Done when evidence or refuses naming the
-                  missing check; re-closing an already completed or skipped row exits 0 without
-                  rewriting it. The exit code alone is not proof of closure.
+                  missing check; a stampless re-close of an already completed or skipped row exits
+                  0 without rewriting it. The exit code alone is not proof of closure.
                   The host-native attribution mechanism (the Claude Code PostToolUse hook uses the same matcher as
                   step 0/2) remains the idempotent cleanup fallback after the implementer returns.
                   Task close records task-level proof only; `build_review` remains the BUILD completion authority.
