@@ -1,5 +1,5 @@
 // Covers: task:5
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,8 @@ interface GuardResult {
   status: number | null;
   stdout: string;
   stderr: string;
+  error?: Error;
+  signal?: NodeJS.Signals | null;
 }
 
 const REFUSAL_CASES: Array<[string, string[], RegExp, RegExp]> = [
@@ -71,7 +73,7 @@ esac
 
   function invoke(args: string[]): GuardResult {
     const result = spawnSync(guardPath, args, { cwd: fixtureDir, encoding: 'utf8' });
-    return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+    return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '', error: result.error, signal: result.signal };
   }
 
   async function recordedCommands(): Promise<string[]> {
@@ -141,5 +143,74 @@ esac
     const result = invoke(['guarded']);
     expect(result.status).toBe(0);
     expect(await recordedCommands()).toEqual(['config', 'log']);
+  });
+});
+
+// These cases deliberately use local Git rather than the classification stub:
+// they prove that the shim preserves real repository data on refusal and that
+// allowed forms reach Git unchanged.
+describe('GIT_GUARD_SCRIPT in a scratch repository', () => {
+  let root: string;
+  let repository: string;
+  let guard: string;
+  const git = (args: string[], cwd = repository) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'git-guard-real-'));
+    repository = join(root, 'repo');
+    await mkdir(repository);
+    git(['init', '-b', 'main']);
+    git(['config', 'user.email', 'test@example.com']);
+    git(['config', 'user.name', 'Test']);
+    await writeFile(join(repository, 'tracked'), 'base\n');
+    git(['add', '.']); git(['commit', '-m', 'base']);
+    const bin = join(repository, '.pipeline', 'bin');
+    const data = join(repository, '.pipeline', 'git-guard');
+    await Promise.all([mkdir(bin, { recursive: true }), mkdir(data, { recursive: true })]);
+    guard = join(bin, 'git');
+    await writeFile(guard, GIT_GUARD_SCRIPT); await chmod(guard, 0o755);
+    await writeFile(join(data, 'real-git'), `${execFileSync('which', ['git'], { encoding: 'utf8' }).trim()}\n`);
+    await writeFile(join(data, 'common-dir'), `${git(['rev-parse', '--path-format=absolute', '--git-common-dir'])}\n`);
+  });
+
+  afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+  const invoke = (args: string[], cwd = repository, env: NodeJS.ProcessEnv = process.env) => spawnSync(guard, args, { cwd, encoding: 'utf8', env });
+
+  it('refuses destructive operations in the guarded repository without changing its tips or untracked bytes', async () => {
+    git(['switch', '-c', 'unreachable']);
+    await writeFile(join(repository, 'tracked'), 'unreachable\n'); git(['add', 'tracked']); git(['commit', '-m', 'unreachable']);
+    const tip = git(['rev-parse', 'unreachable']); git(['switch', 'main']);
+    await writeFile(join(repository, 'untracked'), 'survive exactly\n');
+    const branchDelete = invoke(['branch', '-D', 'unreachable']);
+    expect(branchDelete.error).toBeUndefined();
+    expect(branchDelete.signal).toBeNull();
+    expect(branchDelete.status).toBe(1);
+    expect(invoke(['clean', '-f']).status).toBe(1);
+    expect(git(['rev-parse', 'unreachable'])).toBe(tip);
+    expect(await readFile(join(repository, 'untracked'), 'utf8')).toBe('survive exactly\n');
+  });
+
+  it('passes reachable forced and ordinary branch deletion to real Git, including remote-only reachability', async () => {
+    git(['branch', 'local-reachable']);
+    expect(invoke(['branch', '-D', 'local-reachable']).status).toBe(0);
+    git(['branch', 'remote-reachable']);
+    const tip = git(['rev-parse', 'remote-reachable']);
+    git(['update-ref', 'refs/remotes/origin/remote-reachable', tip]);
+    expect(invoke(['branch', '-D', 'remote-reachable']).status).toBe(0);
+    git(['branch', 'ordinary']);
+    expect(invoke(['branch', '-d', 'ordinary']).status).toBe(0);
+  });
+
+  it('refuses path discard forms but allows conflict-side selection, and does not guard a foreign repository', async () => {
+    await writeFile(join(repository, 'tracked'), 'edited\n');
+    for (const args of [['checkout', '--', 'tracked'], ['restore', 'tracked'], ['restore', '--worktree', 'tracked']] as const) {
+      expect(invoke([...args]).status).toBe(1);
+      expect(await readFile(join(repository, 'tracked'), 'utf8')).toBe('edited\n');
+    }
+    const foreign = join(root, 'foreign'); await mkdir(foreign); git(['init', '-b', 'main'], foreign);
+    git(['config', 'user.email', 'test@example.com'], foreign); git(['config', 'user.name', 'Test'], foreign);
+    await writeFile(join(foreign, 'untracked'), 'remove\n');
+    expect(invoke(['-C', foreign, 'clean', '-f']).status).toBe(0);
+    expect(() => execFileSync('test', ['-e', join(foreign, 'untracked')])).toThrow();
   });
 });

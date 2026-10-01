@@ -115,14 +115,16 @@ function resolveAdvisorySmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, AdvisorySmokeCapabilityResolution> {
   const credentialedCapabilities = Object.fromEntries(
-    liveCredentialedSmokeCapabilities().map(([capability, { credentialEnvVar }]) => {
+    liveCredentialedSmokeCapabilities().map(([capability, { credentialEnvVar, binaryName }]) => {
       return [
         capability,
         forceSkipsCapability(environment, capability)
           ? { outcome: 'skipped', unmet: 'operator override' }
-          : environment[credentialEnvVar]
-          ? { outcome: 'ran' }
-          : { outcome: 'skipped', unmet: credentialEnvVar },
+          : !environment[credentialEnvVar]
+          ? { outcome: 'skipped', unmet: credentialEnvVar }
+          : !hasCommand(binaryName)
+          ? { outcome: 'skipped', unmet: binaryName }
+          : { outcome: 'ran' },
       ];
     }),
   ) as Record<

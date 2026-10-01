@@ -4152,7 +4152,9 @@ export class DefaultStepRunner implements StepRunner {
                   contentDigest: inputs.sourceSnapshot.contentDigest, mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha,
                   changes: inputs.sourceSnapshot.sourceChanges ?? [], view: materialized,
                 })}`}`,
-                ...(customPolicyLap ? { readOnlyReview: true } : {}),
+                // Every build-review reviewer is a read-only inspection,
+                // including built-in rubrics that share a custom-policy lap.
+                readOnlyReview: true,
                 interactive: false,
                 },
                 invoke: (options) => context.invoke(options, async (rung, invoke) => {

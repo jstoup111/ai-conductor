@@ -33,6 +33,7 @@ const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
   'test/smoke/claude-subagent-stream.smoke.test.ts': 'credentialed:claude',
   'test/smoke/git-guard-claude.smoke.test.ts': 'credentialed:claude',
   'test/smoke/git-guard-codex.smoke.test.ts': 'credentialed:codex',
+  'test/smoke/git-guard-pi.smoke.test.ts': 'credentialed:pi',
   'test/smoke/finish-record.smoke.test.ts': 'hermetic',
   'test/smoke/publish-interrupted.smoke.test.ts': 'toolchain',
   'test/smoke/surgical-finish-retry.smoke.test.ts': 'hermetic',

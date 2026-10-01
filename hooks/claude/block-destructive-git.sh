@@ -12,7 +12,8 @@ set -e
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
 
-# Scannable copy: first drop heredoc bodies, then drop single- and double-quoted
+# Scannable copy: first drop quoted spans while finding heredoc openers, then
+# drop heredoc bodies and finally drop remaining single- and double-quoted
 # spans (content and quotes). A heredoc delimiter may be quoted, but its body is
 # command data rather than shell syntax and must never be interpreted as a git
 # operation by this hook.
@@ -67,9 +68,12 @@ for line in os.environ["COMMAND"].splitlines(keepends=True):
             delimiters.pop(0)
         continue
 
+    # A quoted literal such as echo '<<EOF' is not a heredoc opener.  Preserve
+    # its shape for later quote stripping but mask it before opener detection.
+    opener_line = re.sub(r"(?<!<<)(?<!<< )'[^']*'|(?<!<<)(?<!<< )\"[^\"]*\"", lambda m: " " * len(m.group()), line)
     print(line, end="")
     arithmetic_spans, arithmetic_depth = arithmetic_expansion_spans(line, arithmetic_depth)
-    for match in heredoc_start.finditer(line):
+    for match in heredoc_start.finditer(opener_line):
         if not any(start <= match.start() < end for start, end in arithmetic_spans):
             delimiters.append((match.group("quoted") or match.group("bare"), match.group("strip") == "-"))
 PY

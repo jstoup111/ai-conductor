@@ -79,6 +79,12 @@ describe('block-destructive-git hook force-push protection', () => {
     expect(refused.status).toBe(2);
   });
 
+  it('does not mistake a quoted heredoc-looking literal for an opener', () => {
+    const result = invoke("echo '<<EOF'\ngit reset --hard");
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('git reset --hard');
+  });
+
   const separators: Array<[string, string]> = [
     ['&&', ' && '],
     ['||', ' || '],

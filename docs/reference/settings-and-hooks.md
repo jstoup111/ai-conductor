@@ -242,7 +242,7 @@ Trailer semantics — which trailers are gates and which are telemetry — are d
 ## Engine git guard
 
 The engine writes a `git` argv guard into every worktree it prepares and puts it first on the child
-`PATH` of every Claude and Codex dispatch into that worktree, in self-host and non-self-host runs. It is
+`PATH` of every Claude, Codex, and Pi dispatch into that worktree, in self-host and non-self-host runs. It is
 the enforcing control for destructive git; the operator hook above is Claude-only early feedback
 (adr-2026-09-23-engine-git-guard-on-agent-path).
 
@@ -257,7 +257,8 @@ A worktree counts as engine-prepared when its worktree-scoped `core.hooksPath` i
 engine re-verifies them and rewrites any that differ. If it cannot, the dispatch does not launch and
 fails naming the guard path. The daemon's own `process.env` is never changed, so engine git (rebase,
 quarantine, shipped-record, spec landing, setup triage) runs the real `git`. There is no bypass
-variable.
+variable. Runtime values live only in the `.pipeline/git-guard` sidecars; they are never baked into
+the static shim. `build_review` dispatches are read-only and intentionally exempt from the guard.
 
 The guard refuses these forms when the target repository's common directory is the feature
 repository's (the feature worktree, its sibling worktrees and the root checkout). It exits 1, prints

@@ -1,6 +1,6 @@
 import { access, chmod, lstat, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { delimiter, isAbsolute, join, normalize } from 'node:path';
+import { delimiter, isAbsolute, join, normalize, resolve } from 'node:path';
 import { execa } from 'execa';
 import { GIT_GUARD_SCRIPT } from './git-hook-assets.js';
 
@@ -15,7 +15,15 @@ export async function resolveRealGit(pathEnv = process.env.PATH ?? ''): Promise<
     const resolvedEntry = await realpath(entry).catch(() => normalize(entry));
     if (resolvedEntry.endsWith(join('.pipeline', 'bin'))) continue;
     const candidate = join(entry, 'git');
-    try { await access(candidate, constants.X_OK); return candidate; } catch { /* continue */ }
+    try {
+      await access(candidate, constants.X_OK);
+      const canonicalCandidate = await realpath(candidate).catch(() => candidate);
+      // Never accept a PATH spelling which resolves back to a guard script.
+      // Content is checked as well because a copied guard can sit elsewhere.
+      if (canonicalCandidate.endsWith(join('.pipeline', 'bin', 'git'))
+        || (await readFile(canonicalCandidate, 'utf8').catch(() => '')) === GIT_GUARD_SCRIPT) continue;
+      return canonicalCandidate;
+    } catch { /* continue */ }
   }
   throw new Error('unable to resolve real git executable');
 }
@@ -65,12 +73,10 @@ export async function ensureGitGuardForDispatch(cwd: string | undefined): Promis
   try { await access(pipeline(cwd)); } catch { return null; }
   let configured = '';
   try { configured = (await execa('git', ['-C', cwd, 'config', '--worktree', '--get', 'core.hooksPath'])).stdout.trim(); } catch (error) {
+    if ((error as { exitCode?: number }).exitCode === 1) return null;
     throw new Error(`unable to verify git guard ${gitGuardPath(cwd)}: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (configured !== expectedHooks) return null;
-  try { await access(expectedHooks); } catch {
-    throw new Error(`unable to verify git guard ${gitGuardPath(cwd)}: expected hooks directory is missing`);
-  }
   const target = gitGuardPath(cwd);
   let valid = false;
   try {
@@ -82,8 +88,10 @@ export async function ensureGitGuardForDispatch(cwd: string | undefined): Promis
       isRegularFile(join(pipeline(cwd), 'git-guard', 'real-git')),
       isRegularFile(join(pipeline(cwd), 'git-guard', 'common-dir')),
     ]);
+    const resolvedRealGit = await realpath(realGit.trim());
     valid = content === GIT_GUARD_SCRIPT && scriptRegular && realRegular && commonRegular &&
-      isAbsolute(realGit.trim()) && !realGit.includes(join('.pipeline', 'bin')) && isAbsolute(commonDir.trim()) &&
+      isAbsolute(realGit.trim()) && !resolvedRealGit.startsWith(resolve(pipeline(cwd), 'bin')) &&
+      (await readFile(resolvedRealGit, 'utf8').catch(() => '')) !== GIT_GUARD_SCRIPT && isAbsolute(commonDir.trim()) &&
       (info.mode & 0o777) === 0o755;
   } catch { /* repair */ }
   if (!valid) await writeGitGuard(cwd);

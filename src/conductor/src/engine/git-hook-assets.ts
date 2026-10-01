@@ -28,7 +28,10 @@ while [[ $i -lt \${#args[@]} ]]; do
   break
 done
 command="\${args[$i]:-}"
-if [[ -n "$command" ]] && [[ ! "$command" =~ ^(status|log|diff|commit|rebase|config|rev-parse|for-each-ref|merge-base|show|fetch|add|ls-files)$ ]]; then
+# These are Git's own non-destructive query commands.  Keep this a static
+# built-in-only set: consulting config for one of these commands both adds an
+# observable real-git call and incorrectly treats a built-in as an alias.
+if [[ -n "$command" ]] && [[ ! "$command" =~ ^(add|annotate|blame|bugreport|cat-file|check-attr|check-ignore|check-mailmap|check-ref-format|column|config|count-objects|describe|diff|diff-files|diff-index|diff-tree|fetch|for-each-ref|fsck|get-tar-commit-id|grep|help|ls-files|ls-remote|ls-tree|log|merge-base|name-rev|range-diff|rev-list|rev-parse|show|show-branch|show-index|show-ref|status|var|verify-commit|verify-pack|verify-tag|whatchanged|worktree)$ ]]; then
   alias_value="$($real_git "\${args[@]:0:$i}" config --get "alias.$command" 2>/dev/null || true)"
   if [[ -n "$alias_value" && "$alias_value" != '!'* ]]; then
     # Git aliases use quote-aware split_cmdline semantics, not bash's plain
