@@ -1843,6 +1843,8 @@ export interface ConductorOptions {
   /** Injectable native aggregate-suite verifier; production uses FullSuiteVerifier. */
   fullSuiteVerifier?: Pick<FullSuiteVerifier, 'ensure' | 'inspect'> &
     Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
+  /** Test seam for the engine-owned rebase adapter. */
+  performRebase?: typeof performRebase;
   /** Test seam for the disposition-aware build_review completion join. */
   buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   /** Test seam for an adjudicated action-effect charge failure. */
@@ -2504,6 +2506,7 @@ export class Conductor {
   private fromStep?: StepName;
   private mode: RunMode;
   private readonly finishPublication?: FinishPublicationCoordinator;
+  private readonly performRebase: typeof performRebase;
   private config: HarnessConfig;
   private readonly legacyModelPolicy?: ProviderModelPolicy;
   private readonly providerExecution?: ProviderExecutionContext;
@@ -3742,6 +3745,7 @@ export class Conductor {
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
     this.finishPublication = opts.finishPublication;
+    this.performRebase = opts.performRebase ?? performRebase;
     this.config = opts.config ?? {};
     this.legacyModelPolicy = opts.modelPolicy;
     this.providerExecution = opts.providerExecution;
@@ -15026,7 +15030,7 @@ export class Conductor {
     let outcome: RebaseOutcome;
     let sealRejectionReason: string | null = null;
     try {
-      outcome = await performRebase(git, this.projectRoot, localBase, {
+      outcome = await this.performRebase(git, this.projectRoot, localBase, {
         finishMergeabilityCheck: true,
         translateAfterRebase,
       });

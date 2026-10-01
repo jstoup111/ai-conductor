@@ -756,6 +756,8 @@ export async function resumeRebaseFirst(opts: {
   slug?: string;
   /** Test seam; production uses the strict merged-history verifier. */
   verifyMergedShipment?: () => Promise<VerifiedMergedPrResult>;
+  /** Test seam for the engine-owned rebase adapter. */
+  performRebase?: typeof performRebase;
   /**
    * Post-rebase mechanical pre-verify capability for the `build` gate
    * (adr-2026-07-08-post-rebase-gate-first-mechanical-reverify). Optional
@@ -813,7 +815,9 @@ export async function resumeRebaseFirst(opts: {
     ));
   let outcome: RebaseOutcome;
   try {
-    outcome = await performRebase(git, opts.worktreePath, opts.localBase, { translateAfterRebase });
+    outcome = await (opts.performRebase ?? performRebase)(
+      git, opts.worktreePath, opts.localBase, { translateAfterRebase },
+    );
   } catch (err) {
     if (err instanceof ProtectedArtifactSealRejection) {
       await writeSealHalt(opts.worktreePath, err.message, opts.events);

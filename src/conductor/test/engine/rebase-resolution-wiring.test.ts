@@ -21,7 +21,7 @@
  *   4. rebase_resolution_attempt event carries {index, cap}
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdtemp, rm, writeFile, access, readFile, mkdir, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -31,10 +31,12 @@ import { promisify } from 'node:util';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { resumeRebaseFirst, REKICK_SENTINEL } from '../../src/engine/daemon-rekick.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
-import type { ResolutionContext, ResolutionAttempt } from '../../src/engine/rebase.js';
+import type { ResolutionContext, ResolutionAttempt, RebaseOutcome } from '../../src/engine/rebase.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 
@@ -119,20 +121,113 @@ it('daemon rebase resolver carries the selected provider model policy', async ()
   expect(source.slice(constructorStart, constructorEnd)).toContain('modelPolicy');
 });
 
-it('both rebase callers keep a stateless flattened refusal out of the resolver loop', async () => {
-  const [conductor, rekick] = await Promise.all([
-    readFile(new URL('../../src/engine/conductor.ts', import.meta.url), 'utf8'),
-    readFile(new URL('../../src/engine/daemon-rekick.ts', import.meta.url), 'utf8'),
-  ]);
-  const conductorLoop = conductor;
-  const rekickLoop = rekick.slice(
-    rekick.indexOf('// #300: route a conflict'),
-    rekick.indexOf('// FR-5 + adr-2026-07-08'),
-  );
+const flattenRefusal: Extract<RebaseOutcome, { kind: 'flatten_refused' }> = {
+  kind: 'flatten_refused',
+  mergeSha: 'a'.repeat(40),
+  parents: ['b'.repeat(40), 'c'.repeat(40)],
+  flattenedSha: 'd'.repeat(40),
+  conflicts: ['src/conflicted.ts'],
+  reason: 'flattened merge aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa tree mismatch',
+  recipe: 'park the feature, then run git -C <worktree> rebase -i --rebase-merges main; at the merge stop, re-apply git diff <first-parent> <merge>; run git rebase --continue; then clear .pipeline/HALT and .pipeline/HALT.class before re-queueing',
+};
 
-  expect({ conductorLoop, rekickLoop }).toEqual({
-    conductorLoop: expect.stringContaining("outcome.kind !== 'flatten_refused'"),
-    rekickLoop: expect.stringContaining("outcome.kind !== 'flatten_refused'"),
+describe('flatten_refused callers', () => {
+  let repo: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+  let persister: EventPersister;
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-flatten-refusal-'));
+    await initTestRepo(repo);
+    const git = (args: string[]) => execFile('git', args, { cwd: repo });
+    await writeFile(join(repo, 'README.md'), 'fixture\n');
+    await git(['add', 'README.md']);
+    await git(['commit', '-q', '-m', 'fixture baseline']);
+    statePath = join(repo, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    persister = new EventPersister(join(repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    await seedPreRebaseState(statePath);
+    const baselineCommit = (await git(['rev-parse', 'HEAD'])).stdout.toString().trim();
+    await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+  });
+
+  afterEach(async () => {
+    persister.stop();
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  async function assertRefusalBoundary(resolver: ReturnType<typeof vi.fn>, push: Mock<StepRunner['run']>) {
+    const halt = await readFile(join(repo, '.pipeline', 'HALT'), 'utf8');
+    const eventsJsonl = await readFile(join(repo, '.pipeline', 'events.jsonl'), 'utf8');
+    expect(resolver).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+    expect(halt).toContain(flattenRefusal.reason);
+    expect(halt).toContain('rebase -i --rebase-merges main');
+    expect(halt).not.toContain('reset --hard');
+    expect(halt).not.toContain('checkout --');
+    expect(halt).not.toContain('No git rebase is in progress');
+    expect(eventsJsonl).toContain('"type":"rebase_conflict_halt"');
+    expect(eventsJsonl).toContain('"mergeAudit"');
+  }
+
+  async function assertFinishIsBlocked(push: Mock<StepRunner['run']>, sealPath: string, beforeSeal: string) {
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: push },
+      events,
+      projectRoot: repo,
+      daemon: true,
+      mode: 'auto',
+      fromStep: 'finish',
+    }).run();
+    expect(push).not.toHaveBeenCalled();
+    await expect(readFile(sealPath, 'utf8')).resolves.toBe(beforeSeal);
+  }
+
+  it('runRebaseStep halts a flattened refusal without entering resolution or finish', async () => {
+    const resolver = vi.fn();
+    const push = vi.fn<StepRunner['run']>();
+    const sealPath = join(repo, '.pipeline', 'protected-artifact-seal.json');
+    const beforeSeal = await readFile(sealPath, 'utf8');
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: push, resolveRebaseConflict: resolver },
+      events,
+      projectRoot: repo,
+      daemon: true,
+      mode: 'auto',
+      fromStep: 'rebase',
+      performRebase: vi.fn().mockResolvedValue(flattenRefusal),
+    });
+
+    await conductor.run();
+
+    await assertRefusalBoundary(resolver, push);
+    await assertFinishIsBlocked(push, sealPath, beforeSeal);
+  });
+
+  it('resumeRebaseFirst halts a flattened refusal without entering resolution or finish', async () => {
+    const resolver = vi.fn();
+    const push = vi.fn<StepRunner['run']>();
+    const sealPath = join(repo, '.pipeline', 'protected-artifact-seal.json');
+    const beforeSeal = await readFile(sealPath, 'utf8');
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(join(repo, REKICK_SENTINEL), 'rekick\n');
+
+    await expect(resumeRebaseFirst({
+      worktreePath: repo,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      resolveAttempts: 3,
+      resolveConflict: resolver,
+      performRebase: vi.fn().mockResolvedValue(flattenRefusal),
+    })).resolves.toBe('halted');
+
+    await assertRefusalBoundary(resolver, push);
+    await expect(readFile(sealPath, 'utf8')).resolves.toBe(beforeSeal);
   });
 });
 
