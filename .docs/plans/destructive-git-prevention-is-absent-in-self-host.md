@@ -656,3 +656,19 @@ Twenty-three tasks deliver an engine-generated `git` argv guard, provisioned fai
 **Done when:**
 - adr-2026-09-23-engine-git-guard-on-agent-path decision 2 is satisfied by this task.
 - Re-run as-built and confirm task rem-as-built-rem-adr-d2-pi-1 is complete.
+
+### Task rem-as-built-rem-as-built-rem-adr-d10-1: src/conductor/test/smoke/git-guard-pi.smoke.test.ts — add a credentialed:pi live smoke mirroring git-guard-claude.smoke.test.ts: gate on the binaryName/credentialEnvVar that live-e2e-providers.ts registers for PI_PROVIDER, prepare a scratch worktree, dispatch a real Pi session through the adapter that runs `command -v git` and `git clean -f`, and assert the guard path and refusal text; register it with its capability in src/conductor/test/structural/smoke-entry-point.test.ts alongside the Claude and Codex entries (Task 16)
+**Gate:** as-built
+**Rationale:** Pi became a guarded built-in adapter (pi-provider.ts:130, Task rem-as-built-rem-adr-d2-pi-1), but Task 16 covers only Claude and Codex live smokes, and docs/reference/settings-and-hooks.md's engine-git-guard section still describes only those two. No existing task admits a Pi smoke or the doc update, so both are new tasks. The Pi smoke reuses Task 16's shape and the registry entry for PI_PROVIDER in live-e2e-providers.ts. The feature diagram's Pi/sidecar drift note is under a sealed path and is excluded here (not a blocking finding).
+**Governing clause:** adr-2026-09-23-engine-git-guard-on-agent-path decision 10
+**Done when:**
+- adr-2026-09-23-engine-git-guard-on-agent-path decision 10 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-as-built-rem-adr-d10-1 is complete.
+
+### Task rem-as-built-rem-as-built-rem-adr-d10-2: docs/reference/settings-and-hooks.md engine-git-guard section — state that Claude, Codex and Pi dispatches all prepend the guard, that runtime values live in the .pipeline/git-guard sidecars and are not baked into the shim, and that build_review dispatches are exempt; keep the existing block-destructive-git.sh row unchanged
+**Gate:** as-built
+**Rationale:** Pi became a guarded built-in adapter (pi-provider.ts:130, Task rem-as-built-rem-adr-d2-pi-1), but Task 16 covers only Claude and Codex live smokes, and docs/reference/settings-and-hooks.md's engine-git-guard section still describes only those two. No existing task admits a Pi smoke or the doc update, so both are new tasks. The Pi smoke reuses Task 16's shape and the registry entry for PI_PROVIDER in live-e2e-providers.ts. The feature diagram's Pi/sidecar drift note is under a sealed path and is excluded here (not a blocking finding).
+**Governing clause:** adr-2026-09-23-engine-git-guard-on-agent-path decision 10
+**Done when:**
+- adr-2026-09-23-engine-git-guard-on-agent-path decision 10 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-as-built-rem-adr-d10-2 is complete.
