@@ -56,6 +56,29 @@ describe('proveFlattenedReplay real local Git (Task 3)', () => {
 });
 
 describe('performRebase real local Git (Task 5)', () => {
+  it('pauses an ordinary conflict in a flattened todo, then resolve-and-continue replays the flattened merge', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'rebase-flatten-paused-'));
+    try {
+      const git = (args: string[]) => execFile('git', args, { cwd: repo });
+      await git(['init', '-q', '-b', 'main']);
+      await git(['config', 'user.email', 'test@example.invalid']); await git(['config', 'user.name', 'Flatten test']);
+      await writeFile(join(repo, 'conflict.ts'), 'base\n'); await git(['add', '.']); await git(['commit', '-qm', 'base']);
+      await git(['checkout', '-qb', 'feature']);
+      await writeFile(join(repo, 'conflict.ts'), 'feature\n'); await git(['commit', '-qam', 'ordinary conflict first']);
+      await git(['branch', 'side']); await git(['checkout', '-q', 'side']);
+      await writeFile(join(repo, 'side.ts'), 'unique side\n'); await git(['add', '.']); await git(['commit', '-qm', 'side lineage']);
+      await git(['checkout', '-q', 'feature']); await git(['merge', '--no-ff', '-m', 'flattened merge after conflict', 'side']);
+      await git(['checkout', '-q', 'main']); await writeFile(join(repo, 'conflict.ts'), 'main\n'); await git(['commit', '-qam', 'upstream conflict']);
+      await git(['checkout', '-q', 'feature']);
+      const outcome = await performRebase(makeGitRunner(repo), repo, 'main');
+      expect(outcome).toMatchObject({ kind: 'conflict_halt', flatten: expect.any(Object), conflicts: ['conflict.ts'] });
+      await writeFile(join(repo, 'conflict.ts'), 'resolved\n'); await git(['add', 'conflict.ts']);
+      await git(['-c', 'core.editor=true', 'rebase', '--continue']);
+      expect((await git(['log', '--format=%B', 'main..HEAD'])).stdout).toContain('Flattened-merge:');
+      expect((await git(['rev-list', '--merges', 'main..HEAD'])).stdout.trim()).toBe('');
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
   it('refuses a conflicting flattened merge before starting rebase or mutating checkout state', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'rebase-flatten-refusal-'));
     try {
@@ -144,6 +167,11 @@ describe('performRebase real local Git (Task 5)', () => {
       await writeFile(join(repo, 'base.txt'), 'base\n');
       await git(['add', '.']); await git(['commit', '-qm', 'base']);
       await git(['checkout', '-qb', 'feature']);
+      // #2498 shape: the eventual merge's second parent carries a commit with
+      // the same patch as a first-parent commit.  A normal `rebase --rebase-
+      // merges` can replay both adds and hit an add/add conflict; flattening
+      // must replay only the first-parent list plus the synthetic merge.
+      await git(['branch', 'duplicated-side', 'main']);
       await writeFile(join(repo, 'repair.txt'), 'repair\n');
       await git(['add', '.']); await git(['commit', '-qm', 'repair']);
 
@@ -156,13 +184,15 @@ describe('performRebase real local Git (Task 5)', () => {
       const ancestryOnly = (await git(['rev-parse', 'HEAD'])).stdout.trim();
       await writeFile(join(repo, 'after.txt'), 'after\n');
       await git(['add', '.']); await git(['commit', '-qm', 'after ancestry merge']);
-      await git(['branch', 'content-side']);
-      await git(['checkout', '-q', 'content-side']);
+      await git(['checkout', '-q', 'duplicated-side']);
+      await writeFile(join(repo, 'repair.txt'), 'repair\n');
+      await git(['add', '.']); await git(['commit', '-qm', 'duplicated repair side lineage']);
+      const duplicatedRepair = (await git(['rev-parse', 'HEAD'])).stdout.trim();
       await writeFile(join(repo, 'side.txt'), 'side content\n');
       await git(['add', '.']); await git(['commit', '-qm', 'side lineage commit']);
       const sideCommit = (await git(['rev-parse', 'HEAD'])).stdout.trim();
       await git(['checkout', '-q', 'feature']);
-      await execFile('git', ['merge', '--no-ff', '--no-edit', 'content-side'], {
+      await execFile('git', ['merge', '--no-ff', '--no-edit', 'duplicated-side'], {
         cwd: repo,
         env: { ...process.env, GIT_AUTHOR_NAME: 'Ada Author', GIT_AUTHOR_EMAIL: 'ada@example.test' },
       });
@@ -187,6 +217,8 @@ describe('performRebase real local Git (Task 5)', () => {
       expect((await git(['log', '--format=%an <%ae>', 'main..HEAD'])).stdout).toContain('Ada Author <ada@example.test>');
       expect((await git(['rev-list', '--merges', 'main..HEAD'])).stdout.trim()).toBe('');
       expect((await git(['merge-base', '--is-ancestor', sideCommit, 'HEAD']).catch(() => ({ stdout: 'no' }))).stdout).toBe('no');
+      expect((await git(['log', '--format=%s', 'main..HEAD'])).stdout).not.toContain('duplicated repair side lineage');
+      expect((await git(['merge-base', '--is-ancestor', duplicatedRepair, 'HEAD']).catch(() => ({ stdout: 'no' }))).stdout).toBe('no');
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });

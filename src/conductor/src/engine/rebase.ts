@@ -2319,11 +2319,10 @@ export async function applyRebaseVerdicts(
   preservedCandidates?: RebasePreservedCandidate[];
   replay?: ReplayEvidence;
 }> {
-  if (
-    outcome.kind === 'conflict_halt' ||
-    outcome.kind === 'flatten_refused' ||
-    outcome.kind === 'setup_stop'
-  ) {
+  switch (outcome.kind) {
+    case 'conflict_halt':
+    case 'flatten_refused':
+    case 'setup_stop': {
     // A setup-only resolver exhaustion leaves the rebase paused exactly like an
     // unresolved conflict: the gate stays unsatisfied and the run parks.
     await writeVerdict(projectRoot, 'rebase', {
@@ -2336,6 +2335,13 @@ export async function applyRebaseVerdicts(
       checkedAt: Date.now(),
     });
     return { satisfied: false, kickedBack: [], reverified: [] };
+    }
+    case 'noop':
+    case 'mergeable_skip':
+    case 'changed':
+      break;
+    default:
+      return assertNeverRebaseOutcome(outcome);
   }
 
   // A completed file-changing rebase is a cross-file operation.  Publish its
@@ -2607,12 +2613,21 @@ export async function recordRebaseStepCompletion(
   stateFilePath: string,
   outcome: RebaseOutcome,
 ): Promise<void> {
-  if (outcome.kind === 'conflict_halt' || outcome.kind === 'flatten_refused') return;
-  if (outcome.kind === 'setup_stop') {
-    await saveStepStatus(stateFilePath, 'rebase', 'refused');
-    return;
+  switch (outcome.kind) {
+    case 'conflict_halt':
+    case 'flatten_refused':
+      return;
+    case 'setup_stop':
+      await saveStepStatus(stateFilePath, 'rebase', 'refused');
+      return;
+    case 'noop':
+    case 'mergeable_skip':
+    case 'changed':
+      await saveStepStatus(stateFilePath, 'rebase', 'done');
+      return;
+    default:
+      return assertNeverRebaseOutcome(outcome);
   }
-  await saveStepStatus(stateFilePath, 'rebase', 'done');
 }
 
 /**
@@ -2871,6 +2886,8 @@ export async function emitRebaseEvent(
           conflicts: outcome.conflicts,
         });
         break;
+      default:
+        assertNeverRebaseOutcome(outcome);
     }
   } catch {
     /* best-effort: event failure must not affect the rebase result */

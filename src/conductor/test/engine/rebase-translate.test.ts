@@ -228,6 +228,29 @@ describe('buildRewriteMap (RED — module does not exist yet)', () => {
     expect(residue).toEqual(expect.not.arrayContaining([ancestry]));
   });
 
+  it('leaves an ancestry-only merge with no surviving absorption point as citation residue', async () => {
+    const ancestry = '1212121212121212121212121212121212121212';
+    const dropped = '3434343434343434343434343434343434343434';
+    const flatten: FlattenedReplayPlan = {
+      entries: [], audit: { flattenedMerges: [], ancestryOnlyMerges: [ancestry], sideLineageCount: 0 }, pairs: [],
+      absorptionPoints: [{ from: ancestry, to: dropped }],
+    };
+    const git = makeFakeGit({
+      revList: { [`${ONTO}..orig-no-survivor`]: [ancestry, dropped], [`${ONTO}..head-no-survivor`]: [] },
+      show: { [ancestry]: 'ancestry-only', [dropped]: 'dropped' },
+      patchId: { 'ancestry-only': 'ancestry', dropped: 'dropped' },
+    });
+
+    const { map, residue } = await buildRewriteMap(git, ONTO, 'orig-no-survivor', 'head-no-survivor', flatten);
+    expect(map[ancestry]).toBeUndefined();
+    expect(residue).toContain(ancestry);
+  });
+
+  it('does not launder a forged sha absent from both the pre-image and flatten pairs', () => {
+    const forged = 'f'.repeat(40);
+    expect(resolveThroughMap(forged, { ["a".repeat(40)]: 'b'.repeat(40) })).toBe(forged);
+  });
+
   it('keeps a patch-id mapping when a recorded absorption point names the same side commit', async () => {
     const side = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     const merge = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';

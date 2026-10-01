@@ -1235,7 +1235,8 @@ export async function resolveConflictingPr(
             return { kind: 'escalated' };
           }
           case 'flatten_refused':
-            await escalate(prUrl, 'merge-flatten-refused', tier2Outcome.recipe, {
+            await escalate(prUrl, 'merge-flatten-refused',
+              `merge ${tier2Outcome.mergeSha}: ${tier2Outcome.reason}; recovery: ${tier2Outcome.recipe}`, {
               runGh: deps.runGh, operations, cwd: repoCwd, log,
             });
             logOutcome(log, prUrl, 'merge-flatten-refused', 'escalated');
