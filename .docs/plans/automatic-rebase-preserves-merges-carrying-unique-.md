@@ -440,3 +440,19 @@ Every engine-started feature rebase (`performRebase` and open-PR autoresolve) re
 **Done when:**
 - adr-2026-09-29-automatic-rebase-flattens-merge-bearing-history decision 9 is satisfied by this task.
 - Re-run as-built and confirm task rem-as-built-rem-ab10-1 is complete.
+
+### Task rem-as-built-rem-as-built-rem-ab11-1: src/conductor/src/engine/rebase.ts:2301-2340,2606-2617,2793-2870 — make applyRebaseVerdicts, recordRebaseStepCompletion and emitRebaseEvent exhaustive over RebaseOutcome['kind']: route each through an explicit per-kind branch (noop, mergeable_skip, changed, conflict_halt, flatten_refused, setup_stop) ending in assertNeverRebaseOutcome(outcome) (rebase.ts:744) so a new kind fails npm run typecheck, keeping every existing branch's verdict text, saveStepStatus value and emitted event shape byte-identical (Task 1, Task 6 and Task 10 Done-when preserved); sweep rebase.ts for any other function taking a RebaseOutcome that branches on outcome.kind without a never terminal and convert it the same way
+**Gate:** as-built
+**Rationale:** ADR adr-2026-09-29-automatic-rebase-flattens-merge-bearing-history D5 requires exhaustive RebaseOutcome handling, but applyRebaseVerdicts (src/conductor/src/engine/rebase.ts:2322), recordRebaseStepCompletion (:2610) and emitRebaseEvent (:2811) fall through without a never-checked terminal branch; this is conforming implementation drift inside Task 1 Step 3 ('give every existing RebaseOutcome switch an explicit flatten_refused branch', rebase.ts in Task 1 Files) — no architecture change. Sweep: the other consumers (conductor.ts:15218, daemon-rekick.ts:1013, autoresolve.ts:1241) already call assertNeverRebaseOutcome; no other rebase.ts RebaseOutcome consumer was named by the audit. Existing behavior and Task 1/6/10 coverage (verdict text, refused/done stamping, event shapes) are preserved unchanged.
+**Governing clause:** adr-2026-09-29-automatic-rebase-flattens-merge-bearing-history decision 5
+**Done when:**
+- adr-2026-09-29-automatic-rebase-flattens-merge-bearing-history decision 5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-as-built-rem-ab11-1 is complete.
+
+### Task rem-as-built-rem-as-built-rem-ab11-2: src/conductor/test/engine/rebase-flatten-types.test.ts — add a type-level case (// @ts-expect-error on a call passing an outcome widened with a synthetic extra kind, or an equivalent compile-time check) proving applyRebaseVerdicts, recordRebaseStepCompletion and emitRebaseEvent reject an unhandled RebaseOutcome kind, and keep the existing rebase.test.ts / rebase-flatten-events.test.ts / rebase-resolution-wiring.test.ts outcome assertions unchanged
+**Gate:** as-built
+**Rationale:** ADR adr-2026-09-29-automatic-rebase-flattens-merge-bearing-history D5 requires exhaustive RebaseOutcome handling, but applyRebaseVerdicts (src/conductor/src/engine/rebase.ts:2322), recordRebaseStepCompletion (:2610) and emitRebaseEvent (:2811) fall through without a never-checked terminal branch; this is conforming implementation drift inside Task 1 Step 3 ('give every existing RebaseOutcome switch an explicit flatten_refused branch', rebase.ts in Task 1 Files) — no architecture change. Sweep: the other consumers (conductor.ts:15218, daemon-rekick.ts:1013, autoresolve.ts:1241) already call assertNeverRebaseOutcome; no other rebase.ts RebaseOutcome consumer was named by the audit. Existing behavior and Task 1/6/10 coverage (verdict text, refused/done stamping, event shapes) are preserved unchanged.
+**Governing clause:** adr-2026-09-29-automatic-rebase-flattens-merge-bearing-history decision 5
+**Done when:**
+- adr-2026-09-29-automatic-rebase-flattens-merge-bearing-history decision 5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-as-built-rem-ab11-2 is complete.
