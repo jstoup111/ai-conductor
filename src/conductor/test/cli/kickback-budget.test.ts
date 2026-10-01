@@ -120,6 +120,60 @@ describe('kickback-budget refusal ladder', () => {
   });
 });
 
+describe('kickback-budget inspect resume authorization state', () => {
+  const ledger = {
+    version: 1,
+    gates: {
+      build_review: {
+        ...baseEntry,
+        adjustmentsKnown: true,
+        resumeAuthorization: { adjustmentId: 'adjustment-1', haltGeneration: 'bound-halt', consumed: false },
+      },
+    },
+  };
+
+  it('reports a stale authorization bound to a different live halt in human and JSON output', async () => {
+    const fixture = await makeFeature(ledger);
+    try {
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted\nKickback halt generation: live-halt');
+      const human: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => human.push(line) },
+      )).toBe(0);
+      expect(human.join('\n')).toContain('Resume authorization: stale (bound to halt generation bound-halt; live halt generation live-halt); the daemon will not consume it');
+
+      const json: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => json.push(line) },
+      )).toBe(0);
+      const parsed = JSON.parse(json[0]) as { gates: Array<{ gate: string; resumeAuthorization?: unknown }> };
+      expect(parsed.gates.find((view) => view.gate === 'build_review')?.resumeAuthorization).toEqual({
+        state: 'stale', adjustmentId: 'adjustment-1', boundHaltGeneration: 'bound-halt', liveHaltGeneration: 'live-halt',
+      });
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('reports an authorization stale without a live marker and preserves ledger bytes', async () => {
+    const fixture = await makeFeature(ledger);
+    try {
+      const ledgerPath = join(fixture.worktree, '.pipeline', 'kickback-ledger.json');
+      const before = await readFile(ledgerPath);
+      const output: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => output.push(line) },
+      )).toBe(0);
+      const parsed = JSON.parse(output[0]) as { gates: Array<{ gate: string; resumeAuthorization?: unknown }> };
+      expect(parsed.gates.find((view) => view.gate === 'build_review')?.resumeAuthorization).toEqual({
+        state: 'stale', adjustmentId: 'adjustment-1', boundHaltGeneration: 'bound-halt', liveHaltGeneration: '',
+      });
+      expect(await readFile(ledgerPath)).toEqual(before);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+});
+
 // Covers: task:14 — reconciliation is a COMMAND-ENTRY obligation. `inspect` is
 // the first command an operator reaches for after a crash, so both sealed
 // crash-recovery cases must be delivered by it, not only by raise/reset.

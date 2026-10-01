@@ -5,6 +5,13 @@ export interface KickbackPlanGrowthView extends PlanGrowth {
   capSource: 'raised' | 'config-derived';
 }
 
+export interface KickbackResumeAuthorizationView {
+  state: 'consumed' | 'awaiting-sweep' | 'stale' | 'pending';
+  adjustmentId: string;
+  boundHaltGeneration: string;
+  liveHaltGeneration: string;
+}
+
 export interface KickbackBudgetView {
   gate: string;
   consumed: number;
@@ -16,6 +23,7 @@ export interface KickbackBudgetView {
   lapCap?: number;
   mechanicalFaults?: number;
   planGrowth?: KickbackPlanGrowthView;
+  resumeAuthorization?: KickbackResumeAuthorizationView;
 }
 
 export function renderKickbackRecoveryHint({
@@ -37,10 +45,25 @@ export function kickbackBudgetView(
   gate: string,
   fallbackLimit: number,
   planGrowth?: KickbackPlanGrowthView,
+  liveHaltGeneration?: string,
 ): KickbackBudgetView {
   const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
   const limit = remediation ? (entry?.effectiveLapCap ?? fallbackLimit) : (entry?.effectiveLimit ?? fallbackLimit);
   const consumed = remediation ? (entry?.laps ?? 0) : (entry?.cumulative ?? 0);
+  const authorization = entry?.resumeAuthorization;
+  const resumeAuthorization = authorization === undefined ? undefined : {
+    state: authorization.consumed
+      ? 'consumed'
+      : liveHaltGeneration === undefined
+        ? 'pending'
+        : authorization.haltGeneration === liveHaltGeneration &&
+            authorization.haltGeneration === entry?.capEvidence?.haltGeneration
+          ? 'awaiting-sweep'
+          : 'stale',
+    adjustmentId: authorization.adjustmentId,
+    boundHaltGeneration: authorization.haltGeneration,
+    liveHaltGeneration: liveHaltGeneration ?? '',
+  } as KickbackResumeAuthorizationView;
   return {
     gate, consumed, limit, remaining: Math.max(0, limit - consumed), latestReason: entry?.lastReason ?? '',
     // Current-schema entries stamp `adjustmentsKnown` when they first consume
@@ -52,6 +75,7 @@ export function kickbackBudgetView(
     ) ? 'unavailable' : (entry?.adjustments ?? []),
     ...(remediation ? { laps: entry?.laps ?? 0, lapCap: limit } : { mechanicalFaults: entry?.mechanicalFaults ?? 0 }),
     ...(planGrowth === undefined ? {} : { planGrowth }),
+    ...(resumeAuthorization === undefined ? {} : { resumeAuthorization }),
   };
 }
 
@@ -60,13 +84,25 @@ export function renderKickbackBudgetView(
   gate: string,
   fallbackLimit: number,
   planGrowth?: KickbackPlanGrowthView,
+  liveHaltGeneration?: string,
 ): string {
-  const view = kickbackBudgetView(entry, gate, fallbackLimit, planGrowth);
+  const view = kickbackBudgetView(entry, gate, fallbackLimit, planGrowth, liveHaltGeneration);
   const history = view.adjustments === 'unavailable' ? 'unavailable' : (view.adjustments ?? []);
+  const authorization = view.resumeAuthorization;
+  const authorizationLine = authorization === undefined
+    ? 'Resume authorization: none'
+    : authorization.state === 'consumed'
+      ? 'Resume authorization: consumed'
+      : authorization.state === 'awaiting-sweep'
+        ? 'Resume authorization: awaiting daemon sweep'
+        : authorization.state === 'pending'
+          ? 'Resume authorization: pending (live halt not read)'
+          : `Resume authorization: stale (bound to halt generation ${authorization.boundHaltGeneration}; live halt generation ${authorization.liveHaltGeneration}); the daemon will not consume it`;
   return [
     `Kickback budget (${gate}): ${view.consumed}/${view.limit} consumed; ${view.remaining} remaining`,
     `Latest reason: ${view.latestReason || 'none'}`,
     `Adjustment history: ${history === 'unavailable' ? 'unavailable' : history.length === 0 ? 'none' : history.map((item) => `${item.kind} ${item.id}${item.allowance ? ` (${item.allowance})` : ''}`).join(', ')}`,
+    authorizationLine,
     ...(view.planGrowth === undefined ? [] : [
       `Plan growth: ${view.planGrowth.added}/${view.planGrowth.cap} added; ${view.planGrowth.remaining} remaining (${view.planGrowth.capSource} cap)`,
     ]),

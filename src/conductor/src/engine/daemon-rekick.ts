@@ -259,29 +259,37 @@ export async function consumeResumeAuthorizations(
       }
       // adr-2026-08-31 decision 3: a malformed sibling gate never invalidates a
       // healthy gate's authorization, but its own gate is never honored.
-      const match = Object.entries(ledger.gates).find(([gate, entry]) =>
+      const candidates = Object.entries(ledger.gates).filter(([gate, entry]) =>
         !isUnreadableKickbackGate(ledger, gate) &&
         entry.capEvidence && entry.resumeAuthorization && !entry.resumeAuthorization.consumed &&
         entry.capEvidence.gate === gate &&
         entry.capEvidence.haltGeneration === entry.resumeAuthorization.haltGeneration,
       );
-      if (!match) continue;
-      const [gate, entry] = match;
+      if (candidates.length === 0) continue;
       // The live halt must still be THIS gate's cap halt. Without this an
       // authorization raised against a cap halt would clear whatever unrelated
       // halt happened to replace it (D6: "no unrelated halt is cleared").
       const liveHaltClass = (await deps.readLiveHaltClass(slug)).trim();
+      const liveGeneration = (await deps.readLiveHaltGeneration(slug)).trim();
+      const match = candidates.find(([, entry]) => entry.capEvidence!.haltGeneration === liveGeneration);
+      for (const [candidateGate, candidateEntry] of candidates) {
+        if (candidateEntry === match?.[1]) continue;
+        deps.log?.(
+          `kickback-budget ${slug}: ${candidateGate} authorization is stale — ` +
+            `bound to generation ${candidateEntry.capEvidence!.haltGeneration} rather than live generation ${liveGeneration || 'absent'}; was not consumed`,
+        );
+      }
+      if (!match) {
+        deps.log?.(`kickback-budget ${slug}: retained — live halt generation does not match authorization`);
+        continue;
+      }
+      const [gate, entry] = match;
       const expected = RECOVERABLE_CAP_HALT_CLASS_BY_GATE[gate];
       if (expected === undefined || liveHaltClass !== expected) {
         deps.log?.(
           `kickback-budget ${slug}: retained — live halt class '${liveHaltClass || 'absent'}' ` +
             `is not ${gate}'s recoverable cap halt`,
         );
-        continue;
-      }
-      const liveGeneration = (await deps.readLiveHaltGeneration(slug)).trim();
-      if (liveGeneration !== entry.capEvidence!.haltGeneration) {
-        deps.log?.(`kickback-budget ${slug}: retained — live halt generation does not match authorization`);
         continue;
       }
       // Repair-then-clear, then consume. A `partial` clear leaves the halt and

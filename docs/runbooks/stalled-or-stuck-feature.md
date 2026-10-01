@@ -573,6 +573,10 @@ raise was too small or named the other gate: re-inspect and raise the exhausted 
 The daemon clears only a live halt whose gate and generation match that one-use authorization. It
 does so on its next loop iteration, without waiting for a base-branch advance. If the feature was
 already operator-parked, unpark it after the command; otherwise it remains intentionally halted.
+
+If the halt persists and `inspect` reports `Resume authorization: stale`, the authorization was
+bound to an earlier halt generation; the daemon log records it as stale and not consumed. Run
+`raise` or `reset` again against the live halt — the new authorization replaces the stale one.
 The full command contract is in the [CLI reference](../reference/cli.md#ai-conductor-kickback-budget).
 
 #### BUILD verification after a repair

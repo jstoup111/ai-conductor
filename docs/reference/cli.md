@@ -996,6 +996,22 @@ unrelated base-branch advance. Supported gates are `build_review`, `prd_audit`, 
 `adjustments` array for a valid gate with no adjustment history. Inspect also performs that
 reconciliation, so it is safe as the first command after an interrupted `raise` or `reset`.
 
+Inspect reports each gate's resume authorization against the live halt generation. Human output
+prints one `Resume authorization:` line per gate:
+
+| Line | Meaning |
+| --- | --- |
+| `none` | The gate has no recorded authorization. |
+| `consumed` | The daemon already used this authorization. |
+| `awaiting daemon sweep` | The authorization and the gate's cap evidence both match the live halt generation; the daemon consumes it on its next loop iteration. |
+| `stale (bound to halt generation <bound>; live halt generation <live>); the daemon will not consume it` | The authorization or the gate's cap evidence names a different halt generation, or no halt is live. The daemon logs it as stale and never consumes it. |
+
+JSON adds a `resumeAuthorization` object to a gate that has one:
+`{ state, adjustmentId, boundHaltGeneration, liveHaltGeneration }`, where `state` is `consumed`,
+`awaiting-sweep`, `stale`, or `pending`. `pending` means the live halt was not read; inspect always
+reads it. `liveHaltGeneration` is empty when no halt is live. When several gates hold unconsumed
+authorizations, the daemon consumes only the one bound to the live halt generation.
+
 The eligible live halt class is per gate: `build_review`'s cumulative convergence cap halts
 `needs-human`, while the `prd_audit` and `architecture_review_as_built` remediation-lap caps halt
 `kickback-cap`. A `raise` or `reset` naming a gate whose live halt carries the other class is
