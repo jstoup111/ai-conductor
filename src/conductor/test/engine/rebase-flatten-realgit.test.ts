@@ -269,6 +269,9 @@ describe('performRebase real local Git (Task 5)', () => {
       expect((await git(['merge-base', '--is-ancestor', ancestryOnly, 'HEAD']).catch(() => ({ stdout: 'no' }))).stdout).toBe('no');
       expect((await git(['log', '--format=%B', 'main..HEAD'])).stdout).toContain(`Flattened-merge: ${contentMerge}`);
       expect((await git(['log', '--format=%an <%ae>', 'main..HEAD'])).stdout).toContain('Ada Author <ada@example.test>');
+      // The merge author stays author only; the committer remains the operator (ADR D10).
+      const committers = (await git(['log', '--format=%cn <%ce>', 'main..HEAD'])).stdout.trim().split('\n');
+      expect(new Set(committers)).toEqual(new Set(['Committer <committer@example.test>']));
       expect((await git(['rev-list', '--merges', 'main..HEAD'])).stdout.trim()).toBe('');
       expect((await git(['merge-base', '--is-ancestor', sideCommit, 'HEAD']).catch(() => ({ stdout: 'no' }))).stdout).toBe('no');
       expect((await git(['log', '--format=%s', 'main..HEAD'])).stdout).not.toContain('duplicated repair side lineage');

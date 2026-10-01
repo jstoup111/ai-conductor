@@ -163,11 +163,11 @@ describe('planFlattenedReplay (Task 2)', () => {
     const flattenedCommits = calls.filter(({ args }) => args[4] === 'commit-tree');
     expect(flattenedCommits).toHaveLength(2);
     expect(flattenedCommits[0]).toMatchObject({
-      args: ['-c', 'user.name=Ada Author', '-c', 'user.email=ada@example.test', 'commit-tree', CONTENT_TREE, '-p', CONTENT_FIRST_PARENT],
+      args: ['-c', 'author.name=Ada Author', '-c', 'author.email=ada@example.test', 'commit-tree', CONTENT_TREE, '-p', CONTENT_FIRST_PARENT],
       input: 'merge feature with authored content\n\nFlattened-merge: ' + CONTENT_MERGE_AUTHOR_DIFFERS,
     });
     expect(flattenedCommits[1]).toMatchObject({
-      args: ['-c', 'user.name=Bryn Author', '-c', 'user.email=bryn@example.test', 'commit-tree', CONTENT_TWO_TREE, '-p', CONTENT_TWO_FIRST_PARENT],
+      args: ['-c', 'author.name=Bryn Author', '-c', 'author.email=bryn@example.test', 'commit-tree', CONTENT_TWO_TREE, '-p', CONTENT_TWO_FIRST_PARENT],
       input: 'merge follow-up content\n\nFlattened-merge: ' + CONTENT_MERGE_TWO,
     });
 

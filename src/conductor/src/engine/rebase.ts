@@ -935,7 +935,7 @@ export async function planFlattenedReplay(
     }
     const [authorName, authorEmail, _committerName, _committerEmail, subject] = metadata.stdout.trim().split('\n');
     const commitTree = await git(
-      ['-c', `user.name=${authorName}`, '-c', `user.email=${authorEmail}`, 'commit-tree', mergeTree, '-p', firstParentSha],
+      ['-c', `author.name=${authorName}`, '-c', `author.email=${authorEmail}`, 'commit-tree', mergeTree, '-p', firstParentSha],
       { input: withDaemonCoAuthorTrailer(`${subject}\n\nFlattened-merge: ${sha}`) },
     );
     if (commitTree.exitCode !== 0) {
