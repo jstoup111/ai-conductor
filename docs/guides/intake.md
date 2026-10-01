@@ -47,6 +47,11 @@ Use `## Desired outcome` as the canonical heading. The intake reader also accept
 `## Desired outcomes`; both forms preserve the section's bullets, while staged and committed
 intake markers use the canonical singular heading.
 
+Write each outcome as a `- ` bullet; staging ignores other prose in the section. A bullet may
+wrap across lines — staging joins its continuation lines into one outcome. A blank line, heading,
+or `*`, `+`, or numbered list item ends the bullet. A nested `- ` bullet is staged as its own
+outcome.
+
 | Section | Required | Contents |
 | --- | --- | --- |
 | **Observed** | yes | Evidence of the problem — verbatim artifacts, not narrative |
