@@ -251,6 +251,19 @@ export async function clearHaltStateForResume(
       if (isRefusal(result)) return 'refused';
       if (result.kind !== 'executed') return 'partial';
     }
+    try {
+      const stdout = await runTrackerUrlRead(
+        gh,
+        cwd,
+        'pull-request',
+        prUrl,
+        ['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body'],
+      );
+      if (hasHaltSignal(parsePrView(stdout))) return 'partial';
+    } catch (err) {
+      log(`[halt-pr-rehab] resume clear verification read failed for ${prUrl}: ${err}`);
+      return 'partial';
+    }
     const note = await rehabilitateMutation(
       operations,
       prUrl,

@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:1
 /**
  * Tests for the prefix-gated retitle-floor primitive (Task 6,
  * adr-2026-07-03-halt-pr-rehabilitation-at-finish).
@@ -14,6 +14,7 @@ import {
   retitleFloor,
   ensureShipReady,
   clearHaltStateForResume,
+  hasHaltSignal,
   rehabilitateHaltPr,
   bodyFloor,
   readStaleHaltBanner,
@@ -205,18 +206,19 @@ describe('ensureShipReady (Task 7)', () => {
 });
 
 describe('clearHaltStateForResume (Tasks 1, 4)', () => {
-  it('writes the authorized resolution note through the guarded operation boundary', async () => {
+  it('confirms a stateful four-signal halt view is clean before writing the resolution note', async () => {
     const state = {
-      labelPresent: true,
-      bodyMarkerPresent: true,
+      title: 'needs-remediation: feat/daemon-widget — manual remediation required',
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `${HALT_PR_BANNER_SENTINEL}\n\n## Summary\n\nWidget import flow.\n\n<!-- conductor:needs-remediation -->`,
     };
     const gh: GhRunner = async (args) => {
       if (args[0] === 'pr' && args[1] === 'view') {
         return {
           stdout: JSON.stringify({
-            isDraft: true,
-            labels: state.labelPresent ? [{ name: 'needs-remediation' }] : [],
-            body: state.bodyMarkerPresent ? '<!-- conductor:needs-remediation -->' : '',
+            ...state,
+            labels: state.labels.map((name) => ({ name })),
           }),
         };
       }
@@ -224,21 +226,18 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
     };
     const { operations, writes } = fakeOperations({
       onOperation: (request) => {
-        if (request.operation === 'pull-request.label.remove') state.labelPresent = false;
-        if (request.operation === 'pull-request.edit') state.bodyMarkerPresent = false;
+        if (request.operation === 'pull-request.label.remove') state.labels = [];
+        if (request.operation === 'pull-request.edit' && 'title' in request.payload) state.title = request.payload.title;
+        if (request.operation === 'pull-request.edit' && 'body' in request.payload) state.body = request.payload.body;
       },
     });
 
-    await expect(clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations)).resolves.toBe('cleared');
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations, {
+      featureDesc: 'widget import flow',
+    });
 
-    expect(writes).toEqual(expect.arrayContaining([
-      expect.objectContaining({ operation: 'pull-request.label.remove' }),
-      expect.objectContaining({ operation: 'pull-request.edit', payload: { body: '' } }),
-      expect.objectContaining({
-        operation: 'pull-request.comment.create',
-        payload: expect.objectContaining({ body: expect.stringContaining('Halt resolved') }),
-      }),
-    ]));
+    expect({ outcome, hasHaltSignal: hasHaltSignal(state), commentWrites: writes.filter((write) => write.operation === 'pull-request.comment.create').length })
+      .toEqual({ outcome: 'cleared', hasHaltSignal: false, commentWrites: 1 });
   });
 
   it('clears a halt title prefix and banner when no label or body marker remains', async () => {
@@ -248,7 +247,10 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
       labels: [],
       body: `${HALT_PR_BANNER_SENTINEL}\n\n## Summary\n\nWidget import flow.`,
     };
-    const { gh } = fakeGh([{ stdout: JSON.stringify(halted) }]);
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify(halted) },
+      { stdout: JSON.stringify({ ...halted, title: 'feat: widget import flow', body: '## Summary\n\nWidget import flow.' }) },
+    ]);
     const { operations, writes } = fakeOperations();
 
     await expect(clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations, {
@@ -268,6 +270,29 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
     await expect(clearHaltStateForResume(gh, CWD, PR_URL)).resolves.toBe('gh-unavailable');
   });
 
+  it('returns partial without a resolution comment when the post-mutation re-read rejects', async () => {
+    const halted = {
+      title: 'feat: widget import flow',
+      isDraft: true,
+      labels: [{ name: 'needs-remediation' }],
+      body: `## Summary\n\nWidget import flow.\n\n<!-- conductor:needs-remediation -->`,
+    };
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify(halted) }, // resume-clear state read
+      new Error('gh: network error'), // post-mutation verification read
+    ]);
+    const { operations, writes } = fakeOperations();
+
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
+
+    expect(outcome).toBe('partial');
+    expect(writes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ operation: 'pull-request.label.remove' }),
+      expect.objectContaining({ operation: 'pull-request.edit', payload: { body: '## Summary\n\nWidget import flow.' } }),
+    ]));
+    expect(writes.filter((write) => write.operation === 'pull-request.comment.create')).toHaveLength(0);
+  });
+
   it('preserves a halted draft PR while clearing halt state', async () => {
     const halted = {
       title: 'feat: widget import flow',
@@ -282,6 +307,7 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
     };
     const { gh } = fakeGh([
       { stdout: JSON.stringify(halted) }, // resume-clear state read
+      { stdout: JSON.stringify(cleared) }, // post-mutation verification read
     ]);
     const { operations } = fakeOperations();
 
@@ -307,6 +333,7 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
     };
     const { gh } = fakeGh([
       { stdout: JSON.stringify(halted) }, // resume-clear state read
+      { stdout: JSON.stringify(cleared) }, // post-mutation verification read
     ]);
     const { operations, writes } = fakeOperations();
 
@@ -329,6 +356,7 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
     };
     const { gh } = fakeGh([
       { stdout: JSON.stringify(labeledWithoutMarker) }, // resume-clear state read
+      { stdout: JSON.stringify({ ...labeledWithoutMarker, labels: [] }) }, // post-mutation verification read
     ]);
     const { operations, writes } = fakeOperations();
 
@@ -360,7 +388,7 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
     expect(writes).toEqual([expect.objectContaining({ operation: 'pull-request.label.remove' })]);
   });
 
-  it('returns partial when the final re-read retains the remediation body marker', async () => {
+  it('returns partial without a resolution comment when executed writes leave a halt marker', async () => {
     const halted = {
       title: 'feat: widget import flow',
       isDraft: true,
@@ -369,12 +397,14 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
     };
     const { gh } = fakeGh([
       { stdout: JSON.stringify(halted) }, // resume-clear state read
+      { stdout: JSON.stringify(halted) }, // post-mutation verification read
     ]);
-    const { operations } = fakeOperations({ mode: 'fail' });
+    const { operations, writes } = fakeOperations();
 
     const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
 
-    expect(outcome).toBe('partial');
+    expect({ outcome, commentWrites: writes.filter((write) => write.operation === 'pull-request.comment.create').length })
+      .toEqual({ outcome: 'partial', commentWrites: 0 });
   });
 });
 
