@@ -128,6 +128,7 @@ function invokeScriptWithFakeVitest(
   const pathFakeVitestPath = join(binDirectory, 'vitest');
   mkdirSync(dirname(fakeVitestPath), { recursive: true });
   copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'run-vitest.mjs'), join(fixturePackageRoot, 'scripts', 'run-vitest.mjs'));
+  copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'run-vitest-shards.mjs'), join(fixturePackageRoot, 'scripts', 'run-vitest-shards.mjs'));
   copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'vitest-temp.mjs'), join(fixturePackageRoot, 'scripts', 'vitest-temp.mjs'));
   const fakeVitest = [
     '#!/bin/sh',
@@ -282,16 +283,12 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     const testScript = JSON.parse(packageJson).scripts.test as string;
     // Every invocation goes through the Node 26 temp-dir wrapper
     // (`scripts/run-vitest.mjs`), so no bare `vitest run` survives.
-    // The aggregate run is split into four complementary shards. Each starts a
-    // fresh Vitest parent, bounding the module graph retained by its fork
-    // workers while still covering the configured include set exactly once.
+    // The aggregate run has a dedicated launcher that partitions the concrete
+    // include set into eight batches. Each starts a fresh Vitest parent,
+    // bounding the module graph retained by its fork workers while still
+    // covering the configured include set exactly once.
     // The selector branch remains a single unsharded run below.
-    expect(testScript.match(/run-vitest\.mjs run/g)).toHaveLength(5);
-    expect(testScript).toMatch(/--shard=1\/4/);
-    expect(testScript).toMatch(/--shard=2\/4/);
-    expect(testScript).toMatch(/--shard=3\/4/);
-    expect(testScript).toMatch(/--shard=4\/4/);
-    expect(testScript).not.toMatch(/(^|[^-])vitest run/);
+    expect(testScript).toBe('node scripts/run-vitest-shards.mjs');
 
     // The no-argument branch is the aggregate gate's command. Any positional
     // path passed there narrows the run to those paths, silently dropping
@@ -324,6 +321,54 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
 });
 
 describe('Story 7 — package-script selector forwarding (Task 17)', () => {
+  it('partitions the concrete test include set into fresh, disjoint Vitest processes', () => {
+    const fixturePackageRoot = join(scratchParent, 'sharded-conductor');
+    const runnerArgumentsPath = join(scratchParent, 'sharded-vitest-arguments');
+    const scriptRoot = join(fixturePackageRoot, 'scripts');
+    const fakeVitestPath = join(fixturePackageRoot, 'node_modules', '.bin', 'vitest');
+    const testFiles = Array.from({ length: 9 }, (_, index) => `test/group-${index + 1}.test.ts`);
+    mkdirSync(scriptRoot, { recursive: true });
+    mkdirSync(dirname(fakeVitestPath), { recursive: true });
+    for (const file of [...testFiles, 'test/ignored.smoke.test.ts']) {
+      mkdirSync(dirname(join(fixturePackageRoot, file)), { recursive: true });
+      writeFileSync(join(fixturePackageRoot, file), 'export {};\n');
+    }
+    copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'run-vitest-shards.mjs'), join(scriptRoot, 'run-vitest-shards.mjs'));
+    copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'run-vitest.mjs'), join(scriptRoot, 'run-vitest.mjs'));
+    copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'vitest-temp.mjs'), join(scriptRoot, 'vitest-temp.mjs'));
+    writeFileSync(fakeVitestPath, [
+      '#!/usr/bin/env node',
+      "import { appendFileSync } from 'node:fs';",
+      "appendFileSync(process.env.FAKE_VITEST_ARGUMENTS, `${JSON.stringify(process.argv.slice(2))}\\n`);",
+      '',
+    ].join('\n'));
+    chmodSync(fakeVitestPath, 0o755);
+
+    const result = spawnSync(process.execPath, ['scripts/run-vitest-shards.mjs'], {
+      cwd: fixturePackageRoot,
+      encoding: 'utf8',
+      env: { ...process.env, FAKE_VITEST_ARGUMENTS: runnerArgumentsPath },
+    });
+    const forwarded = readFileSync(runnerArgumentsPath, 'utf8')
+      .trim()
+      .split('\n')
+      .flatMap((line) => JSON.parse(line) as string[])
+      .filter((argument) => argument.endsWith('.test.ts'))
+      .sort();
+
+    expect({
+      exitCode: result.status,
+      stdout: result.stdout,
+      invocationCount: readFileSync(runnerArgumentsPath, 'utf8').trim().split('\n').length,
+      forwarded,
+    }).toEqual({
+      exitCode: 0,
+      stdout: 'AGGREGATE_TEST_SUITE_PASS\n',
+      invocationCount: 8,
+      forwarded: testFiles,
+    });
+  });
+
   it('keeps the legacy trailing-echo shape detectable by the fake runner', async () => {
     const packageJson = JSON.parse(await readFile(join(CONDUCTOR_ROOT, 'package.json'), 'utf8')) as {
       scripts: { test: string };
