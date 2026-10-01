@@ -98,6 +98,33 @@ describe('intake overlap check events', () => {
     });
   });
 
+  it('records pre-accepted and declined suggestions for a non-interactive filing', async () => {
+    const events = new ConductorEventEmitter();
+    const seen: ConductorEvent[] = [];
+    events.on('intake_overlap_checked', (event) => { seen.push(event); });
+
+    await runOverlapPreflight({
+      ...input(),
+      dependsOn: ['acme/app#1579'],
+      declineOverlap: ['acme/app#1487'],
+    }, {
+      repository: 'acme/app',
+      events,
+      suggestions: async () => ({
+        preAccepted: [{ issue: 'acme/app#1579', sharedPaths: ['src/review/rubric.ts'] }],
+        shown: [{ issue: 'acme/app#1487', sharedPaths: ['src/review/rubric.ts'] }],
+        advisory: [],
+      }),
+    });
+
+    expect(seen).toEqual([expect.objectContaining({
+      outcome: 'proceeded',
+      suggested: ['acme/app#1579', 'acme/app#1487'],
+      accepted: ['acme/app#1579'],
+      declined: ['acme/app#1487'],
+    })]);
+  });
+
   it('records refused undecided suggestions', () => {
     const decision: OverlapDecision = {
       kind: 'refused',

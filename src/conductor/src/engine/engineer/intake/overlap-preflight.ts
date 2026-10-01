@@ -14,6 +14,8 @@ export interface OverlapSkipNote {
   reason: string;
 }
 
+const sameIssue = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
+
 export type OverlapDecision =
   | {
     kind: 'proceed';
@@ -199,12 +201,16 @@ export function intakeOverlapCheckedEvent(
   suggestions: OverlapSuggestions,
   decision: OverlapDecision,
 ): Extract<ConductorEvent, { type: 'intake_overlap_checked' }> {
+  const accepted = decision.kind === 'proceed'
+    ? [...suggestions.preAccepted.map(({ issue }) => issue), ...decision.accepted]
+      .filter((issue, index, issues) => !issues.slice(0, index).some((prior) => sameIssue(prior, issue)))
+    : [];
   return {
     type: 'intake_overlap_checked',
     repository,
     outcome: decision.kind === 'proceed' ? 'proceeded' : decision.kind,
     suggested: [...suggestions.preAccepted, ...suggestions.shown].map(({ issue }) => issue),
-    accepted: decision.kind === 'proceed' ? [...decision.accepted] : [],
+    accepted,
     declined: decision.kind === 'proceed' ? [...decision.declined] : [],
     undecided: decision.kind === 'refused' ? decision.undecided.map(({ issue }) => issue) : [],
     advisoryCount: suggestions.advisory.length,
@@ -223,7 +229,6 @@ export async function runOverlapPreflight(
 ): Promise<OverlapDecision> {
   const suggestions = await deps.suggestions(input);
   const skipNotes = suggestions.skipNotes ?? [];
-  const sameIssue = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
   const declined: string[] = [];
   const invalid = (input.declineOverlap ?? []).filter((value) => {
     const parsed = parseSourceRef(value);
