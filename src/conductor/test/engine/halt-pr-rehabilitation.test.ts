@@ -207,6 +207,7 @@ describe('ensureShipReady (Task 7)', () => {
 
 describe('clearHaltStateForResume (Tasks 1, 4)', () => {
   it('confirms a stateful four-signal halt view is clean before writing the resolution note', async () => {
+    const callLog: string[] = [];
     const state = {
       title: 'needs-remediation: feat/daemon-widget — manual remediation required',
       isDraft: true,
@@ -215,6 +216,7 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
     };
     const gh: GhRunner = async (args) => {
       if (args[0] === 'pr' && args[1] === 'view') {
+        callLog.push(`read:${args[args.indexOf('--json') + 1]}`);
         return {
           stdout: JSON.stringify({
             ...state,
@@ -226,6 +228,7 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
     };
     const { operations, writes } = fakeOperations({
       onOperation: (request) => {
+        callLog.push(`write:${request.operation}`);
         if (request.operation === 'pull-request.label.remove') state.labels = [];
         if (request.operation === 'pull-request.edit') {
           const payload = request.payload as { title?: string; body?: string } | undefined;
@@ -241,6 +244,16 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
 
     expect({ outcome, hasHaltSignal: hasHaltSignal(state), commentWrites: writes.filter((write) => write.operation === 'pull-request.comment.create').length })
       .toEqual({ outcome: 'cleared', hasHaltSignal: false, commentWrites: 1 });
+
+    const lastPresentationMutation = Math.max(
+      callLog.lastIndexOf('write:pull-request.label.remove'),
+      callLog.lastIndexOf('write:pull-request.edit'),
+    );
+    const postMutationStateRead = callLog.lastIndexOf('read:title,isDraft,labels,body');
+    const resolutionComment = callLog.indexOf('write:pull-request.comment.create');
+
+    expect(postMutationStateRead).toBeGreaterThan(lastPresentationMutation);
+    expect(resolutionComment).toBeGreaterThan(postMutationStateRead);
   });
 
   it('updates an existing marked remediation comment after confirming the clear', async () => {
