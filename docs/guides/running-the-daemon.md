@@ -1098,7 +1098,10 @@ Two independent repairs keep that PR usable, at two different points in the run:
   body marker and supersedes the halt comment, while preserving draft status. This reaches a
   feature that resumes into `BUILD`, where the PR is resolved through `gh` directly rather than
   through the conductor's own resolver, so a BUILD-phase halt no longer leaves the branch's PR
-  permanently occupied by the remediation placeholder.
+  permanently occupied by the remediation placeholder. The clear re-reads the PR after removing the
+  label and marker; if either is still present, or the read fails, the clear counts as partial and
+  runs again at the next dispatch. Once verified, it rewrites the existing halt comment in place to
+  say the halt resolved, and posts a new comment only when no halt comment is found.
 
 Both repairs share the same properties:
 
