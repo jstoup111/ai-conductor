@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# BEGIN integrity failure reporting
+set -eEuo pipefail
 
 # test_harness_integrity.sh — Validates harness structural integrity.
 # Checks bash syntax, SKILL.md frontmatter, agent/template references,
@@ -36,6 +37,37 @@ assert() {
     FAIL=$((FAIL + 1))
   fi
 }
+
+report_unhandled_abort() {
+  local status=$?
+  local line=$1
+
+  case $- in
+    *e*) ;;
+    *) return 0 ;;
+  esac
+
+  printf 'ABORT: unguarded command failed at line %s (exit %s)\n' "$line" "$status" >&2
+}
+
+trap 'report_unhandled_abort "$LINENO"' ERR
+
+summarize_and_exit() {
+  echo ""
+  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "  ${GREEN}${PASS} passed${NC}  ${RED}${FAIL} failed${NC}  ${YELLOW}${WARN} warnings${NC}  (${TOTAL} total)"
+  echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+  if [ "$FAIL" -gt 0 ]; then
+    echo ""
+    echo -e "${RED}Validation FAILED — fix issues before committing.${NC}"
+    exit 1
+  fi
+
+  exit 0
+}
+
+# END integrity failure reporting
 
 # The Node project lives under src/conductor/. A root lockfile would describe
 # no installable package and mislead dependency tooling about that boundary.
@@ -145,8 +177,9 @@ else
   esac
 fi
 
-bash "${HARNESS_DIR}/test/test_lint_shell_enumeration.sh"
-assert "shell script enumeration regression suite" $?
+lint_shell_enumeration_status=0
+bash "${HARNESS_DIR}/test/test_lint_shell_enumeration.sh" || lint_shell_enumeration_status=$?
+assert "shell script enumeration regression suite" "$lint_shell_enumeration_status"
 
 # ── 1c. No NUL bytes in tracked text source ─────────────────────────────────
 # A raw NUL control character committed into a source file makes that file
@@ -1251,11 +1284,13 @@ echo ""
 echo -e "${BOLD}12. /plan overlap-scan step${NC}"
 plan_skill="${HARNESS_DIR}/skills/plan/SKILL.md"
 if [ -f "$plan_skill" ]; then
-  grep -q "ai-conductor overlap-scan" "$plan_skill"
-  assert "skills/plan/SKILL.md — invokes ai-conductor overlap-scan" $?
+  plan_overlap_scan_status=0
+  grep -q "ai-conductor overlap-scan" "$plan_skill" || plan_overlap_scan_status=$?
+  assert "skills/plan/SKILL.md — invokes ai-conductor overlap-scan" "$plan_overlap_scan_status"
 
-  grep -qi "advisory" "$plan_skill"
-  assert "skills/plan/SKILL.md — overlap-scan step states result is advisory" $?
+  plan_advisory_status=0
+  grep -qi "advisory" "$plan_skill" || plan_advisory_status=$?
+  assert "skills/plan/SKILL.md — overlap-scan step states result is advisory" "$plan_advisory_status"
 
   plan_terminal_validation_contract=$(awk '
     /^### 3a\. No Terminal Catch-All Validation Task$/ { capture=1; next }
@@ -1263,35 +1298,41 @@ if [ -f "$plan_skill" ]; then
     capture { print }
   ' "$plan_skill")
 
-  test -n "$plan_terminal_validation_contract"
-  assert "skills/plan/SKILL.md — carries isolated terminal-validation ownership contract" $?
+  plan_terminal_contract_status=0
+  test -n "$plan_terminal_validation_contract" || plan_terminal_contract_status=$?
+  assert "skills/plan/SKILL.md — carries isolated terminal-validation ownership contract" "$plan_terminal_contract_status"
 
-  grep -qiE 'MUST NOT.*catch-all validation task' <<<"$plan_terminal_validation_contract"
-  assert "skills/plan/SKILL.md — forbids terminal catch-all validation tasks" $?
+  plan_no_catch_all_status=0
+  grep -qiE 'MUST NOT.*catch-all validation task' <<<"$plan_terminal_validation_contract" || plan_no_catch_all_status=$?
+  assert "skills/plan/SKILL.md — forbids terminal catch-all validation tasks" "$plan_no_catch_all_status"
 
+  plan_later_gates_status=0
   grep -qiE 'writing-system-tests' <<<"$plan_terminal_validation_contract" \
     && grep -qiE 'test-suite' <<<"$plan_terminal_validation_contract" \
     && grep -qiE 'manual-test' <<<"$plan_terminal_validation_contract" \
     && grep -qiE 'prd-audit' <<<"$plan_terminal_validation_contract" \
-    && grep -qiE 'architecture-review' <<<"$plan_terminal_validation_contract"
-  assert "skills/plan/SKILL.md — assigns whole-feature validation to later gates" $?
+    && grep -qiE 'architecture-review' <<<"$plan_terminal_validation_contract" || plan_later_gates_status=$?
+  assert "skills/plan/SKILL.md — assigns whole-feature validation to later gates" "$plan_later_gates_status"
 
+  plan_routes_status=0
   grep -qiE 'test-suite.*failures.*manual-test.*failures.*return directly to BUILD' \
     <<<"$plan_terminal_validation_contract" \
     && grep -qiE 'prd-audit.*architecture-review.*finish.*route' \
       <<<"$plan_terminal_validation_contract" \
     && grep -qiE 'remediate.*appropriate SDLC' <<<"$plan_terminal_validation_contract" \
-    && grep -qiE 'speculative' <<<"$plan_terminal_validation_contract"
-  assert "skills/plan/SKILL.md — routes aggregate, manual, and judged findings correctly" $?
+    && grep -qiE 'speculative' <<<"$plan_terminal_validation_contract" || plan_routes_status=$?
+  assert "skills/plan/SKILL.md — routes aggregate, manual, and judged findings correctly" "$plan_routes_status"
 
+  plan_scoped_tests_status=0
   grep -qiE 'scoped RED/GREEN tests.*implementation task.*owns' \
-    <<<"$plan_terminal_validation_contract"
-  assert "skills/plan/SKILL.md — keeps scoped tests with behavior-owning tasks" $?
+    <<<"$plan_terminal_validation_contract" || plan_scoped_tests_status=$?
+  assert "skills/plan/SKILL.md — keeps scoped tests with behavior-owning tasks" "$plan_scoped_tests_status"
 
+  plan_integration_status=0
   grep -qiE 'behavior-specific integration task' <<<"$plan_terminal_validation_contract" \
     && grep -qiE 'is valid only' <<<"$plan_terminal_validation_contract" \
-    && grep -qiE 'named production integration' <<<"$plan_terminal_validation_contract"
-  assert "skills/plan/SKILL.md — preserves named production integration tasks" $?
+    && grep -qiE 'named production integration' <<<"$plan_terminal_validation_contract" || plan_integration_status=$?
+  assert "skills/plan/SKILL.md — preserves named production integration tasks" "$plan_integration_status"
 
   harness_plan_ownership_contract=$(awk '
     /^### Plan Task Ownership$/ { capture=1; next }
@@ -1299,6 +1340,7 @@ if [ -f "$plan_skill" ]; then
     capture { print }
   ' "${HARNESS_DIR}/HARNESS.md")
 
+  harness_plan_ownership_status=0
   test -n "$harness_plan_ownership_contract" \
     && grep -qiE 'terminal catch-all' <<<"$harness_plan_ownership_contract" \
     && grep -qiE 'writing-system-tests' <<<"$harness_plan_ownership_contract" \
@@ -1311,8 +1353,8 @@ if [ -f "$plan_skill" ]; then
     && grep -qiE 'remediate' <<<"$harness_plan_ownership_contract" \
     && grep -qiE 'appropriate SDLC step' <<<"$harness_plan_ownership_contract" \
     && grep -qiE 'required human' <<<"$harness_plan_ownership_contract" \
-    && grep -qiE 'decision' <<<"$harness_plan_ownership_contract"
-  assert "HARNESS.md — assigns whole-feature validation outside terminal plan tasks" $?
+    && grep -qiE 'decision' <<<"$harness_plan_ownership_contract" || harness_plan_ownership_status=$?
+  assert "HARNESS.md — assigns whole-feature validation outside terminal plan tasks" "$harness_plan_ownership_status"
 else
   assert "skills/plan/SKILL.md exists" 1
 fi
@@ -1410,16 +1452,18 @@ echo ""
 echo -e "${BOLD}14b. As-built Markdown authority${NC}"
 as_built_markdown_authority="${HARNESS_DIR}/test/check_as_built_markdown_authority.sh"
 if [ -x "$as_built_markdown_authority" ]; then
-  "$as_built_markdown_authority"
-  assert "as-built verdict Markdown is derived-only" $?
+  as_built_markdown_authority_status=0
+  "$as_built_markdown_authority" || as_built_markdown_authority_status=$?
+  assert "as-built verdict Markdown is derived-only" "$as_built_markdown_authority_status"
 else
   assert "test/check_as_built_markdown_authority.sh exists and is executable" 1
 fi
 
 as_built_markdown_authority_test="${HARNESS_DIR}/test/test_as_built_markdown_authority.sh"
 if [ -x "$as_built_markdown_authority_test" ]; then
-  "$as_built_markdown_authority_test"
-  assert "as-built Markdown authority fixtures fail closed" $?
+  as_built_markdown_authority_test_status=0
+  "$as_built_markdown_authority_test" || as_built_markdown_authority_test_status=$?
+  assert "as-built Markdown authority fixtures fail closed" "$as_built_markdown_authority_test_status"
 else
   assert "test/test_as_built_markdown_authority.sh exists and is executable" 1
 fi
@@ -1530,23 +1574,31 @@ finish_skill="${HARNESS_DIR}/skills/finish/SKILL.md"
 if [ ! -f "$finish_skill" ]; then
   assert "skills/finish/SKILL.md exists" 1
 else
+  finish_attended_intent_status=0
   grep -qiE 'attended default and interactive foreground' "$finish_skill" \
     && grep -qiE '`pr`' "$finish_skill" \
     && grep -qiE '`keep`' "$finish_skill" \
     && grep -qiE '`defer`' "$finish_skill" \
     && grep -qiE 'before any publication observation or mutation' "$finish_skill" \
-    && grep -qiE 'explicit.*foreground-auto.*daemon.*engine policy' "$finish_skill"
-  assert "skills/finish/SKILL.md — documents attended intent before publication activity" $?
+    && grep -qiE 'explicit.*foreground-auto.*daemon.*engine policy' "$finish_skill" || finish_attended_intent_status=$?
+  assert "skills/finish/SKILL.md — documents attended intent before publication activity" "$finish_attended_intent_status"
 
-  ! grep -qiE '^\*\*Option [1-4]:' "$finish_skill"
-  assert "skills/finish/SKILL.md — contains no empty legacy option headings" $?
+  finish_no_legacy_options_status=0
+  if grep -qiE '^\*\*Option [1-4]:' "$finish_skill"; then
+    finish_no_legacy_options_status=1
+  fi
+  assert "skills/finish/SKILL.md — contains no empty legacy option headings" "$finish_no_legacy_options_status"
 
   cleanup_owner_count=$(grep -ciE 'remote-default shipment cleanup' "$finish_skill" || true)
-  [ "$cleanup_owner_count" -eq 1 ]
-  assert "skills/finish/SKILL.md — assigns remote-default cleanup ownership exactly once" $?
+  finish_cleanup_owner_status=0
+  [ "$cleanup_owner_count" -eq 1 ] || finish_cleanup_owner_status=$?
+  assert "skills/finish/SKILL.md — assigns remote-default cleanup ownership exactly once" "$finish_cleanup_owner_status"
 
-  ! grep -qiE '(recorded|outcome).*(merge-local|discard)|(merge-local|discard).*(recorded|outcome)' "$finish_skill"
-  assert "skills/finish/SKILL.md — contains no legacy merge-local/discard outcome instructions" $?
+  finish_no_legacy_outcomes_status=0
+  if grep -qiE '(recorded|outcome).*(merge-local|discard)|(merge-local|discard).*(recorded|outcome)' "$finish_skill"; then
+    finish_no_legacy_outcomes_status=1
+  fi
+  assert "skills/finish/SKILL.md — contains no legacy merge-local/discard outcome instructions" "$finish_no_legacy_outcomes_status"
 fi
 
 # ── 19. Migration block authoring contract ──────────────────────────────────
@@ -1929,17 +1981,26 @@ else
   assert "test/check_github_invocation_boundary.sh — guarded invocation audit passes" 1
 fi
 
-# ── Summary ──────────────────────────────────────────────────────────────────
-
+# ── 29. Integrity failure reporting ─────────────────────────────────────────
 echo ""
-echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "  ${GREEN}${PASS} passed${NC}  ${RED}${FAIL} failed${NC}  ${YELLOW}${WARN} warnings${NC}  (${TOTAL} total)"
-echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BOLD}29. Integrity failure reporting${NC}"
+failure_reporting_spec="${HARNESS_DIR}/test/test_harness_integrity_failure_reporting.sh"
+if [ ! -f "$failure_reporting_spec" ]; then
+  assert "test/test_harness_integrity_failure_reporting.sh exists" 1
+else
+  set +e
+  failure_reporting_output=$(bash "$failure_reporting_spec" 2>&1)
+  failure_reporting_exit=$?
+  set -e
 
-if [ "$FAIL" -gt 0 ]; then
-  echo ""
-  echo -e "${RED}Validation FAILED — fix issues before committing.${NC}"
-  exit 1
+  if [ "$failure_reporting_exit" -eq 0 ]; then
+    assert "integrity failure reporting fixtures preserve guarded failures and abort diagnostics" 0
+  else
+    echo "$failure_reporting_output" | sed 's/^/    /'
+    assert "integrity failure reporting fixtures preserve guarded failures and abort diagnostics" 1
+  fi
 fi
 
-exit 0
+# ── Summary ──────────────────────────────────────────────────────────────────
+
+summarize_and_exit

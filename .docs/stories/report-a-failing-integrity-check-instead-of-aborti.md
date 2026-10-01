@@ -44,13 +44,13 @@ As the operator diagnosing a failed validation run, I want an abort that no chec
 #### Negative Paths
 
 - Given a command fails inside a region that has deliberately disabled errexit, when the run continues past it, then no abort diagnostic is printed.
-- Given the suite runs over the real repository tree with no regression present, when it completes, then it prints no abort diagnostic and its pass, fail, and warning counts are unchanged from before this change.
+- Given the suite runs over the real repository tree with no regression present, when it completes, then it prints no abort diagnostic and its pass, fail, and warning counts are unchanged from before this change apart from the new failure-reporting section and its spec run.
 
 ### Done When
 
 - [ ] A fixture whose unguarded command fails prints one abort diagnostic carrying a line number and the failing exit status, and exits non-zero.
 - [ ] A fixture that fails a command inside a deliberately non-errexit region prints no abort diagnostic and reaches its summary.
-- [ ] A real-tree run of the suite prints no abort diagnostic and reports the same pass, fail, and warning counts as before the change.
+- [ ] A real-tree run of the suite prints no abort diagnostic and reports the same pass, fail, and warning counts as before the change apart from the new failure-reporting section and its spec run.
 
 ## Negative-category review
 

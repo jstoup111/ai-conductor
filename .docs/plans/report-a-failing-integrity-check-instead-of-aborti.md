@@ -114,7 +114,7 @@ One former interaction is resolved. The earlier spec of this issue (PR #2334) wa
 **Done when:**
 1. A fixture whose unguarded command fails prints one abort diagnostic carrying a line number and the failing exit status, and exits non-zero.
 2. A fixture that fails a command inside a deliberately non-errexit region prints no abort diagnostic and reaches its summary.
-3. A real-tree run of the integrity suite prints no abort diagnostic and reports the same pass, fail, and warning counts as before this change.
+3. A real-tree run of the integrity suite prints no abort diagnostic and reports the same pass, fail, and warning counts as before this change apart from the new failure-reporting section and its spec run.
 
 ### Task 5: Wire the spec into the suite and the check enumeration
 **Story:** Story 2 (negative path)
@@ -144,7 +144,7 @@ One former interaction is resolved. The earlier spec of this issue (PR #2334) wa
 | Story 1 negative: Given a copy of the suite whose reporting region markers are absent, when the spec tries to build its fixture, then it exits non-zero rather than reporting a clean run over nothing. | 1 | "A copy of the suite with its region markers stripped makes the spec exit non-zero rather than reporting a clean run over nothing." | diff-local |
 | Story 2 happy: Given a command outside any check guard fails while errexit is in force, when the suite aborts, then it prints a diagnostic naming the script line and the failing exit status. | 4 | "A fixture whose unguarded command fails prints one abort diagnostic carrying a line number and the failing exit status, and exits non-zero." | diff-local |
 | Story 2 negative: Given a command fails inside a region that has deliberately disabled errexit, when the run continues past it, then no abort diagnostic is printed. | 4 | "A fixture that fails a command inside a deliberately non-errexit region prints no abort diagnostic and reaches its summary." | diff-local |
-| Story 2 negative: Given the suite runs over the real repository tree with no regression present, when it completes, then it prints no abort diagnostic and its pass, fail, and warning counts are unchanged from before this change. | 4, 5 | "A real-tree run of the integrity suite prints no abort diagnostic and reports the same pass, fail, and warning counts as before this change." | diff-local |
+| Story 2 negative: Given the suite runs over the real repository tree with no regression present, when it completes, then it prints no abort diagnostic and its pass, fail, and warning counts are unchanged from before this change apart from the new failure-reporting section and its spec run. | 4, 5 | "A real-tree run of the integrity suite prints no abort diagnostic and reports the same pass, fail, and warning counts as before this change." | diff-local |
 
 ## Test dispositions and integration ownership
 
