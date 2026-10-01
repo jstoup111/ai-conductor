@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-01T00:35:48.461Z
 Slug: destructive-git-prevention-is-absent-in-self-host
 Class: needs-human
 Halting step: prd_audit
