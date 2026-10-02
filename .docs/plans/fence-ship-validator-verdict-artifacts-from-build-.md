@@ -50,9 +50,9 @@ Tests follow the write-tests skill. Task 1 adds one contract function to `test/t
 
 **Done when:**
 1. `test/test_skill_pipeline_contract.sh` exits 0 and its new contract asserts all five verdict artifact paths appear in both `skills/pipeline/SKILL.md` and `skills/tdd/SKILL.md`.
-2. The new contract asserts both skills state the verdict artifacts are never written, deleted, or recreated by a BUILD session.
+2. The new contract asserts both skills state the verdict artifacts are never written, deleted, or recreated by a BUILD session. It also asserts both skills state the verdict artifacts are never renamed by a BUILD session.
 3. The new contract asserts the pipeline skill states only the validator's own dispatch produces a new verdict and that proof is recorded through `conduct task done`.
-4. The new contract asserts the pipeline skill states reading `.pipeline/remediation.json` and the cited verdict artifact remains allowed.
+4. The new contract asserts the pipeline skill states reading `.pipeline/remediation.json` and the cited verdict artifact remains allowed. It also asserts the tdd skill states the same reading remains allowed.
 5. The pipeline skill's implementer dispatch requirements include a bullet requiring every dispatch prompt to carry the verdict read-only rule.
 
 ### Task 2: Mark verdict inputs read-only in the remediate skill
