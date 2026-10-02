@@ -23,6 +23,7 @@ import type { ConductorEvent } from '../../src/types/events.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { RebaseOutcome } from '../../src/engine/rebase.js';
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
 
@@ -73,13 +74,25 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       '# Stories', '', '## Story 2: remediation', '', '#### Happy Path',
       ...criteria.map((criterion) => `- Given ${criterion}, when repaired, then it holds.`),
     ].join('\n'));
-    await writeFile(join(root, '.pipeline', 'prd-audit.md'), [
-      '**PRD:** present', '', '## Verdict Table',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      ...criteria.map((criterion, index) =>
-        `| ${criterion} | FIXABLE | ${index + 1} | Missing ${criterion} behavior |`),
-    ].join('\n'));
+    await persistPrdAuditVerdict(root, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: criteria.map((criterion, index) => ({
+          criterion: { storyId: '2', ordinal: index + 1 },
+          criterionId: criterion,
+          grade: 'FIXABLE' as const,
+          evidence: `Missing ${criterion} behavior`,
+          rationale: 'Fixture repair requires the active owning task.',
+          requirementAssociations: [],
+          evidenceTaskIds: [String(index + 1)],
+          ownerTaskId: String(index + 1),
+        })),
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'fixture-prd-audit', codeStamp: null });
 
     const conductor = new Conductor({
       stateFilePath: join(root, '.pipeline', 'conduct-state.json'),

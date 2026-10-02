@@ -15,6 +15,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
 import * as protectedArtifactSeal from '../../src/engine/protected-artifact-seal.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 
 describe('BUILD pending-repair settlement transition (Task 6)', () => {
   let dir: string;
@@ -293,11 +294,25 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
       tasks: [{ id: '1', status: 'completed' }],
     }));
-    await writeFile(join(dir, '.pipeline', 'prd-audit.md'), [
-      '# PRD Audit', '', '**PRD:** present', '', '## Verdict Table', '',
-      '| Criterion | Grade | Plan task | PRD: | Evidence |',
-      '|---|---|---|---|---|', '| S1.1 | FIXABLE | 1 | FR-1 | x |',
-    ].join('\n'));
+    await persistPrdAuditVerdict(dir, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 },
+          criterionId: 'S1.1',
+          grade: 'FIXABLE',
+          evidence: 'Fixture identifies the existing repair.',
+          rationale: 'Fixture repair requires the active owning task.',
+          requirementAssociations: [],
+          evidenceTaskIds: ['1'],
+          ownerTaskId: '1',
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'fixture-prd-audit', codeStamp: null });
     await writeKickbackLedger(dir, { version: 1, gates: {}, growth: { authored: 1, added: 0, byGate: {} } });
     const conductor = new Conductor({
       stateFilePath: statePath,

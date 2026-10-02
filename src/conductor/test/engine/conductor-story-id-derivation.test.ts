@@ -29,6 +29,7 @@ import { Conductor, routePrdAuditPlanGaps } from '../../src/engine/conductor.js'
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 
 /**
  * Story 2.1 (nested id), Story 5 (plain), Story 5a (suffixed). Story 5a has
@@ -97,21 +98,25 @@ describe('prd_audit remediation authorization derives suffixed story ids', () =>
       JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
       'utf8',
     );
-    await writeFile(
-      join(dir, '.pipeline/prd-audit.md'),
-      [
-        '# PRD Audit',
-        '',
-        '**PRD:** present',
-        '',
-        '## Verdict Table',
-        '',
-        '| Criterion | Grade | Plan task | PRD: | Evidence |',
-        '|---|---|---|---|---|',
-        '| S5a.1 | FIXABLE | 1 | FR-1 | x |',
-      ].join('\n'),
-      'utf8',
-    );
+    await persistPrdAuditVerdict(dir, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '5a', ordinal: 1 },
+          criterionId: 'S5a.1',
+          grade: 'FIXABLE',
+          evidence: 'Fixture identifies the suffixed-story repair.',
+          rationale: 'Fixture repair requires the active owning task.',
+          requirementAssociations: [],
+          evidenceTaskIds: ['1'],
+          ownerTaskId: '1',
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'fixture-prd-audit', codeStamp: null });
 
     const conductor = new Conductor({
       stateFilePath: join(dir, '.pipeline/conduct-state.json'),
@@ -123,7 +128,7 @@ describe('prd_audit remediation authorization derives suffixed story ids', () =>
               JSON.stringify({
                 dispositions: [
                   {
-                    id: 'FR-1',
+                    id: 'S5a.1',
                     disposition: 'existing-task',
                     category: null,
                     rationale: 'Task 1 already owns this repair.',
