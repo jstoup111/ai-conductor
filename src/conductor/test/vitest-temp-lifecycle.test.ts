@@ -200,7 +200,14 @@ describe('relocated Vitest temporary lifecycle', () => {
         await expect(teardown()).resolves.toBeUndefined();
       }
       expect(removed).toEqual([configInstallation.root]);
-      expect(tmpdirsDuringSnapshots).toEqual([configInstallation.root, configInstallation.root]);
+      // A preceding pipeline-guard failure short-circuits the teardown before
+      // its second real-tmpdir snapshot; both paths must nevertheless retain
+      // the run-root redirect while the snapshot they do reach executes.
+      expect(tmpdirsDuringSnapshots).toEqual(
+        pipelineLeak
+          ? [configInstallation.root]
+          : [configInstallation.root, configInstallation.root]
+      );
       expect(existsSync(selected)).toBe(true);
       expect(process.env).toMatchObject(callerEnvironment);
     });
