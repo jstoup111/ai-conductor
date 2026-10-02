@@ -307,13 +307,14 @@ Pi declares `readOnlyReview` and `nativeSchema` through a harness-owned Pi exten
 **Type:** verification
 
 **Steps:**
-1. Write tests in `src/conductor/test/engine/environment-claim-audit.test.ts`: the provider sandbox table value for `pi` is `false` and equals the pi catalog descriptor `osSandbox`; for a fixed output claiming the sandbox blocked a file write and facts with no write fence installed, `auditEnvironmentBlockerClaims` with provider `pi` returns a non-empty `refuted` list and a message carrying the environment-claim-refuted marker, identical in `refuted` operations to the result for provider `claude`; with provider `codex` it returns an empty `refuted` list and a null message.
+1. Write tests in `src/conductor/test/engine/environment-claim-audit.test.ts`: the provider sandbox table value for `pi` is `false` and equals the pi catalog descriptor `osSandbox`; for a fixed output claiming the sandbox blocked a file write and facts with no write fence installed, `auditEnvironmentBlockerClaims` with provider `pi` returns a non-empty `refuted` list and a message carrying the environment-claim-refuted marker, identical in `refuted` operations to the result for provider `claude`; with provider `codex` it returns an empty `refuted` list and a null message; the provider sandbox table value for `codex` is `true` and equals the codex catalog descriptor `osSandbox`.
 2. These tests are expected to pass against existing code (the table derives from the catalog). Commit with an `Evidence:` trailer if no production change is needed.
 
 **Done when:**
 - The environment-claim audit sandbox value for pi is `false` and equals the pi catalog descriptor `osSandbox`, as asserted in environment-claim-audit.test.ts.
 - For an output claiming the sandbox blocked a file write with no write fence installed, `auditEnvironmentBlockerClaims` with provider pi returns a non-empty `refuted` list and a message carrying the environment-claim-refuted marker, with the same refuted operations as for provider claude, as asserted in environment-claim-audit.test.ts.
 - For that same output `auditEnvironmentBlockerClaims` with provider codex returns an empty `refuted` list and a null message, as asserted in environment-claim-audit.test.ts.
+- The environment-claim audit sandbox value for codex is `true` and equals the codex catalog descriptor `osSandbox`, so codex has an OS sandbox, as asserted in environment-claim-audit.test.ts.
 
 **Files:** `src/conductor/test/engine/environment-claim-audit.test.ts`
 
