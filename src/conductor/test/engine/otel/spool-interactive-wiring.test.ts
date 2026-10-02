@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { wireInteractiveOtelMetrics, wireOtelVisualizer } from '../../../src/engine/otel/wire.js';
+import { PluginRegistry } from '../../../src/engine/plugin-registry.js';
 import { SpoolLease } from '../../../src/engine/otel/spool-lease.js';
 import { SpoolStore } from '../../../src/engine/otel/spool-store.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -62,7 +63,7 @@ async function closedEndpoint(): Promise<string> {
 
 async function eventually(predicate: () => boolean | Promise<boolean>): Promise<void> {
   for (let turn = 0; turn < 1_000 && !(await predicate()); turn += 1) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
 }
 
@@ -163,5 +164,41 @@ describe('interactive OTel spool wiring', () => {
     } finally {
       await lease.release();
     }
+  });
+
+  it('replaces a failed visualizer lifecycle before metrics acquires and drains the spool', async () => {
+    const project = await temporaryProject();
+    const store = new SpoolStore(join(project, '.daemon', 'otel-spool'));
+    await store.write('traces', Buffer.from('pre-existing'));
+    const events = new ConductorEventEmitter();
+    const errors: string[] = [];
+    events.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') errors.push(event.error);
+    });
+    let received = 0;
+    const config = { otel: { exporter: 'otlp' as const, endpoint: await endpoint(() => { received += 1; }), spool: { enabled: true } } };
+    const context = {
+      pipelineDir: join(project, '.pipeline'), runId: 'run', feature: 'feature', project,
+      branch: 'feature', engineVersion: 'test', harnessVersion: 'test', metrics: false,
+    };
+    const failedRegistry = (): PluginRegistry => {
+      const registry = new PluginRegistry();
+      registry.register('visualizer', 'otel', () => ({
+        name: 'otel', start: () => { throw new Error('visualizer failed'); }, stop: async () => {},
+      }));
+      registry.markInitialized();
+      return registry;
+    };
+
+    expect(wireOtelVisualizer(config, context, events, undefined, failedRegistry)).toBeNull();
+    const metrics = wireInteractiveOtelMetrics(config, context, events);
+    await eventually(() => received === 1);
+
+    expect(errors).toHaveLength(1);
+    expect(received).toBe(1);
+    expect(metrics).not.toBeNull();
+    await expect(access(join(project, '.daemon', 'otel-spool', 'lease.json'))).resolves.toBeUndefined();
+    await metrics?.stop();
+    await expect(access(join(project, '.daemon', 'otel-spool', 'lease.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

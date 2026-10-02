@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { link, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
@@ -7,6 +7,7 @@ const HEARTBEAT_EXPIRY_MS = 60_000;
 
 interface LeaseFileHandle {
   writeFile(contents: string): Promise<void>;
+  sync(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -22,6 +23,7 @@ export interface SpoolLeaseFilesystem {
   link(existingPath: string, newPath: string): Promise<void>;
   rename(source: string, destination: string): Promise<void>;
   rm(path: string, options: { force: true }): Promise<void>;
+  stat(path: string): Promise<{ mtimeMs: number }>;
   writeFile(path: string, contents: string, encoding: 'utf8'): Promise<void>;
 }
 
@@ -43,7 +45,7 @@ interface LeaseRecord {
   heartbeatAt: number;
 }
 
-const defaultFilesystem: SpoolLeaseFilesystem = { link, mkdir, open, readFile, rename, rm, writeFile };
+const defaultFilesystem: SpoolLeaseFilesystem = { link, mkdir, open, readFile, rename, rm, stat, writeFile };
 
 function isAlreadyExists(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'EEXIST';
@@ -111,10 +113,13 @@ export class SpoolLease {
   }
 
   async release(): Promise<void> {
+    const wasOwned = this.owned;
+    // Mark ownership ended before awaiting the one serialized refresh.  That
+    // refresh checks this flag immediately before its rename.
+    this.owned = false;
     this.stopHeartbeat();
     await this.heartbeatRefresh;
-    if (!this.owned) return;
-    this.owned = false;
+    if (!wasOwned) return;
 
     try {
       const serialized = await this.filesystem.readFile(this.path(), 'utf8');
@@ -146,7 +151,7 @@ export class SpoolLease {
   private async tryAcquire(): Promise<SpoolLeaseAcquireResult> {
     const record = this.record();
     try {
-      await this.create(this.path(), record);
+      await this.publishInitial(record);
       this.takeOwnership();
       return { acquired: true };
     } catch (error) {
@@ -161,7 +166,7 @@ export class SpoolLease {
       throw error;
     }
     const holder = parseLeaseRecord(predecessor);
-    if (holder !== null && this.isFresh(holder) && this.isProcessAlive(holder.pid)) {
+    if (await this.isHeld(this.path(), predecessor, holder)) {
       return { acquired: false };
     }
 
@@ -192,6 +197,23 @@ export class SpoolLease {
       await handle.writeFile(JSON.stringify(record));
     } finally {
       await handle.close();
+    }
+  }
+
+  /** Publish a complete initial record before making its authoritative name visible. */
+  private async publishInitial(record: LeaseRecord): Promise<void> {
+    const temporary = `${this.path()}.${process.pid}.${this.uuid}.${randomUUID()}.tmp`;
+    try {
+      const handle = await this.filesystem.open(temporary, 'wx');
+      try {
+        await handle.writeFile(JSON.stringify(record));
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await this.filesystem.link(temporary, this.path());
+    } finally {
+      await this.filesystem.rm(temporary, { force: true });
     }
   }
 
@@ -227,7 +249,7 @@ export class SpoolLease {
       throw error;
     }
     const holder = parseLeaseRecord(serialized);
-    if (holder !== null && this.isFresh(holder) && this.isProcessAlive(holder.pid)) return false;
+    if (await this.isHeld(successor, serialized, holder)) return false;
 
     const moved = `${successor}.${this.uuid}.${randomUUID()}.orphan`;
     try {
@@ -254,9 +276,21 @@ export class SpoolLease {
     return this.now() - record.heartbeatAt <= HEARTBEAT_EXPIRY_MS;
   }
 
+  /** A recent malformed record may still be a foreign writer's in-progress wx publication. */
+  private async isHeld(path: string, serialized: string, holder = parseLeaseRecord(serialized)): Promise<boolean> {
+    if (holder !== null) return this.isFresh(holder) && this.isProcessAlive(holder.pid);
+    try {
+      return this.now() - (await this.filesystem.stat(path)).mtimeMs <= HEARTBEAT_EXPIRY_MS;
+    } catch (error) {
+      if (isMissing(error)) return false;
+      throw error;
+    }
+  }
+
   private takeOwnership(): void {
     this.owned = true;
     this.heartbeatTimer = this.scheduleInterval(async () => {
+      if (this.heartbeatRefresh) return;
       const refresh = this.refreshHeartbeat();
       this.heartbeatRefresh = refresh;
       try {
@@ -286,6 +320,10 @@ export class SpoolLease {
       if (await this.filesystem.readFile(this.path(), 'utf8') !== serialized) {
         await this.filesystem.rm(successor, { force: true });
         this.loseOwnership();
+        return;
+      }
+      if (!this.owned) {
+        await this.filesystem.rm(successor, { force: true });
         return;
       }
       await this.filesystem.rename(successor, this.path());

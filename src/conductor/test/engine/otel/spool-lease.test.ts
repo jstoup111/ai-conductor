@@ -38,6 +38,43 @@ describe('SpoolLease', () => {
     });
   });
 
+  it('never exposes a partially-written initial lease to a concurrent acquirer', async () => {
+    const directory = await temporaryDirectory();
+    let recordWritten!: () => void;
+    let resumeWrite!: () => void;
+    const wroteRecord = new Promise<void>((resolve) => { recordWritten = resolve; });
+    const writeResumed = new Promise<void>((resolve) => { resumeWrite = resolve; });
+    const first = new SpoolLease(directory, {
+      now: () => now,
+      isProcessAlive: () => true,
+      filesystem: {
+        open: async (path, flags) => {
+          const handle = await open(path, flags);
+          if (!path.endsWith('.tmp')) return handle;
+          return {
+            writeFile: async (contents) => {
+              recordWritten();
+              await writeResumed;
+              await handle.writeFile(contents);
+            },
+            sync: () => handle.sync(),
+            close: () => handle.close(),
+          };
+        },
+      },
+    });
+    const second = new SpoolLease(directory, { now: () => now, isProcessAlive: () => true });
+
+    const firstResult = first.acquire();
+    await wroteRecord;
+    const secondResult = await second.acquire();
+    resumeWrite();
+
+    expect([await firstResult, secondResult].filter((result) => result.acquired)).toHaveLength(1);
+    await first.release();
+    await second.release();
+  });
+
   it('reclaims an expired lease when its holder pid is dead', async () => {
     const directory = await temporaryDirectory();
     await writeLease(directory, { pid: 41, uuid: 'dead-holder', heartbeatAt: now - 60_001 });
@@ -115,7 +152,7 @@ describe('SpoolLease', () => {
     }
   });
 
-  it('waits for an in-flight heartbeat before release removes both lease paths', async () => {
+  it('skips an overlapping heartbeat and waits for the in-flight refresh before release removes both lease paths', async () => {
     const directory = await temporaryDirectory();
     const leasePath = join(directory, 'lease.json');
     const successorPath = `${leasePath}.next`;
@@ -138,10 +175,11 @@ describe('SpoolLease', () => {
 
     await lease.acquire();
     const refreshing = heartbeat?.();
+    const overlapping = heartbeat?.();
     await new Promise<void>((resolve) => setImmediate(resolve));
     const releasing = lease.release();
     resumeSuccessor();
-    await Promise.all([refreshing, releasing]);
+    await Promise.all([refreshing, overlapping, releasing]);
 
     await expect(readFile(leasePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(successorPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });

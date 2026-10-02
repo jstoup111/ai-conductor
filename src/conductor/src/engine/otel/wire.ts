@@ -30,10 +30,12 @@ interface InteractiveSpoolLifecycle {
   visualizerOpen: boolean;
   metricsOpen: boolean;
   leaseStart?: Promise<{ acquired: boolean }>;
+  stopping?: boolean;
   stopped?: Promise<void>;
 }
 
 const interactiveSpoolLifecycles = new Map<string, InteractiveSpoolLifecycle>();
+const interactiveSpoolStops = new Map<string, Promise<void>>();
 const emittedSpoolWarnings = new Set<string>();
 
 function emitResolvedWarnings(resolved: Extract<ReturnType<typeof resolveOtelConfig>, { enabled: true }>, events: ConductorEventEmitter): void {
@@ -104,20 +106,32 @@ function interactiveSpoolLifecycle(
   if (directory === null) return undefined;
   const existing = interactiveSpoolLifecycles.get(directory);
   if (existing) return existing;
-  const lifecycle = { runtime: createSpoolRuntime(directory, resolved, events), visualizerOpen: false, metricsOpen: false };
+  const lifecycle: InteractiveSpoolLifecycle = {
+    runtime: createSpoolRuntime(directory, resolved, events), visualizerOpen: false, metricsOpen: false,
+  };
+  const priorStop = interactiveSpoolStops.get(directory);
+  if (priorStop) lifecycle.leaseStart = priorStop.then(() => lifecycle.runtime.lease.acquire());
   interactiveSpoolLifecycles.set(directory, lifecycle);
   return lifecycle;
 }
 
-async function stopInteractiveSpoolIfUnused(directory: string, lifecycle: InteractiveSpoolLifecycle): Promise<void> {
-  if (lifecycle.visualizerOpen || lifecycle.metricsOpen) return;
-  lifecycle.stopped ??= (async () => {
+function stopInteractiveSpoolIfUnused(directory: string, lifecycle: InteractiveSpoolLifecycle): Promise<void> {
+  if (lifecycle.visualizerOpen || lifecycle.metricsOpen) return Promise.resolve();
+  if (lifecycle.stopping) return lifecycle.stopped ?? Promise.resolve();
+  // Remove this lifecycle synchronously: a following interactive connector
+  // must never attach to a lease that is already being released.
+  lifecycle.stopping = true;
+  if (interactiveSpoolLifecycles.get(directory) === lifecycle) interactiveSpoolLifecycles.delete(directory);
+  lifecycle.stopped = (async () => {
     await lifecycle.leaseStart?.catch(() => undefined);
     await lifecycle.runtime.drainer.stop();
     await lifecycle.runtime.lease.release();
-    interactiveSpoolLifecycles.delete(directory);
   })();
-  await lifecycle.stopped;
+  interactiveSpoolStops.set(directory, lifecycle.stopped);
+  void lifecycle.stopped.finally(() => {
+    if (interactiveSpoolStops.get(directory) === lifecycle.stopped) interactiveSpoolStops.delete(directory);
+  });
+  return lifecycle.stopped;
 }
 
 /**
@@ -132,6 +146,7 @@ export function wireOtelVisualizer(
   context: OtelVisualizerStartContext,
   events: ConductorEventEmitter,
   spoolRuntime?: SpoolRuntime,
+  registryFactory: (events: ConductorEventEmitter) => PluginRegistry = createOtelVisualizerRegistry,
 ): VisualizerPlugin | null {
   const resolved = resolveOtelConfig(config, context.pipelineDir);
   if (!resolved.enabled) return null;
@@ -145,7 +160,7 @@ export function wireOtelVisualizer(
     warnSpoolUnavailable(context.project ?? dirname(context.pipelineDir), events);
   }
   const activeSpoolRuntime = spoolRuntime ?? interactiveLifecycle?.runtime;
-  const registry = createOtelVisualizerRegistry(events);
+  const registry = registryFactory(events);
   const factory = registry.get<VisualizerFactory>('visualizer', 'otel');
   let visualizer: VisualizerPlugin | null;
   try {
