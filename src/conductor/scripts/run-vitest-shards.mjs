@@ -10,10 +10,10 @@ const testRoot = join(packageRoot, 'test');
 // source bytes so a growing heavyweight fixture cannot share a worker merely
 // because it fits below the count limit.
 const maxFilesPerBatch = 2;
-// Tests around 120 KiB can retain enough fixture state to make a two-file
-// worker exceed its heap ceiling. Treat that size as a dedicated-process
-// boundary rather than allowing it to share a batch merely below 128 KiB.
-const maxBytesPerBatch = 120 * 1024;
+// Mid-sized Conductor fixtures (around 64 KiB) can retain enough state that a
+// second file pushes one worker over its heap ceiling. Treat that size as a
+// dedicated-process boundary rather than allowing it to share a batch.
+const maxBytesPerBatch = 64 * 1024;
 const vitestArgs = ['run', '--reporter=dot', '--silent', '--slowTestThreshold=1800000'];
 
 async function collectTestFiles(directory) {

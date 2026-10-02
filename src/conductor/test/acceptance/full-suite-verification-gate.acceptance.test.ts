@@ -339,10 +339,12 @@ describe('Story 7 — package-script selector forwarding (Task 17)', () => {
       writeFileSync(join(fixturePackageRoot, file), 'export {};\n');
     }
     // A file-count limit alone allows a near-limit fixture to share a worker
-    // with smaller files. Keep this source at the heavy-fixture threshold so
-    // the runner proves it is dispatched on its own before it can accumulate
-    // another test module's retained state.
+    // with smaller files. Keep these sources at the medium- and heavy-fixture
+    // thresholds so the runner proves each is dispatched on its own before it
+    // can accumulate another test module's retained state.
+    const mediumweightTestFile = 'test/mediumweight.test.ts';
     writeFileSync(join(fixturePackageRoot, heavyweightTestFile), `export const fixture = '${'x'.repeat(120 * 1024)}';\n`);
+    writeFileSync(join(fixturePackageRoot, mediumweightTestFile), `export const fixture = '${'x'.repeat(64 * 1024)}';\n`);
     copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'run-vitest-shards.mjs'), join(scriptRoot, 'run-vitest-shards.mjs'));
     copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'run-vitest.mjs'), join(scriptRoot, 'run-vitest.mjs'));
     copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'vitest-temp.mjs'), join(scriptRoot, 'vitest-temp.mjs'));
@@ -376,14 +378,16 @@ describe('Story 7 — package-script selector forwarding (Task 17)', () => {
     }).toEqual({
       exitCode: 0,
       stdout: 'AGGREGATE_TEST_SUITE_PASS\n',
-      invocationCount: 290,
-      forwarded: [...testFiles, heavyweightTestFile].sort(),
+      invocationCount: 291,
+      forwarded: [...testFiles, mediumweightTestFile, heavyweightTestFile].sort(),
     });
     expect(invocations.every((invocation) =>
       invocation.filter((argument) => argument.endsWith('.test.ts')).length <= 2,
     )).toBe(true);
     expect(invocations.find((invocation) => invocation.includes(heavyweightTestFile)))
       .toEqual(['run', '--reporter=dot', '--silent', '--slowTestThreshold=1800000', heavyweightTestFile]);
+    expect(invocations.find((invocation) => invocation.includes(mediumweightTestFile)))
+      .toEqual(['run', '--reporter=dot', '--silent', '--slowTestThreshold=1800000', mediumweightTestFile]);
   });
 
   it('keeps the legacy trailing-echo shape detectable by the fake runner', async () => {

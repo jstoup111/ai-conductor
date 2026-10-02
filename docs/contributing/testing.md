@@ -40,7 +40,7 @@ node scripts/run-vitest-shards.mjs
 ```
 
 The aggregate launcher divides the ordinary suite into fresh Vitest
-batches of at most five files and 128 KiB of test source. This keeps a large fixture
+batches of at most two files and 64 KiB of test source. This keeps a large fixture
 from sharing a fork merely because it fits the file-count limit, keeping each fork below
 the 8 GiB worker ceiling
 as the suite grows while running every included test exactly once.
