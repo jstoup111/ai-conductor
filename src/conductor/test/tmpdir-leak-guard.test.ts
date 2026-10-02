@@ -434,14 +434,15 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
 });
 
 describe('tmpdir-leak-guard: vitestOwnTmpdirEntries', () => {
-  it('returns only direct children of the real tmpdir', () => {
+  it('returns direct-child ancestors of supplied Vitest workspaces only', () => {
     expect(vitestOwnTmpdirEntries([
       '/fixture/real-tmpdir/vitest-direct',
+      '/fixture/real-tmpdir/vitest-core/node',
       '/fixture/real-tmpdir/nested/vitest-nested',
       '/fixture/other-tmpdir/vitest-foreign',
       '',
       undefined,
-    ], '/fixture/real-tmpdir')).toEqual(['vitest-direct']);
+    ], '/fixture/real-tmpdir')).toEqual(['vitest-direct', 'vitest-core', 'nested']);
   });
 });
 

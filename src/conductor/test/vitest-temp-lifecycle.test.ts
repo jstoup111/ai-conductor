@@ -36,6 +36,7 @@ afterEach(async () => {
 describe('relocated Vitest temporary lifecycle', () => {
   it.each([
     ['exempts the passed project tmpDir when it is the only new original-tmpdir entry', 'project', false, true],
+    ['exempts Vitest’s core workspace when it is the only new original-tmpdir entry', 'core', false, true],
     ['still reports another original-tmpdir entry beside the passed project tmpDir', 'project', true, false],
     ['reports the Vitest-named entry when setup has no project', 'none', false, false],
     ['does not exempt a project tmpDir inside the run root', 'run-root', true, false],
@@ -75,10 +76,18 @@ describe('relocated Vitest temporary lifecycle', () => {
     const { default: setup } = await import('./global-setup.js');
     const project = projectLocation === 'none'
       ? undefined
-      : { tmpDir: projectLocation === 'run-root' ? join(installation.root, 'vitest-project') : projectTmpDir };
+      : {
+          tmpDir: projectLocation === 'run-root' || projectLocation === 'core'
+            ? join(installation.root, 'vitest-project')
+            : projectTmpDir,
+          ...(projectLocation === 'core' ? { vitest: { _tmpDir: projectTmpDir } } : {}),
+        };
     const teardown = await setup(project);
 
-    await mkdir(project?.tmpDir ?? projectTmpDir, { recursive: true });
+    await Promise.all([
+      mkdir(project?.tmpDir ?? projectTmpDir, { recursive: true }),
+      ...(projectLocation === 'core' ? [mkdir(projectTmpDir, { recursive: true })] : []),
+    ]);
     if (createSeparateEntry) await writeFile(join(original, separateEntry), 'leak');
 
     if (shouldResolve) {

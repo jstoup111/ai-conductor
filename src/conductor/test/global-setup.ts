@@ -288,7 +288,11 @@ function installInterruptReap(
   };
 }
 
-export default async function setup(project?: { tmpDir?: string }) {
+export default async function setup(project?: {
+  tmpDir?: string;
+  /** Vitest's core workspace is removed only after project global teardown. */
+  vitest?: { _tmpDir?: string };
+}) {
   // Tmpdir leak guard (#1112), part 1 of 2 — the REDIRECT. It is installed one
   // stage earlier, in vitest.config.ts module scope (see `ensureRunTmpRootSync`
   // for why it cannot wait until here), so by now `TMPDIR` and `os.tmpdir()`
@@ -301,7 +305,15 @@ export default async function setup(project?: { tmpDir?: string }) {
   const runTmpRoot = installation.root;
   const ownsRunTmpRoot = isVitestTmpRootAllocatedByThisProcess(runTmpRoot);
   const originalTmpdir = installation.originalTmpdir ?? tmpdir();
-  const vitestTmpdirEntries = vitestOwnTmpdirEntries([project?.tmpDir], originalTmpdir);
+  // Vitest removes the core workspace after project global teardown. It is
+  // therefore present while this guard snapshots the real tmpdir, even though
+  // it is framework-owned rather than a test leak. Keep the exemption exact:
+  // only the direct real-tmpdir entry that contains Vitest's reported core or
+  // project workspace is allowed through.
+  const vitestTmpdirEntries = vitestOwnTmpdirEntries(
+    [project?.tmpDir, project?.vitest?._tmpDir],
+    originalTmpdir,
+  );
   const selectedParent = installation.parent ?? dirname(runTmpRoot);
   const nestedParent = dirname(runTmpRoot);
   const sweepParents = [...new Set([originalTmpdir, selectedParent, nestedParent])];
