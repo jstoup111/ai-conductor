@@ -230,16 +230,16 @@ export class PiProvider implements LLMProvider {
     let extensionPath: string | undefined;
     try {
       if (options.nativeSchema !== undefined) schemaFile = await writePiNativeSchema(options);
-      if (options.readOnlyReview || options.nativeSchema !== undefined) {
+      if (options.nativeSchema !== undefined) {
         extensionPath = await this.materializeExtension({ homeDir: options.selfHost?.env.PI_HOME });
         args.push('-e', extensionPath);
       }
     } catch (error) {
       return { success: false, output: `${piDisplayName()} native schema setup failed: ${error instanceof Error ? error.message : String(error)}`, exitCode: 1 };
     }
-    if (options.readOnlyReview) {
-      args.push('--no-extensions', '-na', '--tools', `read,grep,find,ls,git_read${schemaFile ? ',submit_result' : ''}`, '--conduct-git-read');
-    } else if (options.trustProjectFiles !== true) {
+    // Pi read-only review (a restricted tool set) is deferred to #1888; custom-policy
+    // read-only paths refuse Pi before dispatch.
+    if (options.trustProjectFiles !== true) {
       args.push('-na');
     }
     if (schemaFile) args.push('--conduct-output-schema', schemaFile);
