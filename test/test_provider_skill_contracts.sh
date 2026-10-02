@@ -643,6 +643,19 @@ section_matches() {
   printf '%s\n' "$section" | tr '\n' ' ' | grep -qiE "$pattern"
 }
 
+# Managed-machine instructions may occur under any H2 except the standalone
+# presentation section itself. In particular, the shipped skill deliberately
+# resumes managed judgment guidance after standalone review.
+prd_audit_managed_body() {
+  local file=$1
+
+  awk '
+    $0 == "## Standalone review" { in_standalone = 1; next }
+    in_standalone && /^## / { in_standalone = 0 }
+    !in_standalone { print }
+  ' "$file"
+}
+
 prd_audit_skill_contract_audit() {
   local file=$1
   local managed
@@ -652,9 +665,7 @@ prd_audit_skill_contract_audit() {
 
   managed=$(prd_audit_section "$file" '## Managed review')
   standalone=$(prd_audit_section "$file" '## Standalone review')
-  # Audit every managed-relevant H2. Standalone presentation is excluded only
-  # for its own body; managed headings may legitimately follow it.
-  audit_body=$(awk '$0 == "## Standalone review" { standalone = 1; next } standalone && /^## / { standalone = 0 } !standalone { print }' "$file")
+  audit_body=$(prd_audit_managed_body "$file")
 
   if [ -z "$managed" ]; then
     printf 'prd-audit contract rejected: %s is missing managed review\n' "$file"
@@ -762,6 +773,10 @@ Use grounded evidence and return one terminal structured judgment.
 ## Standalone review
 
 Present a human-readable advisory judgment. It is not current managed gate evidence.
+
+## Judge each criterion
+
+Use the supplied criterion evidence to explain the judgment.
 EOF
 }
 
@@ -776,11 +791,10 @@ The managed reviewer may accept a finding and write the accepted decision to the
 expect_prd_audit_contract 'prd-audit contract rejects reviewer acceptance writes' 1 "$prd_audit_contract_fixture" 'acceptance/refusal writes'
 
 write_prd_audit_contract_fixture
-sed -i '/^## Standalone review$/i\
-## Judge each criterion\
+sed -i '/^## Judge each criterion$/a\
 The managed reviewer may accept a finding and write the accepted decision to the operator store.\
 ' "$prd_audit_contract_fixture"
-expect_prd_audit_contract 'prd-audit contract rejects reviewer grants outside managed review' 1 "$prd_audit_contract_fixture" 'acceptance/refusal writes'
+expect_prd_audit_contract 'prd-audit contract rejects reviewer grants after standalone review' 1 "$prd_audit_contract_fixture" 'acceptance/refusal writes'
 
 write_prd_audit_contract_fixture
 sed -i '/^## Standalone review$/i\
@@ -795,20 +809,26 @@ The managed reviewer may author a Markdown report instead of the terminal struct
 expect_prd_audit_contract 'prd-audit contract rejects report authoring substituted for terminal judgment' 1 "$prd_audit_contract_fixture" 'substitutes report authoring'
 
 write_prd_audit_contract_fixture
-sed -i '/^## Standalone review$/i\
-## Judge each criterion\
+sed -i '/^## Judge each criterion$/a\
 ### Engine input recipe\
 1. Read the plan and assemble a replacement evidence projection.\
 ' "$prd_audit_contract_fixture"
-expect_prd_audit_contract 'prd-audit contract rejects reintroduced engine-input recipe after managed criterion guidance' 1 "$prd_audit_contract_fixture" 'engine-owned input recipe'
+expect_prd_audit_contract 'prd-audit contract rejects engine-input recipes after standalone review' 1 "$prd_audit_contract_fixture" 'engine-owned input recipe'
 
 write_prd_audit_contract_fixture
-sed -i '/^## Standalone review$/i\
-## Judge each criterion\
+sed -i '/^## Judge each criterion$/a\
 ## Verdict Table\
 | Criterion | Grade | Plan task |\
 ' "$prd_audit_contract_fixture"
-expect_prd_audit_contract 'prd-audit contract rejects reintroduced machine-output table grammar after managed criterion guidance' 1 "$prd_audit_contract_fixture" 'machine-output table grammar'
+expect_prd_audit_contract 'prd-audit contract rejects machine-output tables after standalone review' 1 "$prd_audit_contract_fixture" 'machine-output table grammar'
+
+write_prd_audit_contract_fixture
+sed -i '/^## Judge each criterion$/i\
+### Standalone evidence gathering\
+### Engine input recipe\
+1. Read the plan and assemble an advisory evidence summary.\
+' "$prd_audit_contract_fixture"
+expect_prd_audit_contract 'prd-audit contract ignores engine-input prose inside standalone review' 0 "$prd_audit_contract_fixture"
 
 write_prd_audit_contract_fixture
 sed -i '/^## Standalone review$/i\
