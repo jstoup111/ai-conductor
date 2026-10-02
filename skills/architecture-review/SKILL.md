@@ -433,6 +433,11 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
     behavior. Name the primitive and what was searched.
     In the structured verdict, record it as a `reachability` entry with an empty `callerChain`
     (`[]`); the engine admits an empty chain only under a `BLOCKED` verdict.
+    Classify it `REMEDIABLE` and cite the plan task that introduced or changed the primitive:
+    wiring the primitive into its production caller is part of delivering that task. Classify it
+    `DESIGN` only when no plan task introduced the primitive or the approved design names no
+    production entry point it could be wired into. Never cite this section as the governing
+    reference.
   - **Statically reachable but not yet observed running** (e.g. a new log line no production log
     shows yet) → record it under Drift Notes as `UNEXERCISED: <primitive> — signature: <the
     greppable line/event that will prove it live>`. Not blocking; the signature tells a later
@@ -446,6 +451,11 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
   design is itself the limit that prevents an outcome the sealed story criteria require, issue
   `PLAN_GAP`. Record the affected outcome and whether it was delivered; do not send unplanned work
   back to BUILD.
+  - **Story criteria belong to `/prd-audit`.** `/prd-audit`, in the same validation group, grades
+    every story criterion and owns criterion-level findings. Issue `PLAN_GAP` here only when an
+    APPROVED ADR or approved diagram is the limit; a shortfall that names only a story or a desired
+    outcome is not an as-built finding. Never record a story, criterion, or desired outcome as a
+    BLOCKED finding's governing reference.
   - **Outcome authority: the sealed story criteria.** The approved, sealed acceptance criteria under
     `.docs/stories/` are this feature's acceptance contract and the only authority for what outcome
     was stated. `.docs/intake/` is an idea capture that is **superseded** once stories are approved;
@@ -505,8 +515,10 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
   limit preventing an outcome the sealed story criteria require. Record whether the outcome was
   delivered; an undelivered outcome HALTs for a human. Never turn this finding into unplanned BUILD work.
 - **BLOCKED** — an enabled check found an architectural violation, such as an APPROVED-ADR
-  violation or an unreachable production rung. The loop HALTS. A human must resolve it: fix the
-  code to comply, or for an ADR violation supersede the ADR with a new, human-APPROVED ADR
+  violation or an unreachable production rung. Each finding's class decides who resolves it:
+  `REMEDIABLE` findings route back to BUILD as bounded repairs against their cited plan task or ADR
+  decision; `DESIGN` findings HALT for a human, who must fix the code to comply, or for an ADR
+  violation supersede the ADR with a new, human-APPROVED ADR
   (`Supersedes: <old>`, old → `Status: SUPERSEDED`). **Never silently downgrade** an APPROVED ADR
   or auto-resolve the violation. After resolution, re-run the as-built gate.
 
@@ -517,6 +529,16 @@ state each finding's `REMEDIABLE` or `DESIGN` class, summary, and typed
 governing reference: either an APPROVED ADR's whole decision or an active plan
 task. `REMEDIABLE` means the approved design already requires bounded BUILD
 work; `DESIGN` means a human architectural decision is required.
+
+| Finding | Class | Governing reference |
+|---|---|---|
+| Unreachable rung; a plan task introduced the primitive | `REMEDIABLE` | `task <id>` of that plan task |
+| Unreachable rung; no plan task or approved entry point covers it | `DESIGN` | the APPROVED ADR decision it conflicts with |
+| Code diverges from an APPROVED ADR decision the plan already requires | `REMEDIABLE` | `<adr-stem> D<n>` |
+| Complying needs a changed or new architectural decision | `DESIGN` | `<adr-stem> D<n>` |
+| Story criterion or desired outcome unmet | none | out of scope; `/prd-audit` owns it |
+
+Write a plan-task reference as `task <id>` exactly, not `plan task <id>` or `Task <id>`.
 
 ## Verification
 
