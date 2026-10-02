@@ -1,6 +1,6 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -188,6 +188,84 @@ describe('PRD-audit feature projection', () => {
         coherence: { kind: 'absent' },
         history: { kind: 'absent' },
       },
+    });
+  });
+
+  it('rejects a valid foreign widening history without rewriting its recovery source', async () => {
+    const root = await fixture();
+    const historyPath = join(root, '.pipeline', 'accepted-widenings.json');
+    const foreignHistory = JSON.stringify({
+      version: 2,
+      feature: { version: 1, repository: 'fixture-repository', feature: 'foreign-fixture' },
+      decisions: [],
+    });
+    await writeFile(historyPath, foreignHistory);
+
+    const result = await buildPrdAuditProjection(root);
+
+    expect({ result, bytes: await readFile(historyPath, 'utf-8') }).toEqual({
+      result: {
+        ok: false,
+        fault: { dimension: 'history', detail: 'widening history is foreign to the active feature' },
+      },
+      bytes: foreignHistory,
+    });
+  });
+
+  it('rejects a missing coherence-required PRD without substituting a foreign source', async () => {
+    const root = await fixture();
+    const foreignPrdPath = join(root, '.docs', 'specs', 'foreign-fixture.md');
+    const foreignPrd = '# PRD\n\n## Functional Requirements\n- FR-1: Foreign requirement.\n';
+    await Promise.all([
+      rm(join(root, '.docs', 'specs', 'audit-fixture.md')),
+      rm(join(root, '.docs', 'specs', '2026-09-30-audit-fixture.md')),
+      writeFile(foreignPrdPath, foreignPrd),
+    ]);
+
+    const result = await buildPrdAuditProjection(root);
+
+    expect({ result, bytes: await readFile(foreignPrdPath, 'utf-8') }).toEqual({
+      result: {
+        ok: false,
+        fault: { dimension: 'prd', detail: 'active PRD required by coherence is unavailable' },
+      },
+      bytes: foreignPrd,
+    });
+  });
+
+  it('rejects a missing active plan without substituting a valid foreign plan', async () => {
+    const root = await fixture();
+    const activePlanPath = join(root, '.docs', 'plans', 'audit-fixture.md');
+    const foreignPlanPath = join(root, '.docs', 'plans', 'foreign-fixture.md');
+    const foreignPlan = '# Implementation Plan: Foreign fixture\n\n## Technical Approach\n\nForeign intent.\n';
+    await Promise.all([rm(activePlanPath), writeFile(foreignPlanPath, foreignPlan)]);
+
+    const result = await buildPrdAuditProjection(root);
+
+    expect({ result, bytes: await readFile(foreignPlanPath, 'utf-8') }).toEqual({
+      result: {
+        ok: false,
+        fault: { dimension: 'plan', detail: 'active plan is unreadable' },
+      },
+      bytes: foreignPlan,
+    });
+  });
+
+  it('rejects missing sealed stories without substituting a valid foreign story source', async () => {
+    const root = await fixture();
+    const activeStoriesPath = join(root, '.docs', 'stories', 'audit-fixture.md');
+    const foreignStoriesPath = join(root, '.docs', 'stories', 'foreign-fixture.md');
+    const foreignStories = '# Stories\n\n## Story foreign.1: Foreign obligation\n\n### Happy Path\n- Given foreign input, when reviewed, then it passes.\n';
+    await Promise.all([rm(activeStoriesPath), writeFile(foreignStoriesPath, foreignStories)]);
+
+    const result = await buildPrdAuditProjection(root);
+
+    expect({ result, bytes: await readFile(foreignStoriesPath, 'utf-8') }).toEqual({
+      result: {
+        ok: false,
+        fault: { dimension: 'stories', detail: 'sealed stories are unreadable' },
+      },
+      bytes: foreignStories,
     });
   });
 });
