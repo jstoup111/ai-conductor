@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative } from 'node:path';
 
@@ -15,6 +16,9 @@ import { listItems, sectionBody, splitStoryBlocks } from './story-criteria.js';
 
 /** Incremented only when the engine-rendered PRD-audit input contract changes. */
 export const PRD_AUDIT_PROJECTION_VERSION = 1;
+
+const PRD_AUDIT_DIFF_EXCERPT_PER_FILE_BYTES = 256 * 1024;
+const PRD_AUDIT_DIFF_EXCERPT_TOTAL_BYTES = 512 * 1024;
 
 export interface PrdAuditProjection {
   readonly version: typeof PRD_AUDIT_PROJECTION_VERSION;
@@ -44,6 +48,16 @@ export interface PrdAuditProjection {
     readonly base: string;
     readonly head: string;
     readonly changedFiles: readonly { readonly path: string; readonly additions: number; readonly deletions: number }[];
+    readonly excerpts: readonly string[];
+    readonly omittedFiles: readonly {
+      readonly path: string;
+      readonly digest: string;
+      readonly locator: {
+        readonly kind: 'git-diff';
+        readonly range: string;
+        readonly path: string;
+      };
+    }[];
   };
   readonly history:
     | { readonly kind: 'absent' }
@@ -105,6 +119,65 @@ function parseNumstat(text: string): PrdAuditProjection['changes']['changedFiles
   }).sort((left, right) => left.path.localeCompare(right.path));
 }
 
+function decodeGitQuotedPath(encoded: string): string {
+  const bytes: number[] = [];
+  for (let index = 0; index < encoded.length; index += 1) {
+    const character = encoded[index]!;
+    if (character !== '\\') {
+      bytes.push(...Buffer.from(character));
+      continue;
+    }
+    const escaped = encoded[index + 1];
+    if (escaped !== undefined && /[0-7]/.test(escaped) && /^[0-7]{3}$/.test(encoded.slice(index + 1, index + 4))) {
+      bytes.push(Number.parseInt(encoded.slice(index + 1, index + 4), 8));
+      index += 3;
+      continue;
+    }
+    const escapedBytes: Record<string, number> = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11 };
+    bytes.push(escaped === undefined ? 92 : escapedBytes[escaped] ?? escaped.charCodeAt(0));
+    index += 1;
+  }
+  return Buffer.from(bytes).toString('utf-8');
+}
+
+function diffPathFromHeader(content: string): string | undefined {
+  const header = content.match(/^diff --git (.+)$/m)?.[1];
+  if (header === undefined) return undefined;
+  const quoted = header.match(/^"a\/((?:\\.|[^"\\])*)" "b\/((?:\\.|[^"\\])*)"$/);
+  if (quoted) return decodeGitQuotedPath(quoted[2]!);
+  return header.match(/^a\/.* b\/(.+)$/)?.[1];
+}
+
+function boundedDiffExcerpts(
+  diffText: string,
+  range: string,
+): Pick<PrdAuditProjection['changes'], 'excerpts' | 'omittedFiles'> | undefined {
+  const excerpts: string[] = [];
+  const omittedFiles: PrdAuditProjection['changes']['omittedFiles'][number][] = [];
+  const files: { path: string; content: string }[] = [];
+  for (const content of diffText.split(/(?=^diff --git )/m).filter(Boolean)) {
+    const path = diffPathFromHeader(content);
+    if (path === undefined) return undefined;
+    files.push({ path, content });
+  }
+
+  let includedBytes = 0;
+  for (const { path, content } of files.sort((left, right) => left.path.localeCompare(right.path))) {
+    const bytes = Buffer.byteLength(content, 'utf-8');
+    if (bytes > PRD_AUDIT_DIFF_EXCERPT_PER_FILE_BYTES || includedBytes + bytes > PRD_AUDIT_DIFF_EXCERPT_TOTAL_BYTES) {
+      omittedFiles.push({
+        path,
+        digest: `sha256:${createHash('sha256').update(content).digest('hex')}`,
+        locator: { kind: 'git-diff', range, path },
+      });
+      continue;
+    }
+    includedBytes += bytes;
+    excerpts.push(content);
+  }
+  return { excerpts, omittedFiles };
+}
+
 async function discoverLocalBase(git: GitRunner): Promise<string> {
   const fromOrigin = await originDefaultBranch(git);
   if (fromOrigin) return fromOrigin;
@@ -124,9 +197,12 @@ async function scopedChanges(projectRoot: string): Promise<Extract<PrdAuditProje
   if (baseSha.exitCode !== 0 || headSha.exitCode !== 0) return undefined;
   const mergeBase = await git(['merge-base', baseSha.stdout.trim(), headSha.stdout.trim()]);
   if (mergeBase.exitCode !== 0 || !mergeBase.stdout.trim()) return undefined;
-  const changes = await git(['diff', '--numstat', `${mergeBase.stdout.trim()}..${headSha.stdout.trim()}`]);
-  if (changes.exitCode !== 0) return undefined;
-  return { base: mergeBase.stdout.trim(), head: headSha.stdout.trim(), changedFiles: parseNumstat(changes.stdout) };
+  const range = `${mergeBase.stdout.trim()}..${headSha.stdout.trim()}`;
+  const [changes, diff] = await Promise.all([git(['diff', '--numstat', range]), git(['diff', range])]);
+  if (changes.exitCode !== 0 || diff.exitCode !== 0) return undefined;
+  const excerpts = boundedDiffExcerpts(diff.stdout, range);
+  if (excerpts === undefined) return undefined;
+  return { base: mergeBase.stdout.trim(), head: headSha.stdout.trim(), changedFiles: parseNumstat(changes.stdout), ...excerpts };
 }
 
 type WideningHistoryResult =
