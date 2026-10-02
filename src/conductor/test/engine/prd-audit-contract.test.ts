@@ -1,4 +1,4 @@
-// Covers: task:6, task:7
+// Covers: task:6, task:7, task:8
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -77,6 +77,74 @@ describe('PRD audit judgment contract', () => {
         'criterionJudgments[3].ownerTaskId must identify exactly one active task for FIXABLE',
         'criterionJudgments[4].ownerTaskId must identify exactly one active task for FIXABLE',
       ],
+    });
+  });
+
+  it('retains valid siblings when a readable supported envelope has an invalid entry', () => {
+    const valid = {
+      criterion: { storyId: 'alpha', ordinal: 1 },
+      grade: 'PASS',
+      evidence: 'The delivered behavior meets the active criterion.',
+      rationale: 'The observed evidence is sufficient.',
+      requirementAssociations: [],
+      evidenceTaskIds: [],
+    };
+    const secondValid = { ...valid, criterion: { storyId: 'beta', ordinal: 1 } };
+    const invalid = { ...valid, criterion: { storyId: 'gamma', ordinal: 1 }, evidence: ' ' };
+
+    expect(validatePrdAuditJudgment({
+      version: 'v1',
+      criterionJudgments: [valid, invalid, secondValid],
+      noOwnerObservations: [],
+    }, {
+      criteria: [{ id: 'Salpha.1' }, { id: 'Sbeta.1' }, { id: 'Sgamma.1' }],
+      taskIds: new Set(),
+      requirements: [],
+    })).toEqual({
+      ok: false,
+      diagnostics: ['criterionJudgments[1].evidence must be non-empty'],
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [
+          { ...valid, criterionId: 'Salpha.1' },
+          { ...secondValid, criterionId: 'Sbeta.1' },
+        ],
+        noOwnerObservations: [],
+      },
+    });
+  });
+
+  it('rejects every normalized duplicate carrier while retaining unrelated entries', () => {
+    const duplicate = {
+      criterion: { storyId: 'ALPHA', ordinal: 1 },
+      grade: 'PASS',
+      evidence: 'The first carrier appears valid before duplicate validation.',
+      rationale: 'The active criterion is independently resolved.',
+      requirementAssociations: [],
+      evidenceTaskIds: [],
+    };
+    const secondCarrier = { ...duplicate, criterion: { storyId: 'alpha', ordinal: 1 } };
+    const unrelated = { ...duplicate, criterion: { storyId: 'beta', ordinal: 1 } };
+
+    expect(validatePrdAuditJudgment({
+      version: 'v1',
+      criterionJudgments: [duplicate, secondCarrier, unrelated],
+      noOwnerObservations: [],
+    }, {
+      criteria: [{ id: 'Salpha.1' }, { id: 'Sbeta.1' }],
+      taskIds: new Set(),
+      requirements: [],
+    })).toEqual({
+      ok: false,
+      diagnostics: [
+        'criterionJudgments[0].criterion duplicates normalized criterion Salpha.1',
+        'criterionJudgments[1].criterion duplicates normalized criterion Salpha.1',
+      ],
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{ ...unrelated, criterionId: 'Sbeta.1' }],
+        noOwnerObservations: [],
+      },
     });
   });
 

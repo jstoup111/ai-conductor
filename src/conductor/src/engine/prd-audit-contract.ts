@@ -61,7 +61,7 @@ export interface PrdAuditJudgmentContext {
 
 export type ValidatePrdAuditJudgmentResult =
   | { readonly ok: true; readonly judgment: PrdAuditJudgment }
-  | { readonly ok: false; readonly diagnostics: readonly string[] };
+  | { readonly ok: false; readonly judgment?: PrdAuditJudgment; readonly diagnostics: readonly string[] };
 
 const NON_BLANK_STRING = { type: 'string', minLength: 1 } as const;
 const INTENT_RELATIONS = ['within', 'outside-harmless', 'outside-visible'] as const;
@@ -207,19 +207,22 @@ function parseAssociations(value: unknown, field: string, requirements: Readonly
     return undefined;
   }
   const associations: PrdAuditRequirementAssociation[] = [];
+  let invalid = false;
   for (const [index, entry] of value.entries()) {
     const entryField = `${field}[${index}]`;
     if (!record(entry) || !exactKeys(entry, ['path', 'requirementId']) || !nonEmptyText(entry.path) || !nonEmptyText(entry.requirementId)) {
       diagnostics.push(`${entryField} requires exactly non-empty path and requirementId`);
+      invalid = true;
       continue;
     }
     if (!requirements.has(`${entry.path}\u0000${entry.requirementId}`)) {
       diagnostics.push(`${entryField} does not resolve requirement ${entry.path}:${entry.requirementId}`);
+      invalid = true;
       continue;
     }
     associations.push({ path: entry.path, requirementId: entry.requirementId });
   }
-  return associations;
+  return invalid ? undefined : associations;
 }
 
 function parseEvidenceTaskIds(value: unknown, field: string, taskIds: ReadonlySet<string>, diagnostics: string[]): string[] | undefined {
@@ -228,15 +231,17 @@ function parseEvidenceTaskIds(value: unknown, field: string, taskIds: ReadonlySe
     return undefined;
   }
   const resolved: string[] = [];
+  let invalid = false;
   for (const [index, raw] of value.entries()) {
     const resolution = resolvePlanTaskReference(raw, taskIds);
     if (resolution.kind !== 'resolved') {
       diagnostics.push(`${field}[${index}] ${resolution.kind === 'unresolvable' ? `does not resolve active task ${resolution.ids.join(', ')}` : 'must use the shared active-plan task-id grammar'}`);
+      invalid = true;
       continue;
     }
     for (const id of resolution.ids) if (!resolved.includes(id)) resolved.push(id);
   }
-  return resolved;
+  return invalid ? undefined : resolved;
 }
 
 function parseCriterionReference(value: unknown, field: string, criteria: ReadonlyMap<string, string>, diagnostics: string[]): { reference: PrdAuditCriterionReference; id: string } | undefined {
@@ -296,6 +301,7 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
   const requirements = requirementKeys(context);
   const taskIds = activeTaskIds(context);
   const criterionJudgments: PrdAuditCriterionJudgment[] = [];
+  const criterionJudgmentIndexes: number[] = [];
 
   for (const [index, raw] of input.criterionJudgments.entries()) {
     const field = `criterionJudgments[${index}]`;
@@ -325,6 +331,7 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
       }
       criterionJudgments.push({ criterion: criterion.reference, criterionId: criterion.id, grade: raw.grade, evidence: raw.evidence,
         rationale: raw.rationale, requirementAssociations: associations, evidenceTaskIds, ownerTaskId: owner.ids[0] });
+      criterionJudgmentIndexes.push(index);
       continue;
     }
     if (raw.grade === 'OVER_SCOPE') {
@@ -334,10 +341,29 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
       }
       criterionJudgments.push({ criterion: criterion.reference, criterionId: criterion.id, grade: raw.grade, evidence: raw.evidence,
         rationale: raw.rationale, requirementAssociations: associations, evidenceTaskIds, intentRelation: raw.intentRelation });
+      criterionJudgmentIndexes.push(index);
       continue;
     }
     criterionJudgments.push({ criterion: criterion.reference, criterionId: criterion.id, grade: raw.grade, evidence: raw.evidence,
       rationale: raw.rationale, requirementAssociations: associations, evidenceTaskIds });
+    criterionJudgmentIndexes.push(index);
+  }
+
+  const carriersByCriterionId = new Map<string, number[]>();
+  for (const [index, judgment] of criterionJudgments.entries()) {
+    const normalizedCriterionId = judgment.criterionId.toLowerCase();
+    const carriers = carriersByCriterionId.get(normalizedCriterionId) ?? [];
+    carriers.push(index);
+    carriersByCriterionId.set(normalizedCriterionId, carriers);
+  }
+  const duplicateCriterionIndexes = new Set<number>();
+  for (const carriers of carriersByCriterionId.values()) {
+    if (carriers.length < 2) continue;
+    const duplicateCriterionId = criterionJudgments[carriers[0]].criterionId;
+    for (const carrier of carriers) {
+      duplicateCriterionIndexes.add(carrier);
+      diagnostics.push(`criterionJudgments[${criterionJudgmentIndexes[carrier]}].criterion duplicates normalized criterion ${duplicateCriterionId}`);
+    }
   }
 
   const noOwnerObservations: PrdAuditNoOwnerObservation[] = [];
@@ -358,7 +384,13 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
       rationale: raw.rationale, intentRelation: raw.intentRelation });
   }
 
-  return diagnostics.length > 0
-    ? { ok: false, diagnostics }
-    : { ok: true, judgment: { version: PRD_AUDIT_JUDGMENT_CONTRACT_VERSION, criterionJudgments, noOwnerObservations } };
+  const judgment = {
+    version: PRD_AUDIT_JUDGMENT_CONTRACT_VERSION,
+    criterionJudgments: criterionJudgments.filter((_, index) => !duplicateCriterionIndexes.has(index)),
+    noOwnerObservations,
+  };
+  if (diagnostics.length === 0) return { ok: true, judgment };
+  return judgment.criterionJudgments.length > 0 || judgment.noOwnerObservations.length > 0
+    ? { ok: false, judgment, diagnostics }
+    : { ok: false, diagnostics };
 }
