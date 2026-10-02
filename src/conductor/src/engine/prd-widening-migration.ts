@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { isPrdAuditNoOwnerOrdinal } from './prd-audit-contract.js';
+
 import {
   AcceptedWideningDecisionStore,
   readLegacyOverScopeDecisionDocument,
@@ -85,7 +87,7 @@ function bounded(value: string, maximum = MAX_TEXT_LENGTH): boolean {
 
 function sourceKey(row: Pick<LegacyOverScopeDecision, 'criterion' | 'summary'>): string {
   // Old named criteria were criterion-keyed; NC rows had evidence identity.
-  return /^NC\.\d+$/i.test(row.criterion)
+  return isPrdAuditNoOwnerOrdinal(row.criterion)
     ? `NC\0${row.summary}`
     : `criterion\0${row.criterion}`;
 }

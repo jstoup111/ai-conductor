@@ -29,6 +29,7 @@ import { persistPrdWideningOffers } from '../../src/engine/prd-widening-offers.j
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { validatePrdAuditJudgment } from '../../src/engine/prd-audit-contract.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import * as coordinatorModule from '../../src/engine/prd-widening-coordinator.js';
@@ -176,8 +177,7 @@ describe('v2 PRD widening routing', () => {
     await persistPrdAuditVerdict(projectRoot, {
       complete: true,
       judgment: {
-        version: 'v1',
-        criterionJudgments: [],
+        version: 'v1', criterionJudgments: [],
         noOwnerObservations: [{
           presentationOrdinal: criterion, grade: 'OVER_SCOPE', evidence,
           rationale: 'The fixture supplies typed outside-visible scope evidence.', intentRelation: 'outside-visible',
@@ -187,6 +187,14 @@ describe('v2 PRD widening routing', () => {
       recordedDispositions: [],
     }, { attemptId: `typed-${criterion}`, codeStamp: null });
   }
+
+  it('uses the validator-emitted NC-1 presentation ordinal in the typed contract', () => {
+    const result = validatePrdAuditJudgment({
+      version: 'v1', criterionJudgments: [],
+      noOwnerObservations: [{ grade: 'OVER_SCOPE', evidence: 'A distinct visible widening.', rationale: 'The finding has no owning criterion.', intentRelation: 'outside-visible' }],
+    }, { criteria: [], requirements: [] });
+    expect(result).toMatchObject({ ok: true, judgment: { noOwnerObservations: [{ presentationOrdinal: 'NC-1' }] } });
+  });
 
   it.each(['same-case', 'different'] as const)('captures the rendered %s offer after reconciliation', async (kind) => {
     const feature = { version: 'v1' as const, repository: '/fixture/repository', feature: 'prd-widening-routing' };

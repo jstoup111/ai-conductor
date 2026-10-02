@@ -3214,10 +3214,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${stored.value.diagnostics.join('; ')}`,
       };
     }
-    const recorded = new Set(stored.value.recordedDispositions.map((finding) => `${finding.criterionId.toUpperCase()}\u0000${finding.grade}`));
+    const typed = prdAuditTypedRouteReport(stored.value);
+    const classifications = await classifyPrdAuditWideningProjection(dir, typed.relations, typed.report.findings);
     const settledOverScope = (criterionId: string, grade: string, relation: IntentRelation | undefined) =>
-      grade === 'OVER_SCOPE' && (relation === 'within' || relation === 'outside-harmless') &&
-      recorded.has(`${criterionId.toUpperCase()}\u0000OVER_SCOPE`);
+      grade === 'OVER_SCOPE' && (relation === 'within' || relation === 'outside-harmless' ||
+        classifications.get(criterionId)?.kind === 'accepted');
     const blocking = stored.value.judgment.criterionJudgments.filter((finding) =>
       finding.grade !== 'PASS' && !settledOverScope(finding.criterionId, finding.grade, finding.intentRelation));
     const blockingNoOwner = stored.value.judgment.noOwnerObservations.filter((finding) =>
@@ -4683,7 +4684,7 @@ export async function classifyPrdAuditWideningProjection(
       // Keep it readable during the v1→v2 migration, but deliberately do not
       // manufacture NC authority from it.
       decisions = (await readOverScopeDecisions(dir)).decisions
-        .filter((decision) => !/^NC\.\d+$/i.test(decision.criterion))
+        .filter((decision) => !isPrdAuditNoOwnerOrdinal(decision.criterion))
         .map((decision, index) => ({
           id: `legacy-criterion-${index + 1}`,
           criterion: decision.criterion,

@@ -151,16 +151,29 @@ describe('PRD-audit feature projection', () => {
     await writeFile(stories, `# Stories\n\n## Story alpha.1: Broken obligation\n\n### Happy Path\n- Given a request, when it is handled, it is visible.\n`);
     await expect(buildPrdAuditProjection(root)).resolves.toMatchObject({
       ok: false,
-      fault: { dimension: 'stories criteria', detail: expect.stringContaining('lacks Given or Then') },
+      fault: { dimension: 'stories criteria', detail: expect.stringContaining('sealed Happy Path/Negative Paths Given/When/Then') },
     });
 
-    await writeFile(stories, `# Stories\n\n## Story alpha.1: Valid obligation\n\n### Happy Path\n- Given a request, when it is handled, then it is visible.\n`);
+    await writeFile(stories, `# Stories\n\n## Story alpha.1: Valid obligation\n\n### Happy Path\n- Given a request, when it is handled, then it is visible.\n\n### Negative Paths\n- Given a request, when it fails, then it is visible.\n`);
     await writeFile(join(root, '.docs', 'plans', 'audit-fixture.md'), `# Implementation Plan: Audit fixture\n\n**Stories:** .docs/stories/audit-fixture.md\n\n## Technical Approach\n\nAudit the feature requirements against the delivered source.\n\n### Task task-a: Broken completion\n\n**Story:** Story alpha.1\n**Done when:**\n`);
     await expect(buildPrdAuditProjection(root)).resolves.toMatchObject({
       ok: false,
       fault: { dimension: 'plan task completion conditions', detail: expect.stringContaining('task-a') },
     });
   });
+  it.each([
+    ['a source without a story id', '# Stories\n\n### Happy Path\n- Given a request, when it is handled, then it is visible.\n\n### Negative Paths\n- Given a request, when it fails, then it is visible.'],
+    ['a source without negative paths', '# Stories\n\n## Story alpha.1: Broken obligation\n\n### Happy Path\n- Given a request, when it is handled, then it is visible.'],
+    ['a criterion without When', '# Stories\n\n## Story alpha.1: Broken obligation\n\n### Happy Path\n- Given a request, then it is visible.\n\n### Negative Paths\n- Given a request, when it fails, then it is visible.'],
+  ])('rejects %s through the sealed story readability contract', async (_name, storiesText) => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'stories', 'audit-fixture.md'), storiesText);
+    await expect(buildPrdAuditProjection(root)).resolves.toMatchObject({
+      ok: false,
+      fault: { dimension: 'stories criteria', detail: expect.stringContaining('story') },
+    });
+  });
+
   it('independently resolves populated feature obligations, scoped changes, and attributable history', async () => {
     const result = await buildPrdAuditProjection(await fixture());
 
@@ -406,6 +419,34 @@ describe('PRD-audit feature projection', () => {
         fault: { dimension: 'history', detail: 'widening history at .pipeline/accepted-widenings.json is foreign to the active feature' },
       },
       bytes: foreignHistory,
+    });
+  });
+
+  it('keeps case-only widening history and rejects a foreign case-store feature', async () => {
+    const root = await fixture();
+    await rm(join(root, '.pipeline', 'accepted-widenings.json'));
+    const casePath = join(root, '.pipeline', 'remediation-cases.json');
+    const caseHistory = {
+      version: 'v2',
+      feature: { version: 'v1', repository: 'fixture-repository', feature: 'audit-fixture' },
+      cases: [], suppressions: [],
+      prdWideningCases: [{
+        id: 'prd-case-1', domain: 'prd_widening',
+        originalSources: [{ sourceId: 'NC-1', snapshot: 'Original widening.' }],
+        currentSources: [{ sourceId: 'NC-1', snapshot: 'Current widening.', recordedAt: '2026-09-09T12:00:00.000Z' }],
+        relationships: [{ currentSourceId: 'NC-1', kind: 'same-case', caseId: 'prd-case-1', reason: 'Same behavior.' }],
+      }],
+    };
+    await writeFile(casePath, JSON.stringify(caseHistory));
+    await expect(buildPrdAuditProjection(root)).resolves.toMatchObject({
+      ok: true,
+      projection: { history: { decisions: [], cases: [expect.objectContaining({ id: 'prd-case-1' })] } },
+    });
+
+    await writeFile(casePath, JSON.stringify({ ...caseHistory, feature: { ...caseHistory.feature, feature: 'foreign-fixture' } }));
+    await expect(buildPrdAuditProjection(root)).resolves.toMatchObject({
+      ok: false,
+      fault: { dimension: 'history', detail: 'widening case history at .pipeline/remediation-cases.json is foreign to the active feature' },
     });
   });
 
