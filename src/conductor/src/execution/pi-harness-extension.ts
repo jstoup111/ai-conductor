@@ -9,42 +9,7 @@ import { homedir } from 'node:os';
  */
 export const PI_HARNESS_EXTENSION_SOURCE = String.raw`
 export default function(pi: any) {
-  const gitRead = pi.registerFlag('conduct-git-read', { type: 'boolean', default: false });
   const schemaPath = pi.registerFlag('conduct-output-schema', { type: 'string' });
-  const deniedOptions = [
-    { long: '--output', short: 'O' },
-    { long: '--open-files-in-pager' },
-    { long: '--ext-diff' },
-    { long: '--textconv' },
-    { long: '--config-env', short: 'c' },
-  ];
-  const refused = (arg: string) => {
-    if (arg.startsWith('--')) {
-      const name = arg.split('=', 1)[0];
-      return name.length > 2 && deniedOptions.find(({ long }) => long.startsWith(name))?.long;
-    }
-    if (arg.startsWith('-') && arg.length > 1) {
-      const denied = deniedOptions.find(({ short }) => short && arg.slice(1).includes(short));
-      return denied?.short && '-' + denied.short;
-    }
-  };
-  if (pi.getFlag(gitRead)) {
-    pi.registerTool({ name: 'git_read', description: 'Run an allowed read-only git command', parameters: {
-      type: 'object', required: ['subcommand', 'args'], properties: {
-        subcommand: { type: 'string', enum: ['show','diff','log','ls-tree','ls-files','cat-file','rev-parse','blame','grep'] },
-        args: { type: 'array', items: { type: 'string' } },
-      },
-    }, async execute(args: any, context: any) {
-      if (!['show','diff','log','ls-tree','ls-files','cat-file','rev-parse','blame','grep'].includes(args.subcommand)) return { isError: true, content: [{ type: 'text', text: 'subcommand not allowed: ' + args.subcommand }] };
-      const bad = (args.args || []).map(refused).find(Boolean);
-      if (bad) return { isError: true, content: [{ type: 'text', text: 'option not allowed: ' + bad }] };
-      try {
-        const cp: any = await import('node:child_process');
-        const result: any = await new Promise((ok, fail) => cp.execFile('git', [args.subcommand, ...(args.args || [])], { cwd: context.cwd, shell: false, env: { ...process.env, GIT_PAGER: 'cat', PAGER: 'cat', GIT_EXTERNAL_DIFF: undefined } }, (error: any, stdout: string, stderr: string) => error ? fail(Object.assign(error, { stderr })) : ok({ stdout })));
-        return { content: [{ type: 'text', text: result.stdout }] };
-      } catch (error: any) { return { isError: true, content: [{ type: 'text', text: error.stderr || error.message }] }; }
-    }});
-  }
   const path = pi.getFlag(schemaPath);
   if (path) {
     // The provider permits async extension factories; avoid a static dependency so this
