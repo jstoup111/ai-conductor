@@ -79,6 +79,11 @@ Option A.
    > review launches from a materialized detached checkout that is not an engine-prepared worktree,
    > so no guard is prepended for it. This is a recorded limit under D10.
 
+   > **Amended 2026-10-01 by #1354 (operator decision):** the Pi provider is out of this decision's
+   > scope. Pi became a built-in provider after this ADR was approved; its adapter's guard
+   > enforcement is delivered by #2895, which builds on this decision's adapter seam. Until #2895
+   > ships, Pi dispatches are unguarded, and this is a recorded limit under D10.
+
 3. **The guard is re-verified before every guarded dispatch, fail-closed.** Before prepending, the
    engine confirms the guard's content and mode match the embedded asset, and rewrites it if they
    do not. If it still cannot be confirmed, the dispatch is not launched and fails with a message
@@ -139,6 +144,11 @@ Option A.
     > read-only classification queries; the proof is that it records no refused subcommand and no
     > state-changing subcommand. Review dispatches (D2 amendment) are added to the recorded limits.
 
+    > **Amended 2026-10-01 by #1354 (operator decision):** the provider × run-mode cells, the live
+    > guard smoke, and the control-inventory coverage cover Claude and Codex only. The Pi adapter
+    > cells, a Pi live guard smoke, and Pi's inventory entry are delivered by #2895. Pi dispatches
+    > are added to the recorded limits in `docs/reference/settings-and-hooks.md`.
+
 ## Consequences
 
 ### Positive
@@ -160,3 +170,4 @@ Option A.
 - [ ] #2693: a git-side `reference-transaction`/`pre-push` backstop for ref moves that bypass the
       guard.
 - [ ] #1352: OS-level sealing for the adversarial bypass class.
+- [ ] #2895: destructive-git guard enforcement and proof for the Pi provider adapter.
