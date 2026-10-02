@@ -264,13 +264,14 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       const timeline: Array<{ step: string; phase: 'start' | 'end'; t: number }> = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state, opts) => {
           timeline.push({ step, phase: 'start', t: Date.now() });
           if (step === 'manual_test') {
             await delay(40);
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_PASS);
+            await writePrdAuditPass(dir, opts?.runId);
           }
           timeline.push({ step, phase: 'end', t: Date.now() });
           return { success: true } as StepRunResult;
@@ -642,6 +643,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
           prdAuditCalls++;
           if (prdAuditCalls === 1) {
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_GAP);
+            await writePrdAuditPass(dir, opts?.runId, 'FIXABLE');
             return { success: true } as StepRunResult;
           }
         }
@@ -816,16 +818,17 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               '|---|---|---|---|---|',
               '| FR-1 | MISSING | impl-gap | src/feature.ts:1 | no |',
             ].join('\n'));
+            await writePrdAuditPass(dir, opts?.runId, 'FIXABLE');
           } else if (step === 'architecture_review_as_built') {
             await writeRemediableAsBuiltVerdict(
-              dir, opts?.runId, 'FR-1', '1', 'Repair the same approved behavior',
+              dir, opts?.runId, 'S1.1', '1', 'Repair the same approved behavior',
             );
           } else if (step === 'remediate') {
             remediationReasons.push(opts?.retryReason ?? '');
             await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify({
               dispositions: [
                 {
-                  id: 'FR-1',
+                  id: 'S1.1',
                   disposition: 'build',
                   category: null,
                   rationale: 'Implement the existing PRD criterion.',
@@ -943,12 +946,13 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               '|---|---|---|---|---|',
               '| S1.1 | FIXABLE | 1 | FR-1 | Missing implementation |',
             ].join('\n'));
+            await writePrdAuditPass(dir, opts?.runId, 'FIXABLE');
           } else if (step === 'architecture_review_as_built') {
             await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {
             await writeFile(join(dir, '.pipeline/remediation.json'), JSON.stringify({
               dispositions: [
-                { id: 'FR-1', disposition: 'build', category: null, rationale: 'Implement criterion.', tasks: [{ id: 'prd-fix', title: 'Implement S1.1' }] },
+                { id: 'S1.1', disposition: 'build', category: null, rationale: 'Implement criterion.', tasks: [{ id: 'prd-fix', title: 'Implement S1.1' }] },
                 { id: 'ARCH-1', disposition: 'build', category: null, rationale: 'Add guard.', tasks: [{ id: 'as-built-fix', title: 'Add the missing guard' }] },
               ],
             }));
@@ -1094,6 +1098,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
           } else if (step === 'prd_audit') {
             prdAuditCalls++;
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_GAP);
+            await writePrdAuditPass(dir, options?.runId, 'FIXABLE');
           } else if (step === 'architecture_review_as_built') {
             await persistAsBuiltVerdict(dir, {
               version: 'v1', verdict: 'APPROVED', reachability: [], driftNotes: [],
@@ -1108,7 +1113,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               JSON.stringify({
                 dispositions: [
                   {
-                    id: 'FR-2',
+                    id: 'S1.1',
                     disposition: 'halt',
                     category: 'architectural-clarity',
                     rationale: 'ambiguous aggregate boundary',
