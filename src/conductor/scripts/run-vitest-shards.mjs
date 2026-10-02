@@ -5,10 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const testRoot = join(packageRoot, 'test');
-// A 73-file batch still grew a worker past its 8 GiB cap. Thirty-two batches
-// bound a worker to roughly half that module graph while preserving two-way
-// parallelism.
-const shardCount = 32;
+// A contiguous 73-file batch grew a worker past its 8 GiB cap. Spread each
+// directory's adjacent heavy fixtures across sixteen fresh runs instead of
+// clustering them in one batch; two forks then retain a bounded mixed graph.
+const shardCount = 16;
 const vitestArgs = ['run', '--reporter=dot', '--silent', '--slowTestThreshold=1800000'];
 
 async function collectTestFiles(directory) {
@@ -24,11 +24,9 @@ async function collectTestFiles(directory) {
 
 function partition(files) {
   const count = Math.min(shardCount, files.length);
-  return Array.from({ length: count }, (_, index) => {
-    const start = Math.floor(index * files.length / count);
-    const end = Math.floor((index + 1) * files.length / count);
-    return files.slice(start, end);
-  });
+  const batches = Array.from({ length: count }, () => []);
+  for (const [index, file] of files.entries()) batches[index % count].push(file);
+  return batches;
 }
 
 function runVitest(selectors) {

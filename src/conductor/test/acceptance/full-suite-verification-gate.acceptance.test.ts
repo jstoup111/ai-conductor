@@ -284,7 +284,7 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     // Every invocation goes through the Node 26 temp-dir wrapper
     // (`scripts/run-vitest.mjs`), so no bare `vitest run` survives.
     // The aggregate run has a dedicated launcher that partitions the concrete
-    // include set into thirty-two batches. Each starts a fresh Vitest parent,
+    // include set into sixteen round-robin batches. Each starts a fresh Vitest parent,
     // bounding the module graph retained by its fork workers while still
     // covering the configured include set exactly once.
     // The selector branch remains a single unsharded run below.
@@ -349,24 +349,35 @@ describe('Story 7 — package-script selector forwarding (Task 17)', () => {
       encoding: 'utf8',
       env: { ...process.env, FAKE_VITEST_ARGUMENTS: runnerArgumentsPath },
     });
-    const forwarded = readFileSync(runnerArgumentsPath, 'utf8')
+    const invocations = readFileSync(runnerArgumentsPath, 'utf8')
       .trim()
       .split('\n')
-      .flatMap((line) => JSON.parse(line) as string[])
+      .map((line) => JSON.parse(line) as string[]);
+    const forwarded = invocations
+      .flat()
       .filter((argument) => argument.endsWith('.test.ts'))
       .sort();
 
     expect({
       exitCode: result.status,
       stdout: result.stdout,
-      invocationCount: readFileSync(runnerArgumentsPath, 'utf8').trim().split('\n').length,
+      invocationCount: invocations.length,
       forwarded,
     }).toEqual({
       exitCode: 0,
       stdout: 'AGGREGATE_TEST_SUITE_PASS\n',
-      invocationCount: 32,
+      invocationCount: 16,
       forwarded: [...testFiles].sort(),
     });
+    expect(invocations[0].filter((argument) => argument.endsWith('.test.ts'))).toEqual([
+      'test/group-1.test.ts',
+      'test/group-24.test.ts',
+      'test/group-9.test.ts',
+    ]);
+    expect(invocations[1].filter((argument) => argument.endsWith('.test.ts'))).toEqual([
+      'test/group-10.test.ts',
+      'test/group-25.test.ts',
+    ]);
   });
 
   it('keeps the legacy trailing-echo shape detectable by the fake runner', async () => {
