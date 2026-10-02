@@ -308,9 +308,8 @@ Write the review to `.docs/decisions/architecture-review-YYYY-MM-DD-<feature>.md
 **Wiring Surface (design-time, Medium/Large tier only):** For each new production surface
 the feature introduces (exported function/module, hook script, config key, emitted event,
 scheduled job, CLI subcommand, etc.), state at design time where/how it will be called from
-in production — e.g. "invoked from the daemon loop's step dispatcher," "wired into
-`ai-conductor`'s command table," "consumed by the existing event bus subscriber in
-`src/x.ts`." This is a design-time commitment, not a code citation — no `file:line` is
+in production — e.g. "handled by the existing `POST /orders` route," "registered in the
+CLI's command table," "consumed by the existing event subscriber in `src/x.ts`." This is a design-time commitment, not a code citation — no `file:line` is
 required yet since the code doesn't exist. It informs the review's feasibility and overlap
 analysis; it is not a per-task plan contract.
 
@@ -414,8 +413,8 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
 - **Production reachability sweep (green-but-unwired guard).** For each primitive this
   feature's diff introduces or materially changes — exported functions/modules, hook scripts,
   config keys, emitted events, ADR-promised log lines — trace ONE invocation path from a real
-  production entry point (`ai-conductor` command dispatch, the daemon loop, hook/settings provisioning,
-  a wired step runner) and cite the caller as `file:line`. Test files, fixtures, and the
+  production entry point (a public API or route, CLI command dispatch, a job or worker, an event
+  consumer, a framework hook, or the project's equivalent) and cite the caller as `file:line`. Test files, fixtures, and the
   primitive's own module do not count as callers, except for the narrow same-file composition
   case below.
   - **Narrow same-file composition exception.** Independently verify the complete **root-to-caller-to-export** chain in the current shipped source: a configured production
