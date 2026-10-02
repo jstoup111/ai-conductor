@@ -20,7 +20,7 @@ vi.mock('../../src/engine/owner-gate/machine-identity.js', async (importOriginal
   readMachineOwnerConfig: vi.fn(async () => ({ spec_owner: 'fixture-operator' })),
 }));
 
-import { Conductor, routePrdAuditOverScopeV2, type StepRunner } from '../../src/engine/conductor.js';
+import { Conductor, type PrdAuditOverScopeRoute, type StepRunner } from '../../src/engine/conductor.js';
 import { AcceptedWideningDecisionStore, renderOverScopeDecisionBlock } from '../../src/engine/accepted-widenings.js';
 import { capturePrdWideningDecisions } from '../../src/engine/prd-widening-capture.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -34,78 +34,10 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import * as coordinatorModule from '../../src/engine/prd-widening-coordinator.js';
 
-const report = (evidence: string, criterion = 'NC.1') => [
-  '**PRD:** none',
-  '',
-  '## Verdict Table',
-  '| Criterion | Grade | Plan task | PRD: | Intent relation | Evidence |',
-  '| --- | --- | --- | --- | --- | --- |',
-  '| S1.1 | PASS | — | none | within | Covered behavior |',
-  '',
-  '## Findings without an owning criterion',
-  '| Finding | Grade | Intent relation | Evidence |',
-  '| --- | --- | --- | --- |',
-  `| ${criterion} | OVER_SCOPE | outside-visible | ${evidence} |`,
-].join('\n');
+const sourceId = (evidence: string, criterion = 'NC.1') =>
+  prdWideningSourceId({ criterion, grade: 'OVER_SCOPE', evidence, prdIds: [] });
 
-const sourceId = (evidence: string, criterion = 'NC.1') => prdWideningSourceId({ criterion, grade: 'OVER_SCOPE', evidence, prdIds: [] });
-const caseRecord = {
-  id: 'case-1', domain: 'prd_widening' as const, offeredCriterion: 'NC.1',
-  originalSources: [{ sourceId: sourceId('Original wording.'), snapshot: 'Original wording.' }],
-  currentSources: [{ sourceId: sourceId('Replacement wording.'), snapshot: 'Replacement wording.', recordedAt: '2026-09-09T00:00:00.000Z' }],
-  relationships: [{ currentSourceId: sourceId('Replacement wording.'), kind: 'same-case' as const, caseId: 'case-1', reason: 'Same behavior.' }],
-  reconciliationDigest: 'published-batch',
-};
-
-describe('v2 PRD widening routing', () => {
-  it('uses a fresh relation and decision identity rather than reviewer wording', () => {
-    const accepted = routePrdAuditOverScopeV2(report('Replacement wording.'), [{
-      id: 'decision-1', criterion: 'NC.1', authority: 'accept', rationale: 'Approved.', operator: 'operator', revision: 1,
-      originalSource: { id: sourceId('Original wording.'), snapshot: 'Original wording.' }, originalCaseId: 'case-1', offerEntryId: 'case-1',
-    }], [caseRecord]);
-    expect(accepted).toMatchObject({ kind: 'record', findings: [{ criterion: 'NC.1', decision: 'accept' }] });
-
-    const refused = routePrdAuditOverScopeV2(report('Replacement wording.'), [{
-      id: 'decision-2', criterion: 'NC.1', authority: 'refuse', rationale: 'Not approved.', operator: 'operator', revision: 1,
-      originalSource: { id: sourceId('Original wording.'), snapshot: 'Original wording.' }, originalCaseId: 'case-1', offerEntryId: 'case-1',
-    }], [caseRecord]);
-    expect(refused).toMatchObject({ kind: 'halt', refused: [{ criterion: 'NC.1', decision: 'refuse' }] });
-  });
-
-  it('uses the shared freshness projection and retains the original offer for a renumbered refusal', () => {
-    const renumbered = { ...caseRecord, currentSources: [{
-      sourceId: sourceId('Replacement wording.', 'NC.2'), snapshot: 'Replacement wording.', recordedAt: '2026-09-09T00:00:00.000Z',
-    }], relationships: [{
-      currentSourceId: sourceId('Replacement wording.', 'NC.2'), kind: 'same-case' as const, caseId: 'case-1', reason: 'Same behavior after renumbering.',
-    }] };
-    const refusal = {
-      id: 'decision-refuse', criterion: 'NC.1', authority: 'refuse' as const, rationale: 'Not approved.', operator: 'operator', revision: 1,
-      originalSource: { id: sourceId('Original wording.'), snapshot: 'Original wording.' }, originalCaseId: 'case-1', offerEntryId: 'case-1',
-    };
-    expect(routePrdAuditOverScopeV2(report('Replacement wording.', 'NC.2'), [refusal], [renumbered]))
-      .toMatchObject({
-        kind: 'halt',
-        refused: [{
-          criterion: 'NC.1', kind: 'revise-decision', offerEntryId: 'case-1',
-          originalSource: refusal.originalSource, priorDecision: { id: 'decision-refuse', revision: 1 },
-        }],
-      });
-
-    // A relation without the coordinator's frozen-input digest is stale for
-    // routing too; it cannot be promoted merely because its source text fits.
-    expect(routePrdAuditOverScopeV2(report('Replacement wording.'), [{ ...refusal, authority: 'accept' }], [{
-      ...caseRecord,
-      reconciliationDigest: undefined,
-    }])).toMatchObject({ kind: 'halt', undecided: [{ criterion: 'NC.1' }] });
-  });
-
-  it('withholds an editable block when a stored case lacks its immutable offer', () => {
-    const route = routePrdAuditOverScopeV2(report('Replacement wording.'), [], [{ ...caseRecord, offeredCriterion: undefined }]);
-    expect(route).toMatchObject({ kind: 'halt', detail: expect.stringContaining('projection-failed'),
-      undecided: [], refused: [], defects: [{ kind: 'projection-failed', criterion: 'NC.1' }],
-    });
-  });
-
+describe('typed PRD widening routing', () => {
   it('routes a complete typed OVER_SCOPE judgment when its derived report is altered', async () => {
     await persistPrdAuditVerdict(projectRoot, {
       complete: true,
@@ -219,7 +151,7 @@ describe('v2 PRD widening routing', () => {
     const conductor = new Conductor({ projectRoot, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter() });
     const entry = conductor as unknown as {
       preparePrdWideningBeforeAudit(): Promise<string | undefined>;
-      routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<ReturnType<typeof routePrdAuditOverScopeV2>>;
+      routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<PrdAuditOverScopeRoute>;
     };
 
     await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
@@ -275,7 +207,7 @@ describe('v2 PRD widening routing', () => {
     } })) };
     const entry = new Conductor({ projectRoot, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter() }) as unknown as {
       preparePrdWideningBeforeAudit(): Promise<string | undefined>;
-      routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<ReturnType<typeof routePrdAuditOverScopeV2>>;
+      routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<PrdAuditOverScopeRoute>;
     };
     await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
     await writeTypedOverScope('Reworded current behavior.', 'NC.2');

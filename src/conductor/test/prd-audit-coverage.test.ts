@@ -7,12 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import {
   checkStepCompletion,
-  parsePrdAuditReport,
   resolveFeaturePrdPaths,
   sweepStaleReviewArtifacts,
   type ArtifactResolutionContext,
 } from '../src/engine/artifacts.js';
-import { appendRemediationTasks } from '../src/engine/remediation-append.js';
 import { persistPrdAuditVerdict } from '../src/engine/prd-audit-verdict-store.js';
 import type { PrdAuditJudgment } from '../src/engine/prd-audit-contract.js';
 
@@ -34,392 +32,6 @@ describe('prd-audit skill contract', () => {
   });
 });
 
-describe('parsePrdAuditReport', () => {
-  it('reads criterion grades, optional plan ownership, and the PRD-presence marker', () => {
-    const report = [
-      '# PRD Audit',
-      '',
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| S2.1 | FIXABLE | 4 | Missing guard |',
-      '| S2.2 | PLAN_GAP | | No plan task owns this |',
-    ].join('\n');
-
-    expect(parsePrdAuditReport(report, activePlan)).toEqual({
-      ok: true,
-      value: {
-        prd: 'present',
-        rejectedRows: [],
-        findings: [
-          { criterion: 'S2.1', grade: 'FIXABLE', planTask: '4', prdIds: [], evidence: 'Missing guard' },
-          { criterion: 'S2.2', grade: 'PLAN_GAP', prdIds: [], evidence: 'No plan task owns this' },
-        ],
-      },
-    });
-  });
-
-  it('accepts the mandated em-dash placeholder for grades without a Plan task', () => {
-    const report = [
-      '# PRD Audit',
-      '',
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | PRD: | Evidence |',
-      '| --- | --- | --- | --- | --- |',
-      '| S6.1 | PASS | — | FR-7 | Implemented |',
-      '| S6.2 | FIXABLE | 4 | FR-7 | Missing guard |',
-      '| S6.3 | PLAN_GAP | — | FR-7 | No active task owns the missing behavior |',
-      '| S9.2 | OVER_SCOPE | — | FR-9 | Outside intent |',
-    ].join('\n');
-
-    expect(parsePrdAuditReport(report, activePlan)).toEqual({
-      ok: true,
-      value: {
-        prd: 'present',
-        rejectedRows: [],
-        findings: [
-          { criterion: 'S6.1', grade: 'PASS', prdIds: ['FR-7'], evidence: 'Implemented' },
-          { criterion: 'S6.2', grade: 'FIXABLE', planTask: '4', prdIds: ['FR-7'], evidence: 'Missing guard' },
-          {
-            criterion: 'S6.3',
-            grade: 'PLAN_GAP',
-            prdIds: ['FR-7'],
-            evidence: 'No active task owns the missing behavior',
-          },
-          { criterion: 'S9.2', grade: 'OVER_SCOPE', prdIds: ['FR-9'], evidence: 'Outside intent' },
-        ],
-      },
-    });
-  });
-
-  it('reads a no-PRD verdict report', () => {
-    const report = [
-      '**PRD:** none',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| S2.1 | PASS | | Implemented |',
-    ].join('\n');
-
-    expect(parsePrdAuditReport(report)).toMatchObject({
-      ok: true,
-      value: { prd: 'none', findings: [{ criterion: 'S2.1', grade: 'PASS' }] },
-    });
-  });
-
-  it('rejects a grade outside the closed grade enum', () => {
-    const report = [
-      '**PRD:** none',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| S2.1 | MAYBE | | Unclear |',
-    ].join('\n');
-
-    expect(parsePrdAuditReport(report)).toEqual({
-      ok: true,
-      value: {
-        prd: 'none',
-        findings: [],
-        rejectedRows: [{
-          key: 'S2.1',
-          rowText: '| S2.1 | MAYBE | | Unclear |',
-          reason: 'PRD audit finding S2.1 has an invalid Grade.',
-        }],
-      },
-    });
-  });
-
-  const activePlan = '### Task 4: Existing task\n\n**Files:** src/example.ts';
-
-  it('resolves annotated and remediation Plan task citations against the active plan', () => {
-    const report = [
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| S1.1 | PASS | rem-prd-audit-rem-s1-6-1 (landed) | Implemented |',
-      '| S1.2 | FIXABLE | rem-as-built-rem-ab1-3 | Missing guard |',
-    ].join('\n');
-    const remediationPlan = [
-      '### Task rem-prd-audit-rem-s1-6-1: Existing task',
-      '',
-      '### Task rem-as-built-rem-ab1-3: Existing task',
-    ].join('\n');
-
-    expect(parsePrdAuditReport(report, remediationPlan)).toEqual({
-      ok: true,
-      value: {
-        prd: 'present',
-        rejectedRows: [],
-        findings: [
-          {
-            criterion: 'S1.1',
-            grade: 'PASS',
-            planTask: 'rem-prd-audit-rem-s1-6-1',
-            prdIds: [],
-            evidence: 'Implemented',
-          },
-          {
-            criterion: 'S1.2',
-            grade: 'FIXABLE',
-            planTask: 'rem-as-built-rem-ab1-3',
-            prdIds: [],
-            evidence: 'Missing guard',
-          },
-        ],
-      },
-    });
-  });
-
-  it('#2064 keeps an unchanged report parseable after appending remediation tasks', () => {
-    const basePlan = [
-      '### Task 1: Existing work',
-      '',
-      '### Task 2: Existing work',
-    ].join('\n');
-    const appended = appendRemediationTasks(basePlan, [{
-      id: 'S1.1',
-      disposition: 'build',
-      category: null,
-      rationale: 'Repair the first missing behavior.',
-      tasks: [{ id: 'rem-s1-6-1', title: 'Repair the cited behavior' }],
-    }], 'prd-audit');
-    const report = [
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| S1.1 | PASS | rem-prd-audit-rem-s1-6-1 (landed) | Implemented |',
-      '| S1.2 | FIXABLE | 2 | Missing guard |',
-    ].join('\n');
-    const extended = appendRemediationTasks(appended.planText, [{
-      id: 'AB1',
-      disposition: 'build',
-      category: null,
-      rationale: 'Repair the as-built gap.',
-      tasks: [{ id: 'rem-ab1-2', title: 'Repair the as-built behavior' }],
-    }], 'as-built');
-    const expected = {
-      ok: true,
-      value: {
-        prd: 'present' as const,
-        rejectedRows: [],
-        findings: [
-          {
-            criterion: 'S1.1',
-            grade: 'PASS',
-            planTask: 'rem-prd-audit-rem-s1-6-1',
-            prdIds: [],
-            evidence: 'Implemented',
-          },
-          {
-            criterion: 'S1.2',
-            grade: 'FIXABLE',
-            planTask: '2',
-            prdIds: [],
-            evidence: 'Missing guard',
-          },
-        ],
-      },
-    };
-
-    expect([
-      parsePrdAuditReport(report, appended.planText),
-      parsePrdAuditReport(report, extended.planText),
-    ]).toEqual([expected, expected]);
-  });
-
-  it('rejects a FIXABLE finding with no owning plan task, naming the finding', () => {
-    const report = [
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| S2.1 | FIXABLE | | Missing guard |',
-    ].join('\n');
-
-    expect(parsePrdAuditReport(report, activePlan)).toEqual({
-      ok: true,
-      value: {
-        prd: 'present',
-        findings: [],
-        rejectedRows: [{
-          key: 'S2.1',
-          rowText: '| S2.1 | FIXABLE | | Missing guard |',
-          reason: 'PRD audit finding S2.1 is FIXABLE but has no Plan task.',
-        }],
-      },
-    });
-  });
-
-  it('rejects a FIXABLE finding whose remediation task is absent from the active plan', () => {
-    const report = [
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| S2.1 | FIXABLE | rem-prd-audit-zz-1 | Missing guard |',
-    ].join('\n');
-
-    expect(parsePrdAuditReport(report, activePlan)).toEqual({
-      ok: true,
-      value: {
-        prd: 'present',
-        findings: [],
-        rejectedRows: [{
-          key: 'S2.1',
-          rowText: '| S2.1 | FIXABLE | rem-prd-audit-zz-1 | Missing guard |',
-          reason: 'PRD audit finding S2.1 names Plan task rem-prd-audit-zz-1, which is absent from the active plan.',
-        }],
-      },
-    });
-  });
-
-  it('names the criterion and unresolved Plan task reference in its diagnostic', () => {
-    const report = [
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| S2.3 | FIXABLE | rem-x-1 | Missing guard |',
-    ].join('\n');
-
-    expect(parsePrdAuditReport(report, activePlan)).toEqual({
-      ok: true,
-      value: {
-        prd: 'present',
-        findings: [],
-        rejectedRows: [{
-          key: 'S2.3',
-          rowText: '| S2.3 | FIXABLE | rem-x-1 | Missing guard |',
-          reason: 'PRD audit finding S2.3 names Plan task rem-x-1, which is absent from the active plan.',
-        }],
-      },
-    });
-  });
-
-  it('names the criterion and malformed Plan task reference in its diagnostic', () => {
-    const report = [
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| S2.3 | FIXABLE | task#7 | Missing guard |',
-    ].join('\n');
-
-    expect(parsePrdAuditReport(report, activePlan)).toEqual({
-      ok: true,
-      value: {
-        prd: 'present',
-        findings: [],
-        rejectedRows: [{
-          key: 'S2.3',
-          rowText: '| S2.3 | FIXABLE | task#7 | Missing guard |',
-          reason: 'PRD audit finding S2.3 has malformed Plan task task#7.',
-        }],
-      },
-    });
-  });
-
-  it('rejects a finding that claims multiple grades', () => {
-    const report = [
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| S2.1 | FIXABLE, PLAN_GAP | 4 | Missing guard |',
-    ].join('\n');
-
-    expect(parsePrdAuditReport(report, activePlan)).toEqual({
-      ok: true,
-      value: {
-        prd: 'present',
-        findings: [],
-        rejectedRows: [{
-          key: 'S2.1',
-          rowText: '| S2.1 | FIXABLE, PLAN_GAP | 4 | Missing guard |',
-          reason: 'PRD audit finding S2.1 has an invalid Grade.',
-        }],
-      },
-    });
-  });
-
-  it('accepts separate rows with one grade each', () => {
-    const report = [
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| S2.1 | FIXABLE | 4 | Missing guard |',
-      '| S2.2 | PLAN_GAP | | No plan task owns this |',
-    ].join('\n');
-
-    expect(parsePrdAuditReport(report, activePlan)).toEqual({
-      ok: true,
-      value: {
-        prd: 'present',
-        rejectedRows: [],
-        findings: [
-          { criterion: 'S2.1', grade: 'FIXABLE', planTask: '4', prdIds: [], evidence: 'Missing guard' },
-          { criterion: 'S2.2', grade: 'PLAN_GAP', prdIds: [], evidence: 'No plan task owns this' },
-        ],
-      },
-    });
-  });
-
-  it('stops at the end of the criterion table and retains the per-FR table as context', () => {
-    const report = [
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '',
-      '| Criterion | Grade | Plan task | PRD: | Evidence |',
-      '| --- | --- | --- | --- | --- |',
-      '| S1.1 | PASS | — | FR-1 | Implemented |',
-      '',
-      '| FR | Verdict | Gap-class | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| FR-1 | ALIGNED | — | Implemented |',
-    ].join('\n');
-
-    expect(parsePrdAuditReport(report)).toEqual({
-      ok: true,
-      value: {
-        prd: 'present',
-        rejectedRows: [],
-        findings: [{ criterion: 'S1.1', grade: 'PASS', prdIds: ['FR-1'], evidence: 'Implemented' }],
-      },
-    });
-  });
-});
-
 const context = (overrides: Partial<ArtifactResolutionContext> = {}): ArtifactResolutionContext => ({
   featureIdentities: [],
   changedPaths: new Set(),
@@ -429,35 +41,26 @@ const context = (overrides: Partial<ArtifactResolutionContext> = {}): ArtifactRe
 async function persistCoverageVerdict(
   root: string,
   rows: Array<{ criterion: string; grade?: 'PASS' | 'FIXABLE' | 'PLAN_GAP' | 'OVER_SCOPE' }>,
-  options: {
-    complete?: boolean;
-    diagnostics?: readonly string[];
-    codeStamp?: string | null;
-  } = {},
+  options: { complete?: boolean; diagnostics?: readonly string[]; codeStamp?: string | null } = {},
 ): Promise<void> {
   const criterionJudgments: Array<PrdAuditJudgment['criterionJudgments'][number]> = rows.map(({
-    criterion: criterionId,
-    grade = 'PASS',
+    criterion: criterionId, grade = 'PASS',
   }) => {
     const match = /^S(.+)\.(\d+)$/.exec(criterionId);
     if (!match) throw new Error(`Fixture cannot derive criterion reference from ${criterionId}`);
     const base = {
-      criterion: { storyId: match[1]!, ordinal: Number(match[2]) },
-      criterionId,
-      evidence: 'Fixture supplies typed audit evidence.',
-      rationale: 'Fixture supplies typed audit evidence.',
-      requirementAssociations: [],
-      evidenceTaskIds: [],
+      criterion: { storyId: match[1]!, ordinal: Number(match[2]) }, criterionId,
+      evidence: 'Fixture supplies typed audit evidence.', rationale: 'Fixture supplies typed audit evidence.',
+      requirementAssociations: [], evidenceTaskIds: [],
     };
     if (grade === 'FIXABLE') return { ...base, grade, ownerTaskId: '1' };
-    if (grade === 'OVER_SCOPE') return { ...base, grade, intentRelation: 'within' };
+    if (grade === 'OVER_SCOPE') return { ...base, grade, intentRelation: 'within' as const };
     return { ...base, grade };
   });
   await persistPrdAuditVerdict(root, {
     complete: options.complete ?? true,
     judgment: { version: 'v1', criterionJudgments, noOwnerObservations: [] },
-    diagnostics: options.diagnostics ?? [],
-    recordedDispositions: [],
+    diagnostics: options.diagnostics ?? [], recordedDispositions: [],
   }, { attemptId: 'fixture-run', codeStamp: options.codeStamp ?? null });
 }
 

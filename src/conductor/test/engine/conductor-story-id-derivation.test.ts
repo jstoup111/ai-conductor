@@ -25,7 +25,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { Conductor, routePrdAuditPlanGaps } from '../../src/engine/conductor.js';
+import { Conductor } from '../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -173,43 +173,59 @@ describe('prd_audit remediation authorization derives suffixed story ids', () =>
   });
 });
 
-describe('criterionStorySection resolves suffixed story ids (via routePrdAuditPlanGaps)', () => {
-  const planGapReport = (criterion: string): string =>
-    [
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      `| ${criterion} | PLAN_GAP | | An edge case is not in the approved plan. |`,
-    ].join('\n');
+describe('typed PLAN_GAP routing resolves suffixed and nested story ids', () => {
+  let dir: string;
 
-  it('records a negative-path PLAN_GAP on S5a.3 rather than failing closed to a halt', () => {
-    expect(routePrdAuditPlanGaps(planGapReport('S5a.3'), STORIES, {} as never)).toMatchObject({
-      kind: 'record',
-      findings: [{ gate: 'prd_audit', grade: 'PLAN_GAP', criterion: 'S5A.3' }],
-    });
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'typed-story-id-routing-'));
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
   });
 
-  it('still halts a happy-path PLAN_GAP on S5a.1', () => {
-    expect(routePrdAuditPlanGaps(planGapReport('S5a.1'), STORIES, {} as never)).toMatchObject({
-      kind: 'halt',
-      haltClass: 'plan-gap',
-    });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
   });
 
-  it('still halts a happy-path PLAN_GAP on the nested id S2.1.1', () => {
-    expect(routePrdAuditPlanGaps(planGapReport('S2.1.1'), STORIES, {} as never)).toMatchObject({
-      kind: 'halt',
-      haltClass: 'plan-gap',
+  async function routePlanGap(criterionId: string, stories = STORIES): Promise<unknown> {
+    await writeFile(join(dir, '.docs', 'stories', 'suffixed-story.md'), stories, 'utf8');
+    const boundary = criterionId.lastIndexOf('.');
+    await persistPrdAuditVerdict(dir, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: criterionId.slice(1, boundary), ordinal: Number(criterionId.slice(boundary + 1)) },
+          criterionId,
+          grade: 'PLAN_GAP',
+          evidence: 'The typed judgment identifies an uncovered path.',
+          rationale: 'The active plan has no owning task.',
+          requirementAssociations: [],
+          evidenceTaskIds: [],
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: `typed-${criterionId}`, codeStamp: null });
+    const conductor = new Conductor({
+      stateFilePath: join(dir, '.pipeline', 'conduct-state.json'),
+      stepRunner: { run: async () => ({ success: true }) },
+      events: new ConductorEventEmitter(), projectRoot: dir,
     });
+    return (conductor as unknown as {
+      routeCurrentPrdAuditPlanGaps(state: { feature_desc: string }): Promise<unknown>;
+    }).routeCurrentPrdAuditPlanGaps({ feature_desc: 'suffixed-story' });
+  }
+
+  it.each([
+    ['S5a.3', 'record'],
+    ['S5a.1', 'halt'],
+    ['S2.1.1', 'halt'],
+  ] as const)('routes %s from typed evidence as %s', async (criterionId, kind) => {
+    await expect(routePlanGap(criterionId)).resolves.toMatchObject({ kind });
   });
 
-  it('records S1.3 from a wrapped-first-criterion story as its authored negative path', () => {
-    expect(routePrdAuditPlanGaps(planGapReport('S1.3'), WRAPPED_FIRST_CRITERION_STORIES, {} as never))
-      .toMatchObject({
-        kind: 'record',
-        findings: [{ gate: 'prd_audit', grade: 'PLAN_GAP', criterion: 'S1.3' }],
-      });
+  it('retains the wrapped negative criterion through the typed route', async () => {
+    await expect(routePlanGap('S1.3', WRAPPED_FIRST_CRITERION_STORIES)).resolves.toMatchObject({ kind: 'record' });
   });
 });

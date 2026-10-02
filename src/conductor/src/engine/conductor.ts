@@ -217,7 +217,6 @@ import {
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
   prdAuditTypedRouteReport,
-  parsePrdAuditReport,
   extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
   readRemediationPlanResult,
@@ -279,10 +278,7 @@ import {
   type OverScopeHaltClass,
 } from './halt-classification.js';
 import {
-  classifyOverScopeCriterion,
-  overScopeRelations,
   renderOverScopeDecisionBlock,
-  type OverScopeDecision,
   type IntentRelation,
 } from './accepted-widenings.js';
 import type { ScopeTrailer } from './scope-trailer.js';
@@ -961,7 +957,7 @@ function criterionStorySection(
   criterion: string,
 ): 'happy' | 'negative' | undefined {
   // The story id uses the stories parser's heading alphabet (`[A-Za-z0-9.-]`,
-  // see `story-criteria.ts`), mirroring `CRITERION_ID_RE` in artifacts.ts: the
+  // see `story-criteria.ts`): the
   // trailing `.<digits>` is the criterion ordinal and everything before it is
   // the heading id verbatim, so `S5a.3` and `S2.1.3` classify instead of
   // silently returning undefined (#2219 / PR #2222 fixed the sibling sites).
@@ -984,62 +980,6 @@ function criterionStorySection(
   return undefined;
 }
 
-/**
- * A PLAN_GAP on a main path needs an operator to amend the approved plan;
- * an edge-case gap is durable review information unless the feature opts in
- * to stopping on every plan gap. Unknown locations deliberately fail closed
- * as main-path gaps.
- */
-export function routePrdAuditPlanGaps(
-  reportText: string,
-  storiesText: string,
-  config: HarnessConfig,
-  activePlanText?: string,
-): PrdAuditPlanGapRoute {
-  // `activePlanText` is this parse's citation authority. Its absence is not
-  // permission to self-validate: the parser rejects a row citing a Plan task
-  // it cannot check, and the rejected-row guard below then declines to route.
-  const parsed = parsePrdAuditReport(reportText, activePlanText);
-  // A rejected row is a row the parser could not read, not a finding — it never
-  // appears in `parsed.value.findings`, so the `hasOtherBlockingGrade` scan
-  // below cannot see it. Without this guard a rejected row riding with a
-  // recordable negative-path PLAN_GAP returns `record`, and either SHIP path
-  // then overrides the gate as satisfied, so the row never blocks by name.
-  // Matches the sibling guard in `routePrdAuditOverScope`.
-  if (!parsed.ok || parsed.value.rejectedRows.length > 0) return { kind: 'none' };
-
-  const findings = parsed.value.findings
-    .filter((finding) => finding.grade === 'PLAN_GAP')
-    .map((finding) => ({
-      gate: 'prd_audit' as const,
-      grade: 'PLAN_GAP' as const,
-      criterion: finding.criterion,
-      summary: finding.evidence.trim() || `No approved plan task covers ${finding.criterion}.`,
-    }));
-  if (findings.length === 0) return { kind: 'none' };
-
-  const haltOnAnyPlanGap = (config as HarnessConfig & {
-    prd_audit?: { halt_on_any_plan_gap?: boolean };
-  }).prd_audit?.halt_on_any_plan_gap === true;
-  const blocking = findings.filter(
-    (finding) => haltOnAnyPlanGap || criterionStorySection(storiesText, finding.criterion) !== 'negative',
-  );
-  if (blocking.length > 0) {
-    return {
-      kind: 'halt',
-      haltClass: 'plan-gap',
-      detail: `PLAN_GAP on ${blocking.map((finding) => finding.criterion).join(', ')}.`,
-      findings,
-    };
-  }
-
-  const hasOtherBlockingGrade = parsed.value.findings.some(
-    (finding) => finding.grade !== 'PASS' && finding.grade !== 'PLAN_GAP',
-  );
-  return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings };
-}
-
-
 export type PrdAuditOverScopeRoute =
   | { kind: 'none' }
   | { kind: 'record'; findings: RecordedPrdAuditFinding[] }
@@ -1061,84 +1001,13 @@ type CurrentPrdAuditRoute =
   // other route — an unrenderable decision must not be settled as satisfied.
   | { kind: 'projection-halt'; reason: string };
 
-/** Route OVER_SCOPE findings through intent relation and prior operator acceptance. */
-export function routePrdAuditOverScope(
-  reportText: string,
-  decisions: readonly OverScopeDecision[],
-  activePlanText?: string,
-): PrdAuditOverScopeRoute {
-  const parsed = parsePrdAuditReport(reportText, activePlanText);
-  if (!parsed.ok || parsed.value.rejectedRows.length > 0) return { kind: 'none' };
-  const relations = overScopeRelations(reportText);
-  const overScopeFindings = parsed.value.findings.filter((finding) => finding.grade === 'OVER_SCOPE');
-  if (overScopeFindings.some((finding) => !relations.has(finding.criterion))) return { kind: 'none' };
-  const findings = overScopeFindings
-    .map((finding) => {
-      const summary = finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`;
-      const relation = relations.get(finding.criterion) as IntentRelation;
-      const classification = classifyOverScopeCriterion(finding.criterion, summary, relations, decisions);
-      const durableDecision = decisions
-        .filter((entry) => {
-          if (entry.criterion !== finding.criterion) return false;
-          return !isPrdAuditNoOwnerOrdinal(finding.criterion) || entry.summary.trim() === summary.trim();
-        })
-        .at(-1);
-      return {
-        gate: 'prd_audit' as const,
-        grade: 'OVER_SCOPE' as const,
-        criterion: finding.criterion,
-        summary,
-        accepted: classification === 'accepted' || relation === 'within',
-        ...(durableDecision ? { decision: durableDecision.decision, rationale: durableDecision.rationale } : {}),
-        classification,
-        relation,
-      };
-    });
-  if (findings.length === 0) return { kind: 'none' };
-
-  const undecided = findings.filter((finding) => finding.classification === 'blocking-undecided');
-  const refused = findings.filter((finding) => finding.classification === 'blocking-refused');
-  const recorded = findings.map(({ relation: _relation, classification: _classification, ...finding }) => finding);
-  if (undecided.length > 0 || refused.length > 0) {
-    return {
-      kind: 'halt',
-      haltClass: OVER_SCOPE_HALT_CLASS,
-      detail: `OVER_SCOPE visible behavior on ${[...undecided, ...refused].map((finding) => finding.criterion).join(', ')}.`,
-      findings: recorded,
-      undecided: undecided.map(({ classification: _classification, ...finding }) => finding),
-      refused: refused.map(({ classification: _classification, ...finding }) => finding),
-    };
-  }
-  const hasOtherBlockingGrade = parsed.value.findings.some(
-    (finding) => finding.grade !== 'PASS' && finding.grade !== 'OVER_SCOPE',
-  );
-  return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings: recorded };
-}
-
-/**
- * The v2 route consumes only criterion keys, published relations, and durable
- * operator decisions.  In particular, no reviewer summary is ever used to
- * find authority for an NC row.
- */
-export function routePrdAuditOverScopeV2(
-  reportText: string,
-  decisions: readonly AcceptedWideningDecision[],
-  cases: readonly RemediationCasePrdWideningRecord[],
-  activePlanText?: string,
-): PrdAuditOverScopeRoute {
-  const parsed = parsePrdAuditReport(reportText, activePlanText);
-  if (!parsed.ok || parsed.value.rejectedRows.length > 0) return { kind: 'none' };
-  const relations = overScopeRelations(reportText);
-  return routePrdAuditOverScopeV2FromTypedReport(parsed.value, relations, decisions, cases);
-}
-
 /**
  * Adapt the validated verdict to the existing widening domain without
  * re-reading its derived Markdown report.  Presentation ordinals remain only
  * locators for no-owner observations; their evidence and relation come from
  * the typed authority.
  */
-function routePrdAuditOverScopeV2FromTypedReport(
+function routeTypedPrdAuditOverScope(
   report: PrdAuditReport,
   relations: ReadonlyMap<string, IntentRelation>,
   decisions: readonly AcceptedWideningDecision[],
@@ -4734,7 +4603,7 @@ export class Conductor {
     if (!cases.ok || (decisions.kind !== 'absent' && decisions.kind !== 'valid')) {
       return { kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS, detail: renderPrdWideningRecovery('persistence-failed', [...blockingFindings.keys()]), findings: [], undecided: [], refused: [] };
     }
-    const route = routePrdAuditOverScopeV2FromTypedReport(
+    const route = routeTypedPrdAuditOverScope(
       typed.report,
       typed.relations,
       decisions.kind === 'valid' ? decisions.state.decisions : [],
