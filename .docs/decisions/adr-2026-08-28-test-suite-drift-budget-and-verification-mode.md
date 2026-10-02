@@ -267,6 +267,8 @@ byte copy, still deterministic and refuse-to-clobber.
 > prelude's pre-existing auto-mode `config init` call predates this feature (the merge-base skill
 > already invoked it), is unchanged by this amendment, and is out of its scope.
 
+> **Amended 2026-10-01 by #2709:** The previously excluded managed auto-mode initialization path is now governed by adr-2026-10-01-daemon-session-command-contracts D2 (operator-approved in composer chat). Managed prelude refresh requires initialized configuration; absent or unsafe setup returns an operator-bootstrap requirement before provider dispatch. Neither the provider nor the engine initializes configuration on that managed path. The unmarked operator bootstrap retains initialization, and D8.1–D8.3's refusal of marked config calls remains in force.
+
 ## Consequences
 
 ### Positive
