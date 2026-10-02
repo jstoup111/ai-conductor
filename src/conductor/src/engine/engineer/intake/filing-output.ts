@@ -31,7 +31,12 @@ export function renderIntakeFileOutput(result: FileIntakeIssueResult): {
         && result.overlap.omittedCount === 0) {
         stdout.push('[intake-file] overlap check: no overlap');
       }
-      for (const ref of result.overlap.accepted) stdout.push(`[intake-file] overlap: linked ${ref}`);
+      for (const ref of result.overlap.accepted) {
+        if (result.linked.includes(ref)) stdout.push(`[intake-file] overlap: linked ${ref}`);
+        else if (result.unlinked.some((dependency) => dependency.ref === ref)) {
+          stdout.push(`[intake-file] overlap: accepted ${ref} (not linked — see NOT LINKED below)`);
+        }
+      }
       for (const ref of result.overlap.declined) stdout.push(`[intake-file] overlap: declined ${ref}`);
     } else if (result.overlap.kind === 'refused') {
       for (const suggestion of result.overlap.undecided) {

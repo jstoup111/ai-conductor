@@ -1,4 +1,5 @@
 import {
+  enumerateUnmergedBranches,
   intersectFiles,
 } from '../../overlap-scan.js';
 import { changedPathsSinceMergeBase, type GitRunner } from '../../rebase.js';
@@ -193,30 +194,12 @@ export async function selectInFlightBranches({
   const skipNotes: string[] = [];
   let branches: string[];
   try {
-    // Unlike DECIDE's best-effort overlap scan, this filing path must preserve
-    // a failed ref enumeration as a visible degraded-comparison note.
-    const refs = await git([
-      'for-each-ref',
-      '--format=%(refname:short)',
-      ...IN_FLIGHT_REF_PATTERNS,
-    ]);
-    if (refs.exitCode !== 0) {
-      return { branches: [], skipNotes: [`skipped in-flight branch enumeration: ${refs.stderr}`] };
-    }
-
-    const candidates = refs.stdout
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-    branches = [];
-    for (const branch of candidates) {
-      if (branch === baseRef || branch.endsWith(`/${baseRef}`)) continue;
-      const ahead = await git(['rev-list', '--count', `${baseRef}..${branch}`]);
-      const aheadCount = ahead.exitCode === 0 ? Number.parseInt(ahead.stdout.trim(), 10) : Number.NaN;
-      // A failed ahead-count is indeterminate, not proof that this comparison
-      // branch is merged. Keep it, matching enumerateUnmergedBranches.
-      if (Number.isNaN(aheadCount) || aheadCount !== 0) branches.push(branch);
-    }
+    branches = await enumerateUnmergedBranches(
+      git,
+      baseRef,
+      IN_FLIGHT_REF_PATTERNS,
+      (stderr) => skipNotes.push(`skipped in-flight branch enumeration: ${stderr}`),
+    );
   } catch (error) {
     return { branches: [], skipNotes: [`skipped in-flight branch enumeration: ${error instanceof Error ? error.message : String(error)}`] };
   }

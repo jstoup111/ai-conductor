@@ -108,6 +108,29 @@ describe('engine/overlap-scan — enumerateUnmergedBranches (Task 1)', () => {
 
     expect(result).toEqual(['spec/feature-unknown']);
   });
+
+  it('uses supplied ref patterns and reports enumeration failures only to its callback', async () => {
+    const custom = fakeGit([
+      { match: ['for-each-ref'], result: { exitCode: 1, stderr: 'custom refs unavailable' } },
+    ]);
+    const failures: string[] = [];
+
+    await expect(enumerateUnmergedBranches(
+      custom.git,
+      'main',
+      ['refs/heads/feat/daemon-*'],
+      (stderr) => failures.push(stderr),
+    )).resolves.toEqual([]);
+    expect(custom.calls).toEqual([[
+      'for-each-ref', '--format=%(refname:short)', 'refs/heads/feat/daemon-*',
+    ]]);
+    expect(failures).toEqual(['custom refs unavailable']);
+
+    const defaults = fakeGit([
+      { match: ['for-each-ref'], result: { exitCode: 1, stderr: 'default refs unavailable' } },
+    ]);
+    await expect(enumerateUnmergedBranches(defaults.git, 'main')).resolves.toEqual([]);
+  });
 });
 
 describe('engine/overlap-scan — intersectFiles (Task 2)', () => {
