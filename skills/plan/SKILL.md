@@ -293,6 +293,14 @@ approved architecture's `## Wiring Surface`; at Small tier, identify any changed
 directly from the scoped behavior. Name stable observable behavior, not a `file:line` or private
 caller that will drift under refactoring.
 
+The Wiring Surface is a floor, not the full list. At SHIP, the as-built `/architecture-review`
+requires every primitive the diff adds or changes (an exported function, config key, emitted event,
+or hook) to be reachable from a production entry point at every tier. When a task changes a
+primitive whose behavior must reach production, some task's `Done when:` must state that behavior
+as observed through an entry point, even when no Wiring Surface entry names it. Wording the
+obligation as observed behavior, rather than as "call X from Y", lets `/simplify` move the call site
+without making the task undeliverable or its evidence stale.
+
 ### 4. Task Ordering Rules
 
 1. **Infrastructure first** — Database migrations, model definitions, route setup
