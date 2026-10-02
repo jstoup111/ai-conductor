@@ -1422,6 +1422,8 @@ export interface StepRunResult {
   };
   /** Deterministic as-built input/capability failures never enter retries. */
   asBuiltFault?: { kind: 'input' | 'capability'; reason: string };
+  /** Deterministic PRD-audit input/capability failures never enter retries. */
+  prdAuditFault?: { kind: 'input' | 'capability'; reason: string };
   /** Provider routing identity and ordered candidate-attempt accounting. */
   preferredProvider?: string;
   actualProvider?: string;
