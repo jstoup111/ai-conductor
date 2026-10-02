@@ -14,7 +14,7 @@ import type { ProviderExecutionContext } from '../../src/engine/provider-executi
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
-import { PRD_AUDIT_VERDICT_PATH } from '../../src/engine/prd-audit-verdict-store.js';
+import { PRD_AUDIT_REPORT_PATH, PRD_AUDIT_VERDICT_PATH } from '../../src/engine/prd-audit-verdict-store.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 
 const execFileAsync = promisify(execFile);
@@ -28,8 +28,8 @@ async function fixture(): Promise<string> {
   await execFileAsync('git', ['init', '-b', 'main', root]);
   await git('config', 'user.email', 'test@example.com'); await git('config', 'user.name', 'Test');
   await mkdir(join(root, '.docs', 'plans'), { recursive: true }); await mkdir(join(root, '.docs', 'stories'), { recursive: true });
-  await writeFile(join(root, '.docs', 'plans', 'feature.md'), `# Plan\n\n**Stories:** .docs/stories/feature.md\n\n## Technical Approach\nBound the PRD audit.\n\n### Task 1: Audit\n\n**Story:** Story 1\n\n**Done when:**\n- the audit dispatches typed evidence\n`);
-  await writeFile(join(root, '.docs', 'stories', 'feature.md'), `# Stories\n\n## Story 1: Audit\n\n### Happy Path\n- Given an active feature, when audited, then the evidence is bounded.\n`);
+  await writeFile(join(root, '.docs', 'plans', 'feature.md'), `# Plan\n\n**Stories:** .docs/stories/feature.md\n\n## Technical Approach\nBound the PRD audit.\n\n### Task 1: Project criteria\n\n**Story:** Story 1\n\n**Done when:**\n- the audit dispatches typed evidence\n\n### Task 2: Persist verdict\n\n**Story:** Story 1\n\n**Done when:**\n- the rendered report reflects the persisted judgment\n`);
+  await writeFile(join(root, '.docs', 'stories', 'feature.md'), `# Stories\n\n## Story 1: Audit\n\n### Happy Path\n- Given an active feature, when audited, then the evidence is bounded.\n\n### Negative Paths\n- Given a malformed judgment, when audited, then the engine rejects it.\n`);
   await writeFile(join(root, 'tracked.ts'), 'export const value = 1;\n'); await git('add', '.'); await git('commit', '-m', 'base');
   await git('checkout', '-b', 'feature/audit'); await writeFile(join(root, 'tracked.ts'), 'export const value = 2;\n'); await git('add', '.'); await git('commit', '-m', 'change');
   return root;
@@ -87,16 +87,90 @@ async function expectNoVerdict(root: string): Promise<void> {
   await expect(access(join(root, PRD_AUDIT_VERDICT_PATH))).rejects.toMatchObject({ code: 'ENOENT' });
 }
 
+function dispatchedProjection(invoke: ReturnType<typeof vi.fn>) {
+  const prompt = invoke.mock.calls[0]![0].prompt;
+  const prefix = 'PRD-AUDIT EVIDENCE (engine-owned, versioned):\n';
+  const suffix = '\n\nTerminal judgment shape (engine-owned):';
+  const start = prompt.indexOf(prefix);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = prompt.indexOf(suffix, start);
+  expect(end).toBeGreaterThan(start + prefix.length);
+  return JSON.parse(prompt.slice(start + prefix.length, end)) as {
+    criteria: { id: string; kind: string }[];
+    tasks: { id: string; doneWhen: string[] }[];
+  };
+}
+
+const passingJudgment = {
+  version: 'v1',
+  criterionJudgments: [
+    { criterion: { storyId: '1', ordinal: 1 }, grade: 'PASS', evidence: 'Happy path is covered.', rationale: 'The change covers bounded evidence.', requirementAssociations: [], evidenceTaskIds: ['1'] },
+    { criterion: { storyId: '1', ordinal: 2 }, grade: 'PASS', evidence: 'Negative path is covered.', rationale: 'The change rejects malformed judgments.', requirementAssociations: [], evidenceTaskIds: ['2'] },
+  ],
+  noOwnerObservations: [],
+};
+
 describe('PRD audit typed provider dispatch', () => {
-  it('sends engine-owned bounded evidence and persists only a validated terminal judgment', async () => {
+  it('projects each fixture criterion and task, then renders its validated terminal judgment', async () => {
     const root = await fixture();
-    const { invoke, runner: subject } = runner(root, { success: true, output: 'done', finalStructuredResult: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, grade: 'PASS', evidence: 'Covered.', rationale: 'The changed path is covered.', requirementAssociations: [], evidenceTaskIds: ['1'] }], noOwnerObservations: [] } } as InvokeResult);
+    const { invoke, runner: subject } = runner(root, { success: true, output: 'done', finalStructuredResult: passingJudgment } as InvokeResult);
     await expect(subject.run('prd_audit', { complexity_tier: 'S' })).resolves.toMatchObject({ success: true });
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke.mock.calls[0]![0].interactive).toBe(false);
     expect(invoke.mock.calls[0]![0].nativeSchema).toBeDefined();
-    expect(invoke.mock.calls[0]![0].prompt).toContain('PRD-AUDIT EVIDENCE');
-    expect(JSON.parse(await readFile(join(root, PRD_AUDIT_VERDICT_PATH), 'utf8'))).toMatchObject({ attemptId: 'prd-attempt', complete: true });
+    expect(dispatchedProjection(invoke)).toMatchObject({
+      criteria: [
+        { id: 'S1.1', kind: 'happy' },
+        { id: 'S1.2', kind: 'negative' },
+      ],
+      tasks: [
+        { id: '1', doneWhen: ['the audit dispatches typed evidence'] },
+        { id: '2', doneWhen: ['the rendered report reflects the persisted judgment'] },
+      ],
+    });
+    const persisted = JSON.parse(await readFile(join(root, PRD_AUDIT_VERDICT_PATH), 'utf8'));
+    expect(persisted).toMatchObject({ attemptId: 'prd-attempt', complete: true, judgment: passingJudgment });
+    await expect(readFile(join(root, PRD_AUDIT_REPORT_PATH), 'utf8')).resolves.toContain('S1.2: PASS — Negative path is covered.');
+  });
+
+  it('persists a partial verdict with diagnostics when validation rejects an invented criterion', async () => {
+    const root = await fixture();
+    const { runner: subject } = runner(root, {
+      success: true,
+      output: 'done',
+      finalStructuredResult: {
+        ...passingJudgment,
+        criterionJudgments: [
+          passingJudgment.criterionJudgments[0],
+          { criterion: { storyId: '999', ordinal: 1 }, grade: 'PASS', evidence: 'Invented.', rationale: 'This criterion does not exist.', requirementAssociations: [], evidenceTaskIds: ['2'] },
+        ],
+      },
+    } as InvokeResult);
+
+    await expect(subject.run('prd_audit', { complexity_tier: 'S' })).resolves.toMatchObject({
+      success: false,
+      output: expect.stringContaining('structured-result-rejected'),
+    });
+
+    const persisted = JSON.parse(await readFile(join(root, PRD_AUDIT_VERDICT_PATH), 'utf8'));
+    expect(persisted).toMatchObject({
+      attemptId: 'prd-attempt',
+      complete: false,
+      diagnostics: expect.arrayContaining(['criterionJudgments[1].criterion does not resolve active criterion S999.1']),
+      judgment: { criterionJudgments: [expect.objectContaining({ criterionId: 'S1.1' })] },
+    });
+    expect(persisted.judgment.criterionJudgments).not.toContainEqual(expect.objectContaining({ criterionId: 'S999.1' }));
+  });
+
+  it.each([
+    ['no terminal structured result', { success: true, output: 'done' }],
+    ['a malformed terminal structured result', { success: true, output: 'done', finalStructuredResult: { malformed: true } }],
+  ])('does not succeed or persist a verdict for %s', async (_name, result) => {
+    const root = await fixture();
+    const { runner: subject } = runner(root, result as InvokeResult);
+
+    await expect(subject.run('prd_audit', { complexity_tier: 'S' })).resolves.toMatchObject({ success: false });
+    await expectNoVerdict(root);
   });
 
   it('refuses a candidate lacking native structured output before invocation', async () => {
