@@ -151,7 +151,11 @@ describe('PRD-audit feature projection', () => {
     await writeFile(stories, `# Stories\n\n## Story alpha.1: Broken obligation\n\n### Happy Path\n- Given a request, when it is handled, it is visible.\n`);
     await expect(buildPrdAuditProjection(root)).resolves.toMatchObject({
       ok: false,
-      fault: { dimension: 'stories criteria', detail: expect.stringContaining('sealed Happy Path/Negative Paths Given/When/Then') },
+      fault: {
+        source: '.docs/stories/audit-fixture.md',
+        dimension: 'malformed-criteria',
+        detail: expect.stringContaining('lacks Then'),
+      },
     });
 
     await writeFile(stories, `# Stories\n\n## Story alpha.1: Valid obligation\n\n### Happy Path\n- Given a request, when it is handled, then it is visible.\n\n### Negative Paths\n- Given a request, when it fails, then it is visible.\n`);
@@ -162,15 +166,20 @@ describe('PRD-audit feature projection', () => {
     });
   });
   it.each([
-    ['a source without a story id', '# Stories\n\n### Happy Path\n- Given a request, when it is handled, then it is visible.\n\n### Negative Paths\n- Given a request, when it fails, then it is visible.'],
-    ['a source without negative paths', '# Stories\n\n## Story alpha.1: Broken obligation\n\n### Happy Path\n- Given a request, when it is handled, then it is visible.'],
-    ['a criterion without When', '# Stories\n\n## Story alpha.1: Broken obligation\n\n### Happy Path\n- Given a request, then it is visible.\n\n### Negative Paths\n- Given a request, when it fails, then it is visible.'],
-  ])('rejects %s through the sealed story readability contract', async (_name, storiesText) => {
+    ['a source without a story id', '# Stories\n\n### Happy Path\n- Given a request, when it is handled, then it is visible.\n\n### Negative Paths\n- Given a request, when it fails, then it is visible.', 'missing Story id'],
+    ['a source without a Happy Path section', '# Stories\n\n## Story alpha.1: Broken obligation\n\n### Negative Paths\n- Given a request, when it fails, then it is visible.', 'missing Happy Path section'],
+    ['a source without a Negative Paths section', '# Stories\n\n## Story alpha.1: Broken obligation\n\n### Happy Path\n- Given a request, when it is handled, then it is visible.', 'missing Negative Paths section'],
+    ['a criterion without When', '# Stories\n\n## Story alpha.1: Broken obligation\n\n### Happy Path\n- Given a request, then it is visible.\n\n### Negative Paths\n- Given a request, when it fails, then it is visible.', 'lacks When'],
+  ])('rejects %s through the sealed story readability contract', async (_name, storiesText, diagnostic) => {
     const root = await fixture();
     await writeFile(join(root, '.docs', 'stories', 'audit-fixture.md'), storiesText);
     await expect(buildPrdAuditProjection(root)).resolves.toMatchObject({
       ok: false,
-      fault: { dimension: 'stories criteria', detail: expect.stringContaining('story') },
+      fault: {
+        source: '.docs/stories/audit-fixture.md',
+        dimension: 'malformed-criteria',
+        detail: expect.stringContaining(diagnostic),
+      },
     });
   });
 
@@ -541,7 +550,11 @@ describe('PRD-audit feature projection', () => {
     expect({ result, bytes: await readFile(foreignStoriesPath, 'utf-8') }).toEqual({
       result: {
         ok: false,
-        fault: { dimension: 'stories', detail: 'sealed stories are unreadable' },
+        fault: {
+          source: '.docs/stories/audit-fixture.md',
+          dimension: 'stories',
+          detail: 'sealed stories are unreadable',
+        },
       },
       bytes: foreignStories,
     });

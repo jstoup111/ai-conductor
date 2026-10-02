@@ -19,6 +19,24 @@ export interface AcceptedStoryReadability {
   firstUnreadableStoryId?: string;
 }
 
+/** A criterion accepted by the sealed-story contract, in stable source order. */
+export interface SealedStoryCriterion {
+  readonly id: string;
+  readonly storyId: string;
+  readonly kind: 'happy' | 'negative';
+  readonly text: string;
+}
+
+/** A named reason the sealed-story contract could not derive authoritative criteria. */
+export interface SealedStoryCriterionDiagnostic {
+  readonly storyId?: string;
+  readonly detail: string;
+}
+
+export type SealedStoryCriteriaRead =
+  | { readonly ok: true; readonly criteria: readonly SealedStoryCriterion[] }
+  | { readonly ok: false; readonly diagnostics: readonly SealedStoryCriterionDiagnostic[] };
+
 /**
  * Split a stories file into per-story blocks on `## Story <id>:` headings.
  * Single-story files (no such heading) return one block spanning the file.
@@ -87,6 +105,54 @@ export function listItems(body: string): string[] {
   return items.filter((item) => item !== '');
 }
 
+/**
+ * Resolve the authoritative criterion set only when every sealed story is
+ * readable. Consumers must use this instead of independently accepting a
+ * subset of story blocks or Given/Then-only bullets.
+ */
+export function readSealedStoryCriteria(storiesText: string): SealedStoryCriteriaRead {
+  const criteria: SealedStoryCriterion[] = [];
+  const diagnostics: SealedStoryCriterionDiagnostic[] = [];
+
+  for (const block of splitStoryBlocks(storiesText)) {
+    if (!block.id) {
+      diagnostics.push({ detail: 'story source is missing Story id' });
+      continue;
+    }
+
+    let ordinal = 0;
+    for (const [kind, heading, label] of [
+      ['happy', /happy\s*path/i, 'Happy Path'],
+      ['negative', /negative\s*paths?/i, 'Negative Paths'],
+    ] as const) {
+      const body = sectionBody(block.text, heading);
+      if (body === null) {
+        diagnostics.push({ storyId: block.id, detail: `story ${block.id} is missing ${label} section` });
+        continue;
+      }
+      const items = listItems(body);
+      if (items.length === 0) {
+        diagnostics.push({ storyId: block.id, detail: `story ${block.id} has an empty ${label} section` });
+        continue;
+      }
+      for (const text of items) {
+        ordinal += 1;
+        const missing = ['Given', 'When', 'Then'].filter((term) => !new RegExp(`\\b${term}\\b`, 'i').test(text));
+        if (missing.length > 0) {
+          diagnostics.push({
+            storyId: block.id,
+            detail: `story ${block.id} ${kind} criterion ${ordinal} lacks ${missing.join(', ')}`,
+          });
+          continue;
+        }
+        criteria.push({ id: `S${block.id}.${ordinal}`, storyId: block.id, kind, text });
+      }
+    }
+  }
+
+  return diagnostics.length === 0 ? { ok: true, criteria } : { ok: false, diagnostics };
+}
+
 /** Map each authoritative Given/When/Then row to its report-table criterion id. */
 export function extractStoryCriterionIds(storiesText: string): string[] {
   const ids: string[] = [];
@@ -122,19 +188,10 @@ export function extractStoryCriterionIds(storiesText: string): string[] {
  * dropping a malformed bullet would let land seal an unreadable artifact.
  */
 export function assessAcceptedStoryReadability(storiesText: string): AcceptedStoryReadability {
-  const stories = splitStoryBlocks(storiesText).map((block) => {
-    const happyPath = sectionBody(block.text, /happy\s*path/i);
-    const negativePaths = sectionBody(block.text, /negative\s*paths?/i);
-    const items = [happyPath, negativePaths]
-      .flatMap((section) => section === null ? [] : listItems(section))
-    const readable = items.length > 0
-      && items.every((item) => /\bgiven\b/i.test(item) && /\bwhen\b/i.test(item) && /\bthen\b/i.test(item))
-      && happyPath !== null
-      && listItems(happyPath).length > 0
-      && negativePaths !== null
-      && listItems(negativePaths).length > 0;
-    return { id: block.id, readable };
-  });
+  const stories = splitStoryBlocks(storiesText).map((block) => ({
+    id: block.id,
+    readable: readSealedStoryCriteria(block.text).ok,
+  }));
 
   return {
     stories,
