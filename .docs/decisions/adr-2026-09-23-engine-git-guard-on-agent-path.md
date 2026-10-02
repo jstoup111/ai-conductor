@@ -108,6 +108,12 @@ Option A.
    - A single-level non-shell git alias is expanded before classification.
 
    > **Amended 2026-09-23 by #1354:** conflict-check found that the unmerged-branch rule above refuses the #334 smoke cleanup (a branch created at `HEAD` in the root checkout) and disagrees with parked-feature reconciliation when a local `main` lags. The rule now refuses `branch -D` and `--delete --force` only when the branch tip is not reachable from any other local branch or remote-tracking ref, which is when commits would become unreachable. The ancestor-of-default-branch case is a subset of this rule and stays allowed.
+
+   > **Amended 2026-10-02 by #1354 (operator decision):** this decision's matrix is delivered for the
+   > canonical spellings of each refused form, and for the global-option and alias spellings that
+   > #1354's tests name. Parsing every other spelling git accepts is delivered by #2904. That
+   > includes global options such as `--config-env=<name>=<envvar>` and alias text quoted the way
+   > git quotes it. Until #2904 ships, those spellings are a recorded limit under D10.
 6. **Every refusal explains itself.** It exits non-zero without running `git`. Its stderr names the
    refused operation, why it is refused, and the safe alternative: `--force-with-lease`,
    `reset --keep`, `branch -d`, `clean -n`, or committing a WIP first or using a temporary worktree.
@@ -128,6 +134,11 @@ Option A.
    `hooks/claude/block-destructive-git.sh` is not removed. Its scanner drops heredoc bodies as well
    as quoted spans before matching, so text that merely describes a destructive command is not
    refused.
+
+   > **Amended 2026-10-02 by #1354 (operator decision):** the heredoc and quote handling covers the
+   > forms #1354's tests name. Bash quote removal on heredoc delimiters (`<<\EOF`, `<<E"OF"`) and
+   > ignoring openers inside comments are delivered by #2904. The hook is early feedback, not the
+   > enforcement point (D2), so these gaps cost a false refusal or a missed early warning only.
 9. **Skill text agrees with the guard.** The `tdd` skill's pre-diff counterfactual runs in a
    temporary detached worktree, never by discarding changes in the build worktree.
 10. **Coverage is proven by executable tests and documented limits.**
@@ -171,3 +182,4 @@ Option A.
       guard.
 - [ ] #1352: OS-level sealing for the adversarial bypass class.
 - [ ] #2895: destructive-git guard enforcement and proof for the Pi provider adapter.
+- [ ] #2904: git-faithful option, alias and heredoc parsing for the guard and operator hook.
