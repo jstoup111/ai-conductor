@@ -60,6 +60,13 @@ A validated prior relationship may be reused only for the identical source snaps
 
 The result covers each supplied current source exactly once with same-case(existing case ID), different, or uncertain(candidate case IDs and reason). New case IDs are stamped only by the engine after validation. A same-case result needs a substantive explanation; incomplete evidence may be uncertain. No judge verdict directly says accepted or refused.
 
+> **Amended 2026-09-30 by #2521:** D5.1 replaces the current-report parse with the validated
+> typed PRD finding set and its typed intent relations. Independent-entry diagnostics remain
+> blocking; valid siblings remain available as evidence under the existing routing rules.
+> Criterion-scoped decisions and the NC semantic reconciliation owner are unchanged. Original
+> source/case IDs and historical snapshots remain durable; presentation ordinals and report
+> prose grant no authority.
+
 ### D6 — Engine-owned native output contract
 
 Define the closed versioned input projection and JSON output schema in the engine. Thread a narrowly optional schema contract through InvokeOptions and the existing selected-provider execution path. Claude passes its native JSON-schema option; Codex uses an engine-created schema file under the feature invocation scratch directory and its native output-schema option. The adapter consumes the provider's final structured result, not markdown or arbitrary intermediate tool text. The engine validates the schema again and validates all cross-record relationships.
@@ -68,11 +75,34 @@ No other step's parser is migrated in #2429. Skills carry judgment guidance for 
 
 This supplies only the contract needed here and is an incremental implementation of #2188's direction. Consume a compatible shared seam if it lands before BUILD; do not introduce a competing second option. Coordinate that ownership in #2188 before land.
 
+> **Amended 2026-09-30 by #2521:** D6.3 adds `prd_audit` as the fourth consumer of the
+> existing native-schema seam, using the one-shot skill path in managed auto and interactive
+> runs. Its versioned engine-rendered input contains sealed criteria, plan ownership/Done-when
+> and intent, applicable PRD/coherence context, scoped changes and available prior findings
+> and attributable decisions. Its terminal output carries only judgment. One engine schema
+> supplies native enforcement and the rendered output shape; validation resolves references
+> against the supplied authoritative feature artifacts. The engine persists the typed verdict,
+> renders the report, and supplies every consumer through one reader. Skills keep judgment
+> guidance and standalone human use, not machine input recipes or table grammar. No provider
+> option, adapter, registry, decision authority or reconciliation responsibility is added.
+
 ### D7 — Bounded inputs and retries never erase obligations
 
 Initial bounds: 512 current sources, 128 PRD cases, 512 source links per case, 64 evidence pointers per source, 256 bytes per identifier/reference, 8000 bytes per prose field, and 128 KiB total serialized reconciliation input. These are explicit approved engineering limits based on the existing build-review context precedent, not measurements of this feature's needs. Overflow names the dimension, actual size, and limit and blocks reconciliation without truncation or history pruning.
 
 At most one successful semantic reconciliation is accepted per unchanged frozen input. An uncertain result is terminal for that snapshot and asks for an explicit operator decision; it does not retry for a more agreeable answer. Mechanical dispatch failures use the configured remediate attempt allowance and then a named halt. Reconciliation never charges a BUILD or plan-growth allowance. Restart reuses committed evidence for the same input rather than replaying a completed judgment.
+
+> **Amended 2026-09-30 by #2521:** D7.2 applies the named-bound rule to the full PRD-audit
+> input projection. Required structured dimensions and total size have finite engine constants
+> based on the corresponding corpus at BUILD; plan-task and criterion limits have a 256 KiB
+> floor and fit the largest observed corresponding input. PRD/coherence/available-history
+> constants are measured and rounded up, and the total accommodates documented component
+> limits plus envelope overhead. Missing/unreadable/over-limit required input faults before
+> invocation, naming source/dimension and actual/limit for overflow, with no truncation or
+> repeated provider call. Diff caps follow as-built (256 KiB per file, 512 KiB total), with
+> explicit omitted paths/digests for read-only inspection. Optional absent PRD/history is
+> represented honestly; present corrupt/foreign/unsupported authority is never absence.
+> Existing widening-reconciliation limits and allowances remain unchanged.
 
 ### D8 — Commit relationships with optimistic freshness, classify mechanically
 
@@ -81,6 +111,15 @@ Capture a digest of the report/source set, code/diff snapshot, feature identity,
 Once relationships are durable, derive accepted, blocking-refused, blocking-undecided, or not-blocking from those relationships plus current authoritative decisions. Routing, verdict projection, artifact completion, and ship rendering consume that same classification and freshness evidence. They never call an LLM or re-run summary similarity independently. A raw reviewer statement that an approval exists cannot satisfy completion.
 
 An absent current finding may make its refusal presently moot, but does not delete the refusal or history. Recurrence is reconciled against the retained case. A changed/refused widening cannot be silently converted into a repair task by this slice.
+
+> **Amended 2026-09-30 by #2521:** D8.1 computes current-source freshness from the canonical
+> source-bearing typed judgment, excluding derived report formatting and recorded-disposition
+> projections. Keep source/code/feature/decision-revision/version checks and increment the
+> projection contract version when its representation changes. Historical original Markdown
+> snapshots remain immutable context, never a current verdict; existing provenance fields
+> may store a bounded deterministic rendering of validated source without parsing it for
+> authority. Existing decisions and cases survive; representation change may require fresh
+> reconciliation, never re-approval solely for presentation drift.
 
 ### D9 — Recovery and observability follow existing ownership
 

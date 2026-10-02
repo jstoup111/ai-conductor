@@ -97,6 +97,8 @@ within-dispatch mtime attempt-floor unchanged.**
 6. **Kill-switch.** An additive config flag reverts to pure mtime-freshness (no stamp read/preserve),
    defaulting to the new behavior.
 
+> **Amended 2026-09-30 by #2521:** Decisions 3, 5 and 6 retain their established scope for other gates. Managed PRD audit and as-built review instead follow adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity and its typed-review amendments: the code-validity switch controls pre-dispatch preservation, never typed attempt identity. Markdown-only, malformed typed, or missing current-dispatch evidence cannot pass through mtime fallback. Decision 4 uses the same validated typed reader as completion and preserves operator decision history.
+
 ## Alternatives considered
 
 - **Raw HEAD tree-hash equality** (preserve only if the whole tree is byte-identical). Rejected — a

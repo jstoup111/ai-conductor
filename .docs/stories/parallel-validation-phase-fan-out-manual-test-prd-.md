@@ -65,8 +65,7 @@ serially.
 
 #### Happy Path
 - Given a technical-track feature, when the validation group resolves membership, then
-  prd_audit is not dispatched and its state key is `skipped` — identical to today's
-  serial skip.
+  prd_audit remains applicable and receives the same typed judgment contract as the serial path, with explicit no-PRD context.
 - Given an S-tier feature (or one whose DECIDE-phase architecture_review was skipped),
   when membership resolves, then architecture_review_as_built is not dispatched and its
   state key is `skipped`.

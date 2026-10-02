@@ -76,6 +76,8 @@ representable state: the candidate's `accepted: false` field is written but neve
 
    > **Amended 2026-09-07 by #2429:** Use version-2 operator decisions and domain-tagged case history under adr-2026-09-07-durable-prd-widening-decision-reconciliation D1-D4. Preserve valid version-1 rows and legacy cleared decisions. Corruption is a named recovery condition, not absence. NC wording/ordinal changes enter source-complete judgment; a validated same-case relationship retains authority. Explicit supersession governs reversals.
 
+> **Amended 2026-09-30 by #2521:** Decision 4's current finding carrier follows adr-2026-08-22-prd-audit-stories-authority-and-bounded-kickback decision 3 as amended: the engine assigns NC presentation ordinals to validated typed no-owner observations. The reviewer does not author a machine table or identity. Original decisions, offers, explicit reversals and semantic reconciliation remain governed by adr-2026-09-07-durable-prd-widening-decision-reconciliation; changing the carrier grants no new authority.
+
 5. **No backwards compatibility (operator-authorized pre-v1 break).** The single-line
    `OVER_SCOPE_ACCEPT:` marker, its single-match reader, and the old record shape are removed
    in the same change. An old-shape store or an old-form `HALT.cleared` body reads as absent.

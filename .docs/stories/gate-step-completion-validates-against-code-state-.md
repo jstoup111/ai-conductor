@@ -71,7 +71,7 @@ than it is today.
 
 ### Happy Path
 
-- **Given** a `build_review`, `prd_audit`, or `manual_test` `PASS` verdict authored before this change
+- **Given** a `build_review` or `manual_test` `PASS` verdict authored before this change
   (no `codeStamp`) — or the kill-switch is off,
 - **When** completion is re-evaluated on re-dispatch,
 - **Then** the code-validity branch does not apply and the existing mtime-freshness behavior governs
@@ -79,7 +79,7 @@ than it is today.
 
 ### Negative Path
 
-- **Given** an `architecture_review_as_built` artifact with no code stamp or no run-identity stamp — or
+- **Given** a `prd_audit` or `architecture_review_as_built` artifact with no code stamp or no run-identity stamp — or
   the kill-switch is off,
 - **When** completion is re-evaluated on re-dispatch,
 - **Then** no mtime comparison decides freshness: identity checking stays in force, only a typed verdict
@@ -129,7 +129,7 @@ As the gate layer, when a gate is re-run, the judge must still write a fresh ver
 
 ### Happy Path
 
-- **Given** a gate other than `architecture_review_as_built` that re-runs (surface changed / no stamp /
+- **Given** a gate other than `prd_audit` or `architecture_review_as_built` that re-runs (surface changed / no stamp /
   invalidated) and the judge is dispatched,
 - **When** the judge declines to rewrite its verdict file this attempt,
 - **Then** the existing per-attempt freshness floor (`verdictFreshnessComparand` with its FS tolerance)
@@ -138,12 +138,12 @@ As the gate layer, when a gate is re-run, the judge must still write a fresh ver
 
 ### Negative Path
 
-- **Given** an `architecture_review_as_built` gate that re-runs and whose dispatch produces no validated
+- **Given** a `prd_audit` or `architecture_review_as_built` gate that re-runs and whose dispatch produces no validated
   structured result this attempt, with the kill-switch on or off,
 - **When** completion is evaluated,
 - **Then** the typed verdict stamped with an earlier attempt's identity is scored absent by run identity
   rather than by a file mtime floor, and the step reruns within its existing retry budget — the
-  incident-2026-07-12 guard is intact for the as-built gate.
+  incident-2026-07-12 guard is intact for both typed gates.
 
 ## Story 7 — `sweepStaleReviewArtifacts` does not delete a still-valid verdict
 
