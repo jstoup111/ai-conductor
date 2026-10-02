@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-02T23:45:09.264Z
 Slug: fence-ship-validator-verdict-artifacts-from-build-
 Class: needs-human
 Halting step: unknown
