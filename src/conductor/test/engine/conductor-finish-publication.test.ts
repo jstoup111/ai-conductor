@@ -149,6 +149,34 @@ describe('Conductor FINISH publication routing', () => {
     await writeState(statePath, state as ConductState);
   });
 
+  it('refuses FINISH without its coordinator before any provider recording dispatch', async () => {
+    const runner: StepRunner = { run: vi.fn(async () => { throw new Error('provider must not run'); }) };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      providerExecution: {} as never,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect(runner.run).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'FINISH publication coordination is unavailable.',
+    );
+    await expect(readFile(join(dir, '.pipeline', 'finish-choice'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
   });
@@ -1289,6 +1317,10 @@ describe('Conductor FINISH publication routing', () => {
     events.on('finish_publication_disposition', (event) => {
       if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
     });
+    const recordFinish = vi.fn(async () => {
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      return 0;
+    });
     const coordinator = createProductionFinishPublicationCoordinator({
       projectRoot: dir,
       stateFilePath: productionStatePath,
@@ -1325,10 +1357,7 @@ describe('Conductor FINISH publication routing', () => {
         },
       },
       observeReleaseReadiness: async () => 'present',
-      recordFinish: async () => {
-        await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-        return 0;
-      },
+      recordFinish,
     });
     const conductor = new Conductor({
       stateFilePath: productionStatePath, stepRunner: runner, finishPublication: coordinator,
@@ -1342,6 +1371,8 @@ describe('Conductor FINISH publication routing', () => {
     // Placeholder prose requires authoring. Its resulting retained-PR
     // title/body is accepted by the GitHub observation without another pass.
     expect(runner.run).toHaveBeenCalledTimes(1);
+    expect(recordFinish).toHaveBeenCalledOnce();
+    await expect(readFile(join(pipeline, 'finish-choice'), 'utf8')).resolves.toBe('pr\n');
     expect(dispositions).not.toContain('retry_finish');
     expect(dispositions).not.toContain('human_required');
     await expect(readFile(join(pipeline, 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });

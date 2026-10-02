@@ -482,6 +482,7 @@ export type HumanRequiredReason =
   | 'judgment_halt_prose'
   | 'halt_state_pr'
   | 'publication_transition_unmoved'
+  | 'publication_coordinator_unavailable'
   | 'ambiguous_pr_identity'
   | 'invalid_shipped_record'
   | 'interactive_intent_deferred'
@@ -583,6 +584,10 @@ export const HUMAN_REQUIRED_REASONS = {
   publication_transition_unmoved: {
     message: 'A FINISH publication transition did not change the state it owns.',
     nextAction: 'Inspect the listed transition and state, resolve why it is unchanged, then retry FINISH.',
+  },
+  publication_coordinator_unavailable: {
+    message: 'FINISH publication coordination is unavailable.',
+    nextAction: 'Restore the engine-owned FINISH publication coordinator, then retry FINISH.',
   },
   ambiguous_pr_identity: {
     message: 'More than one pull request matches this feature, so FINISH cannot select one safely.',
@@ -1344,6 +1349,7 @@ export type AdvanceFinishPublicationResult =
       kind: 'human_required';
       reason:
         | 'publication_transition_unmoved'
+        | 'publication_coordinator_unavailable'
         | 'ambiguous_pr_identity'
         | 'invalid_shipped_record';
       detail?: string;

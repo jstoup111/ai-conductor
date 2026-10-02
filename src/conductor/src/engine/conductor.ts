@@ -3256,7 +3256,17 @@ export class Conductor {
     options: StepRunOptions,
   ): Promise<StepRunResult> {
     if (!this.finishPublication) {
-      return this.stepRunner.run('finish', state, options);
+      // Compatibility-only test and embedding callers can still supply their
+      // own FINISH runner. An engine-managed provider session must never get
+      // the legacy recording assignment: production wires the coordinator.
+      if (!this.providerExecution) return this.stepRunner.run('finish', state, options);
+      return {
+        success: false,
+        publicationDisposition: {
+          kind: 'human_required',
+          reason: 'publication_coordinator_unavailable',
+        },
+      };
     }
 
     const publicationDisposition = await this.finishPublication.advance({
@@ -10539,7 +10549,7 @@ export class Conductor {
                       ? await this.runRebaseStep(state)
                       : step.name === 'test_suite'
                         ? await this.runTestSuiteStep()
-                        : step.name === 'finish' && this.finishPublication
+                        : step.name === 'finish'
                           ? await this.runFinishPublication(state, {
                               retryReason: retryHint,
                               attempt,
