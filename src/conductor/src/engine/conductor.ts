@@ -259,7 +259,11 @@ import {
   readAsBuiltVerdict,
   type RecordedAsBuiltFinding,
 } from './as-built-verdict-store.js';
-import { PRD_AUDIT_VERDICT_PATH, readPrdAuditVerdict } from './prd-audit-verdict-store.js';
+import {
+  PRD_AUDIT_VERDICT_PATH,
+  persistPrdAuditVerdict,
+  readPrdAuditVerdict,
+} from './prd-audit-verdict-store.js';
 import { parsePlanTaskBodies, resolvePlanTaskReference } from './plan-task-parse.js';
 import type { AsBuiltGoverningReference } from './as-built-contract.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
@@ -3097,7 +3101,18 @@ export class Conductor {
           return { done: false, routeClass: 'absent', retrySignal: 'structured-result-missing', reason: `${absentReason}: ${stored.kind === 'absent' ? 'artifact is missing' : stored.reason}` };
         }
         if (expectedRunId !== undefined && stored.value.attemptId !== expectedRunId) {
-          return { done: false, routeClass: 'absent', retrySignal: 'stale-run-identity', reason: `${PRD_AUDIT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${expectedRunId}` };
+          return {
+            done: false,
+            routeClass: 'absent',
+            retrySignal: 'stale-run-identity',
+            verdictFreshness: {
+              artifact: join(this.projectRoot, PRD_AUDIT_VERDICT_PATH),
+              floorSource: 'run-identity',
+              outcome: 'stale_invalidated',
+              fresh: false,
+            },
+            reason: `${PRD_AUDIT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${expectedRunId}`,
+          };
         }
         if (!stored.value.complete) {
           return { done: false, routeClass: 'absent', retrySignal: 'structured-result-rejected', reason: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${stored.value.diagnostics.join('; ')}` };
@@ -4270,28 +4285,59 @@ export class Conductor {
 
   /** Read the current verdict and its authoritative story sections as one route decision. */
   private async routeCurrentPrdAuditPlanGaps(state: ConductState): Promise<PrdAuditPlanGapRoute> {
-    const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
-    if (!reportPath) return { kind: 'none' };
-
-    let reportText: string;
-    try {
-      reportText = await readFile(reportPath, 'utf8');
-    } catch {
-      return { kind: 'none' };
-    }
+    const stored = await readPrdAuditVerdict(this.projectRoot);
+    if (stored.kind !== 'present' || !stored.value.complete) return { kind: 'none' };
     const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
     const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';
-    const route = routePrdAuditPlanGaps(
-      reportText,
-      storiesText,
-      this.config,
-      await this.activePlanText(state.feature_desc),
+    const findings = stored.value.judgment.criterionJudgments
+      .filter((judgment) => judgment.grade === 'PLAN_GAP')
+      .map((judgment) => ({
+        gate: 'prd_audit' as const,
+        grade: 'PLAN_GAP' as const,
+        criterion: judgment.criterionId,
+        summary: judgment.evidence.trim() || `No approved plan task covers ${judgment.criterionId}.`,
+      }));
+    if (findings.length === 0) return { kind: 'none' };
+
+    const haltOnAnyPlanGap = (this.config as HarnessConfig & {
+      prd_audit?: { halt_on_any_plan_gap?: boolean };
+    }).prd_audit?.halt_on_any_plan_gap === true;
+    const blocking = findings.filter(
+      (finding) => haltOnAnyPlanGap || criterionStorySection(storiesText, finding.criterion) !== 'negative',
     );
-    if (route.kind === 'record') {
-      const projected = await persistRecordedFindings(reportPath, reportText, route.findings);
-      if (!projected.ok) this.prdAuditProjectionRefusal = projected.message;
+    if (blocking.length > 0) {
+      return {
+        kind: 'halt',
+        haltClass: 'plan-gap',
+        detail: `PLAN_GAP on ${blocking.map((finding) => finding.criterion).join(', ')}.`,
+        findings,
+      };
     }
-    return route;
+
+    const hasOtherBlockingGrade = stored.value.judgment.criterionJudgments.some(
+      (judgment) => judgment.grade !== 'PASS' && judgment.grade !== 'PLAN_GAP',
+    ) || stored.value.judgment.noOwnerObservations.length > 0;
+    if (hasOtherBlockingGrade) return { kind: 'none' };
+
+    const recordedDispositions = [
+      ...stored.value.recordedDispositions,
+      ...findings
+        .filter((finding) => !stored.value.recordedDispositions.some((recorded) =>
+          recorded.criterionId === finding.criterion && recorded.grade === finding.grade))
+        .map((finding) => ({ criterionId: finding.criterion, grade: finding.grade })),
+    ];
+    try {
+      await persistPrdAuditVerdict(this.projectRoot, {
+        complete: stored.value.complete,
+        judgment: stored.value.judgment,
+        diagnostics: stored.value.diagnostics,
+        recordedDispositions,
+      }, { attemptId: stored.value.attemptId, codeStamp: stored.value.codeStamp });
+    } catch {
+      this.prdAuditProjectionRefusal = `Unable to record accepted PRD-audit PLAN_GAP findings in ${PRD_AUDIT_VERDICT_PATH}.`;
+      return { kind: 'none' };
+    }
+    return { kind: 'record', findings };
   }
 
   /** Read OVER_SCOPE verdict rows after incorporating an operator-cleared halt acceptance. */
@@ -9942,11 +9988,6 @@ export class Conductor {
             step.name,
             state.session_started_at,
             this.config,
-            {
-              featureDesc: state.feature_desc,
-              featureIdentities: [],
-              changedPaths: new Set(),
-            },
           );
         }
 
