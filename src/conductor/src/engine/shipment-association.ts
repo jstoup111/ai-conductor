@@ -134,10 +134,14 @@ function uniqueNonEmpty(values: readonly string[]): string[] {
 
 function recordedPrdAuditFindings(value: PersistedPrdAuditVerdict | undefined): RecordedShipmentFinding[] {
   if (!value || !value.complete) return [];
-  const recorded = new Set(value.recordedDispositions.map((entry) => `${entry.criterionId.toUpperCase()}\u0000${entry.grade}`));
+  const recorded = new Map<string, PersistedPrdAuditVerdict['recordedDispositions'][number]>(
+    value.recordedDispositions.map((entry) =>
+      [`${entry.criterionId.toUpperCase()}\u0000${entry.grade}`, entry] as const),
+  );
   return value.judgment.criterionJudgments.flatMap<RecordedShipmentFinding>((finding) => {
     const key = `${finding.criterionId.toUpperCase()}\u0000${finding.grade}`;
-    if (!recorded.has(key)) return [];
+    const disposition = recorded.get(key);
+    if (!disposition) return [];
     if (finding.grade === 'PLAN_GAP') {
       return [{ gate: 'prd_audit', grade: 'PLAN_GAP', criterion: finding.criterionId, summary: finding.rationale }];
     }
@@ -145,7 +149,10 @@ function recordedPrdAuditFindings(value: PersistedPrdAuditVerdict | undefined): 
     return [{
       gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: finding.criterionId,
       summary: finding.rationale,
-      accepted: finding.intentRelation === 'within' || finding.intentRelation === 'outside-harmless',
+      accepted: disposition.decision === 'accept',
+      ...(disposition.decision === 'accept' || disposition.decision === 'refuse'
+        ? { decision: disposition.decision, rationale: disposition.rationale }
+        : {}),
     }];
   });
 }

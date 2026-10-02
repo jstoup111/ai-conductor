@@ -38,7 +38,10 @@ describe('PRD audit typed verdict store', () => {
         complete: false,
         diagnostics: ['criterion Sbeta.1 is missing a judgment'],
         evidence: 'Incomplete judgment evidence.',
-        recordedDispositions: [{ criterionId: 'Sbeta.1', grade: 'PLAN_GAP' as const }],
+        recordedDispositions: [{
+          criterionId: 'Sbeta.1', grade: 'PLAN_GAP' as const, decision: 'record' as const,
+          rationale: 'The engine records a negative-path plan gap.', authority: 'engine',
+        }],
       },
     ]) {
       const dir = await mkdtemp(join(tmpdir(), 'prd-audit-store-'));
