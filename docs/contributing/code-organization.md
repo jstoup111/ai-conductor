@@ -60,7 +60,7 @@ Static-analysis configuration sits at two levels. Anything needing the TypeScrip
 | Subpackage | Files | Owns |
 | --- | --- | --- |
 | `engine/engineer/` | 25 | The composer-loop implementation: authoring, routing, handoff, land-time spec and coherence gates, lesson store. |
-| `engine/engineer/intake/` | 16 | Intake queue, ledger, GitHub issue read/write-back, label sync, closed-issue reconciliation, filing-time evidence-path overlap preflight. |
+| `engine/engineer/intake/` | 26 | Intake queue, ledger, GitHub issue read/write-back, label sync, closed-issue reconciliation, filing-time evidence-path overlap preflight. |
 | `engine/self-host/` | 16 | Guardrails for the harness building itself: detector, write fence, sandbox build env, build auth, version gate, release gate. |
 | `engine/halt-issues/` | 6 | Halt-monitor issue reconciliation and its CLI. |
 | `engine/otel/` | 8 | OpenTelemetry config, metrics, visualizer, and shared entry-point wiring. |

@@ -268,13 +268,16 @@ Otherwise, any undecided suggestion refuses the filing with exit 1 and creates n
 [intake-file] overlap: undecided owner/repo#42 (src/a.ts) — re-run with --depends-on owner/repo#42 or --decline-overlap owner/repo#42
 ```
 
-Decide every listed suggestion and re-run the same command with the matching flags. These lines are
-informational and never block a filing:
+Decide every listed suggestion and re-run the same command with the matching flags. A
+`--decline-overlap` ref that is not a current suggestion, or is also passed to `--depends-on`, prints
+`overlap: invalid decline <ref> — not a current suggestion` and also exits 1 without creating the
+issue; drop or correct that flag. These lines are informational and never block a filing:
 
 | Line | Meaning |
 | --- | --- |
 | `overlap check: no overlap` | Nothing shared a cited path |
 | `overlap: linked <ref>` / `overlap: declined <ref>` | Recorded decision |
+| `overlap: accepted <ref> (not linked — see NOT LINKED below)` | Accepted, but the dependency link failed |
 | `overlap: advisory <branch> (<paths>)` | In-flight branch with no traceable open issue |
 | `overlap: skipped <part> — <reason>` | A source could not be read (no matching checkout, tracker or git failure); filing continues |
 | `overlap: N more suggestion(s) omitted` | Suggestions beyond the cap of five |
