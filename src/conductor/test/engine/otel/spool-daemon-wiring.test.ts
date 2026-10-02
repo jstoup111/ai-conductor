@@ -55,6 +55,25 @@ afterEach(async () => {
 });
 
 describe('daemon OTel spool wiring', () => {
+  it('reports a rejected lease acquisition once and still stops cleanly', async () => {
+    const directory = await temporaryDirectory();
+    const blockedRoot = join(directory, 'not-a-directory');
+    await writeFile(blockedRoot, 'file');
+    const events = new ConductorEventEmitter();
+    const errors: string[] = [];
+    events.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') errors.push(event.error);
+    });
+    const daemon = wireDaemonOtel({ otel: { exporter: 'otlp', endpoint: 'http://127.0.0.1:1', spool: { enabled: true } } }, {
+      mainRoot: blockedRoot, project: blockedRoot, projectName: 'test', rootEvents: events,
+    });
+
+    await eventually(() => errors.length === 1);
+    await expect(daemon?.stop()).resolves.toBeUndefined();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('spool lease or drainer failed');
+  });
+
   it('leaves flushed dispatch spans and daemon metrics in the spool when the endpoint is closed', async () => {
     const mainRoot = await temporaryDirectory();
     const endpoint = await closedEndpoint();

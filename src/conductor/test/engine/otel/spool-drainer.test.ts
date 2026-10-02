@@ -66,6 +66,74 @@ afterEach(async () => {
 });
 
 describe('SpoolDrainer', () => {
+  it('retries a transient spool list failure without delaying the other signal', async () => {
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('traces', Buffer.from('retry-trace'));
+    await store.write('metrics', Buffer.from('independent-metric'));
+    const flakyStore = Object.create(store) as SpoolStore;
+    const list = store.list.bind(store);
+    let failed = false;
+    flakyStore.list = async (signal) => {
+      if (signal === 'traces' && !failed) {
+        failed = true;
+        throw new Error('transient list failure');
+      }
+      return list(signal);
+    };
+    const events = new ConductorEventEmitter();
+    const errors: string[] = [];
+    events.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') errors.push(event.error);
+    });
+    const delivered: string[] = [];
+    const drainer = new SpoolDrainer(flakyStore, {
+      endpoint: 'http://collector.test', headers: () => ({}), events,
+      sleep: async () => undefined,
+      fetch: async (url, init) => {
+        delivered.push(`${url}:${Buffer.from(init?.body as ArrayBuffer).toString()}`);
+        return new Response(undefined, { status: 200 });
+      },
+    });
+
+    await drainUntilEmpty(drainer, store);
+
+    expect(delivered).toEqual(expect.arrayContaining([
+      'http://collector.test/v1/traces:retry-trace',
+      'http://collector.test/v1/metrics:independent-metric',
+    ]));
+    expect(errors.filter((error) => error.includes('spool delivery failed'))).toHaveLength(1);
+  });
+
+  it('continues after a listed batch is concurrently evicted before read', async () => {
+    const store = new SpoolStore(await temporaryDirectory());
+    await store.write('traces', Buffer.from('evicted'));
+    await store.write('traces', Buffer.from('delivered'));
+    const racingStore = Object.create(store) as SpoolStore;
+    const read = store.read.bind(store);
+    let evicted = false;
+    racingStore.read = async (batch) => {
+      if (!evicted) {
+        evicted = true;
+        await store.delete(batch);
+        throw Object.assign(new Error('concurrently evicted'), { code: 'ENOENT' });
+      }
+      return read(batch);
+    };
+    const delivered: string[] = [];
+    const drainer = new SpoolDrainer(racingStore, {
+      endpoint: 'http://collector.test', headers: () => ({}),
+      fetch: async (_url, init) => {
+        delivered.push(Buffer.from(init?.body as ArrayBuffer).toString());
+        return new Response(undefined, { status: 200 });
+      },
+    });
+
+    await drainUntilEmpty(drainer, store);
+
+    expect(delivered).toEqual(['delivered']);
+    expect(await store.list('traces')).toEqual([]);
+  });
+
   it('keeps draining batches appended while an earlier batch is being delivered', async () => {
     const store = new SpoolStore(await temporaryDirectory());
     await store.write('traces', Buffer.from('first'));
@@ -278,8 +346,13 @@ describe('SpoolDrainer', () => {
       delete: async () => { throw new Error('simulated crash after accept before delete'); },
     });
 
-    await expect(new SpoolDrainer(crashBeforeDelete, { endpoint, headers: () => ({}) }).drainUntilStopped())
-      .rejects.toThrow('simulated crash after accept before delete');
+    const crashingDrainer = new SpoolDrainer(crashBeforeDelete, { endpoint, headers: () => ({}) });
+    const crashing = crashingDrainer.drainUntilStopped();
+    for (let turn = 0; turn < 1_000 && received.length === 0; turn += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    await crashingDrainer.stop();
+    await crashing;
     await drainUntilEmpty(new SpoolDrainer(store, { endpoint, headers: () => ({}) }), store);
 
     expect({

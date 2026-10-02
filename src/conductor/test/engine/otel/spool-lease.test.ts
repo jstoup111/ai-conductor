@@ -115,6 +115,40 @@ describe('SpoolLease', () => {
     }
   });
 
+  it('waits for an in-flight heartbeat before release removes both lease paths', async () => {
+    const directory = await temporaryDirectory();
+    const leasePath = join(directory, 'lease.json');
+    const successorPath = `${leasePath}.next`;
+    let heartbeat: (() => Promise<void>) | undefined;
+    let resumeSuccessor!: () => void;
+    const successorPaused = new Promise<void>((resolve) => { resumeSuccessor = resolve; });
+    const lease = new SpoolLease(directory, {
+      now: () => now,
+      isProcessAlive: () => true,
+      scheduleInterval: (callback) => { heartbeat = callback; return {}; },
+      filesystem: {
+        open: async (path, flags) => {
+          const handle = await open(path, flags);
+          if (path === successorPath) await successorPaused;
+          return handle;
+        },
+      },
+    });
+    const contender = new SpoolLease(directory, { now: () => now, isProcessAlive: () => true });
+
+    await lease.acquire();
+    const refreshing = heartbeat?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const releasing = lease.release();
+    resumeSuccessor();
+    await Promise.all([refreshing, releasing]);
+
+    await expect(readFile(leasePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(successorPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(contender.acquire()).resolves.toEqual({ acquired: true });
+    await contender.release();
+  });
+
   it('reclaims an expired lease whose live pid belongs to another uuid', async () => {
     const directory = await temporaryDirectory();
     await writeLease(directory, { pid: 42, uuid: 'unrelated-live-holder', heartbeatAt: now - 60_001 });

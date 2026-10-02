@@ -92,6 +92,7 @@ export class SpoolLease {
   private readonly onLost: () => void;
   private readonly uuid = randomUUID();
   private heartbeatTimer: HeartbeatTimer | undefined;
+  private heartbeatRefresh: Promise<void> | undefined;
   private owned = false;
 
   constructor(private readonly directory: string, options: SpoolLeaseOptions = {}) {
@@ -111,6 +112,7 @@ export class SpoolLease {
 
   async release(): Promise<void> {
     this.stopHeartbeat();
+    await this.heartbeatRefresh;
     if (!this.owned) return;
     this.owned = false;
 
@@ -255,7 +257,13 @@ export class SpoolLease {
   private takeOwnership(): void {
     this.owned = true;
     this.heartbeatTimer = this.scheduleInterval(async () => {
-      await this.refreshHeartbeat();
+      const refresh = this.refreshHeartbeat();
+      this.heartbeatRefresh = refresh;
+      try {
+        await refresh;
+      } finally {
+        if (this.heartbeatRefresh === refresh) this.heartbeatRefresh = undefined;
+      }
     }, HEARTBEAT_INTERVAL_MS);
     this.heartbeatTimer.unref?.();
   }
@@ -270,6 +278,10 @@ export class SpoolLease {
       }
       const successor = this.successorPath();
       if (!await this.createSuccessor(this.record())) return;
+      if (!this.owned) {
+        await this.filesystem.rm(successor, { force: true });
+        return;
+      }
       // A successor may have won while this holder prepared its atomic update.
       if (await this.filesystem.readFile(this.path(), 'utf8') !== serialized) {
         await this.filesystem.rm(successor, { force: true });

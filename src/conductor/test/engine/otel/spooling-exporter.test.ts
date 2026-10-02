@@ -7,6 +7,7 @@ import { BasicTracerProvider, type ReadableSpan, type SpanExporter } from '@open
 import { ExportResultCode } from '@opentelemetry/core';
 import { AggregationTemporality, DataPointType, InstrumentType, type PushMetricExporter, type ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import { ValueType } from '@opentelemetry/api';
+import { ProtobufMetricsSerializer } from '@opentelemetry/otlp-transformer';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { SpoolStore } from '../../../src/engine/otel/spool-store.js';
 import { buildExporters } from '../../../src/engine/otel/transport.js';
@@ -147,7 +148,11 @@ describe('spooling exporters', () => {
         const [batch] = await store.list('metrics');
         expect(batch).toBeDefined();
         expect(batch.items).toBe(3);
-        const request = decodeFields(await readFile(batch.path));
+        const spooledBody = await readFile(batch.path);
+        // This compares every encoded resource, scope, metric, and data point
+        // against the OTLP request for the ResourceMetrics passed to export().
+        expect(spooledBody).toEqual(Buffer.from(ProtobufMetricsSerializer.serializeRequest(metrics)!));
+        const request = decodeFields(spooledBody);
         const resourceMetrics = decodeFields(embedded(request, 1)[0]);
         const scopeMetrics = decodeFields(embedded(resourceMetrics, 2)[0]);
         const decodedMetrics = embedded(scopeMetrics, 2).map((metric) => decodeFields(metric));

@@ -225,7 +225,7 @@ export function wireDaemonOtel(
     void leaseStart.then((result) => {
       if (result.acquired) return activeSpoolRuntime!.drainer.drainUntilStopped();
       return undefined;
-    }).catch(() => undefined);
+    }).catch((error) => reportSpoolRuntimeFailure(activeSpoolRuntime!, context.rootEvents, error));
   }
   const settleMetricLifecycle = guardMetricLifecycle(context.rootEvents);
   let stopped: Promise<void> | undefined;
@@ -311,7 +311,7 @@ export function wireInteractiveOtelMetrics(
     void leaseStart.then((result) => {
       if (result.acquired) return activeSpoolRuntime!.drainer.drainUntilStopped();
       return undefined;
-    }).catch(() => undefined);
+    }).catch((error) => reportSpoolRuntimeFailure(activeSpoolRuntime!, events, error));
   }
   const settleMetricLifecycle = guardMetricLifecycle(events);
   let stopped: Promise<void> | undefined;
@@ -329,6 +329,14 @@ export function wireInteractiveOtelMetrics(
       }
     })(),
   };
+}
+
+async function reportSpoolRuntimeFailure(runtime: SpoolRuntime, events: ConductorEventEmitter, error: unknown): Promise<void> {
+  const detail = error instanceof Error ? error.message : String(error);
+  await events.emit({
+    type: 'renderer_error', rendererName: 'otel', error: `[otel] spool lease or drainer failed: ${detail}`,
+  }).catch(() => undefined);
+  await runtime.lease.release().catch(() => undefined);
 }
 
 /** Route one metric-export failure through the shared renderer-error spine. */

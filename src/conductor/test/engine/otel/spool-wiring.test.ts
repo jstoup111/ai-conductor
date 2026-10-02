@@ -1,7 +1,7 @@
 // Covers: task:15, task:19
 import { execFile as execFileCallback } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -49,7 +49,7 @@ describe("resolveSpoolDir", () => {
       response.writeHead(200).end();
     });
     const config = resolveOtelConfig({ otel: {
-      exporter: "otlp", endpoint: await endpoint(collector), headers: { Authorization: { env: header } },
+      exporter: "otlp", endpoint: await endpoint(collector), headers: { Authorization: { env: header } }, spool: { enabled: true },
     } }, join(directory, ".pipeline"));
     expect(config).toMatchObject({ enabled: true, exporter: "otlp" });
     if (!config.enabled || config.exporter !== "otlp") return;
@@ -82,6 +82,57 @@ describe("resolveSpoolDir", () => {
 
     expect(spoolDir).toBe(join(mainRoot, ".daemon", "otel-spool"));
     expect(dirname(spoolDir!)).not.toBe(join(worktree, ".daemon"));
+
+    const secret = "linked-worktree-secret";
+    const header = "OTEL_SPOOL_WIRING_WORKTREE_HEADER";
+    const previous = process.env[header];
+    process.env[header] = secret;
+    const received: Buffer[] = [];
+    const collector = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      received.push(Buffer.concat(chunks));
+      response.writeHead(200).end();
+    });
+    const config = resolveOtelConfig({ otel: {
+      exporter: "otlp", endpoint: await endpoint(collector), headers: { Authorization: { env: header } },
+    } }, join(worktree, ".pipeline"));
+    if (!config.enabled || config.exporter !== "otlp") throw new Error("expected OTLP configuration");
+    const runtime = createSpoolRuntime(spoolDir!, config);
+    const provider = new BasicTracerProvider();
+    const span = provider.getTracer("spool-wiring-test").startSpan("survives-worktree-removal");
+    span.end();
+    await exportSpan(buildExporters(config, { spoolStore: runtime.store }).spanExporter, span as unknown as ReadableSpan);
+    const [batch] = await runtime.store.list("traces");
+    expect(batch).toBeDefined();
+    if (!batch) throw new Error("expected spooled traces batch");
+
+    await execFile("git", ["-C", mainRoot, "worktree", "remove", "--force", worktree]);
+    await expect(access(batch.path)).resolves.toBeUndefined();
+
+    const scan = async (directory: string): Promise<Array<{ name: string; content: string }>> => {
+      const entries = await readdir(directory, { withFileTypes: true });
+      return (await Promise.all(entries.map(async (entry) => entry.isDirectory()
+        ? scan(join(directory, entry.name))
+        : [{ name: join(directory, entry.name), content: await readFile(join(directory, entry.name), "utf8") }]
+      ))).flat();
+    };
+    await runtime.lease.acquire();
+    for (const file of await scan(spoolDir!)) {
+      expect(file.name).not.toContain(secret);
+      expect(file.content).not.toContain(secret);
+    }
+    const draining = runtime.drainer.drainUntilStopped();
+    for (let turn = 0; turn < 1_000 && (received.length === 0 || (await runtime.store.list("traces")).length !== 0); turn += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    await runtime.drainer.stop();
+    await draining;
+    await runtime.lease.release();
+    if (previous === undefined) delete process.env[header]; else process.env[header] = previous;
+
+    expect(received).toHaveLength(1);
+    expect(await runtime.store.list("traces")).toEqual([]);
   });
 
   it("disables the spool and warns once when no main checkout can be resolved", async () => {

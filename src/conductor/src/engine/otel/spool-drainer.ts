@@ -27,6 +27,7 @@ const DEFAULT_EXPORT_TIMEOUT_MS = 5_000;
 const BACKLOG_REPORT_INTERVAL_MS = 30_000;
 const IDLE_POLL_INTERVAL_MS = 1_000;
 type DeliveryFailureClass = Extract<DeliveryClassification, { action: 'keep' }>['failureClass'];
+type ReportedFailureClass = DeliveryFailureClass | 'spool';
 
 /**
  * Delivers immutable OTLP batches one at a time. Delivery is at-least-once:
@@ -44,7 +45,7 @@ export class SpoolDrainer {
   private readonly pendingDelays = new Set<() => void>();
   private readonly loops = new Set<Promise<void>>();
   private readonly lastFailures = new Map<SpoolSignal, DeliveryFailureClass>();
-  private readonly reportedFailures = new Map<SpoolSignal, DeliveryFailureClass>();
+  private readonly reportedFailures = new Map<SpoolSignal, ReportedFailureClass>();
   private continuousDrain: Promise<void> | undefined;
   private stopped = false;
 
@@ -103,21 +104,28 @@ export class SpoolDrainer {
       if (batches.length === 0) return;
       for (const batch of batches) {
       if (this.stopped) return;
-      const body = await this.store.read(batch);
+      let body: Buffer;
+      try {
+        body = await this.store.read(batch);
+      } catch (error) {
+        // Cap eviction can remove a batch after list() but before read().
+        if (isMissing(error)) continue;
+        throw error;
+      }
       let backoffMs = INITIAL_BACKOFF_MS;
 
       while (!this.stopped) {
         const classification = await this.deliver(signal, body);
         if (this.stopped) return;
         if (classification.action !== 'keep') {
-          await this.store.delete(batch);
-          if (classification.action === 'delete' && this.reportedFailures.delete(signal)) {
-            await this.events?.emit({
-              type: 'renderer_error',
-              rendererName: 'otel',
-              error: `OTLP ${signal} delivery recovered`,
-            });
+          try {
+            await this.store.delete(batch);
+          } catch (error) {
+            // Cap eviction can remove an accepted batch before this delete.
+            if (isMissing(error)) break;
+            throw error;
           }
+          if (classification.action === 'delete') await this.reportRecovery(signal);
           if (classification.action === 'drop') {
             await this.events?.emit({
               type: 'otel_spool_drop',
@@ -132,14 +140,7 @@ export class SpoolDrainer {
         }
 
         this.lastFailures.set(signal, classification.failureClass);
-        if (this.reportedFailures.get(signal) !== classification.failureClass) {
-          this.reportedFailures.set(signal, classification.failureClass);
-          await this.events?.emit({
-            type: 'renderer_error',
-            rendererName: 'otel',
-            error: `OTLP ${signal} delivery failed: ${classification.failureClass}`,
-          });
-        }
+        await this.reportFailure(signal, classification.failureClass, `OTLP ${signal} delivery failed: ${classification.failureClass}`);
 
         // A server-directed delay takes precedence over the ordinary backoff.
         if (classification.retryAfterMs !== undefined) {
@@ -157,12 +158,18 @@ export class SpoolDrainer {
   private async runUntilStopped(): Promise<void> {
     const signalLoops = (['traces', 'metrics'] as const).map((signal) => this.trackLoop((async () => {
       while (!this.stopped) {
-        await this.drainSignal(signal);
+        try {
+          await this.drainSignal(signal);
+        } catch (error) {
+          await this.reportFailure(signal, 'spool', `OTLP ${signal} spool delivery failed: ${errorMessage(error)}`);
+          if (!this.stopped) await this.delay(INITIAL_BACKOFF_MS);
+          continue;
+        }
         if (!this.stopped) await this.delay(IDLE_POLL_INTERVAL_MS);
       }
     })()));
     // The continuous runtime owns the sole reporter; delivery loops do not.
-    const backlogLoop = this.trackLoop(this.reportBacklog());
+    const backlogLoop = this.trackLoop(this.runBacklogUntilStopped());
     await Promise.all([...signalLoops, backlogLoop]);
   }
 
@@ -232,6 +239,30 @@ export class SpoolDrainer {
     }
   }
 
+  private async runBacklogUntilStopped(): Promise<void> {
+    while (!this.stopped) {
+      try {
+        await this.reportBacklog();
+      } catch (error) {
+        await this.reportFailure('traces', 'spool', `OTLP spool backlog reporting failed: ${errorMessage(error)}`);
+        if (!this.stopped) await this.delay(INITIAL_BACKOFF_MS);
+      }
+    }
+  }
+
+  private async reportFailure(signal: SpoolSignal, failureClass: ReportedFailureClass, error: string): Promise<void> {
+    if (this.reportedFailures.get(signal) === failureClass) return;
+    this.reportedFailures.set(signal, failureClass);
+    await this.events?.emit({ type: 'renderer_error', rendererName: 'otel', error });
+  }
+
+  private async reportRecovery(signal: SpoolSignal): Promise<void> {
+    if (!this.reportedFailures.delete(signal)) return;
+    await this.events?.emit({
+      type: 'renderer_error', rendererName: 'otel', error: `OTLP ${signal} delivery recovered`,
+    });
+  }
+
   private async delay(ms: number): Promise<void> {
     if (this.stopped) return;
     const due = this.now() + ms;
@@ -265,4 +296,12 @@ export class SpoolDrainer {
       signal.removeEventListener('abort', abort);
     }
   }
+}
+
+function isMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
