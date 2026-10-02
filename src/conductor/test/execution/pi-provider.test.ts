@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 import { classifyMetering } from '../../src/engine/metering.js';
 import { parsePiModelId, parsePiModelListing, PiProvider } from '../../src/execution/pi-provider.js';
+import { DAEMON_SESSION_MARKER } from '../../src/execution/daemon-session.js';
 import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
@@ -97,6 +98,48 @@ describe('PiProvider', () => {
       }),
     );
     expect(spawn.mock.calls[0]?.[1]).not.toContain('claude-opus-4-5:xhigh');
+  });
+
+  it('stamps the daemon marker and masks tmux targets after the self-host env overlay', async () => {
+    await provider.invoke({
+      ...invokeOptions,
+      selfHost: {
+        executable: '/isolated/pi',
+        env: {
+          PI_HOME: '/isolated/home',
+          [DAEMON_SESSION_MARKER]: 'not-a-daemon-session',
+          TMUX: '/tmp/tmux-1000/default,1234,0',
+          TMUX_PANE: '%7',
+        },
+        args: [],
+        teardown: async () => {},
+      },
+    });
+
+    expect(spawn.mock.calls[0]?.[2].env).toEqual({
+      PI_HOME: '/isolated/home',
+      [DAEMON_SESSION_MARKER]: '1',
+      TMUX: undefined,
+      TMUX_PANE: undefined,
+    });
+  });
+
+  it('creates a marked and tmux-scrubbed env for an empty self-host overlay', async () => {
+    await provider.invoke({
+      ...invokeOptions,
+      selfHost: {
+        executable: '/isolated/pi',
+        env: {},
+        args: [],
+        teardown: async () => {},
+      },
+    });
+
+    expect(spawn.mock.calls[0]?.[2].env).toEqual({
+      [DAEMON_SESSION_MARKER]: '1',
+      TMUX: undefined,
+      TMUX_PANE: undefined,
+    });
   });
 
   it('keeps retries in fresh no-session invocations and exposes only invoke dispatch', async () => {
