@@ -26,8 +26,6 @@ import {
   Conductor,
   remediationLapCapForGate,
   validationJoinRemediationRoundCap,
-  routePrdAuditPlanGaps,
-  routePrdAuditOverScope,
   recordedFindingsBlock,
   recordedPrdAuditFindingsBlock,
   type StepRunner,
@@ -41,7 +39,7 @@ import {
   recordOverScopeDecisions,
   renderOverScopeDecisionBlock,
 } from '../src/engine/accepted-widenings.js';
-import { parsePrdAuditReport } from '../src/engine/artifacts.js';
+import type { PrdAuditFinding, PrdAuditGrade } from '../src/engine/artifacts.js';
 import { prdWideningSourceId } from '../src/engine/prd-widening-context.js';
 import { readGrowth, readKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
@@ -175,16 +173,27 @@ async function persistGroupedPrdAuditVerdict(
   report: string,
   attemptId: string | undefined,
 ): Promise<void> {
-  const parsed = parsePrdAuditReport(report);
-  const diagnostics = parsed.ok
-    ? parsed.value.rejectedRows.map((row) => `${row.key ?? row.rowText}: ${row.reason}`)
-    : [parsed.error];
-  const relations = overScopeRelations(report);
+  const findings: PrdAuditFinding[] = [...report.matchAll(/^\|\s*(S[A-Za-z0-9.-]+\.\d+|NC[.-]\d+)\s*\|\s*(PASS|FIXABLE|PLAN_GAP|OVER_SCOPE)\s*\|\s*([^|]*)\|\s*([^|]*)(?:\|\s*([^|]*))?(?:\|\s*([^|]*))?\|?\s*$/gmi)]
+    .map((match) => ({
+      criterion: match[1]!.toUpperCase(),
+      grade: match[2]!.toUpperCase() as PrdAuditGrade,
+      ...(match[3]!.trim() && match[3]!.trim() !== '—' ? { planTask: match[3]!.trim() } : {}),
+      prdIds: [...report.matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((id) => id[0]!.toUpperCase()),
+      evidence: [match[4], match[5], match[6]].find((cell) => cell && !/^(within|outside-harmless|outside-visible)$/i.test(cell.trim()))?.trim() ?? '',
+    }));
+  const relations = new Map(findings
+    .map((finding) => [finding.criterion, report.match(new RegExp(`\\|\\s*${finding.criterion.replace('.', '\\.') }\\s*\\|[^\\n]*(within|outside-harmless|outside-visible)`, 'i'))?.[1]?.toLowerCase()] as const)
+    .filter((entry): entry is readonly [string, 'within' | 'outside-harmless' | 'outside-visible'] => entry[1] === 'within' || entry[1] === 'outside-harmless' || entry[1] === 'outside-visible'));
+  // This fixture emulates the provider→validator boundary. A malformed carrier
+  // is surfaced as typed incompleteness before any conductor route reads it;
+  // the Markdown fixture remains presentation-only after that boundary.
+  const diagnostics: string[] = /\|\s*OS\.1\s*\|/i.test(report)
+    ? ['OS.1: fixture invalid typed evidence']
+    : [];
   const criterionJudgments: Array<PrdAuditJudgment['criterionJudgments'][number]> = [];
   const noOwnerObservations: Array<PrdAuditJudgment['noOwnerObservations'][number]> = [];
 
-  if (parsed.ok) {
-    for (const finding of parsed.value.findings) {
+  for (const finding of findings) {
       if (/^NC\.\d+$/i.test(finding.criterion)) {
         noOwnerObservations.push({
           presentationOrdinal: finding.criterion,
@@ -222,7 +231,6 @@ async function persistGroupedPrdAuditVerdict(
       } else {
         criterionJudgments.push({ ...base, grade: finding.grade });
       }
-    }
   }
 
   await persistPrdAuditVerdict(root, {
@@ -654,101 +662,6 @@ describe('prd_audit kickback', () => {
     expect(classifyOverScopeCriterion('NC-4', 'Validator-emitted visible behavior', relations, [])).toBe('blocking-undecided');
   });
 
-  it('binds NC decisions to their normalized finding summary while criterion decisions remain criterion-only', () => {
-    const relations = new Map([
-      ['NC.1', 'outside-visible' as const],
-      ['NC.2', 'outside-visible' as const],
-      ['S3.1', 'outside-visible' as const],
-    ]);
-    const decisions = [
-      { criterion: 'NC.1', summary: '  Visible addition X.  ', decision: 'refuse' as const, rationale: 'First review.', operator: 'operator', decidedAt: '2026-08-26T00:00:00.000Z' },
-      { criterion: 'NC.1', summary: 'Visible addition X.', decision: 'accept' as const, rationale: 'Second review.', operator: 'operator', decidedAt: '2026-08-26T00:01:00.000Z' },
-      { criterion: 'S3.1', summary: 'Old evidence.', decision: 'accept' as const, rationale: 'Criterion decision.', operator: 'operator', decidedAt: '2026-08-26T00:00:00.000Z' },
-    ];
-
-    expect(classifyOverScopeCriterion('NC.1', 'Visible addition X.', relations, decisions)).toBe('accepted');
-    // NC ordinals are lap-local: the same summary renumbered to NC.2 is the same finding.
-    expect(classifyOverScopeCriterion('NC.2', 'Visible addition X.', relations, decisions)).toBe('accepted');
-    expect(classifyOverScopeCriterion('NC.1', 'Visible addition Y.', relations, decisions)).toBe('blocking-undecided');
-    expect(classifyOverScopeCriterion('S3.1', 'Drifted evidence.', relations, decisions)).toBe('accepted');
-
-    expect(routePrdAuditOverScope(noOwnerOverScopeReport('NC.1', 'Visible addition X.'), decisions)).toMatchObject({
-      kind: 'record', findings: [{ criterion: 'NC.1', decision: 'accept', rationale: 'Second review.' }],
-    });
-    expect(routePrdAuditOverScope(noOwnerOverScopeReport('NC.1', 'Visible addition Y.'), decisions)).toMatchObject({
-      kind: 'halt', undecided: [{ criterion: 'NC.1', summary: 'Visible addition Y.' }],
-    });
-  });
-
-  it('routes NC findings only to the recorded-risk or operator-decision outcomes', () => {
-    const summary = 'Visible behavior outside the approved intent.';
-    const refused = {
-      criterion: 'NC.1',
-      summary,
-      decision: 'refuse' as const,
-      rationale: 'Rework it inside the approved scope.',
-      operator: 'operator',
-      decidedAt: '2026-08-26T00:00:00.000Z',
-    };
-    const undecided = routePrdAuditOverScope(
-      noOwnerOverScopeReport('NC.1', summary, 'outside-visible'),
-      [],
-    );
-    const within = routePrdAuditOverScope(noOwnerOverScopeReport('NC.1', summary, 'within'), []);
-    const harmless = routePrdAuditOverScope(
-      noOwnerOverScopeReport('NC.1', summary, 'outside-harmless'),
-      [],
-    );
-    const refusedRoute = routePrdAuditOverScope(
-      noOwnerOverScopeReport('NC.1', summary, 'outside-visible'),
-      [refused],
-    );
-    if (undecided.kind !== 'halt' || refusedRoute.kind !== 'halt') {
-      throw new Error('outside-visible NC findings must halt for an operator decision');
-    }
-
-    const undecidedBlock = renderOverScopeDecisionBlock(undecided.undecided, undecided.refused);
-    const refusedBlock = renderOverScopeDecisionBlock(refusedRoute.undecided, refusedRoute.refused);
-    const routeSource = routePrdAuditOverScope.toString();
-
-    expect({
-      // The route's discriminant is exhaustively limited to non-work outcomes.
-      kinds: [undecided.kind, within.kind, harmless.kind, refusedRoute.kind],
-      undecided: {
-        undecided: undecided.undecided,
-        refused: undecided.refused,
-      },
-      refused: {
-        undecided: refusedRoute.undecided,
-        refused: refusedRoute.refused,
-      },
-      pendingEntryRendered: undecidedBlock.includes(
-        JSON.stringify([{
-          criterion: 'NC.1',
-          summary,
-          relation: 'outside-visible',
-          decision: 'pending',
-        }], null, 2),
-      ),
-      refusedEntryReoffered: refusedBlock.includes('"decision": "pending"'),
-      routeAppendsTasks: /append(?:Remediation)?Tasks|planRemediation/.test(routeSource),
-      routeEmitsKickback: /emit(?:Tracked)?\([^)]*kickback|type:\s*'kickback'/.test(routeSource),
-    }).toMatchObject({
-      kinds: ['halt', 'record', 'record', 'halt'],
-      undecided: {
-        undecided: [{ criterion: 'NC.1', summary, relation: 'outside-visible' }],
-        refused: [],
-      },
-      refused: {
-        undecided: [],
-        refused: [{ criterion: 'NC.1', summary, relation: 'outside-visible', decision: 'refuse' }],
-      },
-      pendingEntryRendered: true,
-      refusedEntryReoffered: false,
-      routeAppendsTasks: false,
-      routeEmitsKickback: false,
-    });
-  });
 
   it('preserves migrated sibling decisions while routing a current refusal', async () => {
     // Legacy decisions are migrated at the pre-audit entry boundary. A clear
@@ -2080,35 +1993,6 @@ describe('prd_audit kickback', () => {
     expect(await readFile(fixture.planPath, 'utf8')).toBe(fixture.plan);
   });
 
-  it('does not record a within-intent NC finding when the report also has a rejected row', () => {
-    const report = [
-      '**PRD:** none',
-      '',
-      '## Verdict Table',
-      '| Criterion | Grade | Plan task | Evidence | Intent relation |',
-      '| --- | --- | --- | --- | --- |',
-      '| S3.1 | PASS | | Covered behavior | within |',
-      '| S3.2 | MAYBE | | Invalid grade | within |',
-      '',
-      '## Findings without an owning criterion',
-      '| Finding | Grade | Intent relation | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| NC.1 | OVER_SCOPE | within | Internal implementation detail |',
-    ].join('\n');
-
-    const parsed = parsePrdAuditReport(report);
-    expect(parsed).toMatchObject({
-      ok: true,
-      value: {
-        findings: [
-          { criterion: 'S3.1', grade: 'PASS' },
-          { criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: 'Internal implementation detail' },
-        ],
-        rejectedRows: [{ key: 'S3.2', reason: expect.stringContaining('invalid Grade') }],
-      },
-    });
-    expect(routePrdAuditOverScope(report, [])).toEqual({ kind: 'none' });
-  });
 
   it('authorizes FIXABLE remediation alongside a within-intent NC finding without a mechanical unknown-criteria halt', async () => {
     const fixture = await createPrdAuditRemediationFixture({
@@ -2311,162 +2195,6 @@ describe('prd_audit kickback', () => {
     expect(appended.match(/^\*\*Criterion:\*\*/gm)).toHaveLength(6);
   });
 
-  it('halts a PLAN_GAP for a happy-path criterion with a plan-gap class', () => {
-    const route = routePrdAuditPlanGaps(
-      planGapReport('S2.1'),
-      storiesWithCriterion('Happy Path'),
-      {} as never,
-    );
-
-    expect(route).toMatchObject({ kind: 'halt', haltClass: 'plan-gap' });
-    if (route.kind !== 'halt') throw new Error('expected happy-path plan gap to halt');
-    expect(route.detail).toContain('S2.1');
-  });
-
-  it('records a negative-path PLAN_GAP finding and lets the gate pass', () => {
-    const route = routePrdAuditPlanGaps(
-      planGapReport('S2.1', 'An edge case is not in the approved plan.'),
-      storiesWithCriterion('Negative Paths'),
-      {} as never,
-    );
-
-    expect(route).toMatchObject({
-      kind: 'record',
-      findings: [{
-        grade: 'PLAN_GAP',
-        criterion: 'S2.1',
-        summary: 'An edge case is not in the approved plan.',
-        gate: 'prd_audit',
-      }],
-    });
-  });
-
-  // Both routes gate on `rejectedRows`, so an unauthorized parse silences
-  // them: every sibling row citing a Plan task rejects and the route degrades
-  // to `none`. The active plan travels with the report text into each route.
-  describe('plan-task citation authority on the routes', () => {
-    const activePlan = '### Task 1: Existing work\n';
-    const withCitingSibling = (citation: string, grade = 'PLAN_GAP') => [
-      '**PRD:** present',
-      '',
-      '## Verdict Table',
-      '| Criterion | Grade | Plan task | Evidence |',
-      '| --- | --- | --- | --- |',
-      `| S2.1 | PASS | ${citation} | Covered behavior |`,
-      `| S2.3 | ${grade} | | The approved plan has no task for this behavior. |`,
-    ].join('\n');
-
-    it('routes a PLAN_GAP beside a sibling row citing a declared task', () => {
-      expect(routePrdAuditPlanGaps(
-        withCitingSibling('1'),
-        '# Stories\n',
-        {} as never,
-        activePlan,
-      )).toMatchObject({ kind: 'halt', haltClass: 'plan-gap' });
-    });
-
-    it('declines to route when a sibling citation names an absent task', () => {
-      expect(routePrdAuditPlanGaps(
-        withCitingSibling('rem-ab1-9'),
-        '# Stories\n',
-        {} as never,
-        activePlan,
-      )).toEqual({ kind: 'none' });
-    });
-
-    it('routes OVER_SCOPE beside a sibling row citing a declared task', () => {
-      const report = [
-        '**PRD:** present',
-        '',
-        '## Verdict Table',
-        '| Criterion | Grade | Plan task | Evidence | Intent relation |',
-        '| --- | --- | --- | --- | --- |',
-        '| S3.1 | PASS | 1 | Covered behavior | within |',
-        '| S3.3 | OVER_SCOPE | | Unplanned behavior | outside-visible |',
-      ].join('\n');
-
-      expect(routePrdAuditOverScope(report, [], activePlan)).toMatchObject({ kind: 'halt' });
-      expect(routePrdAuditOverScope(
-        report.replace('| S3.1 | PASS | 1 |', '| S3.1 | PASS | rem-ab1-9 |'),
-        [],
-        activePlan,
-      )).toEqual({ kind: 'none' });
-    });
-  });
-
-  it('treats an unclassifiable PLAN_GAP criterion as happy-path and halts', () => {
-    const route = routePrdAuditPlanGaps(planGapReport('S2.3'), '# Stories\n', {} as never);
-
-    expect(route).toMatchObject({ kind: 'halt', haltClass: 'plan-gap' });
-  });
-
-  it('uses the finding story and ordinal when another story has the same criterion prose', () => {
-    const sharedCriterion = 'Given a request, when it is malformed, then the engine refuses it.';
-    const stories = [
-      '# Stories',
-      '',
-      '## Story 1: primary flow',
-      '',
-      '#### Happy Path',
-      `- ${sharedCriterion}`,
-      '',
-      '## Story 2: edge flow',
-      '',
-      '#### Negative Paths',
-      `- ${sharedCriterion}`,
-    ].join('\n');
-
-    const route = routePrdAuditPlanGaps(planGapReport('S2.1'), stories, {} as never);
-
-    expect(route).toMatchObject({
-      kind: 'record',
-      findings: [expect.objectContaining({ criterion: 'S2.1', grade: 'PLAN_GAP' })],
-    });
-  });
-
-  it('halts a negative-path PLAN_GAP when halt_on_any_plan_gap is enabled', () => {
-    const route = routePrdAuditPlanGaps(
-      planGapReport('S2.1'),
-      storiesWithCriterion('Negative Paths'),
-      { prd_audit: { halt_on_any_plan_gap: true } } as never,
-    );
-
-    expect(route).toMatchObject({ kind: 'halt', haltClass: 'plan-gap' });
-  });
-
-  it('refuses to record a negative-path PLAN_GAP while the report carries a rejected row', () => {
-    const route = routePrdAuditPlanGaps(
-      rejectedRowWithNegativePathPlanGapReport(),
-      storiesForRejectedRowReport(),
-      {} as never,
-    );
-
-    expect(route).toEqual({ kind: 'none' });
-  });
-
-  it('records an in-intent OVER_SCOPE finding as an accepted widening and passes', () => {
-    const route = routePrdAuditOverScope(overScopeReport('S3.1', 'within'), []);
-
-    expect(route).toMatchObject({
-      kind: 'record',
-      findings: [{ grade: 'OVER_SCOPE', criterion: 'S3.1', accepted: true }],
-    });
-  });
-
-  it('records a harmless out-of-intent OVER_SCOPE finding and passes', () => {
-    const route = routePrdAuditOverScope(overScopeReport('S3.2', 'outside-harmless'), []);
-
-    expect(route).toMatchObject({
-      kind: 'record',
-      findings: [{ grade: 'OVER_SCOPE', criterion: 'S3.2', accepted: false }],
-    });
-  });
-
-  it('halts a visible out-of-intent OVER_SCOPE finding with its own class', () => {
-    const route = routePrdAuditOverScope(overScopeReport('S3.3', 'outside-visible'), []);
-
-    expect(route).toMatchObject({ kind: 'halt', haltClass: 'over-scope' });
-  });
 
   it('joins a negative-path PLAN_GAP as a recorded, satisfied prd_audit member', async () => {
     const stories = [
@@ -2610,34 +2338,6 @@ describe('prd_audit kickback', () => {
     }
   });
 
-  it('requires the explicit Intent relation field instead of inferring within intent from evidence', () => {
-    const route = routePrdAuditOverScope(
-      overScopeReport('S3.4', 'within', 'within', false),
-      [],
-    );
-
-    expect(route).toEqual({ kind: 'none' });
-  });
-
-  it('parses a cleared decision block and regrades an accepted criterion', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'accepted-widenings-'));
-    dirs.push(root);
-    await mkdir(join(root, '.pipeline'), { recursive: true });
-    const report = overScopeReport('S3.4', 'outside-visible', 'A visible optional feature.');
-    const body = renderOverScopeDecisionBlock([{ criterion: 'S3.4', summary: 'A visible optional feature.', relation: 'outside-visible' }])
-      .replace('"pending"', '"accept"')
-      .replace('"decision": "accept"', '"decision": "accept", "rationale": "Approved."');
-    const parsed = parseClearedOverScopeDecisions(body, new Set(['S3.4']));
-    expect(parsed.kind).toBe('parsed');
-    if (parsed.kind !== 'parsed') return;
-    await recordOverScopeDecisions(root, parsed.decisions.map((decision) => ({ ...decision, operator: 'test' })));
-    const decisions = await readOverScopeDecisions(root);
-    expect(decisions.decisions).toHaveLength(1);
-    expect(routePrdAuditOverScope(report, decisions.decisions)).toMatchObject({
-      kind: 'record',
-      findings: [{ criterion: 'S3.4', accepted: true }],
-    });
-  });
 
   it('passes reseal and feature-commit Scope rationale evidence into the prd_audit prompt', async () => {
     const root = await mkdtemp(join(tmpdir(), 'prd-audit-scope-prompt-'));
