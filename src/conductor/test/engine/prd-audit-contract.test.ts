@@ -8,6 +8,27 @@ import {
 } from '../../src/engine/prd-audit-contract.js';
 
 describe('PRD audit judgment contract', () => {
+  it('names non-object judgment carriers while retaining independently valid siblings', () => {
+    const valid = {
+      criterion: { storyId: 'alpha', ordinal: 1 }, grade: 'PASS',
+      evidence: 'The active criterion is satisfied.', rationale: 'The evidence is complete.',
+      requirementAssociations: [], evidenceTaskIds: [],
+    };
+    expect(validatePrdAuditJudgment({
+      version: 'v1', criterionJudgments: [valid, null], noOwnerObservations: ['not an object'],
+    }, { criteria: [{ id: 'Salpha.1' }], taskIds: new Set(), requirements: [] })).toEqual({
+      ok: false,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{ ...valid, criterionId: 'Salpha.1' }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [
+        'criterionJudgments[1] must be a judgment object',
+        'noOwnerObservations[0] must be a judgment object',
+      ],
+    });
+  });
   it('resolves nested case-normalized criteria and annotated remediation citations', () => {
     const input = {
       version: 'v1',

@@ -145,6 +145,22 @@ afterEach(async () => {
 });
 
 describe('PRD-audit feature projection', () => {
+  it('rejects each malformed story criterion and task completion block before dispatch', async () => {
+    const root = await fixture();
+    const stories = join(root, '.docs', 'stories', 'audit-fixture.md');
+    await writeFile(stories, `# Stories\n\n## Story alpha.1: Broken obligation\n\n### Happy Path\n- Given a request, when it is handled, it is visible.\n`);
+    await expect(buildPrdAuditProjection(root)).resolves.toMatchObject({
+      ok: false,
+      fault: { dimension: 'stories criteria', detail: expect.stringContaining('lacks Given or Then') },
+    });
+
+    await writeFile(stories, `# Stories\n\n## Story alpha.1: Valid obligation\n\n### Happy Path\n- Given a request, when it is handled, then it is visible.\n`);
+    await writeFile(join(root, '.docs', 'plans', 'audit-fixture.md'), `# Implementation Plan: Audit fixture\n\n**Stories:** .docs/stories/audit-fixture.md\n\n## Technical Approach\n\nAudit the feature requirements against the delivered source.\n\n### Task task-a: Broken completion\n\n**Story:** Story alpha.1\n**Done when:**\n`);
+    await expect(buildPrdAuditProjection(root)).resolves.toMatchObject({
+      ok: false,
+      fault: { dimension: 'plan task completion conditions', detail: expect.stringContaining('task-a') },
+    });
+  });
   it('independently resolves populated feature obligations, scoped changes, and attributable history', async () => {
     const result = await buildPrdAuditProjection(await fixture());
 

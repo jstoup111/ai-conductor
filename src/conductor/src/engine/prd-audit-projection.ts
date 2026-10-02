@@ -165,8 +165,12 @@ function planIntent(plan: string): string | undefined {
   return section.split('\n').map((line) => line.trim()).find(Boolean);
 }
 
-function criteriaFromStories(stories: string): PrdAuditProjection['criteria'] {
+function criteriaFromStories(stories: string): {
+  readonly criteria: PrdAuditProjection['criteria'];
+  readonly malformed: readonly string[];
+} {
   const criteria: PrdAuditProjection['criteria'][number][] = [];
+  const malformed: string[] = [];
   for (const block of splitStoryBlocks(stories)) {
     if (!block.id) continue;
     let ordinal = 0;
@@ -174,13 +178,16 @@ function criteriaFromStories(stories: string): PrdAuditProjection['criteria'] {
       const body = sectionBody(block.text, kind === 'happy' ? /happy\s*path/i : /negative\s*paths?/i);
       if (body === null) continue;
       for (const text of listItems(body)) {
-        if (!/\bgiven\b/i.test(text) || !/\bthen\b/i.test(text)) continue;
         ordinal += 1;
+        if (!/\bgiven\b/i.test(text) || !/\bthen\b/i.test(text)) {
+          malformed.push(`story ${block.id} ${kind} criterion ${ordinal} lacks Given or Then`);
+          continue;
+        }
         criteria.push({ id: `S${block.id}.${ordinal}`, storyId: block.id, kind, text });
       }
     }
   }
-  return criteria;
+  return { criteria, malformed };
 }
 
 function prdRequirements(prd: string): { readonly id: string; readonly text: string }[] {
@@ -342,10 +349,21 @@ export async function buildPrdAuditProjection(
   } catch {
     return { ok: false, fault: { dimension: 'stories', detail: 'sealed stories are unreadable' } };
   }
-  const criteria = criteriaFromStories(stories);
+  const parsedCriteria = criteriaFromStories(stories);
+  if (parsedCriteria.malformed.length > 0) {
+    return { ok: false, fault: { dimension: 'stories criteria', detail: parsedCriteria.malformed.join('; ') } };
+  }
+  const criteria = parsedCriteria.criteria;
   const taskBodies = parsePlanTaskBodies(plan);
   const doneWhen = parsePlanTaskDoneWhen(plan);
   const tasks = [...taskBodies].map(([id, body]) => ({ id, storyIds: parsePlanTaskStoryIds(body), doneWhen: doneWhen.get(id) ?? [] }));
+  if (doneWhen.malformedTaskIds.size > 0) {
+    return { ok: false, fault: { dimension: 'plan task completion conditions', detail: `tasks with malformed Done when blocks: ${[...doneWhen.malformedTaskIds].join(', ')}` } };
+  }
+  const tasksWithoutDoneWhen = tasks.filter((task) => task.doneWhen.length === 0).map((task) => task.id);
+  if (tasksWithoutDoneWhen.length > 0) {
+    return { ok: false, fault: { dimension: 'plan task completion conditions', detail: `tasks missing Done when checks: ${tasksWithoutDoneWhen.join(', ')}` } };
+  }
   if (criteria.length === 0 || tasks.length === 0) return { ok: false, fault: { dimension: 'obligations', detail: 'active stories or plan contain no audit obligations' } };
 
   const coherencePath = join(projectRoot, '.docs', 'coherence', `${basename(planPath, '.md')}.md`);
