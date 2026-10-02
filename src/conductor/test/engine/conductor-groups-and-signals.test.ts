@@ -163,6 +163,40 @@ async function writePrdAuditFixture(
   }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: null });
 }
 
+/**
+ * Remediation fixtures must supply the current typed authority. The derived
+ * Markdown report deliberately is not an input to remediation routing.
+ */
+async function writePrdAuditFixableFixture(
+  projectRoot: string,
+  runId: string | undefined,
+  findings: readonly { criterionId: string; ownerTaskId: string }[] = [{ criterionId: 'S1.1', ownerTaskId: '1' }],
+): Promise<void> {
+  await persistPrdAuditVerdict(projectRoot, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: findings.map(({ criterionId, ownerTaskId }) => {
+        const match = /^S(.+)\.(\d+)$/.exec(criterionId);
+        if (!match) throw new Error(`Invalid fixture criterion: ${criterionId}`);
+        return {
+          criterion: { storyId: match[1], ordinal: Number(match[2]) },
+          criterionId,
+          grade: 'FIXABLE' as const,
+          evidence: `Fixture reports ${criterionId} as repairable.`,
+          rationale: 'Fixture remediation requires the active owning task.',
+          requirementAssociations: [],
+          evidenceTaskIds: [ownerTaskId],
+          ownerTaskId,
+        };
+      }),
+      noOwnerObservations: [],
+    },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: null });
+}
+
 function asBuiltApprovedFixture() {
   return {
     version: 'v1' as const,
@@ -1478,10 +1512,6 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
-    const PRD_AUDIT_GAPS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
-      '| FR-1 | GAP | missing | evidence.ts:1 | no |\n' +
-      '| FR-2 | GAP | missing | evidence.ts:2 | no |\n';
     function mixedFailingRunner(): {
       runner: StepRunner;
       remediateCalls: Array<{ retryReason?: string }>;
@@ -1499,7 +1529,10 @@ describe('engine/conductor', () => {
           } else if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+            await writePrdAuditFixableFixture(dir, opts?.runId, [
+              { criterionId: 'S1.1', ownerTaskId: '1' },
+              { criterionId: 'S1.2', ownerTaskId: '1' },
+            ]);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
@@ -1509,14 +1542,14 @@ describe('engine/conductor', () => {
               JSON.stringify({
                 dispositions: [
                   {
-                    id: 'FR-1',
+                    id: 'S1.1',
                     disposition: 'build',
                     category: null,
                     rationale: 'Implement FR-1',
                     tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
                   },
                   {
-                    id: 'FR-2',
+                    id: 'S1.2',
                     disposition: 'build',
                     category: null,
                     rationale: 'Implement FR-2',
@@ -1805,9 +1838,6 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
-    const PRD_AUDIT_GAPS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
-      '| FR-1 | GAP | missing | evidence.ts:1 | no |\n';
     it('a halt disposition halts the group even when other gaps in the SAME plan are routable fixes', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -1829,7 +1859,7 @@ describe('engine/conductor', () => {
           } else if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+            await writePrdAuditFixableFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
@@ -1839,7 +1869,7 @@ describe('engine/conductor', () => {
               JSON.stringify({
                 dispositions: [
                   {
-                    id: 'FR-1',
+                    id: 'S1.1',
                     disposition: 'build',
                     category: null,
                     rationale: 'Implement FR-1',
@@ -1915,7 +1945,7 @@ describe('engine/conductor', () => {
             // code was never actually fixed (build's mock does not touch
             // it), so re-verifying prd_audit each round is the ONLY thing
             // standing between this test and a false "gate satisfied".
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+            await writePrdAuditFixableFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
@@ -1928,7 +1958,7 @@ describe('engine/conductor', () => {
               JSON.stringify({
                 dispositions: [
                   {
-                    id: 'FR-1',
+                    id: 'S1.1',
                     disposition: 'build',
                     category: null,
                     rationale: 'Implement FR-1',
@@ -2026,6 +2056,8 @@ describe('engine/conductor', () => {
             );
           } else if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            await writePrdAuditFixableFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             // APPROVED: a BLOCKED as-built verdict is terminal for the run and
             // would mask the property. The non-MT gap that dispatches
