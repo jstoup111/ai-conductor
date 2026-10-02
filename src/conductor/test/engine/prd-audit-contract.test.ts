@@ -1,4 +1,4 @@
-// Covers: task:6, task:7, task:8, task:10
+// Covers: task:6, task:7, task:8, task:9, task:10
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -76,6 +76,11 @@ describe('PRD audit judgment contract', () => {
         'criterionJudgments[2].requirementAssociations[0] does not resolve requirement .docs/specs/a.md:FR-404',
         'criterionJudgments[3].ownerTaskId must identify exactly one active task for FIXABLE',
         'criterionJudgments[4].ownerTaskId must identify exactly one active task for FIXABLE',
+        'criterion Salpha.1 is missing a judgment',
+        'criterion Sbeta.1 is missing a judgment',
+        'criterion Sgamma.1 is missing a judgment',
+        'criterion Sdelta.1 is missing a judgment',
+        'requirement .docs/specs/a.md:FR-7 lacks a criterion association or valid PLAN_GAP evidence',
       ],
     });
   });
@@ -102,7 +107,10 @@ describe('PRD audit judgment contract', () => {
       requirements: [],
     })).toEqual({
       ok: false,
-      diagnostics: ['criterionJudgments[1].evidence must be non-empty'],
+      diagnostics: [
+        'criterionJudgments[1].evidence must be non-empty',
+        'criterion Sgamma.1 is missing a judgment',
+      ],
       judgment: {
         version: 'v1',
         criterionJudgments: [
@@ -139,6 +147,7 @@ describe('PRD audit judgment contract', () => {
       diagnostics: [
         'criterionJudgments[0].criterion duplicates normalized criterion Salpha.1',
         'criterionJudgments[1].criterion duplicates normalized criterion Salpha.1',
+        'criterion Salpha.1 is missing a judgment',
       ],
       judgment: {
         version: 'v1',
@@ -226,6 +235,123 @@ describe('PRD audit judgment contract', () => {
           { ...input.noOwnerObservations[0], presentationOrdinal: 'NC-1' },
           { ...input.noOwnerObservations[1], presentationOrdinal: 'NC-2' },
         ],
+      },
+    });
+  });
+
+  it('names omitted criteria and invalid entries despite PLAN_GAP and accepted scope observations', () => {
+    const alphaPlanGap = {
+      criterion: { storyId: 'alpha', ordinal: 1 },
+      grade: 'PLAN_GAP',
+      evidence: 'The active criterion has no admitted task owner.',
+      rationale: 'The gap remains a recorded negative-path finding.',
+      requirementAssociations: [],
+      evidenceTaskIds: [],
+    };
+
+    expect(validatePrdAuditJudgment({
+      version: 'v1',
+      criterionJudgments: [
+        alphaPlanGap,
+        { ...alphaPlanGap, criterion: { storyId: 'beta', ordinal: 1 }, grade: 'ACCEPTED' },
+        { ...alphaPlanGap, criterion: { storyId: 'gamma', ordinal: 1 }, grade: 'OVER_SCOPE' },
+        {
+          ...alphaPlanGap,
+          criterion: { storyId: 'delta', ordinal: 1 },
+          grade: 'OVER_SCOPE',
+          intentRelation: 'scope-accepted',
+        },
+      ],
+      noOwnerObservations: [{
+        grade: 'OVER_SCOPE',
+        evidence: 'The scope observation has been recorded separately.',
+        rationale: 'It cannot accept invalid criterion evidence.',
+        intentRelation: 'within',
+      }],
+    }, {
+      criteria: [{ id: 'Salpha.1' }, { id: 'Sbeta.1' }, { id: 'Sgamma.1' }, { id: 'Sdelta.1' }],
+      taskIds: new Set(),
+      requirements: [],
+    })).toEqual({
+      ok: false,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{ ...alphaPlanGap, criterionId: 'Salpha.1' }],
+        noOwnerObservations: [{
+          grade: 'OVER_SCOPE',
+          evidence: 'The scope observation has been recorded separately.',
+          rationale: 'It cannot accept invalid criterion evidence.',
+          intentRelation: 'within',
+          presentationOrdinal: 'NC-1',
+        }],
+      },
+      diagnostics: [
+        'criterionJudgments[1].grade must be one of PASS, FIXABLE, PLAN_GAP, OVER_SCOPE',
+        'criterionJudgments[2].intentRelation is required for OVER_SCOPE',
+        'criterionJudgments[3].intentRelation must be one of within, outside-harmless, outside-visible',
+        'criterion Sbeta.1 is missing a judgment',
+        'criterion Sgamma.1 is missing a judgment',
+        'criterion Sdelta.1 is missing a judgment',
+      ],
+    });
+  });
+
+  it('blocks an uncovered requirement while allowing valid criterion PLAN_GAP evidence to account for it', () => {
+    const alphaPass = {
+      criterion: { storyId: 'alpha', ordinal: 1 },
+      grade: 'PASS',
+      evidence: 'The active criterion meets the requirement it covers.',
+      rationale: 'The criterion is independently resolved.',
+      requirementAssociations: [{ path: '.docs/specs/a.md', requirementId: 'FR-7' }],
+      evidenceTaskIds: [],
+    };
+    const betaPlanGap = {
+      ...alphaPass,
+      criterion: { storyId: 'beta', ordinal: 1 },
+      grade: 'PLAN_GAP',
+      evidence: 'The untraced requirement has a valid existing plan-gap finding.',
+      rationale: 'The engine records the evidence without manufacturing repair work.',
+      requirementAssociations: [{ path: '.docs/specs/a.md', requirementId: 'FR-9' }],
+    };
+    const context = {
+      criteria: [{ id: 'Salpha.1' }, { id: 'Sbeta.1' }],
+      taskIds: new Set<string>(),
+      requirements: [
+        { path: '.docs/specs/a.md', id: 'FR-7' },
+        { path: '.docs/specs/a.md', id: 'FR-9' },
+      ],
+    };
+
+    expect({
+      missing: validatePrdAuditJudgment({
+        version: 'v1', criterionJudgments: [alphaPass, { ...betaPlanGap, requirementAssociations: [] }], noOwnerObservations: [],
+      }, context),
+      accounted: validatePrdAuditJudgment({
+        version: 'v1', criterionJudgments: [alphaPass, betaPlanGap], noOwnerObservations: [],
+      }, context),
+    }).toEqual({
+      missing: {
+        ok: false,
+        judgment: {
+          version: 'v1',
+          criterionJudgments: [
+            { ...alphaPass, criterionId: 'Salpha.1' },
+            { ...betaPlanGap, criterionId: 'Sbeta.1', requirementAssociations: [] },
+          ],
+          noOwnerObservations: [],
+        },
+        diagnostics: ['requirement .docs/specs/a.md:FR-9 lacks a criterion association or valid PLAN_GAP evidence'],
+      },
+      accounted: {
+        ok: true,
+        judgment: {
+          version: 'v1',
+          criterionJudgments: [
+            { ...alphaPass, criterionId: 'Salpha.1' },
+            { ...betaPlanGap, criterionId: 'Sbeta.1' },
+          ],
+          noOwnerObservations: [],
+        },
       },
     });
   });

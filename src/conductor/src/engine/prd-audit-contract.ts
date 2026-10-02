@@ -320,7 +320,9 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
         ? ['criterion', 'grade', 'evidence', 'rationale', 'requirementAssociations', 'evidenceTaskIds', 'intentRelation']
         : ['criterion', 'grade', 'evidence', 'rationale', 'requirementAssociations', 'evidenceTaskIds'];
     if (!exactKeys(raw, permitted)) {
-      diagnostics.push(`${field} has unsupported fields or is missing required fields for grade ${raw.grade}`);
+      diagnostics.push(raw.grade === 'OVER_SCOPE' && !('intentRelation' in raw)
+        ? `${field}.intentRelation is required for OVER_SCOPE`
+        : `${field} has unsupported fields or is missing required fields for grade ${raw.grade}`);
       continue;
     }
     const criterion = parseCriterionReference(raw.criterion, `${field}.criterion`, criteria, diagnostics);
@@ -381,7 +383,9 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
     const permitted = ['grade', 'evidence', 'rationale', 'intentRelation'];
     const unexpected = Object.keys(raw).find((key) => !permitted.includes(key));
     if (!exactKeys(raw, permitted) || raw.grade !== 'OVER_SCOPE') {
-      diagnostics.push(`${field}${unexpected === undefined ? '' : `.${unexpected}`} permits only OVER_SCOPE with evidence, rationale, and intentRelation`);
+      diagnostics.push(raw.grade === 'OVER_SCOPE' && !('intentRelation' in raw)
+        ? `${field}.intentRelation is required for OVER_SCOPE`
+        : `${field}${unexpected === undefined ? '' : `.${unexpected}`} permits only OVER_SCOPE with evidence, rationale, and intentRelation`);
       continue;
     }
     if (!isIntentRelation(raw.intentRelation)) {
@@ -397,6 +401,19 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
     criterionJudgments: criterionJudgments.filter((_, index) => !duplicateCriterionIndexes.has(index)),
     noOwnerObservations,
   };
+  const judgedCriteria = new Set(judgment.criterionJudgments.map((entry) => entry.criterionId.toLowerCase()));
+  for (const [normalizedCriterionId, criterionId] of criteria) {
+    if (!judgedCriteria.has(normalizedCriterionId)) diagnostics.push(`criterion ${criterionId} is missing a judgment`);
+  }
+  const associatedRequirements = new Set(judgment.criterionJudgments.flatMap((entry) =>
+    entry.requirementAssociations.map((association) => `${association.path}\u0000${association.requirementId}`),
+  ));
+  for (const requirement of requirements) {
+    if (!associatedRequirements.has(requirement)) {
+      const [path, requirementId] = requirement.split('\u0000');
+      diagnostics.push(`requirement ${path}:${requirementId} lacks a criterion association or valid PLAN_GAP evidence`);
+    }
+  }
   if (diagnostics.length === 0) return { ok: true, judgment };
   return judgment.criterionJudgments.length > 0 || judgment.noOwnerObservations.length > 0
     ? { ok: false, judgment, diagnostics }
