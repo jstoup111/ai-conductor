@@ -4,6 +4,12 @@ spec_hash: 19afefde95dc02280aaacd5e7b2bf5bc5f8c4fbf8d0ada2d23cbb9e2bd2401aa
 pr: https://github.com/jstoup111/ai-conductor/pull/2872
 shipped: 2026-10-02
 engine_version: 20261002T011715Z-89506a82fed2
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/intake-file-cli.ts:28-47,147 — every CLI prompt now goes through a close-aware readline wrapper, so closing stdin at the pre-existing size or priority prompt ends the run with `interactive input closed` and exit 1 instead of an unsettled prompt"
+    accepted: true
 ---
 
 ## Cost
