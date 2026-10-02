@@ -1,6 +1,7 @@
 // Covers: task:1
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { externalFixturePrefix } from '../tmpdir-leak-guard.js';
@@ -50,15 +51,28 @@ async function capturedLines(path: string): Promise<string[]> {
   return (await readFile(path, 'utf8')).trimEnd().split('\n');
 }
 
-async function makePathDirectory(root: string): Promise<string> {
+async function makePathDirectory(root: string, searchCeiling?: string): Promise<string> {
   const pathDirectory = join(root, 'path-stubs');
   await mkdir(pathDirectory, { recursive: true });
   await symlink(process.execPath, join(pathDirectory, 'node'));
+  if (searchCeiling) {
+    // Run roots are checkout-local. Stop only this fixture's upward walk at
+    // its root so an intentionally unqualified helper cannot discover the
+    // real harness above the fixture.
+    await writeFile(join(pathDirectory, 'dirname'), `#!/bin/sh
+if [ "$1" = "$FIXTURE_SEARCH_CEILING" ]; then
+  printf '/\\n'
+else
+  exec /usr/bin/dirname "$@"
+fi
+`);
+    await chmod(join(pathDirectory, 'dirname'), 0o755);
+  }
   return pathDirectory;
 }
 
-async function makePathCommand(root: string, target: string): Promise<string> {
-  const pathDirectory = await makePathDirectory(root);
+async function makePathCommand(root: string, target: string, searchCeiling?: string): Promise<string> {
+  const pathDirectory = await makePathDirectory(root, searchCeiling);
   await symlink(target, join(pathDirectory, 'ai-conductor'));
   return pathDirectory;
 }
@@ -68,6 +82,12 @@ afterEach(async () => {
 });
 
 describe('bundled intake helper', () => {
+  it('contains its fixture under the worker-scoped temp root', async () => {
+    const setup = await fixture();
+
+    expect(resolve(setup.root).startsWith(`${resolve(tmpdir())}${sep}`)).toBe(true);
+  });
+
   it('resolves a symlinked skill to its harness while preserving the caller directory and argument order', async () => {
     const setup = await fixture();
     const caller = await setup.makeCaller('consumer-repo');
@@ -143,10 +163,16 @@ describe('bundled intake helper', () => {
     await chmod(isolatedHelper, 0o755);
     await writeFile(harnessCommand, '#!/usr/bin/env bash\n');
     await chmod(harnessCommand, 0o755);
-    const pathDirectory = await makePathCommand(setup.root, harnessCommand);
+    const pathDirectory = await makePathCommand(setup.root, harnessCommand, setup.root);
 
     const result = spawnSync(isolatedHelper, ['--title', 'Fallback', '--body', 'body'], {
-      cwd: caller, encoding: 'utf8', env: { CAPTURE: setup.capture, PATH: controlledPath(pathDirectory) },
+      cwd: caller,
+      encoding: 'utf8',
+      env: {
+        CAPTURE: setup.capture,
+        PATH: controlledPath(pathDirectory),
+        FIXTURE_SEARCH_CEILING: setup.root,
+      },
     });
 
     expect(result.status).toBe(0);
@@ -166,10 +192,16 @@ describe('bundled intake helper', () => {
     await chmod(isolatedHelper, 0o755);
     await writeFile(unqualifiedCommand, '#!/usr/bin/env bash\n');
     await chmod(unqualifiedCommand, 0o755);
-    const pathDirectory = await makePathCommand(setup.root, unqualifiedCommand);
+    const pathDirectory = await makePathCommand(setup.root, unqualifiedCommand, setup.root);
 
     const result = spawnSync(isolatedHelper, ['--title', 'Missing', '--body', 'body'], {
-      cwd: caller, encoding: 'utf8', env: { CAPTURE: setup.capture, PATH: controlledPath(pathDirectory) },
+      cwd: caller,
+      encoding: 'utf8',
+      env: {
+        CAPTURE: setup.capture,
+        PATH: controlledPath(pathDirectory),
+        FIXTURE_SEARCH_CEILING: setup.root,
+      },
     });
 
     expect(result.status).not.toBe(0);
@@ -185,10 +217,16 @@ describe('bundled intake helper', () => {
     await mkdir(dirname(isolatedHelper), { recursive: true });
     await copyFile(setup.helper, isolatedHelper);
     await chmod(isolatedHelper, 0o755);
-    const pathDirectory = await makePathDirectory(setup.root);
+    const pathDirectory = await makePathDirectory(setup.root, setup.root);
 
     const result = spawnSync(isolatedHelper, ['--title', 'Missing', '--body', 'body'], {
-      cwd: caller, encoding: 'utf8', env: { CAPTURE: setup.capture, PATH: controlledPath(pathDirectory) },
+      cwd: caller,
+      encoding: 'utf8',
+      env: {
+        CAPTURE: setup.capture,
+        PATH: controlledPath(pathDirectory),
+        FIXTURE_SEARCH_CEILING: setup.root,
+      },
     });
 
     expect(result.status).not.toBe(0);
