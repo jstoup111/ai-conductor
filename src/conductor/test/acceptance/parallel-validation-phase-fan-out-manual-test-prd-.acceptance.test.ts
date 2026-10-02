@@ -15,6 +15,7 @@ import {
   PRD_AUDIT_CODE_STAMP,
 } from '../../src/engine/artifacts.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 
@@ -126,6 +127,10 @@ const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   adrCompliance: { enabled: false, reason: 'test fixture' },
   diagramDrift: { enabled: false, reason: 'test fixture' },
 };
+
+async function writePrdAuditPass(dir: string, attemptId?: string, grade: 'PASS' | 'FIXABLE' = 'PASS'): Promise<void> {
+  await persistPrdAuditVerdict(dir, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade, evidence: 'evidence.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: [], ...(grade === 'FIXABLE' ? { ownerTaskId: '1' } : {}) }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId: attemptId ?? 'fixture-run', codeStamp: null });
+}
 
 describe('parallel validation phase — cross-module acceptance flows (#469)', () => {
   /**
@@ -690,6 +695,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               '',
               PRD_PASS,
             ].join('\n'));
+            await writePrdAuditPass(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {
@@ -809,6 +815,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               '|---|---|---|---|---|',
               '| FR-1 | MISSING | impl-gap | src/feature.ts:1 | no |',
             ].join('\n'));
+            await writePrdAuditPass(dir, opts?.runId, 'FIXABLE');
           } else if (step === 'architecture_review_as_built') {
             await writeRemediableAsBuiltVerdict(
               dir, opts?.runId, 'FR-1', '1', 'Repair the same approved behavior',
@@ -1000,6 +1007,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               '| --- | --- | --- | --- | --- |',
               '| S1.1 | PASS | — | FR-1 | evidence.ts:1 |',
             ].join('\n'));
+            await writePrdAuditPass(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {
@@ -1382,6 +1390,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               '',
               PRD_PASS,
             ].join('\n'));
+            await writePrdAuditPass(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {
@@ -1441,6 +1450,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               '',
               PRD_PASS,
             ].join('\n'));
+            await writePrdAuditPass(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeRemediableAsBuiltVerdict(dir, opts?.runId, 'ARCH-1', '1', 'Add the missing guard');
           } else if (step === 'remediate') {

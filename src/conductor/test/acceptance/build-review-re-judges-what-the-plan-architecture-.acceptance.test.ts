@@ -22,6 +22,7 @@ import {
   type StepRunOptions,
 } from '../../src/engine/conductor.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import {
   BuildReviewDispositionStore,
@@ -225,10 +226,7 @@ function fakeRunner(fixture: Fixture, calls: StepName[], options: RunnerOptions 
       } else if (step === 'manual_test') {
         await writeFile(join(fixture.pipelineDir, 'manual-test-results.md'), MANUAL_TEST_PASS);
       } else if (step === 'prd_audit' && options.prdAudit !== 'missing') {
-        await writeFile(
-          join(fixture.pipelineDir, 'prd-audit.md'),
-          options.prdAudit === 'no-prd' ? PRD_AUDIT_NO_PRD_PASS : PRD_AUDIT_PASS,
-        );
+        await persistPrdAuditVerdict(fixture.root, { complete: true, judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'src/feature.ts:1', rationale: 'Fixture supplies typed audit evidence.', requirementAssociations: [], evidenceTaskIds: ['1'] }], noOwnerObservations: [] }, diagnostics: [], recordedDispositions: [] }, { attemptId: runOptions?.runId ?? 'fixture-run', codeStamp: null });
       } else if (step === 'architecture_review_as_built') {
         await persistAsBuiltVerdict(fixture.root, options.asBuilt === 'plan-gap'
           ? {
@@ -416,10 +414,7 @@ describe('Covers: FR-8, S7.1 — S-tier technical work is still audited', () => 
     expect(calls).toContain('prd_audit');
     expect(calls).toContain('architecture_review_as_built');
     expect(calls).toContain('finish');
-    await expect(readFile(join(fixture.pipelineDir, 'prd-audit.md'), 'utf8')).resolves.toContain('**PRD:** none');
-    await expect(readFile(join(fixture.pipelineDir, 'prd-audit.md'), 'utf8')).resolves.toContain(
-      '| S1.1 | PASS | | src-feature.ts:1 |',
-    );
+    await expect(readFile(join(fixture.pipelineDir, 'prd-audit.json'), 'utf8')).resolves.toContain('"criterionId": "S1.1"');
     expect(existsSync(join(fixture.root, '.docs', 'specs', `${fixture.slug}.md`))).toBe(false);
     expect(existsSync(join(fixture.pipelineDir, 'HALT'))).toBe(false);
   });
