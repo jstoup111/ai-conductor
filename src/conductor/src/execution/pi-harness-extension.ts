@@ -11,8 +11,23 @@ export const PI_HARNESS_EXTENSION_SOURCE = String.raw`
 export default function(pi: any) {
   const gitRead = pi.registerFlag('conduct-git-read', { type: 'boolean', default: false });
   const schemaPath = pi.registerFlag('conduct-output-schema', { type: 'string' });
-  const refused = (arg: string) => ['--output', '-O', '--open-files-in-pager', '--ext-diff', '--textconv', '-c', '--config-env']
-    .some((option) => arg === option || arg.startsWith(option + '='));
+  const deniedOptions = [
+    { long: '--output', short: 'O' },
+    { long: '--open-files-in-pager' },
+    { long: '--ext-diff' },
+    { long: '--textconv' },
+    { long: '--config-env', short: 'c' },
+  ];
+  const refused = (arg: string) => {
+    if (arg.startsWith('--')) {
+      const name = arg.split('=', 1)[0];
+      return name.length > 2 && deniedOptions.find(({ long }) => long.startsWith(name))?.long;
+    }
+    if (arg.startsWith('-') && arg.length > 1) {
+      const denied = deniedOptions.find(({ short }) => short && arg.slice(1).includes(short));
+      return denied?.short && '-' + denied.short;
+    }
+  };
   if (pi.getFlag(gitRead)) {
     pi.registerTool({ name: 'git_read', description: 'Run an allowed read-only git command', parameters: {
       type: 'object', required: ['subcommand', 'args'], properties: {
@@ -21,7 +36,7 @@ export default function(pi: any) {
       },
     }, async execute(args: any, context: any) {
       if (!['show','diff','log','ls-tree','ls-files','cat-file','rev-parse','blame','grep'].includes(args.subcommand)) return { isError: true, content: [{ type: 'text', text: 'subcommand not allowed: ' + args.subcommand }] };
-      const bad = (args.args || []).find(refused);
+      const bad = (args.args || []).map(refused).find(Boolean);
       if (bad) return { isError: true, content: [{ type: 'text', text: 'option not allowed: ' + bad }] };
       try {
         const cp: any = await import('node:child_process');
