@@ -828,7 +828,7 @@ export function overScopeRelations(reportText: string): Map<string, IntentRelati
     if (!/^\s*\|/.test(line)) continue;
     const cells = prdAuditTableCells(line); if (cells.every((cell) => /^:?-{3,}:?$/.test(cell)) || cells[noOwnerGradeIndex]?.toUpperCase() !== 'OVER_SCOPE') continue;
     const finding = cells[findingIndex]?.trim().toUpperCase(); const relation = cells[noOwnerRelationIndex]?.trim().toLowerCase();
-    if (finding && /^NC\.\d+$/.test(finding) && (relation === 'within' || relation === 'outside-harmless' || relation === 'outside-visible')) relations.set(finding, relation);
+    if (finding && isPrdAuditNoOwnerOrdinal(finding) && (relation === 'within' || relation === 'outside-harmless' || relation === 'outside-visible')) relations.set(finding, relation);
   }
   return relations;
 }
