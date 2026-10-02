@@ -1,4 +1,4 @@
-// Covers: task:13, task:14
+// Covers: task:13, task:14, task:15
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -66,5 +66,11 @@ describe('PRD audit typed provider dispatch', () => {
       success: false, prdAuditFault: { kind: 'input', reason: expect.stringContaining('plan') },
     });
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('preserves an authentication failure instead of relabeling it as missing judgment', async () => {
+    const root = await fixture();
+    const { runner: subject } = runner(root, { success: false, output: 'authentication required', exitCode: 1, authFailure: true });
+    await expect(subject.run('prd_audit', { complexity_tier: 'S' })).resolves.toMatchObject({ success: false, authFailure: true });
   });
 });
