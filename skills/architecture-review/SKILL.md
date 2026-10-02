@@ -388,6 +388,18 @@ architecture review was skipped. This is the final architectural drift sweep. It
 it does **no** new design or feasibility/complexity assessment, and reuses the drift logic of §10
 (Recurring Review) and the ADR lifecycle of §7b.
 
+**Managed as-built review.** When the engine dispatches `--as-built`, it supplies the bounded,
+versioned input projection, check policy, and terminal native structured-result shape. Treat those
+as the complete machine contract: judge the supplied evidence and return one terminal structured
+verdict that conforms to the supplied shape. Do not recreate engine input collection, substitute a
+Markdown report for that verdict, write a managed verdict artifact, alter ADRs or decisions, or
+choose a gate route. The engine validates, persists, renders, and routes the result.
+
+**Standalone as-built review.** When a human invokes `--as-built` outside the managed engine step,
+present a human-readable advisory judgment from the available architecture, source, and history
+evidence. It is not current managed gate evidence. Do not write managed verdict artifacts,
+operator-decision stores, or routing state; the human or engine owns any follow-up action.
+
 **Per-check policy:** Read the supplied `AS-BUILT CHECK POLICY` before reviewing. Apply every
 check marked `on`, do not infer obligations from a check marked `off`, and record each off check
 with its supplied reason. By default, `reachability` and `planGap` apply at every tier;
@@ -510,7 +522,7 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
   (`Supersedes: <old>`, old → `Status: SUPERSEDED`). **Never silently downgrade** an APPROVED ADR
   or auto-resolve the violation. After resolution, re-run the as-built gate.
 
-For interactive use, state one verdict from the closed set `APPROVED`,
+For standalone interactive use, state one verdict from the closed set `APPROVED`,
 `APPROVED WITH DRIFT NOTES`, `PLAN_GAP`, or `BLOCKED`. State the affected
 outcome and whether it was delivered for a plan gap. For a blocked result,
 state each finding's `REMEDIABLE` or `DESIGN` class, summary, and typed
