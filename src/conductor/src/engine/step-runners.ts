@@ -1243,6 +1243,10 @@ export class DefaultStepRunner implements StepRunner {
           if (!result.success && (result.authFailure || result.rateLimited || result.commandUnresolved || result.modelUnavailable || providerExhausted)) {
             return this.toStepRunResult(step, result);
           }
+          // A provider failure is authoritative even if an adapter happened to
+          // leave a structured-looking value behind.  Never validate/persist a
+          // partial terminal result over the provider's own failure reason.
+          if (!result.success) return this.toStepRunResult(step, result);
           if (result.structuredResultFailure !== undefined || result.finalStructuredResult === undefined) {
             return { ...this.toStepRunResult(step, result), success: false, output: 'structured-result-missing' };
           }
@@ -1255,14 +1259,26 @@ export class DefaultStepRunner implements StepRunner {
           const head = await this.gitRunner(['rev-parse', 'HEAD']);
           const codeStamp = head.exitCode === 0 && head.stdout.trim().length > 0 ? head.stdout.trim() : null;
           if (!validated.ok) {
-            if (validated.judgment) await persistPrdAuditVerdict(this.projectDir, {
-              complete: false, judgment: validated.judgment, diagnostics: validated.diagnostics, recordedDispositions: [],
-            }, { attemptId: opts?.runId ?? this.runId, codeStamp });
+            if (validated.judgment) {
+              try {
+                await persistPrdAuditVerdict(this.projectDir, {
+                  complete: false, judgment: validated.judgment, diagnostics: validated.diagnostics, recordedDispositions: [],
+                }, { attemptId: opts?.runId ?? this.runId, codeStamp });
+              } catch (error) {
+                return { ...this.toStepRunResult(step, result), success: false, output: `prd-audit authority persistence failed: ${error instanceof Error ? error.message : String(error)}` };
+              }
+            }
             return { ...this.toStepRunResult(step, result), success: false, output: `structured-result-rejected: ${validated.diagnostics.join('; ')}` };
           }
-          await persistPrdAuditVerdict(this.projectDir, {
-            complete: true, judgment: validated.judgment, diagnostics: [], recordedDispositions: [],
-          }, { attemptId: opts?.runId ?? this.runId, codeStamp });
+          try {
+            await persistPrdAuditVerdict(this.projectDir, {
+              complete: true, judgment: validated.judgment, diagnostics: [], recordedDispositions: [],
+            }, { attemptId: opts?.runId ?? this.runId, codeStamp });
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            const stage = /render|report/i.test(reason) ? 'report rendering' : 'authority persistence';
+            return { ...this.toStepRunResult(step, result), success: false, output: `prd-audit ${stage} failed: ${reason}` };
+          }
           return this.toStepRunResult(step, result);
         }
       } catch (error) {

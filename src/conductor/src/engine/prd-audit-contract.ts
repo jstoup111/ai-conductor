@@ -313,7 +313,11 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
 
   for (const [index, raw] of input.criterionJudgments.entries()) {
     const field = `criterionJudgments[${index}]`;
-    if (!record(raw) || !validBase(raw, field, diagnostics)) continue;
+    if (!record(raw)) {
+      diagnostics.push(`${field} must be a judgment object`);
+      continue;
+    }
+    if (!validBase(raw, field, diagnostics)) continue;
     const permitted = raw.grade === 'FIXABLE'
       ? ['criterion', 'grade', 'evidence', 'rationale', 'requirementAssociations', 'evidenceTaskIds', 'ownerTaskId']
       : raw.grade === 'OVER_SCOPE'
@@ -379,7 +383,11 @@ export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgme
   const noOwnerObservations: PrdAuditNoOwnerObservation[] = [];
   for (const [index, raw] of input.noOwnerObservations.entries()) {
     const field = `noOwnerObservations[${index}]`;
-    if (!record(raw) || !validBase(raw, field, diagnostics)) continue;
+    if (!record(raw)) {
+      diagnostics.push(`${field} must be a judgment object`);
+      continue;
+    }
+    if (!validBase(raw, field, diagnostics)) continue;
     const permitted = ['grade', 'evidence', 'rationale', 'intentRelation'];
     const unexpected = Object.keys(raw).find((key) => !permitted.includes(key));
     if (!exactKeys(raw, permitted) || raw.grade !== 'OVER_SCOPE') {

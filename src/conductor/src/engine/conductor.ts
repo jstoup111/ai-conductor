@@ -4326,6 +4326,10 @@ export class Conductor {
   /** Read the current verdict and its authoritative story sections as one route decision. */
   private async routeCurrentPrdAuditPlanGaps(state: ConductState): Promise<PrdAuditPlanGapRoute> {
     const stored = await readPrdAuditVerdict(this.projectRoot);
+    if (stored.kind === 'unreadable') {
+      this.prdAuditProjectionRefusal = `Cannot route PRD-audit findings: ${stored.reason}`;
+      return { kind: 'none' };
+    }
     if (stored.kind !== 'present' || !stored.value.complete) return { kind: 'none' };
     const storiesPath = await resolveFeatureStoriesPath(this.projectRoot, state.feature_desc);
     const storiesText = storiesPath ? await readFile(storiesPath, 'utf8').catch(() => '') : '';

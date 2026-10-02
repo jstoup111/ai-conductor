@@ -121,6 +121,17 @@ require_pattern 'pipeline retains RED/DOMAIN/GREEN workflow gates' \
   "$HARNESS_DIR/skills/pipeline/SKILL.md"
 require_pattern 'code review retains fresh-context evaluator review' \
   'fresh context' "$HARNESS_DIR/skills/code-review/SKILL.md"
+prd_audit_skill="$HARNESS_DIR/skills/prd-audit/SKILL.md"
+require_pattern 'prd-audit defines managed terminal structured judgment ownership' \
+  'managed review|terminal (native )?structured' "$prd_audit_skill"
+require_pattern 'prd-audit keeps standalone advice separate from managed gate evidence' \
+  'standalone review|not current managed gate evidence' "$prd_audit_skill"
+require_pattern 'prd-audit forbids managed verdict and decision writes' \
+  'do not write .*prd-audit|writes no managed verdict' "$prd_audit_skill"
+require_absent_pattern 'prd-audit does not reintroduce Verdict Table grammar' \
+  '## Verdict Table|\| Criterion \| Grade \|' "$prd_audit_skill"
+require_absent_pattern 'prd-audit does not grant accepted-widenings writes' \
+  'write.*accepted-widenings|accepted-widenings.*write' "$prd_audit_skill"
 require_pattern 'finish retains fresh verification before completion' \
   'fresh.*(verification|evidence)|verify.*fresh' "$HARNESS_DIR/skills/finish/SKILL.md"
 finish_skill="$HARNESS_DIR/skills/finish/SKILL.md"
