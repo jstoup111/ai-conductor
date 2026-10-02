@@ -28,6 +28,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Plan authors can declare bounded work slices, and the conductor rejects ordered slice dependencies. ([implementation PR #2864](https://github.com/jstoup111/ai-conductor/pull/2864)).
 - Unclassified provider dispatch failures now include recorded exit codes, signals, and output sizes. ([implementation PR #2853](https://github.com/jstoup111/ai-conductor/pull/2853)).
 - You can configure provider-specific models, fallback ladders, and escalation orders for Pi-backed steps. ([implementation PR #2880](https://github.com/jstoup111/ai-conductor/pull/2880)).
+- Intake filers receive evidence-path overlap suggestions and can explicitly link or decline related work. ([implementation PR #2872](https://github.com/jstoup111/ai-conductor/pull/2872)).
 
 ### Changed
 
