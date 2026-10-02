@@ -683,6 +683,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
+            await writePrdAuditPass(dir, opts?.runId, 'FIXABLE');
             await writeFile(join(dir, '.pipeline/prd-audit.md'), [
               '# PRD Audit',
               '',
@@ -815,7 +816,6 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
               '|---|---|---|---|---|',
               '| FR-1 | MISSING | impl-gap | src/feature.ts:1 | no |',
             ].join('\n'));
-            await writePrdAuditPass(dir, opts?.runId, 'FIXABLE');
           } else if (step === 'architecture_review_as_built') {
             await writeRemediableAsBuiltVerdict(
               dir, opts?.runId, 'FR-1', '1', 'Repair the same approved behavior',

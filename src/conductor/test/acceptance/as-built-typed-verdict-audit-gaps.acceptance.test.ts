@@ -44,19 +44,6 @@ const MANUAL_TEST_PASS = [
   '',
 ].join('\n');
 
-const PRD_AUDIT_PASS = [
-  '# PRD Audit',
-  '',
-  '**PRD:** none',
-  '',
-  '## Verdict Table',
-  '',
-  '| Criterion | Grade | Plan task | Evidence |',
-  '|---|---|---|---|',
-  '| S3.1 | PASS | 1 | src/feature.ts:1 |',
-  '',
-].join('\n');
-
 const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'test fixture' },
   planGap: { enabled: true, reason: 'test fixture' },
@@ -285,7 +272,7 @@ describe('S4.17: rejected-result exhaustion names the last rejected field', () =
     const { root, statePath } = await seedFixture();
     await seedSerial(root, statePath);
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName, _state, options): Promise<StepRunResult> => {
+      run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
         if (step === 'architecture_review_as_built') {
           return {
             success: false,
@@ -381,7 +368,7 @@ describe('S6.11: a mechanical as-built fault in the validation group is a no-ver
     const { root, statePath } = await seedFixture();
     const calls: StepName[] = [];
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+      run: vi.fn(async (step: StepName, _state, options): Promise<StepRunResult> => {
         calls.push(step);
         if (step === 'manual_test') {
           await writeFile(join(root, '.pipeline', 'manual-test-results.md'), MANUAL_TEST_PASS);

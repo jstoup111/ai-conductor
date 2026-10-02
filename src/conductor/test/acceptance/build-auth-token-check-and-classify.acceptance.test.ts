@@ -90,18 +90,6 @@ const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   adrCompliance: { enabled: false, reason: 'test fixture' },
   diagramDrift: { enabled: false, reason: 'test fixture' },
 };
-const PRD_PASS = [
-  '# PRD Audit',
-  '',
-  '**PRD:** present',
-  '',
-  '## Verdict Table',
-  '',
-  '| Criterion | Grade | Plan task | PRD | Evidence |',
-  '|---|---|---|---|---|',
-  '| S1.1 | PASS | | FR-1 | evidence.ts:1 |',
-  '',
-].join('\n');
 const FEATURE_PRD = '# PRD: Build auth token check and classify\n\n## Functional Requirements\n\n- **FR-1 — Group auth recovery.** Authentication failures park and resume.\n';
 
 // Verbatim observed rejected-credential output

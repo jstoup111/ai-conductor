@@ -45,41 +45,6 @@ const MANUAL_TEST_PASS = [
   '',
 ].join('\n');
 
-// The new criterion-grade table and the retained per-FR evidence table are
-// both present, matching the approved prd_audit ADR.
-const PRD_AUDIT_PASS = [
-  '# PRD Audit',
-  '',
-  '**PRD:** present',
-  '',
-  '## Verdict Table',
-  '',
-  '| Criterion | Grade | Plan task | Evidence |',
-  '|---|---|---|---|',
-  '| S1.1 | PASS | 1 | src/feature.ts:1 |',
-  '| S1.2 | PASS | 1 | src/feature.ts:1 |',
-  '',
-  '| FR | Verdict | Gap-class | Evidence | Accepted? |',
-  '|---|---|---|---|---|',
-  '| FR-16 | ALIGNED | | src/feature.ts:1 | yes |',
-  '| FR-17 | ALIGNED | | src/feature.ts:1 | yes |',
-  '',
-].join('\n');
-
-const PRD_AUDIT_NO_PRD_PASS = [
-  '# PRD Audit',
-  '',
-  '**PRD:** none',
-  '',
-  '## Verdict Table',
-  '',
-  '| Criterion | Grade | Plan task | Evidence |',
-  '|---|---|---|---|',
-  '| S1.1 | PASS | | src-feature.ts:1 |',
-  '| S1.2 | PASS | | src-feature.ts:1 |',
-  '',
-].join('\n');
-
 const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'test fixture' },
   planGap: { enabled: true, reason: 'test fixture' },
