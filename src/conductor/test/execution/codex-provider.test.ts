@@ -1,6 +1,7 @@
 // Covers: task:4
 // Covers: task:5
 // Covers: task:3
+// Covers: task:9
 import { toCodexStrictSchema } from '../../src/execution/codex-strict-schema.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
@@ -176,7 +177,6 @@ describe('CodexProvider', () => {
   });
 
   it('carries the guarded child PATH in the shell-environment policy only for a guarded dispatch', async () => {
-    // Covers: task:9
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('done'), stderr: '', exitCode: 0, failed: false } as any);
     const setPath = (args: readonly string[]) => args.filter((arg) => arg.startsWith('shell_environment_policy.set.PATH='));
 
@@ -192,6 +192,94 @@ describe('CodexProvider', () => {
     await provider.invoke({ ...baseOptions, cwd: '/unprepared' });
     const [, unguardedArgs] = mockExeca.mock.calls.at(-1) as [string, string[], ExecaOptions];
     expect(setPath(unguardedArgs)).toEqual([]);
+  });
+
+  it.each([
+    { name: 'non-self-host', selfHost: undefined },
+    {
+      name: 'self-host',
+      selfHost: {
+        executable: '/isolated/bin/codex',
+        env: {},
+        args: [],
+        teardown: async () => {},
+      },
+    },
+  ])('prepends the guard for a $name dispatch with an empty HOME', async ({ selfHost }) => {
+    const emptyHome = await mkdtemp(join(tmpdir(), 'codex-provider-empty-home-'));
+    const priorHome = process.env.HOME;
+    const priorPath = process.env.PATH;
+    process.env.HOME = emptyHome;
+    mockEnsureGitGuardForDispatch.mockResolvedValue('/prepared/.pipeline/bin');
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('done'), stderr: '', exitCode: 0, failed: false } as any);
+
+    try {
+      await provider.invoke({
+        ...baseOptions,
+        cwd: '/prepared',
+        ...(selfHost === undefined ? {} : {
+          selfHost: { ...selfHost, env: { ...selfHost.env, HOME: emptyHome } },
+        }),
+      });
+
+      const [, , spawnOptions] = mockExeca.mock.calls.at(-1) as [string, string[], ExecaOptions];
+      const childEnv = { ...process.env, ...(spawnOptions.env as NodeJS.ProcessEnv) };
+      expect(childEnv.HOME).toBe(emptyHome);
+      expect(childEnv.PATH?.split(':')[0]).toBe('/prepared/.pipeline/bin');
+      expect(process.env.PATH).toBe(priorPath);
+    } finally {
+      if (priorHome === undefined) delete process.env.HOME;
+      else process.env.HOME = priorHome;
+      await rm(emptyHome, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves an unprepared cwd without a PATH overlay and preserves the review allowlist except for the guard', async () => {
+    const emptyHome = await mkdtemp(join(tmpdir(), 'codex-provider-review-home-'));
+    const priorKey = process.env.CODEX_API_KEY;
+    const priorPath = process.env.PATH;
+    delete process.env.CODEX_API_KEY;
+    provider = new CodexProvider(
+      vi.fn(async () => readyDoctorResult()),
+      'codex',
+      undefined,
+      mockExeca as never,
+    );
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('done'), stderr: '', exitCode: 0, failed: false } as any);
+
+    try {
+      mockEnsureGitGuardForDispatch.mockResolvedValue(null);
+      await provider.invoke({ ...baseOptions, cwd: '/unprepared' });
+      const [, , unpreparedOptions] = mockExeca.mock.calls.at(-1) as [string, string[], ExecaOptions];
+      expect(unpreparedOptions.env).not.toHaveProperty('PATH');
+
+      mockEnsureGitGuardForDispatch.mockResolvedValue('/prepared/.pipeline/bin');
+      await provider.invoke({
+        ...baseOptions,
+        cwd: '/prepared',
+        interactive: false,
+        readOnlyReview: true,
+        selfHost: {
+          executable: '/isolated/bin/codex',
+          env: { HOME: emptyHome },
+          args: [],
+          teardown: async () => {},
+        },
+      });
+      const [, , reviewOptions] = mockExeca.mock.calls.at(-1) as [string, string[], ExecaOptions];
+      const reviewEnv = reviewOptions.env as NodeJS.ProcessEnv;
+      expect(reviewEnv).toEqual({
+        HOME: emptyHome,
+        CONDUCT_DAEMON_SESSION: '1',
+        PATH: expect.stringMatching(/^\/prepared\/\.pipeline\/bin:/),
+      });
+      expect(reviewEnv).not.toHaveProperty('CODEX_API_KEY');
+      expect(process.env.PATH).toBe(priorPath);
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+      await rm(emptyHome, { recursive: true, force: true });
+    }
   });
 
   it('fails before launch when a missing guard cannot be rewritten in its read-only directory', async () => {
