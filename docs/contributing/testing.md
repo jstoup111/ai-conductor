@@ -36,8 +36,12 @@ Run everything from `src/conductor` unless stated otherwise.
 `npm test` expands to:
 
 ```bash
-node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 && echo 'AGGREGATE_TEST_SUITE_PASS'
+node scripts/run-vitest-shards.mjs
 ```
+
+The aggregate launcher divides the ordinary suite into sixteen fresh Vitest
+batches, bounding the module graph retained by each worker while running every
+included test exactly once.
 
 `AGGREGATE_TEST_SUITE_PASS` is a human-readable shell success indicator. The pre-SHIP `test_suite`
 gate classifies the aggregate command's exit code and records its evidence; it does not inspect this

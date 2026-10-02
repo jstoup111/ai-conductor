@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const testRoot = join(packageRoot, 'test');
-const shardCount = 8;
+// A 146-file shard grew a worker past its 8 GiB cap. Sixteen batches bound a
+// worker to roughly half that module graph while preserving two-way parallelism.
+const shardCount = 16;
 const vitestArgs = ['run', '--reporter=dot', '--silent', '--slowTestThreshold=1800000'];
 
 async function collectTestFiles(directory) {
