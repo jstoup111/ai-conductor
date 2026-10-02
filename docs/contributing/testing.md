@@ -39,7 +39,7 @@ Run everything from `src/conductor` unless stated otherwise.
 node scripts/run-vitest-shards.mjs
 ```
 
-The aggregate launcher divides the ordinary suite into sixteen fresh Vitest
+The aggregate launcher divides the ordinary suite into thirty-two fresh Vitest
 batches, bounding the module graph retained by each worker while running every
 included test exactly once.
 
