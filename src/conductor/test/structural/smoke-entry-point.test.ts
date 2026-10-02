@@ -50,12 +50,15 @@ async function allTestFiles(directory: string): Promise<string[]> {
 }
 
 function startsUnmockedLiveProvider(source: string): boolean {
-  // A bounded same-file pair avoids treating a fixture that merely inspects a
-  // provider constructor as a live session; the execution call is the start.
+  // Construction alone is safe (catalog/credential fixtures do it); the
+  // session starts at invoke. The ordinary suite may reach that boundary only
+  // through an injected recording process adapter. Do not depend on a fixed
+  // list of known smoke files: a newly-added provider must be caught.
   const invokesAdapter = /new\s+(?:ClaudeProvider|CodexProvider|PiProvider)\s*\([\s\S]{0,500}?\)\s*[\s\S]{0,500}?\.invoke\s*\(/.test(source);
-  const spawnsBinary = /\b(?:spawn|spawnSync|execFile|execa)\s*\(\s*['"](?:claude|codex|pi)['"]/.test(source);
-  const mocksProcess = /vi\.mock\(['"]execa|mockExeca|mockEnsureGitGuardForDispatch|subprocessFactory|processFactory|\bspawn\s*=\s*vi\.fn|new\s+(?:ClaudeProvider|CodexProvider|PiProvider)\s*\([^)]*,/.test(source);
-  return (invokesAdapter || spawnsBinary) && !mocksProcess;
+  const spawnsBinary = /\b(?:spawn|spawnSync|execFile|exec|execa|execaCommand)\s*\(\s*['"`](?:claude|codex|pi)['"`]/.test(source);
+  const hasMockedSpawn = /\b(?:vi\.(?:mock|fn)|mockExeca|mockEnsureGitGuardForDispatch|subprocessFactory|processFactory|spawn(?:Pi)?\s*=\s*vi\.fn|mockExeca)\b/.test(source)
+    || /new\s+(?:ClaudeProvider|CodexProvider|PiProvider)\s*\([^)]*,\s*[^)]/.test(source);
+  return (invokesAdapter || spawnsBinary) && !hasMockedSpawn;
 }
 
 describe('structural: smoke test entry point', () => {
@@ -69,7 +72,10 @@ describe('structural: smoke test entry point', () => {
     const vitest = await createVitest('test', { root: conductorRoot });
     try {
       const defaultFiles = new Set((await vitest.globTestSpecifications()).map(({ moduleId }) => relative(conductorRoot, moduleId)));
-      expect(flagged.filter((path) => !path.endsWith('.smoke.test.ts') || defaultFiles.has(path))).toEqual([]);
+      // Both assertions are intentional: a live invocation must be smoke-only,
+      // and smoke-only is insufficient unless default Vitest excludes it.
+      expect(flagged.filter((path) => !path.endsWith('.smoke.test.ts'))).toEqual([]);
+      expect(flagged.filter((path) => defaultFiles.has(path))).toEqual([]);
     } finally {
       await vitest.close();
     }
