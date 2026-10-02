@@ -229,8 +229,7 @@ decision. Reuse an existing governing ADR rather than duplicate it. Cite and app
 covers the proposal; draft a new ADR only for an uncovered structural decision, or supersede the
 existing ADR when the structural decision itself changes.
 
-**ADR format:** Use `templates/adr.md.template` (relative to the harness root — the directory
-containing `skills/` and `templates/` — not this skill's directory). Name each ADR
+**ADR format:** Use `templates/adr.md.template` (relative to this skill's own directory). Name each ADR
 `.docs/decisions/adr-YYYY-MM-DD-<kebab-slug>.md` — date plus a short descriptive slug — and title it
 `# ADR: <title>` (the heading carries **no** number). **Never use a sequential number, in the
 filename or the heading:**

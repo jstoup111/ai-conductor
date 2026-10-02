@@ -1,7 +1,7 @@
 // Covers: task:6
 import { describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile, chmod } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -370,6 +370,30 @@ describe('provider-aware self-host homes', () => {
       expect(worktreeSkillEntries).not.toContain('.system');
       expect(worktreeSkillEntries).not.toContain('.system-agents');
       expect(worktreeSkillEntries.sort()).toEqual(['HARNESS']);
+    } finally {
+      await home.teardown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('materializes skill-relative template symlinks as files, not links back into the worktree', async () => {
+    // Skills ship shared templates as relative symlinks into the root
+    // templates/ (#2903). A plain recursive copy rewrites each one into an
+    // absolute link to the worktree, re-opening the write-through path the
+    // throwaway copy exists to close.
+    const root = await mkdtemp(join(tmpdir(), 'provider-home-templates-'));
+    const worktree = join(root, 'worktree');
+    await mkdir(join(worktree, 'templates'), { recursive: true });
+    await mkdir(join(worktree, 'skills', 'bootstrap', 'templates'), { recursive: true });
+    await writeFile(join(worktree, 'templates', 'adr.md.template'), '# ADR\n', 'utf-8');
+    await symlink('../../../templates/adr.md.template', join(worktree, 'skills', 'bootstrap', 'templates', 'adr.md.template'));
+    const home = await provisionProviderHome({ provider: { id: 'codex' }, worktreeRoot: worktree, baseDir: root });
+    try {
+      const copied = join(home.homeDir, 'skills', 'bootstrap', 'templates', 'adr.md.template');
+      expect((await lstat(copied)).isSymbolicLink()).toBe(false);
+      expect(await readFile(copied, 'utf-8')).toBe('# ADR\n');
+      await writeFile(copied, 'provider write\n', 'utf-8');
+      expect(await readFile(join(worktree, 'templates', 'adr.md.template'), 'utf-8')).toBe('# ADR\n');
     } finally {
       await home.teardown();
       await rm(root, { recursive: true, force: true });

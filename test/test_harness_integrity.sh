@@ -637,17 +637,33 @@ fi
 echo ""
 echo -e "${BOLD}6. Template references${NC}"
 
-template_refs=$(grep -roh 'templates/[a-z_.-]*\.template' "${HARNESS_DIR}"/skills/ "${HARNESS_DIR}"/HARNESS.md "${HARNESS_DIR}"/ARCHITECTURE.md 2>/dev/null | sort -u || true)
-if [ -z "$template_refs" ]; then
-  assert "no template references to check" 0
-else
-  for ref in $template_refs; do
-    if [ -f "${HARNESS_DIR}/${ref}" ]; then
-      assert "$ref exists" 0
+# A skill's templates/ path resolves against that skill's own directory (#2903):
+# installs expose only the skill directory, so a harness-root path is unreachable
+# from it. Shared templates are per-file symlinks into the root templates/; -f
+# follows them, so a dangling link fails here too. HARNESS.md and ARCHITECTURE.md
+# references still resolve against the harness root.
+template_ref_pattern='templates/[A-Za-z_.-]+\.(template|md)'
+template_refs_checked=0
+check_template_refs() {
+  local base="$1" label="$2" source_file="$3" ref
+  for ref in $(grep -oE "$template_ref_pattern" "$source_file" 2>/dev/null | sort -u); do
+    template_refs_checked=$((template_refs_checked + 1))
+    if [ -f "${base}/${ref}" ]; then
+      assert "${label}: $ref exists" 0
     else
-      assert "$ref — referenced but missing" 1
+      assert "${label}: $ref — referenced but missing" 1
     fi
   done
+}
+for skill_file in "${HARNESS_DIR}"/skills/*/SKILL.md; do
+  [ -f "$skill_file" ] || continue
+  check_template_refs "$(dirname "$skill_file")" "$(basename "$(dirname "$skill_file")")" "$skill_file"
+done
+for root_doc in HARNESS.md ARCHITECTURE.md; do
+  check_template_refs "$HARNESS_DIR" "$root_doc" "${HARNESS_DIR}/${root_doc}"
+done
+if [ "$template_refs_checked" -eq 0 ]; then
+  assert "no template references to check" 0
 fi
 
 # ── 7. SKILL.md section numbering ───────────────────────────────────────────

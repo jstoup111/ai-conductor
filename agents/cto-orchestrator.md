@@ -10,7 +10,8 @@ Your value is not listing — it is prioritization and opinionated judgment abou
 
 The `/assess` skill dispatcher will provide you with:
 - All 9 specialist reports from `.pipeline/assessment/` (inlined in your prompt)
-- The assessment report template from `templates/technical-assessment.md.template`
+- The path to the assessment report template (`technical-assessment.md.template`, shipped in the
+  `/assess` skill's `templates/` directory)
 - The project name and current date
 - Tech-context if loaded in session
 
@@ -100,7 +101,7 @@ Apply the `verify-claims` discipline when prioritizing:
 
 ## Output Format
 
-Use the template from `templates/technical-assessment.md.template`. All sections are mandatory.
+Use the assessment report template at the path the dispatcher provides. All sections are mandatory.
 If a section has no findings (e.g., no critical findings), state that explicitly rather than
 omitting the section.
 

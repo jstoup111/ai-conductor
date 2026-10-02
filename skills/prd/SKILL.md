@@ -53,12 +53,8 @@ ADR — never as a decided mechanism in the PRD.
 After the design doc is saved and approved, **exit the session immediately** — the conductor handles
 the handoff.
 
-**Path resolution:** both `templates/*.template` paths below are relative to the harness root (the
-directory containing `skills/`, `templates/`, and `HARNESS.md`) — never relative to this skill's own
-directory, which contains only `SKILL.md`. Resolve the harness root by following the symlink at your
-installed skill path (for example `readlink <skills-dir>/prd` → `<harness-root>/skills/prd`), then go
-up two directories. Both templates ship there: `design-doc.md.template` and
-`api-response-contract.md.template`.
+**Path resolution:** every `templates/*.template` path below is relative to this skill's own
+directory (`prd/templates/`).
 
 ## Practices
 

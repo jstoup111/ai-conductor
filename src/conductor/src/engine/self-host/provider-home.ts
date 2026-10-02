@@ -21,7 +21,11 @@ export interface ProviderHomeFs {
   mkdtemp(prefix: string): Promise<string>;
   mkdir(path: string): Promise<void>;
   symlink(target: string, path: string): Promise<void>;
-  /** Recursively copy a worktree asset into the throwaway home; never a live link. */
+  /**
+   * Recursively copy a worktree asset into the throwaway home; never a live link.
+   * Symlinks inside the asset (a skill's shared `templates/` files) are copied as
+   * the files they point at, or the copy would carry links back into the worktree.
+   */
   cp(source: string, destination: string): Promise<void>;
   rm(path: string, opts: { recursive?: boolean; force?: boolean }): Promise<void>;
   pathExists(path: string): Promise<boolean>;
@@ -31,7 +35,7 @@ export const realProviderHomeFs: ProviderHomeFs = {
   mkdtemp: (prefix) => fsp.mkdtemp(prefix),
   mkdir: async (path) => { await fsp.mkdir(path, { recursive: true }); },
   symlink: (target, path) => fsp.symlink(target, path),
-  cp: (source, destination) => fsp.cp(source, destination, { recursive: true }),
+  cp: (source, destination) => fsp.cp(source, destination, { recursive: true, dereference: true }),
   rm: (path, opts) => fsp.rm(path, opts),
   pathExists: (path) => fsp.access(path).then(() => true, () => false),
 };

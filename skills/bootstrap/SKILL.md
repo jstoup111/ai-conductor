@@ -17,12 +17,11 @@ memory, and documentation artifacts.
 Works for both **new projects** (empty or freshly scaffolded) and **existing projects** (with
 code, tests, and history already in place).
 
-**Path resolution:** every `templates/*.template` and `tech-context/*` path referenced below is
-relative to the harness root (the directory containing this skill's parent `skills/`, plus
-`templates/`, `tech-context/`, and `HARNESS.md`) — never relative to this skill's own directory,
-which contains only `SKILL.md`. Resolve the harness root by following the symlink at your own
-skill path, e.g. `readlink ~/.claude/skills/bootstrap` → `<harness-root>/skills/bootstrap`, then
-go up two directories.
+**Path resolution:** every `templates/*` path referenced below is relative to this skill's own
+directory (`bootstrap/templates/`). Every `tech-context/*` path is relative to the harness root (the
+directory containing `skills/`, `tech-context/`, and `HARNESS.md`); resolve it by following the
+symlink at your own skill path, e.g. `readlink <skills-dir>/bootstrap` →
+`<harness-root>/skills/bootstrap`, then go up two directories.
 
 ## Practices
 
