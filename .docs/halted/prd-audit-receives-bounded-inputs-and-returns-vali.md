@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-02T10:22:20.328Z
 Slug: prd-audit-receives-bounded-inputs-and-returns-vali
 Class: needs-human
 Halting step: unknown
