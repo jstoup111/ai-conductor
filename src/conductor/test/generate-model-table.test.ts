@@ -528,7 +528,7 @@ describe('engine-managed auxiliary rows', () => {
           providerCells: {
             claude: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
             codex: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
-            pi: { model: 'n/a', effort: 'n/a' },
+            pi: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
           },
         }),
         expect.objectContaining({
@@ -537,7 +537,7 @@ describe('engine-managed auxiliary rows', () => {
           providerCells: {
             claude: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
             codex: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
-            pi: { model: 'n/a', effort: 'n/a' },
+            pi: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
           },
         }),
         expect.objectContaining({
@@ -546,7 +546,7 @@ describe('engine-managed auxiliary rows', () => {
           providerCells: {
             claude: { model: 'inherits resolved coverage-binding policy', effort: 'inherits resolved coverage-binding policy' },
             codex: { model: 'inherits resolved coverage-binding policy', effort: 'inherits resolved coverage-binding policy' },
-            pi: { model: 'n/a', effort: 'n/a' },
+            pi: { model: 'inherits resolved coverage-binding policy', effort: 'inherits resolved coverage-binding policy' },
           },
         }),
       ],
