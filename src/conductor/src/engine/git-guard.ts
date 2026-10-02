@@ -67,10 +67,10 @@ async function isRegularFile(path: string): Promise<boolean> {
 export async function ensureGitGuardForDispatch(cwd: string | undefined): Promise<string | null> {
   if (!cwd) return null;
   const expectedHooks = join(pipeline(cwd), 'git-hooks');
-  // Adapter-only callers commonly have no engine state at all.  Once a
-  // pipeline exists, however, a missing hooks marker is corruption rather
-  // than an opt-out and must be checked against the worktree configuration.
-  try { await access(pipeline(cwd)); } catch { return null; }
+  // Adapter-only callers commonly have no repository at all. A worktree's
+  // `.git` entry, however, is enough to make its worktree-scoped config
+  // authoritative even when a damaged `.pipeline` directory has vanished.
+  try { await access(join(cwd, '.git')); } catch { return null; }
   let configured = '';
   try { configured = (await execa('git', ['-C', cwd, 'config', '--worktree', '--get', 'core.hooksPath'])).stdout.trim(); } catch (error) {
     if ((error as { exitCode?: number }).exitCode === 1) return null;

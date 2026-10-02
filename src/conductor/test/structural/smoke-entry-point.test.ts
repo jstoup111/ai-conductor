@@ -1,5 +1,6 @@
 // Covers: task:5
 import { existsSync } from 'node:fs';
+import { readdir } from 'node:fs/promises';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -39,7 +40,41 @@ const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
   'test/smoke/surgical-finish-retry.smoke.test.ts': 'hermetic',
 };
 
+async function allTestFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  return (await Promise.all(entries.map(async (entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return allTestFiles(path);
+    return entry.isFile() && entry.name.endsWith('.test.ts') ? [path] : [];
+  }))).flat();
+}
+
+function startsUnmockedLiveProvider(source: string): boolean {
+  // A bounded same-file pair avoids treating a fixture that merely inspects a
+  // provider constructor as a live session; the execution call is the start.
+  const invokesAdapter = /new\s+(?:ClaudeProvider|CodexProvider|PiProvider)\s*\([\s\S]{0,500}?\)\s*[\s\S]{0,500}?\.invoke\s*\(/.test(source);
+  const spawnsBinary = /\b(?:spawn|spawnSync|execFile|execa)\s*\(\s*['"](?:claude|codex|pi)['"]/.test(source);
+  const mocksProcess = /vi\.mock\(['"]execa|mockExeca|mockEnsureGitGuardForDispatch|subprocessFactory|processFactory|\bspawn\s*=\s*vi\.fn|new\s+(?:ClaudeProvider|CodexProvider|PiProvider)\s*\([^)]*,/.test(source);
+  return (invokesAdapter || spawnsBinary) && !mocksProcess;
+}
+
 describe('structural: smoke test entry point', () => {
+  it('keeps every unmocked live-provider session smoke-only and excluded from default Vitest', async () => {
+    const testRoot = join(conductorRoot, 'test');
+    const files = await allTestFiles(testRoot);
+    const flagged = (await Promise.all(files.map(async (path) => {
+      const source = await readFile(path, 'utf8');
+      return startsUnmockedLiveProvider(source) ? relative(conductorRoot, path) : undefined;
+    }))).filter((path): path is string => path !== undefined);
+    const vitest = await createVitest('test', { root: conductorRoot });
+    try {
+      const defaultFiles = new Set((await vitest.globTestSpecifications()).map(({ moduleId }) => relative(conductorRoot, moduleId)));
+      expect(flagged.filter((path) => !path.endsWith('.smoke.test.ts') || defaultFiles.has(path))).toEqual([]);
+    } finally {
+      await vitest.close();
+    }
+  });
+
   it('installs an owned temporary scope before loading and running the smoke command', async () => {
     const originalEnvironment = {
       TMPDIR: process.env.TMPDIR,

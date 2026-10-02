@@ -234,6 +234,26 @@ describe('block-destructive-git hook force-push protection', () => {
     expect(result.calledGitOrGh).toBe(false);
   });
 
+  it.each([
+    "cat <<  'EOF'\ngit reset --hard\nEOF",
+    'cat <<\t"EOF"\ngit reset --hard\nEOF',
+    "cat <<-   'EOF'\ngit reset --hard\nEOF",
+  ])('allows destructive text in a spaced quoted heredoc opener: %s', (command) => {
+    const result = invoke(command);
+    expect(result.status).toBe(0);
+    expect(result.calledGitOrGh).toBe(false);
+  });
+
+  it.each([
+    "cat <<  'EOF'\ngit reset --hard\nEOF\ngit reset --hard",
+    'cat <<\t"EOF"\ngit reset --hard\nEOF\ngit reset --hard',
+    "cat <<-   'EOF'\ngit reset --hard\nEOF\ngit reset --hard",
+  ])('denies a real hard reset after a spaced quoted heredoc opener: %s', (command) => {
+    const result = invoke(command);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/git reset --hard is destructive and irreversible/i);
+  });
+
   it('denies a real hard reset after a heredoc body', () => {
     const result = invoke("cat <<'EOF'\ngit reset --hard\nEOF\ngit reset --hard");
 

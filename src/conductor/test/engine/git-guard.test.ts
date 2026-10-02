@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { Options as ExecaOptions } from 'execa';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { gitGuardPath, resolveRealGit } from '../../src/engine/git-guard.js';
+import { ensureGitGuardForDispatch, gitGuardPath, resolveRealGit } from '../../src/engine/git-guard.js';
 import { GIT_GUARD_SCRIPT } from '../../src/engine/git-hook-assets.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
@@ -42,6 +42,19 @@ describe('git guard provisioning primitives', () => {
     const realGit = (await readFile(join(root, '.pipeline', 'git-guard', 'real-git'), 'utf8')).trim();
     expect(realGit.startsWith('/')).toBe(true);
     expect(realGit).not.toContain('/.pipeline/bin/');
+  });
+
+  it('repairs a wholly deleted pipeline when worktree config still names its hooks', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'git-guard-pipeline-repair-'));
+    roots.push(root);
+    await initTestRepo(root);
+    await prepareWorktree(root);
+    await rm(join(root, '.pipeline'), { recursive: true, force: true });
+
+    await expect(ensureGitGuardForDispatch(root)).resolves.toBe(join(root, '.pipeline', 'bin'));
+    const guard = gitGuardPath(root);
+    const info = await lstat(guard);
+    expect([await readFile(guard, 'utf8'), info.mode & 0o777]).toEqual([GIT_GUARD_SCRIPT, 0o755]);
   });
 
   it.each([

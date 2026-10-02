@@ -291,6 +291,8 @@ export interface InvokeResult {
   authentication?: AuthenticationReadiness;
   /** Sanitized diagnostic-only safety notices; never an authorization input. */
   safetyDiagnostics?: readonly string[];
+  /** Adapter-observed fact: this exact spawn received the worktree git guard. */
+  gitGuardInstalled?: boolean;
 }
 
 export interface InvokeOptions {

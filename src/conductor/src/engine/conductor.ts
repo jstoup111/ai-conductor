@@ -6710,6 +6710,7 @@ export class Conductor {
     const claimAudit = auditEnvironmentBlockerClaims(withNotices.output, {
       provider: candidate.providerKey,
       writeFenceInstalled: writeFenceInstalledForProvider(candidate.providerKey),
+      gitGuardInstalled: withNotices.gitGuardInstalled === true,
     });
     if (claimAudit.message === null) return withNotices;
     return {

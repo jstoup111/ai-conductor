@@ -687,7 +687,7 @@ export class ClaudeProvider implements LLMProvider {
       }),
     );
 
-    return this.classifyCompletion(
+    return { ...this.classifyCompletion(
       observed.value,
       hasMachineEnvelope,
       observed.interval,
@@ -695,7 +695,7 @@ export class ClaudeProvider implements LLMProvider {
       hasMachineEnvelope,
       options.nativeSchema !== undefined,
       options.diagnosticLog,
-    );
+    ), gitGuardInstalled: guardDir !== null };
   }
 
   private classifyCompletion(

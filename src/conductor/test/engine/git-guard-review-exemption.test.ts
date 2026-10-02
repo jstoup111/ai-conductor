@@ -46,12 +46,17 @@ type CapturedSpawn = { env?: NodeJS.ProcessEnv };
 
 describe('build_review git-guard exemption', () => {
   it.each(['claude', 'codex'] as const)(
-    'launches %s from an unprepared materialized review checkout without a git guard PATH prefix',
+    'launches %s from a prepared materialized review checkout without a git guard PATH prefix',
     async (providerKey) => {
       const root = await mkdtemp(join(tmpdir(), 'git-guard-review-exemption-'));
       roots.push(root);
       const headPath = join(root, '.pipeline', 'build-review-materialized', 'head');
       await mkdir(headPath, { recursive: true });
+      // A prepared review worktree would normally prepend the guard. The
+      // review marker, rather than an unprepared-cwd early return, must be
+      // what keeps this built-in rubric dispatch unguarded.
+      await initTestRepo(headPath);
+      await prepareWorktree(headPath);
 
       const calls: CapturedSpawn[] = [];
       const subprocess = vi.fn((_file: string, _args: readonly string[], options: CapturedSpawn) => {

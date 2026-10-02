@@ -70,7 +70,14 @@ for line in os.environ["COMMAND"].splitlines(keepends=True):
 
     # A quoted literal such as echo '<<EOF' is not a heredoc opener.  Preserve
     # its shape for later quote stripping but mask it before opener detection.
-    opener_line = re.sub(r"(?<!<<)(?<!<< )'[^']*'|(?<!<<)(?<!<< )\"[^\"]*\"", lambda m: " " * len(m.group()), line)
+    # Preserve quoted delimiter tokens after << or <<- with arbitrary shell
+    # whitespace; all other quoted literals stay masked before opener parsing.
+    opener_spans = [(m.start(), m.end()) for m in heredoc_start.finditer(line)]
+    def mask_quote(match):
+        if any(start <= match.start() and match.end() <= end for start, end in opener_spans):
+            return match.group()
+        return " " * len(match.group())
+    opener_line = re.sub(r"'[^']*'|\"[^\"]*\"", mask_quote, line)
     print(line, end="")
     arithmetic_spans, arithmetic_depth = arithmetic_expansion_spans(line, arithmetic_depth)
     for match in heredoc_start.finditer(opener_line):

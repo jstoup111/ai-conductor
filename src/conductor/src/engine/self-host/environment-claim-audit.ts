@@ -103,6 +103,8 @@ export interface DispatchEnvironmentFacts {
   provider: string;
   /** Whether the self-build write fence was provisioned for this dispatch. */
   writeFenceInstalled: boolean;
+  /** Whether this exact provider spawn received the worktree git guard. */
+  gitGuardInstalled: boolean;
 }
 
 /** Result of auditing one dispatch's output. */
@@ -167,7 +169,7 @@ function detectClaims(output: string): RefutedEnvironmentClaim[] {
 function isGuardRefusedForcePushClaim(claim: string): boolean {
   const push = claim.match(/git\s+push\b([^`]*)/i);
   if (!push) return false;
-  return push[1].trim().split(/\s+/).some((argument) =>
+  return push[1].trim().split(/\s+/).map((argument) => argument.replace(/^[.,;:!?\)\]\('"`]+|[.,;:!?\)\]\('"`]+$/g, '')).some((argument) =>
     argument === '--force' || argument === '-f' || (argument.startsWith('+') && !argument.startsWith('++')),
   );
 }
@@ -184,6 +186,9 @@ function renderFacts(facts: DispatchEnvironmentFacts): string[] {
           'matching the operation above.'
       : '  - write fence: NOT installed for this dispatch. No fence rule of any kind applied.',
   );
+  lines.push(facts.gitGuardInstalled
+    ? '  - git guard: installed on this provider spawn.'
+    : '  - git guard: NOT installed on this provider spawn.');
   return lines;
 }
 
@@ -214,7 +219,7 @@ export function auditEnvironmentBlockerClaims(
     ? writeFenceDeniableOperations()
     : new Set<AuditedOperation>();
   const refuted = detectClaims(output).filter((claim) =>
-    !deniable.has(claim.operation) && !(claim.operation === 'git push' && isGuardRefusedForcePushClaim(claim.claim)),
+    !deniable.has(claim.operation) && !(claim.operation === 'git push' && facts.gitGuardInstalled && isGuardRefusedForcePushClaim(claim.claim)),
   );
   if (refuted.length === 0) return none;
 

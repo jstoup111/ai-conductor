@@ -404,6 +404,7 @@ export class PiProvider implements LLMProvider {
       ...(modelUnavailable ? { modelUnavailable: true } : {}),
       tokenUsage: exitCode === 0 ? parsed.tokenUsage : undefined,
       ...(genericUnclassifiedFailure ? { exitFacts } : {}),
+      gitGuardInstalled: guardDir !== null,
     };
   }
 }

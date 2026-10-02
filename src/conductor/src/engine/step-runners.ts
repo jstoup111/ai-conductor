@@ -4092,6 +4092,7 @@ export class DefaultStepRunner implements StepRunner {
                     prompt: `${renderAuxiliarySkillInvocation(branch.skillName, context.candidate.providerKey)}\n\n${prompt}`,
                     cwd: materialized?.headPath ?? this.projectDir,
                     dangerouslySkipPermissions: true,
+                    reviewDispatch: true,
                     interactive: false,
                   },
                   invoke: (options) => context.invoke(options),
@@ -4243,6 +4244,7 @@ export class DefaultStepRunner implements StepRunner {
           prompt: `${renderAuxiliarySkillInvocation(branch.skillName, this.providerKey)}\n\n${prompt}`,
           dangerouslySkipPermissions: true,
           cwd: this.projectDir,
+          reviewDispatch: true,
           interactive: false,
         },
         invoke: (options) => this.provider.invoke({

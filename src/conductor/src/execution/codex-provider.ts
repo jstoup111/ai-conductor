@@ -390,7 +390,7 @@ export class CodexProvider implements LLMProvider {
     const structured = options.nativeSchema !== undefined && completion.finalStructuredResult !== undefined
       ? { finalStructuredResult: fromCodexStrictResult(options.nativeSchema, completion.finalStructuredResult) }
       : {};
-    return { ...completion, ...structured, tokenUsage, observedIntervals: [interval] };
+    return { ...completion, ...structured, tokenUsage, observedIntervals: [interval], gitGuardInstalled: guardDir !== null };
   }
 
   /**
