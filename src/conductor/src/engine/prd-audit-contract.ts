@@ -284,7 +284,15 @@ function validBase(value: Record<string, unknown>, field: string, diagnostics: s
 export function validatePrdAuditJudgment(input: unknown, context: PrdAuditJudgmentContext): ValidatePrdAuditJudgmentResult {
   const diagnostics: string[] = [];
   if (!record(input)) return { ok: false, diagnostics: ['root must be a judgment object'] };
-  if (!exactKeys(input, ['version', 'criterionJudgments', 'noOwnerObservations'])) {
+  const rootKeys = ['version', 'criterionJudgments', 'noOwnerObservations'];
+  const reviewerAuthorityRootFields = ['accept', 'refuse', 'engineIdentity', 'codeStamp', 'recordedDisposition'];
+  const unsupportedRootFields = Object.keys(input).filter((key) => !rootKeys.includes(key));
+  if (unsupportedRootFields.length > 0 && unsupportedRootFields.every((field) => reviewerAuthorityRootFields.includes(field))) {
+    return { ok: false, diagnostics: unsupportedRootFields.map((field) =>
+      `root.${field} is an unsupported reviewer-supplied authority field`),
+    };
+  }
+  if (!exactKeys(input, rootKeys)) {
     return { ok: false, diagnostics: ['root permits only version, criterionJudgments, and noOwnerObservations'] };
   }
   if (input.version !== PRD_AUDIT_JUDGMENT_CONTRACT_VERSION) {
