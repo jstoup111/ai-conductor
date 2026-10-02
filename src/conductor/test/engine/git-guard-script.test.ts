@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:3, task:4, task:5
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -212,5 +212,87 @@ describe('GIT_GUARD_SCRIPT in a scratch repository', () => {
     await writeFile(join(foreign, 'untracked'), 'remove\n');
     expect(invoke(['-C', foreign, 'clean', '-f']).status).toBe(0);
     expect(() => execFileSync('test', ['-e', join(foreign, 'untracked')])).toThrow();
+  });
+  async function provisionGuardIn(worktree: string): Promise<string> {
+    const bin = join(worktree, '.pipeline', 'bin');
+    const data = join(worktree, '.pipeline', 'git-guard');
+    await Promise.all([mkdir(bin, { recursive: true }), mkdir(data, { recursive: true })]);
+    const copy = join(bin, 'git');
+    await writeFile(copy, GIT_GUARD_SCRIPT); await chmod(copy, 0o755);
+    await writeFile(join(data, 'real-git'), `${execFileSync('which', ['git'], { encoding: 'utf8' }).trim()}\n`);
+    await writeFile(join(data, 'common-dir'), `${git(['rev-parse', '--path-format=absolute', '--git-common-dir'], worktree)}\n`);
+    return copy;
+  }
+
+  async function foreignRepository(): Promise<string> {
+    const foreign = join(root, 'foreign'); await mkdir(foreign); git(['init', '-b', 'main'], foreign);
+    git(['config', 'user.email', 'test@example.com'], foreign); git(['config', 'user.name', 'Test'], foreign);
+    await writeFile(join(foreign, 'f'), 'f\n'); git(['add', '.'], foreign); git(['commit', '-m', 'f'], foreign);
+    return foreign;
+  }
+
+  it.each([
+    ['checkout --ours', ['checkout', '--ours', '--', 'tracked'], 'main side\n'],
+    ['checkout --theirs', ['checkout', '--theirs', '--', 'tracked'], 'side side\n'],
+    ['restore --ours', ['restore', '--ours', 'tracked'], 'main side\n'],
+    ['restore --theirs', ['restore', '--theirs', 'tracked'], 'side side\n'],
+  ])('lets %s resolve a file in a merge stopped on a conflict', async (_name, args, expected) => {
+    git(['switch', '-c', 'side']);
+    await writeFile(join(repository, 'tracked'), 'side side\n'); git(['commit', '-am', 'side']);
+    git(['switch', 'main']);
+    await writeFile(join(repository, 'tracked'), 'main side\n'); git(['commit', '-am', 'main']);
+    expect(spawnSync('git', ['merge', 'side'], { cwd: repository, encoding: 'utf8' }).status).not.toBe(0);
+    expect(await readFile(join(repository, 'tracked'), 'utf8')).toContain('<<<<<<<');
+
+    const result = invoke([...args]);
+    expect(result.stderr).not.toContain('ai-conductor git guard');
+    expect(result.status).toBe(0);
+    expect(await readFile(join(repository, 'tracked'), 'utf8')).toBe(expected);
+  });
+
+  it('refuses -C retargeting of the feature repository from a foreign current directory', async () => {
+    const foreign = await foreignRepository();
+    await writeFile(join(repository, 'tracked'), 'edited\n');
+    const result = invoke(['-C', repository, 'reset', '--hard'], foreign);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('ai-conductor git guard: refused reset');
+    expect(await readFile(join(repository, 'tracked'), 'utf8')).toBe('edited\n');
+  });
+
+  it('refuses GIT_DIR retargeting of the feature repository from a foreign current directory', async () => {
+    const foreign = await foreignRepository();
+    await writeFile(join(repository, 'tracked'), 'edited\n');
+    const result = invoke(['reset', '--hard'], foreign, { ...process.env, GIT_DIR: join(repository, '.git'), GIT_WORK_TREE: repository });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('ai-conductor git guard: refused reset');
+    expect(await readFile(join(repository, 'tracked'), 'utf8')).toBe('edited\n');
+  });
+
+  it('classifies -C branch -D reachability in the targeted feature repository, not the current directory', async () => {
+    const foreign = await foreignRepository();
+    git(['branch', 'doomed'], foreign); // reachable from foreign main
+    git(['switch', '-c', 'doomed']);
+    await writeFile(join(repository, 'tracked'), 'only here\n'); git(['commit', '-am', 'only here']);
+    const tip = git(['rev-parse', 'doomed']); git(['switch', 'main']);
+
+    const result = invoke(['-C', repository, 'branch', '-D', 'doomed'], foreign);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('commits unreachable');
+    expect(git(['rev-parse', 'doomed'])).toBe(tip);
+  });
+
+  it.each(['sibling worktree', 'root checkout'])('refuses clean -f in the feature repository\'s %s', async (where) => {
+    const feature = join(root, 'feature-wt');
+    const sibling = join(root, 'sibling-wt');
+    git(['worktree', 'add', '-b', 'feature', feature]);
+    git(['worktree', 'add', '-b', 'sibling', sibling]);
+    const featureGuard = await provisionGuardIn(feature);
+    const cwd = where === 'sibling worktree' ? sibling : repository;
+    await writeFile(join(cwd, 'untracked'), 'survive\n');
+
+    const result = spawnSync(featureGuard, ['clean', '-f'], { cwd, encoding: 'utf8' });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('ai-conductor git guard: refused clean');
+    expect(await readFile(join(cwd, 'untracked'), 'utf8')).toBe('survive\n');
   });
 });

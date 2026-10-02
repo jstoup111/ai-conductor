@@ -84,11 +84,11 @@ case "$command" in
         reachable=false
         while IFS= read -r ref; do
           [[ "$ref" == "refs/heads/$name" ]] && continue
-          if "$real_git" merge-base --is-ancestor "refs/heads/$name" "$ref" >/dev/null 2>&1; then
+          if "$real_git" "\${args[@]:0:$i}" merge-base --is-ancestor "refs/heads/$name" "$ref" >/dev/null 2>&1; then
             reachable=true
             break
           fi
-        done < <("$real_git" for-each-ref --format='%(refname)' refs/heads refs/remotes)
+        done < <("$real_git" "\${args[@]:0:$i}" for-each-ref --format='%(refname)' refs/heads refs/remotes)
         [[ "$reachable" == false ]] && { destructive=true; reason='force deletion would make commits unreachable'; alternative='git branch -d <branch>'; break; }
       done
     fi ;;
