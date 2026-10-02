@@ -897,7 +897,11 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     const workersReleased = new Promise<void>((resolve) => {
       releaseWorkers = resolve;
     });
-    await runDaemonMode({
+    // Keep the daemon promise under test control.  If the drain-set assertion
+    // fails, the workers must still be released and the daemon awaited; leaving
+    // them blocked turns a useful assertion failure into Vitest's 20-second
+    // timeout and leaks work into later files.
+    const daemon = runDaemonMode({
         projectRoot: root,
         concurrency: 2,
         baseBranch: 'main',
@@ -944,18 +948,27 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
           events.push(existsSync(getPidfilePath(root)) ? 'lock-held' : 'lock-released');
           events.push('exited');
         },
-      });
-
-    const durableDrainLines = (await readFile(join(root, '.daemon', 'daemon.log'), 'utf8'))
-      .split('\n')
-      .filter((line) => line.includes('drain started: restart-pending'));
-    expect(durableDrainLines).toEqual([
-      expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[^ ]+ \[daemon\] drain started: restart-pending$/),
-    ]);
-    expect({ started, events }).toEqual({
-      started: ['first', 'second'],
-      events: ['status:first,second', 'marker-consumed', 'lock-released', 'exited'],
     });
+
+    try {
+      await vi.waitFor(() => {
+        expect(events).toContain('status:first,second');
+      });
+      await daemon;
+      const durableDrainLines = (await readFile(join(root, '.daemon', 'daemon.log'), 'utf8'))
+        .split('\n')
+        .filter((line) => line.includes('drain started: restart-pending'));
+      expect(durableDrainLines).toEqual([
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[^ ]+ \[daemon\] drain started: restart-pending$/),
+      ]);
+      expect({ started, events }).toEqual({
+        started: ['first', 'second'],
+        events: ['status:first,second', 'marker-consumed', 'lock-released', 'exited'],
+      });
+    } finally {
+      releaseWorkers?.();
+      await daemon;
+    }
   });
 });
 

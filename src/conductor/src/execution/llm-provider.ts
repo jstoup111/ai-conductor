@@ -304,6 +304,8 @@ export interface InvokeOptions {
   dangerouslySkipPermissions?: boolean;
   /** Engine-owned provider read-only profile for build-review members. */
   readOnlyReview?: boolean;
+  /** Pi-only opt-in to project-owned .pi files for unattended build work. */
+  trustProjectFiles?: boolean;
   stepCooldown?: number;
   sessionName?: string;
   /**

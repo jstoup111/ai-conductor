@@ -124,7 +124,7 @@ const passingEffectiveResolver = async () => ({
   },
 }) as never;
 
-it('records Pi as a skipped readOnlyReview candidate before invoking Claude from a custom fallback policy', async () => {
+it('records Pi as a skipped reviewPolicyCatalog candidate before invoking Claude from a custom fallback policy', async () => {
   const root = await fixture();
   const piInvoke = vi.fn();
   const claudeInvoke = vi.fn(async () => {
@@ -166,7 +166,7 @@ it('records Pi as a skipped readOnlyReview candidate before invoking Claude from
   expect(piInvoke).not.toHaveBeenCalled();
   expect(claudeInvoke).toHaveBeenCalledOnce();
   expect(attempts).toEqual(expect.arrayContaining([
-    expect.objectContaining({ provider: 'pi', invoked: false, reason: expect.stringContaining('readOnlyReview') }),
+    expect.objectContaining({ provider: 'pi', invoked: false, reason: expect.stringContaining('reviewPolicyCatalog') }),
     expect.objectContaining({ provider: 'claude', invoked: true }),
   ]));
 });

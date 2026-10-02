@@ -87,7 +87,7 @@ function provider(): LLMProvider {
 }
 
 describe('ProviderRuntimeSet', () => {
-  it('refuses native schema from a Pi adapter when its descriptor omits nativeSchema', () => {
+  it('exposes native schema from a Pi adapter when its descriptor declares nativeSchema', () => {
     const runtimes = new RuntimeSet([{
       key: 'pi',
       provider: { ...provider(), nativeSchemaCapability: { nativeOutputSchema: true } },
@@ -97,7 +97,7 @@ describe('ProviderRuntimeSet', () => {
       availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
     }]);
 
-    expect(runtimes.nativeSchemaCapabilityFor('pi')).toBeUndefined();
+    expect(runtimes.nativeSchemaCapabilityFor('pi')).toEqual({ nativeOutputSchema: true });
   });
 
   it('treats a Pi descriptor without writeFence as unfenced', async () => {

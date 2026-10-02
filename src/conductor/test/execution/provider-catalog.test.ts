@@ -115,8 +115,8 @@ describe('built-in provider catalog', () => {
         ['--permission-mode', 'default', '/composer'],
       ],
       codexArgv: ['$composer'],
-      readOnlyReview: [true, true, false],
-      readOnlyReviewUnsupported: expect.stringMatching(/pi.*readOnlyReview.*#1886/),
+      readOnlyReview: [true, true, true],
+      readOnlyReviewUnsupported: undefined,
     });
   });
 

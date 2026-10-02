@@ -307,13 +307,14 @@ Pi declares `readOnlyReview` and `nativeSchema` through a harness-owned Pi exten
 **Type:** verification
 
 **Steps:**
-1. Write tests in `src/conductor/test/engine/environment-claim-audit.test.ts`: the provider sandbox table value for `pi` is `false` and equals the pi catalog descriptor `osSandbox`; for a fixed output claiming the sandbox blocked a file write and facts with no write fence installed, `auditEnvironmentBlockerClaims` with provider `pi` returns a non-empty `refuted` list and a message carrying the environment-claim-refuted marker, identical in `refuted` operations to the result for provider `claude`; with provider `codex` it returns an empty `refuted` list and a null message.
+1. Write tests in `src/conductor/test/engine/environment-claim-audit.test.ts`: the provider sandbox table value for `pi` is `false` and equals the pi catalog descriptor `osSandbox`; for a fixed output claiming the sandbox blocked a file write and facts with no write fence installed, `auditEnvironmentBlockerClaims` with provider `pi` returns a non-empty `refuted` list and a message carrying the environment-claim-refuted marker, identical in `refuted` operations to the result for provider `claude`; with provider `codex` it returns an empty `refuted` list and a null message; the provider sandbox table value for `codex` is `true` and equals the codex catalog descriptor `osSandbox`.
 2. These tests are expected to pass against existing code (the table derives from the catalog). Commit with an `Evidence:` trailer if no production change is needed.
 
 **Done when:**
 - The environment-claim audit sandbox value for pi is `false` and equals the pi catalog descriptor `osSandbox`, as asserted in environment-claim-audit.test.ts.
 - For an output claiming the sandbox blocked a file write with no write fence installed, `auditEnvironmentBlockerClaims` with provider pi returns a non-empty `refuted` list and a message carrying the environment-claim-refuted marker, with the same refuted operations as for provider claude, as asserted in environment-claim-audit.test.ts.
 - For that same output `auditEnvironmentBlockerClaims` with provider codex returns an empty `refuted` list and a null message, as asserted in environment-claim-audit.test.ts.
+- The environment-claim audit sandbox value for codex is `true` and equals the codex catalog descriptor `osSandbox`, so codex has an OS sandbox, as asserted in environment-claim-audit.test.ts.
 
 **Files:** `src/conductor/test/engine/environment-claim-audit.test.ts`
 
@@ -430,3 +431,180 @@ Task 15 <- none
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-rem-s2-2-1: src/conductor/test/engine/build-review-read-only-capability.test.ts: add failing pi probe cases (fake runner, injected materializer) where help lists every flag except `--extension` but contains `--no-extensions`, and where help lacks `--no-approve`; both must return unavailable naming the missing flag. Then src/conductor/src/engine/build-review-read-only-capability.ts:123 — match required flags as whole help tokens (word-boundary / token split) instead of stdout.includes, keeping the Task 11 available case green
+**Gate:** prd-audit
+**Rationale:** build-review-read-only-capability.ts:123 checks stdout.includes(flag), so `--extension` is satisfied by `--no-extensions` alone; Task 11 admits the flag check and its tests. Sibling: the same includes() check serves the claude probe flags — include it only if it shares the helper, otherwise found-and-excluded (no task for claude).
+**Criterion:** S2.2
+**Parent task:** 11
+**Done when:**
+- S2.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s2-2-1 is complete.
+
+### Task rem-prd-audit-rem-s2-3-1: src/conductor/test/engine/build-review-read-only-capability.test.ts: add failing pi case where the runner throws ENOENT, asserting status unavailable, a reason naming the `pi` executable as unavailable, and no throw; then src/conductor/src/engine/build-review-read-only-capability.ts:55-57 — give the pi probe an ENOENT reason naming the executable without changing the existing codex/claude helper text or their tests
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/engine/build-review-read-only-capability.ts:55-57,120-121 reuse the codex/claude helper so a pi ENOENT reads 'pi sandbox helper is unavailable', not the unavailable executable; Task 11's Done when requires the executable to be named.
+**Criterion:** S2.3
+**Parent task:** 11
+**Done when:**
+- S2.3 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s2-3-1 is complete.
+
+### Task rem-prd-audit-rem-s3-1-1: src/conductor/test/execution/pi-harness-extension-git-read.test.ts:17-22: replace the fake ExtensionAPI with one mirroring installed Pi (types.d.ts:372,936-946): registerFlag returns undefined, getFlag(name) reads flag values by name, tool execute is invoked as (toolCallId, params, signal, onUpdate, ctx) with ctx.cwd; keep every existing Task 3/Task 4 case (refusals, literal `HEAD; rm -rf .` argv) but drive them through this fake
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:12,31 stores registerFlag's void return and calls getFlag(undefined), so git_read never registers in real Pi (verified against Pi loader.js:289-293); the green tests come from a fake echoing the wrong API (git-read test:17-22). Task 3 admits registration; counterparts S3.2 (execute signature) and S4.2 (same flag bug for conduct-output-schema at :13,48) are fixed in their own dispositions against the same fake.
+**Criterion:** S3.1
+**Parent task:** 3
+**Done when:**
+- S3.1 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-1-1 is complete.
+
+### Task rem-prd-audit-rem-s3-1-2: src/conductor/src/execution/pi-harness-extension.ts:12,31 — register `conduct-git-read` with pi.registerFlag and test pi.getFlag('conduct-git-read') by name; add a test that with the flag set exactly one `git_read` tool registers with the 9-subcommand enum and args string-array schema
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:12,31 stores registerFlag's void return and calls getFlag(undefined), so git_read never registers in real Pi (verified against Pi loader.js:289-293); the green tests come from a fake echoing the wrong API (git-read test:17-22). Task 3 admits registration; counterparts S3.2 (execute signature) and S4.2 (same flag bug for conduct-output-schema at :13,48) are fixed in their own dispositions against the same fake.
+**Criterion:** S3.1
+**Parent task:** 3
+**Done when:**
+- S3.1 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-1-2 is complete.
+
+### Task rem-prd-audit-rem-s3-2-1: src/conductor/src/execution/pi-harness-extension.ts:37,43 — change git_read execute to (toolCallId, params, signal, onUpdate, ctx), reading subcommand/args from params and cwd from ctx.cwd; add src/conductor/test/execution/pi-harness-extension-git-read.test.ts case: params {subcommand:'diff', args:['HEAD~1','--','src/a.ts']} reaches the mocked execFile boundary with argv diff HEAD~1 -- src/a.ts, shell:false, cwd ctx.cwd, and the tool returns child stdout
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:37 declares execute(args, context) but Pi calls execute(toolCallId, params, signal, onUpdate, ctx), so params are read from the toolCallId; Task 3 admits execution and its diff argv test.
+**Criterion:** S3.2
+**Parent task:** 3
+**Done when:**
+- S3.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-2-1 is complete.
+
+### Task rem-prd-audit-rem-s3-3-1: src/conductor/test/execution/pi-harness-extension-git-read.test.ts: assert every git_read spawn reaching the mocked boundary has env GIT_PAGER=cat, PAGER=cat and no GIT_EXTERNAL_DIFF key (not merely undefined-valued); fix src/conductor/src/execution/pi-harness-extension.ts:43 to delete the key from a copied env if the test shows it is present
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:43 sets GIT_PAGER/PAGER=cat and drops GIT_EXTERNAL_DIFF but is unreachable in real Pi and untested; Task 3's Done when requires the env assertion.
+**Criterion:** S3.3
+**Parent task:** 3
+**Done when:**
+- S3.3 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-3-1 is complete.
+
+### Task rem-prd-audit-rem-s3-4-1: src/conductor/src/execution/pi-harness-extension.ts:38,40,45 — make every git_read refusal and git failure throw an Error (Pi marks results as errors only on throw, docs/extensions.md:1997) instead of returning {isError:true}; convert existing refusal assertions in src/conductor/test/execution/pi-harness-extension-git-read.test.ts:46-77 to expect a rejected execute naming the refused subcommand/option, preserving every existing Task 4 case
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:38 returns {isError:true} for a disallowed subcommand, which Pi never marks as an error; Task 4 admits refusals and requires the `commit` test.
+**Criterion:** S3.4
+**Parent task:** 4
+**Done when:**
+- S3.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-4-1 is complete.
+
+### Task rem-prd-audit-rem-s3-4-2: src/conductor/test/execution/pi-harness-extension-git-read.test.ts: add subcommand `commit` case — execute rejects naming `commit` as not allowed and the mocked boundary is never reached
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:38 returns {isError:true} for a disallowed subcommand, which Pi never marks as an error; Task 4 admits refusals and requires the `commit` test.
+**Criterion:** S3.4
+**Parent task:** 4
+**Done when:**
+- S3.4 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-4-2 is complete.
+
+### Task rem-prd-audit-rem-s3-5-1: src/conductor/test/execution/pi-harness-extension-git-read.test.ts: per-option cases for `--output=/tmp/x` asserting execute rejects naming that option and the mocked execFile boundary is never called (depends on rem-s3-4-1)
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:40 refuses `--output=/tmp/x` but returns isError instead of throwing (the throw fix is rem-s3-4-1 on S3.4); Task 4's Done when requires per-option error assertions with the boundary never reached.
+**Criterion:** S3.5
+**Parent task:** 4
+**Done when:**
+- S3.5 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-5-1 is complete.
+
+### Task rem-prd-audit-rem-s3-6-1: src/conductor/test/execution/pi-harness-extension-git-read.test.ts: per-option cases for `-O` and `--open-files-in-pager=vi` asserting execute rejects naming that option and the mocked execFile boundary is never called (depends on rem-s3-4-1)
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:40 refuses `-O` and `--open-files-in-pager=vi` but returns isError instead of throwing (the throw fix is rem-s3-4-1 on S3.4); Task 4's Done when requires per-option error assertions with the boundary never reached.
+**Criterion:** S3.6
+**Parent task:** 4
+**Done when:**
+- S3.6 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-6-1 is complete.
+
+### Task rem-prd-audit-rem-s3-7-1: src/conductor/test/execution/pi-harness-extension-git-read.test.ts: per-option cases for `--ext-diff` and `--textconv` asserting execute rejects naming that option and the mocked execFile boundary is never called (depends on rem-s3-4-1)
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:40 refuses `--ext-diff` and `--textconv` but returns isError instead of throwing (the throw fix is rem-s3-4-1 on S3.4); Task 4's Done when requires per-option error assertions with the boundary never reached.
+**Criterion:** S3.7
+**Parent task:** 4
+**Done when:**
+- S3.7 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-7-1 is complete.
+
+### Task rem-prd-audit-rem-s3-8-1: src/conductor/test/execution/pi-harness-extension-git-read.test.ts: per-option cases for `-c core.pager=sh` and `--config-env=core.pager=X` asserting execute rejects naming that option and the mocked execFile boundary is never called (depends on rem-s3-4-1)
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:40 refuses `-c core.pager=sh` and `--config-env=core.pager=X` but returns isError instead of throwing (the throw fix is rem-s3-4-1 on S3.4); Task 4's Done when requires per-option error assertions with the boundary never reached.
+**Criterion:** S3.8
+**Parent task:** 4
+**Done when:**
+- S3.8 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-8-1 is complete.
+
+### Task rem-prd-audit-rem-s3-9-1: src/conductor/test/execution/pi-harness-extension-git-read.test.ts: params {subcommand:'log', args:['HEAD; rm -rf .']} reaches the mocked boundary as one literal argv element with shell:false, and a sentinel file created in the temp cwd still exists afterwards
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:43 is shell:false but git never receives params in real Pi until rem-s3-2-1 fixes the execute signature; Task 4 requires the sentinel-file proof.
+**Criterion:** S3.9
+**Parent task:** 4
+**Done when:**
+- S3.9 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-9-1 is complete.
+
+### Task rem-prd-audit-rem-s3-10-1: src/conductor/test/execution/pi-harness-extension-git-read.test.ts: mocked git exits 1 with stderr `fatal: bad revision` for an allowed call; assert execute rejects with an error carrying that stderr
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:45 returns isError on a non-zero git exit; Pi needs a throw (fixed by rem-s3-4-1). Task 4 requires the failed-git test.
+**Criterion:** S3.10
+**Parent task:** 4
+**Done when:**
+- S3.10 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s3-10-1 is complete.
+
+### Task rem-prd-audit-rem-s4-2-1: src/conductor/src/execution/pi-harness-extension.ts:13,48-53 — register `conduct-output-schema` via registerFlag and read it with pi.getFlag('conduct-output-schema'); read the schema with process.getBuiltinModule('node:fs').readFileSync (no import/require — pairs with AB-2's rem-ab2-1 on line 42) and register submit_result whose execute(toolCallId, params) returns {details: params, terminate: true}
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:13,48,53 has the same registerFlag/getFlag bug as S3.1 and execute(args) would return the toolCallId as details, so submit_result never works in real Pi; Task 5 admits it.
+**Criterion:** S4.2
+**Parent task:** 5
+**Done when:**
+- S4.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s4-2-1 is complete.
+
+### Task rem-prd-audit-rem-s4-2-2: src/conductor/test/execution/pi-harness-extension-submit-result.test.ts: create it with the corrected fake ExtensionAPI from rem-s3-1-1; with the output-schema flag naming a temp schema file, assert submit_result parameters deep-equal the file JSON and execute('id', {verdict:'pass'}) returns details {verdict:'pass'} and terminate true
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:13,48,53 has the same registerFlag/getFlag bug as S3.1 and execute(args) would return the toolCallId as details, so submit_result never works in real Pi; Task 5 admits it.
+**Criterion:** S4.2
+**Parent task:** 5
+**Done when:**
+- S4.2 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s4-2-2 is complete.
+
+### Task rem-prd-audit-rem-s4-9-1: src/conductor/test/execution/pi-harness-extension-submit-result.test.ts: with no harness flag values set on the corrected fake, assert the extension factory calls registerTool zero times, and with only conduct-git-read set it registers only git_read
+**Gate:** prd-audit
+**Rationale:** src/conductor/src/execution/pi-harness-extension.ts:31,48-49 registers no tool without flags only vacuously (flags never resolve); Task 5 requires the no-flag test.
+**Criterion:** S4.9
+**Parent task:** 5
+**Done when:**
+- S4.9 is satisfied by this task.
+- Re-run prd-audit and confirm task rem-prd-audit-rem-s4-9-1 is complete.
+
+### Task rem-as-built-rem-ab2-1: src/conductor/src/execution/pi-harness-extension.ts:42 — replace `await import('node:child_process')` in PI_HARNESS_EXTENSION_SOURCE with process.getBuiltinModule('node:child_process') (Node built-in lookup, no import/require statement); with rem-s4-2-1 covering line 52, the source must match no `import` token at all; add a src/conductor/test/execution/pi-harness-extension.test.ts assertion that PI_HARNESS_EXTENSION_SOURCE matches neither /\bimport\b/ nor /\brequire\b/
+**Gate:** as-built
+**Rationale:** ADR D15 requires an import-free asset and byte verification before every use; src/conductor/src/execution/pi-harness-extension.ts:42,52 use dynamic import() inside PI_HARNESS_EXTENSION_SOURCE and :73-75 return after writeFile+rename without re-reading. Task 2 admits materialization and its no-import Done when. Counterpart: line 52 is also edited by rem-s4-2-1 — both use process.getBuiltinModule so they cannot diverge.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 15
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 15 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-1 is complete.
+
+### Task rem-as-built-rem-ab2-2: src/conductor/src/execution/pi-harness-extension.ts:66-75 — after rename, read the target back and throw an error naming the asset path if its bytes differ from PI_HARNESS_EXTENSION_SOURCE; keep the existing already-correct early return (which already compares bytes); add src/conductor/test/execution/pi-harness-extension.test.ts tests: fresh write returns a path whose bytes equal the constant, tampered file is rewritten, already-correct file is not rewritten (mtime unchanged), unwritable dir throws naming the path
+**Gate:** as-built
+**Rationale:** ADR D15 requires an import-free asset and byte verification before every use; src/conductor/src/execution/pi-harness-extension.ts:42,52 use dynamic import() inside PI_HARNESS_EXTENSION_SOURCE and :73-75 return after writeFile+rename without re-reading. Task 2 admits materialization and its no-import Done when. Counterpart: line 52 is also edited by rem-s4-2-1 — both use process.getBuiltinModule so they cannot diverge.
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 15
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 15 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-2 is complete.
+
+### Task rem-as-built-rem-ab3-1: src/conductor/src/execution/pi-harness-extension.ts:14-20 — add `--filters` and `--show-signature` to the single deniedOptions list so the existing prefix/abbreviation and bundled-short matching covers them; add src/conductor/test/execution/pi-harness-extension-git-read.test.ts cases: cat-file `--filters`, `--filt`, show `--show-signature`, log `--show-sig` each reject naming the option with the mocked boundary never reached, keeping all existing refusal cases
+**Gate:** as-built
+**Rationale:** ADR D17 requires git_read to refuse any argument that runs another program; the denylist at src/conductor/src/execution/pi-harness-extension.ts:14-20 omits cat-file `--filters` (runs configured filter drivers) and show/log `--show-signature` (runs gpg). Task 4 admits the refusal list. Sweep: `--textconv`, `--ext-diff`, `-O/--open-files-in-pager`, `-c/--config-env`, `--output` are already present; default textconv/external-diff drivers configured in repo config for plain `git diff` are found-and-excluded (config is not writable by the reviewer, and adding `--no-ext-diff/--no-textconv` defaults is not in any plan task).
+**Governing clause:** adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 17
+**Done when:**
+- adr-2026-09-24-built-in-provider-catalog-and-boot-discovery decision 17 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab3-1 is complete.

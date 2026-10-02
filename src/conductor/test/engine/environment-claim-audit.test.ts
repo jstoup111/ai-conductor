@@ -15,6 +15,7 @@ import {
   hasUnboundedCommandDenialClaim,
   writeFenceDeniableOperations,
 } from '../../src/engine/self-host/environment-claim-audit.js';
+import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 
 /** The verbatim blocker prose from `.daemon/daemon.log` (#1106). */
 const INCIDENT_OUTPUT = [
@@ -116,6 +117,19 @@ describe('environment claim audit', () => {
     });
 
     expect(audit).toEqual({ refuted: [], message: null });
+    expect(providerDescriptor('codex').osSandbox).toBe(true);
+  });
+
+  it('treats Pi like Claude because its catalog declares no OS sandbox', () => {
+    const pi = auditEnvironmentBlockerClaims(INCIDENT_OUTPUT, {
+      provider: 'pi', writeFenceInstalled: false,
+    });
+    const claude = auditEnvironmentBlockerClaims(INCIDENT_OUTPUT, {
+      provider: 'claude', writeFenceInstalled: false,
+    });
+    expect(providerDescriptor('pi').osSandbox).toBe(false);
+    expect(pi.refuted.map((claim) => claim.operation)).toEqual(claude.refuted.map((claim) => claim.operation));
+    expect(pi.message).toContain(ENVIRONMENT_CLAIM_REFUTED);
   });
 
   it('never refutes a claim on an unrecognized provider', () => {
