@@ -284,7 +284,7 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     // Every invocation goes through the Node 26 temp-dir wrapper
     // (`scripts/run-vitest.mjs`), so no bare `vitest run` survives.
     // The aggregate run has a dedicated launcher that partitions the concrete
-    // include set into sixteen round-robin batches. Each starts a fresh Vitest parent,
+    // include set into thirty-two round-robin batches. Each starts a fresh Vitest parent,
     // bounding the module graph retained by its fork workers while still
     // covering the configured include set exactly once.
     // The selector branch remains a single unsharded run below.
@@ -366,17 +366,15 @@ describe('Story 7 — package-script selector forwarding (Task 17)', () => {
     }).toEqual({
       exitCode: 0,
       stdout: 'AGGREGATE_TEST_SUITE_PASS\n',
-      invocationCount: 16,
+      invocationCount: 32,
       forwarded: [...testFiles].sort(),
     });
     expect(invocations[0].filter((argument) => argument.endsWith('.test.ts'))).toEqual([
       'test/group-1.test.ts',
-      'test/group-24.test.ts',
       'test/group-9.test.ts',
     ]);
     expect(invocations[1].filter((argument) => argument.endsWith('.test.ts'))).toEqual([
       'test/group-10.test.ts',
-      'test/group-25.test.ts',
     ]);
   });
 
