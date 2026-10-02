@@ -513,6 +513,7 @@ async function awaitDaemonOtelStop(
  */
 export function installDaemonOtelSighupHandler(options: {
   daemonOtel: { stop: () => Promise<void> } | null;
+  activeDispatchVisualizers?: ReadonlySet<{ stop: () => Promise<void> }>;
   processAdapter?: DaemonProcessAdapter;
   awaitStop?: AwaitDaemonOtelStop;
 }): () => void {
@@ -525,6 +526,7 @@ export function installDaemonOtelSighupHandler(options: {
     try {
       await awaitStop(Promise.resolve().then(async () => {
         await runSighupPersistence();
+        await Promise.allSettled([...options.activeDispatchVisualizers ?? []].map((visualizer) => visualizer.stop()));
         await options.daemonOtel?.stop();
       }), DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS);
     } catch {
@@ -1246,10 +1248,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     harnessVersion: await resolveHarnessVersion(__dirname),
     rootEvents: events,
   });
-  // SIGHUP is the daemon respawn boundary. Flush only the daemon-owned OTel
-  // providers here; scheduler draining remains exclusively the SIGTERM path.
+  // The daemon owns SIGHUP, while each dispatch owns its tracer provider.
+  // Keep the providers discoverable until their feature teardown completes so
+  // the daemon can flush all pending spans before it re-raises SIGHUP.
+  const activeDispatchVisualizers = new Set<{ stop: () => Promise<void> }>();
+  // SIGHUP is the daemon respawn boundary. Flush active dispatch and
+  // daemon-owned OTel providers here; scheduler draining remains exclusively
+  // the SIGTERM path.
   const removeDaemonOtelSighupHandler = installDaemonOtelSighupHandler({
     daemonOtel,
+    activeDispatchVisualizers,
     ...(opts.processAdapter ? { processAdapter: opts.processAdapter } : {}),
     ...(opts.awaitDaemonOtelStop ? { awaitStop: opts.awaitDaemonOtelStop } : {}),
   });
@@ -1418,6 +1426,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const visualizer = daemonOtel?.spoolRuntime
       ? wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents, daemonOtel.spoolRuntime)
       : wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents);
+    if (visualizer) activeDispatchVisualizers.add(visualizer);
     const featureLog = featureLogFor(item.slug);
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
     const renderableEvents = renderedEventTypes();
@@ -1426,10 +1435,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const stop = (): Promise<void> => {
       if (stopPromise) return stopPromise;
       stopPromise = (async () => {
-        await visualizer?.stop();
-        await daemonOtel?.flush();
-        for (const type of renderableEvents) featureEvents.off(type, renderEvent);
-        persistence.stop();
+        try {
+          await visualizer?.stop();
+          await daemonOtel?.flush();
+        } finally {
+          if (visualizer) activeDispatchVisualizers.delete(visualizer);
+          for (const type of renderableEvents) featureEvents.off(type, renderEvent);
+          persistence.stop();
+        }
       })();
       return stopPromise;
     };

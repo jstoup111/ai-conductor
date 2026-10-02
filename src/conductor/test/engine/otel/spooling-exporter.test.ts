@@ -123,7 +123,10 @@ describe('spooling exporters', () => {
             aggregationTemporality: AggregationTemporality.CUMULATIVE,
             dataPointType: DataPointType.SUM,
             isMonotonic: true,
-            dataPoints: [{ startTime: [1, 0], endTime: [2, 0], attributes: {}, value: 7 }],
+            dataPoints: [
+              { startTime: [1, 0], endTime: [2, 0], attributes: {}, value: 7 },
+              { startTime: [1, 0], endTime: [2, 0], attributes: { replica: 'two' }, value: 8 },
+            ],
           },
           {
             descriptor: { name: 'spooled.histogram', description: '', unit: 'ms', valueType: ValueType.DOUBLE },
@@ -143,6 +146,7 @@ describe('spooling exporters', () => {
       exporter.export(metrics, async (exportResult) => {
         const [batch] = await store.list('metrics');
         expect(batch).toBeDefined();
+        expect(batch.items).toBe(3);
         const request = decodeFields(await readFile(batch.path));
         const resourceMetrics = decodeFields(embedded(request, 1)[0]);
         const scopeMetrics = decodeFields(embedded(resourceMetrics, 2)[0]);
@@ -152,7 +156,7 @@ describe('spooling exporters', () => {
         ]);
         expect(embedded(decodedMetrics[0], 7)).toHaveLength(1);
         expect(embedded(decodedMetrics[1], 9)).toHaveLength(1);
-        expect(embedded(decodeFields(embedded(decodedMetrics[0], 7)[0]), 1)).toHaveLength(1);
+        expect(embedded(decodeFields(embedded(decodedMetrics[0], 7)[0]), 1)).toHaveLength(2);
         expect(embedded(decodeFields(embedded(decodedMetrics[1], 9)[0]), 1)).toHaveLength(1);
         resolve(exportResult);
       });
@@ -259,23 +263,37 @@ describe('spooling exporters', () => {
     ]);
   });
 
-  it('emits an evicted spool-drop event when a metrics write rejects an oversize batch', async () => {
+  it('emits a metric spool-drop event with the actual data-point count', async () => {
     const events = new ConductorEventEmitter();
     const drops: unknown[] = [];
     events.on('otel_spool_drop', (event) => { drops.push(event); });
     const store = {
-      write: async () => ({ rejectedOversize: true, rejectedItems: 7, evictedBatches: 0, evictedItems: 0 }),
+      write: async (_signal: string, _body: Uint8Array, items: number) =>
+        ({ rejectedOversize: true, rejectedItems: items, evictedBatches: 0, evictedItems: 0 }),
     } as unknown as SpoolStore;
     const metrics = {
       resource: { attributes: {} } as ResourceMetrics['resource'],
-      scopeMetrics: [],
+      scopeMetrics: [{
+        scope: { name: 'metric-count' },
+        metrics: [{
+          descriptor: { name: 'metric.count', description: '', unit: '1', valueType: ValueType.INT },
+          aggregationTemporality: AggregationTemporality.CUMULATIVE,
+          dataPointType: DataPointType.SUM,
+          isMonotonic: true,
+          dataPoints: [
+            { startTime: [1, 0], endTime: [2, 0], attributes: {}, value: 1 },
+            { startTime: [1, 0], endTime: [2, 0], attributes: { replica: 'two' }, value: 2 },
+            { startTime: [1, 0], endTime: [2, 0], attributes: { replica: 'three' }, value: 3 },
+          ],
+        }],
+      }],
     } satisfies ResourceMetrics;
     const exporter = new SpoolingMetricExporter(store, directMetricExporter(), events);
 
     await new Promise<void>((resolve) => exporter.export(metrics, () => resolve()));
 
     expect(drops).toEqual([
-      { type: 'otel_spool_drop', signal: 'metrics', reason: 'evicted', batches: 1, items: 7 },
+      { type: 'otel_spool_drop', signal: 'metrics', reason: 'evicted', batches: 1, items: 3 },
     ]);
   });
 });

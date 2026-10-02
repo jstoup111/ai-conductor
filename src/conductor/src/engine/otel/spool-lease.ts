@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
@@ -19,6 +19,7 @@ export interface SpoolLeaseFilesystem {
   mkdir(path: string, options: { recursive: true; mode: number }): Promise<string | undefined>;
   open(path: string, flags: string): Promise<LeaseFileHandle>;
   readFile(path: string, encoding: 'utf8'): Promise<string>;
+  link(existingPath: string, newPath: string): Promise<void>;
   rename(source: string, destination: string): Promise<void>;
   rm(path: string, options: { force: true }): Promise<void>;
   writeFile(path: string, contents: string, encoding: 'utf8'): Promise<void>;
@@ -42,7 +43,7 @@ interface LeaseRecord {
   heartbeatAt: number;
 }
 
-const defaultFilesystem: SpoolLeaseFilesystem = { mkdir, open, readFile, rename, rm, writeFile };
+const defaultFilesystem: SpoolLeaseFilesystem = { link, mkdir, open, readFile, rename, rm, writeFile };
 
 function isAlreadyExists(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'EEXIST';
@@ -123,6 +124,16 @@ export class SpoolLease {
       const releasingPath = `${this.path()}.${this.uuid}.release`;
       await this.filesystem.rename(this.path(), releasingPath);
       if (parseLeaseRecord(await this.filesystem.readFile(releasingPath, 'utf8'))?.uuid === this.uuid) {
+        await this.filesystem.rm(releasingPath, { force: true });
+      } else {
+        // A successor can replace lease.json after the ownership check but
+        // before our rename. Restore that foreign record without overwriting
+        // a still newer holder, then remove only our moved-aside pathname.
+        try {
+          await this.filesystem.link(releasingPath, this.path());
+        } catch (error) {
+          if (!isAlreadyExists(error)) throw error;
+        }
         await this.filesystem.rm(releasingPath, { force: true });
       }
     } catch (error) {

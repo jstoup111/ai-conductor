@@ -39,7 +39,7 @@ export interface SpoolFilesystem {
   readFile(path: string): Promise<Buffer>;
   rename(source: string, destination: string): Promise<void>;
   rm(path: string, options: { force: true }): Promise<void>;
-  stat(path: string): Promise<{ size: number }>;
+  stat(path: string): Promise<{ size: number; mtimeMs: number }>;
 }
 
 export interface SpoolStoreOptions {
@@ -51,6 +51,7 @@ export interface SpoolStoreOptions {
 }
 
 const filesystem: SpoolFilesystem = { mkdir, open, readdir, readFile, rename, rm, stat };
+const TEMPORARY_FILE_GRACE_MS = 60_000;
 
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -89,6 +90,7 @@ export class SpoolStore {
     const temporaryPath = `${path}.${this.randomBytes(4).toString('hex')}.tmp`;
     const handle = await this.filesystem.open(temporaryPath, 'wx');
     let closed = false;
+    let published = false;
 
     try {
       await handle.writeFile(body);
@@ -96,13 +98,16 @@ export class SpoolStore {
       await handle.close();
       closed = true;
       await this.filesystem.rename(temporaryPath, path);
+      published = true;
     } finally {
       if (!closed) await handle.close().catch(() => undefined);
+      if (!published) await this.filesystem.rm(temporaryPath, { force: true }).catch(() => undefined);
     }
 
     const batch = { name, path, size: body.byteLength, items };
     if (this.maxBytes === undefined) return batch;
 
+    await this.removeStaleTemporaryFiles();
     let totalBytes = await this.totalBytes();
     let evictedBatches = 0;
     let evictedItems = 0;
@@ -172,6 +177,30 @@ export class SpoolStore {
     const signals: readonly SpoolSignal[] = ['traces', 'metrics'];
     const batches = await Promise.all(signals.map((signal) => this.list(signal)));
     return batches.flat().sort((first, second) => first.name.localeCompare(second.name));
+  }
+
+  /** Keep crash-orphaned publication files from bypassing the spool byte cap. */
+  private async removeStaleTemporaryFiles(): Promise<void> {
+    await Promise.all((['traces', 'metrics'] as const).map(async (signal) => {
+      const directory = this.directory(signal);
+      let names: string[];
+      try {
+        names = await this.filesystem.readdir(directory);
+      } catch (error) {
+        if (isMissing(error)) return;
+        throw error;
+      }
+      await Promise.all(names.filter((name) => name.endsWith('.tmp')).map(async (name) => {
+        const path = join(directory, name);
+        try {
+          if (this.now() - (await this.filesystem.stat(path)).mtimeMs >= TEMPORARY_FILE_GRACE_MS) {
+            await this.filesystem.rm(path, { force: true });
+          }
+        } catch (error) {
+          if (!isMissing(error)) throw error;
+        }
+      }));
+    }));
   }
 
   private itemsFromName(name: string): number {

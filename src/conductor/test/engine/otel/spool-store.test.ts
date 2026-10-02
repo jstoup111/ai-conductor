@@ -1,6 +1,6 @@
 // Covers: task:3, task:4
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, open, readdir, readFile, rename, rm } from 'node:fs/promises';
+import { mkdtemp, open, readdir, readFile, rename, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SpoolStore, type SpoolFilesystem } from '../../../src/engine/otel/spool-store.js';
@@ -56,7 +56,7 @@ describe('SpoolStore', () => {
     });
   });
 
-  it('does not expose a final protobuf file when publication rename fails', async () => {
+  it('removes its temporary file and does not expose a final protobuf file when publication rename fails', async () => {
     const directory = await temporaryDirectory();
     const store = new SpoolStore(directory, {
       filesystem: filesystem({ rename: vi.fn(async () => { throw new Error('rename failed'); }) }),
@@ -67,7 +67,25 @@ describe('SpoolStore', () => {
     expect({
       listed: await store.list('metrics'),
       files: await readdir(join(directory, 'metrics')),
-    }).toEqual({ listed: [], files: expect.arrayContaining([expect.stringMatching(/\.tmp$/)]) });
+    }).toEqual({ listed: [], files: [] });
+  });
+
+  it('removes stale temporary files during a capped write without disturbing a fresh writer', async () => {
+    const directory = await temporaryDirectory();
+    const now = 1_727_000_000_000;
+    const traces = join(directory, 'traces');
+    await new SpoolStore(directory, { maxBytes: 1024, now: () => now }).write('traces', Buffer.from('seed'));
+    const stale = join(traces, 'crashed.tmp');
+    const fresh = join(traces, 'writer-in-flight.tmp');
+    await open(stale, 'w').then((handle) => handle.close());
+    await open(fresh, 'w').then((handle) => handle.close());
+    await utimes(stale, (now - 60_001) / 1000, (now - 60_001) / 1000);
+    await utimes(fresh, now / 1000, now / 1000);
+
+    await new SpoolStore(directory, { maxBytes: 1024, now: () => now }).write('traces', Buffer.from('next'));
+
+    await expect(readdir(traces)).resolves.toEqual(expect.arrayContaining(['writer-in-flight.tmp']));
+    await expect(readdir(traces)).resolves.not.toContain('crashed.tmp');
   });
 
   it('keeps same-millisecond writes from independent stores distinct and intact', async () => {

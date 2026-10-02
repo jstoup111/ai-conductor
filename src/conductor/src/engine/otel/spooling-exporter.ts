@@ -16,6 +16,16 @@ function emitEviction(
   void events?.emit({ type: 'otel_spool_drop', signal, reason: 'evicted', batches, items });
 }
 
+function metricDataPointCount(metrics: ResourceMetrics): number {
+  return metrics.scopeMetrics.reduce(
+    (total, scopeMetrics) => total + scopeMetrics.metrics.reduce(
+      (scopeTotal, metric) => scopeTotal + metric.dataPoints.length,
+      0,
+    ),
+    0,
+  );
+}
+
 /**
  * Acknowledges spans to the SDK only after their exact OTLP/HTTP protobuf
  * request body has been durably published by the spool store.
@@ -97,7 +107,11 @@ export class SpoolingMetricExporter implements PushMetricExporter {
 
   private async write(metrics: ResourceMetrics, resultCallback: (result: ExportResult) => void): Promise<void> {
     try {
-      const result = await this.store.write('metrics', ProtobufMetricsSerializer.serializeRequest(metrics) ?? new Uint8Array(), 1);
+      const result = await this.store.write(
+        'metrics',
+        ProtobufMetricsSerializer.serializeRequest(metrics) ?? new Uint8Array(),
+        metricDataPointCount(metrics),
+      );
       emitEviction(this.events, 'metrics', result);
       resultCallback({ code: ExportResultCode.SUCCESS });
     } catch (error) {

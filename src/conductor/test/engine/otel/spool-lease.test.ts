@@ -1,6 +1,6 @@
 // Covers: task:9
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, open, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SpoolLease } from '../../../src/engine/otel/spool-lease.js';
@@ -199,6 +199,28 @@ describe('SpoolLease', () => {
       heartbeatAt: now,
     });
     await expect(observer.acquire()).resolves.toEqual({ acquired: false });
+  });
+
+  it('restores a foreign successor swapped in between release verification and rename', async () => {
+    const directory = await temporaryDirectory();
+    const leasePath = join(directory, 'lease.json');
+    const holder = new SpoolLease(directory, {
+      now: () => now,
+      isProcessAlive: () => true,
+      filesystem: {
+        rename: async (source, destination) => {
+          if (source === leasePath && destination.endsWith('.release')) {
+            await writeLease(directory, { pid: 44, uuid: 'foreign-successor', heartbeatAt: now });
+          }
+          await rename(source, destination);
+        },
+      },
+    });
+
+    await holder.acquire();
+    await holder.release();
+
+    await expect(readFile(leasePath, 'utf8').then(JSON.parse)).resolves.toMatchObject({ uuid: 'foreign-successor' });
   });
 
   it('notifies its owner when a contender replaces the lease during heartbeat', async () => {

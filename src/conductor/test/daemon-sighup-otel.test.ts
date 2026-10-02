@@ -9,16 +9,18 @@ import {
   type DaemonProcessAdapter,
 } from '../src/daemon-cli.js';
 import { wireDaemonOtel } from '../src/engine/otel/wire.js';
+import { wireOtelVisualizer } from '../src/engine/otel/wire.js';
+import { SpoolStore } from '../src/engine/otel/spool-store.js';
 import { registerSighupPersistence } from '../src/engine/sighup-persistence.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 
 function processProbe(): {
   adapter: DaemonProcessAdapter;
-  listeners: Map<NodeJS.Signals, () => void>;
+  listeners: Map<NodeJS.Signals, () => Promise<void>>;
   calls: string[];
   kill: ReturnType<typeof vi.fn>;
 } {
-  const listeners = new Map<NodeJS.Signals, () => void>();
+  const listeners = new Map<NodeJS.Signals, () => Promise<void>>();
   const calls: string[] = [];
   const kill = vi.fn((pid: number, signal: NodeJS.Signals) => {
     calls.push(`kill:${pid}:${signal}`);
@@ -28,7 +30,7 @@ function processProbe(): {
       pid: 481,
       on: vi.fn((signal: NodeJS.Signals, listener: () => void) => {
         calls.push(`on:${signal}`);
-        listeners.set(signal, listener);
+        listeners.set(signal, listener as () => Promise<void>);
       }),
       off: vi.fn((signal: NodeJS.Signals, listener: () => void) => {
         calls.push(`off:${signal}`);
@@ -89,6 +91,35 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
 
     expect(order).toEqual(['persist', 'stop']);
     expect(probe.calls).toEqual(['on:SIGHUP', 'off:SIGHUP', 'kill:481:SIGHUP']);
+  });
+
+  it('flushes pending spans from active dispatch visualizers into the spool before re-raising SIGHUP', async () => {
+    const probe = processProbe();
+    const root = await mkdtemp(join(tmpdir(), 'daemon-sighup-dispatch-span-'));
+    const config = { otel: { exporter: 'otlp' as const, endpoint: 'http://127.0.0.1:1', spool: { enabled: true } } };
+    const daemon = wireDaemonOtel(config, {
+      mainRoot: root, project: root, projectName: 'test', rootEvents: new ConductorEventEmitter(),
+    });
+    const events = new ConductorEventEmitter();
+    const visualizer = wireOtelVisualizer(config, {
+      pipelineDir: join(root, '.pipeline'), runId: 'run', feature: 'feature', project: root,
+      branch: 'feature', engineVersion: 'test', harnessVersion: 'test',
+    }, events, daemon?.spoolRuntime);
+    if (!visualizer) throw new Error('expected dispatch visualizer');
+    const activeDispatchVisualizers = new Set([{ stop: visualizer.stop.bind(visualizer) }]);
+    await events.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await events.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+
+    installDaemonOtelSighupHandler({
+      daemonOtel: daemon,
+      activeDispatchVisualizers,
+      processAdapter: probe.adapter,
+      awaitStop: async (operation) => operation,
+    });
+    await probe.listeners.get('SIGHUP')!();
+
+    await expect(new SpoolStore(join(root, '.daemon', 'otel-spool')).list('traces')).resolves.toHaveLength(1);
+    await rm(root, { recursive: true, force: true });
   });
 
   it('abandons a hanging OTel stop at the bounded export timeout and still re-raises SIGHUP', async () => {
