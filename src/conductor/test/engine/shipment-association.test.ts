@@ -23,7 +23,7 @@ describe('classifyShipmentAssociation', () => {
     expect(recordedShipmentFindings({ prdAudit })).toEqual([{
       gate: 'prd_audit', grade: 'OVER_SCOPE', criterion: 'S1.1',
       summary: 'The operator refused this visible widening.', accepted: false,
-      decision: 'refuse', rationale: 'Visible product behavior requires a plan decision.',
+      decision: 'refuse', rationale: 'Visible product behavior requires a plan decision.', authority: 'operator@example.test',
     }]);
   });
 

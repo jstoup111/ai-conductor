@@ -50,6 +50,14 @@ export interface PrdAuditVerdictStoreDependencies {
   readonly render?: (value: PersistedPrdAuditVerdict) => string;
 }
 
+/** Lets the runner name the output that failed after authority was durable. */
+export class PrdAuditVerdictPersistenceError extends Error {
+  constructor(readonly stage: 'authority' | 'report', cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = 'PrdAuditVerdictPersistenceError';
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -157,8 +165,16 @@ export async function persistPrdAuditVerdict(
   const value: PersistedPrdAuditVerdict = { ...evidence, ...identity };
   const write = dependencies.write ?? atomicWrite;
   const render = dependencies.render ?? renderPrdAuditReport;
-  await write(join(worktree, PRD_AUDIT_VERDICT_PATH), `${JSON.stringify(value, null, 2)}\n`);
-  await write(join(worktree, PRD_AUDIT_REPORT_PATH), render(value));
+  try {
+    await write(join(worktree, PRD_AUDIT_VERDICT_PATH), `${JSON.stringify(value, null, 2)}\n`);
+  } catch (error) {
+    throw new PrdAuditVerdictPersistenceError('authority', error);
+  }
+  try {
+    await write(join(worktree, PRD_AUDIT_REPORT_PATH), render(value));
+  } catch (error) {
+    throw new PrdAuditVerdictPersistenceError('report', error);
+  }
   return value;
 }
 

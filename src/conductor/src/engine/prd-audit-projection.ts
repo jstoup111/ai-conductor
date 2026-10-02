@@ -8,6 +8,7 @@ import {
   resolveFeaturePrdPaths,
 } from './artifacts.js';
 import { AcceptedWideningDecisionStore, type AcceptedWideningDecision } from './accepted-widenings.js';
+import { readRemediationCaseStoreFeature, RemediationCaseStore, type RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { parseCoherenceArtifact, type CoherenceRow } from './coherence-parse.js';
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskStoryIds } from './plan-task-parse.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
@@ -15,7 +16,7 @@ import { makeGitRunner, originDefaultBranch, resolveBase, type GitRunner } from 
 import { listItems, sectionBody, splitStoryBlocks } from './story-criteria.js';
 
 /** Incremented only when the engine-rendered PRD-audit input contract changes. */
-export const PRD_AUDIT_PROJECTION_VERSION = 1;
+export const PRD_AUDIT_PROJECTION_VERSION = 2;
 
 const PRD_AUDIT_DIFF_EXCERPT_PER_FILE_BYTES = 256 * 1024;
 const PRD_AUDIT_DIFF_EXCERPT_TOTAL_BYTES = 512 * 1024;
@@ -85,6 +86,8 @@ export interface PrdAuditProjection {
     readonly storyId: string;
     readonly kind: 'happy' | 'negative';
     readonly text: string;
+    /** Requirement ids explicitly mapped by this story, never reviewer prose. */
+    readonly requirementIds: readonly string[];
   }[];
   readonly tasks: readonly {
     readonly id: string;
@@ -118,7 +121,7 @@ export interface PrdAuditProjection {
   };
   readonly history:
     | { readonly kind: 'absent' }
-    | { readonly decisions: readonly AcceptedWideningDecision[] };
+  | { readonly decisions: readonly AcceptedWideningDecision[]; readonly cases: readonly RemediationCasePrdWideningRecord[] };
 }
 
 export type PrdAuditProjectionResult =
@@ -173,6 +176,8 @@ function criteriaFromStories(stories: string): {
   const malformed: string[] = [];
   for (const block of splitStoryBlocks(stories)) {
     if (!block.id) continue;
+    const requirementIds = [...block.text.matchAll(/^\s*\*\*Requirements?\s*:\*\*\s*(.+?)\s*$/gim)]
+      .flatMap((match) => [...match[1].matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((id) => id[0].toUpperCase()));
     let ordinal = 0;
     for (const kind of ['happy', 'negative'] as const) {
       const body = sectionBody(block.text, kind === 'happy' ? /happy\s*path/i : /negative\s*paths?/i);
@@ -183,7 +188,7 @@ function criteriaFromStories(stories: string): {
           malformed.push(`story ${block.id} ${kind} criterion ${ordinal} lacks Given or Then`);
           continue;
         }
-        criteria.push({ id: `S${block.id}.${ordinal}`, storyId: block.id, kind, text });
+        criteria.push({ id: `S${block.id}.${ordinal}`, storyId: block.id, kind, text, requirementIds });
       }
     }
   }
@@ -318,7 +323,14 @@ async function wideningHistory(projectRoot: string, activeFeature: string): Prom
     repository: raw.feature.repository,
     feature: activeFeature,
   }).read();
-  if (read.kind === 'valid') return { kind: 'available', history: { decisions: read.state.decisions } };
+  if (read.kind === 'valid') {
+    const featureRead = await readRemediationCaseStoreFeature(projectRoot);
+    if (!featureRead.ok) return { kind: 'fault', detail: 'widening case history is corrupt' };
+    if (featureRead.feature === undefined) return { kind: 'available', history: { decisions: read.state.decisions, cases: [] } };
+    const cases = await new RemediationCaseStore(projectRoot, featureRead.feature).read();
+    if (!cases.ok) return { kind: 'fault', detail: 'widening case history is corrupt' };
+    return { kind: 'available', history: { decisions: read.state.decisions, cases: cases.state.version === 'v2' ? cases.state.prdWideningCases : [] } };
+  }
   if (read.kind === 'foreign-feature') return { kind: 'fault', detail: `widening history at ${source} is foreign to the active feature` };
   if (read.kind === 'unsupported') return { kind: 'fault', detail: `widening history at ${source} has an unsupported version` };
   return { kind: 'fault', detail: `widening history at ${source} is corrupt` };

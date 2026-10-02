@@ -216,6 +216,7 @@ import {
   checkStepCompletion,
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
+  prdAuditTypedRouteReport,
   parsePrdAuditReport,
   extractAuthoritativeStoryCriteria,
   classifyRetryDecision,
@@ -941,6 +942,7 @@ export interface RecordedPrdAuditFinding {
   accepted?: boolean;
   decision?: 'accept' | 'refuse';
   rationale?: string;
+  operator?: string;
 }
 
 /** A remediated as-built BLOCKED row retained after the rebuilt gate converges. */
@@ -1135,33 +1137,6 @@ export function routePrdAuditOverScopeV2(
  * locators for no-owner observations; their evidence and relation come from
  * the typed authority.
  */
-function prdAuditTypedRouteReport(value: PersistedPrdAuditVerdict): {
-  readonly report: PrdAuditReport;
-  readonly relations: ReadonlyMap<string, IntentRelation>;
-} {
-  const relations = new Map<string, IntentRelation>();
-  const findings: PrdAuditReport['findings'] = value.judgment.criterionJudgments.map((judgment) => {
-    if (judgment.grade === 'OVER_SCOPE') relations.set(judgment.criterionId, judgment.intentRelation!);
-    return {
-      criterion: judgment.criterionId,
-      grade: judgment.grade,
-      ...(judgment.ownerTaskId === undefined ? {} : { planTask: judgment.ownerTaskId }),
-      prdIds: judgment.requirementAssociations.map((association) => association.requirementId),
-      evidence: judgment.evidence,
-    };
-  });
-  for (const observation of value.judgment.noOwnerObservations) {
-    relations.set(observation.presentationOrdinal, observation.intentRelation);
-    findings.push({
-      criterion: observation.presentationOrdinal,
-      grade: observation.grade,
-      prdIds: [],
-      evidence: observation.evidence,
-    });
-  }
-  return { report: { prd: 'none', findings, rejectedRows: [] }, relations };
-}
-
 function routePrdAuditOverScopeV2FromTypedReport(
   report: PrdAuditReport,
   relations: ReadonlyMap<string, IntentRelation>,
@@ -1190,7 +1165,7 @@ function routePrdAuditOverScopeV2FromTypedReport(
       return {
         gate: 'prd_audit' as const, grade: 'OVER_SCOPE' as const, criterion: finding.criterion, summary, relation,
         accepted: decision?.authority === 'accept', classification: decision?.authority === 'accept' ? 'accepted' as const : decision?.authority === 'refuse' ? 'blocking-refused' as const : 'blocking-undecided' as const,
-        ...(decision ? { decision: decision.authority, rationale: decision.rationale } : {}),
+        ...(decision ? { decision: decision.authority, rationale: decision.rationale, operator: decision.operator } : {}),
       };
     }
     const sourceId = prdWideningSourceId(finding);
@@ -1213,7 +1188,7 @@ function routePrdAuditOverScopeV2FromTypedReport(
       gate: 'prd_audit' as const, grade: 'OVER_SCOPE' as const, criterion: finding.criterion, summary, relation,
       accepted: classification.kind === 'accepted',
       classification: classification.kind === 'refused' ? 'blocking-refused' as const : classification.kind === 'accepted' || classification.kind === 'not-blocking' ? 'accepted' as const : 'blocking-undecided' as const,
-      ...(decision ? { decision: decision.authority, rationale: decision.rationale } : {}),
+      ...(decision ? { decision: decision.authority, rationale: decision.rationale, operator: decision.operator } : {}),
       ...(offer && original ? {
         offerEntryId: offer.id,
         originalSource: { id: original.sourceId, snapshot: original.snapshot },
@@ -4636,7 +4611,7 @@ export class Conductor {
           codeDigest: await readCodeDigest(),
           feature: `${caseFeature.repository}\u0000${caseFeature.feature}`,
           decisionRevision: currentDecision.kind === 'valid' ? currentDecision.state.decisions.at(-1)?.revision ?? 0 : currentDecision.kind === 'absent' ? 0 : -1,
-          contractVersion: 'v1',
+          contractVersion: 'v2',
         };
       },
     };
@@ -4778,7 +4753,7 @@ export class Conductor {
             grade: finding.grade,
             decision: finding.decision ?? 'record',
             rationale: finding.rationale ?? 'The engine recorded this PRD-audit scope finding.',
-            authority: finding.decision === undefined ? 'engine' : 'operator',
+            authority: finding.decision === undefined ? 'engine' : finding.operator ?? 'operator',
           })),
       ];
       try {
@@ -13390,7 +13365,9 @@ export class Conductor {
                 continue;
               }
               const reason =
-                cls.kind === 'impl-only'
+                cls.kind === 'invalid-evidence'
+                  ? `prd-audit halted: current typed output is unavailable — ${cls.summary}`
+                  : cls.kind === 'impl-only'
                   ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${prdAuditRemediationLapCap}): ${cls.summary}`
                   : `prd-audit halted: product/plan gap needs human DECIDE — ${cls.summary}`;
               // Both terminal branches now require an operator: product/plan
