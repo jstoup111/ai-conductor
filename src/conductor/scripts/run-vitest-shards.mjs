@@ -5,10 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const testRoot = join(packageRoot, 'test');
-// A 36-file batch still grew a fork past its 8 GiB cap. Sixty-four fresh,
-// round-robin batches keep a fork to at most nine files while separating
-// adjacent heavy fixtures.
-const shardCount = 64;
+// A worker can retain enough fixture state to exceed its 8 GiB cap after nine
+// files. Derive the shard count from the discovered suite so later test growth
+// cannot silently increase that per-worker bound.
+const maxFilesPerBatch = 9;
 const vitestArgs = ['run', '--reporter=dot', '--silent', '--slowTestThreshold=1800000'];
 
 async function collectTestFiles(directory) {
@@ -23,7 +23,7 @@ async function collectTestFiles(directory) {
 }
 
 function partition(files) {
-  const count = Math.min(shardCount, files.length);
+  const count = Math.ceil(files.length / maxFilesPerBatch);
   const batches = Array.from({ length: count }, () => []);
   for (const [index, file] of files.entries()) batches[index % count].push(file);
   return batches;
