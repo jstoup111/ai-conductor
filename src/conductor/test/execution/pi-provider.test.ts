@@ -83,7 +83,7 @@ describe('PiProvider', () => {
     expect(spawn).toHaveBeenCalledWith(
       '/resolved/pi',
       [
-        '-p', '--no-session', '--mode', 'json',
+        '-p', '--no-session', '--mode', 'json', '-na',
         '--provider', 'anthropic',
         '--model', 'claude-opus-4-5',
         '--thinking', 'xhigh',
@@ -148,13 +148,13 @@ describe('PiProvider', () => {
 
     expect(spawn.mock.calls.map(([, args]) => args)).toEqual([
       [
-        '-p', '--no-session', '--mode', 'json',
+        '-p', '--no-session', '--mode', 'json', '-na',
         '--provider', 'anthropic',
         '--model', 'claude-opus-4-5',
         '--thinking', 'xhigh',
       ],
       [
-        '-p', '--no-session', '--mode', 'json',
+        '-p', '--no-session', '--mode', 'json', '-na',
         '--provider', 'anthropic',
         '--model', 'claude-opus-4-5',
         '--thinking', 'xhigh',

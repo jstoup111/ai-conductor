@@ -35,6 +35,8 @@ export interface ProviderModelConfig {
   model_escalation_order?: string[];
   /** Ordered provider-native models used after model-unavailable failures. */
   model_fallback_ladder?: string[];
+  /** Pi-only opt-in to project-owned .pi files for unattended dispatches. */
+  trust_project_files?: boolean;
 }
 
 /**

@@ -862,6 +862,10 @@ export async function executeProviderCandidates({
     // instead of replacing keeps every scoped field alive for any future
     // candidate-options provider that does not know to re-thread it.
     const candidateOverrides = optionsForCandidate?.(providerKey);
+    const candidateDescriptor = findBuiltInProviderDescriptor(providerKey);
+    const descriptorTrust = candidateDescriptor && 'projectFileTrust' in candidateDescriptor && candidateDescriptor.projectFileTrust === true
+      ? config?.llm_providers?.[providerKey]?.trust_project_files
+      : undefined;
     const candidateOptions = candidateOverrides
       ? {
           ...options,
@@ -877,12 +881,15 @@ export async function executeProviderCandidates({
           ...(options.nativeSchema !== undefined
             ? { nativeSchema: options.nativeSchema }
             : {}),
+          ...(descriptorTrust === undefined ? {} : { trustProjectFiles: descriptorTrust }),
           // Cancellation belongs to the enclosing lifecycle attempt. A
           // candidate-local override must not detach a running subprocess from
           // that authority.
           ...(abortSignal !== undefined ? { abortSignal } : {}),
         }
-      : abortSignal !== undefined ? { ...options, abortSignal } : options;
+      : abortSignal !== undefined
+        ? { ...options, abortSignal, ...(descriptorTrust === undefined ? {} : { trustProjectFiles: descriptorTrust }) }
+        : { ...options, ...(descriptorTrust === undefined ? {} : { trustProjectFiles: descriptorTrust }) };
     const candidate: ProviderCandidate = {
       step,
       providerKey,

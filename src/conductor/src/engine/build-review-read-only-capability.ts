@@ -1,5 +1,6 @@
 import { mkdir } from 'node:fs/promises';
-import { CLAUDE_PROVIDER, CODEX_PROVIDER, providerDescriptor, resolveProviderExecutable } from '../execution/provider-catalog.js';
+import { CLAUDE_PROVIDER, CODEX_PROVIDER, PI_PROVIDER, providerDescriptor, resolveProviderExecutable } from '../execution/provider-catalog.js';
+import { materializePiHarnessExtension } from '../execution/pi-harness-extension.js';
 
 /** Process boundary for the provider-owned read-only review capability probe. */
 export type ReadOnlyReviewCapabilityProcess = (
@@ -21,6 +22,8 @@ export interface ProbeReadOnlyReviewCapabilityOptions {
   readonly runProcess: ReadOnlyReviewCapabilityProcess;
   /** A pipeline-excluded directory used only by the Codex probe write. */
   readonly scratchDir: string;
+  /** Injected by tests; production uses the engine-owned asset materializer. */
+  readonly materializePiExtension?: typeof materializePiHarnessExtension;
 }
 
 const CODEX_PROBE_OBSERVATIONS = new Set([
@@ -111,6 +114,19 @@ async function probeClaude(options: ProbeReadOnlyReviewCapabilityOptions): Promi
     : unavailable(options, `${providerDescriptor(CLAUDE_PROVIDER).displayName} help does not list ${missing}`);
 }
 
+const PI_READ_ONLY_FLAGS = ['--tools', '--no-extensions', '--extension', '--no-approve'] as const;
+async function probePi(options: ProbeReadOnlyReviewCapabilityOptions): Promise<ReadOnlyReviewCapability> {
+  let result: Awaited<ReturnType<ReadOnlyReviewCapabilityProcess>>;
+  try { result = await options.runProcess(resolveProviderExecutable(PI_PROVIDER), ['--help']); }
+  catch (error) { return unavailable(options, processFailureReason(error, PI_PROVIDER)); }
+  if (result.exitCode !== 0) return unavailable(options, exitedReason(PI_PROVIDER, result.exitCode, result.stderr));
+  const missing = PI_READ_ONLY_FLAGS.find((flag) => !result.stdout.includes(flag));
+  if (missing) return unavailable(options, `${providerDescriptor(PI_PROVIDER).displayName} help does not list ${missing}`);
+  try { await (options.materializePiExtension ?? materializePiHarnessExtension)(); }
+  catch (error) { return unavailable(options, error instanceof Error ? error.message : String(error)); }
+  return { provider: options.provider, platform: options.platform, status: 'available' };
+}
+
 /**
  * Establishes availability using the selected provider's own read-only mechanism.
  * This probe never sends a model prompt or invokes a provider adapter.
@@ -120,5 +136,6 @@ export async function probeReadOnlyReviewCapability(
 ): Promise<ReadOnlyReviewCapability> {
   if (options.provider === CODEX_PROVIDER) return probeCodex(options);
   if (options.provider === CLAUDE_PROVIDER) return probeClaude(options);
+  if (options.provider === PI_PROVIDER) return probePi(options);
   return unavailable(options, 'provider has no read-only review mode');
 }
