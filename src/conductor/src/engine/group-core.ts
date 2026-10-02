@@ -684,11 +684,6 @@ async function runGroupBranchInner(
       member.name as StepName,
       deps.sessionStartedAt,
       deps.config,
-      {
-        featureDesc: state.feature_desc,
-        featureIdentities: [],
-        changedPaths: new Set(),
-      },
     );
   }
 

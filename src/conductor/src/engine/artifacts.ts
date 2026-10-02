@@ -90,7 +90,12 @@ import {
   AS_BUILT_REPORT_PATH,
   AS_BUILT_VERDICT_PATH,
 } from './as-built-verdict-store.js';
-import { PRD_AUDIT_REPORT_PATH, PRD_AUDIT_VERDICT_PATH } from './prd-audit-verdict-store.js';
+import {
+  PRD_AUDIT_REPORT_PATH,
+  PRD_AUDIT_VERDICT_PATH,
+  persistPrdAuditVerdict,
+  readPrdAuditVerdict,
+} from './prd-audit-verdict-store.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
 import {
@@ -963,7 +968,6 @@ async function sweptArtifactStillValid(
   dir: string,
   step: StepName,
   config?: HarnessConfig,
-  artifactResolution?: ArtifactResolutionContext,
   expectedRunId?: string,
 ): Promise<boolean> {
   if (!resolveGateCodeValidityConfig(config).enabled) return false;
@@ -993,29 +997,12 @@ async function sweptArtifactStillValid(
       );
     }
     if (step === 'prd_audit') {
-      const raw = await readFile(join(dir, PRD_AUDIT_CODE_STAMP), 'utf-8');
-      const marker = JSON.parse(raw) as GateCodeStampMarker;
-      if (!marker.codeStamp) return false;
-      const validity = await gateVerdictStillValid(ctx, 'prd_audit', marker.codeStamp);
+      const stored = await readPrdAuditVerdict(dir);
+      if (stored.kind !== 'present' || !stored.value.complete || stored.value.codeStamp === null) return false;
+      const validity = await gateVerdictStillValid(ctx, 'prd_audit', stored.value.codeStamp);
       if (validity !== 'preserve') return false;
-      // Mirrors the predicate's own premise re-check (Task 6): the sidecar's
-      // presence signals "last recorded verdict was a PASS", but the report
-      // about to be swept can diverge from what it was stamped from — never
-      // spare a report that does not itself currently read clean.
-      const report = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
-      const resolution = artifactResolution ?? (await buildArtifactResolutionContext(dir, { git }));
-      // Resolve the citation authority BEFORE the parse: a spared report is a
-      // preserved PASS, so its Plan task cells must be checked against the
-      // plan that is active now, never against themselves.
-      const activePlan = await activePlanTextFor(dir, resolution);
-      const parsed = parsePrdAuditReport(report, activePlan);
-      if (
-        parsed.ok
-          ? parsed.value.rejectedRows.length > 0 || parsed.value.findings.some((finding) => finding.grade !== 'PASS')
-          : findUnalignedFrRows(report, activePlan).length > 0
-      ) return false;
-      if ((await prdAuditCoverageGap(dir, resolution, report)) !== null) return false;
-      return (await prdAuditStoryCoverageGap(dir, resolution, undefined, report)) === null;
+      return stored.value.judgment.criterionJudgments.every((judgment) => judgment.grade === 'PASS') &&
+        stored.value.judgment.noOwnerObservations.length === 0;
     }
     if (step === 'architecture_review_as_built') {
       const stored = await readAsBuiltVerdict(dir);
@@ -1062,14 +1049,14 @@ export async function sweepStaleReviewArtifacts(
   step: StepName,
   sessionStartedAt: number | undefined,
   config?: HarnessConfig,
-  artifactResolution?: ArtifactResolutionContext,
+  _artifactResolution?: ArtifactResolutionContext,
   expectedRunId?: string,
 ): Promise<string[]> {
   if (!STALE_SWEEP_STEPS.has(step) || sessionStartedAt === undefined) return [];
   const removed: string[] = [];
   for (const f of await findArtifactFiles(dir, step)) {
     if (await fileIsFreshSinceSession(f, sessionStartedAt)) continue; // fresh → keep
-    if (await sweptArtifactStillValid(dir, step, config, artifactResolution, expectedRunId)) continue; // still code-valid → spare
+    if (await sweptArtifactStillValid(dir, step, config, expectedRunId)) continue; // still code-valid → spare
     // The as-built report is a derived view of the typed verdict. Never leave
     // either half of that authority/view pair behind after a stale sweep.
     const targets = step === 'architecture_review_as_built'
@@ -2582,7 +2569,15 @@ function staleVerdictRunIdentityResult(
 }
 
 async function writePrdAuditCodeStamp(dir: string, ctx: CompletionContext): Promise<void> {
-  await writeGateCodeStamp(dir, PRD_AUDIT_CODE_STAMP, ctx);
+  const stored = await readPrdAuditVerdict(dir);
+  if (stored.kind !== 'present') return;
+  const codeStamp = await stampCode(ctx);
+  await persistPrdAuditVerdict(dir, {
+    complete: stored.value.complete,
+    judgment: stored.value.judgment,
+    diagnostics: stored.value.diagnostics,
+    recordedDispositions: stored.value.recordedDispositions,
+  }, { attemptId: stored.value.attemptId, codeStamp }).catch(() => {});
 }
 
 async function writeArchitectureReviewAsBuiltCodeStamp(
@@ -3176,193 +3171,80 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // the PRD is amended (DECIDE) and the audit re-run. Mirrors manual_test:
   // presence + freshness + no blocking rows.
   prd_audit: async (dir, ctx): Promise<CompletionResult> => {
-    const runIdentity = await completionVerdictRunIdentity(dir, 'prd_audit', ctx);
-    // A prior run's verdict is not condemned by identity alone: the code-stamp
-    // preservation check below runs first, so a verdict formed against this
-    // exact reviewed tree (surface miss since the stamp, including through the
-    // engine's own rebase rewrite) survives a halt/resume. Only when the stamp
-    // cannot vouch for it does the stale identity score 'no fresh verdict'
-    // (adr-2026-08-25 D5 as amended 2026-09-06).
-    // gate-code-validity-on-redispatch (#817, Task 6): before the
-    // freshness/report-parsing checks below, see if the last recorded PASS
-    // (the sidecar is written ONLY on the PASS path — Task 4 — so its mere
-    // presence with a codeStamp IS the "last verdict was a pass" signal) can
-    // be trusted as-is because the code hasn't changed in prd_audit's
-    // (feature-runtime) surface since it was formed. Missing sidecar, parse
-    // failure, or no codeStamp all fall through unchanged to the existing
-    // mtime-based logic (invariant C2/C3).
-    if (resolveGateCodeValidityConfig(ctx.config).enabled) {
-      try {
-        const raw = await readFile(join(dir, PRD_AUDIT_CODE_STAMP), 'utf-8');
-        const marker = JSON.parse(raw) as GateCodeStampMarker;
-        if (marker.codeStamp) {
-          const git = ctx.git ?? makeGitRunner(dir);
-          const validity = await gateVerdictStillValid({ projectRoot: dir, git }, 'prd_audit', marker.codeStamp);
-          if (validity === 'preserve') {
-            // The sidecar's presence signals "last recorded verdict was a
-            // PASS" (Task 4 writes it only on the PASS path), but the report
-            // it was stamped from can diverge from the CURRENT report on disk
-            // (a later run may have rewritten the report to a blocking
-            // verdict without also rewriting/removing the sidecar) — never
-            // preserve past a report that does not itself currently read
-            // clean. Re-check the premise directly against present content.
-            const preCheckFiles = await findArtifactFiles(dir, 'prd_audit');
-            if (preCheckFiles.length > 0) {
-              let stillClean = true;
-              const artifactResolution =
-                ctx.artifactResolution ??
-                (await buildArtifactResolutionContext(dir, {
-                  planPath: ctx.planPath,
-                  featureDesc: ctx.featureDesc,
-                  git: ctx.git,
-                }));
-              const preActivePlan = await activePlanTextFor(dir, artifactResolution);
-              for (const f of preCheckFiles) {
-                const report = await readFile(f, 'utf-8');
-                const parsed = parsePrdAuditReport(report, preActivePlan);
-                const classifications = parsed.ok
-                  ? await classifyPrdAuditWideningProjection(dir, report, parsed.value.findings)
-                  : new Map<string, PrdWideningClassification>();
-                if (
-                  (parsed.ok
-                    ? parsed.value.rejectedRows.length > 0 || parsed.value.findings.some(
-                        (finding) =>
-                          finding.grade !== 'PASS' &&
-                          !(
-                            finding.grade === 'OVER_SCOPE' &&
-                            ['accepted', 'not-blocking'].includes(classifications.get(finding.criterion)?.kind ?? 'unresolved')
-                          ),
-                      )
-                    : findUnalignedFrRows(report, preActivePlan).length > 0) ||
-                  (await prdAuditCoverageGap(dir, artifactResolution, report)) !== null ||
-                  (await prdAuditStoryCoverageGap(dir, artifactResolution, ctx.featureDesc, report)) !== null
-                ) {
-                  stillClean = false;
-                  break;
-                }
-              }
-              if (stillClean) {
-                const artifact = preCheckFiles[0];
-                return {
-                  done: true,
-                  verdictFreshness: await verdictFreshnessFor(artifact, ctx, 'preserved_surface_miss'),
-                };
-              }
-            }
-          }
-        }
-      } catch {
-        // No sidecar, unreadable, or unparseable — fall through.
-      }
+    // The persisted judgment is the sole completion authority.  The adjacent
+    // Markdown file is an engine-rendered inspection view and must never be
+    // parsed back into a gate result: doing so lets a presentation edit change
+    // completion semantics and rejects the renderer's own typed output.
+    const stored = await readPrdAuditVerdict(dir);
+    if (stored.kind === 'absent') {
+      return { done: false, routeClass: 'absent', reason: `${PRD_AUDIT_VERDICT_PATH} is missing` };
     }
-    if (runIdentity.state === 'stale-run-identity') {
-      return staleVerdictRunIdentityResult('.pipeline/prd-audit.md', runIdentity);
+    if (stored.kind === 'unreadable') {
+      return { done: false, routeClass: 'absent', reason: stored.reason };
     }
-
-    const files = await findArtifactFiles(dir, 'prd_audit');
-    if (files.length === 0) {
+    const artifact = join(dir, PRD_AUDIT_VERDICT_PATH);
+    let codeStampStillValid = false;
+    if (stored.value.codeStamp !== null && resolveGateCodeValidityConfig(ctx.config).enabled) {
+      const git = ctx.git ?? makeGitRunner(dir);
+      codeStampStillValid = await gateVerdictStillValid(
+        { projectRoot: dir, git }, 'prd_audit', stored.value.codeStamp,
+      ) === 'preserve';
+    }
+    if (!codeStampStillValid && ctx.attemptRunId !== undefined && stored.value.attemptId !== ctx.attemptRunId) {
       return {
         done: false,
-        reason: 'no .pipeline/prd-audit.md present — the prd-audit skill must record its criterion-grade Verdict Table',
+        routeClass: 'absent',
+        retrySignal: 'stale-run-identity',
+        verdictFreshness: {
+          artifact,
+          floorSource: 'run-identity',
+          outcome: 'stale_invalidated',
+          fresh: false,
+        },
+        reason: `${PRD_AUDIT_VERDICT_PATH} was produced by run ${stored.value.attemptId}, not the current run ${ctx.attemptRunId}`,
       };
     }
-    // Only consider reports written by THIS judging attempt (falls back to
-    // sessionStartedAt when no per-attempt floor is present); a stale audit
-    // left over from a prior feature — or a prior attempt whose session
-    // failed to rewrite the verdict — must not satisfy the gate.
-    const cmpFloor = verdictFreshnessComparand(ctx);
-    const fresh: string[] = [];
-    for (const f of files) {
-      if (runIdentity.state === 'match' || await fileIsFreshSinceSession(f, cmpFloor)) {
-        fresh.push(f);
-      }
-    }
-    if (fresh.length === 0) {
-      const f = files[0];
+    if (!stored.value.complete) {
       return {
         done: false,
-        reason:
-          "prd-audit verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused",
-        verdictFreshness: await verdictFreshnessFor(f, ctx, 'stale_invalidated'),
+        routeClass: 'absent',
+        retrySignal: 'structured-result-rejected',
+        reason: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${stored.value.diagnostics.join('; ')}`,
       };
     }
-    let blockingReason: string | undefined;
-    // The gate's own scoring parse carries the same citation authority the
-    // remediation path uses, so a Verdict Table cannot score done here and be
-    // rejected there (adr-2026-08-30 D1).
-    const activePlan = await readActivePlanText(dir, ctx.planPath, ctx.featureDesc);
-    for (const f of fresh) {
-      const parsed = parsePrdAuditReport(await readFile(f, 'utf-8'), activePlan);
-      if (!parsed.ok) {
-        const hasFeatureIdentity = Boolean(ctx.planPath || ctx.featureDesc);
-        const legacyBlocking = findUnalignedFrRows(await readFile(f, 'utf-8'), activePlan);
-        if (hasFeatureIdentity || legacyBlocking.length > 0) {
-          blockingReason = hasFeatureIdentity
-            ? `PRD audit report mechanical fault: ${parsed.error}`
-            : `prd-audit found un-ALIGNED FRs: ${legacyBlocking.join('; ')} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`;
-          break;
-        }
-        continue;
-      }
-      if (parsed.value.rejectedRows.length > 0) {
-        blockingReason = `prd-audit found rejected rows: ${formatPrdAuditRejectedRows(parsed.value.rejectedRows)} — correct the report and re-audit`;
-        break;
-      }
-      // An accepted or non-visible OVER_SCOPE finding is recorded, not blocking.
-      // Without this the operator could accept scope bloat and still never
-      // ship: the gate re-selected prd_audit forever because acceptance was
-      // invisible here (#1854).
-      const reportText = await readFile(f, 'utf-8');
-      const classifications = await classifyPrdAuditWideningProjection(dir, reportText, parsed.value.findings);
-      const blocking = parsed.value.findings.filter(
-        (finding) =>
-          finding.grade !== 'PASS' &&
-          !(
-            finding.grade === 'OVER_SCOPE' &&
-            ['accepted', 'not-blocking'].includes(classifications.get(finding.criterion)?.kind ?? 'unresolved')
-          ),
-      );
-      if (blocking.length > 0) {
-        const shown = blocking.slice(0, 3).map((finding) => {
-          const classification = classifications.get(finding.criterion);
-          const suffix = classification?.kind === 'unresolved' ? ` [${classification.reason}]` : '';
-          return `${finding.criterion} (${finding.grade})${suffix}`;
-        }).join('; ');
-        const more = blocking.length > 3 ? ` (+${blocking.length - 3} more)` : '';
-        blockingReason = `prd-audit found blocking criterion grades: ${shown}${more} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`;
-        break;
-      }
-    }
-    const passF = fresh[0];
-    const artifactResolution =
-      ctx.artifactResolution ??
-      (await buildArtifactResolutionContext(dir, {
-        planPath: ctx.planPath,
-        featureDesc: ctx.featureDesc,
-        git: ctx.git,
-      }));
-    const passReport = await readFile(passF, 'utf-8');
-    const coverageGap = await prdAuditCoverageGap(dir, artifactResolution, passReport);
-    const storyCoverageGap = await prdAuditStoryCoverageGap(
-      dir,
-      artifactResolution,
-      ctx.featureDesc,
-      passReport,
-    );
-    if (blockingReason || coverageGap || storyCoverageGap) {
+    const blocking = stored.value.judgment.criterionJudgments.filter((finding) => finding.grade !== 'PASS');
+    if (blocking.length > 0 || stored.value.judgment.noOwnerObservations.length > 0) {
+      const labels = [
+        ...blocking.map((finding) => `${finding.criterionId} (${finding.grade})`),
+        ...stored.value.judgment.noOwnerObservations.map((finding) => `${finding.presentationOrdinal} (${finding.grade})`),
+      ];
       return {
         done: false,
-        reason: [blockingReason, coverageGap, storyCoverageGap]
-          .filter((reason): reason is string => Boolean(reason))
-          .join('; '),
+        routeClass: 'named-route',
+        reason: `prd-audit found blocking criterion grades: ${labels.join('; ')} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`,
       };
     }
-    const verdictFreshness = await verdictFreshnessFor(passF, ctx, 'rewritten');
+    if (!codeStampStillValid && ctx.attemptRunId === undefined) {
+      const comparand = verdictFreshnessComparand(ctx);
+      if (!(await fileIsFreshSinceSession(artifact, comparand))) {
+        return {
+          done: false,
+          routeClass: 'absent',
+          reason: 'prd-audit verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring \'no fresh verdict\'; a prior session\'s verdict is never reused',
+          verdictFreshness: await verdictFreshnessFor(artifact, ctx, 'stale_invalidated'),
+        };
+      }
+    }
     await writePrdAuditCodeStamp(dir, ctx);
     return {
       done: true,
-      verdictFreshness,
+      verdictFreshness: await verdictFreshnessFor(
+        artifact,
+        ctx,
+        codeStampStillValid ? 'preserved_surface_miss' : 'rewritten',
+      ),
     };
+
   },
 
   // As-built architecture gate is FAIL-CLOSED: it passes only when a fresh
@@ -4667,7 +4549,7 @@ export async function prdAuditCoverageGap(
  * the audit key; an FR that no story traces must instead be explicitly called
  * out with a PLAN_GAP row in the report.
  */
-async function prdAuditStoryCoverageGap(
+export async function prdAuditStoryCoverageGap(
   projectRoot: string,
   context: ArtifactResolutionContext,
   featureDesc: string | undefined,

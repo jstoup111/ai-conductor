@@ -1490,7 +1490,7 @@ describe('engine/conductor', () => {
       await writeState(statePath, state);
       const dispatched: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step) => {
+        run: vi.fn(async (step, _state) => {
           dispatched.push(step);
           return { success: false, output: 'expected test boundary' };
         }),

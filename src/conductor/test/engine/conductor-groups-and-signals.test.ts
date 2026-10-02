@@ -136,6 +136,33 @@ async function writeAsBuiltFixture(
   });
 }
 
+/**
+ * Conductor fixtures write the engine-owned PRD verdict.  Its Markdown report
+ * is deliberately derived by the store, so fixture prose cannot become gate
+ * authority while testing unrelated orchestration behavior.
+ */
+async function writePrdAuditFixture(
+  projectRoot: string,
+  runId: string | undefined,
+  grade: 'PASS' | 'PLAN_GAP' = 'PASS',
+): Promise<void> {
+  await persistPrdAuditVerdict(projectRoot, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade,
+        evidence: 'The fixture supplies a complete typed audit judgment.',
+        rationale: 'The orchestration fixture requires a clean current verdict.',
+        requirementAssociations: [], evidenceTaskIds: [],
+      }],
+      noOwnerObservations: [],
+    },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: null });
+}
+
 function asBuiltApprovedFixture() {
   return {
     version: 'v1' as const,
@@ -521,8 +548,6 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
-    const PRD_AUDIT_PASS =
-      '**PRD:** present\n\n## Verdict Table\n\n| Criterion | Grade | Plan task | PRD: | Evidence |\n|---|---|---|---|---|\n| S1.1 | PASS | — | FR-1 | evidence.ts:1 |\n';
 
     beforeEach(async () => {
       await mkdir(join(dir, '.docs/specs'), { recursive: true });
@@ -546,7 +571,7 @@ describe('engine/conductor', () => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
@@ -601,7 +626,7 @@ describe('engine/conductor', () => {
             };
           }
           if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
@@ -643,7 +668,7 @@ describe('engine/conductor', () => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
@@ -891,7 +916,7 @@ describe('engine/conductor', () => {
             await new Promise((r) => setTimeout(r, 30));
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
             const mid = await readState(statePath);
             sawPrematureWrite = mid.ok ? (mid.value as Record<string, unknown>)['validation__prd_audit'] : 'unreadable';
           } else if (step === 'architecture_review_as_built') {
@@ -943,8 +968,6 @@ describe('engine/conductor', () => {
       finish: 'done',
     } as ConductState;
 
-    const PRD_AUDIT_PASS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
 
     it('abort mid-group with one member done persists that member as done; a resumed run re-dispatches only the unfinished members', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
@@ -975,7 +998,7 @@ describe('engine/conductor', () => {
         run: vi.fn(async (step: StepName, _state: ConductState, _options?: StepRunOptions) => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, _options?.runId);
             prdAuditDone = true;
             return { success: true };
           }
@@ -1082,8 +1105,6 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
-    const PRD_AUDIT_PASS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
 
     it('halts serial and validation-group as-built precondition faults mechanically without retries', async () => {
       const fakeProvider: LLMProvider = {
@@ -1178,7 +1199,7 @@ describe('engine/conductor', () => {
             // Crashes: never produces a completion marker, never succeeds.
             return { success: false, output: 'agent process crashed' };
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
             return { success: true };
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
@@ -1307,8 +1328,6 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
-    const PRD_AUDIT_PASS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
 
     // manual_test always FAILs (perpetual bug); build re-satisfies its own
     // gate but never actually fixes anything — every sibling PASSes cleanly.
@@ -1330,7 +1349,7 @@ describe('engine/conductor', () => {
           } else if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, options?.runId, asBuiltApprovedFixture());
           }
@@ -1579,14 +1598,7 @@ describe('engine/conductor', () => {
           if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), [
-              '**PRD:** none',
-              '',
-              '## Verdict Table',
-              '| Criterion | Grade | Plan task | PRD: | Evidence |',
-              '| --- | --- | --- | --- | --- |',
-              '| S1.1 | PASS | — | FR-1 | evidence.ts:1 |',
-            ].join('\n'));
+            await writePrdAuditFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             asBuiltCalls++;
             await writeAsBuiltFixture(dir, opts?.runId, {
@@ -1662,8 +1674,6 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
-    const PRD_AUDIT_PASS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
     // manual_test FAILs deterministically AND architecture_review_as_built
     // is BLOCKED (its own gate unsatisfied) in the SAME join round — the
     // merged-work-order shape this task covers. The remediate plan routes
@@ -1688,7 +1698,7 @@ describe('engine/conductor', () => {
           } else if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
           } else if (step === 'remediate') {
@@ -2162,8 +2172,6 @@ describe('engine/conductor', () => {
       finish: 'done',
     } as ConductState;
 
-    const PRD_AUDIT_PASS =
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
     it('manual_test crashes fast while prd_audit and architecture_review_as_built are still in flight — both siblings run to completion (their markers land on disk) before the group halts, not cancelled mid-flight', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 
@@ -2176,7 +2184,7 @@ describe('engine/conductor', () => {
           } else if (step === 'prd_audit') {
             // Slow sibling — must be allowed to run to completion.
             await new Promise((r) => setTimeout(r, 50));
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            await writePrdAuditFixture(dir, options?.runId);
             return { success: true };
           } else if (step === 'architecture_review_as_built') {
             // Slower sibling — must also be allowed to run to completion.
@@ -2214,7 +2222,7 @@ describe('engine/conductor', () => {
       // in-flight branches on the fast failure, these setTimeout-guarded
       // writes would not have happened yet.
       const prdAuditMarker = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
-      expect(prdAuditMarker).toBe(PRD_AUDIT_PASS);
+      expect(prdAuditMarker).toMatch(/Status: complete[\s\S]*S1\.1: PASS/);
       const asBuiltMarker = await readFile(
         join(dir, '.pipeline/architecture-review-as-built.md'),
         'utf-8',

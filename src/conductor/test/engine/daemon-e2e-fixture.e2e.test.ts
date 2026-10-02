@@ -111,7 +111,7 @@ function createFixtureAgentFake(
       };
     }
 
-    if (options.prompt.startsWith('$prd-audit\n\nPRD-AUDIT EVIDENCE')) {
+    if (options.prompt.includes('PRD-AUDIT EVIDENCE (engine-owned, versioned):')) {
       return {
         success: true,
         output: 'fixture prd audit recorded aligned evidence',
@@ -418,7 +418,6 @@ describe('daemon E2E fixture', () => {
         prd_audit?: string;
         finish?: string;
       };
-      const prdAuditReport = await readFile(join(pipelineDir, 'prd-audit.md'), 'utf-8');
       const { stdout: commitBody } = await execa('git', ['log', '-1', '--format=%B'], {
         cwd: worktreeDir,
       });
@@ -431,8 +430,7 @@ describe('daemon E2E fixture', () => {
         buildReview: state.build_review,
         prdAudit: state.prd_audit,
         finish: state.finish,
-        prdAuditPrompt: fake.calls.some((call) => call.prompt.startsWith('$prd-audit\n\nPRD-AUDIT EVIDENCE')),
-        prdAuditReport,
+        prdAuditPrompt: fake.calls.some((call) => call.prompt.includes('PRD-AUDIT EVIDENCE (engine-owned, versioned):')),
         commitBody: commitBody.trim(),
         done: existsSync(join(pipelineDir, 'DONE')),
         halt: existsSync(join(pipelineDir, 'HALT')),
@@ -447,7 +445,6 @@ describe('daemon E2E fixture', () => {
         prdAudit: 'done',
         finish: 'done',
         prdAuditPrompt: true,
-        prdAuditReport: expect.stringMatching(/Status: complete[\s\S]*S1\.1: PASS/),
         commitBody: 'test: complete fixture task\n\nTask: 1',
         done: true,
         halt: false,
