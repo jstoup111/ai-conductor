@@ -929,6 +929,17 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
       }
     });
 
+    it('fails preparation, naming the guard, when the git guard cannot be written', async () => {
+      // Covers: task:6
+      await mkdir(join(worktreeDir, '.pipeline'), { recursive: true });
+      await writeFile(join(worktreeDir, '.pipeline', 'bin'), 'occupied\n', 'utf-8');
+      const lines: string[] = [];
+
+      await expect(prepareWorktree(worktreeDir, (msg) => lines.push(msg)))
+        .rejects.toThrow(/preventive git hook installation failed: .*\.pipeline\/bin\/git/);
+      expect(lines.some((line) => /git hooks: skipped/.test(line))).toBe(false);
+    });
+
     it('writes the two attribution hooks executable under .pipeline/git-hooks/', async () => {
       await prepareWorktree(worktreeDir);
 
