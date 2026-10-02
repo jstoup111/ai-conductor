@@ -696,3 +696,19 @@ Twenty-three tasks deliver an engine-generated `git` argv guard, provisioned fai
 **Done when:**
 - adr-2026-09-23-engine-git-guard-on-agent-path decision 8 is satisfied by this task.
 - Re-run as-built and confirm task rem-as-built-rem-as-built-adr-d8-1 is complete.
+
+### Task rem-as-built-rem-as-built-adr-d5-config-env-1: src/conductor/src/engine/git-hook-assets.ts:24-26 — in GIT_GUARD_SCRIPT's global-option loop consume --config-env=* as one token and --config-env, --attr-source, --super-prefix with a separate value as two, and --attr-source=* / --super-prefix=* as one, so the real subcommand is classified and the consumed options remain in the args prefix passed to the :35 alias lookup and :98 common-dir query; add failing-first cases to src/conductor/test/engine/git-guard-script.test.ts in the scratch feature repository for `--config-env=core.pager=PAGER reset --hard` and `--config-env core.pager=PAGER reset --hard` (exit non-zero, tracked edit byte-identical, no reset reaches the stub) plus `--config-env=core.pager=PAGER status` reaching real git with unchanged argv; keep Task 4 alias/-C tests and Task 21 fast-path test unchanged (Task 4)
+**Gate:** as-built
+**Rationale:** git-hook-assets.ts:24-26's global-option loop does not consume --config-env=<name>=<envvar> (nor the separated --config-env <arg> form), so it becomes the apparent subcommand and a following reset --hard skips classification, violating ADR D5; Task 4 owns global-option parsing but its Done-when does not name --config-env, so a file-scoped task is appended. The sibling sweep of :24-26 against Git's documented pre-subcommand options also finds --super-prefix/--attr-source forms; they are included because the same loop and the same Task 4 scoping admit them. Task 4's alias, -C and pass-through tests and Task 21's fast-path test stay unchanged.
+**Governing clause:** adr-2026-09-23-engine-git-guard-on-agent-path decision 5
+**Done when:**
+- adr-2026-09-23-engine-git-guard-on-agent-path decision 5 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-as-built-adr-d5-config-env-1 is complete.
+
+### Task rem-as-built-rem-as-built-adr-d8-quote-removal-1: hooks/claude/block-destructive-git.sh heredoc opener parsing (heredoc_start regex and the opener loop) — capture the full delimiter word including backslash escapes and mixed quotes, apply shell quote removal (strip backslashes and single/double quote characters) before storing it as the terminator, and ignore any `<<` that follows an unquoted `#` beginning a comment word; add failing-first cases to src/conductor/test/engine/destructive-git-hook.test.ts: `cat <<\EOF` and `cat <<E"OF"` bodies containing git reset --hard (exit 0) each followed after the terminator by an unquoted git reset --hard (exit 2), and `# <<EOF` on one line followed by git reset --hard on the next (exit 2); keep Task 14's existing heredoc, quoted-literal, post-heredoc and regression cases and the spacing cases unchanged (Task 14)
+**Gate:** as-built
+**Rationale:** hooks/claude/block-destructive-git.sh's heredoc_start regex (~:25) keeps raw delimiters, so <<\EOF and <<E"OF" record the delimiter with its quote characters and the body never terminates at EOF, and opener detection runs on comment text, so `# <<EOF` suppresses scanning of later lines; Bash performs quote removal on the delimiter and ignores comments (ADR D8). Task 14's Done-when covers only plain quoted/unquoted delimiters, so a file-scoped task is appended; the earlier rem-as-built-rem-as-built-adr-d8-1 spacing fix and Task 14's existing heredoc, quoted-literal and regression cases are preserved.
+**Governing clause:** adr-2026-09-23-engine-git-guard-on-agent-path decision 8
+**Done when:**
+- adr-2026-09-23-engine-git-guard-on-agent-path decision 8 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-as-built-adr-d8-quote-removal-1 is complete.
