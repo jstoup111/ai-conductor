@@ -22,20 +22,16 @@ const prdAuditSkillPath = fileURLToPath(
 );
 
 describe('prd-audit skill contract', () => {
-  it('renders a graded per-criterion report with PRD intent context', async () => {
+  it('delegates managed verdict persistence to the typed engine contract', async () => {
     const skill = await readFile(prdAuditSkillPath, 'utf8');
-    const report = skill.match(/```markdown\n(# PRD Audit:[\s\S]*?)\n```/)?.[1];
 
-    expect(report).toEqual(expect.any(String));
-    expect(report).toMatch(/^# PRD Audit: <Feature Name>/m);
-    expect(report).toMatch(/^\*\*PRD:\*\* present/m);
-    expect(report).toMatch(/^\*\*Intent sources:\*\* /m);
-    expect(report).toMatch(/^\| Criterion \| Grade \| Plan task \| PRD: \| Intent relation \| Evidence \|/m);
-    expect(report).toMatch(/^\| S6\.1 \| PASS \| — \| FR-7 \| /m);
-    expect(report).toMatch(/^\| S6\.2 \| FIXABLE \| 4 \| FR-7 \| /m);
-
+    expect(skill).toContain('bounded, versioned evidence projection');
+    expect(skill).toContain('terminal native structured-result shape');
+    expect(skill).toContain('Do not recreate engine input collection');
+    expect(skill).toMatch(/substitute a Markdown report\s+for the terminal judgment/);
+    expect(skill).toMatch(/The engine validates,\s+persists, renders, and routes the returned judgment/);
     expect(skill).toContain('PASS | FIXABLE | PLAN_GAP | OVER_SCOPE');
-    expect(skill).toContain('every OVER_SCOPE row must use exactly one of `within`, `outside-harmless`, or `outside-visible`');
+    expect(skill).toMatch(/An OVER_SCOPE judgment supplies its closed\s+intent relation/);
   });
 });
 
