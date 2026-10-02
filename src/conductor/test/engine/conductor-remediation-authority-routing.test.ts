@@ -24,6 +24,8 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { writeState } from '../../src/engine/state.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import type { PrdAuditJudgment } from '../../src/engine/prd-audit-contract.js';
 
 const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'test fixture' },
@@ -45,6 +47,18 @@ async function writeBlockedAsBuiltFixture(projectRoot: string, id = 'ARCH-1'): P
   }, {
     attemptId: 'fixture-run', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY,
   });
+}
+
+async function persistFixturePrdAuditVerdict(
+  projectRoot: string,
+  criterionJudgments: PrdAuditJudgment['criterionJudgments'],
+): Promise<void> {
+  await persistPrdAuditVerdict(projectRoot, {
+    complete: true,
+    judgment: { version: 'v1', criterionJudgments, noOwnerObservations: [] },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId: 'fixture-prd', codeStamp: null });
 }
 
 describe('planRemediation implementation-only authority routing', () => {
@@ -80,6 +94,20 @@ describe('planRemediation implementation-only authority routing', () => {
       '| --- | --- | --- | --- | --- | --- |',
       '| S1.1 | OVER_SCOPE | 1 | none | Accepted scope objection | outside-visible |',
     ].join('\n'), 'utf8');
+    await persistPrdAuditVerdict(projectRoot, {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [{
+          criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'OVER_SCOPE',
+          evidence: 'Accepted scope objection', rationale: 'Fixture scope judgment.',
+          requirementAssociations: [], evidenceTaskIds: ['1'], intentRelation: 'outside-visible',
+        }],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
+    }, { attemptId: 'fixture-run', codeStamp: null });
     const accepted = await new AcceptedWideningDecisionStore(projectRoot, {
       version: 1, repository: '/fixture/repository', feature: 'conductor-remediation-authority-routing',
     }).append({
@@ -257,18 +285,18 @@ describe('planRemediation implementation-only authority routing', () => {
       '# Stories', '', '## Story 1: remediation', '', '#### Happy Path',
       '- Given input, when repaired, then it holds.',
     ].join('\n'), 'utf8');
-    await writeFile(join(projectRoot, '.pipeline/prd-audit.md'), [
-      '**PRD:** present', '', '## Verdict Table',
-      '| Criterion | Grade | Plan task | PRD: | Evidence |',
-      '| --- | --- | --- | --- | --- |',
-      '| S1.1 | FIXABLE | 1 | FR-7 | Missing implementation |',
-    ].join('\n'), 'utf8');
+    await persistFixturePrdAuditVerdict(projectRoot, [{
+      criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'FIXABLE',
+      evidence: 'Missing implementation', rationale: 'Fixture repair.',
+      requirementAssociations: [{ path: '.docs/specs/feature.md', requirementId: 'FR-7' }],
+      evidenceTaskIds: ['1'], ownerTaskId: '1',
+    }]);
     const runner: StepRunner = {
       run: async () => {
         await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
           dispositions: [
             {
-              id: 'FR-7', disposition: 'build', category: null,
+              id: 'S1.1', disposition: 'build', category: null,
               rationale: 'Repair the authorized criterion.',
               tasks: [{ id: 'rem-authorized', title: 'Implement the authorized repair' }],
             },
@@ -299,7 +327,7 @@ describe('planRemediation implementation-only authority routing', () => {
     );
 
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
-    expect(outcome.hint).toContain('FR-7');
+    expect(outcome.hint).toContain('S1.1');
     expect(outcome.hint).not.toContain('FR-42');
     const plan = await readFile(planPath, 'utf8');
     expect(plan).toContain('rem-authorized');
@@ -320,12 +348,11 @@ describe('planRemediation implementation-only authority routing', () => {
       '# Stories', '', '## Story 5: remediation', '', '#### Happy Path',
       '- Given input, when repaired, then it holds.',
     ].join('\n'), 'utf8');
-    await writeFile(join(projectRoot, '.pipeline/prd-audit.md'), [
-      '**PRD:** none', '', '## Verdict Table',
-      '| Criterion | Grade | Plan task | PRD: | Evidence |',
-      '| --- | --- | --- | --- | --- |',
-      `| ${criterion} | FIXABLE | 1 | none | Missing implementation |`,
-    ].join('\n'), 'utf8');
+    await persistFixturePrdAuditVerdict(projectRoot, [{
+      criterion: { storyId: '5', ordinal: 1 }, criterionId: criterion, grade: 'FIXABLE',
+      evidence: 'Missing implementation', rationale: 'Fixture repair.',
+      requirementAssociations: [], evidenceTaskIds: ['1'], ownerTaskId: '1',
+    }]);
     const runner: StepRunner = {
       run: async () => {
         await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
@@ -365,12 +392,12 @@ describe('planRemediation implementation-only authority routing', () => {
       '# Stories', '', '## Story 5: remediation', '', '#### Happy Path',
       '- Given input, when repaired, then it holds.',
     ].join('\n'), 'utf8');
-    await writeFile(join(projectRoot, '.pipeline/prd-audit.md'), [
-      '**PRD:** present', '', '## Verdict Table',
-      '| Criterion | Grade | Plan task | PRD: | Evidence |',
-      '| --- | --- | --- | --- | --- |',
-      '| S5.1 | FIXABLE | 1 | FR-S5.1 | Missing implementation |',
-    ].join('\n'), 'utf8');
+    await persistFixturePrdAuditVerdict(projectRoot, [{
+      criterion: { storyId: '5', ordinal: 1 }, criterionId: 'S5.1', grade: 'FIXABLE',
+      evidence: 'Missing implementation', rationale: 'Fixture repair.',
+      requirementAssociations: [{ path: '.docs/specs/feature.md', requirementId: 'FR-S5.1' }],
+      evidenceTaskIds: ['1'], ownerTaskId: '1',
+    }]);
     const runner: StepRunner = {
       run: async () => {
         await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
@@ -416,16 +443,11 @@ describe('planRemediation implementation-only authority routing', () => {
         '# Stories', '', '## Story 5: remediation', '', '#### Happy Path',
         '- Given input, when repaired, then it holds.',
       ].join('\n'), 'utf8');
-      await writeFile(join(projectRoot, '.pipeline/prd-audit.md'), [
-        '**PRD:** none', '', '## Verdict Table',
-        '| Criterion | Grade | Plan task | PRD: | Evidence |',
-        '| --- | --- | --- | --- | --- |',
-        '| S5.1 | PLAN_GAP | — | none | The approved plan has no owner for this work |',
-        '', '## Findings without an owning criterion',
-        '| Finding | Grade | Evidence |',
-        '| --- | --- | --- |',
-        '| NC.1 | OVER_SCOPE | No owning criterion admits remediation work |',
-      ].join('\n'), 'utf8');
+      await persistFixturePrdAuditVerdict(projectRoot, [{
+        criterion: { storyId: '5', ordinal: 1 }, criterionId: 'S5.1', grade: 'PLAN_GAP',
+        evidence: 'The approved plan has no owner for this work', rationale: 'Fixture plan gap.',
+        requirementAssociations: [], evidenceTaskIds: [],
+      }]);
       const runner: StepRunner = {
         run: async () => {
           await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
@@ -468,12 +490,12 @@ describe('planRemediation implementation-only authority routing', () => {
       '# Stories', '', '## Story 5: remediation', '', '#### Happy Path',
       '- Given input, when repaired, then it holds.',
     ].join('\n'), 'utf8');
-    await writeFile(join(projectRoot, '.pipeline/prd-audit.md'), [
-      '**PRD:** present', '', '## Verdict Table',
-      '| Criterion | Grade | Plan task | PRD: | Evidence |',
-      '| --- | --- | --- | --- | --- |',
-      '| S5.1 | PASS | — | FR-S5.1 | Implementation is complete |',
-    ].join('\n'), 'utf8');
+    await persistFixturePrdAuditVerdict(projectRoot, [{
+      criterion: { storyId: '5', ordinal: 1 }, criterionId: 'S5.1', grade: 'PASS',
+      evidence: 'Implementation is complete', rationale: 'Fixture pass.',
+      requirementAssociations: [{ path: '.docs/specs/feature.md', requirementId: 'FR-S5.1' }],
+      evidenceTaskIds: [],
+    }]);
     const runner: StepRunner = {
       run: async () => {
         await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
