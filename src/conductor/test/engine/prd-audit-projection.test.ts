@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4
+// Covers: task:1, task:2, task:3, task:4, task:5
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -387,10 +387,50 @@ describe('PRD-audit feature projection', () => {
     expect({ result, bytes: await readFile(historyPath, 'utf-8') }).toEqual({
       result: {
         ok: false,
-        fault: { dimension: 'history', detail: 'widening history is foreign to the active feature' },
+        fault: { dimension: 'history', detail: 'widening history at .pipeline/accepted-widenings.json is foreign to the active feature' },
       },
       bytes: foreignHistory,
     });
+  });
+
+  it('rejects corrupt, foreign, and unsupported present widening history without rewriting its recovery source', async () => {
+    const root = await fixture();
+    const historyPath = join(root, '.pipeline', 'accepted-widenings.json');
+    const histories = [
+      {
+        bytes: '{not json',
+        detail: 'widening history at .pipeline/accepted-widenings.json is corrupt',
+      },
+      {
+        bytes: JSON.stringify({
+          version: 2,
+          feature: { version: 1, repository: 'fixture-repository', feature: 'foreign-fixture' },
+          decisions: [],
+        }),
+        detail: 'widening history at .pipeline/accepted-widenings.json is foreign to the active feature',
+      },
+      {
+        bytes: JSON.stringify({
+          version: 3,
+          feature: { version: 1, repository: 'fixture-repository', feature: 'audit-fixture' },
+          decisions: [],
+        }),
+        detail: 'widening history at .pipeline/accepted-widenings.json has an unsupported version',
+      },
+    ] as const;
+
+    for (const history of histories) {
+      await writeFile(historyPath, history.bytes);
+      const result = await buildPrdAuditProjection(root);
+
+      expect({ result, bytes: await readFile(historyPath, 'utf-8') }).toEqual({
+        result: {
+          ok: false,
+          fault: { dimension: 'history', detail: history.detail },
+        },
+        bytes: history.bytes,
+      });
+    }
   });
 
   it('rejects a missing coherence-required PRD without substituting a foreign source', async () => {
