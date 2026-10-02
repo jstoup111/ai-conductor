@@ -42,7 +42,7 @@ describe('engine/artifacts — stories predicate', () => {
   it('passes a single-story file with happy + negative paths', async () => {
     await story(
       'features/foo/ST-001-foo.md',
-      `# Story: Foo\n**Status:** Accepted\n\n## Acceptance Criteria\n\n### Happy Path\n- Given x, when y, then z\n\n### Negative Paths\n- Given a, when b, then error\n`,
+      `# Story: Foo\n**Status:** Accepted\n\n## Story 1: Foo\n\n### Happy Path\n- Given x, when y, then z\n\n### Negative Paths\n- Given a, when b, then error\n`,
     );
     const r = await checkGateCompletion(dir, 'stories');
     expect(r.done).toBe(true);
