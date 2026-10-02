@@ -6,11 +6,12 @@ import type {
   SelfHostAuthContext,
   SelfHostAuthPreparation,
 } from '../execution/llm-provider.js';
-import { ModelAvailability } from './model-availability.js';
+import { ModelAvailability, selectFallbackLadder } from './model-availability.js';
 import {
   resolveProviderModelPolicy,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
+import type { HarnessConfig } from '../types/config.js';
 import type { PluginRegistry } from './plugin-registry.js';
 import {
   findBuiltInProviderDescriptor,
@@ -100,10 +101,11 @@ export class ProviderRuntimeSet {
 export function createProviderRuntimeSet(
   registry: PluginRegistry,
   warn?: (message: string) => void,
+  config?: HarnessConfig,
 ): ProviderRuntimeSet {
   return new ProviderRuntimeSet(
     registry.list('llm_provider').map((key) => {
-      const policy = resolveProviderModelPolicy(key, warn);
+      const policy = resolveProviderModelPolicy(key, { config, warn });
       const provider = registry.get<LLMProvider>('llm_provider', key);
       return {
         key,
@@ -112,7 +114,7 @@ export function createProviderRuntimeSet(
         nativeSchemaCapability: provider.nativeSchemaCapability,
         policy,
         builtIn: findBuiltInProviderDescriptor(key) !== undefined,
-        availability: new ModelAvailability(policy.modelFallbackLadder, warn),
+        availability: new ModelAvailability(selectFallbackLadder(policy, key, config ?? {}), warn),
       };
     }),
   );

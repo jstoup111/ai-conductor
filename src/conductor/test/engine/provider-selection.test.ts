@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import { bootDispatchingCliProviders } from '../../src/index.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { HarnessConfig, ProviderSelection } from '../../src/types/config.js';
 import type {
   InstalledProviderDiscovery,
@@ -91,6 +93,40 @@ describe.each([
     );
 
     expect(providerSelection?.normalizeProviderSelection(selection)).toEqual(expected);
+  });
+});
+
+describe('provider-dispatching CLI guard', () => {
+  it('does not discover or probe configured Pi for render-diagrams', async () => {
+    const discover = vi.fn();
+    const probe = vi.fn();
+
+    await expect(bootDispatchingCliProviders({
+      command: 'render-diagrams',
+      registry: new PluginRegistry(),
+      events: new ConductorEventEmitter(),
+      config: {
+        llm_provider: 'pi',
+        llm_providers: {
+          pi: {
+            model: 'anthropic/claude-opus-4-5',
+            model_escalation_order: ['anthropic/claude-opus-4-5'],
+            model_fallback_ladder: ['anthropic/claude-opus-4-5'],
+          },
+        },
+      },
+      rendererOpts: {
+        stateFilePath: '/tmp/provider-selection-render-diagrams.json',
+        steps: [],
+        readStateFn: async () => ({ ok: true, value: {} }),
+        projectRoot: '/tmp',
+      },
+      providerDiscoveryRunner: discover,
+      providerModelProbeRunner: probe,
+    })).resolves.toBeUndefined();
+
+    expect(discover).not.toHaveBeenCalled();
+    expect(probe).not.toHaveBeenCalled();
   });
 });
 
@@ -248,6 +284,28 @@ describe('validateRegisteredProviderSelections', () => {
       }),
     ).toThrow(/steps\.build_review\.llm_provider.*unknown.*available.*claude.*codex/i);
   });
+
+  it.each([
+    {
+      name: 'a build-review rubric',
+      config: { llm_provider: 'claude', build_review: { rubrics: { testQuality: { llm_provider: 'pi' } } } },
+      path: 'build_review.rubrics.testQuality.llm_provider',
+    },
+    {
+      name: 'a custom build-review rubric',
+      config: {
+        llm_provider: 'claude',
+        build_review: { custom_rubrics: { policy: { skill: 'review', question: 'Review.', llm_provider: 'pi' } } },
+      },
+      path: 'build_review.custom_rubrics.policy.llm_provider',
+    },
+  ] satisfies Array<{ name: string; config: HarnessConfig; path: string }>)('rejects an unregistered Pi selected only by $name', async ({ config, path }) => {
+    const validateRegistered = await loadRegisteredSelectionValidator();
+
+    expect(() => validateRegistered?.({ config, registeredProviders: frozenProviderNames() })).toThrow(
+      new RegExp(`${path.replace(/[.[\]]/g, '\\$&')}.*unknown provider "pi"`, 'i'),
+    );
+  });
 });
 
 describe('validateProviderInstallation', () => {
@@ -275,6 +333,25 @@ describe('validateProviderInstallation', () => {
       path: 'llm_provider[1]',
       provider: 'pi',
       reason: 'not-executable',
+    },
+    {
+      name: 'a build-review rubric provider',
+      config: { llm_provider: 'claude', build_review: { rubrics: { testQuality: { llm_provider: 'pi' } } } },
+      discovery: discovery(['claude', 'codex'], [{ id: 'pi', reason: 'not-found' }]),
+      path: 'build_review.rubrics.testQuality.llm_provider',
+      provider: 'pi',
+      reason: 'not-found',
+    },
+    {
+      name: 'a custom build-review rubric provider',
+      config: {
+        llm_provider: 'claude',
+        build_review: { custom_rubrics: { policy: { skill: 'review', question: 'Review.', llm_provider: 'pi' } } },
+      },
+      discovery: discovery(['claude', 'codex'], [{ id: 'pi', reason: 'not-found' }]),
+      path: 'build_review.custom_rubrics.policy.llm_provider',
+      provider: 'pi',
+      reason: 'not-found',
     },
   ] satisfies Array<{
     name: string;

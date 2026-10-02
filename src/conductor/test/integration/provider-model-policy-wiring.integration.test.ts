@@ -183,7 +183,7 @@ it('composes one ordered provider context across the interactive run after regis
     contextIsConst: true,
     contextProperties: {
       configuredProviders: 'configuredProviders',
-      runtimes: 'createProviderRuntimeSet(registry, console.warn)',
+      runtimes: 'createProviderRuntimeSet(registry, console.warn, config)',
       sessions: 'new ProviderSessionStore()',
       config: 'config',
       modelOverride: 'opts.model',
@@ -1185,12 +1185,6 @@ it('binds every production step-resolution call to the policy owned by its execu
     },
   ).toEqual({
     callSites: [
-      {
-        file: 'engine/attribution-lane.ts',
-        scope: 'dispatchAttributionVerifier',
-        argumentCount: 5,
-        policyProvenance: 'option:modelPolicy:ProviderModelPolicy',
-      },
       {
         file: 'engine/conductor.ts',
         scope: 'reconcileCurrentPrdWidening',

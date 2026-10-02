@@ -4,6 +4,7 @@ import { enforceFreshSessionOptions } from './fresh-session.js';
 import { deriveProviderExitFacts, formatProviderExitFacts } from './provider-diagnostics.js';
 import { validateSpawnPermit } from './spawn-permit.js';
 import { providerDescriptor } from './provider-catalog.js';
+import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -24,11 +25,66 @@ export type PiSubprocessFactory = (
 export const PI_MODEL_UNAVAILABLE_RE =
   /^Error: Model "[^"\r\n]+" not found\. Use --list-models to see available models\.$/;
 
+export type PiModelIdParseFailureReason =
+  | 'missing-separator'
+  | 'empty-provider'
+  | 'empty-model'
+  | 'whitespace';
+
+export type PiModelIdParseResult =
+  | { readonly provider: string; readonly model: string }
+  | { readonly reason: PiModelIdParseFailureReason };
+
+/** Parse Pi's canonical provider/model identifier without rewriting its model suffix. */
+export function parsePiModelId(modelId: string): PiModelIdParseResult {
+  if (/\s/.test(modelId)) return { reason: 'whitespace' };
+
+  const separator = modelId.indexOf('/');
+  if (separator === -1) return { reason: 'missing-separator' };
+
+  const provider = modelId.slice(0, separator);
+  if (!provider) return { reason: 'empty-provider' };
+
+  const model = modelId.slice(separator + 1);
+  if (!model) return { reason: 'empty-model' };
+
+  return { provider, model };
+}
+
+/** Parse Pi's whitespace-aligned --list-models table into canonical ids. */
+export function parsePiModelListing(stdout: string): ProviderModelCatalogParseResult {
+  const lines = stdout.split(/\r?\n/);
+  const firstLine = lines[0] ?? '';
+  const columns = (line: string) => line.trim().split(/\s{2,}/);
+  const headerIndex = lines.findIndex((line) => {
+    const header = columns(line);
+    return header.includes('provider') && header.includes('model');
+  });
+
+  if (headerIndex === -1) return { kind: 'unparseable', firstLine };
+
+  const header = columns(lines[headerIndex]!);
+  const providerIndex = header.indexOf('provider');
+  const modelIndex = header.indexOf('model');
+  const modelIds = lines.slice(headerIndex + 1)
+    .filter((line) => line.trim())
+    .flatMap((line) => {
+      const row = columns(line);
+      const provider = row[providerIndex];
+      const model = row[modelIndex];
+      return provider && model ? [`${provider}/${model}`] : [];
+    });
+
+  return { kind: 'parsed', modelIds };
+}
+
 type PiJsonEvent = {
   type?: unknown;
   message?: {
     role?: unknown;
     content?: unknown;
+    stopReason?: unknown;
+    errorMessage?: unknown;
   };
   usage?: {
     input?: unknown;
@@ -69,10 +125,14 @@ export function parsePiJsonl(stdout: string): {
   output: string;
   tokenUsage?: TokenUsage;
   hasTerminalAssistantMessage: boolean;
+  terminalAssistantStopReason?: string;
+  terminalAssistantErrorMessage?: string;
 } {
   let output = '';
   let tokenUsage: TokenUsage | undefined;
   let hasTerminalAssistantMessage = false;
+  let terminalAssistantStopReason: string | undefined;
+  let terminalAssistantErrorMessage: string | undefined;
   let assistantTurns = 0;
 
   for (const line of stdout.split(/\r?\n/)) {
@@ -83,6 +143,12 @@ export function parsePiJsonl(stdout: string): {
         hasTerminalAssistantMessage = true;
         assistantTurns += 1;
         output = terminalAssistantText(event.message.content);
+        terminalAssistantStopReason = typeof event.message.stopReason === 'string'
+          ? event.message.stopReason
+          : undefined;
+        terminalAssistantErrorMessage = typeof event.message.errorMessage === 'string'
+          ? event.message.errorMessage
+          : undefined;
       }
       if ((event.type === 'message_update'
         || (event.type === 'message_end' && event.message?.role === 'assistant')) && event.usage) {
@@ -106,7 +172,13 @@ export function parsePiJsonl(stdout: string): {
     tokenUsage = { ...(tokenUsage ?? { input: 0, output: 0 }), numTurns: assistantTurns };
   }
 
-  return { output, tokenUsage, hasTerminalAssistantMessage };
+  return {
+    output,
+    tokenUsage,
+    hasTerminalAssistantMessage,
+    ...(terminalAssistantStopReason ? { terminalAssistantStopReason } : {}),
+    ...(terminalAssistantErrorMessage ? { terminalAssistantErrorMessage } : {}),
+  };
 }
 
 /** One-shot Pi adapter. */
@@ -128,7 +200,16 @@ export class PiProvider implements LLMProvider {
       throw new Error(`${piDisplayName()} process spawn denied: ${permit.reason}`);
     }
 
-    const subprocess = this.subprocessFactory(this.executable, ['-p', '--no-session', '--mode', 'json'], {
+    const args = ['-p', '--no-session', '--mode', 'json'];
+    if (options.model) {
+      const parsedModel = parsePiModelId(options.model);
+      if ('provider' in parsedModel) {
+        args.push('--provider', parsedModel.provider, '--model', parsedModel.model);
+      }
+    }
+    if (options.effort) args.push('--thinking', options.effort);
+
+    const subprocess = this.subprocessFactory(this.executable, args, {
       reject: false,
       input: options.prompt,
       stdin: 'pipe',
@@ -173,6 +254,14 @@ export class PiProvider implements LLMProvider {
       return {
         success: false,
         output: `${piDisplayName()} provider parse failure: missing terminal assistant message.`,
+        exitCode,
+      };
+    }
+
+    if (exitCode === 0 && parsed.terminalAssistantStopReason === 'error') {
+      return {
+        success: false,
+        output: parsed.terminalAssistantErrorMessage || `${piDisplayName()} reported an error stop with no message`,
         exitCode,
       };
     }

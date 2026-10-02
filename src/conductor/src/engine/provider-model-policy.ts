@@ -4,6 +4,7 @@ import {
   CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
 } from './provider-model-policy-defaults.js';
+import type { HarnessConfig } from '../types/config.js';
 
 export {
   CLAUDE_MODEL_POLICY,
@@ -24,12 +25,37 @@ export function hasBuiltInProviderModelPolicy(providerKey: string): boolean {
   return Object.hasOwn(BUILT_IN_PROVIDER_MODEL_POLICIES, providerKey);
 }
 
+export interface ResolveProviderModelPolicyOptions {
+  config?: Pick<HarnessConfig, 'llm_providers'>;
+  warn?: (message: string) => void;
+}
+
 export function resolveProviderModelPolicy(
   providerKey: string,
-  warn?: (message: string) => void,
+  options?: ResolveProviderModelPolicyOptions | ((message: string) => void),
 ): ProviderModelPolicy {
+  const { config, warn } = typeof options === 'function'
+    ? { config: undefined, warn: options }
+    : options ?? {};
   if (hasBuiltInProviderModelPolicy(providerKey)) {
-    return BUILT_IN_PROVIDER_MODEL_POLICIES[providerKey];
+    const catalogPolicy = BUILT_IN_PROVIDER_MODEL_POLICIES[providerKey];
+    const configuredPolicy = config?.llm_providers?.[providerKey];
+    if (configuredPolicy === undefined) return catalogPolicy;
+
+    return Object.freeze({
+      ...catalogPolicy,
+      stepModels: configuredPolicy.model === undefined
+        ? catalogPolicy.stepModels
+        : Object.freeze(Object.fromEntries(
+          Object.keys(catalogPolicy.stepModels).map((step) => [step, configuredPolicy.model!]),
+        )) as ProviderModelPolicy['stepModels'],
+      modelEscalationOrder: configuredPolicy.model_escalation_order === undefined
+        ? catalogPolicy.modelEscalationOrder
+        : Object.freeze([...configuredPolicy.model_escalation_order]),
+      modelFallbackLadder: configuredPolicy.model_fallback_ladder === undefined
+        ? catalogPolicy.modelFallbackLadder
+        : Object.freeze([...configuredPolicy.model_fallback_ladder]),
+    });
   }
 
   warn?.(
@@ -50,15 +76,18 @@ export const COST_SELF_REPORTING_PROVIDERS: ReadonlySet<string> = new Set(
 
 export function rateCardModelIds(): string[] {
   const ids = new Set<string>();
+  const addModelId = (model: string | undefined): void => {
+    if (model) ids.add(model);
+  };
   for (const [provider, policy] of Object.entries(BUILT_IN_PROVIDER_MODEL_POLICIES)) {
     if (COST_SELF_REPORTING_PROVIDERS.has(provider)) continue;
-    for (const model of BUILT_IN_PROVIDER_OPT_IN_MODEL_IDS[provider] ?? []) ids.add(model);
-    for (const model of Object.values(policy.stepModels)) ids.add(model);
-    for (const model of policy.modelEscalationOrder) ids.add(model);
-    for (const model of policy.modelFallbackLadder) ids.add(model);
+    for (const model of BUILT_IN_PROVIDER_OPT_IN_MODEL_IDS[provider] ?? []) addModelId(model);
+    for (const model of Object.values(policy.stepModels)) addModelId(model);
+    for (const model of policy.modelEscalationOrder) addModelId(model);
+    for (const model of policy.modelFallbackLadder) addModelId(model);
     for (const tiers of Object.values(policy.stepTierOverrides)) {
       for (const override of Object.values(tiers ?? {})) {
-        if (override?.model) ids.add(override.model);
+        addModelId(override?.model);
       }
     }
   }

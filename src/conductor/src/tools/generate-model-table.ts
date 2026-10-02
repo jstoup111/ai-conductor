@@ -11,15 +11,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { StepName, ComplexityTier } from '../types/index.js';
 import {
   CLAUDE_MODEL_POLICY,
-  CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
 } from '../engine/provider-model-policy.js';
 import {
-  CLAUDE_PROVIDER,
-  CODEX_PROVIDER,
-  CLAUDE_DISPLAY_NAME,
-  CODEX_DISPLAY_NAME,
-  providerDisplayName,
+  BUILT_IN_PROVIDERS,
+  type BuiltInProviderDescriptor,
 } from '../execution/provider-catalog.js';
 import {
   STEP_RATIONALE,
@@ -28,6 +24,7 @@ import {
   EXTRA_MODEL_TABLE_ROWS,
   SKILL_STEP_MAP,
   PIN_EXEMPT_SKILLS,
+  type ModelTableProviderCellMap,
 } from '../engine/model-table-metadata.js';
 
 export const BEGIN_MARKER = '<!-- BEGIN GENERATED: model-selection-table -->';
@@ -213,12 +210,12 @@ export function assertNoDuplicateRowNames(
 // ────────────────────────────────────────────────────────────────────────────
 // renderModelTable
 //
-// Pure renderer: builds the provider-aware seven-column markdown table from
+// Pure renderer: builds the catalog-driven provider-column markdown table from
 // the engine's typed provider policies plus STEP_RATIONALE /
 // EXTRA_MODEL_TABLE_ROWS metadata. No filesystem access.
 //
 // Story TS-2 happy path 2 (.docs/stories/generated-model-table.md):
-//   - provider-labelled seven-column header
+//   - provider-labelled model/effort columns for every catalog provider
 //   - a step whose model/effort varies by complexity tier renders each
 //     distinct value once, suffixed with the tiers that share it, e.g.
 //     `sonnet (S/M), fable (L)`; a step whose value is tier-invariant renders
@@ -260,6 +257,9 @@ function policyValue(
   field: 'model' | 'effort',
 ): string {
   const base = field === 'model' ? policy.stepModels[step] : policy.stepEfforts[step];
+  if (field === 'model' && policy.requiresConfiguredModels && base === '') {
+    return 'config-required';
+  }
   if (typeof base !== 'string' || base.trim() === '') {
     throw new Error(`Missing ${provider} ${field} for step ${step}`);
   }
@@ -305,17 +305,55 @@ export function renderTieredField(
 
 export interface ModelTableRow extends NamedRow {
   executionPath: string;
-  claudeModel: string;
-  claudeEffort: string;
-  codexModel: string;
-  codexEffort: string;
+  providerCells: ModelTableProviderCellMap;
   why: string;
+}
+
+/**
+ * Reject an ambiguous generated row before it can be rendered as an empty
+ * markdown cell. `config-required` and `n/a` are intentional, non-empty
+ * statements; the gate deliberately accepts them.
+ */
+export function assertCompleteProviderCells(
+  rows: readonly Pick<ModelTableRow, 'name' | 'providerCells'>[],
+  providerIds: readonly string[],
+): void {
+  for (const row of rows) {
+    for (const providerId of providerIds) {
+      const cell = row.providerCells[providerId];
+      for (const field of ['model', 'effort'] as const) {
+        const value = cell?.[field];
+        if (typeof value !== 'string' || value.trim() === '') {
+          throw new Error(
+            `Incomplete model-table row "${row.name}": ${providerId} ${field} is blank`,
+          );
+        }
+      }
+    }
+  }
+}
+
+type TableProvider = Pick<BuiltInProviderDescriptor, 'id' | 'displayName' | 'modelPolicy'>;
+
+function engineProviderCells(
+  providers: readonly TableProvider[],
+  step: StepName,
+  modelFree: boolean,
+): ModelTableProviderCellMap {
+  return Object.fromEntries(providers.map((provider) => [
+    provider.id,
+    modelFree
+      ? { model: '—', effort: '—' }
+      : {
+          model: renderTieredField(provider.modelPolicy, provider.displayName, step, 'model'),
+          effort: renderTieredField(provider.modelPolicy, provider.displayName, step, 'effort'),
+        },
+  ]));
 }
 
 /** All 24 engine-derived rows, in STEP_RATIONALE key order. */
 export function buildEngineRows(
-  claudePolicy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
-  codexPolicy: ProviderModelPolicy = CODEX_MODEL_POLICY,
+  providers: readonly TableProvider[] = BUILT_IN_PROVIDERS,
 ): ModelTableRow[] {
   const modelFreeSteps = new Set<StepName>(MODEL_FREE_ENGINE_STEPS);
 
@@ -324,10 +362,7 @@ export function buildEngineRows(
       return {
         name: stepDisplayName(step),
         executionPath: 'engine machinery',
-        claudeModel: '—',
-        claudeEffort: '—',
-        codexModel: '—',
-        codexEffort: '—',
+        providerCells: engineProviderCells(providers, step, true),
         why: STEP_RATIONALE[step],
       };
     }
@@ -335,10 +370,7 @@ export function buildEngineRows(
     return {
       name: stepDisplayName(step),
       executionPath: 'autonomous engine',
-      claudeModel: renderTieredField(claudePolicy, providerDisplayName(CLAUDE_PROVIDER), step, 'model'),
-      claudeEffort: renderTieredField(claudePolicy, providerDisplayName(CLAUDE_PROVIDER), step, 'effort'),
-      codexModel: renderTieredField(codexPolicy, providerDisplayName(CODEX_PROVIDER), step, 'model'),
-      codexEffort: renderTieredField(codexPolicy, providerDisplayName(CODEX_PROVIDER), step, 'effort'),
+      providerCells: engineProviderCells(providers, step, false),
       why: STEP_RATIONALE[step],
     };
   });
@@ -354,15 +386,15 @@ function assertValidInteractiveRows(rows: readonly ModelTableRow[]): void {
       );
     }
 
-    for (const field of ['codexModel', 'codexEffort'] as const) {
-      const value = row[field];
+    for (const field of ['model', 'effort'] as const) {
+      const value = row.providerCells.codex?.[field] ?? '';
       if (
         value.trim() === '' ||
         !/\binherit(?:s|ed|ance|ing)?\b/i.test(value) ||
         CLAUDE_NATIVE_MODEL_ALIAS.test(value)
       ) {
         throw new Error(
-          `Invalid interactive model-table row "${row.name}": ${field}=${JSON.stringify(value)}`,
+          `Invalid interactive model-table row "${row.name}": codex${field === 'model' ? 'Model' : 'Effort'}=${JSON.stringify(value)}`,
         );
       }
     }
@@ -374,6 +406,21 @@ export function buildAuxiliaryRows(): ModelTableRow[] {
   return AUXILIARY_MODEL_TABLE_ROWS.map((row) => ({ ...row }));
 }
 
+function withNotApplicableProviderCells(
+  rows: readonly ModelTableRow[],
+  providers: readonly TableProvider[],
+): ModelTableRow[] {
+  return rows.map((row) => ({
+    ...row,
+    providerCells: {
+      ...row.providerCells,
+      ...Object.fromEntries(providers
+        .filter((provider) => row.providerCells[provider.id] === undefined)
+        .map((provider) => [provider.id, { model: 'n/a', effort: 'n/a' }])),
+    },
+  }));
+}
+
 /** Rows for skills/agents with no corresponding engine step. */
 export function buildExtraRows(
   metadata: readonly ModelTableRow[] = EXTRA_MODEL_TABLE_ROWS,
@@ -381,10 +428,7 @@ export function buildExtraRows(
   const rows = metadata.map((row) => ({
     name: row.name,
     executionPath: row.executionPath,
-    claudeModel: row.claudeModel,
-    claudeEffort: row.claudeEffort,
-    codexModel: row.codexModel,
-    codexEffort: row.codexEffort,
+    providerCells: row.providerCells,
     why: row.why,
   }));
 
@@ -392,12 +436,22 @@ export function buildExtraRows(
   return rows;
 }
 
-const TABLE_HEADER =
-  `| Skill/Agent | Execution path | ${CLAUDE_DISPLAY_NAME} model | ${CLAUDE_DISPLAY_NAME} effort | ${CODEX_DISPLAY_NAME} model | ${CODEX_DISPLAY_NAME} effort | Why |`;
-const TABLE_SEPARATOR = '|---|---|---|---|---|---|---|';
+function tableHeader(providers: readonly TableProvider[]): string {
+  return `| Skill/Agent | Execution path | ${providers.flatMap((provider) => [
+    `${provider.displayName} model`, `${provider.displayName} effort`,
+  ]).join(' | ')} | Why |`;
+}
 
-function renderRow(row: ModelTableRow): string {
-  return `| ${row.name} | ${row.executionPath} | ${row.claudeModel} | ${row.claudeEffort} | ${row.codexModel} | ${row.codexEffort} | ${row.why} |`;
+function tableSeparator(providers: readonly TableProvider[]): string {
+  return `|${Array.from({ length: 3 + providers.length * 2 }, () => '---').join('|')}|`;
+}
+
+function renderRow(row: ModelTableRow, providers: readonly TableProvider[]): string {
+  const cells = providers.flatMap((provider) => {
+    const cell = row.providerCells[provider.id];
+    return [cell?.model ?? '', cell?.effort ?? ''];
+  });
+  return `| ${row.name} | ${row.executionPath} | ${cells.join(' | ')} | ${row.why} |`;
 }
 
 /**
@@ -405,17 +459,21 @@ function renderRow(row: ModelTableRow): string {
  * only the imported typed metadata, no filesystem/network access, no
  * randomness — same output every call.
  */
-export function renderModelTable(): string {
-  const engineRows = buildEngineRows();
-  const auxiliaryRows = buildAuxiliaryRows();
-  const extraRows = buildExtraRows();
+export function renderModelTable(providers: readonly TableProvider[] = BUILT_IN_PROVIDERS): string {
+  const engineRows = buildEngineRows(providers);
+  const auxiliaryRows = withNotApplicableProviderCells(buildAuxiliaryRows(), providers);
+  const extraRows = withNotApplicableProviderCells(buildExtraRows(), providers);
 
   assertNoDuplicateRowNames([...engineRows, ...auxiliaryRows], extraRows);
+  assertCompleteProviderCells(
+    [...engineRows, ...auxiliaryRows, ...extraRows],
+    providers.map((provider) => provider.id),
+  );
 
   const lines = [
-    TABLE_HEADER,
-    TABLE_SEPARATOR,
-    ...[...engineRows, ...auxiliaryRows, ...extraRows].map(renderRow),
+    tableHeader(providers),
+    tableSeparator(providers),
+    ...[...engineRows, ...auxiliaryRows, ...extraRows].map((row) => renderRow(row, providers)),
   ];
   return lines.join('\n');
 }

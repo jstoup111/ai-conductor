@@ -6,6 +6,8 @@ type ReadonlyTierOverrides = Readonly<
 >;
 
 export interface ProviderModelPolicy {
+  /** Whether this provider must receive its model ids from operator configuration. */
+  readonly requiresConfiguredModels: boolean;
   readonly stepModels: Readonly<Record<StepName, string>>;
   readonly stepEfforts: Readonly<Record<StepName, EffortLevel>>;
   readonly stepTierOverrides: ReadonlyTierOverrides;
@@ -64,6 +66,7 @@ const COMMON_TIER_OVERRIDES: ReadonlyTierOverrides = {
 };
 
 export const CLAUDE_MODEL_POLICY: ProviderModelPolicy = deepFreeze({
+  requiresConfiguredModels: false,
   stepModels: CLAUDE_STEP_MODELS,
   stepEfforts: STEP_EFFORTS,
   stepTierOverrides: {
@@ -77,6 +80,7 @@ export const CLAUDE_MODEL_POLICY: ProviderModelPolicy = deepFreeze({
 });
 
 export const CODEX_MODEL_POLICY: ProviderModelPolicy = deepFreeze({
+  requiresConfiguredModels: false,
   stepModels: CODEX_STEP_MODELS,
   stepEfforts: STEP_EFFORTS,
   stepTierOverrides: {

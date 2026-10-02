@@ -361,7 +361,7 @@ describe('ST-927-1/ST-927-8 — scalar built-in compatibility', () => {
       expect(scripted.calls).toHaveLength(2);
       expect(scripted.calls.map(({ model, effort }) => ({ model, effort }))).toEqual([
         { model: expectedModel, effort: expectedEffort },
-        { model: expectedModel, effort: expectedEffort },
+        { model: expectedModel, effort: 'high' },
       ]);
       expect(scripted.calls[0].resume).toBe(false);
       expect(scripted.calls[1].resume).toBe(false);
@@ -779,7 +779,7 @@ describe('ST-927-4 and ST-927-5 — ordered availability fallback', () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.actualProvider).toBeUndefined();
+    expect(result.actualProvider).toBe('claude');
     expect(result.attempts.map(({ provider }) => provider)).toEqual(['codex', 'claude']);
     expect(result.output).toMatch(/codex.*codex binary missing/i);
     expect(result.output).toMatch(/claude.*claude binary missing/i);

@@ -241,7 +241,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
     depsFactory: 'createProviderExecution',
     factoryState: {
       configuredProviders: 'configuredProviders',
-      runtimes: 'createProviderRuntimeSet(registry, runtimeLog)',
+      runtimes: 'createProviderRuntimeSet(registry, runtimeLog, config)',
       sessions: 'new ProviderSessionStore()',
       config: 'config',
       providerAvailability: 'providerAvailability',

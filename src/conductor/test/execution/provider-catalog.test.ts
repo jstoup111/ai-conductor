@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:13
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   BUILT_IN_PROVIDERS,
@@ -12,6 +12,8 @@ import {
   type ProviderCapabilityFlags,
   type ProviderWith,
 } from '../../src/execution/provider-catalog.js';
+import { parsePiModelId, parsePiModelListing } from '../../src/execution/pi-provider.js';
+import { rateCardModelIds } from '../../src/engine/provider-model-policy.js';
 
 const executableOverrides = ['CLAUDE_EXECUTABLE', 'CODEX_EXECUTABLE', 'PI_EXECUTABLE'] as const;
 const originalExecutableOverrides = new Map(
@@ -30,6 +32,51 @@ describe('built-in provider catalog', () => {
   it('declares the existing built-in provider ids and default provider', () => {
     expect(BUILT_IN_PROVIDERS.map(({ id }) => id)).toEqual(['claude', 'codex', 'pi']);
     expect(DEFAULT_PROVIDER).toBe('claude');
+  });
+
+  it('requires configured Pi models while built-in policies retain their model defaults', () => {
+    const policies = BUILT_IN_PROVIDERS.map((provider) => provider.modelPolicy);
+    const piPolicy = policies[2]!;
+
+    expect({
+      configuredModelRequirements: policies.map((policy) => policy.requiresConfiguredModels),
+      piModelEscalationOrder: piPolicy.modelEscalationOrder,
+      piModelFallbackLadder: piPolicy.modelFallbackLadder,
+      piHasNonEmptyStepModel: Object.values(piPolicy.stepModels).some(Boolean),
+    }).toEqual({
+      configuredModelRequirements: [false, false, true],
+      piModelEscalationOrder: [],
+      piModelFallbackLadder: [],
+      piHasNonEmptyStepModel: false,
+    });
+  });
+
+  it('never sends an empty model id to rate-card refreshes', () => {
+    expect(rateCardModelIds()).not.toContain('');
+  });
+
+  it('declares Pi model parsing only on the Pi descriptor', () => {
+    const parserByProvider = Object.fromEntries(
+      BUILT_IN_PROVIDERS.map((provider) => [provider.id, provider.parseModelId]),
+    );
+
+    expect(parserByProvider).toEqual({
+      claude: undefined,
+      codex: undefined,
+      pi: parsePiModelId,
+    });
+  });
+
+  it('declares Pi model listing only on the Pi descriptor', () => {
+    const catalogByProvider = Object.fromEntries(
+      BUILT_IN_PROVIDERS.map((provider) => [provider.id, provider.modelCatalog]),
+    );
+
+    expect(catalogByProvider).toEqual({
+      claude: undefined,
+      codex: undefined,
+      pi: { argv: ['--list-models'], parse: parsePiModelListing },
+    });
   });
 
   it('declares interactive launch mechanics without changing read-only review admission', () => {

@@ -509,6 +509,11 @@ export interface ResolveProviderCandidateNativeConfigInput {
   effortOverride?: EffortLevel;
 }
 
+export interface ResolvedProviderCandidateNativeConfig
+  extends ResolvedProviderNativeStepConfig {
+  modelFallbackLadder?: readonly string[];
+}
+
 /** Resolve provider-native settings for exactly one selected candidate. */
 export function resolveProviderCandidateNativeConfig({
   step,
@@ -522,7 +527,7 @@ export function resolveProviderCandidateNativeConfig({
   escalate,
   modelOverride,
   effortOverride,
-}: ResolveProviderCandidateNativeConfigInput): ResolvedProviderNativeStepConfig {
+}: ResolveProviderCandidateNativeConfigInput): ResolvedProviderCandidateNativeConfig {
   return candidateIndex === 0
     ? resolvePreferredProviderNativeStepConfig({
         step,
@@ -536,11 +541,15 @@ export function resolveProviderCandidateNativeConfig({
           modelCliOverride: modelOverride,
           effortCliOverride: effortOverride,
         },
+        attempt,
+        escalate,
       })
     : resolveFallbackProviderNativeStepConfig({
         step,
         tier,
         policy: runtime.policy,
+        providerKey: runtime.key,
+        config,
         attempt,
         escalate,
       });
@@ -588,6 +597,25 @@ export async function invokeProviderCandidate({
   invokedModel?: string;
   sessionPolicySuppression?: SessionPolicySuppression;
 }> {
+  // A candidate can supply its own ladder, but that must not bypass a
+  // run-wide provider failure observed by an earlier candidate. The native
+  // ladder branch below shares only model availability; provider availability
+  // remains a runtime-wide concern.
+  if (runtime.runWideUnavailable && onModelRung === undefined) {
+    const reason = runtime.runWideUnavailable.reason;
+    return {
+      result: {
+        success: false,
+        output: reason,
+        exitCode: 127,
+        providerUnavailable: true,
+        providerUnavailableReason: reason,
+        providerUnavailableScope: 'run',
+        providerInvocationSkipped: true,
+        executionDisposition: 'not-started',
+      },
+    };
+  }
   const descriptor = findBuiltInProviderDescriptor(providerKey);
   const suppressForUnsupportedCapability = descriptor
     ? !supportsProviderCapability(descriptor, 'supportsSessionResume')
@@ -610,7 +638,11 @@ export async function invokeProviderCandidate({
   const invokeModel = async (rungOptions: InvokeOptions): Promise<InvokeResult> =>
     runtime.provider.invoke(prepareInvocationOptions ? await prepareInvocationOptions(rungOptions) : rungOptions);
   const invocation = modelFallbackLadder
-    ? await new ModelAvailability(modelFallbackLadder).invokeWithLadderResolved(
+    ? await new ModelAvailability(
+        modelFallbackLadder,
+        runtime.availability.warn,
+        runtime.availability.dead,
+      ).invokeWithLadderResolved(
         runtime.provider,
         invocationOptions,
         prepareFallback,
@@ -775,6 +807,11 @@ export async function executeProviderCandidates({
     attribution && 'diagnostic' in attribution ? attribution.diagnostic.code : undefined;
   const setupUnavailableCandidates: ProviderSetupUnavailable[] = [];
   let anyCandidateInvoked = false;
+  let lastInvokedCandidate: {
+    provider: string;
+    model: string | undefined;
+    effort: EffortLevel | undefined;
+  } | undefined;
   let lastUnavailableResult: InvokeResult | undefined;
 
   // A fallback may become the actual candidate only after another provider has
@@ -910,7 +947,9 @@ export async function executeProviderCandidates({
             }
             return rungOptions;
           },
-          modelFallbackLadder,
+          modelFallbackLadder: index === 0
+            ? modelFallbackLadder
+            : resolved.modelFallbackLadder,
           onModelRung,
         });
         return invocation.result;
@@ -1148,7 +1187,14 @@ export async function executeProviderCandidates({
         ...(setupUnavailable.capability ? { capability: redactSafetyText(setupUnavailable.capability) } : {}),
       });
     }
-    if (attemptMetadata.invoked) anyCandidateInvoked = true;
+    if (attemptMetadata.invoked) {
+      anyCandidateInvoked = true;
+      lastInvokedCandidate = {
+        provider: providerKey,
+        model: invokedModel ?? resolved.model,
+        effort: resolved.effort,
+      };
+    }
 
     // Setup has not created a process. Preserve the enclosing lifecycle
     // authority before considering another candidate.
@@ -1180,6 +1226,13 @@ export async function executeProviderCandidates({
           : {}),
         preferredProvider,
         attempts,
+        ...(lastInvokedCandidate
+          ? {
+              actualProvider: lastInvokedCandidate.provider,
+              resolvedModel: lastInvokedCandidate.model,
+              resolvedEffort: lastInvokedCandidate.effort,
+            }
+          : {}),
         ...(!anyCandidateInvoked && setupUnavailableCandidates.length === candidates.length
           ? {
               providerSetupExhaustion: {

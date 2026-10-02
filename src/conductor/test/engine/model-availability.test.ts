@@ -1,7 +1,8 @@
-// Covers: task:5
+// Covers: task:5, task:10
 import { describe, it, expect, vi } from "vitest";
-import { ModelAvailability, DEFAULT_MODEL_FALLBACK_LADDER } from "../../src/engine/model-availability";
-import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from "../../src/engine/provider-model-policy.js";
+import { ModelAvailability, DEFAULT_MODEL_FALLBACK_LADDER, selectFallbackLadder } from "../../src/engine/model-availability";
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY, type ProviderModelPolicy } from "../../src/engine/provider-model-policy.js";
+import type { HarnessConfig } from "../../src/types/config.js";
 import type { LLMProvider, InvokeOptions, InvokeResult } from "../../src/execution/llm-provider";
 
 /** Records every invoke() call's requested model and returns canned results keyed by model. */
@@ -28,6 +29,62 @@ const claudeLadder = CLAUDE_MODEL_POLICY.modelFallbackLadder;
 const codexLadder = CODEX_MODEL_POLICY.modelFallbackLadder;
 
 describe("ModelAvailability", () => {
+  it("selects the dispatched provider ladder before the top-level or policy ladder", () => {
+    const policyLadder: ProviderModelPolicy = { ...CLAUDE_MODEL_POLICY, modelFallbackLadder: ["policy"] };
+    const configuredModelPolicy: ProviderModelPolicy = { ...policyLadder, requiresConfiguredModels: true };
+    const config: HarnessConfig = {
+      model_fallback_ladder: ["top-level"],
+      llm_providers: { codex: { model_fallback_ladder: ["provider"] } },
+    };
+
+    expect([
+      selectFallbackLadder(policyLadder, "codex", config),
+      selectFallbackLadder(policyLadder, "claude", config),
+      selectFallbackLadder(policyLadder, "claude", {}),
+      selectFallbackLadder(configuredModelPolicy, "claude", config),
+    ]).toEqual([["provider"], ["top-level"], ["policy"], ["policy"]]);
+  });
+
+  it("keeps Pi on its configured ladder when a Claude run has a top-level alias ladder", () => {
+    const piPolicy: ProviderModelPolicy = {
+      ...CLAUDE_MODEL_POLICY,
+      requiresConfiguredModels: true,
+      modelFallbackLadder: [],
+    };
+    const config: HarnessConfig = {
+      llm_provider: 'claude',
+      model_fallback_ladder: ['fable', 'opus', 'sonnet'],
+      llm_providers: {
+        pi: {
+          model: 'anthropic/claude-opus-4-5',
+          model_escalation_order: ['anthropic/claude-opus-4-5'],
+          model_fallback_ladder: ['anthropic/claude-opus-4-5', 'openai/gpt-5.6-sol'],
+        },
+      },
+      steps: { plan: { llm_provider: 'pi' } },
+    };
+
+    expect(selectFallbackLadder(piPolicy, 'pi', config)).toEqual([
+      'anthropic/claude-opus-4-5',
+      'openai/gpt-5.6-sol',
+    ]);
+    expect(selectFallbackLadder(CODEX_MODEL_POLICY, 'codex', config)).toEqual([
+      'fable',
+      'opus',
+      'sonnet',
+    ]);
+  });
+
+  it("preserves the top-level ladder for native policies when no provider block exists", () => {
+    const config: HarnessConfig = { model_fallback_ladder: ['fable', 'opus', 'sonnet'] };
+
+    expect(selectFallbackLadder(CLAUDE_MODEL_POLICY, 'claude', config)).toEqual([
+      'fable',
+      'opus',
+      'sonnet',
+    ]);
+  });
+
   it("fresh instance returns configured model as effective with downgraded=false", () => {
     const avail = new ModelAvailability(claudeLadder);
     const result = avail.effectiveModel("fable");
@@ -195,6 +252,21 @@ describe("ModelAvailability", () => {
       expect(result.success).toBe(true);
       expect(invokeCalls.map((c) => c.model)).toEqual(["fable", "opus"]);
       expect(avail.dead.has("fable")).toBe(true);
+    });
+
+    it("skips a rung marked dead by an earlier dispatch before invoking the provider again", async () => {
+      const warnings: string[] = [];
+      const avail = new ModelAvailability(claudeLadder, (line) => warnings.push(line));
+      const { provider, invokeCalls } = fakeProvider({
+        fable: modelUnavailable(),
+        opus: { success: true, output: "done", exitCode: 0 },
+      });
+
+      await avail.invokeWithLadder(provider, { prompt: "first", sessionId: "s1", resume: false, model: "fable" });
+      await avail.invokeWithLadder(provider, { prompt: "second", sessionId: "s2", resume: false, model: "fable" });
+
+      expect(invokeCalls.map((call) => call.model)).toEqual(["fable", "opus", "opus"]);
+      expect(warnings).toContain("Downgraded from fable to opus: fable is not available (unavailable)");
     });
 
     it("retains every model attempt interval when two unavailable models precede success", async () => {

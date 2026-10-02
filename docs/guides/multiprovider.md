@@ -148,6 +148,35 @@ ladder. Set the key at the top level to make this the default, then use
 `steps.<step>.provider_substitution: allow` for an exception. Invalid values fail configuration
 loading. See the [configuration reference](../reference/configuration.md#provider_substitution).
 
+## Configure Pi models
+
+Pi ships no model defaults. Selecting `pi` anywhere without `llm_providers.pi` fails configuration
+loading.
+
+1. List the ids your Pi install can reach: `pi --list-models`. Each id is `<provider>/<model>` from
+   the first two columns, for example `anthropic/claude-opus-4-5`.
+2. Add all three keys to the project config:
+
+   ```yaml
+   llm_provider: [claude, pi]
+   llm_providers:
+     pi:
+       model: anthropic/claude-sonnet-4-5
+       model_escalation_order: [anthropic/claude-sonnet-4-5, anthropic/claude-opus-4-5]
+       model_fallback_ladder: [anthropic/claude-opus-4-5, openai/gpt-5]
+   ```
+
+3. Start a dispatching command. Boot runs `pi --list-models` and fails on an id it does not list:
+
+   ```text
+   unknown Pi model for configured id "anthropic/claude-nope" at llm_providers.pi.model
+   ```
+
+**Observable outcome:** each Pi step spawns `pi` with `--provider`, `--model`, and `--thinking <effort>`.
+A Pi run that exits `0` but ends with an error stop — for example `No API key for provider: cline` —
+fails the step with that message instead of passing. Keys, precedence, and every validation error are
+in the [configuration reference](../reference/configuration.md#llm_providers).
+
 ## Usage-exhaustion recovery
 
 In a daemon run, a provider that reports usage exhaustion is suppressed until its reported reset
@@ -171,7 +200,7 @@ records the exhausted provider and deadline; see [artifacts](../reference/artifa
 | Interactive steps | a real REPL | none — `codex exec` is one-shot, streamed as JSONL | none — one-shot JSONL output |
 | Readiness check | none; failures are classified from process signals and output | explicit `codex doctor --json --summary` before every dispatch, failing closed | none; boot probes `pi --version` |
 | Isolated-home variable | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` | unsupported |
-| Model selection | harness model table | harness model table | Pi CLI's configured default model |
+| Model selection | harness model table | harness model table | required `llm_providers.pi` block; boot validates ids with `pi --list-models` |
 | Provider-specific features | self-host and custom build-review policies | self-host and custom build-review policies | unsupported; the engine refuses before spawning |
 
 Claude and Codex share one skill corpus; Pi is a headless build provider and does not load skills.

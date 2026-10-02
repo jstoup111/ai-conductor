@@ -9,7 +9,10 @@ import {
 import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
+  resolveProviderModelPolicy,
 } from '../../src/engine/provider-model-policy.js';
+import type { HarnessConfig } from '../../src/types/config.js';
+import { resolveFallbackProviderNativeStepConfig } from '../../src/engine/resolved-config.js';
 
 const EFFORT_SEQUENCE = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const ATTEMPTS = [-1, 0, 1, 2, 3, 4, 5, 9] as const;
@@ -195,6 +198,54 @@ describe('engine/escalation — policy-aware helpers', () => {
 });
 
 describe('engine/escalation — provider-aware escalateAttempt', () => {
+  it('walks the configured Pi escalation order', () => {
+    const small = 'openai/gpt-5.6-luna';
+    const mid = 'openai/gpt-5.6-terra';
+    const large = 'anthropic/claude-opus-4-5';
+    const config: HarnessConfig = {
+      llm_providers: {
+        pi: {
+          model: small,
+          model_escalation_order: [small, mid, large],
+          model_fallback_ladder: [small],
+        },
+      },
+    };
+    const piPolicy = resolveProviderModelPolicy('pi', { config });
+
+    expect(escalateAttempt(small, 'medium', 3, true, piPolicy)).toEqual({
+      model: mid,
+      effort: 'high',
+    });
+    expect(resolveFallbackProviderNativeStepConfig({
+      step: 'build',
+      policy: piPolicy,
+      providerKey: 'pi',
+      config,
+      attempt: 3,
+      escalate: true,
+    })).toMatchObject({ model: mid, effort: 'high' });
+  });
+
+  it('keeps a Pi model outside its configured escalation order while escalating effort', () => {
+    const small = 'openai/gpt-5.6-luna';
+    const config: HarnessConfig = {
+      llm_providers: {
+        pi: {
+          model: small,
+          model_escalation_order: [small, 'openai/gpt-5.6-terra', 'anthropic/claude-opus-4-5'],
+          model_fallback_ladder: [small],
+        },
+      },
+    };
+    const piPolicy = resolveProviderModelPolicy('pi', { config });
+
+    expect(escalateAttempt('google/gemini-3-pro', 'medium', 3, true, piPolicy)).toEqual({
+      model: 'google/gemini-3-pro',
+      effort: 'high',
+    });
+  });
+
   it.each(ESCALATION_CASES)(
     '$provider $baseModel/$baseEffort attempt $attempt follows both selected orders and caps',
     ({ policy, baseModel, baseEffort, attempt, expected }) => {

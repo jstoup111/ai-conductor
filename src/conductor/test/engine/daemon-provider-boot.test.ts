@@ -92,7 +92,7 @@ describe('runDaemonMode provider discovery at boot', () => {
     await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
     await writeFile(
       join(projectRoot, '.ai-conductor', 'config.yml'),
-      'llm_provider: claude\nsteps:\n  build:\n    llm_provider:\n      - pi\n      - claude\n',
+      'llm_provider: claude\nllm_providers:\n  pi:\n    model: anthropic/claude-sonnet-4-5\n    model_escalation_order:\n      - anthropic/claude-sonnet-4-5\n    model_fallback_ladder:\n      - anthropic/claude-sonnet-4-5\nsteps:\n  build:\n    llm_provider:\n      - pi\n      - claude\n',
       'utf8',
     );
 

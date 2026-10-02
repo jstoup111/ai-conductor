@@ -74,10 +74,10 @@ describe('Generator write mode rewrites only the marked region (TS-2)', () => {
       const afterWrite = await readFile(file, 'utf8');
       // Table header per the story's happy-path criterion.
       expect(afterWrite).toContain(
-        '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |',
+        '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Pi model | Pi effort | Why |',
       );
       expect(afterWrite).toMatch(
-        /\| code-review \| supported-host interactive \| opus \|  \| inherits model from the Codex session or spawned-agent configuration \| inherits effort from the Codex session or spawned-agent configuration \|/,
+        /\| code-review \| supported-host interactive \| opus \| n\/a \| inherits model from the Codex session or spawned-agent configuration \| inherits effort from the Codex session or spawned-agent configuration \| n\/a \| n\/a \|/,
       );
       // The stale placeholder row must be gone — real regeneration happened.
       expect(afterWrite).not.toContain('stale row from a previous run');
@@ -130,7 +130,7 @@ describe('public CLI provider-labelled contract drift', () => {
       const generatedLines =
         beginIndex >= 0 && endIndex > beginIndex ? lines.slice(beginIndex + 1, endIndex) : [];
       const header =
-        '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |';
+        '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Pi model | Pi effort | Why |';
       const cells = (line: string): string[] =>
         line
           .split('|')
@@ -141,7 +141,7 @@ describe('public CLI provider-labelled contract drift', () => {
           line !== header &&
           !line.startsWith('|---') &&
           line.startsWith('| ') &&
-          line.split('|').length === 9,
+          line.split('|').length === 11,
       );
       const autonomousRows = rows.filter((row) => cells(row)[1] === 'autonomous engine');
       const interactiveRow =

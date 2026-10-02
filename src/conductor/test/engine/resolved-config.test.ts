@@ -1,5 +1,4 @@
-// Covers: task:3
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3, task:8
 import { describe, it, expect, vi } from 'vitest';
 import {
   resolveStepConfig,
@@ -24,7 +23,11 @@ import {
 } from '../../src/engine/build-review-coordinator.js';
 import type { BuildReviewFrozenInputs } from '../../src/engine/build-review-inputs.js';
 import type { HarnessConfig } from '../../src/types/config.js';
-import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+  resolveProviderModelPolicy,
+} from '../../src/engine/provider-model-policy.js';
 
 type TeardownTimeoutConfig = HarnessConfig & { teardown_timeout_seconds?: unknown };
 type DispatchStartTimeoutConfig = HarnessConfig & { dispatch_start_timeout_seconds?: unknown };
@@ -50,6 +53,120 @@ type EffectiveReviewCatalogMember = {
 };
 
 describe('engine/resolved-config', () => {
+  describe('Pi provider model policy resolution', () => {
+    const piConfig = {
+      llm_providers: {
+        pi: {
+          model: 'google/gemini-2.5-flash',
+          model_escalation_order: [
+            'google/gemini-2.5-flash',
+            'anthropic/claude-opus-4-5',
+          ],
+          model_fallback_ladder: [
+            'anthropic/claude-opus-4-5',
+            'google/gemini-2.5-flash',
+          ],
+        },
+      },
+    } as HarnessConfig;
+
+    it('overlays the configured Pi model and orders while leaving an unconfigured catalog policy unchanged', () => {
+      expect({
+        configured: resolveProviderModelPolicy('pi', { config: piConfig }),
+        unconfigured: resolveProviderModelPolicy('pi'),
+      }).toMatchObject({
+        configured: {
+          stepModels: Object.fromEntries(
+            Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) => [
+              step,
+              'google/gemini-2.5-flash',
+            ]),
+          ),
+          modelEscalationOrder: [
+            'google/gemini-2.5-flash',
+            'anthropic/claude-opus-4-5',
+          ],
+          modelFallbackLadder: [
+            'anthropic/claude-opus-4-5',
+            'google/gemini-2.5-flash',
+          ],
+        },
+        unconfigured: {
+          stepModels: Object.fromEntries(
+            Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) => [step, '']),
+          ),
+          modelEscalationOrder: [],
+          modelFallbackLadder: [],
+        },
+      });
+    });
+
+    it('resolves a Pi step model and effort from the step configuration', () => {
+      expect(resolveProviderNativeStepConfig(
+        'plan',
+        'DECIDE',
+        resolveProviderModelPolicy('pi', { config: piConfig }),
+        {
+          steps: {
+            plan: { model: 'anthropic/claude-opus-4-5', effort: 'high' },
+          },
+        },
+      )).toEqual({ model: 'anthropic/claude-opus-4-5', effort: 'high' });
+    });
+
+    it('uses the configured Pi model for every step without a step-level model', () => {
+      expect(Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) =>
+        resolveProviderNativeStepConfig(
+          step as keyof typeof CLAUDE_MODEL_POLICY.stepModels,
+          'BUILD',
+          resolveProviderModelPolicy('pi', { config: piConfig }),
+          piConfig,
+        ).model,
+      )).toEqual(Object.keys(CLAUDE_MODEL_POLICY.stepModels).map(() => 'google/gemini-2.5-flash'));
+    });
+
+    it('uses a tier-L Pi step model and never falls back to another provider alias', () => {
+      const effectivePolicy = resolveProviderModelPolicy('pi', { config: piConfig });
+      const tierConfig = {
+        ...piConfig,
+        steps: {
+          plan: {
+            by_tier: { L: { model: 'anthropic/claude-opus-4-5' } },
+          },
+        },
+      } as HarnessConfig;
+
+      expect({
+        tierLPlan: resolveProviderNativeStepConfig(
+          'plan', 'DECIDE', effectivePolicy, tierConfig, { tier: 'L' },
+        ).model,
+        allModels: Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) =>
+          resolveProviderNativeStepConfig(
+            step as keyof typeof CLAUDE_MODEL_POLICY.stepModels,
+            'BUILD',
+            effectivePolicy,
+            piConfig,
+          ).model,
+        ),
+      }).toEqual({
+        tierLPlan: 'anthropic/claude-opus-4-5',
+        allModels: Object.keys(CLAUDE_MODEL_POLICY.stepModels).map(() => 'google/gemini-2.5-flash'),
+      });
+    });
+
+    it('refuses to use the generic fallback for a configured-model policy', () => {
+      const effectivePolicy = resolveProviderModelPolicy('pi', { config: piConfig });
+      const policyWithoutModel = {
+        ...effectivePolicy,
+        stepModels: {} as typeof effectivePolicy.stepModels,
+      };
+
+      expect(() => resolveProviderNativeStepConfig(
+        'plan', 'DECIDE', policyWithoutModel,
+      )).toThrow(/requires a configured model/);
+    });
+  });
+
   describe('resolveCoverageBindingConfig', () => {
     it('defaults the judge to disabled', () => {
       expect(resolveCoverageBindingConfig(undefined)).toEqual({ judgeEnabled: false, batchSize: 8 });
@@ -1359,5 +1476,31 @@ describe('engine/resolved-config', () => {
       };
       expect(resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config).escalate).toBe(true);
     });
+  });
+});
+
+describe('build-review rubric ladder for an inherited Pi provider', () => {
+  const piLadder = ['anthropic/claude-opus-4-5', 'openai/gpt-5.6-sol'];
+  const pi = { model: piLadder[0]!, model_escalation_order: piLadder, model_fallback_ladder: piLadder };
+
+  it('uses llm_providers.pi ladder, never the top-level Claude ladder, for a run-level Pi rubric', () => {
+    const resolved = resolveBuildReviewConfig({
+      llm_provider: 'pi', model_fallback_ladder: ['opus', 'sonnet'], llm_providers: { pi },
+    });
+    expect(resolved.rubrics.testQuality.model_fallback_ladder).toEqual(piLadder);
+    expect(resolved.rubrics.security.model_fallback_ladder).toEqual(piLadder);
+  });
+
+  it('uses llm_providers.pi ladder for a rubric inheriting a Pi build_review step', () => {
+    const resolved = resolveBuildReviewConfig({
+      llm_provider: 'claude', model_fallback_ladder: ['opus', 'sonnet'], llm_providers: { pi },
+      steps: { build_review: { llm_provider: 'pi' } },
+    });
+    expect(resolved.rubrics.testQuality.model_fallback_ladder).toEqual(piLadder);
+  });
+
+  it('keeps the top-level ladder for an inherited Claude rubric', () => {
+    const resolved = resolveBuildReviewConfig({ llm_provider: 'claude', model_fallback_ladder: ['opus', 'sonnet'] });
+    expect(resolved.rubrics.testQuality.model_fallback_ladder).toEqual(['opus', 'sonnet']);
   });
 });

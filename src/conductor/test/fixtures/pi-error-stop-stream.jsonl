@@ -1,0 +1,2 @@
+{"type":"session","version":3,"id":"pi-error-stop-fixture","timestamp":"2026-09-29T00:00:00.000Z","cwd":"/fixture"}
+{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"No API key for provider: cline"}}

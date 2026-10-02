@@ -15,7 +15,7 @@ import type {
   ProviderStreamObservation,
 } from '../execution/llm-provider.js';
 import { formatProviderExitFacts } from '../execution/provider-diagnostics.js';
-import { ModelAvailability } from './model-availability.js';
+import { ModelAvailability, selectFallbackLadder } from './model-availability.js';
 import {
   DEFAULT_PROVIDER,
   CLAUDE_DISPLAY_NAME,
@@ -49,6 +49,7 @@ import {
   resolveCoverageBindingConfig,
   phaseForStep,
   resolveProviderPreparationTimeoutMinutes,
+  resolvePreferredProviderNativeStepConfig,
   type ResolvedStepConfig,
 } from './resolved-config.js';
 import {
@@ -203,7 +204,7 @@ import {
   type BuildReviewScopedLauncher,
 } from './build-review-scoped-run.js';
 import {
-  CLAUDE_MODEL_POLICY,
+  resolveProviderModelPolicy,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
 import type {
@@ -965,7 +966,10 @@ export class DefaultStepRunner implements StepRunner {
     this.sleepFn = options?.sleepFn ?? defaultSleep;
     this.config = options?.config;
     this.stepRegistry = this.config ? buildStepRegistry(this.config) : ALL_STEPS;
-    this.modelPolicy = options?.modelPolicy ?? CLAUDE_MODEL_POLICY;
+    this.providerKey = options?.providerKey ?? DEFAULT_PROVIDER;
+    this.modelPolicy = options?.modelPolicy ?? resolveProviderModelPolicy(this.providerKey, {
+      config: this.config,
+    });
     this.modelOverride =
       options?.modelOverride ?? options?.providerExecution?.modelOverride;
     this.effortOverride =
@@ -973,7 +977,7 @@ export class DefaultStepRunner implements StepRunner {
     this.mode = options?.mode ?? 'default';
     this.log = options?.log ?? ((message) => console.warn(message));
     this.modelAvailability = new ModelAvailability(
-      this.config?.model_fallback_ladder ?? this.modelPolicy.modelFallbackLadder,
+      selectFallbackLadder(this.modelPolicy, this.providerKey, this.config ?? {}),
       this.log,
     );
     this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
@@ -992,7 +996,6 @@ export class DefaultStepRunner implements StepRunner {
     this.coverageBindingFilesystem = options?.coverageBindingFilesystem;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
-    this.providerKey = options?.providerKey ?? DEFAULT_PROVIDER;
     this.providerRuntimes =
       options?.providerRuntimes ?? options?.providerExecution?.runtimes;
     this.configuredProviders =
@@ -2460,29 +2463,22 @@ export class DefaultStepRunner implements StepRunner {
 
     try {
       return await dispatchAttributionVerifier({
-        provider: this.provider,
         projectDir: opts.projectRoot,
         planPath: opts.planPath,
         residueIds: opts.residueIds,
         featureWorktreePath: opts.projectRoot,
-        config: this.config,
-        modelPolicy: this.modelPolicy,
-        ...(this.providerRuntimes && this.sessionStore
-          ? {
-              providerDispatch: async (options) => {
-                const result = await this.executeProviderAwareOneShot(
-                  'attribution_verify',
-                  options,
-                );
-                if (!result) {
-                  throw new Error(
-                    'Provider-aware attribution dispatch requires runtimes and a session store',
-                  );
-                }
-                return result;
-              },
-            }
-          : {}),
+        providerDispatch: async (options) => {
+          const result = await this.executeProviderAwareOneShot(
+            'attribution_verify',
+            options,
+          );
+          if (!result) {
+            throw new Error(
+              'Provider-aware attribution dispatch requires runtimes and a session store',
+            );
+          }
+          return result;
+        },
       });
     } catch (err) {
       return {
@@ -4660,13 +4656,28 @@ export class DefaultStepRunner implements StepRunner {
     const entries: CoverageBindingEnvelopeEntry[] = [...planned.entries];
     const refused: CoverageBindingEnvelopeEntry[] = [];
     const resolved = this.resolvedConfigFor('coverage_binding');
+    const llmProvider = this.config?.steps?.coverage_binding?.llm_provider
+      ?? this.config?.llm_provider
+      ?? DEFAULT_PROVIDER;
+    const auxiliaryProvider = normalizeProviderSelection(llmProvider)[0]!;
+    const auxiliaryRuntime = this.providerRuntimes?.get(auxiliaryProvider);
+    const auxiliaryModelPolicy = auxiliaryRuntime?.policy
+      ?? resolveProviderModelPolicy(auxiliaryProvider, { config: this.config });
+    const auxiliaryNative = resolvePreferredProviderNativeStepConfig({
+      step: 'coverage_binding',
+      phase: phaseForStep('coverage_binding'),
+      preferredProvider: auxiliaryProvider,
+      inheritedProvider: normalizeProviderSelection(this.config?.llm_provider)[0]!,
+      policy: auxiliaryModelPolicy,
+      config: this.config,
+    });
     const auxiliaryPolicy: ResolvedBuildReviewRubricPolicy = {
       enabled: true,
       max_projection_bytes: DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
-      llm_provider: this.config?.steps?.coverage_binding?.llm_provider ?? this.config?.llm_provider ?? DEFAULT_PROVIDER,
-      model: resolved.model,
-      effort: resolved.effort,
-      model_fallback_ladder: this.modelPolicy.modelFallbackLadder,
+      llm_provider: llmProvider,
+      model: auxiliaryNative.model,
+      effort: auxiliaryNative.effort,
+      model_fallback_ladder: selectFallbackLadder(auxiliaryModelPolicy, auxiliaryProvider, this.config ?? {}),
       max_retries: resolved.max_retries,
       escalate: resolved.escalate,
       min_confidence: 0,

@@ -329,9 +329,10 @@ The region is delimited by `<!-- BEGIN GENERATED: model-selection-table -->` and
 missing, duplicated, or out-of-order marker throws a `MarkerError` and leaves the document untouched
 (`generate-model-table.ts:49-89`).
 
-Table shape is seven columns —
-`| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |` —
-with engine rows first in `STEP_RATIONALE` key order and extra rows after: 26 + 22 = **48 data rows**.
+Table shape is one model/effort column pair per catalog provider —
+`| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Pi model | Pi effort | Why |` —
+with no blank cells: a provider whose policy requires configured models renders `config-required`,
+and a row with no value for a provider renders `n/a`. Engine rows come first in `STEP_RATIONALE` key order and extra rows after: 26 + 22 = **48 data rows**.
 `renderTieredField` groups the S/M/L tiers by identical resolved value, so a tier-invariant value renders
 bare while a varying one renders as, for example, `sonnet (S/M), fable (L)`.
 

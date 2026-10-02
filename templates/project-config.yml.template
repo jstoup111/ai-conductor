@@ -104,9 +104,25 @@
 # Default: unset (no variables tracked).
 # Changing it: each named variable's value is hashed into the suite fingerprint, so changing it re-runs the suite, and it is redacted from verifier output.
 # Controls: llm_provider — which provider host runs lifecycle steps.
-# Allowed: a non-empty string, or a non-empty array of unique strings used as a fallback ladder; built-in providers are claude and codex.
+# Allowed: a non-empty string, or a non-empty array of unique strings used as a fallback ladder; built-in providers are claude, codex, and pi.
 # Default: [claude].
 # Changing it: the first entry becomes the provider for every step without its own steps.<name>.llm_provider; an unregistered name stops the run at start.
+# Controls: llm_providers — provider-native model policy overrides keyed by built-in provider id.
+# Allowed: an object whose provider entries contain model, model_escalation_order, and model_fallback_ladder; only catalog provider ids are accepted.
+# Default: unset; each provider uses its built-in model policy. Pi requires all three settings whenever it is selected.
+# Changing it: sets a provider's default model and its retry and availability ladders without changing other providers.
+# Controls: llm_providers.model — the provider-native default model; written as llm_providers.<provider>.model.
+# Allowed: a non-empty string; Pi uses a provider/model id such as anthropic/claude-sonnet-4-5.
+# Default: unset; Pi cannot be selected until this value is set.
+# Changing it: replaces the selected provider's default model for steps without their own model override.
+# Controls: llm_providers.model_escalation_order — models selected for retries; written as llm_providers.<provider>.model_escalation_order.
+# Allowed: an array of non-empty model strings.
+# Default: unset; Pi cannot be selected until this value is set.
+# Changing it: replaces the selected provider's retry escalation order.
+# Controls: llm_providers.model_fallback_ladder — models tried when the resolved model is unavailable; written as llm_providers.<provider>.model_fallback_ladder.
+# Allowed: an array of non-empty model strings.
+# Default: unset; Pi cannot be selected until this value is set.
+# Changing it: replaces the selected provider's availability fallback ladder.
 # Controls: provider_substitution — whether an explicitly selected step provider may fall back to configured providers.
 # Allowed: allow or disallow.
 # Default: unset; a step's explicit selection is followed by configured providers, preserving the existing fallback ladder.

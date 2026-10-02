@@ -1,6 +1,11 @@
 import { ClaudeProvider } from './claude-provider.js';
 import { CodexProvider } from './codex-provider.js';
-import { PiProvider } from './pi-provider.js';
+import {
+  parsePiModelId,
+  parsePiModelListing,
+  PiProvider,
+  type PiModelIdParseResult,
+} from './pi-provider.js';
 import type { LLMProvider } from './llm-provider.js';
 import type { StepName } from '../types/steps.js';
 import {
@@ -45,6 +50,17 @@ export interface InteractiveLaunch {
   readonly argv: (prompt: string, env: NodeJS.ProcessEnv) => string[];
 }
 
+/** Result of parsing a provider-owned model listing command. */
+export type ProviderModelCatalogParseResult =
+  | { readonly kind: 'parsed'; readonly modelIds: readonly string[] }
+  | { readonly kind: 'unparseable'; readonly firstLine: string };
+
+/** Provider-owned command and parser for listing its available model ids. */
+export interface ProviderModelCatalog {
+  readonly argv: readonly string[];
+  readonly parse: (stdout: string) => ProviderModelCatalogParseResult;
+}
+
 export interface BuiltInProviderDescriptor {
   readonly id: string;
   /** Human-readable name for diagnostics and operator-facing status. */
@@ -58,6 +74,10 @@ export interface BuiltInProviderDescriptor {
   readonly homeVariable: string;
   readonly defaultHome: string;
   readonly modelPolicy: ProviderModelPolicy;
+  /** Parses provider-native model ids when the provider defines model-id grammar. */
+  readonly parseModelId?: (modelId: string) => PiModelIdParseResult;
+  /** Lists provider-native models when the provider supports an authoritative catalog. */
+  readonly modelCatalog?: ProviderModelCatalog;
   /** Additional provider-owned model ids to include in rate-card refreshes. */
   readonly optInModelIds: readonly string[];
   /** Whether unattended provider commands run in an OS sandbox. */
@@ -71,18 +91,17 @@ export interface BuiltInProviderDescriptor {
   readonly reviewPolicyCatalog?: ReviewPolicyCatalogDiscovery;
 }
 
-const PI_NO_MODEL = '';
-
 /** Pi owns its configured default model, so no harness model id is selected. */
 const PI_MODEL_POLICY: ProviderModelPolicy = {
+  requiresConfiguredModels: true,
   stepModels: Object.fromEntries(
-    Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) => [step, PI_NO_MODEL]),
+    Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) => [step, '']),
   ) as Readonly<Record<StepName, string>>,
   stepEfforts: CLAUDE_MODEL_POLICY.stepEfforts,
   stepTierOverrides: {},
   effortOrder: CLAUDE_MODEL_POLICY.effortOrder,
-  modelEscalationOrder: [PI_NO_MODEL],
-  modelFallbackLadder: [PI_NO_MODEL],
+  modelEscalationOrder: [],
+  modelFallbackLadder: [],
 };
 
 /**
@@ -106,6 +125,8 @@ export const BUILT_IN_PROVIDERS = [
     homeVariable: 'CLAUDE_CONFIG_DIR',
     defaultHome: '.claude',
     modelPolicy: CLAUDE_MODEL_POLICY,
+    parseModelId: undefined,
+    modelCatalog: undefined,
     optInModelIds: [],
     osSandbox: false,
     capabilities: {
@@ -147,6 +168,8 @@ export const BUILT_IN_PROVIDERS = [
     homeVariable: 'CODEX_HOME',
     defaultHome: '.codex',
     modelPolicy: CODEX_MODEL_POLICY,
+    parseModelId: undefined,
+    modelCatalog: undefined,
     optInModelIds: ['gpt-6-astra'],
     osSandbox: true,
     capabilities: {
@@ -177,6 +200,8 @@ export const BUILT_IN_PROVIDERS = [
     homeVariable: 'PI_HOME',
     defaultHome: '.pi',
     modelPolicy: PI_MODEL_POLICY,
+    parseModelId: parsePiModelId,
+    modelCatalog: { argv: ['--list-models'], parse: parsePiModelListing },
     optInModelIds: [],
     osSandbox: false,
     capabilities: {} as const satisfies ProviderCapabilityFlags,

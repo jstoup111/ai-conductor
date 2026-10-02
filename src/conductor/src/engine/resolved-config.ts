@@ -18,6 +18,7 @@ import {
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
 import { DEFAULT_PROVIDER, providerDescriptor } from '../execution/provider-catalog.js';
+import { selectFallbackLadder } from './model-availability.js';
 import { escalateAttempt } from './escalation.js';
 import { normalizeProviderSelection } from './provider-selection.js';
 import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
@@ -97,6 +98,13 @@ export const FALLBACK_EFFORT: EffortLevel = 'medium';
 export const FALLBACK_RETRIES = 3;
 export const FALLBACK_REVIEW: ReviewMode = 'manual';
 
+function fallbackModelForPolicy(policy: ProviderModelPolicy): string {
+  if (policy.requiresConfiguredModels) {
+    throw new Error('Provider model policy requires a configured model');
+  }
+  return FALLBACK_MODEL;
+}
+
 /** The serial daemon default when no executor-pool width is configured. */
 export const DEFAULT_DAEMON_CONCURRENCY = 1;
 
@@ -175,12 +183,16 @@ export interface ResolvePreferredProviderNativeInput {
   policy: ProviderModelPolicy;
   config?: HarnessConfig;
   options?: ResolveOptions;
+  attempt?: number;
+  escalate?: boolean;
 }
 
 export interface ResolveFallbackProviderNativeInput {
   step: StepName;
   tier?: ComplexityTier;
   policy: ProviderModelPolicy;
+  providerKey?: string;
+  config?: HarnessConfig;
   attempt: number;
   escalate: boolean;
 }
@@ -278,7 +290,7 @@ export function resolveProviderNativeStepConfig(
     defaultsCfg?.model ??
     policyStepTier?.model ??
     policy.stepModels[step] ??
-    FALLBACK_MODEL;
+    fallbackModelForPolicy(policy);
 
   const effort: EffortLevel =
     options.effortCliOverride ??
@@ -310,24 +322,33 @@ export function resolvePreferredProviderNativeStepConfig({
   policy,
   config,
   options,
+  attempt = 1,
+  escalate = false,
 }: ResolvePreferredProviderNativeInput): ResolvedProviderNativeStepConfig {
-  if (preferredProvider === inheritedProvider) {
-    return resolveProviderNativeStepConfig(step, phase, policy, config, options);
-  }
+  const base = preferredProvider === inheritedProvider
+    ? resolveProviderNativeStepConfig(step, phase, policy, config, options)
+    : (() => {
+        const stepConfig = config?.steps?.[step];
+        const specializedConfig: HarnessConfig | undefined =
+          stepConfig === undefined
+            ? undefined
+            : { steps: { [step]: stepConfig } };
+        return resolveProviderNativeStepConfig(
+          step,
+          phase,
+          policy,
+          specializedConfig,
+          options,
+        );
+      })();
 
-  const stepConfig = config?.steps?.[step];
-  const specializedConfig: HarnessConfig | undefined =
-    stepConfig === undefined
-      ? undefined
-      : { steps: { [step]: stepConfig } };
-
-  return resolveProviderNativeStepConfig(
-    step,
-    phase,
-    policy,
-    specializedConfig,
-    options,
-  );
+  // Serial callers pass their already-escalated values as overrides. Only
+  // candidate dispatches with no override climb here, preventing a retry from
+  // being escalated twice while allowing validation-group preferred members to
+  // use the same provider-native ladder as fallback members.
+  return options?.modelCliOverride === undefined && options?.effortCliOverride === undefined
+    ? escalateAttempt(base.model, base.effort, attempt, escalate, policy)
+    : base;
 }
 
 /**
@@ -339,14 +360,26 @@ export function resolveFallbackProviderNativeStepConfig({
   step,
   tier,
   policy,
+  providerKey = DEFAULT_PROVIDER,
+  config,
   attempt,
   escalate,
 }: ResolveFallbackProviderNativeInput): ResolvedFallbackProviderNativeConfig {
+  // A configured-model provider owns model selection, but an authored step
+  // still owns its effort. Preserve only that step-local effort precedence so
+  // fallback cannot inherit the primary provider's model, phase, or defaults.
+  const authoredStep = config?.steps?.[step];
+  const authoredEffort = policy.requiresConfiguredModels
+    ? (tier ? authoredStep?.by_tier?.[tier]?.effort : undefined) ?? authoredStep?.effort
+    : undefined;
+  const fallbackConfig = authoredEffort === undefined
+    ? undefined
+    : { steps: { [step]: { effort: authoredEffort } } };
   const base = resolveProviderNativeStepConfig(
     step,
     phaseForStep(step),
     policy,
-    undefined,
+    fallbackConfig,
     { tier },
   );
   const native = escalateAttempt(
@@ -359,7 +392,7 @@ export function resolveFallbackProviderNativeStepConfig({
 
   return {
     ...native,
-    modelFallbackLadder: policy.modelFallbackLadder,
+    modelFallbackLadder: selectFallbackLadder(policy, providerKey, config ?? {}),
   };
 }
 
@@ -832,7 +865,7 @@ export function resolveBuildReviewConfig(
   const inheritedPrimaryProvider = normalizeProviderSelection(inheritedProviderSelection)[0] ?? DEFAULT_PROVIDER;
   const inheritedPolicy = outerStepConfig?.llm_provider === undefined && config?.llm_provider === undefined
     ? policy
-    : resolveProviderModelPolicy(inheritedPrimaryProvider);
+    : resolveProviderModelPolicy(inheritedPrimaryProvider, { config });
   const resolveRubricPolicy = (
     rubric: BuildReviewRubricConfig | BuildReviewCustomRubricConfig | undefined,
     defaultEnabled: boolean,
@@ -847,7 +880,7 @@ export function resolveBuildReviewConfig(
     const rubricPrimaryProvider = normalizeProviderSelection(rubricProvider)[0] ?? inheritedPrimaryProvider;
     const rubricPolicy = rubric?.llm_provider === undefined
       ? inheritedPolicy
-      : resolveProviderModelPolicy(rubricPrimaryProvider);
+      : resolveProviderModelPolicy(rubricPrimaryProvider, { config });
     const rubricConfig: HarnessConfig = {
       ...config,
       steps: {
@@ -897,7 +930,7 @@ export function resolveBuildReviewConfig(
       effort: resolvedNative.effort,
       model_fallback_ladder: rubric?.model_fallback_ladder
         ?? (rubricPrimaryProvider === inheritedPrimaryProvider
-          ? config?.model_fallback_ladder ?? inheritedPolicy.modelFallbackLadder
+          ? selectFallbackLadder(inheritedPolicy, inheritedPrimaryProvider, config ?? {})
           : rubricPolicy.modelFallbackLadder),
       max_retries: resolvedNeutral.max_retries,
       escalate: resolvedNeutral.escalate,

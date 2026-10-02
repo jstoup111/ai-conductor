@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:16, task:17
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -17,7 +17,7 @@ import {
   AUXILIARY_MODEL_TABLE_ROWS,
   EXTRA_MODEL_TABLE_ROWS,
 } from '../src/engine/model-table-metadata.js';
-import { classifyPinnedSkill } from '../src/tools/generate-model-table.js';
+import { assertCompleteProviderCells, classifyPinnedSkill } from '../src/tools/generate-model-table.js';
 
 const CLAUDE_NATIVE_ALIASES = ['fable', 'opus', 'sonnet', 'haiku'] as const;
 const CODEX_NATIVE_MODEL_IDS = [
@@ -197,9 +197,9 @@ const RETIRED_EVALUATOR_SELECTION_CATEGORIES = [
 ] as const;
 
 function retiredEvaluatorCategories(
-  evaluator: Pick<(typeof EXTRA_MODEL_TABLE_ROWS)[number], 'claudeModel' | 'why'>,
+  evaluator: Pick<(typeof EXTRA_MODEL_TABLE_ROWS)[number], 'providerCells' | 'why'>,
 ): string[] {
-  const selectionText = `${evaluator.claudeModel}\n${evaluator.why}`;
+  const selectionText = `${evaluator.providerCells.claude?.model}\n${evaluator.why}`;
   return RETIRED_EVALUATOR_SELECTION_CATEGORIES.filter((category) =>
     selectionText.toLocaleLowerCase().includes(category),
   );
@@ -221,9 +221,9 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
     const violations = EXTRA_MODEL_TABLE_ROWS.flatMap((row) => {
       const hasInteractiveHostContract =
         row.executionPath === 'supported-host interactive' &&
-        row.claudeModel.trim().length > 0 &&
-        /\binherit(?:s|ed|ance|ing)?\b/i.test(row.codexModel) &&
-        /\binherit(?:s|ed|ance|ing)?\b/i.test(row.codexEffort);
+        (row.providerCells.claude?.model.trim().length ?? 0) > 0 &&
+        /\binherit(?:s|ed|ance|ing)?\b/i.test(row.providerCells.codex?.model ?? '') &&
+        /\binherit(?:s|ed|ance|ing)?\b/i.test(row.providerCells.codex?.effort ?? '');
 
       return hasInteractiveHostContract ? [] : [row.name];
     });
@@ -237,10 +237,13 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
     expect(evaluator).toMatchObject({
       name: 'evaluator',
       executionPath: 'supported-host interactive',
-      claudeModel: 'sonnet (default) / fable (concurrency, state mutation, security, auth, money)',
-      claudeEffort: '',
-      codexModel: 'inherits model from the Codex session or spawned-agent configuration',
-      codexEffort: 'inherits effort from the Codex session or spawned-agent configuration',
+      providerCells: {
+        claude: { model: 'sonnet (default) / fable (concurrency, state mutation, security, auth, money)', effort: 'n/a' },
+        codex: {
+          model: 'inherits model from the Codex session or spawned-agent configuration',
+          effort: 'inherits effort from the Codex session or spawned-agent configuration',
+        },
+      },
       why: expect.stringMatching(/single risk-domain criterion/i),
     });
   });
@@ -252,7 +255,7 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
     const retired = retiredEvaluatorCategories(evaluator!);
     expect(
       retired,
-      `evaluator claudeModel/why contains retired selection categories: ${retired.join(', ')}`,
+      `evaluator providerCells.claude.model/why contains retired selection categories: ${retired.join(', ')}`,
     ).toEqual([]);
   });
 
@@ -274,10 +277,13 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
 
     expect(composer).toMatchObject({
       executionPath: 'supported-host interactive',
-      claudeModel: 'opus',
-      claudeEffort: '',
-      codexModel: expect.stringMatching(/inherits.*Codex.*session/i),
-      codexEffort: expect.stringMatching(/inherits.*Codex.*session/i),
+      providerCells: {
+        claude: { model: 'opus', effort: 'n/a' },
+        codex: {
+          model: expect.stringMatching(/inherits.*Codex.*session/i),
+          effort: expect.stringMatching(/inherits.*Codex.*session/i),
+        },
+      },
       why: expect.stringMatching(/canonical.*authoring/i),
     });
     expect(readSkillModelPin(join(skillsDir, 'composer'))).toBe('opus');
@@ -305,6 +311,23 @@ describe('AUXILIARY_MODEL_TABLE_ROWS auxiliary-judge registration', () => {
       name: 'coverage-binding',
       executionPath: 'engine-managed auxiliary judge',
     });
+  });
+});
+
+describe('model-table provider-cell completeness', () => {
+  it('rejects a blank catalog-provider cell naming the row, while accepting explicit sentinels', () => {
+    const rows = [{
+      name: 'incomplete-row',
+      providerCells: {
+        claude: { model: 'opus', effort: 'high' },
+        codex: { model: 'gpt-5.6-sol', effort: 'high' },
+        pi: { model: '', effort: 'n/a' },
+      },
+    }];
+
+    expect(() => assertCompleteProviderCells(rows, ['claude', 'codex', 'pi'])).toThrow(/incomplete-row.*pi.*model/i);
+    rows[0]!.providerCells.pi.model = 'config-required';
+    expect(() => assertCompleteProviderCells(rows, ['claude', 'codex', 'pi'])).not.toThrow();
   });
 });
 
