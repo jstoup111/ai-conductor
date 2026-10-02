@@ -1,4 +1,4 @@
-// Covers: task:13
+// Covers: task:13, task:14
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -55,6 +55,16 @@ describe('PRD audit typed provider dispatch', () => {
     const root = await fixture();
     const { invoke, runner: subject } = runner(root, { success: true, output: 'unreachable' } as InvokeResult, false);
     await expect(subject.run('prd_audit', { complexity_tier: 'S' })).resolves.toMatchObject({ success: false, prdAuditFault: { kind: 'capability' } });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('reports a missing authoritative plan as an unretryable projection fault before invocation', async () => {
+    const root = await fixture();
+    await rm(join(root, '.docs', 'plans', 'feature.md'));
+    const { invoke, runner: subject } = runner(root, { success: true, output: 'unreachable' } as InvokeResult);
+    await expect(subject.run('prd_audit', { complexity_tier: 'S' })).resolves.toMatchObject({
+      success: false, prdAuditFault: { kind: 'input', reason: expect.stringContaining('plan') },
+    });
     expect(invoke).not.toHaveBeenCalled();
   });
 });
