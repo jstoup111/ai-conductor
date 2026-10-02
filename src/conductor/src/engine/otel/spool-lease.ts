@@ -125,23 +125,19 @@ export class SpoolLease {
       const serialized = await this.filesystem.readFile(this.path(), 'utf8');
       if (parseLeaseRecord(serialized)?.uuid !== this.uuid) return;
 
-      // Moving our verified record out of the lease pathname prevents a
-      // late unlink from deleting a successor that acquired the now-vacant
-      // pathname. A new owner may safely acquire between rename and cleanup.
-      const releasingPath = `${this.path()}.${this.uuid}.release`;
-      await this.filesystem.rename(this.path(), releasingPath);
-      if (parseLeaseRecord(await this.filesystem.readFile(releasingPath, 'utf8'))?.uuid === this.uuid) {
-        await this.filesystem.rm(releasingPath, { force: true });
-      } else {
-        // A successor can replace lease.json after the ownership check but
-        // before our rename. Restore that foreign record without overwriting
-        // a still newer holder, then remove only our moved-aside pathname.
-        try {
-          await this.filesystem.link(releasingPath, this.path());
-        } catch (error) {
-          if (!isAlreadyExists(error)) throw error;
+      // Hold the succession slot while checking and removing our lease. This
+      // prevents a stale reclaimer from replacing lease.json between the
+      // ownership check and the removal without ever moving lease.json aside.
+      // If a contender already holds the slot, it owns the replacement race
+      // and we leave its lease pathname untouched.
+      if (!await this.createSuccessor(this.record())) return;
+      try {
+        const current = await this.filesystem.readFile(this.path(), 'utf8');
+        if (parseLeaseRecord(current)?.uuid === this.uuid) {
+          await this.filesystem.rm(this.path(), { force: true });
         }
-        await this.filesystem.rm(releasingPath, { force: true });
+      } finally {
+        await this.filesystem.rm(this.successorPath(), { force: true });
       }
     } catch (error) {
       if (!isMissing(error)) throw error;
@@ -261,11 +257,22 @@ export class SpoolLease {
     try {
       if (await this.filesystem.readFile(moved, 'utf8') === serialized) {
         await this.filesystem.rm(moved, { force: true });
+        return true;
       }
+
+      // The record changed after our stale read. Put it back unless another
+      // writer has already filled the slot, and let that writer win.
+      try {
+        await this.filesystem.link(moved, successor);
+      } catch (error) {
+        if (!isAlreadyExists(error)) throw error;
+      }
+      await this.filesystem.rm(moved, { force: true });
+      return false;
     } catch (error) {
-      if (!isMissing(error)) throw error;
+      if (isMissing(error)) return false;
+      throw error;
     }
-    return true;
   }
 
   private record(): LeaseRecord {

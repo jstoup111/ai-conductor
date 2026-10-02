@@ -273,26 +273,95 @@ describe('SpoolLease', () => {
     await expect(observer.acquire()).resolves.toEqual({ acquired: false });
   });
 
-  it('restores a foreign successor swapped in between release verification and rename', async () => {
+  it('keeps a single holder through a release, stale-reclaim, and acquire interleaving', async () => {
     const directory = await temporaryDirectory();
     const leasePath = join(directory, 'lease.json');
+    let releaseRead!: () => void;
+    let resumeRelease!: () => void;
+    const releaseReadPromise = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const releaseResumed = new Promise<void>((resolve) => { resumeRelease = resolve; });
+    let pauseRelease = false;
+    const lost: string[] = [];
+    const contender = new SpoolLease(directory, {
+      now: () => now,
+      isProcessAlive: () => true,
+      onLost: () => { lost.push('contender'); },
+    });
+    let contenderResult: { acquired: boolean } | undefined;
+    const acquireContender = async (): Promise<void> => {
+      contenderResult ??= await contender.acquire();
+    };
     const holder = new SpoolLease(directory, {
       now: () => now,
       isProcessAlive: () => true,
+      onLost: () => { lost.push('holder'); },
+      filesystem: {
+        open: async (path, flags) => {
+          if (pauseRelease && path === `${leasePath}.next` && flags === 'wx') await acquireContender();
+          return open(path, flags);
+        },
+        readFile: async (path, encoding) => {
+          const serialized = await readFile(path, encoding);
+          if (pauseRelease && path === leasePath) {
+            releaseRead();
+            await releaseResumed;
+          }
+          return serialized;
+        },
+        rename: async (source, destination) => {
+          await rename(source, destination);
+          if (pauseRelease && source === leasePath && destination.endsWith('.release')) await acquireContender();
+        },
+      },
+    });
+    await holder.acquire();
+    pauseRelease = true;
+    const releasing = holder.release();
+    await releaseReadPromise;
+
+    const reclaimer = new SpoolLease(directory, {
+      now: () => now,
+      isProcessAlive: () => false,
+      onLost: () => { lost.push('reclaimer'); },
+    });
+    await expect(reclaimer.acquire()).resolves.toEqual({ acquired: true });
+    resumeRelease();
+    await releasing;
+
+    const lease = await readFile(leasePath, 'utf8').then(JSON.parse) as { uuid: string };
+    const owned = [holder, reclaimer, contender]
+      .filter((candidate) => (candidate as unknown as { owned: boolean }).owned);
+    expect(contenderResult).toEqual({ acquired: false });
+    expect(owned).toHaveLength(1);
+    expect((owned[0] as unknown as { uuid: string }).uuid).toBe(lease.uuid);
+    expect(lost).toEqual([]);
+
+    await reclaimer.release();
+    await contender.release();
+  });
+
+  it('restores a changed orphan successor and refuses to create its own successor', async () => {
+    const directory = await temporaryDirectory();
+    const leasePath = join(directory, 'lease.json');
+    const successorPath = `${leasePath}.next`;
+    const stale = { pid: 42, uuid: 'stale-successor', heartbeatAt: now - 60_001 };
+    const replacement = { pid: 43, uuid: 'replacement-successor', heartbeatAt: now };
+    await writeLease(directory, { pid: 41, uuid: 'stale-holder', heartbeatAt: now - 60_001 });
+    await writeFile(successorPath, JSON.stringify(stale));
+
+    const lease = new SpoolLease(directory, {
+      now: () => now,
+      isProcessAlive: () => false,
       filesystem: {
         rename: async (source, destination) => {
-          if (source === leasePath && destination.endsWith('.release')) {
-            await writeLease(directory, { pid: 44, uuid: 'foreign-successor', heartbeatAt: now });
-          }
+          if (source === successorPath) await writeFile(successorPath, JSON.stringify(replacement));
           await rename(source, destination);
         },
       },
     });
 
-    await holder.acquire();
-    await holder.release();
-
-    await expect(readFile(leasePath, 'utf8').then(JSON.parse)).resolves.toMatchObject({ uuid: 'foreign-successor' });
+    await expect(lease.acquire()).resolves.toEqual({ acquired: false });
+    await expect(readFile(successorPath, 'utf8').then(JSON.parse)).resolves.toEqual(replacement);
   });
 
   it('notifies its owner when a contender replaces the lease during heartbeat', async () => {
