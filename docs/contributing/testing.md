@@ -219,7 +219,7 @@ so a bare `npm test` discovers 1185 files and excludes the 16 opt-in smoke files
 | `test/types/` | 3 | Type-level contracts. | `npm test -- test/types` |
 | `test/fixtures/` | 5 | Fixture helpers and their executable contract tests. | `npm test -- test/fixtures` |
 
-Runner shape (`src/conductor/vitest.config.ts`): `pool: 'forks'` with top-level `maxWorkers: 2`,
+Runner shape (`src/conductor/vitest.config.ts`): `pool: 'forks'` with top-level `maxWorkers: 1`,
 `testTimeout: 20000`, `hookTimeout: 30000`, `environment: 'node'`. No reporter is configured in the file
 — it comes from the command line. Vitest 4 removed `poolOptions` and `minWorkers`; isolated generated
 smoke fixtures set `maxWorkers: 1`.

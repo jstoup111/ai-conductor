@@ -9,9 +9,9 @@ const runRoot = installation.root;
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageVitest = join(packageRoot, 'node_modules', '.bin', 'vitest');
 const vitestCommand = existsSync(packageVitest) ? packageVitest : 'vitest';
-// The ordinary suite's final worker exceeded 6 GiB after completing 1,158 of
-// 1,159 files. Keep two forks (rather than adding a third) so this 8 GiB
-// per-worker minimum remains within the self-host user-slice ceiling.
+// A single fork can approach 8 GiB in the heaviest fixture batch. The Vitest
+// config serializes forks so nested fixture processes do not combine with a
+// second 8 GiB worker beyond the self-host user-slice ceiling.
 const defaultOldSpaceLimit = '--max-old-space-size=8192';
 const inheritedNodeOptions = process.env.NODE_OPTIONS ?? '';
 const inheritedOldSpaceLimit = /(?:^|\s)--max-old-space-size(?:=|\s+)(\d+)(?=\s|$)/.exec(inheritedNodeOptions);

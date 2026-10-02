@@ -302,8 +302,9 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     expect(vitestConfig).toMatch(/include:[^\n]*test\/\*\*\/\*\.test\.ts/);
     expect(vitestConfig).toMatch(/pool:\s*'forks'/);
     // vitest 4 removed `poolOptions`; the fork cap is `maxWorkers` now. It
-    // must stay at 2 — 3 is the count that gets OOM-killed on this host.
-    expect(vitestConfig).toMatch(/maxWorkers:\s*2/);
+    // must stay at 1 — a second 8 GiB worker plus nested fixtures exceeds
+    // this host's user-slice ceiling.
+    expect(vitestConfig).toMatch(/maxWorkers:\s*1/);
     expect(vitestConfig).not.toMatch(/poolOptions/);
   });
 

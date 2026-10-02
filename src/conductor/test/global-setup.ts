@@ -411,13 +411,13 @@ export default async function setup(project?: { tmpDir?: string }) {
     removeInterruptHandlers();
     heartbeat.stop();
 
-    // Restore the real tmpdir FIRST so every guard below observes exactly the
-    // `os.tmpdir()` it observed before this redirect existed — in particular
-    // the tmux reap's `isTmpdirRooted` corroboration, which must still match a
-    // pane cwd anywhere under the real tmpdir, not only under the run root.
-    process.env.TMPDIR = originalTmpdir;
-
     try {
+      // Keep containment installed through Vitest's close sequence. Vitest can
+      // allocate its transient nanoid workspace while global teardown is
+      // running; restoring TMPDIR here made that workspace escape into the
+      // operator's real tmpdir before Vitest removed it. Every guard below is
+      // already rooted explicitly at originalTmpdir or tmuxRoots, so none
+      // depends on mutating the process environment back first.
       await runTeardownGuards();
     } finally {
       // Reclaim the run root whatever the guards decided. In `finally` so a
