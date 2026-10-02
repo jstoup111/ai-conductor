@@ -51,7 +51,7 @@ export function withDaemonSessionMarker(
  * list in lockstep with the referenced SKILL.md/hook contracts — do NOT add
  * daemon/engineer/state-mutating verbs here.
  */
-const SESSION_SANCTIONED_SUBCOMMANDS: ReadonlySet<string> = new Set([
+const SESSION_SANCTIONED_SUBCOMMANDS = [
   // skills/tdd/SKILL.md + skills/pipeline/SKILL.md — scoped VERIFY runs the
   // affected-test union through `ai-conductor scoped-run <selectors...>`.
   'scoped-run',
@@ -80,15 +80,81 @@ const SESSION_SANCTIONED_SUBCOMMANDS: ReadonlySet<string> = new Set([
   // ownership, and shared-write approval needs an interactive TTY a daemon
   // session never has, so admitting it cannot reach another feature.
   'github-operation',
+] as const;
+
+const SESSION_SANCTIONED_SUBCOMMAND_SET: ReadonlySet<string> = new Set(SESSION_SANCTIONED_SUBCOMMANDS);
+
+/**
+ * Bounded identity emitted with a refusal. Unknown command text is never
+ * reflected into the result, so consumers cannot accidentally persist argv.
+ */
+export type DaemonSessionSubcommand =
+  | (typeof SESSION_SANCTIONED_SUBCOMMANDS)[number]
+  | 'daemon'
+  | 'config'
+  | 'test-suite'
+  | 'build-review'
+  | 'finish-record'
+  | 'unknown'
+  | 'none';
+
+const KNOWN_BLOCKED_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  'daemon',
+  'config',
+  'test-suite',
+  'build-review',
+  'finish-record',
 ]);
 
 export type DaemonSessionGuardVerdict =
   | { readonly allowed: true }
-  | { readonly allowed: false; readonly message: string };
+  | {
+      readonly allowed: false;
+      readonly subcommand: DaemonSessionSubcommand;
+      readonly message: string;
+    };
 
 /** First non-flag argv token after the node/script prefix. */
 function firstSubcommand(argv: readonly string[]): string | undefined {
   return argv.slice(2).find((token) => !token.startsWith('-'));
+}
+
+function boundedSubcommand(subcommand: string | undefined): DaemonSessionSubcommand {
+  if (subcommand === undefined) return 'none';
+  if (
+    SESSION_SANCTIONED_SUBCOMMAND_SET.has(subcommand)
+    || KNOWN_BLOCKED_SUBCOMMANDS.has(subcommand)
+  ) {
+    return subcommand as DaemonSessionSubcommand;
+  }
+  return 'unknown';
+}
+
+function renderSubcommand(subcommand: DaemonSessionSubcommand): string {
+  return subcommand === 'none' ? '<none>' : subcommand;
+}
+
+/**
+ * The one production command policy shared by the entry guard and source
+ * compatibility audit. It deliberately has no environment/config input: the
+ * test-only bypass is an entry-guard valve, never an audit exemption.
+ */
+export function evaluateDaemonSessionCommandPolicy(
+  argv: readonly string[],
+): DaemonSessionGuardVerdict {
+  const subcommand = firstSubcommand(argv);
+  if (subcommand !== undefined && SESSION_SANCTIONED_SUBCOMMAND_SET.has(subcommand)) {
+    return { allowed: true };
+  }
+  const bounded = boundedSubcommand(subcommand);
+  return {
+    allowed: false,
+    subcommand: bounded,
+    message:
+      'ai-conductor may not be invoked from inside a daemon-managed session; ' +
+      'the engine owns all conductor operations for this run ' +
+      `(blocked subcommand: ${renderSubcommand(bounded)}).`,
+  };
 }
 
 /**
@@ -104,15 +170,5 @@ export function guardDaemonSessionInvocation(
   // Test-only valve (mirrors the fresh-session valve): nothing in production
   // sets it and there is no config key for it.
   if (env.CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW === '1') return { allowed: true };
-  const subcommand = firstSubcommand(argv);
-  if (subcommand !== undefined && SESSION_SANCTIONED_SUBCOMMANDS.has(subcommand)) {
-    return { allowed: true };
-  }
-  return {
-    allowed: false,
-    message:
-      'ai-conductor may not be invoked from inside a daemon-managed session; ' +
-      'the engine owns all conductor operations for this run ' +
-      `(blocked subcommand: ${subcommand ?? '<none>'}).`,
-  };
+  return evaluateDaemonSessionCommandPolicy(argv);
 }
