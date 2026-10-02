@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-02T01:53:16.560Z
 Slug: pi-runs-stay-contained-despite-pi-having-no-permis
 Class: needs-human
 Halting step: unknown
