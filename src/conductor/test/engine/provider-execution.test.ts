@@ -4026,6 +4026,9 @@ describe('executeProviderCandidates', () => {
             'All configured providers are unavailable for step build: codex (codex binary missing); claude (claude cached missing, cached unavailable); third (third integration missing).',
           exitCode: 127,
           preferredProvider: 'codex',
+          actualProvider: 'third',
+          resolvedModel: 'sonnet',
+          resolvedEffort: 'medium',
           attempts: [
             {
               provider: 'codex',

@@ -779,7 +779,7 @@ describe('ST-927-4 and ST-927-5 — ordered availability fallback', () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.actualProvider).toBeUndefined();
+    expect(result.actualProvider).toBe('claude');
     expect(result.attempts.map(({ provider }) => provider)).toEqual(['codex', 'claude']);
     expect(result.output).toMatch(/codex.*codex binary missing/i);
     expect(result.output).toMatch(/claude.*claude binary missing/i);
