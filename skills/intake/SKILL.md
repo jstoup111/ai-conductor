@@ -294,6 +294,16 @@ For Codex, it is the directory of the listed `SKILL.md` path.
   Omitting it entirely is fine — the script records an explicit
   `dependencies: none` rather than silently skipping the question, so "no
   dependencies" is always a decision, never an omission.
+- **Overlap refusal.** Before filing, the script checks open work for shared
+  evidence paths. When it finds suggestions you have not decided, it refuses and
+  prints one `[intake-file] overlap: undecided <issue> (<paths>)` line per
+  suggestion. Review each one — does the new issue really depend on it? — then
+  re-run the same command with `--depends-on <issue>` to accept it or
+  `--decline-overlap <issue>` to decline it, deciding every listed suggestion.
+  Non-interactive agents must make the decision themselves for every listed
+  suggestion, based on the shared paths; never loop the same command, and never
+  drop the overlap check to get a filing through. `advisory` and `skipped` lines
+  are informational only.
 - **`--repo owner/repo`** (optional): target a repo other than the current one.
 - The script assigns the filer via the normal `gh issue create` invocation it
   wraps; a label-apply or `--depends-on` link failure after successful issue

@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:6, task:11
+// Covers: task:1, task:4, task:6, task:11, task:15
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Every executed step leaves positive evidence —
 // including non-verdict steps" (Story 3,
@@ -62,6 +62,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   feature_dispatch_ended: 'not-audited-by-design',
   feature_shipped: 'not-audited-by-design',
   intake_inbound_sanitized: 'not-audited-by-design',
+  intake_overlap_checked: 'not-audited-by-design',
   // Command rejection telemetry is persisted but has no audit-trail projection.
   land_gate_rejected: 'not-audited-by-design',
   project_setup: 'not-audited-by-design',
@@ -262,6 +263,17 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     sourceRef: 'owner/repo#12',
     neutralizations: [{ category: 'agent-directive', count: 1 }],
     digest: 'a'.repeat(64),
+  },
+  intake_overlap_checked: {
+    type: 'intake_overlap_checked',
+    repository: 'owner/repo',
+    outcome: 'proceeded',
+    suggested: [],
+    accepted: [],
+    declined: [],
+    undecided: [],
+    advisoryCount: 0,
+    skipped: [],
   },
   land_gate_rejected: {
     type: 'land_gate_rejected',

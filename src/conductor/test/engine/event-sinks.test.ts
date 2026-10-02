@@ -178,6 +178,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'github_write_credential_fallback',
   'bot_co_author_skipped',
   'intake_inbound_sanitized',
+  'intake_overlap_checked',
   // S7.5: the budget basis on a post-rebase preservation is only observable
   // if it reaches .pipeline/events.jsonl — its sibling rebase_gate_invalidated
   // is already persisted, so an unpersisted preservation reads as silence.

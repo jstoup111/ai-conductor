@@ -7,7 +7,7 @@
 
 ## Summary
 
-Before the intake filer creates an issue, it compares the paths the intake cites against open issues and in-flight spec and daemon branches in the target repository, then turns overlaps into suggested dependencies. Interactive filers decide each one. Non-interactive filers are refused until every suggestion is accepted or declined. Failures inside the check degrade to notes. Twenty-one tasks.
+Before the intake filer creates an issue, it compares the paths the intake cites against open issues and in-flight spec and daemon branches in the target repository, then turns overlaps into suggested dependencies. Interactive filers decide each one. Non-interactive filers are refused until every suggestion is accepted or declined. Failures inside the check degrade to notes. Twenty-two tasks.
 
 ## Technical Approach
 
@@ -336,6 +336,7 @@ Before the intake filer creates an issue, it compares the paths the intake cites
 **Done when:**
 - The `intake-overlap-degraded` Vitest test asserts that a throwing open-issue lister with no other overlaps yields a non-interactive filing that records `issue.create`, returns a proceed decision whose skip notes include `open-issues` with the thrown reason, and renders stdout containing `[intake-file] overlap: skipped open-issues` with that reason.
 - The same test asserts that a lister returning exactly 500 issues and a fixture with 101 unmerged branches produce `partial` skip notes naming the 500-issue and 100-branch bounds, that only 100 branches were diffed, and that the filing proceeds.
+- The same test asserts that a lister returning 501 open issues with no other overlaps produces a `partial` `open-issues` skip note naming the 500-issue bound, that only 500 issues were compared, and that the filing proceeds.
 - The same test asserts that a timed-out open-issue read plus an undecided branch suggestion traced to #1477 returns a refused decision listing only #1477 and renders stdout naming the skipped `open-issues` comparison.
 - The same test asserts that an unresolvable base ref yields skip note `in-flight` while the open-issue lister is still called once.
 - The same test asserts that when every collector fails, a non-interactive filing records the same create, label and dependency operations as a filing with no `overlap` dependency, and renders stdout naming both skipped parts, `open-issues` and `in-flight`.
@@ -385,6 +386,7 @@ Before the intake filer creates an issue, it compares the paths the intake cites
 - The same test asserts that a refused filing emits one event with outcome `refused` and `undecided` listing the undecided refs.
 - The same test asserts that a skipped open-issue comparison appears in the event's `skipped` with part `open-issues` and its reason.
 - The same test asserts that a no-overlap filing emits exactly one event with an empty `suggested` list, and that the check performs no filesystem write (asserted with a spied `node:fs` write surface).
+- The same test asserts that the no-overlap filing's overlap check writes no separate log: no log-file append or write stream is opened (spied `node:fs` `appendFile*` and `createWriteStream`), so the single `intake_overlap_checked` event is its only record.
 - The existing event-sink exhaustiveness test passes with the new `intake_overlap_checked` row declared.
 
 **Files likely touched:**
@@ -523,6 +525,25 @@ Before the intake filer creates an issue, it compares the paths the intake cites
 
 **Dependencies:** 13, 14
 
+### Task 22: Intake filing guidance documents how to act on an overlap refusal
+**Story:** 18
+**Type:** happy-path
+
+**Steps:**
+1. Confirm `skills/intake/SKILL.md` carries an `Overlap refusal` entry that names the undecided line, both re-run flags, and the non-interactive obligation; add whatever is missing.
+2. Confirm `docs/guides/intake.md` carries an `### Overlap suggestions` section and the `--decline-overlap` flag row; add whatever is missing.
+3. Commit: "docs(intake): document acting on an overlap refusal".
+
+**Done when:**
+- `skills/intake/SKILL.md` contains an `Overlap refusal` entry naming the `[intake-file] overlap: undecided` line, `--depends-on <issue>` and `--decline-overlap <issue>`, and `docs/guides/intake.md` has an `### Overlap suggestions` section plus a `--decline-overlap <owner/repo#N>` flag row.
+- The same `Overlap refusal` entry in `skills/intake/SKILL.md` states that non-interactive agents must make the decision themselves for every listed suggestion.
+
+**Files likely touched:**
+- `skills/intake/SKILL.md`
+- `docs/guides/intake.md`
+
+**Dependencies:** 18
+
 ## Task Dependency Graph
 
 ```text
@@ -540,6 +561,7 @@ Task 2 ──┼─> Task 3 ─────────────────�
    Task 13 ─> Task 20 ──────────────────────────┤
    Tasks 13, 14 ─> Task 21 ─────────────────────┤
 Task 14 ─────────────────────────────────────────┴─> Task 18 ─> Task 17
+                                                          Task 18 ─> Task 22
 ```
 
 ## Integration Points
@@ -623,6 +645,8 @@ Task 14 ────────────────────────
 | Story 16 negative: **Given** a no-overlap filing, **When** it completes, **Then** exactly one overlap-check entry is recorded with zero suggestions and the check itself writes no separate file or log | 15 | "The same test asserts that a no-overlap filing emits exactly one event with an empty `suggested` list, and that the check performs no filesystem write (asserted with a spied `node:fs` write surface)." | diff-local |
 | Story 17 happy: **Given** a repository with an unmerged spec branch overlapping candidate files, **When** the DECIDE-time overlap scan runs, **Then** it reports that spec branch exactly as before this feature | 16 | "The `overlap-scan-branch-set` Vitest test asserts `runOverlapScan` over the fixture reports a seam overlap for `spec/x` and no seam overlap for `feat/daemon-y`." | diff-local |
 | Story 17 negative: **Given** a repository with an unmerged daemon build branch overlapping candidate files, **When** the DECIDE-time overlap scan runs, **Then** the daemon branch is not reported because the scan's branch set stays exactly today's `spec/*` set | 16 | "The same test asserts `enumerateUnmergedBranches(git, base)` called without a pattern argument returns `spec/x` and not `feat/daemon-y`." | diff-local |
+| Story 18 happy: **Given** a filer whose filing was refused for undecided overlap suggestions, **When** the filer reads the intake filing guidance in `skills/intake/SKILL.md` and `docs/guides/intake.md`, **Then** the guidance explains the refusal line and says to re-run with `--depends-on <issue>` to accept or `--decline-overlap <issue>` to decline each listed suggestion | 22 | "`skills/intake/SKILL.md` contains an `Overlap refusal` entry naming the `[intake-file] overlap: undecided` line, `--depends-on <issue>` and `--decline-overlap <issue>`, and `docs/guides/intake.md` has an `### Overlap suggestions` section plus a `--decline-overlap <owner/repo#N>` flag row." | diff-local |
+| Story 18 negative: **Given** a non-interactive agent whose filing was refused for undecided overlap suggestions, **When** the agent reads the intake filing guidance in `skills/intake/SKILL.md`, **Then** the guidance tells the agent to decide every listed suggestion itself and not to wait for an interactive prompt | 22 | "The same `Overlap refusal` entry in `skills/intake/SKILL.md` states that non-interactive agents must make the decision themselves for every listed suggestion." | diff-local |
 
 ## Verification
 
@@ -631,3 +655,11 @@ Task 14 ────────────────────────
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-adr-1: overlap-sources.ts collectOpenIssueOverlaps (lines 51-95) — pass each open-issue body through sanitizeInboundText([body], { repository, issue number WorkRef }) from sanitize-inbound.ts before extractCitedPaths, extracting only from the sanitized body with the armor open/close lines excluded so sourceRef/digest tokens never become cited paths; extend intake-overlap-open-issues.test.ts to assert a body containing a directive-shaped line plus `src/review/rubric.ts` still yields the #1579 shared path, and that the collector calls the sanitizer (no raw-body extraction path remains)
+**Gate:** as-built
+**Rationale:** adr-2026-09-06-inbound-intake-trust-boundary D1 requires that no consumer receive raw tracker text except through sanitizeInboundText (sanitize-inbound.ts:133, used by github-issues.ts:182), but overlap-sources.ts:51-95 feeds raw `issue list --json number,body` bodies straight into extractCitedPaths; the approved ADR stays authoritative and the conforming fix is determinable (sanitize each body with its WorkRef before extraction, exactly as buildText does), so this is build, not architecture_review. Task 3's Done-when neither requires nor forbids the sanitizer, so no existing task admits it and one task is appended.
+**Governing clause:** adr-2026-09-06-inbound-intake-trust-boundary decision 1
+**Done when:**
+- adr-2026-09-06-inbound-intake-trust-boundary decision 1 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-adr-1 is complete.

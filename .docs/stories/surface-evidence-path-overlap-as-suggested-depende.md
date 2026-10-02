@@ -5,8 +5,8 @@
 **PRD:** .docs/specs/surface-evidence-path-overlap-as-suggested-depende.md
 **Architecture review:** .docs/decisions/architecture-review-2026-09-28-surface-evidence-path-overlap-as-suggested-depende.md
 
-FR-17 (filing guidance for acting on a refusal) is documentation. Under the stories documentation
-boundary it has no story here; the refusal output itself carries the how-to-decide instructions
+FR-17 (filing guidance for acting on a refusal) is covered by Story 18, which checks the shipped
+intake filing guidance. The refusal output itself also carries the how-to-decide instructions
 (Story 10).
 
 Scope: the overlap check and its decision rule apply to filings made through the operator- and
@@ -410,3 +410,24 @@ As an engineer running DECIDE, I want the plan-time overlap scan to keep its cur
 ### Done When
 
 - [ ] A regression fixture shows the DECIDE-time scan's branch set and rendered report are identical before and after the change
+
+## Story 18: Filing guidance tells filers how to act on an overlap refusal
+
+**Requirement:** FR-17
+
+As a filer, especially a non-interactive agent, I want the intake filing guidance to explain an overlap refusal, so that I know how to accept or decline each suggestion and re-run.
+
+### Acceptance Criteria
+
+#### Happy Path
+
+- **Given** a filer whose filing was refused for undecided overlap suggestions, **When** the filer reads the intake filing guidance in `skills/intake/SKILL.md` and `docs/guides/intake.md`, **Then** the guidance explains the refusal line and says to re-run with `--depends-on <issue>` to accept or `--decline-overlap <issue>` to decline each listed suggestion
+
+#### Negative Paths
+
+- **Given** a non-interactive agent whose filing was refused for undecided overlap suggestions, **When** the agent reads the intake filing guidance in `skills/intake/SKILL.md`, **Then** the guidance tells the agent to decide every listed suggestion itself and not to wait for an interactive prompt
+
+### Done When
+
+- [ ] The intake skill and the intake user guide both document the overlap refusal and both re-run flags
+- [ ] The intake skill states that non-interactive agents decide every listed suggestion themselves

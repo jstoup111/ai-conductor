@@ -240,11 +240,51 @@ EOF
 | `--size S\|M\|L` | no | Omitted: prompts on a TTY, otherwise infers from body wording, otherwise defaults to `M`. Always reported as `size=<value> (<source>)`. An invalid value errors. |
 | `--priority critical\|high\|medium\|low` | no | Same prompt, infer, default resolution; reported as `priority=<value> (<source>)`. |
 | `--depends-on <owner/repo#N>` | no | Repeatable. Omitting it records an explicit `dependencies: none` rather than skipping the question. |
+| `--decline-overlap <owner/repo#N>` | no | Repeatable. Declines one overlap suggestion from the current run. A ref that is not a current suggestion, or is also passed to `--depends-on`, refuses the filing. |
 | `--repo <owner/repo>` | no | Target a repo other than the harness repo. Required whenever the issue belongs to your project. |
 
 You should see `[intake-file] filed: <url>`. A label-apply or dependency-link failure after the issue
 is created surfaces as `[intake-file] warning: …` and does **not** fail the filing; only a failure to
 create the issue itself is a hard error. Report the URL and any warnings to the operator.
+
+### Overlap suggestions
+
+Before creating the issue, the filer extracts the file paths cited in the title and body and looks
+for open work that touches the same paths:
+
+| Source | Matched by | Result |
+| --- | --- | --- |
+| Open issues in the target repo (up to 500) | Issue text cites a shared path | Suggestion |
+| In-flight `spec/*` and `feat/daemon-*` branches in the target repo's checkout | Branch diff since its merge base changes a shared path | Suggestion when the branch traces to an open issue; otherwise `advisory` |
+
+Suggestions rank by shared-path count, then issue number; at most five are shown. A ref already
+passed to `--depends-on` is accepted without asking. The in-flight scan uses the invoking checkout
+when its `origin` is the target repo, otherwise the single registered project with that remote.
+
+On a TTY, each suggestion prompts `accept or decline?`; accepting links it as a dependency.
+Otherwise, any undecided suggestion refuses the filing with exit 1 and creates no issue:
+
+```text
+[intake-file] overlap: undecided owner/repo#42 (src/a.ts) — re-run with --depends-on owner/repo#42 or --decline-overlap owner/repo#42
+```
+
+Decide every listed suggestion and re-run the same command with the matching flags. A
+`--decline-overlap` ref that is not a current suggestion, or is also passed to `--depends-on`, prints
+`overlap: invalid decline <ref> — not a current suggestion` and also exits 1 without creating the
+issue; drop or correct that flag. These lines are informational and never block a filing:
+
+| Line | Meaning |
+| --- | --- |
+| `overlap check: no overlap` | Nothing shared a cited path |
+| `overlap: linked <ref>` / `overlap: declined <ref>` | Recorded decision |
+| `overlap: accepted <ref> (not linked — see NOT LINKED below)` | Accepted, but the dependency link failed |
+| `overlap: advisory <branch> (<paths>)` | In-flight branch with no traceable open issue |
+| `overlap: skipped <part> — <reason>` | A source could not be read (no matching checkout, tracker or git failure); filing continues |
+| `overlap: N more suggestion(s) omitted` | Suggestions beyond the cap of five |
+
+Each check persists one `intake_overlap_checked` event to `.pipeline/events.jsonl` with the outcome
+(`proceeded`, `refused`, or `invalid-decline`) and the suggested, accepted, declined, and undecided
+refs.
 
 ## Redaction before publication
 

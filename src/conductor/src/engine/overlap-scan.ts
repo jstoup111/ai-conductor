@@ -41,19 +41,26 @@ export interface RunOverlapScanArgs {
 export async function enumerateUnmergedBranches(
   git: GitRunner,
   base: string,
+  refPatterns: readonly string[] = [
+    'refs/heads/spec/*',
+    'refs/remotes/*/spec/*',
+  ],
+  onRefEnumerationFailure?: (stderr: string) => void,
 ): Promise<string[]> {
   const refs = await git([
     'for-each-ref',
     '--format=%(refname:short)',
-    'refs/heads/spec/*',
-    'refs/remotes/*/spec/*',
+    ...refPatterns,
   ]);
-  const candidates = refs.exitCode === 0
-    ? refs.stdout
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0)
-    : [];
+  if (refs.exitCode !== 0) {
+    onRefEnumerationFailure?.(refs.stderr);
+    return [];
+  }
+
+  const candidates = refs.stdout
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
 
   const unmerged: string[] = [];
   for (const branch of candidates) {

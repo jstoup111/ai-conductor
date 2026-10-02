@@ -15,6 +15,7 @@
 import { parseSizeLabel, parsePriorityLabels } from '../../backlog-priority.js';
 import { parseSourceRef } from '../issue-ref.js';
 import { sanitizeIntakeText, type Redaction } from './sanitize.js';
+import { runOverlapPreflight, type OverlapDecision, type OverlapPreflightDeps } from './overlap-preflight.js';
 import { createGuardedGithubOperationRunner, runTrackerRead, type GhRunner } from '../../tracker-client.js';
 import {
   executeGithubIssueCreationTransaction,
@@ -38,10 +39,13 @@ export interface FileIntakeIssueOpts {
   dependsOn?: string[];
   interactive?: boolean;
   repo?: string;
+  declineOverlap?: string[];
 }
 
 export interface FileIntakeIssueDeps {
   prompt?: (question: string) => Promise<string>;
+  /** Optional read-only preflight; omitted by engine-internal filings. */
+  overlap?: OverlapPreflightDeps;
   /** One creation authority and terminal operation seam for this filing. */
   creation: {
     readonly authority: GithubIssueCreationAuthority;
@@ -71,6 +75,8 @@ export interface FileIntakeIssueResult {
    * noticed to be restored.
    */
   redactions: Redaction[];
+  /** Present only when the caller opted into the overlap preflight. */
+  overlap?: OverlapDecision;
 }
 
 const SIZE_WORDS: Record<'S' | 'M' | 'L', RegExp> = {
@@ -295,7 +301,20 @@ export async function fileIntakeIssue(
     redactions,
   };
 
-  const dependsOn = opts.dependsOn ?? [];
+  const overlap = deps.overlap
+    ? await runOverlapPreflight({
+      title: cleanTitle.text,
+      body: cleanBody.text,
+      dependsOn: opts.dependsOn ?? [],
+      interactive: Boolean(opts.interactive),
+      prompt: deps.prompt,
+      declineOverlap: opts.declineOverlap,
+    }, deps.overlap)
+    : undefined;
+  if (overlap) result.overlap = overlap;
+  if (overlap && overlap.kind !== 'proceed') return result;
+
+  const dependsOn = [...(opts.dependsOn ?? []), ...(overlap?.accepted ?? [])];
   const validDependencies: ValidDependency[] = [];
   if (dependsOn.length === 0) {
     result.dependsOnDecision = 'none';
