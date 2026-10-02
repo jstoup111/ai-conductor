@@ -345,7 +345,7 @@ Twenty-three tasks deliver an engine-generated `git` argv guard, provisioned fai
 
 **Done when:**
 - The skill-content test asserts the `skills/tdd/SKILL.md` pre-diff sensitivity item names a temporary detached worktree at the base commit and copying the new or changed test files into it, then removing that worktree.
-- The same test asserts the item contains none of `stash`, `checkout --`, `git restore`, or `reset`, so following it never discards paths in any worktree.
+- The same test asserts the item contains none of `stash`, `checkout --`, `git restore`, or `reset`, so following it never discards paths in any worktree, and asserts the item tells the agent to change no worktree's files, the temporary one included, beyond adding the test copies.
 
 **Files likely touched:**
 - `skills/tdd/SKILL.md`

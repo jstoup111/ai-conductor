@@ -26,6 +26,7 @@ describe('tdd skill pre-diff sensitivity check', () => {
   it('directs the agent not to set work aside or discard paths in any worktree, and names no discard command', () => {
     const item = preDiffSensitivityItem();
     expect(item).toMatch(/the temporary one included/);
+    expect(item).toMatch(/Change no worktree's files beyond adding those copies/);
     expect(item).toMatch(/never set\s+uncommitted work aside/);
     expect(item).toMatch(/never discard, roll back or overwrite paths/);
     for (const forbidden of ['stash', 'checkout --', 'git restore', 'reset']) expect(item).not.toContain(forbidden);
